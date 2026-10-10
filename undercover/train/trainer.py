@@ -381,6 +381,7 @@ class Trainer:
         save_every = max(1, round(SAVE_STEPS / steps_per_epoch))
         patience = max(10, max_epochs // 4)     # auto: stop when held-out loss hasn't improved for a quarter of the run
         st.update(state="training", steps_per_epoch=steps_per_epoch, error="")
+        self._reprobe(st, sr)
         proj.save_train()
         # bf16 on ROCm (always, as before) and on NVIDIA cards with native bf16 (RTX 30+). Older NVIDIA cards
         # train in fp32: slower, but no loss scaling needed and nothing to destabilise.
@@ -522,19 +523,43 @@ class Trainer:
                 self._emb = SpeakerEmbedder()
             v = Voice(name=f"{self.proj.name}-e{epoch}", dir=self.tdir, pth=self.tdir / f"e{epoch}.pth", index=None,
                       version="v2", sr=sr)
+            if not hasattr(self, "_tests"):   # one fixed test per run, so saves are compared like for like
+                self._tests = voicecheck.test_phrases(self.proj)
             lv = LoadedVoice(v, self.converter.device, self.converter.half)
-            q = voicecheck.check(lv, self.proj, self.converter, self._emb)
+            q = voicecheck.check(lv, self.proj, self.converter, self._emb, tests=self._tests)
             del lv
             self._probe_ok = True
-            return {"identity": q.score, "low": q.low, "cents": q.pitch_cents, "content": q.content}
+            return {"identity": q.score, "low": q.low, "cents": q.pitch_cents, "content": q.content, "test": q.test}
         except ValueError:   # no other speakers in this project's clips: fall back to the held-out loss
             self._probe_ok = False
             return None
+
+    def _reprobe(self, st: dict, sr: int):
+        """Resuming: saves measured with a different test (e.g. speech before the project had a sung reference)
+        can't be compared with new ones, so measure them again with this run's test."""
+        if not self.converter or not st.get("saves"):
+            return
+        from .. import voicecheck
+        try:
+            kind = voicecheck.test_phrases(self.proj)[2]
+        except Exception:
+            return
+        stale = [s for s in st["saves"] if s.get("identity") is not None and s.get("test", "speech") != kind
+                 and (self.tdir / f"e{s['epoch']}.pth").exists()]
+        for s in stale:
+            probe = self._probe(s["epoch"], sr)
+            if probe:
+                s.update(probe)
+        if stale:
+            self._pick_best(st)
 
     def _pick_best(self, st: dict):
         """Best save = most like the target among saves that still keep the words and the melody (content within 2%
         of the best content, pitch error within 10 cents of the best). Falls back to the held-out loss."""
         probed = [s for s in st.get("saves", []) if s.get("identity") is not None]
+        kinds = {s.get("test", "speech") for s in probed}
+        if len(kinds) > 1:   # never compare a sung score with a speech one: use the newer test's saves
+            probed = [s for s in probed if s.get("test", "speech") == probed[-1].get("test", "speech")]
         if not probed:
             return
         top_c = max(s["content"] for s in probed)

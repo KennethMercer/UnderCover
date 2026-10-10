@@ -453,7 +453,7 @@ def find_speakers(proj: Project):
     for c in clusters:
         emb[f"speaker:{c['cluster']}"] = c.pop("centroid")
         c.pop("weight")
-    for k in [k for k in emb if k.startswith("speaker:") and int(k.split(":")[1]) not in {c["cluster"] for c in clusters}]:
+    for k in [k for k in emb if k.startswith("speaker:") and k != "speaker:sung" and int(k.split(":")[1]) not in {c["cluster"] for c in clusters}]:
         del emb[k]
     proj.speakers = clusters
     if not proj.reference.get("confirmed") or proj.reference.get("cluster") not in {c["cluster"] for c in clusters}:
@@ -491,6 +491,12 @@ def score(proj: Project):
         r2 = np.mean(close, 0)
         ref = r2 / (np.linalg.norm(r2) + 1e-9)
     sref = _sung_reference(proj, emb, ref)
+    if sref is not None or "speaker:sung" in emb:   # kept for the voice check (tests singers on singing)
+        if sref is None:
+            emb.pop("speaker:sung")
+        else:
+            emb["speaker:sung"] = sref
+        proj.save_embeddings(emb)
     for p in proj.phrases:
         if p.id not in emb:
             p.score, p.mix, p.sung = 0.0, 0.0, False
