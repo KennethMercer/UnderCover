@@ -32,9 +32,35 @@ GOOD = {"speaking": re.compile(r"interview|podcast|speech|address|conversation|t
         "singing": re.compile(r"acapella|a cappella|isolated|vocals? only|live|unplugged|session", re.I)}
 
 
-def is_sung(title: str) -> bool:
-    """A source of the person singing (by its title): used to find their singing voice and to prefer singing."""
-    return bool(GOOD["singing"].search(title)) and not GOOD["speaking"].search(title)
+def is_sung(src) -> bool:
+    """A source of the person singing: their own album tracks, or a title saying so (acapella, isolated vocals,
+    live...). Used to find their singing voice and to prefer singing. Accepts a Source or a title."""
+    if not isinstance(src, str):
+        if (src.extra or {}).get("sung"):
+            return True
+        src = src.title
+    return bool(GOOD["singing"].search(src)) and not GOOD["speaking"].search(src)
+
+
+def album_tracks(name: str, n: int = 20) -> list:
+    """The person's own studio recordings from YouTube Music (their "Artist - Topic" channel): consistent,
+    well-recorded singing, separated here with the same model as covers. Fan acapellas vary a lot (Elliott Smith's
+    Clementine upload was too hissy to use) and there are only a handful per artist."""
+    from .. import songs
+    words = [w for w in re.findall(r"\w+", name.lower()) if len(w) > 2]
+    out: dict = {}
+    for q in (name, f"{name} songs"):
+        try:
+            found = songs._music_tracks(q, n=n)
+        except Exception:
+            continue
+        for r in found:
+            artist = r.channel.lower().replace(" - topic", "")
+            if not words or not all(w in artist for w in words) or r.id in out:
+                continue   # only recordings by the person themselves
+            out[r.id] = Source(id=r.id, url=r.url, title=r.title, channel=r.channel, duration=float(r.duration or 0),
+                               note="album track", extra={"sung": True})
+    return list(out.values())
 
 
 @dataclass
@@ -106,7 +132,7 @@ def _rank(src: Source, name: str, mode: str) -> float:
     score = 0.0
     name_tokens = [w for w in re.findall(r"\w+", name.lower()) if len(w) > 1]
     score += 2.0 * sum(w in t for w in name_tokens) / max(1, len(name_tokens))
-    sung = mode != "speaking" and is_sung(src.title)
+    sung = mode != "speaking" and is_sung(src)
     if mode == "both":   # singers: sung sources first, interviews only as backup
         score += 2.0 if sung else (0.5 if GOOD["speaking"].search(t) else 0.0)
     elif GOOD["singing" if mode == "singing" else "speaking"].search(t):
@@ -147,9 +173,10 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None) -> l
                         src.selected, src.note = False, why
                         break
                 found[vid] = src
-    if not found:
+    albums = album_tracks(name) if mode != "speaking" else []
+    if not found and not albums:
         raise ModelError(f"No videos found for '{name}'. Check the spelling, or paste links / add recordings.")
-    ranked = sorted(found.values(), key=lambda s: -_rank(s, name, mode))
+    ranked = albums + sorted([s for s in found.values() if s.id not in {a.id for a in albums}], key=lambda s: -_rank(s, name, mode))
     # Tick the best sources until there is comfortably enough raw audio for the target.
     want = TCFG["target_minutes"] * 60 * 4   # assume ~1/4 of the used audio survives as clean target voice
     have = 0.0
@@ -164,7 +191,7 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None) -> l
             m = GOOD["singing"].search(s.title) or GOOD["speaking"].search(s.title)
             s.note = m.group(0).lower() if m else ""
     # sung sources are songs (2-4 min each), so singers need more of them listed to reach the target
-    return ranked[:TCFG["search_results"] * (2 if mode == "both" else 1)]
+    return ranked[:TCFG["search_results"] * (2 if mode == "both" else 1) + len(albums)]
 
 
 def from_link(url: str) -> list[Source]:

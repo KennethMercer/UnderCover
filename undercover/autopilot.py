@@ -606,14 +606,14 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
         emb = SpeakerEmbedder()
         # Singers: the voice will sing, so gather singing first; interviews only top up when songs run out.
         singer = proj.mode != "speaking"
-        sung_first = (lambda s: not srcmod.is_sung(s.title)) if singer else (lambda s: False)
+        sung_first = (lambda s: not srcmod.is_sung(s)) if singer else (lambda s: False)
         searched_more = False
 
         def enough(pr):
             return (pr.sung_seconds() if singer and not songs_exhausted(pr) else pr.kept_seconds()) / 60 >= TC["target_minutes"]
 
         def songs_exhausted(pr):
-            return not [s for s in pr.sources if srcmod.is_sung(s.title) and s.status == "found"
+            return not [s for s in pr.sources if srcmod.is_sung(s) and s.status == "found"
                         and not s.note.startswith(NOT_USABLE)]
         for rnd in range(12 if singer else 8):
             proj = P.Project.load(proj.name)
@@ -623,7 +623,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
             todo = [s.id for s in sorted(proj.sources, key=sung_first)
                     if s.selected and s.status not in ("ready", "failed")]
             if singer and not songs_exhausted(proj):
-                todo = [i for i in todo if srcmod.is_sung(proj.source(i).title)]
+                todo = [i for i in todo if srcmod.is_sung(proj.source(i))]
             todo = todo[:3 if singer else 2]
             if todo:
                 def prog(f, label, rnd=rnd, **kw):
@@ -643,9 +643,9 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
             if enough(proj):
                 break
             more = sorted([s for s in proj.sources if not s.selected and not s.note.startswith(NOT_USABLE)
-                           and s.status == "found" and s.duration >= (90 if singer and srcmod.is_sung(s.title) else 120)],
+                           and s.status == "found" and s.duration >= (90 if singer and srcmod.is_sung(s) else 120)],
                           key=sung_first)
-            if singer and not searched_more and not [s for s in more if srcmod.is_sung(s.title)]:
+            if singer and not searched_more and not [s for s in more if srcmod.is_sung(s)]:
                 # out of songs: look for more of them before settling for interviews
                 searched_more = True
                 try:
@@ -655,7 +655,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
                 with P.lock(proj.name):
                     proj = P.Project.load(proj.name)
                     have = {s.id for s in proj.sources}
-                    new = [s for s in extra if s.id not in have and s.selected and srcmod.is_sung(s.title)]
+                    new = [s for s in extra if s.id not in have and s.selected and srcmod.is_sung(s)]
                     proj.sources += new
                     proj.save()
                 more = new + more
