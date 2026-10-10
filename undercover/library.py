@@ -23,8 +23,8 @@ import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from .config import CONFIG, ROOT, path
-from .models import ModelError, slug
+from .core.config import CONFIG, ROOT, path
+from .core.voices import ModelError, slug
 
 DAY = 86400
 TEMP_PREFIXES = ("dl_", "yt_", "mix_", "tup_", "vup_", "inst_")
@@ -138,7 +138,7 @@ def _duplicate_voices(hist: list) -> tuple[list, str]:
     """Voice folders whose model.pth is byte-identical to another voice's (e.g. 'biden' and 'joe-biden' from two
     sites). Keeps the copy used for more covers (then the older install); returns (folders to remove, names)."""
     import hashlib
-    from .models import list_voices
+    from .core.voices import list_voices
     by_size: dict = {}
     for v in list_voices():
         try:
@@ -294,7 +294,7 @@ def songs(S) -> list[dict]:
 
 def voices(S) -> list[dict]:
     from .autopilot import undertrained
-    from .models import list_voices
+    from .core.voices import list_voices
     from .pipeline import history
     hist = history()
     q = _quality()
@@ -488,10 +488,10 @@ def _route(S, h, method, p):
         return h._json({"ok": True})
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
     if m:
-        from .models import get_voice, voices_dir
+        from .core.voices import get_voice, voices_dir
         v = get_voice(m.group(1))
         if m.group(2) == "export" and method == "GET":
-            from .rvc.index import export_faiss
+            from .core.engine.rvc.index import export_faiss
             tmp = path("cache_dir") / f"_export_{v.name}.index"
             try:   # stored compact (fp16): other RVC tools need the standard faiss layout
                 idx = export_faiss(v.index, tmp) if v.index else None
@@ -511,7 +511,7 @@ def _route(S, h, method, p):
             meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
             meta.update(name=new, dir=str(target), pth=str(target / "model.pth"),
                         index=str(target / "model.index") if meta.get("index") else None)
-            from . import fsutil
+            from .core import fsutil
             fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
             if S.ENGINE and S.ENGINE._conv:
                 S.ENGINE._conv.voices.pop(v.name, None)

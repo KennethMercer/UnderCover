@@ -32,10 +32,10 @@ def main():
     ap.add_argument("-o", "--out", type=Path, help="output path (extension set by --format)")
     a = ap.parse_args()
 
-    from .models import ModelError, download_and_install, get_voice, search
+    from .core.voices import ModelError, download_and_install, get_voice, search
     from .pipeline import CoverEngine, CoverOptions
     from .remix import RemixError
-    from . import timing
+    from .core import timing
     timing.VERBOSE = False
 
     if a.pitch is not None and a.pitch % 12 and a.key is None and a.octave is None:
@@ -52,7 +52,7 @@ def main():
                 msg = f"No voice called '{a.voice}' is installed."
                 if res:
                     msg += " Top matches online:\n" + "\n".join(f"  {i}. {r.name}  ({r.repo})" for i, r in enumerate(res, 1))
-                    msg += f"\nRe-run with --download to install #1, or: python -m undercover.models download <n> --name {a.voice}"
+                    msg += f"\nRe-run with --download to install #1, or: python -m undercover.core.voices download <n> --name {a.voice}"
                 sys.exit(msg)
             res = search(a.voice, limit=1)
             if not res:

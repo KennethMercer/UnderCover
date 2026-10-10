@@ -7,8 +7,8 @@ Same-speaker pairs typically score > 0.5, different speakers < 0.3.
 import numpy as np
 import torch
 
-from ..config import path
-from .. import setup_models
+from .config import path
+from . import setup_models
 
 SR = 16000
 

@@ -1,6 +1,6 @@
 """Download the shared RVC models (HuBERT/ContentVec features, RMVPE pitch) if missing.
 
-    python -m undercover.setup_models
+    python -m undercover.core.setup_models
 """
 from .config import CONFIG, path
 

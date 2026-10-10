@@ -15,8 +15,8 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .config import path
-from .models import ModelError
+from .core.config import path
+from .core.voices import ModelError
 from .train.source import _QuietLogger, _short
 
 STOP = {"the", "in", "of", "by", "an", "and", "to", "on", "for", "my", "me", "you", "it", "is", "at", "with", "from"}

@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .config import CONFIG, ROOT, path
+from .core.config import CONFIG, ROOT, path
 from . import library
 from .train import api as train_api
 
@@ -55,7 +55,7 @@ STARTUP_STAMP = code_stamp()
 
 def friendly(e: BaseException, stage: str = "") -> str:
     """Turn an exception into a message that says what to do. Full traceback goes to logs/errors.log."""
-    from .models import ModelError
+    from .core.voices import ModelError
     from .remix import RemixError
     if isinstance(e, (ModelError, RemixError)):
         return str(e)
@@ -145,11 +145,11 @@ def gpu_worker():
         if STATUS.get("gpu_problem"):
             STATUS["models"] = "error: " + STATUS["gpu_problem"]   # the loop below keeps running, refusing jobs
         elif UCFG["preload_models"]:
-            from . import setup_models
+            from .core import setup_models
             mdir = path("models_dir")
             STATUS["first_run"] = not all((mdir / f).exists() for f in setup_models.FILES)   # ~600 MB to fetch, once
             STATUS["models"] = "loading"
-            from .separate import SEP
+            from .core.separate import SEP
             ENGINE.separator._get(SEP["vocal_model"])
             ENGINE.converter
         if not STATUS.get("gpu_problem"):
@@ -231,7 +231,7 @@ def heartbeat_loop():
 def start_oneshot(body: dict) -> "Job":
     """Queue a one-shot cover (from the page, or Resume after a pause)."""
     from . import autopilot
-    from .models import ModelError
+    from .core.voices import ModelError
     text = (body.get("text") or "").strip()
     autopilot.parse(text)   # friendly error now rather than inside the job
     if any(j.kind == "auto" and not j.finished for j in JOBS.values()):
@@ -424,7 +424,7 @@ def history_items() -> list[dict]:
 
 
 def voices_json() -> list[dict]:
-    from .models import list_voices
+    from .core.voices import list_voices
     return [{"name": v.name, "version": v.version, "sr": v.sr, "index": bool(v.index), "f0": v.f0,
              "source": v.source, "installed": v.installed} for v in list_voices()]
 
@@ -522,7 +522,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/voices":
                 return self._json(voices_json())
             if p == "/api/search":
-                from .models import ModelError, search
+                from .core.voices import ModelError, search
                 term = (q.get("q") or [""])[0]
                 try:
                     res = search(term, limit=12)
@@ -534,7 +534,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/history":
                 return self._json(history_items())
             if p == "/api/songs/search":
-                from .models import ModelError
+                from .core.voices import ModelError
                 from . import songs
                 try:
                     return self._json([r.to_json() for r in songs.search((q.get("q") or [""])[0])])
@@ -610,7 +610,7 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/voices/([a-z0-9-]+)", urlparse(self.path).path)
         if not m:
             return self._error("Not found", 404)
-        from .models import ModelError, remove_voice
+        from .core.voices import ModelError, remove_voice
         try:
             remove_voice(m.group(1))
             if ENGINE and ENGINE._conv:
@@ -745,7 +745,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(estimate(path("uploads_dir") / meta["file"], opts))
 
     def _start_cover(self, body: dict):
-        from .models import get_voice
+        from .core.voices import get_voice
         meta = song_meta(body.get("song", ""))
         opts = _options(body)
         get_voice(opts.voice)  # friendly error now rather than inside the job
@@ -803,7 +803,7 @@ class Handler(BaseHTTPRequestHandler):
         JOBS[job.id] = job
 
         def run(job: Job):
-            from .separate import separate
+            from .core.separate import separate
 
             def progress(frac, step):
                 if job.cancel:
@@ -816,7 +816,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _song_from_youtube(self, body: dict):
         """Fetch a song from YouTube (a search result or a pasted link) into uploads/, like a dropped file."""
-        from .models import ModelError
+        from .core.voices import ModelError
         from . import songs
         try:
             if body.get("url") and not body.get("id"):
@@ -829,7 +829,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _auto_plan(self, text: str, prefer_train: bool):
         """What a one-shot request would do, without downloading anything (shown before it starts)."""
-        from .models import ModelError, slug
+        from .core.voices import ModelError, slug
         from . import autopilot
         try:
             req = autopilot.parse_request(text)
@@ -848,7 +848,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"song_query": song, "person": person, "style": req["style"], "voice": voice})
 
     def _start_auto(self, body: dict):
-        from .models import ModelError
+        from .core.voices import ModelError
         try:
             job = start_oneshot(body)
         except ModelError as e:
@@ -858,7 +858,7 @@ class Handler(BaseHTTPRequestHandler):
     def _work(self, action: str, b: dict):
         """Pause / Resume and the overnight queue (worklist.py)."""
         from . import worklist
-        from .models import ModelError
+        from .core.voices import ModelError
         try:
             if action == "pause":
                 return self._json(worklist.pause_all())
@@ -881,7 +881,7 @@ class Handler(BaseHTTPRequestHandler):
         self._error("Not found", 404)
 
     def _start_preview(self, body: dict):
-        from .models import get_voice
+        from .core.voices import get_voice
         meta = song_meta(body.get("song", ""))
         opts = _options(body)
         get_voice(opts.voice)
@@ -905,7 +905,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"job": job.id})
 
     def _start_install(self, body: dict):
-        from .models import ModelError, download_and_install, last_search
+        from .core.voices import ModelError, download_and_install, last_search
         src, name = body.get("url"), body.get("name")
         n = body.get("n")   # legacy: position in the last search (pages from before 2026-10-09)
         if n and not src:
@@ -968,7 +968,7 @@ class Handler(BaseHTTPRequestHandler):
     def _voice_upload(self):
         """Install a voice from a dropped .zip/.pth/.index file (body = raw file bytes)."""
         import tempfile
-        from .models import ModelError, _guess_name, install
+        from .core.voices import ModelError, _guess_name, install
         n = int(self.headers.get("Content-Length") or 0)
         fname = Path(unquote(self.headers.get("X-Filename") or "voice.zip")).name
         if Path(fname).suffix.lower() not in (".zip", ".pth"):
@@ -1065,11 +1065,11 @@ def _clean_old_previews(max_age_h: float = 24):
 
 
 def _relaunch(extra_args: list[str]):
-    """Hand off to undercover/relaunch.py, which waits for THIS process to exit before starting a fresh,
+    """Hand off to undercover/core/relaunch.py, which waits for THIS process to exit before starting a fresh,
     windowless server (output in logs/server.log). Starting the new server while this one is still releasing
     the GPU leaves this process stuck in the driver."""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen([sys.executable, "-m", "undercover.relaunch", str(os.getpid()),
+    subprocess.Popen([sys.executable, "-m", "undercover.core.relaunch", str(os.getpid()),
                       "--no-browser", "--restarted", *extra_args],
                      cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=flags, close_fds=True)
@@ -1078,7 +1078,7 @@ def _relaunch(extra_args: list[str]):
 def main():
     global SERVER
     try:   # the app folder may have been moved or renamed: fix stored paths before anything reads them
-        from . import relocate
+        from .core import relocate
         relocate.check_and_fix()
     except Exception as e:   # noqa: BLE001 - never block startup
         print(f"Couldn't check the app folder location: {e}", flush=True)

@@ -15,8 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import CONFIG, path
-from .timing import timed
+from .core.config import CONFIG, path
+from .core.timing import timed
 
 RCFG = CONFIG["remix"]
 

@@ -4,14 +4,14 @@ Starting the new server (which initialises the GPU) while the old one is still t
 leaves the old process stuck in the driver. So the old server spawns this small helper (no torch, no GPU),
 exits, and the helper starts the new server only once the old process is gone.
 
-    python -m undercover.relaunch <old_pid> [server args...]
+    python -m undercover.core.relaunch <old_pid> [server args...]
 """
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def wait_for_exit(pid: int, timeout: float = 60.0) -> bool:
