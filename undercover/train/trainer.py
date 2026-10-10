@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from ..core.config import CONFIG, path
 from ..core import fsutil
 from ..core.voices import ModelError, slug
+from ..core.jobs import Control  # noqa: F401 - used by the training loop; callers import it from here
 from ..core.timing import timed
 from .project import CLIP_SR, Project
 
@@ -54,17 +55,6 @@ def coarse_f0(f0: np.ndarray) -> np.ndarray:
     v = mel > 0
     mel[v] = (mel[v] - F0_MEL_MIN) * 254 / (F0_MEL_MAX - F0_MEL_MIN) + 1
     return np.rint(np.clip(mel, 1, 255)).astype(np.int64)
-
-
-class Control:
-    """Set from the UI thread, read by the training loop between steps."""
-    def __init__(self):
-        self.pause = False   # save a resume point and return
-        self.stop = False    # finish now and export the best save
-        self.service = lambda: None   # called between steps; the server runs queued covers here
-
-    def wants_out(self) -> bool:
-        return self.pause or self.stop
 
 
 # ================================================================ data preparation

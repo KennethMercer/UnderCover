@@ -5,7 +5,10 @@ is preferred: YouTube Music's song search comes first (exact album audio, with a
 then plain YouTube as a fallback, where music videos and anything noticeably longer than the album track are
 ranked down and labelled. Live versions, covers, karaoke, remixes and sped-up edits are pushed down unless asked
 for. Audio is saved as FLAC (a lossless copy of what YouTube serves).
+
+Also the songs in uploads/ (dropped files and YouTube fetches alike): register_song, song_meta.
 """
+import hashlib
 import json
 import math
 import re
@@ -275,3 +278,68 @@ def download(r: SongResult, register, progress=None) -> dict:
         return meta
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- songs in uploads/
+
+def _ffprobe(p: Path) -> dict:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+                          "format=duration:stream=sample_rate,channels", "-of", "json", str(p)],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        raise ValueError("not audio")
+    d = json.loads(out.stdout)
+    st = (d.get("streams") or [{}])[0]
+    if not st:
+        raise ValueError("no audio stream")
+    return {"duration": float(d["format"]["duration"]), "sample_rate": int(st.get("sample_rate", 0)),
+            "channels": int(st.get("channels", 0))}
+
+
+def _peaks(p: Path, bins: int = 1200) -> list[float]:
+    """Waveform overview: peak level per bin, decoded via ffmpeg (any format)."""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
+                         capture_output=True).stdout
+    a = np.abs(np.frombuffer(raw, dtype=np.float32))
+    if not len(a):
+        return []
+    a = a[: len(a) // bins * bins].reshape(bins, -1).max(axis=1) if len(a) >= bins else a
+    top = float(a.max()) or 1.0
+    return [round(float(x) / top, 3) for x in a]
+
+
+def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: dict | None = None) -> dict:
+    """Move an audio file into uploads/ (named by content hash, like the stem cache) and write its metadata.
+    Shared by dropped files and songs fetched from YouTube. Raises ValueError if it isn't readable audio."""
+    from .core.files import file_url
+    from .remix import lufs
+    up = path("uploads_dir")
+    if sha256_hex is None:
+        h = hashlib.sha256()
+        with open(tmp, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        sha256_hex = h.hexdigest()
+    song_id = sha256_hex[:16]
+    dest = up / f"{song_id}{Path(name).suffix.lower() or Path(tmp).suffix.lower()}"
+    if dest.exists():
+        Path(tmp).unlink(missing_ok=True)
+    else:
+        Path(tmp).replace(dest)
+    try:
+        info = _ffprobe(dest)
+    except (ValueError, KeyError, json.JSONDecodeError):
+        dest.unlink(missing_ok=True)
+        raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
+    meta = {"id": song_id, "name": name, "title": Path(name).stem, "file": dest.name, **info,
+            "lufs": round(lufs(dest), 1), "peaks": _peaks(dest), "url": file_url(dest), **(extra or {})}
+    (up / f"{song_id}.json").write_text(json.dumps(meta), encoding="utf-8")
+    return meta
+
+
+def song_meta(song_id: str) -> dict:
+    meta = path("uploads_dir") / f"{song_id}.json"
+    if not re.fullmatch(r"[0-9a-f]{16}", song_id) or not meta.exists():
+        raise LookupError("That song isn't loaded anymore. Drop it in again.")
+    return json.loads(meta.read_text(encoding="utf-8"))

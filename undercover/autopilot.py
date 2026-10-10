@@ -18,7 +18,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .core.config import CONFIG
+from .core import gpu, jobs
+from .core.config import CONFIG, path
+from .core.jobs import Paused
 from .core.voices import ModelError, slug
 
 PATTERNS = [
@@ -262,7 +264,7 @@ def project_for(person: str):
     return proj
 
 
-def reference_clips(S, job, person: str, control, push):
+def reference_clips(job, person: str, control, push):
     """Make sure the person's project has the real voice identified and some phrases by other people (the
     test material): prepares one source at a time, at most two. These are training clips too."""
     from .train import project as P
@@ -289,12 +291,12 @@ def reference_clips(S, job, person: str, control, push):
             break
         push("voice", 0.04, f"Getting real clips of {person} to check voices against")
         try:
-            P.prepare_sources(proj.name, todo, S.ENGINE.separator, emb, cancel=lambda: job.cancel or job.pausing,
+            P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, cancel=lambda: job.cancel or job.pausing,
                               progress=lambda f, label, **kw: push("voice", 0.04 + 0.1 * f, f"Getting real clips of {person}: {label}"),
                               between=control.service,
-                              friendly=lambda e: S.friendly(e, "preparing a source"))
+                              friendly=lambda e: jobs.friendly(e, "preparing a source"))
         except P.Cancelled:
-            raise Paused() if job.pausing else S.Cancelled()
+            raise Paused() if job.pausing else jobs.Cancelled()
     proj = P.Project.load(proj.name)
     if proj.speakers and not proj.reference.get("confirmed"):
         with P.lock(proj.name):
@@ -324,7 +326,7 @@ def _prefetch_voice_sources(person: str):
         pass   # best effort: the normal path does all of this again if needed
 
 
-def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: dict):
+def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dict):
     """-> installed Voice to use (training one if nothing measured good enough)."""
     from . import voicecheck
     from .core.voices import download_and_install, get_voice, remove_voice
@@ -339,8 +341,8 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
     online = [] if prefer_train else online_for(person, 2)
     checked = []
     if community or online:
-        proj = reference_clips(S, job, person, control, push)
-        conv, emb = S.ENGINE.converter, SpeakerEmbedder()
+        proj = reference_clips(job, person, control, push)
+        conv, emb = gpu.MODELS.converter, SpeakerEmbedder()
 
         def test(v, ident):
             cached = _quality_cache().get(_qkey(person, ident))
@@ -357,8 +359,7 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
             for name in downloaded:
                 if name != keep:   # only the chosen download stays in the voice list
                     remove_voice(name)
-                    if S.ENGINE._conv:
-                        S.ENGINE._conv.voices.pop(name, None)
+                    gpu.forget_voice(name)
         try:
             for v in community:
                 q = test(v, _ident(v))
@@ -367,7 +368,7 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
                 online = []   # an installed voice already passes: no need to download more
             for r in online:
                 if job.cancel:
-                    raise S.Cancelled()
+                    raise jobs.Cancelled()
                 ident = r.repo + "/" + r.file
                 cached = _quality_cache().get(_qkey(person, ident))
                 if cached and cached["verdict"] != "good":
@@ -407,11 +408,10 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
         push("voice", 0.2, "None of the existing voices sounded enough like " + person + ", so UnderCover will train one")
     plan["voice"] = {"name": f"{slug(person)}-uc", "how": "train"}
     push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 45 minutes)")
-    name = train_new_voice(S, job, person, control, push)
+    name = train_new_voice(job, person, control, push)
     v = get_voice(name)
     plan["voice"]["name"] = v.name
-    if S.ENGINE._conv:
-        S.ENGINE._conv.voices.pop(v.name, None)
+    gpu.forget_voice(v.name)
     return v
 
 
@@ -583,15 +583,10 @@ MIN_SUNG = 0.12   # under ~12% of the song with a voiced melody = basically inst
 
 # ---------------------------------------------------------------- training a new voice
 
-class Paused(Exception):
-    """Training was paused (Pause at the top of the page, or on the Train tab): the job ends as "paused" and
-    Resume starts it again from the same point."""
-
-
 NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably")   # source notes that mean someone else
 
 
-def train_new_voice(S, job, person: str, control, push, project: str | None = None,
+def train_new_voice(job, person: str, control, push, project: str | None = None,
                     target_minutes: float | None = None) -> str:
     """Find clips -> prepare (topping up sources until the target) -> auto-confirm -> train -> add. Returns voice name.
     project: continue that Train-tab project (its ticked sources, choices and reference are kept)."""
@@ -641,11 +636,11 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
                     push("voice", 0.02 + 0.08 * min(1, (rnd + f) / 2),
                          f"Preparing clips: {label}" + (f" ({kw['index']}/{kw['count']})" if kw.get("count") else ""))
                 try:
-                    P.prepare_sources(proj.name, todo, S.ENGINE.separator, emb, progress=prog, between=control.service,
+                    P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, progress=prog, between=control.service,
                                       cancel=lambda: job.cancel or job.pausing,
-                                      friendly=lambda e: S.friendly(e, "preparing a source"))
+                                      friendly=lambda e: jobs.friendly(e, "preparing a source"))
                 except P.Cancelled:
-                    raise Paused() if job.pausing else S.Cancelled()
+                    raise Paused() if job.pausing else jobs.Cancelled()
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
                 if proj.speakers and not proj.reference.get("confirmed"):
@@ -694,7 +689,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
         st.update(sr=st.get("sr") or TC["sample_rate"], length="auto", voice_name=st.get("voice_name") or f"{key}-uc")
         proj.save_train()
-        conv = S.ENGINE.converter
+        conv = gpu.MODELS.converter
         tr = Trainer(proj, conv.hubert, conv.rmvpe, device=str(conv.device), half=conv.half, converter=conv)
 
         def tprog(**ev):
@@ -707,7 +702,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
                 push("voice", 0.12, f"Training: {ev.get('note', 'getting ready')}")
         st = tr.run(control, progress=tprog)
         if job.cancel:
-            raise S.Cancelled()
+            raise jobs.Cancelled()
         if st.get("state") == "paused":
             raise Paused()
         push("voice", 0.98, "Adding the new voice")
@@ -719,9 +714,9 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
 
 # ---------------------------------------------------------------- the job
 
-def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = None):
+def run(job, text: str, prefer_train: bool = False, song_url: str | None = None):
     from . import songs
-    from .pipeline import CoverOptions
+    from .pipeline import ENGINE, CoverOptions, history_items
     from .core.separate import separate
     from .train.trainer import Control
     t0 = time.perf_counter()
@@ -729,7 +724,7 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
 
     def push(stage, frac, message, **kw):
         if job.cancel:
-            raise S.Cancelled()
+            raise jobs.Cancelled()
         job.push(stage=stage, frac=round(frac, 3), message=message, plan=plan,
                  elapsed=round(time.perf_counter() - t0, 1), **kw)
 
@@ -765,7 +760,7 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
         def go():
             try:
                 box["had"] = songs.known_song(pk.id)
-                box["meta"] = songs.download(pk, S.register_song)
+                box["meta"] = songs.download(pk, songs.register_song)
             except Exception as e:   # noqa: BLE001 - re-raised on the main thread
                 box["err"] = e
         t = threading.Thread(target=go, daemon=True, name="song-ahead")
@@ -785,7 +780,7 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
                 had, meta = box["had"], box["meta"]
             else:
                 had = songs.known_song(pick.id)
-                meta = songs.download(pick, S.register_song, progress=lambda f, pick=pick, label=label, n=n: push(
+                meta = songs.download(pick, songs.register_song, progress=lambda f, pick=pick, label=label, n=n: push(
                     "song", 0.02 + 0.9 * (n + 0.4 * f) / per, f"Downloading {label}“{pick.title}”"))
             if compare and ci + 1 < len(cands) and n + 1 < per:
                 fetch_ahead(cands[ci + 1])
@@ -794,12 +789,12 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
                 raise
             skipped.append(pick.title)   # unavailable (removed, region-locked): try the next candidate
             continue
-        song = Path(S.path("uploads_dir")) / meta["file"]
+        song = Path(path("uploads_dir")) / meta["file"]
         # separate now (cached for the cover): catches a bad download early and gives the melody's pitch
-        stems = separate(song, dereverb=True, karaoke=True, separator=S.ENGINE.separator, quality="high",
+        stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high",
                          progress=lambda f, name, pick=pick, label=label, n=n: push(
                              "song", 0.02 + 0.9 * (n + 0.4 + 0.6 * f) / per, f"Separating the vocals of {label}“{pick.title}”"))
-        song_hz, sung = vocal_stats(stems["vocals"], S.ENGINE.converter.rmvpe)
+        song_hz, sung = vocal_stats(stems["vocals"], gpu.MODELS.converter.rmvpe)
         if sung < MIN_SUNG:
             skipped.append(pick.title)
             if not had and compare:
@@ -830,14 +825,14 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
     job.control = control   # Pause (top of the page) reaches a one-shot's training through this
 
     def service():
-        while not S.GPU_QUEUE.empty():
+        while not jobs.GPU_QUEUE.empty():
             try:
-                other, fn = S.GPU_QUEUE.get_nowait()
+                other, fn = jobs.GPU_QUEUE.get_nowait()
             except Exception:
                 return
-            S.run_job(other, fn)
+            jobs.run_job(other, fn)
     control.service = service
-    v = resolve_voice(S, job, person, prefer_train, control, push, plan)
+    v = resolve_voice(job, person, prefer_train, control, push, plan)
 
     # 3. settings + cover
     vhz, speech = voice_f0(v)
@@ -876,7 +871,7 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
                         "why": why}
     # Stacked backing harmonies don't survive RVC (it follows one pitch): keep the original singers there, a bit
     # quieter, and convert only the lead (review B5).
-    chordal = chordal_backing(stems.get("backing"), S.ENGINE.converter.rmvpe)
+    chordal = chordal_backing(stems.get("backing"), gpu.MODELS.converter.rmvpe)
     plan["settings"]["backing"] = "original (stacked harmonies)" if chordal else "converted"
     opts = CoverOptions(voice=v.name, key=key, octave=octave, quality="high", dereverb=True, karaoke=True,
                         backing_voice=None if chordal else v.name, backing_octave=octave,
@@ -887,7 +882,24 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
         a, b = stage_w.get(stage, (0.95, 1.0))
         push("cover", a + (b - a) * frac, msg or stage.capitalize())
     push("cover", 0.0, f"Making the cover with “{v.name}”")
-    res = S.ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
-    item = next((h for h in S.history_items() if h["output_name"] == res.output.name), None)
+    res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
+    item = next((h for h in history_items() if h["output_name"] == res.output.name), None)
     job.finish("done", message="Finished", result=item, plan=plan, seconds=res.seconds, notes=res.notes,
                elapsed=round(time.perf_counter() - t0, 1))
+
+
+def start_oneshot(body: dict):
+    """Queue a one-shot cover (from the page, or Resume after a pause)."""
+    from .pipeline import cancel_presep
+    text = (body.get("text") or "").strip()
+    parse(text)   # friendly error now rather than inside the job
+    if any(j.kind == "auto" and not j.finished for j in jobs.JOBS.values()):
+        raise ModelError("A one-shot cover is already running. Wait for it, or cancel it.")
+    cancel_presep()
+    job = jobs.Job("auto")
+    jobs.JOBS[job.id] = job
+    job.resume_spec = {"kind": "oneshot", "text": text, "prefer_train": bool(body.get("prefer_train")),
+                       "song_url": body.get("song_url") or None, "label": f"One-shot: {text}"}
+    job.push(stage="queued", frac=0, message="Waiting for the GPU", plan={"request": text})
+    jobs.GPU_QUEUE.put((job, lambda job: run(job, text, bool(body.get("prefer_train")), body.get("song_url") or None)))
+    return job

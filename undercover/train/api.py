@@ -1,5 +1,4 @@
-"""Web API for the Train a voice page. server.py routes /api/train/... here and passes itself as `S`
-(server.py usually runs as __main__, so importing it here would load a second copy).
+"""Web API for the Train a voice page. server.py routes /api/train/... here.
 
 GET    /api/train/projects                      list
 POST   /api/train/projects                      {person, mode} -> create + search
@@ -22,6 +21,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import unquote
 
+from ..core import files, gpu, jobs
 from ..core.config import CONFIG, path
 from ..core.voices import ModelError, slug
 from . import project as P
@@ -49,7 +49,7 @@ def _busy(name: str) -> dict | None:
     return a if a and not a["job"].finished else None
 
 
-def project_json(S, proj: P.Project) -> dict:
+def project_json(proj: P.Project) -> dict:
     tdir = proj.dir / "train"
     hist = []
     if (tdir / "history.jsonl").exists():
@@ -57,19 +57,19 @@ def project_json(S, proj: P.Project) -> dict:
     saves = []
     for s in proj.train.get("saves", []):
         pv = tdir / "previews" / f"e{s['epoch']}.wav"
-        saves.append({**s, "preview": S.file_url(pv) if pv.exists() else None,
+        saves.append({**s, "preview": files.file_url(pv) if pv.exists() else None,
                       "available": (tdir / f"e{s['epoch']}.pth").exists()})
     real = tdir / "previews" / "real.wav"
     a = _busy(proj.name)
     return {
         **proj.summary(),
-        "sources": [{**s.to_json(), "raw": S.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
+        "sources": [{**s.to_json(), "raw": files.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
         "phrases": [{"id": p.id, "source": p.source, "start": p.start, "dur": p.dur, "score": p.score, "mix": p.mix,
                      "music_db": p.music_db, "reason": p.reason, "choice": p.choice, "kept": p.kept, "sung": p.sung,
-                     "url": S.file_url(proj.clip_path(p.id))} for p in proj.phrases],
-        "speakers": [{**sp, "url": S.file_url(proj.clip_path(sp["clip"]))} for sp in proj.speakers],
-        "reference_url": S.file_url(proj.clip_path(proj.reference["clip"])) if proj.reference.get("clip") else None,
-        "history": hist, "saves": saves, "real_preview": S.file_url(real) if real.exists() else None,
+                     "url": files.file_url(proj.clip_path(p.id))} for p in proj.phrases],
+        "speakers": [{**sp, "url": files.file_url(proj.clip_path(sp["clip"]))} for sp in proj.speakers],
+        "reference_url": files.file_url(proj.clip_path(proj.reference["clip"])) if proj.reference.get("clip") else None,
+        "history": hist, "saves": saves, "real_preview": files.file_url(real) if real.exists() else None,
         "job": {"id": a["job"].id, "kind": a["kind"]} if a else None,
         "defaults": {"sr": TCFG["sample_rate"], "length": "auto", "steps": _lengths()},
     }
@@ -80,12 +80,12 @@ def _lengths() -> dict:
     return LENGTHS
 
 
-def handle(S, h, method: str, p: str) -> bool:
+def handle(h, method: str, p: str) -> bool:
     """Route one request. h: the BaseHTTPRequestHandler. Returns False if the path isn't ours."""
     if not p.startswith("/api/train/"):
         return False
     try:
-        _route(S, h, method, p)
+        _route(h, method, p)
     except ModelError as e:
         h._error(str(e))
     except LookupError as e:
@@ -93,7 +93,7 @@ def handle(S, h, method: str, p: str) -> bool:
     return True
 
 
-def _route(S, h, method, p):
+def _route(h, method, p):
     if p == "/api/train/projects":
         if method == "GET":
             return h._json(P.list_projects())
@@ -102,15 +102,15 @@ def _route(S, h, method, p):
             mode = b.get("mode") if b.get("mode") in ("speaking", "singing", "both") else "speaking"
             proj = P.Project.create(b.get("person", ""), mode)
             if b.get("no_search"):
-                return h._json(project_json(S, proj))
+                return h._json(project_json(proj))
             try:
                 from . import source
                 proj.sources = source.search(proj.person, mode)
             except ModelError as e:
                 proj.save()
-                return h._json({**project_json(S, proj), "warning": str(e)})
+                return h._json({**project_json(proj), "warning": str(e)})
             proj.save()
-            return h._json(project_json(S, proj))
+            return h._json(project_json(proj))
     m = re.fullmatch(r"/api/train/projects/([a-z0-9-]+)(?:/(\w+))?", p)
     if not m:
         raise LookupError("Not found")
@@ -120,7 +120,7 @@ def _route(S, h, method, p):
         _heal(proj)
     if action is None:
         if method == "GET":
-            return h._json(project_json(S, proj))
+            return h._json(project_json(proj))
         if method == "DELETE":
             if _busy(name):
                 raise ModelError("That project is busy. Stop or cancel it first.")
@@ -134,12 +134,12 @@ def _route(S, h, method, p):
           "auto": _auto}.get(action)
     if fn is None:
         raise LookupError("Not found")
-    return fn(S, h, proj, b)
+    return fn(h, proj, b)
 
 
 # ---------------------------------------------------------------- sources
 
-def _search(S, h, proj, b):
+def _search(h, proj, b):
     from . import source
     if _busy(proj.name):
         raise ModelError("Wait for the current step to finish before searching again.")
@@ -153,10 +153,10 @@ def _search(S, h, proj, b):
         proj.sources = keep + [s for s in found if s.id not in ids]
         proj.person, proj.mode = person, mode
         proj.save()
-    h._json(project_json(S, proj))
+    h._json(project_json(proj))
 
 
-def _sources(S, h, proj, b):
+def _sources(h, proj, b):
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         if b.get("url"):
@@ -178,15 +178,15 @@ def _sources(S, h, proj, b):
                     proj.clip_path(pid).unlink(missing_ok=True)
                 (proj.dir / "raw" / f"{s.id}.wav").unlink(missing_ok=True)
         proj.save()
-    h._json(project_json(S, proj))
+    h._json(project_json(proj))
 
 
-def _upload(S, h, proj, b):
+def _upload(h, proj, b):
     n = int(h.headers.get("Content-Length") or 0)
     fname = Path(unquote(h.headers.get("X-Filename") or "recording.wav")).name
-    if Path(fname).suffix.lower() not in S.AUDIO_EXT:
+    if Path(fname).suffix.lower() not in files.AUDIO_EXT:
         raise ModelError(f"'{fname}' doesn't look like an audio file. Use mp3, wav, flac, m4a or ogg.")
-    if not n or n > S.UCFG["max_upload_mb"] * 1e6:
+    if not n or n > CONFIG["ui"]["max_upload_mb"] * 1e6:
         raise ModelError("That file is empty or too large.")
     tmp = path("cache_dir") / f"tup_{uuid.uuid4().hex}{Path(fname).suffix.lower()}"
     try:
@@ -206,16 +206,16 @@ def _upload(S, h, proj, b):
             proj.save()
     finally:
         tmp.unlink(missing_ok=True)
-    h._json(project_json(S, proj))
+    h._json(project_json(proj))
 
 
 # ---------------------------------------------------------------- prepare (GPU job)
 
-def _prepare(S, h, proj, b):
-    h._json({"job": start_prepare(S, proj.name).id})
+def _prepare(h, proj, b):
+    h._json({"job": start_prepare(proj.name).id})
 
 
-def start_prepare(S, name: str):
+def start_prepare(name: str):
     """Prepare the ticked sources of a project (GPU job). Pausing stops after the current source; resuming
     prepares the rest."""
     proj = P.Project.load(name)
@@ -224,8 +224,8 @@ def start_prepare(S, name: str):
     todo = [s.id for s in proj.sources if s.selected and s.status != "ready"]
     if not todo and not proj.phrases:
         raise ModelError("Tick at least one source (or add a recording) first.")
-    job = S.Job("train-prepare")
-    S.JOBS[job.id] = job
+    job = jobs.Job("train-prepare")
+    jobs.JOBS[job.id] = job
     ACTIVE[proj.name] = {"job": job, "control": None, "kind": "prepare"}
 
     def run(job):
@@ -234,22 +234,22 @@ def start_prepare(S, name: str):
         def progress(f, label, **kw):
             job.push(stage="matching" if label == "finding the voice" else "prepare", fraction=f, label=label, **kw)
         try:
-            failed = P.prepare_sources(proj.name, todo, S.ENGINE.separator, SpeakerEmbedder(), progress=progress,
+            failed = P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=progress,
                                        cancel=lambda: job.cancel or job.pausing,
-                                       friendly=lambda e: S.friendly(e, "preparing a source"))
+                                       friendly=lambda e: jobs.friendly(e, "preparing a source"))
         except P.Cancelled:
             if job.pausing:
                 return job.finish("paused", message="Paused. The rest is prepared when you resume.", project=proj.name)
-            raise S.Cancelled()
+            raise jobs.Cancelled()
         note = f"Couldn't use: {', '.join(failed)}." if failed else ""
         job.finish("done", message=note, project=proj.name)
 
     job.resume_spec = {"kind": "prepare", "project": proj.name, "label": f"Preparing clips for {proj.person or proj.name}"}
-    S.GPU_QUEUE.put((job, run))
+    jobs.GPU_QUEUE.put((job, run))
     return job
 
 
-def _reference(S, h, proj, b):
+def _reference(h, proj, b):
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         if b.get("clip"):
@@ -257,10 +257,10 @@ def _reference(S, h, proj, b):
         else:
             P.set_reference(proj, cluster=int(b.get("cluster", -2)))
         proj.save()
-    h._json(project_json(S, proj))
+    h._json(project_json(proj))
 
 
-def _phrases(S, h, proj, b):
+def _phrases(h, proj, b):
     choice = b.get("choice")
     if choice not in (True, False, None):
         raise ModelError("choice must be true, false or null")
@@ -271,16 +271,16 @@ def _phrases(S, h, proj, b):
             if x.id in ids:
                 x.choice = choice
         proj.save()
-    h._json(project_json(S, proj))
+    h._json(project_json(proj))
 
 
 # ---------------------------------------------------------------- training (GPU job)
 
-def _train(S, h, proj, b):
-    h._json({"job": start_train(S, proj.name, b).id})
+def _train(h, proj, b):
+    h._json({"job": start_train(proj.name, b).id})
 
 
-def start_train(S, name: str, b: dict):
+def start_train(name: str, b: dict):
     """Train a project (GPU job). A paused run resumes unless b["fresh"]."""
     from .trainer import LENGTHS, SR_CFG, Control, Trainer
     proj = P.Project.load(name)
@@ -313,23 +313,23 @@ def start_train(S, name: str, b: dict):
         st["state"] = "queued"
         proj.save()
     control = Control()
-    job = S.Job("train")
-    S.JOBS[job.id] = job
+    job = jobs.Job("train")
+    jobs.JOBS[job.id] = job
     ACTIVE[proj.name] = {"job": job, "control": control, "kind": "train"}
 
     def service():
         """Covers queued while training run right away, between training steps (models stay in VRAM)."""
-        while not S.GPU_QUEUE.empty():
+        while not jobs.GPU_QUEUE.empty():
             try:
-                other_job, fn = S.GPU_QUEUE.get_nowait()
+                other_job, fn = jobs.GPU_QUEUE.get_nowait()
             except Exception:
                 return
             job.push(stage="training", note="paused for a cover")
-            S.run_job(other_job, fn)
+            jobs.run_job(other_job, fn)
     control.service = service
 
     def run(job):
-        conv = S.ENGINE.converter
+        conv = gpu.MODELS.converter
         with P.lock(proj.name):
             pr = P.Project.load(proj.name)
         tr = Trainer(pr, conv.hubert, conv.rmvpe, device=str(conv.device), half=conv.half, converter=conv)
@@ -352,15 +352,15 @@ def start_train(S, name: str, b: dict):
 
     job.resume_spec = {"kind": "train", "project": proj.name, "label": f"Training {proj.train.get('voice_name') or proj.name}"}
     job.control = control
-    S.GPU_QUEUE.put((job, run))
+    jobs.GPU_QUEUE.put((job, run))
     return job
 
 
-def _auto(S, h, proj, b):
-    h._json({"job": start_auto(S, proj.name, b).id})
+def _auto(h, proj, b):
+    h._json({"job": start_auto(proj.name, b).id})
 
 
-def start_auto(S, name: str, b: dict):
+def start_auto(name: str, b: dict):
     """Do it all: prepare the ticked sources (and more if short of the target), confirm the main voice,
     train (auto length) and add the best save to the voices. Same steps as a one-shot cover's training."""
     from .. import autopilot
@@ -378,41 +378,40 @@ def start_auto(S, name: str, b: dict):
             pr.train["voice_name"] = slug(b["voice_name"])
             pr.save()
     control = Control()
-    job = S.Job("train-auto")
-    S.JOBS[job.id] = job
+    job = jobs.Job("train-auto")
+    jobs.JOBS[job.id] = job
     ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
 
     def service():
-        while not S.GPU_QUEUE.empty():
+        while not jobs.GPU_QUEUE.empty():
             try:
-                other, fn = S.GPU_QUEUE.get_nowait()
+                other, fn = jobs.GPU_QUEUE.get_nowait()
             except Exception:
                 return
-            S.run_job(other, fn)
+            jobs.run_job(other, fn)
     control.service = service
 
     def run(job):
         def push(stage, frac, message, **kw):
             if job.cancel:
-                raise S.Cancelled()
+                raise jobs.Cancelled()
             job.push(stage=stage, frac=round(frac, 3), message=message, **kw)
         try:
-            name = autopilot.train_new_voice(S, job, proj.person, control, push, project=proj.name)
+            name = autopilot.train_new_voice(job, proj.person, control, push, project=proj.name)
         except autopilot.Paused:
             return job.finish("paused", message="Paused. Resume continues where it stopped.")
         finally:
             ACTIVE.pop(proj.name, None)
-        if S.ENGINE._conv:
-            S.ENGINE._conv.voices.pop(name, None)
+        gpu.forget_voice(name)
         job.finish("done", message=f"'{name}' is ready in your voices.", voice=name)
 
     job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}
     job.control = control
-    S.GPU_QUEUE.put((job, run))
+    jobs.GPU_QUEUE.put((job, run))
     return job
 
 
-def _pause(S, h, proj, b):
+def _pause(h, proj, b):
     a = _busy(proj.name)
     if not a or not a["control"]:
         raise ModelError("This voice isn't training right now.")
@@ -420,7 +419,7 @@ def _pause(S, h, proj, b):
     h._json({"ok": True})
 
 
-def _stop(S, h, proj, b):
+def _stop(h, proj, b):
     a = _busy(proj.name)
     if a and a["control"]:
         a["control"].stop = True
@@ -431,17 +430,17 @@ def _stop(S, h, proj, b):
             proj.train["state"] = "trained"
             proj.train["outcome"] = "stopped"
             proj.save()
-    h._json(project_json(S, proj))
+    h._json(project_json(proj))
 
 
-def _export(S, h, proj, b):
+def _export(h, proj, b):
     from .trainer import export_voice
     if _busy(proj.name):
         raise ModelError("Wait for training to finish (or stop it) before adding the voice.")
     if not proj.train.get("saves"):
         raise ModelError("There's nothing to add yet. Train first.")
-    job = S.Job("train-export")
-    S.JOBS[job.id] = job
+    job = jobs.Job("train-export")
+    jobs.JOBS[job.id] = job
     ACTIVE[proj.name] = {"job": job, "control": None, "kind": "export"}
 
     def run():
@@ -450,11 +449,10 @@ def _export(S, h, proj, b):
             with P.lock(proj.name):
                 pr = P.Project.load(proj.name)
             v = export_voice(pr, epoch=b.get("epoch"), name=b.get("name"), overwrite=bool(b.get("overwrite")))
-            if S.ENGINE and S.ENGINE._conv:
-                S.ENGINE._conv.voices.pop(v.name, None)   # reload if an older version was cached
+            gpu.forget_voice(v.name)   # reload if an older version was cached
             job.finish("done", message=f"'{v.name}' is ready in your voices.", voice=v.name)
         except Exception as e:
-            job.finish("error", message=S.friendly(e, "adding the voice"))
+            job.finish("error", message=jobs.friendly(e, "adding the voice"))
 
     threading.Thread(target=run, daemon=True).start()
     h._json({"job": job.id})
