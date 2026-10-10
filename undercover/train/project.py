@@ -429,6 +429,9 @@ def find_speakers(proj: Project):
     voices present in several sources. Fills proj.speakers and (unless confirmed) proj.reference."""
     from sklearn.cluster import AgglomerativeClustering
     emb = proj.load_embeddings()
+    # Cluster numbers are re-assigned on every run, so a confirmed reference is followed by its voice (centroid),
+    # not its number: adding sources once switched Elliott Smith's project to another Elliot's speech.
+    old_ref = emb.get(f"speaker:{proj.reference.get('cluster')}") if proj.reference.get("confirmed") else None
     usable = [p for p in proj.phrases if p.id in emb and p.dur >= 1.5 and p.music_db < TCFG["music_db"] and not p.clipped]
     if len(usable) < 3:
         raise ModelError("Not enough clean speech was found to identify the voice. Add more sources or recordings.")
@@ -458,7 +461,17 @@ def find_speakers(proj: Project):
     for k in [k for k in emb if k.startswith("speaker:") and k != "speaker:sung" and int(k.split(":")[1]) not in {c["cluster"] for c in clusters}]:
         del emb[k]
     proj.speakers = clusters
-    if not proj.reference.get("confirmed") or proj.reference.get("cluster") not in {c["cluster"] for c in clusters}:
+    if old_ref is not None and proj.reference.get("cluster") != -1:
+        o = old_ref / (np.linalg.norm(old_ref) + 1e-9)
+        near = max(clusters, key=lambda c: float(emb[f"speaker:{c['cluster']}"] @ o))
+        if float(emb[f"speaker:{near['cluster']}"] @ o) >= 0.8:   # the same voice, renumbered
+            proj.reference = {**near, "confirmed": True}
+        else:                                                      # it no longer forms a group: keep it as is
+            emb["speaker:-1"] = o
+            proj.reference = {**proj.reference, "cluster": -1, "confirmed": True}
+    elif old_ref is not None:   # a single clip picked as the reference (cluster -1): keep it
+        emb["speaker:-1"] = old_ref
+    elif not proj.reference.get("confirmed") or proj.reference.get("cluster") not in {c["cluster"] for c in clusters}:
         proj.reference = {**clusters[0], "confirmed": False}
     proj.save_embeddings(emb)
 
