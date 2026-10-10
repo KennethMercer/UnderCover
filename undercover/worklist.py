@@ -668,11 +668,11 @@ def _improve(job, item) -> dict:
         if S.ENGINE._conv:
             S.ENGINE._conv.voices.pop(old.name, None)
         return {"voice": old.name, "before": before, "after": after, "replaced": True, "minutes_of_voice": kept_min,
-                "note": f"Improved: likeness {before if before is not None else '?'} -> {after}, trained on {kept_min} min."}
+                "note": f"Retrained on {kept_min} min of {'singing' if proj.mode != 'speaking' else 'speech'}; the new one sounds more like them."}
     remove_voice(cand)
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         proj.train["exported"] = old.name   # the installed voice is still the old one
         proj.save()
     return {"voice": old.name, "before": before, "after": after, "replaced": False, "minutes_of_voice": kept_min,
-            "note": f"No gain (likeness {before} vs new {after}): kept the old voice."}
+            "note": f"Retrained on {kept_min} min, but it didn't sound more like them, so the old voice stays."}
