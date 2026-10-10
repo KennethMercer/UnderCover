@@ -261,8 +261,7 @@ def _project_for_item(item: dict, create: bool):
             person = (v.extra or {}).get("person") or _person_from_voice(v)
         else:
             person = item["target"]
-        key = slug(person)
-        found = next((P.Project.load(p["name"]) for p in P.list_projects() if slug(p["person"]) == key), None)
+        found = _project_named(person)
         if found or not create:
             return found
         from . import autopilot
@@ -271,11 +270,95 @@ def _project_for_item(item: dict, create: bool):
         return None
 
 
+def _project_named(person: str):
+    """The training project for a person, allowing small spelling differences (Elliot / Elliott Smith)."""
+    import difflib
+    from .train import project as P
+    key = slug(person)
+    best, score = None, 0.0
+    for p in P.list_projects():
+        r = difflib.SequenceMatcher(None, key, slug(p["person"] or p["name"])).ratio()
+        if r > score:
+            best, score = p, r
+    return P.Project.load(best["name"]) if best and score >= 0.9 else None
+
+
 def _person_from_voice(v) -> str:
     src = (v.source or "")
     if src.startswith("trained in UnderCover: "):
         return src.split(": ", 1)[1].split(",")[0]
     return v.name.removesuffix("-uc").replace("-", " ")
+
+
+def candidates() -> list:
+    """Voices for the "Improve my voices" picker: what each was trained on, its last measured likeness, what an
+    improve would do and roughly how long it takes."""
+    from .models import list_voices
+    from . import autopilot
+    queued = {(i["kind"], i["target"].lower()) for i in _state()["queue"] if i["state"] in ("queued", "paused", "running")}
+    try:
+        qcache = json.loads((path("cache_dir") / "voice_quality.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        qcache = {}
+    out = []
+    for v in list_voices():
+        ex = v.extra or {}
+        c = {"voice": v.name, "trained": bool(ex.get("trained")), "minutes": ex.get("train_minutes"),
+             "singing": None if ex.get("from_speech") is None else not ex.get("from_speech"), "likeness": None}
+        if ex.get("trained"):
+            person = _person_from_voice(v)
+            proj = _project_for_item({"kind": "improve", "target": v.name}, create=False)
+            if proj is not None:
+                saves = {s["epoch"]: s for s in proj.train.get("saves", [])}
+                c["likeness"] = (saves.get(ex.get("epoch")) or {}).get("identity")
+            c["likeness"] = c["likeness"] or ex.get("likeness")
+            item = {"kind": "improve", "target": v.name}
+            c.update(person=person, kind="improve", target=v.name, can=True,
+                     note=("more of their singing (album tracks), fresh training, kept only if better" if c["singing"]
+                           else "more of their speech, fresh training, kept only if better")
+                     + ("" if proj is not None else " · its clips were cleaned up, so they're prepared again"))
+        elif ex.get("person"):
+            person = ex["person"]
+            hit = next((q for q in qcache.values() if q.get("voice") == v.name or q.get("voice") == ex.get("original_name")), None)
+            c["likeness"] = (hit or {}).get("score")
+            item = {"kind": "new", "target": person}
+            c.update(person=person, kind="new", target=person, can=True,
+                     note=f"downloaded voice: trains UnderCover's own {person} voice to compare with it")
+        else:
+            out.append({**c, "can": False, "note": "downloaded voice: UnderCover doesn't know whose voice it is"})
+            continue
+        c["estimate"] = estimate(item)["total"]
+        c["queued"] = (item["kind"], item["target"].lower()) in queued
+        out.append(c)
+    out.sort(key=lambda c: (not c["can"], not c["trained"], c["voice"]))
+    return out
+
+
+def lookup(q: str) -> list:
+    """Name suggestions for "Train a new voice": artists on YouTube Music (singers: their album tracks are used),
+    plus the name as typed (a speaking voice)."""
+    import re
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    out, seen = [], set()
+    try:
+        from .songs import _music_tracks
+        words = [w for w in re.findall(r"\w+", q.lower()) if len(w) > 1]
+        for r in _music_tracks(q, n=6):
+            artist = r.channel.removesuffix(" - Topic").strip()   # YouTube Music: the artist (sometimes "Artist - Topic")
+            if not artist:
+                continue
+            key = artist.lower()
+            if key in seen or not any(w in key for w in words):
+                continue
+            seen.add(key)
+            out.append({"name": artist, "kind": "artist", "detail": f"on YouTube Music · e.g. {r.title.split(' - ', 1)[-1][:40]}"})
+    except Exception:   # noqa: BLE001 - suggestions are a nicety
+        pass
+    if not any(o["name"].lower() == q.lower() for o in out):
+        out.append({"name": q, "kind": "person", "detail": "as typed · interviews and speeches (or songs, if they sing)"})
+    return out[:6]
 
 
 def status() -> dict:
@@ -453,7 +536,7 @@ def _push(job):
 def _new(job, item) -> dict:
     from . import autopilot, voicecheck
     from .train.speaker import SpeakerEmbedder
-    name = autopilot.train_new_voice(S, job, item["target"], _control(job), _push(job))
+    name = autopilot.train_new_voice(S, job, item["target"], _control(job), _push(job), target_minutes=IMPROVE_SINGING_MIN)
     proj = _project_for_item({"kind": "improve", "target": name}, create=False)
     score = None
     if proj is not None:

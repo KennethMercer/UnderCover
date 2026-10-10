@@ -320,13 +320,22 @@
           <span class="row qat"><button class="btn primary" id="q-at" type="button" hidden>Start at 11:00 pm</button><input type="time" id="q-at-time" value="23:00" aria-label="Start time"></span>
           <button class="linkbtn" id="q-stop" type="button" hidden>Don't start more</button></div>
       </div>
-      <div class="qadd">
-        <select id="q-kind" class="select" aria-label="What to do"><option value="improve">Improve a voice</option><option value="new">Train a new voice</option></select>
-        <input id="q-target" list="q-voices" autocomplete="off" placeholder="A voice to improve" aria-label="Voice or person">
-        <datalist id="q-voices"></datalist>
-        <button class="btn" id="q-add" type="button">Add</button>
+      <div class="qpick">
+        <div class="seg" id="q-mode" role="tablist" aria-label="Add to the queue">
+          <button type="button" data-v="improve" aria-pressed="true">Improve my voices</button>
+          <button type="button" data-v="new" aria-pressed="false">New voices</button>
+        </div>
+        <div id="q-improve">
+          <p class="meta">More singing (their album tracks first) or more speech, every clip checked again, a fresh training. The new voice replaces the old only if it measures better.</p>
+          <div class="vpick" id="q-cands"></div>
+          <div class="row spread"><span class="meta" id="q-sel-sum">Tick the voices to improve.</span><button class="btn primary" id="q-add-sel" type="button" disabled>Add to the queue</button></div>
+          <details class="qother" id="q-other" hidden><summary class="meta">Voices that can't be improved</summary><p class="meta" id="q-cands-off"></p></details>
+        </div>
+        <div id="q-new" hidden>
+          <div class="search"><input id="q-name" type="search" autocomplete="off" placeholder="Type a singer or a person, e.g. Adele" aria-label="Person or artist"></div>
+          <div class="qsugg" id="q-sugg" aria-live="polite"></div>
+        </div>
       </div>
-      <p class="meta">Improve = more singing (their album tracks first) or more speech, every clip checked again, a fresh training, and the new voice replaces the old only if it measures better.</p>
       <div class="qlist" id="q-list"></div>
       <div class="qopts">
         <label class="toggle"><input type="checkbox" id="q-finish"><span>Finish by 7:00 am<br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>

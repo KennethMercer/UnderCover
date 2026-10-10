@@ -423,3 +423,18 @@ svg.chart { width: 100%; height: 150px; display: block; }
   .qjob .grip { display: none; }
   .qside { justify-items: start; text-align: left; }
 }
+
+/* overnight queue: picker */
+.qpick { display: grid; gap: 10px; }
+.qpick > div { display: grid; gap: 10px; }
+.vpick { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.vcard { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px 12px; border-radius: 9px;
+  background: var(--panel-2); border: 1px solid var(--line); cursor: pointer; }
+.vcard:has(input:checked) { border-color: var(--accent); }
+.vcard.queued { opacity: .7; cursor: default; }
+.vcard > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.vcard input { margin-top: 3px; }
+.qsugg { display: grid; gap: 6px; }
+.srow { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 12px; border-radius: 9px;
+  background: var(--panel-2); border: 1px solid var(--line); }
+.qother summary { cursor: pointer; }
