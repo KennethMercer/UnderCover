@@ -40,6 +40,18 @@ async function loadSummary() {
   $("#lib-legend").innerHTML = order.map(k => `<span><i class="sw" style="background:var(--c-${k})"></i>${CAT_LABELS[k]} <b>${gb(s.categories[k])}</b></span>`).join("");
   $("#lib-total").textContent = gb(s.total);
   $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
+  // YouTube changes often; when downloads start failing, a newer yt-dlp usually fixes it
+  $("#lib-ytdlp").innerHTML = s.ytdlp ? `YouTube downloader ${esc(s.ytdlp)} · <button class="linkbtn" id="lib-ytdlp-go" type="button">Update</button>` : "";
+  const go = $("#lib-ytdlp-go");
+  if (go) go.onclick = async () => {
+    go.disabled = true; go.textContent = "Updating…";
+    try {
+      const r = await api("/api/library/tools/ytdlp-update", { json: {} });
+      if (r.changed) { showError(`Updated from ${r.before} to ${r.after}. Restart UnderCover to use it.`, "YouTube downloader updated", { label: "Restart now", run: restartServer }, true); }
+      else showError(`Already the newest version (${r.after}).`, "YouTube downloader", null, true);
+    } catch (e) { showError(e.message, "Couldn't update"); }
+    loadSummary();
+  };
   renderCats();
 }
 async function loadCat(keepSel) {

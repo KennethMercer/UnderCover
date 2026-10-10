@@ -245,7 +245,8 @@ def download(r: SongResult, register, progress=None) -> dict:
             except Exception as e:
                 if _cancelled_in(e) is not None:
                     raise
-                raise ModelError(f"Couldn't download '{r.title}' ({_short(e)}).")
+                raise ModelError(f"Couldn't download '{r.title}' ({_short(e)}). If YouTube downloads keep failing, "
+                                 "update the YouTube downloader (Library, top right).")
         f = next(iter(work.glob("song.flac")), None)
         if not f:
             raise ModelError(f"Downloaded '{r.title}' but couldn't convert it to audio.")
