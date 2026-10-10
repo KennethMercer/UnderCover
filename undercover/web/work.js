@@ -88,7 +88,7 @@ function renderQueue() {
     const chips = done ? `<span class="qchip ${i.state === "done" ? "ok" : "bad"}">${esc(i.state)} · ${fmtMin(i.minutes)}</span>`
       : [["prepare", "prepare"], ["train", "train"], ["compare", i.kind === "improve" ? "compare" : "check"]]
           .map(([k, l]) => `<span class="qchip">${l} ~${fmtMin(e[k])}</span>`).join("");
-    const note = done ? esc(i.result?.note || "") : run ? esc(live.message || "running") : i.state === "paused" ? "paused · Resume (top of the page) continues it" : "";
+    const note = done ? esc(i.result?.note || "") : run ? esc(live.message || "running") : i.state === "paused" ? "paused · Resume (top of the page) continues it" : esc(i.note || "");
     return `<div class="qjob ${run ? "running" : ""} ${done ? "done" : ""}" draggable="${!run && !done}" data-id="${i.id}">
       <span class="grip" aria-hidden="true">${run || done ? "" : "⋮⋮"}</span>
       <div><b>${what}</b>${note ? `<p class="meta">${note}</p>` : ""}<div class="qchips">${chips}</div>

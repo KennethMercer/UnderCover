@@ -472,9 +472,10 @@ def _loop():
                 awake = want_awake
             if not st["held"] and st["armed"] and _gpu_idle() and not S.STATUS.get("gpu_problem"):
                 now = datetime.now()
-                nxt = next((i for i in st["queue"] if i["state"] == "queued"), None)
+                nxt = next((i for i in st["queue"] if i["state"] == "queued" and i.get("retry_after", 0) <= time.time()), None)
+                waiting = any(i["state"] == "queued" for i in st["queue"])
                 if nxt is None:
-                    if any(i["state"] in ("done", "failed", "skipped") for i in st["queue"]):
+                    if not waiting and any(i["state"] in ("done", "failed", "skipped") for i in st["queue"]):
                         with _LOCK:
                             st["armed"] = False   # queue finished
                             _save()
@@ -523,6 +524,12 @@ def _run_item(item: dict):
                     item["state"] = "paused"
                     _save()
                 job.finish("paused", message="Paused. Resume continues where it stopped.")
+                return
+            if type(e).__name__ == "YouTubeBlocked":   # try again in an hour, not "failed"
+                with _LOCK:
+                    item.update(state="queued", retry_after=time.time() + 3600, note=str(e) + " Trying again in an hour.")
+                    _save()
+                job.finish("error", message=str(e) + " The queue tries again in an hour.")
                 return
             if type(e).__name__ == "Cancelled":
                 res, state = {"note": "cancelled"}, "skipped"
