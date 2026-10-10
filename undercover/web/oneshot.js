@@ -98,7 +98,13 @@ function renderOS(ev) {
   const song = plan.song, voice = plan.voice, set = plan.settings;
   const sc = card("song"), vc = card("voice"), cc = card("cover");
   $("b", sc).textContent = song ? song.title : (plan.song_query ? `“${plan.song_query}”` : "Waiting");
-  $("small", sc).textContent = ev.stage === "song" ? ev.message : song ? [song.channel, song.note].filter(Boolean).join(" · ") : "";
+  const cmp = song?.compared?.length > 1
+    ? `best of ${song.compared.length} versions for this voice` + (song.compared.find(x => x.chosen)?.outside != null
+        ? ` (${Math.round(song.compared.find(x => x.chosen).outside * 100)}% of the melody outside its range)` : "")
+    : (song?.compared ? "" : null);
+  $("small", sc).textContent = ev.stage === "song" ? ev.message : song ? [song.channel, song.note, cmp].filter(Boolean).join(" · ") : "";
+  sc.title = song?.compared?.length > 1 ? song.compared.map(x => `${x.chosen ? "✓" : "·"} ${x.title}` +
+    (x.outside != null ? ` · ${Math.round(x.outside * 100)}% out of range` : "") + ` · bleed ${Math.round(x.bleed)} dB`).join("\n") : "";
   $("b", vc).textContent = voice ? (voice.how === "train" && ev.stage === "voice" ? `Training ${voice.name}` : voice.name) : (plan.person || "Waiting");
   $("small", vc).textContent = ev.stage === "voice" ? ev.message
     : voice ? (voice.checked || { installed: "your installed voice", online: `community voice${voice.repo ? " · " + voice.repo : ""}`, train: "trained in UnderCover" }[voice.how]) : "";
