@@ -65,7 +65,7 @@ def project_json(S, proj: P.Project) -> dict:
         **proj.summary(),
         "sources": [{**s.to_json(), "raw": S.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
         "phrases": [{"id": p.id, "source": p.source, "start": p.start, "dur": p.dur, "score": p.score, "mix": p.mix,
-                     "music_db": p.music_db, "reason": p.reason, "choice": p.choice, "kept": p.kept,
+                     "music_db": p.music_db, "reason": p.reason, "choice": p.choice, "kept": p.kept, "sung": p.sung,
                      "url": S.file_url(proj.clip_path(p.id))} for p in proj.phrases],
         "speakers": [{**sp, "url": S.file_url(proj.clip_path(sp["clip"]))} for sp in proj.speakers],
         "reference_url": S.file_url(proj.clip_path(proj.reference["clip"])) if proj.reference.get("clip") else None,

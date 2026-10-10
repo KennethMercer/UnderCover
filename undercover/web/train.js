@@ -257,7 +257,8 @@ function renderSamples() {
     b.setAttribute("aria-pressed", b.dataset.v === T.filter);
   });
   const kept = p.phrases.filter(x => x.kept).reduce((a, x) => a + x.dur, 0) / 60;
-  $("#tr-minutes").textContent = `${kept.toFixed(1)} min of clean voice`;
+  const sung = p.phrases.filter(x => x.kept && x.sung).reduce((a, x) => a + x.dur, 0) / 60;
+  $("#tr-minutes").textContent = `${kept.toFixed(1)} min of clean voice` + (sung ? ` (${sung.toFixed(1)} sung)` : "");
   $("#tr-target").textContent = `target ${p.target_minutes} min · more than 30 rarely helps`;
   const scale = Math.max(p.target_minutes * 2, kept);
   $("#tr-meter").style.width = Math.min(100, kept / scale * 100) + "%";
