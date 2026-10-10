@@ -378,6 +378,8 @@ def prepare_sources(name: str, ids: list[str], separator, embedder, progress=Non
                     fut[src.id].result()   # raises the download's ModelError
                 process_source(pr, src, separator, embedder, progress=step, cancel=cancel)
                 src.error = ""
+            except srcmod.YouTubeBlocked:
+                raise   # stop here: the rest would fail the same way; nothing is marked failed, so it's retried later
             except ModelError as e:
                 src.status, src.error = "failed", str(e)
                 failed.append(src.title)

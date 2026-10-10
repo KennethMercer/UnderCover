@@ -219,11 +219,16 @@ def is_musician(person: str) -> bool:
     from . import songs
     toks = [w for w in re.findall(r"\w+", person.lower()) if len(w) > 1]
     for _ in range(2):
+        from .train.source import YouTubeBlocked
         try:
             tracks = songs._music_tracks(person, n=6)
+        except YouTubeBlocked:
+            raise   # unknown, not "no": deciding now would build the wrong kind of project
         except Exception:
             tracks = []
-        by = [t for t in tracks if all(tok in t.title.split(" - ")[0].lower() for tok in toks)]
+        from .train.source import SPOKEN
+        by = [t for t in tracks if all(tok in t.title.split(" - ")[0].lower() for tok in toks)
+              and not SPOKEN.search(t.title)]   # speeches and audiobooks are listed as music too
         if len(by) >= 2:
             return True
         if tracks:   # got an answer, it's just not this person's music

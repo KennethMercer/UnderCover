@@ -18,7 +18,7 @@ QUERIES["both"] = ["{name} isolated vocals", "{name} acapella", "{name} vocals o
                    "{name} interview"]
 # Titles that usually mean someone else's voice, a fake, or a mash-up. Shown unticked with the reason.
 SUSPECT = [
-    (re.compile(r"\bimpressions?\b|\bimpersonat|\bdoes an? .*voice|\bparody\b|\bsnl\b", re.I), "may be an impersonator"),
+    (re.compile(r"\bimpressions?\b|\bimpersonat|\bdoes an? .*voice|\bparody\b|\bsnl\b|\brap battles?\b", re.I), "may be an impersonator"),
     (re.compile(r"\bai\b|\bdeepfake|\bvoice ?clon|\brvc\b|\bai cover\b|\bsynthesi[sz]ed\b", re.I), "may be an AI voice"),
     (re.compile(r"\breacts?\b|\breaction\b|\breacting\b", re.I), "a reaction video (mostly someone else)"),
     (re.compile(r"\bcompilation\b|\bmashup\b|\bmeme\b|\bremix\b|\bnightcore\b|\bsped up\b|\bslowed\b", re.I),
@@ -30,6 +30,13 @@ COMMENTARY = re.compile(r"destroys|obliterates|slams|owns|claps back|shuts down|
                         r"breaks down|explained|analysis|tier list|ranking|top \d+", re.I)
 GOOD = {"speaking": re.compile(r"interview|podcast|speech|address|conversation|talk|keynote|q&a|lecture", re.I),
         "singing": re.compile(r"acapella|a cappella|isolated|vocals? only|live|unplugged|session", re.I)}
+
+
+# Spoken-word "album tracks": YouTube Music lists speeches, audiobooks and narration as music (Barack Obama:
+# "Obama DNC Speech", "Presidential Oath Of Office"; Morgan Freeman's narration albums). Not singing.
+SPOKEN = re.compile(r"speech|address|remarks|rally|debate|oath|interview|keynote|sermon|commencement|audiobook|"
+                    r"chapter|lecture|conversation|podcast|town hall|state of the union|press conference|q ?& ?a|"
+                    r"narrat|poem|reading|spoken|monologue|stand-?up|comedy|testimony|eulogy|introduc", re.I)
 
 
 def is_sung(src) -> bool:
@@ -52,12 +59,16 @@ def album_tracks(name: str, n: int = 20) -> list:
     for q in (name, f"{name} songs"):
         try:
             found = songs._music_tracks(q, n=n)
+        except YouTubeBlocked:
+            raise
         except Exception:
             continue
         for r in found:
             artist = r.channel.lower().replace(" - topic", "")
             if not words or not all(w in artist for w in words) or r.id in out:
                 continue   # only recordings by the person themselves
+            if SPOKEN.search(r.title):
+                continue   # a speech or audiobook listed as music
             out[r.id] = Source(id=r.id, url=r.url, title=r.title, channel=r.channel, duration=float(r.duration or 0),
                                note="album track", extra={"sung": True})
     return list(out.values())
@@ -99,6 +110,21 @@ def _cancelled_in(e):
             return cause
         cause = getattr(cause, "exc_info", [None, None])[1] if getattr(cause, "exc_info", None) else cause.__context__
     return None
+
+
+class YouTubeBlocked(ModelError):
+    """YouTube's bot check ("Sign in to confirm you're not a bot"): too many requests from this PC. It clears by
+    itself after a while; retrying right away only prolongs it."""
+
+
+BLOCKED_MSG = ("YouTube is temporarily blocking downloads from this PC (it asks to confirm you're not a bot, usually "
+               "after a lot of downloads in a short time). It clears by itself, usually within a few hours.")
+
+
+def check_blocked(e: BaseException):
+    t = str(e)
+    if "not a bot" in t or "Sign in to confirm" in t:
+        raise YouTubeBlocked(BLOCKED_MSG)
 
 
 TRANSIENT = ("403", "429", "HTTP Error 5", "timed out", "Connection", "Remote end closed", "IncompleteRead")
@@ -257,6 +283,7 @@ def download(src: Source, dest_dir: Path, progress=None) -> Path:
             except Exception as e:
                 if _cancelled_in(e) is not None:
                     raise
+                check_blocked(e)
                 raise ModelError(f"Couldn't download '{src.title}' ({_short(e)}). If YouTube downloads keep failing, "
                                  "update the YouTube downloader (Library, top right).")
         cands = [p for p in work.glob(f"{src.id}.*") if p.suffix == ".wav"]

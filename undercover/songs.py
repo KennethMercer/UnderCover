@@ -104,14 +104,22 @@ def _music_tracks(query: str, n: int = 6) -> list[SongResult]:
     except Exception:
         return []
 
+    blocked = []
+
     def detail(vid):
         try:
             with _ydl(skip_download=True) as ydl:
                 return ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False, process=False)
-        except Exception:
+        except Exception as e:
+            if "not a bot" in str(e) or "Sign in to confirm" in str(e):
+                blocked.append(vid)
             return None
     with ThreadPoolExecutor(max_workers=4) as pool:
         infos = list(pool.map(detail, ids))
+    if ids and len(blocked) == len(ids):
+        # every lookup hit YouTube's bot check: say so, rather than "this artist has no music"
+        from .train.source import BLOCKED_MSG, YouTubeBlocked
+        raise YouTubeBlocked(BLOCKED_MSG)
     out = []
     for rank, d in enumerate(infos):
         if not d or not d.get("duration"):
@@ -239,12 +247,13 @@ def download(r: SongResult, register, progress=None) -> dict:
                     progress(min(1.0, d.get("downloaded_bytes", 0) / total))
             opts["progress_hooks"] = [hook]
         with _ydl(**opts) as ydl:
-            from .train.source import _cancelled_in, download_retrying
+            from .train.source import _cancelled_in, check_blocked, download_retrying
             try:
                 download_retrying(ydl, r.url)
             except Exception as e:
                 if _cancelled_in(e) is not None:
                     raise
+                check_blocked(e)
                 raise ModelError(f"Couldn't download '{r.title}' ({_short(e)}). If YouTube downloads keep failing, "
                                  "update the YouTube downloader (Library, top right).")
         f = next(iter(work.glob("song.flac")), None)
