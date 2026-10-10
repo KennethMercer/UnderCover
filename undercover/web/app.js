@@ -94,7 +94,8 @@ async function restartServer() {
   btn.disabled = true; btn.textContent = "Restarting…";
   let before = null;
   try { before = (await api("/api/status")).started; } catch (e) {}
-  try { await api("/api/restart", { method: "POST" }); }
+  let pausing = false;
+  try { pausing = !!(await api("/api/restart", { method: "POST" })).pausing; }
   catch (e) {
     // A server from before this feature has no restart endpoint (404); anything else (e.g. busy) is explained by e.message.
     const old = /not found/i.test(e.message);
@@ -102,9 +103,11 @@ async function restartServer() {
               "Couldn't restart", old ? null : { label: "Try again", run: restartServer }, !old);
     return;
   }
-  $("#err-msg").textContent = "Restarting UnderCover and loading the models. The page will reload by itself.";
+  $("#err-msg").textContent = pausing
+    ? "Pausing the voice work (training keeps its place), restarting, then carrying on where it was. The page will reload by itself."
+    : "Restarting UnderCover and loading the models. The page will reload by itself.";
   const t0 = Date.now();
-  while (Date.now() - t0 < 90000) {
+  while (Date.now() - t0 < (pausing ? 300000 : 90000)) {
     await new Promise(r => setTimeout(r, 1000));
     try {
       // timeout: a request caught by the old process as it exits can otherwise hang forever
