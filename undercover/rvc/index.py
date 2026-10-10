@@ -4,6 +4,7 @@ RVC ships `added_*.index` files written by faiss (IndexIVFFlat). For retrieval R
 stored vectors and an exact-ish k-NN, so we parse the file ourselves and do brute-force k-NN on the GPU
 (exact, and fast: ~100k x 768 vectors). This avoids a faiss dependency entirely.
 """
+import os
 import struct
 from pathlib import Path
 
@@ -120,11 +121,62 @@ def write_ivf_flat(path: Path, vecs: np.ndarray, seed: int = 0) -> int:
     return nlist
 
 
+# Compact index: the same vectors as fp16 with a tiny header, half the size of faiss's float32 IVF file (all
+# retrieval needs is the vectors; fp16 rounding (~5e-4 relative) is far below what changes the output).
+COMPACT_MAGIC = b"UCIDX16\n"
+
+
+def is_compact(path: Path) -> bool:
+    with open(path, "rb") as f:
+        return f.read(len(COMPACT_MAGIC)) == COMPACT_MAGIC
+
+
+def read_vectors(path: Path) -> np.ndarray:
+    """All stored vectors (n, d) float32 from a compact or a faiss IVF-Flat index."""
+    path = Path(path)
+    if is_compact(path):
+        raw = path.read_bytes()
+        n, d = struct.unpack_from("<qq", raw, len(COMPACT_MAGIC))
+        off = len(COMPACT_MAGIC) + 16
+        if len(raw) != off + n * d * 2:
+            raise IndexFormatError("compact index is truncated")
+        return np.frombuffer(raw, np.float16, n * d, off).reshape(n, d).astype(np.float32)
+    return read_ivf_flat(path)
+
+
+def compact_in_place(path: Path) -> tuple[int, int]:
+    """Rewrite an index file as the compact fp16 format (validated, crash-safe). Returns (old, new) bytes."""
+    from .. import fsutil
+    path = Path(path)
+    old = path.stat().st_size
+    if is_compact(path):
+        return old, old
+    vecs = read_ivf_flat(path).astype(np.float16)
+    if not np.isfinite(vecs).all():
+        raise IndexFormatError("index has values out of fp16 range")
+    tmp = path.with_name(f"{path.name}.compact.tmp")
+    with open(tmp, "wb") as f:
+        f.write(COMPACT_MAGIC + struct.pack("<qq", *vecs.shape))
+        f.write(vecs.tobytes())
+        f.flush()
+        os.fsync(f.fileno())
+    fsutil._replace(tmp, path)
+    return old, path.stat().st_size
+
+
+def export_faiss(path: Path, dest: Path) -> Path:
+    """A faiss IVF-Flat copy for other RVC tools (compact indexes are UnderCover-only)."""
+    if not is_compact(path):
+        return Path(path)
+    write_ivf_flat(dest, read_vectors(path))
+    return dest
+
+
 class FeatureIndex:
     """GPU k-NN over an RVC index; blends features toward the voice's training data."""
 
     def __init__(self, path: Path, device):
-        vecs = read_ivf_flat(path)
+        vecs = read_vectors(path)
         self.device = device
         self.vecs = torch.from_numpy(vecs).to(device)                 # (N, d) float32
         self.sqnorm = (self.vecs * self.vecs).sum(1)                   # (N,)

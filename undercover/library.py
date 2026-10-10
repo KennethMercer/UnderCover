@@ -424,8 +424,14 @@ def _route(S, h, method, p):
         from .models import get_voice, voices_dir
         v = get_voice(m.group(1))
         if m.group(2) == "export" and method == "GET":
-            files = [(v.pth, f"{v.name}.pth")] + ([(v.index, f"{v.name}.index")] if v.index else [])
-            return _zip_response(h, f"{v.name}.zip", files)
+            from .rvc.index import export_faiss
+            tmp = path("cache_dir") / f"_export_{v.name}.index"
+            try:   # stored compact (fp16): other RVC tools need the standard faiss layout
+                idx = export_faiss(v.index, tmp) if v.index else None
+                files = [(v.pth, f"{v.name}.pth")] + ([(idx, f"{v.name}.index")] if idx else [])
+                return _zip_response(h, f"{v.name}.zip", files)
+            finally:
+                tmp.unlink(missing_ok=True)
         if m.group(2) == "rename" and method == "POST":
             _guard(S)
             new = slug(h._body().get("name") or "")
