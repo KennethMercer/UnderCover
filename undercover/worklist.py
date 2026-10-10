@@ -23,7 +23,8 @@ _LOCK = threading.RLock()
 _STATE: dict | None = None
 S = None   # the server module, set by start()
 
-PREP_RT = 2.5          # minutes of source audio prepared per minute (download + separation + lead split), refined live
+PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
+                       # realtime on Elliott Smith's album tracks; downloads and phrase cutting take the rest)
 EARLY_STOP = 0.7       # auto-length trainings stop on their own at ~70% of the step budget (Elliott: 219 of 296 epochs)
 COMPARE_MIN = 3.0      # export + likeness test of old and new voice
 IMPROVE_SINGING_MIN = 30   # minutes of clean singing an "improve" aims for (more than ~30 rarely helps)
@@ -249,8 +250,12 @@ def estimate(item: dict) -> dict:
 
 
 def _improve_extra_minutes(proj) -> float:
-    """Raw minutes an improve would add: album tracks not in the project yet (singers), else a few interviews."""
-    return 0.0 if proj.mode == "speaking" else 60.0
+    """Raw minutes an improve would add: album tracks not in the project yet (singers), else a few interviews.
+    A project that already has its album tracks only picks up the odd new one."""
+    if proj.mode == "speaking":
+        return 4 * 10.0
+    albums = sum(1 for s in proj.sources if s.note == "album track")
+    return 5.0 if albums >= 15 else 90.0
 
 
 def _project_for_item(item: dict, create: bool):
