@@ -12,7 +12,10 @@ QUERIES = {
     "speaking": ["{name} interview", "{name} full speech", "{name} podcast", "{name} talks"],
     "singing": ["{name} isolated vocals", "{name} acapella", "{name} live vocals", "{name} live"],
 }
-QUERIES["both"] = QUERIES["speaking"][:2] + QUERIES["singing"][:2]
+# Singers: their singing is what the voice will be used for, so search mostly for sung material (isolated vocals
+# and acapellas separate cleanly); one interview search is the backup if not enough singing turns up.
+QUERIES["both"] = ["{name} isolated vocals", "{name} acapella", "{name} vocals only", "{name} live acoustic",
+                   "{name} interview"]
 # Titles that usually mean someone else's voice, a fake, or a mash-up. Shown unticked with the reason.
 SUSPECT = [
     (re.compile(r"\bimpressions?\b|\bimpersonat|\bdoes an? .*voice|\bparody\b|\bsnl\b", re.I), "may be an impersonator"),
@@ -27,6 +30,11 @@ COMMENTARY = re.compile(r"destroys|obliterates|slams|owns|claps back|shuts down|
                         r"breaks down|explained|analysis|tier list|ranking|top \d+", re.I)
 GOOD = {"speaking": re.compile(r"interview|podcast|speech|address|conversation|talk|keynote|q&a|lecture", re.I),
         "singing": re.compile(r"acapella|a cappella|isolated|vocals? only|live|unplugged|session", re.I)}
+
+
+def is_sung(title: str) -> bool:
+    """A source of the person singing (by its title): used to find their singing voice and to prefer singing."""
+    return bool(GOOD["singing"].search(title)) and not GOOD["speaking"].search(title)
 
 
 @dataclass
@@ -69,13 +77,13 @@ def _rank(src: Source, name: str, mode: str) -> float:
     score = 0.0
     name_tokens = [w for w in re.findall(r"\w+", name.lower()) if len(w) > 1]
     score += 2.0 * sum(w in t for w in name_tokens) / max(1, len(name_tokens))
-    good = GOOD["singing" if mode == "singing" else "speaking"]
-    if good.search(t):
+    sung = mode != "speaking" and is_sung(src.title)
+    if mode == "both":   # singers: sung sources first, interviews only as backup
+        score += 2.0 if sung else (0.5 if GOOD["speaking"].search(t) else 0.0)
+    elif GOOD["singing" if mode == "singing" else "speaking"].search(t):
         score += 1.0
-    if mode == "both" and GOOD["singing"].search(t):
-        score += 0.5
     mins = src.duration / 60
-    lo, hi = (2, 15) if mode == "singing" else (8, 120)
+    lo, hi = (1.5, 15) if mode == "singing" or sung else (8, 120)
     score += 1.0 if lo <= mins <= hi else (-1.0 if mins < 1.5 else 0.0)
     if any(k in t for k in ("official audio", "lyrics", "lyric video")):
         score -= 0.5  # studio mixes separate fine, but fan uploads are often re-encoded
@@ -126,7 +134,8 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None) -> l
         if not s.note:
             m = GOOD["singing"].search(s.title) or GOOD["speaking"].search(s.title)
             s.note = m.group(0).lower() if m else ""
-    return ranked[:TCFG["search_results"]]
+    # sung sources are songs (2-4 min each), so singers need more of them listed to reach the target
+    return ranked[:TCFG["search_results"] * (2 if mode == "both" else 1)]
 
 
 def from_link(url: str) -> list[Source]:

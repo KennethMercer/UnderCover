@@ -57,6 +57,7 @@ class Phrase:
     clipped: bool = False
     reason: str = ""         # why it's left out automatically ("" = kept)
     choice: bool | None = None   # operator override: True keep, False remove, None automatic
+    sung: bool = False       # matched the person's singing voice better than their speaking voice
 
     @property
     def kept(self) -> bool:
@@ -157,6 +158,13 @@ class Project:
     def kept_seconds(self) -> float:
         return sum(p.dur for p in self.phrases if p.kept)
 
+    def sung_seconds(self) -> float:
+        return sum(p.dur for p in self.phrases if p.kept and p.sung)
+
+    def from_speech(self) -> bool:
+        """Mostly speech in the training data (the octave choice gives speech-trained voices extra headroom)."""
+        return self.sung_seconds() < 0.5 * self.kept_seconds()
+
     def summary(self) -> dict:
         reasons: dict = {}
         for p in self.phrases:
@@ -165,7 +173,8 @@ class Project:
         return {"name": self.name, "person": self.person, "mode": self.mode, "created": self.created,
                 "sources": len(self.sources), "ready_sources": sum(s.status == "ready" for s in self.sources),
                 "phrases": len(self.phrases), "kept": sum(p.kept for p in self.phrases),
-                "kept_minutes": round(self.kept_seconds() / 60, 2), "target_minutes": TCFG["target_minutes"],
+                "kept_minutes": round(self.kept_seconds() / 60, 2), "sung_minutes": round(self.sung_seconds() / 60, 2),
+                "target_minutes": TCFG["target_minutes"],
                 "left_out": reasons, "reference": self.reference,
                 "train": {k: v for k, v in self.train.items() if k not in ("history",)}}
 
@@ -481,13 +490,17 @@ def score(proj: Project):
     if len(close) >= 5:
         r2 = np.mean(close, 0)
         ref = r2 / (np.linalg.norm(r2) + 1e-9)
+    sref = _sung_reference(proj, emb, ref)
     for p in proj.phrases:
         if p.id not in emb:
-            p.score, p.mix = 0.0, 0.0
+            p.score, p.mix, p.sung = 0.0, 0.0, False
         else:
-            p.score = round(float(emb[p.id] @ ref), 3)
+            e = emb[p.id]
+            p.sung = sref is not None and float(e @ sref) > float(e @ ref)
+            r = sref if p.sung else ref
+            p.score = round(float(e @ r), 3)
             w = emb.get(p.id + ":w")
-            p.mix = round(float((w @ ref).min()), 3) if w is not None else p.score
+            p.mix = round(float((w @ r).min()), 3) if w is not None else p.score
         if p.dur < TCFG["min_phrase"]:
             p.reason = "too short"
         elif p.clipped:
@@ -501,6 +514,57 @@ def score(proj: Project):
         else:
             p.reason = ""
     _mark_duplicates(proj, emb)
+    if sref is not None:
+        _speech_as_backup(proj)
+
+
+def _sung_reference(proj: Project, emb: dict, speech_ref: np.ndarray) -> np.ndarray | None:
+    """The person's singing voice. Speaker embeddings of singing sit far from the same person's speech (Elliott
+    Smith: his acapellas scored 0.22-0.32 against his interview voice, so every sung phrase was thrown out as
+    "other speaker"), so singing needs its own reference: the main voice across the sung sources, accepted only if
+    it's recognisably the same person as the speaking reference (his: 0.40; other people: about 0.1)."""
+    from sklearn.cluster import AgglomerativeClustering
+    from .source import is_sung
+    sung_src = {s.id for s in proj.sources if is_sung(s.title)}
+    usable = [p for p in proj.phrases if p.source in sung_src and p.id in emb and p.dur >= 1.5
+              and p.music_db < TCFG["music_db"] and not p.clipped]
+    if len(usable) < 8 or len({p.source for p in usable}) < 2:
+        return None
+    X = np.stack([emb[p.id] for p in usable])
+    labels = AgglomerativeClustering(n_clusters=None, metric="cosine", linkage="average",
+                                     distance_threshold=1 - TCFG["cluster_threshold"]).fit_predict(X)
+    best, best_w = None, 0.0
+    for k in set(labels):
+        members = [p for p, l in zip(usable, labels) if l == k]
+        srcs = len({p.source for p in members})
+        w = sum(p.dur for p in members) * srcs
+        if srcs >= 2 and w > best_w:   # in 2+ sources: the artist, not a one-off guest or cover singer
+            c = X[labels == k].mean(0)
+            best, best_w = c / (np.linalg.norm(c) + 1e-9), w
+    if best is None or float(best @ speech_ref) < SUNG_LINK:
+        return None
+    close = [emb[p.id] for p in usable if float(emb[p.id] @ best) >= TCFG["match_threshold"] + 0.1]
+    if len(close) >= 5:   # same refinement as the speaking reference
+        r2 = np.mean(close, 0)
+        best = r2 / (np.linalg.norm(r2) + 1e-9)
+    return best
+
+
+SUNG_LINK = 0.25   # sung reference vs speaking reference: same person (measured 0.40) vs someone else (~0.1)
+
+
+def _speech_as_backup(proj: Project):
+    """Voices are used on song vocals, so for singers the singing is what counts: speech only tops the kept audio up
+    to the target when there isn't enough singing (best-matching speech first). Operator choices still win."""
+    sung = sum(p.dur for p in proj.phrases if not p.reason and p.sung)
+    if sung < 60:
+        return   # hardly any clean singing: speech is all there is
+    room = max(0.0, TCFG["target_minutes"] * 60 - sung)
+    for p in sorted([p for p in proj.phrases if not p.reason and not p.sung], key=lambda p: -p.score):
+        if room >= p.dur:
+            room -= p.dur
+        else:
+            p.reason = "speech (enough singing)"
 
 
 def _mark_duplicates(proj: Project, emb: dict, sim: float = 0.95, dur_tol: float = 0.05):

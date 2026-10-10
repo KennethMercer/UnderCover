@@ -417,7 +417,7 @@ def voice_f0(v) -> tuple[float | None, bool]:
         try:
             proj = Project.load(ex["project"])
             data = torch.load(proj.dir / "train" / "data.pt", map_location="cpu", weights_only=True)
-            ex["f0_median"], ex["from_speech"] = f0_median(data), proj.mode == "speaking"
+            ex["f0_median"], ex["from_speech"] = f0_median(data), proj.from_speech()
             ex["f0_range"] = f0_range(data)
             from . import fsutil
             fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
@@ -510,6 +510,9 @@ MIN_SUNG = 0.12   # under ~12% of the song with a voiced melody = basically inst
 
 # ---------------------------------------------------------------- training a new voice
 
+NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably")   # source notes that mean someone else
+
+
 def train_new_voice(S, job, person: str, control, push, project: str | None = None) -> str:
     """Find clips -> prepare (topping up sources until the target) -> auto-confirm -> train -> add. Returns voice name.
     project: continue that Train-tab project (its ticked sources, choices and reference are kept)."""
@@ -533,12 +536,27 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
             proj.sources = srcmod.search(person, proj.mode)
             proj.save()
         emb = SpeakerEmbedder()
-        for rnd in range(8):
+        # Singers: the voice will sing, so gather singing first; interviews only top up when songs run out.
+        singer = proj.mode != "speaking"
+        sung_first = (lambda s: not srcmod.is_sung(s.title)) if singer else (lambda s: False)
+        searched_more = False
+
+        def enough(pr):
+            return (pr.sung_seconds() if singer and not songs_exhausted(pr) else pr.kept_seconds()) / 60 >= TC["target_minutes"]
+
+        def songs_exhausted(pr):
+            return not [s for s in pr.sources if srcmod.is_sung(s.title) and s.status == "found"
+                        and not s.note.startswith(NOT_USABLE)]
+        for rnd in range(12 if singer else 8):
             proj = P.Project.load(proj.name)
-            if proj.reference.get("clip") and proj.kept_seconds() / 60 >= TC["target_minutes"]:
+            if proj.reference.get("clip") and enough(proj):
                 break   # enough clean voice already (e.g. from the quality check's clips)
-            # two sources at a time, re-checking the total in between, instead of everything that's ticked
-            todo = [s.id for s in proj.sources if s.selected and s.status not in ("ready", "failed")][:2]
+            # a few sources at a time, re-checking the total in between, instead of everything that's ticked
+            todo = [s.id for s in sorted(proj.sources, key=sung_first)
+                    if s.selected and s.status not in ("ready", "failed")]
+            if singer and not songs_exhausted(proj):
+                todo = [i for i in todo if srcmod.is_sung(proj.source(i).title)]
+            todo = todo[:3 if singer else 2]
             if todo:
                 def prog(f, label, rnd=rnd, **kw):
                     push("voice", 0.02 + 0.08 * min(1, (rnd + f) / 2),
@@ -554,19 +572,35 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
                     P.set_reference(proj, cluster=proj.reference["cluster"])   # the dominant voice
                     proj.save()
             mins = proj.kept_seconds() / 60
-            if mins >= TC["target_minutes"]:
+            if enough(proj):
                 break
-            more = [s for s in proj.sources if not s.selected and not s.note.startswith(("may be", "a reaction", "edited", "no vocals", "probably"))
-                    and s.status == "found" and s.duration >= 120]
+            more = sorted([s for s in proj.sources if not s.selected and not s.note.startswith(NOT_USABLE)
+                           and s.status == "found" and s.duration >= (90 if singer and srcmod.is_sung(s.title) else 120)],
+                          key=sung_first)
+            if singer and not searched_more and not [s for s in more if srcmod.is_sung(s.title)]:
+                # out of songs: look for more of them before settling for interviews
+                searched_more = True
+                try:
+                    extra = srcmod.search(person, "singing")
+                except ModelError:
+                    extra = []
+                with P.lock(proj.name):
+                    proj = P.Project.load(proj.name)
+                    have = {s.id for s in proj.sources}
+                    new = [s for s in extra if s.id not in have and s.selected and srcmod.is_sung(s.title)]
+                    proj.sources += new
+                    proj.save()
+                more = new + more
             if not more:
                 break
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
                 for s in proj.sources:
-                    if s.id in {m.id for m in more[:2]}:
+                    if s.id in {m.id for m in more[:3 if singer else 2]}:
                         s.selected = True
                 proj.save()
-            push("voice", 0.1, f"{mins:.1f} min of clean voice so far; adding more sources")
+            push("voice", 0.1, f"{proj.sung_seconds() / 60:.1f} min of {person} singing so far; adding more songs"
+                 if singer else f"{mins:.1f} min of clean voice so far; adding more sources")
         proj = P.Project.load(proj.name)
         mins = proj.kept_seconds() / 60
         if mins < 3:
