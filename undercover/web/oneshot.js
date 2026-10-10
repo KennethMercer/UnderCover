@@ -148,6 +148,20 @@ function osFollow(id, title) {
         }
       } catch (e) {}
       if (ev.result) showResult(ev.result, ev.seconds);
+      const others = (plan.song?.compared || []).filter(x => !x.chosen && x.id);
+      if (others.length) {   // the versions it compared: one click to hear the same voice on another
+        $("#os-plan").insertAdjacentHTML("beforeend", `<div class="os-versions"><span class="meta">Other versions it compared:</span>` +
+          others.map(x => `<div class="srow"><div><b>${esc(x.title)}</b><p class="meta">${x.outside != null ? `${Math.round(x.outside * 100)}% of the melody outside the voice's range` : ""}</p></div>
+            <button class="btn" type="button" data-ver="${esc(x.id)}">Make it with this version</button></div>`).join("") + `</div>`);
+        $$("#os-plan [data-ver]").forEach(b => b.onclick = async () => {
+          try {
+            S.song = await api(`/api/songs/${b.dataset.ver}`); store.set("uc-song", S.song.id); renderSong();
+            S.opts = { ...S.opts, fit: true };   // each version gets its own key and octave
+            syncControls();
+            $("#convert").click();
+          } catch (e) { showError(e.message, "Couldn't load that version"); }
+        });
+      }
     } else if (ev.state === "cancelled") {
       $("#os-plan").textContent = "Cancelled. Anything already downloaded or trained is kept, so trying again is quicker.";
     } else if (ev.state === "paused") {
