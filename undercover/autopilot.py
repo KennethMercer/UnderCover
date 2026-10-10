@@ -299,7 +299,7 @@ def reference_clips(S, job, person: str, control, push):
     if proj.speakers and not proj.reference.get("confirmed"):
         with P.lock(proj.name):
             proj = P.Project.load(proj.name)
-            P.set_reference(proj, cluster=proj.reference["cluster"])
+            P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)
             proj.save()
     return P.Project.load(proj.name)
 
@@ -649,7 +649,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
                 if proj.speakers and not proj.reference.get("confirmed"):
-                    P.set_reference(proj, cluster=proj.reference["cluster"])   # the dominant voice
+                    P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)   # the dominant voice
                     proj.save()
             mins = proj.kept_seconds() / 60
             if enough(proj):
