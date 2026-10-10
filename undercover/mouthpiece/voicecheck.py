@@ -46,8 +46,8 @@ def sung_tests(person: str, max_phrases: int = 8, max_seconds: float = 45.0) -> 
     import json
     import re
     import soundfile as sf
-    from .core.config import path
-    from .train.project import _resample16
+    from ..core.config import path
+    from .project import _resample16
     words = [w for w in re.findall(r"\w+", person.lower()) if len(w) > 2]
     picked, total = [], 0.0
     for d in sorted((path("cache_dir") / "stems").iterdir()) if (path("cache_dir") / "stems").exists() else []:
@@ -98,7 +98,7 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
     """(test phrases, target reference vector, kind) from a prepared project. Singers (a sung reference exists):
     other singers' singing vs their sung voice; everyone else: other speakers in their clips vs their speech."""
     import soundfile as sf
-    from .train.project import _resample16
+    from .project import _resample16
     emb = proj.load_embeddings()
     if "speaker:sung" in emb:
         tests = sung_tests(proj.person or proj.name, max_phrases, max_seconds)
@@ -132,7 +132,7 @@ def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
 def target_range(proj, rmvpe, n: int = 16) -> list | None:
     """[p5, median, p95] pitch (Hz) of the person's best kept phrases (their singing, for singers)."""
     import soundfile as sf
-    from .train.project import _resample16
+    from .project import _resample16
     kept = sorted([p for p in proj.phrases if p.kept and p.dur >= 2], key=lambda p: -p.score)[:n]
     f0s = []
     for p in kept:
@@ -145,8 +145,8 @@ def target_range(proj, rmvpe, n: int = 16) -> list | None:
 
 def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> Quality:
     """tests: a fixed (phrases, ref, kind) from test_phrases, so a training run compares its saves on the same test."""
-    from .core.engine.convert import Settings
-    from .train.project import _resample16
+    from ..core.engine.convert import Settings
+    from .project import _resample16
     phrases, ref, kind = tests or test_phrases(proj)
     if not phrases or ref is None:
         raise ValueError("no test phrases (the clips had only one speaker)")

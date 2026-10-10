@@ -167,13 +167,13 @@ def run_job(job: "Job", fn):
     if job.cancel:
         job.finish("cancelled", message="Cancelled.")
         return
-    from .. import worklist
-    if job.kind in worklist.TRAIN_KINDS and job.kind != "auto" and (job.pausing or worklist.held()):
+    from . import worklist
+    if job.kind in worklist.PAUSABLE and job.kind not in worklist.PARTLY_PAUSABLE and (job.pausing or worklist.held()):
         job.finish("paused", message="Voice work is paused (top of the page). Resume starts it.")
         worklist.remember(job)
         return
-    if job.kind == "auto" and worklist.held():
-        job.pausing = True   # a one-shot still makes its cover, but sets aside any voice training
+    if job.kind in worklist.PARTLY_PAUSABLE and worklist.held():
+        job.pausing = True   # e.g. a one-shot still makes its cover, but sets aside any voice training
     with job.cond:
         job.state = "running"
     for attempt in (1, 2):

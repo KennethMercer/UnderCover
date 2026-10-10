@@ -21,11 +21,11 @@ import uuid
 from pathlib import Path
 from urllib.parse import unquote
 
-from ..core import files, gpu, jobs
+from ..core import files, gpu, jobs, worklist
 from ..core.config import CONFIG, path
 from ..core.voices import ModelError, slug
 from . import project as P
-from .source import Source
+from .sources import Source
 
 TCFG = CONFIG["training"]
 ACTIVE: dict = {}   # project name -> {"job": Job, "control": Control | None, "kind": str}
@@ -104,7 +104,7 @@ def _route(h, method, p):
             if b.get("no_search"):
                 return h._json(project_json(proj))
             try:
-                from . import source
+                from . import sources as source
                 proj.sources = source.search(proj.person, mode)
             except ModelError as e:
                 proj.save()
@@ -140,7 +140,7 @@ def _route(h, method, p):
 # ---------------------------------------------------------------- sources
 
 def _search(h, proj, b):
-    from . import source
+    from . import sources as source
     if _busy(proj.name):
         raise ModelError("Wait for the current step to finish before searching again.")
     person = (b.get("person") or proj.person).strip()
@@ -160,7 +160,7 @@ def _sources(h, proj, b):
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         if b.get("url"):
-            from . import source
+            from . import sources as source
             new = source.from_link(b["url"])
             ids = {s.id for s in proj.sources}
             proj.sources += [s for s in new if s.id not in ids]
@@ -363,7 +363,7 @@ def _auto(h, proj, b):
 def start_auto(name: str, b: dict):
     """Do it all: prepare the ticked sources (and more if short of the target), confirm the main voice,
     train (auto length) and add the best save to the voices. Same steps as a one-shot cover's training."""
-    from .. import autopilot
+    from . import service
     from .trainer import Control
     proj = P.Project.load(name)
     if _busy(proj.name):
@@ -397,8 +397,8 @@ def start_auto(name: str, b: dict):
                 raise jobs.Cancelled()
             job.push(stage=stage, frac=round(frac, 3), message=message, **kw)
         try:
-            name = autopilot.train_new_voice(job, proj.person, control, push, project=proj.name)
-        except autopilot.Paused:
+            name = service.train_new_voice(job, proj.person, control, push, project=proj.name)
+        except jobs.Paused:
             return job.finish("paused", message="Paused. Resume continues where it stopped.")
         finally:
             ACTIVE.pop(proj.name, None)
@@ -456,3 +456,11 @@ def _export(h, proj, b):
 
     threading.Thread(target=run, daemon=True).start()
     h._json({"job": job.id})
+
+
+# Pause / Resume (core.worklist): these jobs are voice work; paused ones start again from their resume spec
+worklist.register_pausable("train", "train-prepare", "train-auto")
+worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]))
+worklist.register_resume("train", lambda spec: start_train(spec["project"], {}))
+worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}))
+worklist.register_control_lookup(lambda j: next((a["control"] for a in ACTIVE.values() if a["job"] is j and a.get("control")), None))

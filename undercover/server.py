@@ -29,7 +29,9 @@ from .core.jobs import GPU_QUEUE, JOBS, STATUS, Cancelled, Job, friendly, gpu_wo
 from . import library
 from .pipeline import ENGINE, cancel_presep as _cancel_presep, history_items
 from .songs import register_song, song_meta
-from .train import api as train_api
+from .mouthpiece import api as train_api
+from . import autopilot  # noqa: F401 - registers the one-shot with Pause / Resume
+from .mouthpiece import night  # noqa: F401 - registers the overnight queue's improve / new items
 
 UCFG = CONFIG["ui"]
 WEB = Path(__file__).parent / "web"
@@ -175,14 +177,14 @@ class Handler(BaseHTTPRequestHandler):
         p, q = u.path, parse_qs(u.query)
         try:
             if p == "/api/work":
-                from . import worklist
+                from .core import worklist
                 return self._json(worklist.status())
             if p == "/api/work/candidates":
-                from . import worklist
-                return self._json(worklist.candidates())
+                from .mouthpiece import night
+                return self._json(night.candidates())
             if p == "/api/work/lookup":
-                from . import worklist
-                return self._json(worklist.lookup((parse_qs(urlparse(self.path).query).get("q") or [""])[0]))
+                from .mouthpiece import night
+                return self._json(night.lookup((parse_qs(urlparse(self.path).query).get("q") or [""])[0]))
             if train_api.handle(self, "GET", p) or library.handle(self, "GET", p):
                 return
             if p in ("/", "/index.html"):
@@ -200,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
                         ev = next((e for e in reversed(a["job"].events) if e.get("epoch") or e.get("eta")), {})
                         training = {"project": name, "epoch": ev.get("epoch"), "epochs": ev.get("epochs"), "eta": ev.get("eta")}
                         break
-                from . import worklist
+                from .core import worklist
                 w = worklist.status()
                 work = {"held": w["held"], "resume": w["resume"], "running": w["running"][:1],
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
@@ -520,17 +522,18 @@ class Handler(BaseHTTPRequestHandler):
         """What a one-shot request would do, without downloading anything (shown before it starts)."""
         from .core.voices import ModelError, slug
         from . import autopilot
+        from .mouthpiece import service
         try:
             req = autopilot.parse_request(text)
         except ModelError as e:
             return self._error(str(e))
         song, person = req["song"], req["person"]
-        inst = autopilot.installed_for(person)
+        inst = service.installed_for(person)
         trained = [v for v in inst if v.extra.get("trained")]
         if trained:
             voice = {"how": "installed", "name": trained[0].name, "trained": True}
         else:
-            online = [] if prefer_train else autopilot.online_for(person, 2)
+            online = [] if prefer_train else service.online_for(person, 2)
             community = [] if prefer_train else [v.name for v in inst]
             voice = ({"how": "check", "candidates": community + [r.name for r in online], "name": f"{slug(person)}-uc"}
                      if community or online else {"how": "train", "name": f"{slug(person)}-uc"})
@@ -546,8 +549,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"job": job.id, "position": GPU_QUEUE.qsize()})
 
     def _work(self, action: str, b: dict):
-        """Pause / Resume and the overnight queue (worklist.py)."""
-        from . import worklist
+        """Pause / Resume and the overnight queue (core/worklist.py)."""
+        from .core import worklist
         from .core.voices import ModelError
         try:
             if action == "pause":
@@ -638,7 +641,7 @@ class Handler(BaseHTTPRequestHandler):
         """Restart the server process to load updated code. Refused while a cover is running or queued."""
         if any(j.kind == "cover" and not j.finished for j in JOBS.values()):
             return self._error("A cover is still being made. Wait for it to finish (or cancel it), then restart.", 409)
-        from . import worklist
+        from .core import worklist
         if worklist.active():
             # Voice work: pause it (training keeps its place), restart, and resume it automatically after
             worklist.pause_all(resume_after_restart=True)
@@ -794,7 +797,7 @@ def main():
     _install_console_handler()
     _clean_old_previews()
     threading.Thread(target=gpu_worker, daemon=True, name="gpu").start()
-    from . import worklist
+    from .core import worklist
     worklist.start()
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
     url = f"http://{host}:{port}/"
