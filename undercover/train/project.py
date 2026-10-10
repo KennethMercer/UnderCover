@@ -426,6 +426,14 @@ def add_file(proj: Project, file: Path, title: str | None = None) -> Source:
 
 # ================================================================ reference voice and scoring
 
+def _music_limits(proj: Project) -> dict:
+    """Leftover-music limit per source (dB vs the voice). Speech: -12 (music under talking = messy separation).
+    Songs always have music under the singing; their separated vocals stay clean up to about +6 dB (Elliott Smith's
+    album tracks: hiss the same at -2 and +6 dB; median phrase +3 dB, so -12 threw out 630 of 754 phrases)."""
+    from .source import is_sung
+    return {s.id: (TCFG.get("music_db_sung", 6.0) if is_sung(s) else TCFG["music_db"]) for s in proj.sources}
+
+
 def find_speakers(proj: Project):
     """Cluster all phrase embeddings into speakers; the reference is the voice heard most, weighted toward
     voices present in several sources. Fills proj.speakers and (unless confirmed) proj.reference."""
@@ -434,7 +442,9 @@ def find_speakers(proj: Project):
     # Cluster numbers are re-assigned on every run, so a confirmed reference is followed by its voice (centroid),
     # not its number: adding sources once switched Elliott Smith's project to another Elliot's speech.
     old_ref = emb.get(f"speaker:{proj.reference.get('cluster')}") if proj.reference.get("confirmed") else None
-    usable = [p for p in proj.phrases if p.id in emb and p.dur >= 1.5 and p.music_db < TCFG["music_db"] and not p.clipped]
+    lim = _music_limits(proj)
+    usable = [p for p in proj.phrases if p.id in emb and p.dur >= 1.5 and p.music_db < lim.get(p.source, TCFG["music_db"])
+              and not p.clipped]
     if len(usable) < 3:
         raise ModelError("Not enough clean speech was found to identify the voice. Add more sources or recordings.")
     usable.sort(key=lambda p: -p.dur)
@@ -535,6 +545,9 @@ def score(proj: Project):
         r2 = np.mean(close, 0)
         ref = r2 / (np.linalg.norm(r2) + 1e-9)
     sref = _sung_reference(proj, emb, ref)
+    lim = _music_limits(proj)
+    from .source import is_sung
+    sung_src = {s.id for s in proj.sources if is_sung(s)}
     if sref is not None or "speaker:sung" in emb:   # kept for the voice check (tests singers on singing)
         if sref is None:
             emb.pop("speaker:sung")
@@ -546,8 +559,11 @@ def score(proj: Project):
             p.score, p.mix, p.sung = 0.0, 0.0, False
         else:
             e = emb[p.id]
-            p.sung = sref is not None and float(e @ sref) > float(e @ ref)
-            r = sref if p.sung else ref
+            better_sung = sref is not None and float(e @ sref) > float(e @ ref)
+            # from a song (album track, acapella) it's singing even when the main reference fits it better
+            # (a songs-only project: the main reference already is the singing voice)
+            p.sung = better_sung or p.source in sung_src
+            r = sref if better_sung else ref
             p.score = round(float(e @ r), 3)
             w = emb.get(p.id + ":w")
             p.mix = round(float((w @ r).min()), 3) if w is not None else p.score
@@ -555,7 +571,7 @@ def score(proj: Project):
             p.reason = "too short"
         elif p.clipped:
             p.reason = "clipped"
-        elif p.music_db > TCFG["music_db"]:
+        elif p.music_db > lim.get(p.source, TCFG["music_db"]):
             p.reason = "music or noise"
         elif p.noise > TCFG.get("noise_max", 0.30):
             p.reason = "hiss or artifacts"
@@ -578,8 +594,9 @@ def _sung_reference(proj: Project, emb: dict, speech_ref: np.ndarray) -> np.ndar
     from sklearn.cluster import AgglomerativeClustering
     from .source import is_sung
     sung_src = {s.id for s in proj.sources if is_sung(s)}
+    lim = _music_limits(proj)
     usable = [p for p in proj.phrases if p.source in sung_src and p.id in emb and p.dur >= 1.5
-              and p.music_db < TCFG["music_db"] and not p.clipped]
+              and p.music_db < lim.get(p.source, TCFG["music_db"]) and not p.clipped]
     if len(usable) < 8 or len({p.source for p in usable}) < 2:
         return None
     X = np.stack([emb[p.id] for p in usable])

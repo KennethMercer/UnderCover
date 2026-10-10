@@ -108,6 +108,7 @@ match_threshold = 0.45           # speaker similarity (cosine) needed to keep a 
 cluster_threshold = 0.45         # similarity that joins phrases into one speaker when finding the reference
 mix_threshold = 0.25             # a 3 s window inside a phrase below this = a second voice in it
 music_db = -12.0                 # leftover music/noise louder than vocal + this (dB) = left out
+music_db_sung = 6.0              # the same for songs (always music under the singing; separated vocals stay clean)
 noise_max = 0.30                 # spectral flatness above this = hissy/processed audio, left out (clean voice ~0.15-0.2)
 sample_rate = 40000              # 32000 | 40000 | 48000 (RVC v2 base models)
 batch_size = 8                   # measured: epoch time barely changes with batch size (GPU does ~26 pieces/s)
