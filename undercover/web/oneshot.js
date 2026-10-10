@@ -150,6 +150,8 @@ function osFollow(id, title) {
       if (ev.result) showResult(ev.result, ev.seconds);
     } else if (ev.state === "cancelled") {
       $("#os-plan").textContent = "Cancelled. Anything already downloaded or trained is kept, so trying again is quicker.";
+    } else if (ev.state === "paused") {
+      $("#os-plan").textContent = "Paused while training the voice. Resume (top of the page) carries on from the same point and then makes the cover.";
     } else {
       showError(ev.message, "The one-shot cover stopped");
       previewPlan();
