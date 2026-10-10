@@ -1,0 +1,110 @@
+# UnderCover configuration: all paths and defaults live here.
+# Relative paths are resolved against this file's folder.
+
+[gpu]
+# Substring of the GPU name to use. Picks the 7900 XTX over the integrated Radeon graphics.
+device_name = "7900 XTX"
+# Optional: force HIP_VISIBLE_DEVICES before torch loads ("" = leave unset).
+hip_visible_devices = ""
+fp16 = true
+# MIOpen kernel search mode. Default (exhaustive) costs ~11 s every time a new input length is seen;
+# FAST picks kernels heuristically (~0.1 s) with near-identical runtime speed (Phase 2 measurement).
+miopen_find_mode = "FAST"
+
+[paths]
+models_dir = "models"
+cache_dir = "cache"
+output_dir = "output"
+logs_dir = "logs"
+uploads_dir = "uploads"
+
+[ui]
+host = "127.0.0.1"       # local only
+port = 7860
+open_browser = true
+preload_models = true    # load separation + conversion models at startup so the first cover is fast
+max_upload_mb = 1000
+
+[voices]
+# Installed voices live in <models_dir>/voices/<name>/ (model.pth, optional model.index, meta.json).
+# Large Hugging Face repos that each hold hundreds of RVC voices; searched by file name.
+collections = ["QuickWick/Music-AI-Voices", "juuxn/RVCModels"]
+collection_cache_hours = 24
+max_download_gb = 2.0
+search_limit = 25
+
+[conversion]
+hubert_dir = "rvc/hubert_base"   # under models_dir
+rmvpe = "rvc/rmvpe.pt"           # under models_dir
+# Pitch. key moves the WHOLE song (instrumental + backing are pitch-shifted too), octave moves only the
+# new vocal by whole octaves. Both keep the vocal in key with the music. Vocal shift = key + 12 * octave.
+key = 0                          # semitones, whole song
+octave = 0                       # new vocal only
+pitch = 0                        # legacy vocal-only semitones (CLI --pitch); not a multiple of 12 = out of key
+pitch_cleanup = true             # repair pitch-tracker octave glitches and blips (cuts octave jumps 60-75%)
+pitch_correction = 0.0           # snap to the song's scale: 0 off, 0.3-0.5 gentle, 1 hard autotune
+index_ratio = 0.75               # 0 = ignore .index, 1 = fully snap to the voice's training features
+protect = 0.33                   # protect consonants/breaths (0.5 = off)
+volume_envelope = 0.25           # 1 = keep converted loudness, 0 = follow the original vocal's loudness
+# Chunking (seconds): split near quiet points every ~center s, padded by pad s. Measured on a 4:23 vocal:
+# 60 s -> 17.1 s / 3.1 GB / 4 seams; 120 s -> 11.5 s / 7.4 GB / 2 seams; whole song -> 29 GB (spills, 2x slower).
+chunk_pad = 3
+chunk_query = 10
+chunk_center = 60              # 2026-10-09: warm speed is the same for 30/60/120 s (8.3-8.6 s for 354 s); 60 s halves VRAM (3.8 vs 7.6 GB)
+chunk_max = 65
+shape_bucket = 5               # pad chunks to multiples of 5 s so GPU kernels tuned for one length get reused (0 = off)
+skip_silence = true            # convert only the sung regions (silences >= 1.5 s stay silent)
+voice_cache = 3                  # voices kept loaded in VRAM
+
+[remix]
+format = "mp3"           # wav | flac | mp3
+mp3_bitrate = "320k"
+sample_rate = 44100
+vocal_db = 0.0           # vocal level relative to the original vocal (after loudness matching)
+backing_db = 0.0         # backing vocals level (when --karaoke split them out)
+reverb = "auto"          # "auto" = put back the amount de-reverb removed (0 if it didn't run); or 0-0.5
+polish = true            # tone-match the new vocal to the original (EQ), de-ess, gentle compression
+eq_match_strength = 0.4  # 0-1: how far the tone moves toward the original singer's
+eq_match_max_db = 4.0    # cap per band, so the new voice keeps its own character (no boosts below 200 Hz)
+reverb_seconds = 1.8     # reverb tail length
+match_song_loudness = true   # final mix loudness = original song's
+limiter_db = -1.0        # true-peak-safe ceiling (oversampled limiter); -0.3 let MP3 masters reach +0.4 dBTP
+
+[separation]
+# audio-separator model filenames (downloaded on first use into models/separator).
+# Vocal/instrumental split. MelBand Roformer Kim FT by unwa (vocals SDR 12.44): in a 2026-10-07 comparison
+# it left ~10 dB less instrument bleed in the vocal than BS-Roformer 1296 (Billie -74 vs -64 dB, S&G -67 vs -57)
+# and ran ~2.5x faster. Previous default: model_bs_roformer_ep_368_sdr_12.9628.ckpt
+vocal_model = "mel_band_roformer_kim_ft_unwa.ckpt"
+# Optional pass on the vocal stem: remove reverb (anvuew MelBand Roformer).
+dereverb_model = "dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt"
+# Optional pass on the vocal stem: split lead vocal from backing vocals.
+karaoke_model = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
+dereverb = true          # default on (2026-10-09 review): reverb tails smear HuBERT features and pitch; "auto" reverb puts matched space back
+karaoke = false
+# Native FP16 weights: ~5% faster than autocast, output identical to 66-72 dB SNR (Phase 5).
+use_native_fp16 = true
+use_autocast = false
+segment_size = 256
+# quality preset -> overlap. Measured on a 60 s excerpt (Phase 5), SNR vs "max":
+#   fast = 2 (12.3x realtime, vocals 26.3 dB) | high = 4 (6.6x, 29.6 dB) | max = 8 (3.4x, reference)
+quality = "high"
+batch_size = 1           # no measurable effect (Phase 1)
+
+[training]
+# Voice training (Train a voice page / python -m undercover.train). Projects live in <cache_dir>/training/<name>/.
+target_minutes = 10              # clean target-voice minutes to aim for (more than ~30 rarely helps)
+search_per_query = 8             # YouTube results per query variant
+search_results = 12              # sources listed
+max_minutes_per_source = 12      # long videos are trimmed (skips the first minute); several shorter sources beat one long one
+separation_quality = "high"      # music/noise removal before slicing: high = cleaner training data (vocal SNR 29.6 vs 26.3 dB fast), ~1.7x slower prep
+dereverb = true                  # dry voice trains cleaner
+min_phrase = 1.0                 # seconds; shorter phrases are left out
+max_phrase = 12.0                # longer phrases are split at their quietest point
+match_threshold = 0.45           # speaker similarity (cosine) needed to keep a phrase
+cluster_threshold = 0.45         # similarity that joins phrases into one speaker when finding the reference
+mix_threshold = 0.25             # a 3 s window inside a phrase below this = a second voice in it
+music_db = -12.0                 # leftover music/noise louder than vocal + this (dB) = left out
+sample_rate = 40000              # 32000 | 40000 | 48000 (RVC v2 base models)
+batch_size = 8                   # measured: epoch time barely changes with batch size (GPU does ~26 pieces/s)
+holdout_phrases = 3              # phrases kept out of training for the loss chart and previews

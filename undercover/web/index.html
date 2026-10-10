@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnderCover</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2312151c'/><g fill='%23f2a33a'><rect x='6' y='13' width='3' height='6' rx='1.5'/><rect x='11' y='8' width='3' height='16' rx='1.5'/><rect x='16' y='11' width='3' height='10' rx='1.5'/><rect x='21' y='6' width='3' height='20' rx='1.5'/></g></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=VT323&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/winamp.css">
+<script>try { if (localStorage.getItem("uc-theme") === "light") document.documentElement.dataset.theme = "light";
+  if (JSON.parse(localStorage.getItem("uc-skin")) === "winamp") document.documentElement.dataset.skin = "winamp"; } catch (e) {}</script>
+</head>
+<body>
+<div class="drop-overlay" id="drop-overlay" hidden><div>Drop a song to load it, or a voice model (.zip / .pth) to install it</div></div>
+<div class="wrap">
+  <header>
+    <div class="brand"><h1>UnderCover</h1>
+      <div class="tabs" role="tablist" aria-label="Section">
+        <button role="tab" id="tab-covers" data-tab="covers" aria-selected="true">Covers</button>
+        <button role="tab" id="tab-train" data-tab="train" aria-selected="false">Train a voice</button>
+        <button role="tab" id="tab-library" data-tab="library" aria-selected="false">Library</button>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip" id="chip-gpu"><i class="dot wait"></i><span>Starting…</span></span>
+      <span class="chip" id="chip-models">loading models</span>
+      <button class="chip chip-btn" id="chip-train" hidden aria-label="Training progress: open Train a voice"></button>
+      <button class="chip chip-btn" id="theme" aria-label="Switch light or dark theme">Light</button>
+    </div>
+  </header>
+
+  <div id="wa-main" aria-hidden="true">
+    <div class="wa-title"><span>WINAMP</span><button class="wa-x" type="button" tabindex="-1" title="Back to the normal look">×</button></div>
+    <div class="wa-body">
+      <div class="wa-lcd"><div class="wa-time"><span class="wa-state">■</span><span id="wa-time">00:00</span></div><canvas id="wa-vis"></canvas></div>
+      <div class="wa-info">
+        <div class="wa-marquee"><span id="wa-song">UnderCover</span></div>
+        <div class="wa-meta"><b>320</b> kbps <b>44</b> kHz <span class="wa-st">mono</span><span class="wa-st on">stereo</span></div>
+      </div>
+    </div>
+    <div class="wa-transport"><button type="button" tabindex="-1" data-a="prev" title="Previous cover">⏮</button><button type="button" tabindex="-1" data-a="play" title="Play">▶</button><button type="button" tabindex="-1" data-a="pause" title="Pause">⏸</button><button type="button" tabindex="-1" data-a="stop" title="Stop">⏹</button><button type="button" tabindex="-1" data-a="next" title="Next cover">⏭</button><span class="wa-brand">UNDERCOVER</span></div>
+  </div>
+  <div id="wa-toast" aria-hidden="true"></div>
+
+  <div class="alert" id="err" hidden role="alert">
+    <div><b id="err-title">Something went wrong</b><p id="err-msg"></p></div>
+    <div class="alert-btns"><button class="btn primary" id="err-action" hidden></button><button class="icon-btn" id="err-x">Dismiss</button></div>
+  </div>
+
+  <div class="view" id="view-covers">
+  <section class="panel oneshot" id="oneshot">
+    <div class="row spread"><h2 id="os-h">Make a cover in one go</h2>
+      <span class="row" id="os-run-meta" hidden><span class="mono meta" id="os-elapsed"></span><button class="linkbtn" id="os-cancel">Cancel</button></span>
+      <span class="meta" id="os-alt">or set it up yourself below</span></div>
+    <div id="os-idle">
+      <div class="row">
+        <input class="big" type="text" id="os-text" autocomplete="off" placeholder="cover of Party In The USA by Morgan Freeman" aria-label="What cover to make">
+        <button class="btn primary go" id="os-go">Make it</button>
+      </div>
+      <div class="row spread os-sub">
+        <div class="ex" id="os-ex"><button type="button">Bohemian Rhapsody sung by Obama</button><button type="button">have SpongeBob sing Toxic</button><button type="button">acoustic cover of Hello by Peter Griffin</button></div>
+        <details class="os-opts"><summary>Options</summary>
+          <label class="toggle"><input type="checkbox" id="os-train"><span>Train my own voice even if a good one exists online (about 45 min)</span></label>
+        </details>
+      </div>
+      <p class="meta" id="os-plan">Name a song and a voice. UnderCover gets the album version of the song from YouTube, finds (or trains) the voice, and makes the cover with the best settings.</p>
+    </div>
+    <div id="os-running" hidden>
+      <div class="plan">
+        <div class="pstep" data-s="song"><span class="k">1 · Song</span><b></b><small></small><div class="bar"><i></i></div></div>
+        <div class="pstep" data-s="voice"><span class="k">2 · Voice</span><b></b><small></small><div class="bar"><i></i></div></div>
+        <div class="pstep" data-s="cover"><span class="k">3 · Cover</span><b></b><small></small><div class="bar"><i></i></div></div>
+      </div>
+      <p class="meta" id="os-foot"></p>
+    </div>
+  </section>
+
+  <section class="setup">
+    <div class="panel">
+      <h2>1 · Song</h2>
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a song file">
+        <div id="drop-empty">
+          <strong>Drop a song here</strong>
+          <p class="meta">or click to choose a file: mp3, wav, flac, m4a, ogg</p>
+        </div>
+        <div id="drop-loaded" hidden>
+          <div class="song-row"><strong id="song-name"></strong><button class="linkbtn" id="song-replace">Replace</button></div>
+          <div class="meta mono" id="song-meta"></div>
+          <canvas class="wave" id="wave-song" aria-hidden="true"></canvas>
+          <div class="cached" id="song-cached" hidden>✓ Stems already separated. This cover skips the separation step.</div>
+        </div>
+        <div id="drop-uploading" hidden>
+          <div class="song-row"><strong id="up-name"></strong><span class="mono meta" id="up-pct"></span></div>
+          <div class="bar"><i id="up-bar"></i></div>
+          <p class="meta" id="up-note">Uploading…</p>
+        </div>
+      </div>
+      <input type="file" id="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.opus,.aac" hidden>
+      <div class="or">or get it from YouTube</div>
+      <div class="search"><input id="yt-q" type="search" autocomplete="off" placeholder="Song and artist, or paste a YouTube link" aria-label="Search YouTube for a song"><button class="btn" id="yt-go">Search</button></div>
+      <div class="yt" id="yt-list" hidden></div>
+    </div>
+
+    <div class="panel">
+      <h2>2 · Voice</h2>
+      <div class="search">
+        <input id="q" type="search" autocomplete="off" placeholder="Search your voices, find new ones, or paste a link">
+      </div>
+      <div class="voices" id="voices" aria-label="Installed voices"></div>
+      <div class="online-h" id="online-h" hidden></div>
+      <div class="voices" id="online" hidden></div>
+    </div>
+  </section>
+
+  <details class="adv" id="adv">
+    <summary><span><b>Advanced settings</b></span><span id="adv-sum"></span></summary>
+    <div class="adv-grid">
+      <div class="field">
+        <span class="flabel">Voice octave</span>
+        <div class="seg" id="octave">
+          <button type="button" data-v="-2">−2</button>
+          <button type="button" data-v="-1">−1</button>
+          <button type="button" data-v="0">Same</button>
+          <button type="button" data-v="1">+1</button>
+          <button type="button" data-v="2">+2</button>
+        </div>
+        <p>Moves only the new voice by whole octaves, so it stays in key. Female singer → male voice: try −1. Male singer → female voice: try +1.</p>
+      </div>
+      <div class="field">
+        <label for="key">Song key <output id="key-o"></output></label>
+        <input type="range" id="key" min="-6" max="6" step="1">
+        <div class="ticks"><span>−6</span><span>−3</span><span>0</span><span>+3</span><span>+6</span></div>
+        <p>Transposes the whole song, music included, to suit the voice's range. ±1 to ±3 sounds most natural.</p>
+      </div>
+      <div class="field">
+        <label for="index_ratio">Voice likeness (index) <output id="index_ratio-o"></output></label>
+        <input type="range" id="index_ratio" min="0" max="1" step="0.05">
+        <p>Higher sounds more like the target voice, but can blur words. Has no effect if the voice has no index.</p>
+      </div>
+      <div class="field">
+        <label for="protect">Protect consonants <output id="protect-o"></output></label>
+        <input type="range" id="protect" min="0" max="0.5" step="0.01">
+        <p>Keeps breaths and "s"/"t" sounds natural. Slide right to turn it off.</p>
+      </div>
+      <div class="field">
+        <label for="volume_envelope">Vocal dynamics <output id="volume_envelope-o"></output></label>
+        <input type="range" id="volume_envelope" min="0" max="1" step="0.05">
+        <div class="ticks"><span>original singer's</span><span>new voice's own</span></div>
+        <p>Whose loudness rises and falls the new vocal follows.</p>
+      </div>
+      <div class="field">
+        <span class="flabel">Separation quality</span>
+        <div class="seg" id="quality">
+          <button type="button" data-v="fast">Fast<small>~12× realtime</small></button>
+          <button type="button" data-v="high">High<small>~6× realtime</small></button>
+          <button type="button" data-v="max">Max<small>~3× realtime</small></button>
+        </div>
+        <p>How carefully vocals are pulled out of the song. Each level is cached separately.</p>
+      </div>
+      <div class="field">
+        <label class="toggle"><input type="checkbox" id="karaoke"><span>Lead vocal only<br><span class="meta">Keep the original backing vocals; convert only the lead.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="dereverb"><span>Remove reverb first<br><span class="meta">A dry vocal converts more cleanly. Try with a little reverb added back.</span></span></label>
+      </div>
+      <div class="field">
+        <label for="backing_voice">Backing vocals</label>
+        <select id="backing_voice" class="select"><option value="">Original singer</option></select>
+        <div id="backing-opts" class="field" hidden>
+          <span class="flabel">Backing voice octave</span>
+          <div class="seg" id="backing_octave">
+            <button type="button" data-v="-2">−2</button>
+            <button type="button" data-v="-1">−1</button>
+            <button type="button" data-v="0">Same</button>
+            <button type="button" data-v="1">+1</button>
+            <button type="button" data-v="2">+2</button>
+          </div>
+        </div>
+        <label for="backing_db">Backing level <output id="backing_db-o"></output></label>
+        <input type="range" id="backing_db" min="-12" max="6" step="1">
+        <p id="backing-note">A second voice sings the backing vocals. It follows one note at a time, so big stacked harmonies come out thinner.</p>
+      </div>
+      <div class="field">
+        <span class="flabel">Reverb on the new vocal</span>
+        <div class="seg" id="reverb">
+          <button type="button" data-v="auto">Auto</button>
+          <button type="button" data-v="0">Off</button>
+          <button type="button" data-v="0.15">Light</button>
+          <button type="button" data-v="0.3">Medium</button>
+        </div>
+        <p>Auto puts back the amount "Remove reverb first" took out, and adds none otherwise.</p>
+        <span class="flabel">Export format</span>
+        <div class="seg" id="format">
+          <button type="button" data-v="mp3">MP3 320k</button>
+          <button type="button" data-v="flac">FLAC</button>
+          <button type="button" data-v="wav">WAV</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="pitch_correction">Pitch correction <output id="pitch_correction-o"></output></label>
+        <input type="range" id="pitch_correction" min="0" max="1" step="0.1">
+        <p id="pc-note">Pulls the singing toward the notes of the song's key. A little (0.3–0.5) tidies wobbly notes; full is the robotic autotune sound.</p>
+        <label class="toggle"><input type="checkbox" id="pitch_cleanup"><span>Fix pitch glitches<br><span class="meta">Repairs octave cracks and blips from the pitch tracker (about half as many cracks).</span></span></label>
+        <label class="toggle"><input type="checkbox" id="polish"><span>Polish the new vocal<br><span class="meta">Matches its tone to the original singer's, softens harsh "s" sounds, light compression.</span></span></label>
+      </div>
+      <div class="field adv-foot"><button class="linkbtn" id="reset">Reset to defaults</button></div>
+    </div>
+  </details>
+
+  <div class="go">
+    <div class="summary" id="summary">Drop a song and pick a voice.</div>
+    <div class="go-btns">
+      <button class="btn" id="preview-btn" disabled>Preview</button>
+      <button class="convert" id="convert" disabled>Convert</button>
+    </div>
+  </div>
+
+  <section class="panel" id="preview" hidden>
+    <div class="hist-head"><h2>Preview</h2><button class="linkbtn" id="preview-close">Close</button></div>
+    <div class="prev-top">
+      <span class="flabel">Compare</span>
+      <div class="seg" id="preview-kind">
+        <button type="button" data-v="octave">Voice octave</button>
+        <button type="button" data-v="key">Song key</button>
+        <button type="button" data-v="correction">Pitch correction</button>
+        <button type="button" data-v="polish">Polish</button>
+      </div>
+      <button class="btn primary" id="preview-go">Render previews</button>
+    </div>
+    <p class="meta" id="preview-status">Renders 15 seconds of the song (the part with the most singing) a few ways, so you can pick by ear. The first preview of a new song takes about a minute (it separates the song once); after that, a few seconds each.</p>
+    <div class="bar" id="preview-bar" hidden><i></i></div>
+    <div class="prev-grid" id="preview-list"></div>
+  </section>
+
+  <div class="sr-only" id="sr-live" aria-live="polite"></div>
+  <section class="panel" id="progress" hidden>
+    <h2 id="progress-h">Working</h2>
+    <div class="stages">
+      <div class="stage" data-s="separating"><span class="ico"></span>
+        <div><div class="stage-name"><span class="sname">Separating vocals</span><small class="mono">Roformer</small></div><div class="bar"><i></i></div></div>
+        <span class="eta">—</span></div>
+      <div class="stage" data-s="converting"><span class="ico"></span>
+        <div><div class="stage-name"><span class="sname">Converting the vocal</span><small class="mono">RVC · RMVPE</small></div><div class="bar"><i></i></div></div>
+        <span class="eta">—</span></div>
+      <div class="stage" data-s="mixing"><span class="ico"></span>
+        <div><div class="stage-name"><span class="sname">Mixing &amp; loudness match</span><small class="mono">ffmpeg</small></div><div class="bar"><i></i></div></div>
+        <span class="eta">—</span></div>
+    </div>
+    <div class="progress-foot"><span id="elapsed" class="mono"></span><button class="linkbtn" id="cancel">Cancel</button></div>
+  </section>
+
+  <section class="panel" id="result" hidden>
+    <h2 id="result-h">Your cover</h2>
+    <div class="player">
+      <button class="play" id="play" aria-label="Play">▶</button>
+      <div class="player-main">
+        <canvas class="wave seekable" id="wave-res" aria-label="Waveform, click to seek"></canvas>
+        <div class="song-row"><span class="mono meta" id="pos">0:00 / 0:00</span>
+          <div class="player-ctrls">
+          <div class="vol">
+            <button type="button" class="mute" id="mute" aria-label="Mute">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path id="vol-waves" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path id="vol-x" d="M16 9l6 6M22 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" hidden/></svg>
+            </button>
+            <input type="range" id="volume" min="0" max="1" step="0.01" aria-label="Volume">
+          </div>
+          <div class="ab" role="group" aria-label="Compare with the original">
+            <button type="button" aria-pressed="true" data-ab="cover">Cover</button><button type="button" aria-pressed="false" data-ab="orig">Original</button>
+          </div></div></div>
+      </div>
+    </div>
+    <div class="result-actions">
+      <div class="times" id="times"></div>
+      <div class="btns">
+        <button class="btn" id="open-folder">Show in folder</button>
+        <a class="btn" id="dl-vocal" href="#">Download vocal only</a>
+        <a class="btn primary" id="dl-cover" href="#">Download</a>
+      </div>
+    </div>
+    <audio id="a-cover" preload="auto"></audio>
+    <audio id="a-orig" preload="auto"></audio>
+  </section>
+
+  <section class="panel">
+    <div class="hist-head"><h2>History</h2><span class="row-gap"><button class="linkbtn" id="hist-library">See all in Library</button><button class="linkbtn" id="open-output">Open output folder</button></span></div>
+    <div class="hist" id="hist"><p class="meta">Your covers will appear here.</p></div>
+  </section>
+  </div>
+
+  <div class="view" id="view-train" hidden>
+    <section class="panel">
+      <div class="row spread">
+        <h2>Train a voice</h2>
+        <div class="row"><select id="tr-pick" aria-label="Training project"></select><button class="btn" id="tr-new">New voice</button></div>
+      </div>
+      <p class="meta" id="tr-intro">Name a person and UnderCover finds clips of them, keeps only their voice, and trains a voice model you can use for covers. For personal use: don't pass the results off as the real person.</p>
+    </section>
+
+    <nav class="steps" id="tr-steps" aria-label="Training steps" hidden>
+      <div class="step" data-step="1"><b>1 · Find clips</b><span></span></div>
+      <div class="step" data-step="2"><b>2 · Confirm the voice</b><span></span></div>
+      <div class="step" data-step="3"><b>3 · Review samples</b><span></span></div>
+      <div class="step" data-step="4"><b>4 · Train</b><span></span></div>
+    </nav>
+
+    <section class="panel" id="tr-find">
+      <div class="row spread"><h2>1 · Who should it sound like?</h2><span class="meta">Clips are kept in <span class="mono">cache/training</span></span></div>
+      <div class="row">
+        <input type="search" id="tr-person" class="grow" autocomplete="off" placeholder="A person's name, e.g. Barack Obama" aria-label="Person's name">
+        <div class="seg" id="tr-mode" role="group" aria-label="Kind of audio">
+          <button type="button" data-v="speaking">Speaking</button><button type="button" data-v="singing">Singing</button><button type="button" data-v="both">Both</button>
+        </div>
+        <button class="btn primary" id="tr-search">Find clips</button>
+      </div>
+      <p class="meta" id="tr-find-hint">Searches YouTube for interviews, speeches and podcasts (or live and isolated vocals for singing). Untick anything that looks wrong.</p>
+      <div class="sources" id="tr-sources"></div>
+      <div class="row" id="tr-add" hidden>
+        <input type="text" id="tr-link" class="grow" placeholder="Paste a YouTube link (video or playlist) to add a source" aria-label="Link to add">
+        <button class="btn" id="tr-link-add">Add</button>
+        <button class="btn" id="tr-file-add">Add recordings…</button>
+        <input type="file" id="tr-file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.opus" multiple hidden>
+      </div>
+      <div class="row" id="tr-auto-row" hidden>
+        <button class="btn primary" id="tr-auto">Do it all for me</button>
+        <span class="meta">Prepares the ticked sources (and more if there isn't 10 min of voice yet), confirms the main voice, trains (~40 min) and adds it to your voices. You can still step in at any point.</span>
+      </div>
+      <div class="row" id="tr-prepare-row" hidden>
+        <button class="btn" id="tr-prepare">Download &amp; prepare</button>
+        <span class="meta" id="tr-prepare-note"></span>
+      </div>
+      <div id="tr-prep-progress" hidden>
+        <div class="row spread"><span id="tr-prep-label" class="meta"></span><span class="row"><span class="mono meta" id="tr-prep-pct"></span><button class="linkbtn" id="tr-prep-cancel">Cancel</button></span></div>
+        <div class="bar"><i id="tr-prep-bar"></i></div>
+      </div>
+    </section>
+
+    <section class="panel" id="tr-ref" hidden>
+      <h2>2 · Is this the right voice?</h2>
+      <p class="meta">The voice heard most across your sources. Every phrase is compared with it, so other people (interviewers, the crowd) get left out.</p>
+      <div class="ref" id="tr-ref-main"></div>
+      <div id="tr-speakers"></div>
+    </section>
+
+    <section class="panel" id="tr-samples" hidden>
+      <div class="row spread"><h2>3 · Training samples</h2>
+        <div class="seg" id="tr-filter" role="group" aria-label="Show">
+          <button type="button" data-v="kept">Kept</button><button type="button" data-v="out">Left out</button><button type="button" data-v="all">All</button>
+        </div>
+      </div>
+      <div class="tr-meter-row">
+        <div class="tr-meter-box">
+          <div class="row spread"><b id="tr-minutes"></b><span class="meta" id="tr-target"></span></div>
+          <div class="meter"><i id="tr-meter"></i><span class="target" id="tr-meter-target"></span></div>
+        </div>
+        <p class="meta" id="tr-leftout"></p>
+      </div>
+      <div class="samples" id="tr-list"></div>
+      <p class="meta">Drop recordings anywhere on this page to add them as a source, then press Download &amp; prepare.</p>
+    </section>
+
+    <section class="tr-train" id="tr-train" hidden>
+      <div class="panel">
+        <h2>4 · Train</h2>
+        <div class="fields">
+          <label class="field">Voice name<input type="text" id="tr-name" autocomplete="off"><small>"-uc" marks voices trained in UnderCover</small></label>
+          <label class="field">Training length<select id="tr-length">
+            <option value="auto">Auto (~45 min with preparation; stops early when it stops improving)</option>
+            <option value="quick">Quick test (~5 min)</option>
+            <option value="long">Long (~80 min)</option></select></label>
+          <label class="field">Sample rate<select id="tr-sr">
+            <option value="40000">40 kHz (recommended)</option><option value="48000">48 kHz</option><option value="32000">32 kHz</option></select>
+            <small>Matches the RVC v2 base models (downloaded once, ~215 MB)</small></label>
+          <div class="field"><span>Starting point</span><span class="meta">RVC v2 base (official)</span></div>
+        </div>
+        <p class="meta">Covers you start while a voice trains are made right away; training waits for them. Pause any time and resume later.</p>
+        <div class="row"><button class="btn primary big" id="tr-start">Start training</button><span class="meta" id="tr-start-note"></span></div>
+      </div>
+      <div class="panel" id="tr-run" hidden>
+        <div class="row spread"><h2 id="tr-run-h">Training…</h2><div class="row"><button class="btn" id="tr-pause">Pause</button><button class="btn" id="tr-stop">Stop &amp; keep best</button></div></div>
+        <div class="bar"><i id="tr-bar"></i></div>
+        <div class="stats">
+          <div class="stat"><small>Epoch</small><b id="tr-epoch">0</b></div>
+          <div class="stat"><small>Time left</small><b id="tr-eta">—</b></div>
+          <div class="stat"><small>Speed</small><b id="tr-speed">—</b></div>
+          <div class="stat"><small>Data</small><b id="tr-data">—</b></div>
+        </div>
+        <svg class="chart" id="tr-chart" viewBox="0 0 400 150" preserveAspectRatio="none" role="img" aria-label="Loss chart"></svg>
+        <div class="legend"><span><i style="background:var(--accent)"></i>mel loss (training)</span><span><i style="background:var(--wave-alt)"></i>held-out samples</span><span>lower = closer to the real voice</span></div>
+      </div>
+    </section>
+
+    <section class="panel" id="tr-listen" hidden>
+      <div class="row spread"><h2>Listen as it learns</h2><span class="meta">A held-out phrase rebuilt by each save, next to the real voice</span></div>
+      <div class="checks" id="tr-checks"></div>
+    </section>
+
+    <section class="panel" id="tr-done" hidden></section>
+  </div>
+
+  <div class="view" id="view-library" hidden>
+    <section class="panel">
+      <div class="lib-storage">
+        <div class="lib-storage-main">
+          <h2>Storage</h2>
+          <div class="stack" id="lib-stack" role="img" aria-label="Storage by type"></div>
+          <div class="legend" id="lib-legend"></div>
+        </div>
+        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn">Clean up…</button></div>
+      </div>
+    </section>
+    <section class="panel" id="lib-clean" hidden>
+      <div class="row spread"><h2>Clean up</h2><span class="meta">Frees space without touching your covers, songs or voices (unless you tick those)</span></div>
+      <div class="clean" id="lib-clean-list"></div>
+      <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
+        <span class="meta">Can't be undone, but anything here is re-made automatically if it's needed again.</span></div>
+    </section>
+    <div class="cats" id="lib-cats" role="group" aria-label="Show"></div>
+    <div class="lib-tools">
+      <input type="search" id="lib-q" autocomplete="off" aria-label="Search the library">
+      <select id="lib-sort" aria-label="Sort"></select>
+      <select id="lib-filter" aria-label="Filter" hidden></select>
+    </div>
+    <section class="lib">
+      <div class="panel items" id="lib-list" aria-label="Items"></div>
+      <aside class="panel detail" id="lib-detail" aria-live="polite"></aside>
+    </section>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+<script src="/static/train.js"></script>
+<script src="/static/oneshot.js"></script>
+<script src="/static/library.js"></script>
+<script src="/static/winamp.js"></script>
+</body>
+</html>
