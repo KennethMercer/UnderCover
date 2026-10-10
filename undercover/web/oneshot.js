@@ -83,6 +83,7 @@ function setRunning(on, title) {
 }
 const ORDER_OS = ["song", "voice", "cover"];
 const octaveWords = o => !o ? "the singer's octave" : `voice ${Math.abs(o) === 1 ? "one octave" : "two octaves"} ${o < 0 ? "lower" : "higher"}`;
+const fitWords = set => octaveWords(set.octave) + (set.key ? ` · song ${Math.abs(set.key)} semitone${Math.abs(set.key) === 1 ? "" : "s"} ${set.key < 0 ? "lower" : "higher"}` : "");
 function card(stage) { return $(`#os-running .pstep[data-s=${stage}]`); }
 function renderOS(ev) {
   const plan = ev.plan || OS.plan || {};
@@ -103,7 +104,7 @@ function renderOS(ev) {
     : voice ? (voice.checked || { installed: "your installed voice", online: `community voice${voice.repo ? " · " + voice.repo : ""}`, train: "trained in UnderCover" }[voice.how]) : "";
   $("b", cc).textContent = ev.stage === "cover" ? "Making the cover" : (ev.final && ev.state === "done" ? "Done" : "Waiting");
   $("small", cc).textContent = ev.stage === "cover" && !ev.final ? ev.message
-    : set ? `Best settings · ${octaveWords(set.octave)} (${set.why})` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
+    : set ? `Best settings · ${fitWords(set)} (${set.why})` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
   OS.eta = ev.eta || null;
   if (!ev.final) tabTitle(`⏳ ${ev.stage === "song" ? "Song" : ev.stage === "voice" ? "Voice" : ev.stage === "cover" ? "Cover" : "Waiting"}${ev.eta ? " · " + fmtSecs(ev.eta) : ""}`);
   $("#os-foot").textContent = voice?.how === "train" && ev.stage === "voice"
@@ -127,14 +128,14 @@ function osFollow(id, title) {
     tabTitle(ev.state === "done" ? "✓ Cover ready" : null);
     if (ev.state === "done") {
       $("#os-plan").innerHTML = `Done in ${fmtSecs(ev.elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with <b>${esc(plan.voice?.name || "")}</b>` +
-        (plan.settings ? ` · ${octaveWords(plan.settings.octave)} (${esc(plan.settings.why)})` : "") + ". Change anything below and press Convert to try a variation.";
+        (plan.settings ? ` · ${esc(fitWords(plan.settings))} (${esc(plan.settings.why)})` : "") + ". Change anything below and press Convert to try a variation.";
       try {
         if (plan.song?.id) { S.song = await api(`/api/songs/${plan.song.id}`); store.set("uc-song", S.song.id); renderSong(); }
         await loadVoices(plan.voice?.name);
         if (plan.settings) {
           // For this session only: your saved settings stay as they were ("Back to my settings" restores them).
           if (!OS.mine) OS.mine = { ...S.opts };
-          Object.assign(S.opts, { octave: plan.settings.octave, backing_voice: plan.voice?.name, karaoke: true, dereverb: true, quality: "high" });
+          Object.assign(S.opts, { octave: plan.settings.octave, key: plan.settings.key || 0, backing_voice: plan.voice?.name, karaoke: true, dereverb: true, quality: "high" });
           syncControls(); refreshEstimate();
           $("#os-plan").insertAdjacentHTML("beforeend", ` <button class="linkbtn" id="os-mine" type="button">Back to my settings</button>`);
           $("#os-mine").onclick = () => { S.opts = OS.mine; OS.mine = null; syncControls(); refreshEstimate(); $("#os-mine").remove(); };
