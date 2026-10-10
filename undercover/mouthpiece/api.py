@@ -1,5 +1,8 @@
-"""Web API for the Train a voice page. server.py routes /api/train/... here.
+"""MouthPiece's HTTP routes (the Train a voice page and the overnight queue's pickers). The app's server routes
+/api/train/... and the two /api/work/ lookups here.
 
+GET    /api/work/candidates                     voices that can be improved overnight (mouthpiece/night.py)
+GET    /api/work/lookup?q=                      name suggestions for a new voice
 GET    /api/train/projects                      list
 POST   /api/train/projects                      {person, mode} -> create + search
 GET    /api/train/projects/<p>                  full state
@@ -82,6 +85,15 @@ def _lengths() -> dict:
 
 def handle(h, method: str, p: str) -> bool:
     """Route one request. h: the BaseHTTPRequestHandler. Returns False if the path isn't ours."""
+    if method == "GET" and p == "/api/work/candidates":
+        from . import night
+        h._json(night.candidates())
+        return True
+    if method == "GET" and p == "/api/work/lookup":
+        from urllib.parse import parse_qs, urlparse
+        from . import night
+        h._json(night.lookup((parse_qs(urlparse(h.path).query).get("q") or [""])[0]))
+        return True
     if not p.startswith("/api/train/"):
         return False
     try:
