@@ -353,14 +353,15 @@ def estimate(song: Path, opts: CoverOptions) -> dict:
     med = lambda xs, d: statistics.median(xs[-10:]) if xs else d
     sep_rt = med(speeds["sep"], {2: 10.6, 4: 5.1, 8: 2.7}[ov])
     stem_dir = path("cache_dir") / "stems" / file_hash(song) / (Path(SEP["vocal_model"]).stem + ("" if quality == "high" else f"_{quality}"))
-    cached = stem_dir.exists() and any(stem_dir.glob("*.wav"))
+    from .separate import stem_files
+    cached = stem_dir.exists() and bool(stem_files(stem_dir))
     sep = 0.0 if cached else dur / sep_rt
     # extra passes run on the vocal stem; each is skipped when its own output is already cached
     karaoke = bool(opts.backing_voice or (opts.karaoke if opts.karaoke is not None else SEP["karaoke"]))
     dereverb = bool(opts.dereverb if opts.dereverb is not None else SEP["dereverb"])
     k_dir = stem_dir / ("karaoke_" + Path(SEP["karaoke_model"]).stem)
     d_dir = (k_dir if karaoke else stem_dir) / ("dereverb_" + Path(SEP["dereverb_model"]).stem)
-    done = lambda d: d.exists() and any(d.glob("*.wav"))
+    done = lambda d: d.exists() and bool(stem_files(d))
     passes = (karaoke and not done(k_dir)) + (dereverb and not done(d_dir))
     sep += passes * dur / med(speeds.get("extra", []), 13.6)  # measured ~13.6x realtime (2026-10-09)
     conv = dur / med(speeds["synth"], 40.0) + dur / med(speeds["f0"], 90.0) + 2.0

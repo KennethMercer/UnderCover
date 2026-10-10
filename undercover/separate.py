@@ -37,6 +37,30 @@ def file_hash(p: Path) -> str:
     return h.hexdigest()[:16]
 
 
+def stem_files(d: Path) -> list:
+    """A stem folder's audio files: FLAC (current) or WAV (older caches)."""
+    return [p for p in d.glob("*") if p.suffix.lower() in (".flac", ".wav") and ".part" not in p.name]
+
+
+def to_flac(wav: Path) -> Path:
+    """Re-encode a 24-bit stem as FLAC: the same samples, about half the size (stems were 3.5 GB of 12).
+    Float stems (not what audio-separator writes here) are left as they are, since FLAC has no float format."""
+    import soundfile as sf
+    try:
+        info = sf.info(str(wav))
+        if info.subtype not in ("PCM_24", "PCM_16"):
+            return wav
+        x, sr = sf.read(str(wav), dtype="int32")
+        flac = wav.with_suffix(".flac")
+        tmp = wav.with_suffix(".part.flac")
+        sf.write(str(tmp), x, sr, subtype=info.subtype, format="FLAC")
+        tmp.replace(flac)
+        wav.unlink()
+        return flac
+    except Exception:   # noqa: BLE001 - a WAV works too
+        return wav
+
+
 def audio_seconds(p: Path) -> float:
     import soundfile as sf
     try:
@@ -81,7 +105,7 @@ class StemSeparator:
 
     def run(self, audio: Path, model: str, cache_dir: Path, overlap: int, progress=None) -> dict[str, Path]:
         """Separate `audio` with `model`; returns {stem name (lowercase): wav path}. Cached."""
-        cached = {p.stem: p for p in cache_dir.glob("*.wav")} if cache_dir.exists() else {}
+        cached = {p.stem: p for p in stem_files(cache_dir)} if cache_dir.exists() else {}
         if len(cached) == 1:   # every model writes 2 stems: one alone is a leftover from an interrupted run
             for p in cached.values():
                 p.unlink(missing_ok=True)
@@ -114,7 +138,7 @@ class StemSeparator:
             stem = out.stem.split("_(")[-1].split(")")[0].lower() if "_(" in out.stem else out.stem.lower()
             dest = cache_dir / f"{stem}.wav"
             shutil.move(str(out), dest)
-            stems[stem] = dest
+            stems[stem] = to_flac(dest)
         return stems
 
 

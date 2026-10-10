@@ -248,7 +248,7 @@ def _stems_for(song_id: str, S) -> list[dict]:
     out = []
     if not root.exists():
         return out
-    for f in sorted(root.rglob("*.wav")):
+    for f in sorted(x for x in root.rglob("*") if x.suffix.lower() in (".wav", ".flac")):
         rel = f.relative_to(root).parts
         label = STEM_LABELS.get(f.stem, f.stem.capitalize())
         if any(p.startswith("karaoke_") for p in rel[:-1]):
