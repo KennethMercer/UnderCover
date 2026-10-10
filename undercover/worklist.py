@@ -299,9 +299,14 @@ def _project_named(person: str):
     import difflib
     from .train import project as P
     key = slug(person)
+    words = set(key.split("-"))
     best, score = None, 0.0
     for p in P.list_projects():
-        r = difflib.SequenceMatcher(None, key, slug(p["person"] or p["name"])).ratio()
+        other = slug(p["person"] or p["name"])
+        r = difflib.SequenceMatcher(None, key, other).ratio()
+        ow = set(other.split("-"))
+        if min(len(words), len(ow)) and (words <= ow or ow <= words):   # "Obama" and "Barack Obama"
+            r = max(r, 0.95)
         if r > score:
             best, score = p, r
     return P.Project.load(best["name"]) if best and score >= 0.9 else None
@@ -563,7 +568,10 @@ def _push(job):
 def _new(job, item) -> dict:
     from . import autopilot, voicecheck
     from .train.speaker import SpeakerEmbedder
-    name = autopilot.train_new_voice(S, job, item["target"], _control(job), _push(job), target_minutes=IMPROVE_SINGING_MIN)
+    known = _project_named(item["target"])   # reuse what's already prepared for this person
+    known = known.name if known is not None and not known.train.get("exported") else None
+    name = autopilot.train_new_voice(S, job, item["target"], _control(job), _push(job), project=known,
+                                     target_minutes=IMPROVE_SINGING_MIN)
     proj = _project_for_item({"kind": "improve", "target": name}, create=False)
     score = None
     if proj is not None:
