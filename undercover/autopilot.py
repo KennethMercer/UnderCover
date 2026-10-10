@@ -391,9 +391,10 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
             rng = voicecheck.target_range(proj, conv.rmvpe)
             hz = rng[1] if rng else None
             plan["person_hz"], plan["person_speech"] = (hz, proj.from_speech()) if hz else (good[0].get("target_hz"), True)
+            v = get_voice(good[0]["name"])
             if rng:
                 plan["person_range"] = rng
-            v = get_voice(good[0]["name"])
+                _remember_range(v, rng, plan["person_speech"], person)
             plan["voice"] = {"name": v.name, "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
                              "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ''})"}
             push("voice", 1.0, f"Using “{v.name}”: it sounds like {person} ({good[0]['score']:.2f})")
@@ -486,6 +487,18 @@ def vocal_stats(vocals: Path, rmvpe) -> tuple[float | None, float]:
 
 
 _LAST_F0: dict = {}
+
+
+def _remember_range(v, rng: list, from_speech: bool, person: str):
+    """A community voice that passed the check for a person: keep that person's measured range with the voice, so
+    "Fit pitch to the voice" works for it on manual covers too."""
+    import json
+    from . import fsutil
+    try:
+        v.extra.update(person_range=rng, person_range_speech=bool(from_speech), person=person)
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    except Exception:
+        pass
 
 
 def _drop_song(sid: str):

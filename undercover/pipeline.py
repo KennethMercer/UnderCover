@@ -87,13 +87,15 @@ class CoverEngine:
         from dataclasses import replace
         from .autopilot import pick_fit
         from .convert import load_16k
-        rng = (voice.extra or {}).get("f0_range")
+        ex = voice.extra or {}
+        rng = ex.get("f0_range") or ex.get("person_range")   # trained here, or the checked person's range
         if not rng:
-            notes.append(f"Fit to voice: {voice.name} has no measured range (only voices trained in UnderCover do), "
-                         "so your octave and key were used.")
+            notes.append(f"Fit to voice: {voice.name} has no measured range yet (voices trained in UnderCover have one, "
+                         "and voices a one-shot cover checked against a person), so your octave and key were used.")
             return opts
         f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
-        fit = pick_fit(rng, bool((voice.extra or {}).get("from_speech")), f0)
+        speech = ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")
+        fit = pick_fit(rng, bool(speech), f0)
         notes.append(f"Fit to voice: octave {fit['octave']:+d}, key {fit['key']:+d} "
                      f"({fit['outside']:.0%} of the melody outside {voice.name}'s range {rng[0]:.0f}-{rng[2]:.0f} Hz).")
         same_backing = bvoice is not None and bvoice.name == voice.name
