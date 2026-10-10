@@ -65,11 +65,18 @@ def _voice_jobs():
     return [j for j in list(S.JOBS.values()) if j.kind in TRAIN_KINDS and not j.finished]
 
 
-def pause_all() -> dict:
-    """Stop all voice work cleanly and remember it for Resume."""
+def active() -> bool:
+    """Voice work running or waiting in the GPU queue."""
+    return bool(_voice_jobs())
+
+
+def pause_all(resume_after_restart: bool = False) -> dict:
+    """Stop all voice work cleanly and remember it for Resume (or, for a restart, resume it right after)."""
     with _LOCK:
         st = _state()
         st["held"] = True
+        if resume_after_restart:
+            st["resume_after_restart"] = True
         _save()
         from .train import api as train_api
         for j in _voice_jobs():
@@ -338,6 +345,11 @@ def _loop():
     while True:
         try:
             st = _state()
+            if st.get("resume_after_restart") and S.STATUS.get("models") == "ready":
+                with _LOCK:
+                    st.pop("resume_after_restart", None)
+                    _save()
+                resume_all()   # paused only to restart: carry on
             busy = bool(_voice_jobs())
             want_awake = busy and st["settings"].get("keep_awake", True)
             if want_awake != awake:

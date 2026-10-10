@@ -942,8 +942,19 @@ class Handler(BaseHTTPRequestHandler):
         """Restart the server process to load updated code. Refused while a cover is running or queued."""
         if any(j.kind == "cover" and not j.finished for j in JOBS.values()):
             return self._error("A cover is still being made. Wait for it to finish (or cancel it), then restart.", 409)
-        if any((j.kind.startswith("train") or j.kind == "auto") and not j.finished for j in JOBS.values()):
-            return self._error("A voice is training or being prepared. Pause it (progress is kept), then restart.", 409)
+        from . import worklist
+        if worklist.active():
+            # Voice work: pause it (training keeps its place), restart, and resume it automatically after
+            worklist.pause_all(resume_after_restart=True)
+
+            def when_paused():
+                t0 = time.time()
+                while worklist.active() and time.time() - t0 < 180:
+                    time.sleep(1)
+                RESTART.set()
+                SERVER.shutdown()
+            threading.Thread(target=when_paused, daemon=True).start()
+            return self._json({"ok": True, "pausing": True})
         self._json({"ok": True})
         RESTART.set()
         threading.Thread(target=SERVER.shutdown, daemon=True).start()  # makes serve_forever() return in main()
