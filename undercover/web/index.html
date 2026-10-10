@@ -117,6 +117,7 @@
   <details class="adv" id="adv">
     <summary><span><b>Advanced settings</b></span><span id="adv-sum"></span></summary>
     <div class="adv-grid">
+      <h3 class="adv-h">Pitch<span>where the new voice sings</span></h3>
       <div class="field">
         <label class="toggle"><input type="checkbox" id="fit"><span>Fit pitch to the voice<br><span class="meta">Picks the octave and key that keep the melody inside the voice's range. Works with voices trained in UnderCover (their range is measured).</span></span></label>
       </div>
@@ -138,6 +139,13 @@
         <p>Transposes the whole song, music included, to suit the voice's range. ±1 to ±3 sounds most natural.</p>
       </div>
       <div class="field">
+        <label for="pitch_correction">Pitch correction <output id="pitch_correction-o"></output></label>
+        <input type="range" id="pitch_correction" min="0" max="1" step="0.1">
+        <p id="pc-note">Pulls the singing toward the notes of the song's key. A little (0.3–0.5) tidies wobbly notes; full is the robotic autotune sound.</p>
+        <label class="toggle"><input type="checkbox" id="pitch_cleanup"><span>Fix pitch glitches<br><span class="meta">Repairs octave cracks and blips from the pitch tracker (about half as many cracks).</span></span></label>
+      </div>
+      <h3 class="adv-h">Voice<span>how much it sounds like the voice</span></h3>
+      <div class="field">
         <label for="index_ratio">Voice likeness (index) <output id="index_ratio-o"></output></label>
         <input type="range" id="index_ratio" min="0" max="1" step="0.05">
         <p>Higher sounds more like the target voice, but can blur words. Has no effect if the voice has no index.</p>
@@ -153,6 +161,7 @@
         <div class="ticks"><span>original singer's</span><span>new voice's own</span></div>
         <p>Whose loudness rises and falls the new vocal follows.</p>
       </div>
+      <h3 class="adv-h">Separation<span>pulling the vocal out of the song</span></h3>
       <div class="field">
         <span class="flabel">Separation quality</span>
         <div class="seg" id="quality">
@@ -166,6 +175,7 @@
         <label class="toggle"><input type="checkbox" id="karaoke"><span>Lead vocal only<br><span class="meta">Keep the original backing vocals; convert only the lead.</span></span></label>
         <label class="toggle"><input type="checkbox" id="dereverb"><span>Remove reverb first<br><span class="meta">A dry vocal converts more cleanly. Try with a little reverb added back.</span></span></label>
       </div>
+      <h3 class="adv-h">Backing vocals<span></span></h3>
       <div class="field">
         <label for="backing_voice">Backing vocals</label>
         <select id="backing_voice" class="select"><option value="">Original singer</option></select>
@@ -183,6 +193,7 @@
         <input type="range" id="backing_db" min="-12" max="6" step="1">
         <p id="backing-note">A second voice sings the backing vocals. It follows one note at a time, so big stacked harmonies come out thinner.</p>
       </div>
+      <h3 class="adv-h">Finish<span>the final mix</span></h3>
       <div class="field">
         <span class="flabel">Reverb on the new vocal</span>
         <div class="seg" id="reverb">
@@ -192,19 +203,13 @@
           <button type="button" data-v="0.3">Medium</button>
         </div>
         <p>Auto puts back the amount "Remove reverb first" took out, and adds none otherwise.</p>
+        <label class="toggle"><input type="checkbox" id="polish"><span>Polish the new vocal<br><span class="meta">Matches its tone to the original singer's, softens harsh "s" sounds, light compression.</span></span></label>
         <span class="flabel">Export format</span>
         <div class="seg" id="format">
           <button type="button" data-v="mp3">MP3 320k</button>
           <button type="button" data-v="flac">FLAC</button>
           <button type="button" data-v="wav">WAV</button>
         </div>
-      </div>
-      <div class="field">
-        <label for="pitch_correction">Pitch correction <output id="pitch_correction-o"></output></label>
-        <input type="range" id="pitch_correction" min="0" max="1" step="0.1">
-        <p id="pc-note">Pulls the singing toward the notes of the song's key. A little (0.3–0.5) tidies wobbly notes; full is the robotic autotune sound.</p>
-        <label class="toggle"><input type="checkbox" id="pitch_cleanup"><span>Fix pitch glitches<br><span class="meta">Repairs octave cracks and blips from the pitch tracker (about half as many cracks).</span></span></label>
-        <label class="toggle"><input type="checkbox" id="polish"><span>Polish the new vocal<br><span class="meta">Matches its tone to the original singer's, softens harsh "s" sounds, light compression.</span></span></label>
       </div>
       <div class="field adv-foot"><button class="linkbtn" id="reset">Reset to defaults</button></div>
     </div>
