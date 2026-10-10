@@ -1,0 +1,13 @@
+# Personal data and downloads: never commit.
+.venv/
+models/
+cache/
+output/
+uploads/
+logs/
+test/
+.claude/
+__pycache__/
+*.pyc
+# Installer build output and test installs.
+installer/dist/

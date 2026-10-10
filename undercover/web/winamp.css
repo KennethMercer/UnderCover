@@ -1,0 +1,145 @@
+/* Hidden classic-WinAmp skin (html[data-skin="winamp"]). Toggle: triple-click the UnderCover logo, or type
+   "llama" anywhere outside a text box. Everything here is scoped to the skin; the normal look is untouched. */
+#wa-main, #wa-toast { display: none; }
+
+html[data-skin="winamp"] {
+  --bg: #11111a; --panel: #23233a; --panel-2: #000; --line: #4a4a6a;
+  --fg: #00e800; --muted: #8ca8a0; --accent: #e8c84c; --accent-ink: #000;
+  --wave: #0b5d0b; --wave-on: #00ff00; --wave-alt: #f0f000;
+  --ok: #00ff00; --warn: #ffd800; --err: #ff4040;
+  --display: "Tahoma", "Verdana", sans-serif; --body: "Tahoma", "Verdana", "Segoe UI", sans-serif;
+  --mono: "VT323", "Lucida Console", monospace;
+  --r: 0px; color-scheme: dark;
+  --wa-face: linear-gradient(#5a5a7c, #34344d); --wa-hi: #a0a0c8; --wa-lo: #0a0a12;
+  --wa-title: repeating-linear-gradient(180deg, #e8c84c 0 1px, #6e5a18 1px 2px, #23233a 2px 3px);
+}
+html[data-skin="winamp"] body {
+  background: #0d0d14 radial-gradient(#1c1c2c 1px, transparent 1px) 0 0 / 4px 4px;
+  font-size: 13px; color: var(--fg);
+}
+
+/* windows */
+html[data-skin="winamp"] .panel, html[data-skin="winamp"] details.adv, html[data-skin="winamp"] .go,
+html[data-skin="winamp"] .step, html[data-skin="winamp"] .alert {
+  background: var(--panel); border: 0; border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo), 0 0 0 1px #000, 3px 3px 0 #000;
+}
+html[data-skin="winamp"] .panel { padding-top: 0; }
+html[data-skin="winamp"] .panel > h2, html[data-skin="winamp"] .panel > .row:first-child > h2,
+html[data-skin="winamp"] .panel > .hist-head > h2, html[data-skin="winamp"] .panel > .row.spread:first-child {
+  margin: 0 -16px; padding: 3px 16px;
+}
+/* title bars: gold ridges with the window name in a dark box */
+html[data-skin="winamp"] h2 {
+  font: bold 11px var(--body); letter-spacing: .14em; color: #fff; text-transform: uppercase;
+  display: flex; align-items: center; gap: 8px;
+}
+html[data-skin="winamp"] h2::before, html[data-skin="winamp"] h2::after {
+  content: ""; flex: 1; height: 7px; background: var(--wa-title); min-width: 12px;
+}
+html[data-skin="winamp"] .panel > h2:first-child, html[data-skin="winamp"] .panel > .row:first-child,
+html[data-skin="winamp"] .panel > .hist-head:first-child {
+  background: linear-gradient(#2c2c48, #1d1d30); border-bottom: 1px solid #000;
+  margin: 0 -16px; padding: 4px 12px;
+}
+html[data-skin="winamp"] h1 { font: bold 20px var(--body); letter-spacing: .25em; color: #e8c84c; text-shadow: 2px 2px 0 #000; text-transform: uppercase; }
+html[data-skin="winamp"] .brand span { display: none; }
+
+/* buttons: bevelled 98-era plastic */
+html[data-skin="winamp"] .btn, html[data-skin="winamp"] .convert, html[data-skin="winamp"] .icon-btn,
+html[data-skin="winamp"] .install, html[data-skin="winamp"] .chip, html[data-skin="winamp"] .seg button,
+html[data-skin="winamp"] .ab button, html[data-skin="winamp"] .tabs button, html[data-skin="winamp"] .stoggle,
+html[data-skin="winamp"] .ex button, html[data-skin="winamp"] .toggle-btn {
+  background: var(--wa-face); color: #e0e0ff; border: 0; border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo);
+  font: bold 11px var(--body); text-transform: uppercase; letter-spacing: .06em;
+}
+html[data-skin="winamp"] .btn:active, html[data-skin="winamp"] .convert:active, html[data-skin="winamp"] .seg button:active,
+html[data-skin="winamp"] .seg button[aria-pressed="true"], html[data-skin="winamp"] .ab button[aria-pressed="true"],
+html[data-skin="winamp"] .tabs button[aria-selected="true"], html[data-skin="winamp"] .tplay[aria-pressed="true"] {
+  box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); color: #00ff00; background: #1a1a28;
+}
+html[data-skin="winamp"] .btn.primary, html[data-skin="winamp"] .convert {
+  background: linear-gradient(#8a7a30, #4e4410); color: #fff8c0;
+}
+html[data-skin="winamp"] .tabs, html[data-skin="winamp"] .seg, html[data-skin="winamp"] .ab { background: none; border: 0; border-radius: 0; gap: 2px; padding: 0; }
+html[data-skin="winamp"] .linkbtn { color: #e8c84c; text-decoration: underline; font-size: 12px; }
+html[data-skin="winamp"] .play, html[data-skin="winamp"] .tplay {
+  border-radius: 0; background: var(--wa-face); color: #00ff00; border: 0;
+  box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo);
+}
+
+/* "LCD" and playlist areas: green on black */
+html[data-skin="winamp"] input[type=text], html[data-skin="winamp"] input[type=search], html[data-skin="winamp"] select,
+html[data-skin="winamp"] .search input, html[data-skin="winamp"] .oneshot .big, html[data-skin="winamp"] .name-in,
+html[data-skin="winamp"] #view-train input[type=text], html[data-skin="winamp"] #view-train input[type=search], html[data-skin="winamp"] #view-train select {
+  background: #000; color: #00ff00; border: 0; border-radius: 0; font-family: var(--body);
+  box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi);
+}
+html[data-skin="winamp"] input::placeholder { color: #0b7a0b; }
+html[data-skin="winamp"] .voices, html[data-skin="winamp"] .hist, html[data-skin="winamp"] .samples, html[data-skin="winamp"] .sources,
+html[data-skin="winamp"] .yt, html[data-skin="winamp"] .drop, html[data-skin="winamp"] .meter, html[data-skin="winamp"] .bar,
+html[data-skin="winamp"] .stat, html[data-skin="winamp"] .pstep, html[data-skin="winamp"] .ckpt, html[data-skin="winamp"] .ref,
+html[data-skin="winamp"] .pcard, html[data-skin="winamp"] canvas.wave, html[data-skin="winamp"] svg.chart {
+  background: #000; border: 0; border-radius: 0; box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi);
+}
+html[data-skin="winamp"] .voices, html[data-skin="winamp"] .hist, html[data-skin="winamp"] .samples { padding: 2px; }
+html[data-skin="winamp"] .voice, html[data-skin="winamp"] .hrow, html[data-skin="winamp"] .sample, html[data-skin="winamp"] .src,
+html[data-skin="winamp"] .ytr, html[data-skin="winamp"] .spk {
+  border-radius: 0; border: 0; padding: 3px 6px; font-family: var(--body); font-size: 12px; color: #00e800;
+}
+html[data-skin="winamp"] .voice[aria-selected="true"], html[data-skin="winamp"] .voice.pick:hover, html[data-skin="winamp"] .sample:hover,
+html[data-skin="winamp"] .ytr.best, html[data-skin="winamp"] .ytr:hover, html[data-skin="winamp"] .src:hover, html[data-skin="winamp"] .hrow.playing {
+  background: #0000c6; color: #fff;
+}
+html[data-skin="winamp"] .hrow.playing strong { color: #fff; }
+html[data-skin="winamp"] .avatar { border-radius: 0; background: #000; color: #00ff00; font-family: var(--mono); font-size: 18px; }
+html[data-skin="winamp"] .tag { border-radius: 0; font-family: var(--mono); font-size: 14px; }
+html[data-skin="winamp"] .bar, html[data-skin="winamp"] .meter { height: 8px; }
+html[data-skin="winamp"] .bar i, html[data-skin="winamp"] .meter i { background: repeating-linear-gradient(90deg, #00ff00 0 3px, transparent 3px 4px); border-radius: 0; }
+html[data-skin="winamp"] .stat b, html[data-skin="winamp"] .mono, html[data-skin="winamp"] .eta, html[data-skin="winamp"] .times {
+  font-family: var(--mono); font-size: 16px; color: #00ff00;
+}
+html[data-skin="winamp"] input[type=range] { accent-color: #e8c84c; }
+html[data-skin="winamp"] .oneshot { background: var(--panel); }
+html[data-skin="winamp"] .stage .ico { border-radius: 0; }
+html[data-skin="winamp"] .dot { border-radius: 0; }
+
+/* the WinAmp main window, shown above everything while skinned */
+html[data-skin="winamp"] #wa-main {
+  display: grid; width: min(100%, 420px); justify-self: center; background: var(--panel);
+  box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo), 0 0 0 1px #000, 3px 3px 0 #000;
+  user-select: none;
+}
+.wa-title { display: flex; align-items: center; gap: 6px; padding: 3px 4px; background: linear-gradient(#2c2c48, #1d1d30); }
+.wa-title::before, .wa-title::after { content: ""; flex: 1; height: 7px; background: var(--wa-title); }
+.wa-title span { font: bold 11px Tahoma, sans-serif; letter-spacing: .3em; color: #fff; }
+.wa-title .wa-x { order: 3; width: 13px; height: 13px; padding: 0; font: bold 9px/1 Tahoma, sans-serif; color: #fff; background: var(--wa-face);
+  border: 0; box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo); cursor: pointer; }
+.wa-body { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 6px 8px; }
+.wa-lcd { background: #000; box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); padding: 4px 6px; display: grid; gap: 2px; }
+.wa-time { display: flex; align-items: baseline; gap: 6px; font: 34px/1 "VT323", monospace; color: #00ff00; text-shadow: 0 0 6px rgba(0,255,0,.45); }
+.wa-state { font-size: 16px; color: #00c000; }
+#wa-vis { width: 100%; height: 22px; display: block; image-rendering: pixelated; }
+.wa-info { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.wa-marquee { background: #000; box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); overflow: hidden; white-space: nowrap;
+  font: 18px/1.3 "VT323", monospace; color: #00ff00; padding: 0 4px; }
+.wa-marquee span { display: inline-block; padding-left: 100%; animation: wa-scroll 14s linear infinite; }
+@keyframes wa-scroll { to { transform: translateX(-100%); } }
+@media (prefers-reduced-motion: reduce) { .wa-marquee span { animation: none; padding-left: 0; } }
+.wa-meta { font: 15px "VT323", monospace; color: #8ca8a0; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.wa-meta b { color: #00ff00; font-weight: normal; }
+.wa-st { margin-left: auto; color: #2a4a2a; } .wa-st.on { color: #00ff00; }
+.wa-transport { display: flex; gap: 2px; padding: 0 8px 8px; }
+.wa-transport button { width: 26px; height: 18px; padding: 0; font: 11px/1 Tahoma, sans-serif; color: #e0e0ff; background: var(--wa-face); border: 0;
+  box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo); cursor: pointer; }
+.wa-transport button:active { box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); }
+.wa-transport .wa-brand { margin-left: auto; font: bold 10px Tahoma, sans-serif; letter-spacing: .2em; color: #e8c84c; align-self: center; }
+
+html[data-skin="winamp"] #wa-toast {
+  display: block; position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 20;
+  background: #000; color: #00ff00; font: 22px "VT323", monospace; padding: 8px 16px;
+  box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo), 0 0 0 2px #000, 4px 4px 0 #000;
+  animation: wa-toast 3.2s ease forwards; pointer-events: none;
+}
+@keyframes wa-toast { 0% { opacity: 0; } 10%, 80% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }

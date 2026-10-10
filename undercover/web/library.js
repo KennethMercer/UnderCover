@@ -1,0 +1,337 @@
+"use strict";
+// Library tab: everything UnderCover keeps on disk (covers, songs + stems, voices, training projects, clean up).
+// Uses helpers from app.js ($, $$, esc, api, showError, store, fmtTime, fmtMB, S, VOL, renderSong, loadVoices,
+// loadHistory, syncControls, saveOpts, refreshEstimate, peaksFromUrl, drawWave) and showTab/openProject (train.js).
+
+const L = { cat: store.get("uc-lib-cat", "covers"), data: {}, sel: null, checked: new Set(), summary: null,
+            audio: new Audio(), peaks: null, src: "url" };
+const CATS = [["covers", "Covers"], ["songs", "Songs"], ["voices", "Voices"], ["training", "Training"]];
+const CAT_LABELS = { covers: "Covers", songs: "Songs", stems: "Stems", voices: "Voices", training: "Training",
+                     temporary: "Temporary files", app: "App models" };
+const SORTS = {
+  covers: [["new", "Newest first"], ["old", "Oldest first"], ["name", "Name"], ["big", "Biggest first"], ["voice", "Voice"]],
+  songs: [["used", "Recently used"], ["name", "Name"], ["big", "Biggest first"], ["covers", "Most covers"]],
+  voices: [["name", "Name"], ["used", "Most used"], ["big", "Biggest first"], ["new", "Newest first"]],
+  training: [["new", "Recently changed"], ["name", "Name"], ["big", "Biggest first"]],
+};
+const gb = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : `${Math.max(1, Math.round(b / 1e3))} kB`;
+const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const art = (name, big) => `<span class="art" style="background:linear-gradient(135deg,hsl(${hue(name)} 55% 45%),hsl(${(hue(name) + 70) % 360} 50% 35%))"${big ? "" : ' aria-hidden="true"'}>${esc((name || "?").replace(/^[^a-z0-9]+/i, "")[0]?.toUpperCase() || "?")}</span>`;
+const when = s => { if (!s) return ""; const d = new Date(typeof s === "number" ? s * 1000 : s.replace(" ", "T")); if (isNaN(d)) return s;
+  const days = Math.floor((Date.now() - d) / 864e5); return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : days < 30 ? `${days} days ago` : d.toLocaleDateString(); };
+const quality = v => v.trained ? (v.undertrained ? ["warn", "under-trained"] : ["ok", "trained here"])
+  : v.verdict === "good" ? ["ok", "sounds like them ✓"] : v.verdict === "weak" ? ["warn", "weak likeness"]
+  : v.verdict === "bad" ? ["bad", "doesn't sound like them"] : v.verdict === "broken" ? ["bad", "won't load"] : ["", "not checked"];
+
+// ------------------------------------------------------------ loading
+async function libShow() {
+  L.visible = true;
+  renderCats();
+  await Promise.all([loadSummary(), loadCat()]);
+}
+function libHide() { L.visible = false; L.audio.pause(); }
+window.libShow = libShow; window.libHide = libHide;
+
+async function loadSummary() {
+  try { L.summary = await api("/api/library/summary"); } catch (e) { return; }
+  const s = L.summary, total = s.total || 1;
+  const order = ["covers", "songs", "stems", "voices", "training", "temporary", "app"];
+  $("#lib-stack").innerHTML = order.map(k => `<i style="width:${(s.categories[k] / total * 100).toFixed(2)}%;background:var(--c-${k})" title="${CAT_LABELS[k]} ${gb(s.categories[k])}"></i>`).join("");
+  $("#lib-legend").innerHTML = order.map(k => `<span><i class="sw" style="background:var(--c-${k})"></i>${CAT_LABELS[k]} <b>${gb(s.categories[k])}</b></span>`).join("");
+  $("#lib-total").textContent = gb(s.total);
+  $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
+  renderCats();
+}
+async function loadCat(keepSel) {
+  try { L.data[L.cat] = await api(`/api/library/${L.cat}`); }
+  catch (e) { return showError(e.message, "Couldn't read the library"); }
+  if (!keepSel) { L.sel = null; L.checked.clear(); }
+  renderTools(); renderList(); renderDetail();
+}
+const refreshAll = async keepSel => { await Promise.all([loadSummary(), loadCat(keepSel)]); };
+
+// ------------------------------------------------------------ chips, tools
+function renderCats() {
+  const c = L.summary?.counts || {};
+  $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
+  $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderCats(); loadCat(); });
+}
+function renderTools() {
+  $("#lib-q").placeholder = { covers: "Search covers by song or voice", songs: "Search songs", voices: "Search voices", training: "Search training projects" }[L.cat];
+  const sort = $("#lib-sort"), cur = store.get(`uc-lib-sort-${L.cat}`, SORTS[L.cat][0][0]);
+  sort.innerHTML = SORTS[L.cat].map(([v, t]) => `<option value="${v}"${v === cur ? " selected" : ""}>${t}</option>`).join("");
+  const f = $("#lib-filter");
+  if (L.cat === "covers") {
+    const voices = [...new Set((L.data.covers || []).map(c => c.voice))].sort();
+    f.hidden = voices.length < 2;
+    const keep = f.value;
+    f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option${v === keep ? " selected" : ""}>${esc(v)}</option>`).join("");
+  } else f.hidden = true;
+}
+$("#lib-q").addEventListener("input", () => renderList());
+$("#lib-sort").onchange = () => { store.set(`uc-lib-sort-${L.cat}`, $("#lib-sort").value); renderList(); };
+$("#lib-filter").onchange = () => renderList();
+
+function rows() {
+  const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
+  let list = (L.data[L.cat] || []).slice();
+  const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${x.backing_voice || ""}` : L.cat === "songs" ? `${x.title} ${x.source}`
+    : L.cat === "voices" ? `${x.name} ${x.source}` : `${x.person} ${x.name}`;
+  if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
+  if (voice) list = list.filter(x => x.voice === voice);
+  const key = { new: x => -(L.cat === "covers" ? Date.parse((x.created || "").replace(" ", "T")) || 0 : (x.updated || Date.parse((x.installed || "").replace(" ", "T")) / 1000 || 0)),
+                old: x => Date.parse((x.created || "").replace(" ", "T")) || 0, name: x => (x.title || x.name || x.person || "").toLowerCase(),
+                big: x => -(x.size + (x.stems_size || 0)), voice: x => x.voice, used: x => L.cat === "songs" ? -x.last_used : -x.covers, covers: x => -x.covers }[sort];
+  if (key) list.sort((a, b) => { const ka = key(a), kb = key(b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
+  return list;
+}
+const idOf = x => String(L.cat === "covers" ? x.id : L.cat === "songs" ? x.id : x.name);
+
+// ------------------------------------------------------------ list
+function renderList() {
+  const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
+  if (!all.length) {
+    box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", songs: "Songs you drop in or get from YouTube collect here.",
+      voices: "Install a voice on the Covers tab, or train one on Train a voice.", training: "Voices you train get a project here." }[L.cat]}</div>`;
+    return;
+  }
+  const bulk = L.cat === "covers" && L.checked.size ? `<div class="bulk"><span><b>${L.checked.size} selected</b> · ${gb(all.filter(c => L.checked.has(String(c.id))).reduce((a, c) => a + c.size, 0))}</span>
+    <span class="lactions"><a class="btn" href="/api/library/covers/zip?ids=${[...L.checked].join(",")}">Download as .zip</a><button class="btn danger" id="lib-bulk-del">Delete ${L.checked.size}…</button><button class="linkbtn" id="lib-bulk-clear">Clear</button></span></div>` : "";
+  box.innerHTML = bulk + (list.length ? list.map(x => {
+    const id = idOf(x), check = L.cat === "covers";
+    let title, sub, side;
+    if (L.cat === "covers") {
+      title = x.title; sub = [x.voice + (x.backing_voice ? ` + ${x.backing_voice}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
+      side = `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
+    } else if (L.cat === "songs") {
+      title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
+      side = (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono">${gb(x.size + x.stems_size)}</span>`;
+    } else if (L.cat === "voices") {
+      const [cls, word] = quality(x);
+      title = x.name; sub = [x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
+      side = `<span class="tag ${cls}">${word}</span><span class="mono">${gb(x.size)}</span>`;
+    } else {
+      title = x.person || x.name; const st = x.train || {};
+      sub = [`${x.kept_minutes} min kept`, st.state === "exported" ? `voice ${st.exported}` : st.state ? st.state : "not trained yet", `changed ${when(x.updated)}`].join(" · ");
+      side = `<span class="mono">${gb(x.size)}</span>`;
+    }
+    return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" role="option" tabindex="0" aria-selected="${L.sel === id}">
+      ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
+      <span style="min-width:0"><b>${esc(title)}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
+  }).join("") : `<div class="lib-empty">Nothing matches “${esc($("#lib-q").value)}”.</div>`);
+  $$(".litem", box).forEach(el => {
+    const pick = () => { L.sel = el.dataset.id; $$(".litem", box).forEach(x => x.setAttribute("aria-selected", x === el)); renderDetail(); };
+    el.addEventListener("click", e => { if (e.target.matches("input")) return; pick(); });
+    el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    const cb = $("input", el);
+    if (cb) cb.onchange = () => { cb.checked ? L.checked.add(el.dataset.id) : L.checked.delete(el.dataset.id); renderList(); };
+  });
+  const bd = $("#lib-bulk-del");
+  if (bd) confirmClick(bd, `Delete ${L.checked.size}?`, async () => {
+    for (const id of [...L.checked]) { try { await api(`/api/library/covers/${id}`, { method: "DELETE" }); } catch (e) { showError(e.message, "Couldn't delete"); break; } }
+    L.checked.clear(); afterChange();
+  });
+  const bc = $("#lib-bulk-clear"); if (bc) bc.onclick = () => { L.checked.clear(); renderList(); };
+  if (!L.sel && list.length && innerWidth > 860) { L.sel = idOf(list[0]); box.querySelector(".litem")?.setAttribute("aria-selected", "true"); renderDetail(); }
+}
+
+// two clicks to do anything destructive
+function confirmClick(btn, ask, run) {
+  const label = btn.textContent;
+  btn.onclick = async () => {
+    if (!btn.classList.contains("confirm")) {
+      btn.classList.add("confirm"); btn.textContent = ask;
+      setTimeout(() => { if (btn.isConnected) { btn.classList.remove("confirm"); btn.textContent = label; } }, 4000);
+      return;
+    }
+    btn.disabled = true;
+    releaseAudio();
+    try { await run(); } catch (e) { showError(e.message, "That didn't work"); } finally { if (btn.isConnected) btn.disabled = false; }
+  };
+}
+// let go of any file the page is playing, so Windows allows renaming/deleting it
+function releaseAudio() {
+  const sel = (L.data[L.cat] || []).find(i => idOf(i) === L.sel);
+  const files = sel ? [sel.url, sel.original, sel.vocal, sel.sample].filter(Boolean).map(u => decodeURIComponent(u.split("/").pop())) : [];
+  for (const a of [L.audio, T.audio, aCover, aOrig]) {
+    const mine = a === L.audio || a === T.audio || files.some(f => decodeURIComponent(a.src || "").endsWith(f));
+    if (mine && a.src) { a.pause(); a.removeAttribute("src"); a.load(); }
+  }
+}
+async function afterChange() {
+  L.sel = null; L.audio.pause();
+  await refreshAll();
+  loadHistory(); loadVoices().catch(() => {});
+}
+
+// ------------------------------------------------------------ detail
+function playerHtml(url) {
+  return `<div class="lplayer"><button class="play" id="lib-play" aria-label="Play">▶</button><canvas id="lib-wave" aria-label="Waveform, click to seek"></canvas></div>`;
+}
+function wirePlayer(url) {
+  L.audio.pause(); L.audio.src = url || ""; L.peaks = null;
+  const btn = $("#lib-play"), cv = $("#lib-wave");
+  const draw = () => drawWave(cv, L.peaks, L.audio.duration ? L.audio.currentTime / L.audio.duration : 0);
+  draw();
+  if (url) peaksFromUrl(url).then(p => { L.peaks = p; draw(); }).catch(() => {});
+  btn.onclick = () => {
+    if (!L.audio.src) return;
+    if (L.audio.paused) { L.audio.volume = VOL.muted ? 0 : VOL.level; L.audio.muted = VOL.muted; L.audio.play().catch(() => {}); btn.textContent = "❚❚"; }
+    else { L.audio.pause(); btn.textContent = "▶"; }
+  };
+  L.audio.ontimeupdate = draw; L.audio.onended = () => { btn.textContent = "▶"; draw(); };
+  cv.onclick = e => { if (!L.audio.duration) return; const r = cv.getBoundingClientRect(); L.audio.currentTime = (e.clientX - r.left) / r.width * L.audio.duration; draw(); };
+}
+function switchSource(url) {
+  const t = L.audio.currentTime, playing = !L.audio.paused;
+  L.audio.src = url; L.peaks = null;
+  L.audio.addEventListener("loadedmetadata", () => { try { L.audio.currentTime = Math.min(t, L.audio.duration || t); } catch (e) {} if (playing) L.audio.play().catch(() => {}); }, { once: true });
+  peaksFromUrl(url).then(p => { L.peaks = p; drawWave($("#lib-wave"), p, 0); }).catch(() => {});
+}
+
+function renderDetail() {
+  const d = $("#lib-detail"), x = (L.data[L.cat] || []).find(i => idOf(i) === L.sel);
+  if (!x) { d.innerHTML = `<p class="meta">Pick something on the left to see it here.</p>`; return; }
+  if (L.cat === "covers") return coverDetail(d, x);
+  if (L.cat === "songs") return songDetail(d, x);
+  if (L.cat === "voices") return voiceDetail(d, x);
+  return trainingDetail(d, x);
+}
+
+function coverDetail(d, c) {
+  const o = c.options || {};
+  const settings = [o.octave ? `voice octave ${o.octave > 0 ? "+" : ""}${o.octave}` : "same octave", o.key ? `key ${o.key > 0 ? "+" : ""}${o.key}` : "key unchanged",
+                    c.backing_voice ? `backing by ${c.backing_voice}` : o.backing_voice ? "lead + backing converted" : o.karaoke ? "lead only" : "",
+                    o.dereverb ? "de-reverb" : "", o.polish === false ? "" : "polish", o.quality ? `${o.quality} quality` : ""].filter(Boolean).join(" · ");
+  d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3><p class="meta">sung by <b>${esc(c.voice)}</b>${c.backing_voice ? ` + ${esc(c.backing_voice)}` : ""} · ${esc(when(c.created))}</p></div></div>
+    ${playerHtml()}
+    <div class="row"><span class="meta">Listen to</span><span class="lactions" id="lib-src"><button class="btn" data-src="url" aria-pressed="true">Cover</button>${c.original ? `<button class="btn" data-src="original">Original</button>` : ""}${c.vocal ? `<button class="btn" data-src="vocal">Vocal only</button>` : ""}</span></div>
+    <dl class="kv"><dt>Settings</dt><dd>${esc(settings)}</dd>
+      ${c.seconds?.total ? `<dt>Made in</dt><dd>${c.seconds.total.toFixed(1)} s</dd>` : ""}
+      ${c.notes?.length ? `<dt>Notes</dt><dd>${esc(c.notes.join(" "))}</dd>` : ""}
+      <dt>File</dt><dd class="mono">${esc(c.file)} · ${gb(c.size)}</dd></dl>
+    <div id="lib-rename-box"></div>
+    <div class="lactions">${c.song_id ? `<button class="btn primary" id="lib-reuse">Use these settings</button>` : ""}<a class="btn" href="${c.url}?download">Download</a>
+      <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
+  wirePlayer(c.url);
+  $$("#lib-src button").forEach(b => b.onclick = () => { $$("#lib-src button").forEach(x => x.setAttribute("aria-pressed", x === b)); switchSource(c[b.dataset.src]); });
+  const reuse = $("#lib-reuse");
+  if (reuse) reuse.onclick = async () => {
+    try {
+      S.song = await api(`/api/songs/${c.song_id}`); store.set("uc-song", S.song.id); renderSong();
+      await loadVoices(c.voice);
+      const keep = ["key", "octave", "index_ratio", "protect", "volume_envelope", "quality", "dereverb", "karaoke", "reverb", "format",
+                    "backing_voice", "backing_octave", "backing_db", "pitch_cleanup", "pitch_correction", "polish"];
+      S.opts = { ...S.defaults, ...Object.fromEntries(keep.filter(k => o[k] !== undefined && o[k] !== null).map(k => [k, o[k]])) };
+      syncControls(); saveOpts(); refreshEstimate();
+      showTab("covers"); window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) { showError(e.message, "Couldn't load that cover's settings"); }
+  };
+  renameFlow(c.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/covers/${c.id}/rename`, { json: { name } }); });
+  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/covers/${c.id}`, { method: "DELETE" }); afterChange(); });
+}
+
+function songDetail(d, s) {
+  d.innerHTML = `<div class="dhead">${art(s.title, true)}<div style="min-width:0"><h3>${esc(s.title)}</h3><p class="meta">${[s.duration ? fmtTime(s.duration) : "", s.sample_rate ? `${(s.sample_rate / 1000).toFixed(1)} kHz ${s.channels === 1 ? "mono" : "stereo"}` : "", s.key ? `key ${s.key}` : "", s.source].filter(Boolean).map(esc).join(" · ")}</p></div></div>
+    ${s.url ? playerHtml() : ""}
+    <h2>Stems</h2>
+    ${s.stems.length ? `<div class="stems">${s.stems.map((t, i) => `<div class="stem"><button class="tplay" data-i="${i}" aria-label="Play ${esc(t.label)}" aria-pressed="false">▶</button><span>${esc(t.label)}${t.quality !== "high" ? ` <span class="meta">(${t.quality})</span>` : ""}</span><span class="meta mono">${gb(t.size)}</span><a class="linkbtn" href="${t.url}?download">Download</a></div>`).join("")}</div>
+      <p class="meta">${s.stems_old_model ? "Made with an older separation model; deleting them means the next cover separates again with the current one." : "Kept so new covers of this song skip separation."}</p>`
+      : `<p class="meta">Not separated yet. The next cover of this song does it (about a minute).</p>`}
+    <dl class="kv"><dt>Covers</dt><dd>${s.covers ? s.cover_titles.map(esc).join("<br>") : "none yet"}</dd>
+      <dt>Size</dt><dd>${gb(s.size)} song${s.stems_size ? ` + ${gb(s.stems_size)} stems` : ""}</dd>
+      ${s.source_url ? `<dt>From</dt><dd><a class="linkbtn" href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_url)}</a></dd>` : ""}</dl>
+    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button>
+      ${s.stems.length ? `<button class="btn" id="lib-del-stems">Delete stems only…</button>` : ""}<button class="btn danger" id="lib-del">Delete song…</button></div>`;
+  if (s.url) wirePlayer(s.url);
+  $$("#lib-detail .stem .tplay").forEach(b => b.onclick = () => {
+    const t = s.stems[+b.dataset.i];
+    const on = b.getAttribute("aria-pressed") === "true";
+    $$("#lib-detail .stem .tplay").forEach(x => { x.setAttribute("aria-pressed", "false"); x.textContent = "▶"; });
+    if (on) return L.audio.pause();
+    L.audio.src = t.url; L.audio.volume = VOL.muted ? 0 : VOL.level; L.audio.muted = VOL.muted; L.audio.play().catch(() => {});
+    b.setAttribute("aria-pressed", "true"); b.textContent = "❚❚";
+  });
+  $("#lib-make").onclick = async () => { try { S.song = await api(`/api/songs/${s.id}`); store.set("uc-song", s.id); renderSong(); refreshEstimate(); showTab("covers"); window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) { showError(e.message); } };
+  const ds = $("#lib-del-stems");
+  if (ds) confirmClick(ds, `Delete ${gb(s.stems_size)} of stems?`, async () => { await api(`/api/library/songs/${s.id}?stems_only=1`, { method: "DELETE" }); afterChange(); });
+  confirmClick($("#lib-del"), "Click again to delete", async () => {
+    await api(`/api/library/songs/${s.id}`, { method: "DELETE" });
+    if (S.song?.id === s.id) { S.song = null; store.set("uc-song", null); renderSong(); }
+    afterChange();
+  });
+}
+
+function voiceDetail(d, v) {
+  const [cls, word] = quality(v);
+  const src = v.trained ? `trained in UnderCover${v.project ? ` · <button class="linkbtn" id="lib-open-proj">open project</button>` : ""}`
+    : esc(v.source.replace(/^https?:\/\//, "").slice(0, 90));
+  d.innerHTML = `<div class="dhead">${art(v.name, true)}<div style="min-width:0"><h3>${esc(v.name)}</h3><p class="meta">RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"} · added ${esc(when(v.installed))}</p></div></div>
+    ${v.sample ? `${playerHtml()}<p class="meta">A held-out phrase rebuilt by this voice</p>` : ""}
+    <dl class="kv"><dt>Likeness</dt><dd><span class="tag ${cls}">${word}</span>${v.score != null ? ` <span class="meta">${v.score.toFixed(2)} (pass 0.45)</span>` : ""}</dd>
+      <dt>From</dt><dd>${src}</dd>
+      ${v.trained ? `<dt>Training</dt><dd>${v.train_minutes ? `${v.train_minutes} min of ${v.from_speech ? "speech" : "audio"}` : ""}${v.epoch ? ` · epoch ${v.epoch}` : ""}${v.f0_range ? ` · range ${Math.round(v.f0_range[0])}–${Math.round(v.f0_range[2])} Hz` : ""}</dd>` : ""}
+      <dt>Used in</dt><dd>${v.covers ? v.cover_titles.map(esc).join("<br>") : "no covers yet"}</dd>
+      <dt>Size</dt><dd>${gb(v.size)}</dd></dl>
+    <div id="lib-rename-box"></div>
+    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename">Rename…</button>
+      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export">Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
+  if (v.sample) wirePlayer(v.sample);
+  const op = $("#lib-open-proj");
+  if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("train"); try { await openProject(v.project); } catch (e) {} };
+  $("#lib-make").onclick = async () => { await loadVoices(v.name); showTab("covers"); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
+  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
+}
+
+function trainingDetail(d, p) {
+  const st = p.train || {};
+  d.innerHTML = `<div class="dhead">${art(p.person || p.name, true)}<div style="min-width:0"><h3>${esc(p.person || p.name)}</h3><p class="meta">${esc(p.mode)} · ${p.ready_sources} of ${p.sources} sources prepared · ${p.kept_minutes} min of voice kept</p></div></div>
+    <dl class="kv"><dt>Status</dt><dd>${st.state === "exported" ? `finished: voice <b>${esc(st.exported)}</b>` : st.state === "paused" ? `paused at epoch ${st.epoch}` : st.state === "trained" ? "trained, not added to voices yet" : st.state || "not trained yet"}</dd>
+      <dt>On disk</dt><dd>${Object.entries(p.parts).filter(([, b]) => b).map(([k, b]) => `${esc(k)} ${gb(b)}`).join(" · ") || "—"}</dd></dl>
+    <p class="meta">${st.state === "exported" ? "Deleting the project keeps the voice; you'd only need these files to train it again." : "Deleting the project removes its clips and any unfinished training."}</p>
+    <div class="lactions"><button class="btn primary" id="lib-open">Open in Train a voice</button><button class="btn danger" id="lib-del">Delete project…</button></div>`;
+  $("#lib-open").onclick = async () => { store.set("uc-train-proj", p.name); showTab("train"); try { await openProject(p.name); } catch (e) {} };
+  confirmClick($("#lib-del"), `Delete ${gb(p.size)}?`, async () => { await api(`/api/train/projects/${p.name}`, { method: "DELETE" }); afterChange(); });
+}
+
+function renameFlow(current, save) {
+  const btn = $("#lib-rename"); if (!btn) return;
+  btn.onclick = () => {
+    const box = $("#lib-rename-box");
+    box.innerHTML = `<div class="renamer"><input id="lib-new-name" value="${esc(current)}" aria-label="New name"><button class="btn primary" id="lib-rename-ok">Save</button><button class="linkbtn" id="lib-rename-x">Cancel</button></div>`;
+    const inp = $("#lib-new-name"); inp.focus(); inp.select();
+    const go = async () => { releaseAudio(); try { await save(inp.value.trim()); afterChangeKeep(); } catch (e) { showError(e.message, "Couldn't rename"); } };
+    $("#lib-rename-ok").onclick = go;
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") go(); if (e.key === "Escape") box.innerHTML = ""; });
+    $("#lib-rename-x").onclick = () => { box.innerHTML = ""; };
+  };
+}
+async function afterChangeKeep() { L.audio.pause(); await refreshAll(true); loadHistory(); loadVoices().catch(() => {}); }
+
+// ------------------------------------------------------------ clean up
+$("#lib-clean-btn").onclick = async () => {
+  const panel = $("#lib-clean");
+  if (!panel.hidden) { panel.hidden = true; return; }
+  let g;
+  try { g = await api("/api/library/cleanup"); } catch (e) { return showError(e.message); }
+  const keys = Object.keys(g).filter(k => g[k].count);
+  $("#lib-clean-list").innerHTML = keys.length ? keys.map(k => `<label class="crow"><input type="checkbox" data-g="${k}" ${g[k].default ? "checked" : ""}>
+      <span><b>${esc(g[k].title)}</b><small>${esc(g[k].detail)}</small></span><span class="mono">${gb(g[k].size)}</span></label>`).join("")
+    : `<p class="meta">Nothing to clean up right now.</p>`;
+  const total = () => keys.filter(k => $(`[data-g=${k}]`).checked).reduce((a, k) => a + g[k].size, 0);
+  const go = $("#lib-clean-go");
+  const upd = () => { go.textContent = `Free ${gb(total())}`; go.disabled = !total(); };
+  $$("#lib-clean-list input").forEach(i => i.onchange = upd);
+  upd(); panel.hidden = false;
+  go.onclick = async () => {
+    const groups = keys.filter(k => $(`[data-g=${k}]`).checked);
+    go.disabled = true; go.textContent = "Freeing…";
+    try { const r = await api("/api/library/cleanup", { json: { groups } }); panel.hidden = true; showError(`Freed ${gb(r.freed)}.`, "Cleaned up", null, true); afterChange(); }
+    catch (e) { showError(e.message, "Couldn't clean up"); upd(); }
+  };
+};
+$("#lib-clean-close").onclick = () => { $("#lib-clean").hidden = true; };
+$("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); showTab("library"); };
+
+if (store.get("uc-tab", "covers") === "library") showTab("library");

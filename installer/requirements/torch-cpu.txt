@@ -1,0 +1,6 @@
+# No supported GPU. Works everywhere, slowly.
+# Installed from https://download.pytorch.org/whl/cpu (setup.ps1 passes it as the only index).
+# Same torch version as the ROCm build so the app code sees the same API. UNTESTED on real hardware.
+torch==2.9.1+cpu
+torchaudio==2.9.1+cpu
+torchvision==0.24.1+cpu
