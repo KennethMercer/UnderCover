@@ -374,7 +374,7 @@ def lookup(q: str) -> list:
         return []
     out, seen = [], set()
     try:
-        from .songs import _music_tracks
+        from .core.youtube import _music_tracks
         words = [w for w in re.findall(r"\w+", q.lower()) if len(w) > 1]
         for r in _music_tracks(q, n=6):
             artist = r.channel.removesuffix(" - Topic").strip()   # YouTube Music: the artist (sometimes "Artist - Topic")
