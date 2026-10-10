@@ -744,14 +744,39 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
     compare = bool(style) and not song_url
     per = VERSIONS if compare else 1
     skipped, versions = [], []
-    for pick in cands:
+    ahead: dict = {}   # comparing versions: the next one downloads while the GPU separates this one
+
+    def fetch_ahead(pk):
+        import threading
+        box = {}
+
+        def go():
+            try:
+                box["had"] = songs.known_song(pk.id)
+                box["meta"] = songs.download(pk, S.register_song)
+            except Exception as e:   # noqa: BLE001 - re-raised on the main thread
+                box["err"] = e
+        t = threading.Thread(target=go, daemon=True, name="song-ahead")
+        t.start()
+        ahead[pk.id] = (t, box)
+
+    for ci, pick in enumerate(cands):
         n = len(versions)
         label = f"version {n + 1} of up to {VERSIONS}: " if compare else ""
         push("song", 0.02 + 0.9 * n / per, f"Downloading {label}“{pick.title}”")
-        had = songs.known_song(pick.id)
         try:
-            meta = songs.download(pick, S.register_song, progress=lambda f, pick=pick, label=label, n=n: push(
-                "song", 0.02 + 0.9 * (n + 0.4 * f) / per, f"Downloading {label}“{pick.title}”"))
+            if pick.id in ahead:
+                t, box = ahead.pop(pick.id)
+                t.join()
+                if "err" in box:
+                    raise box["err"]
+                had, meta = box["had"], box["meta"]
+            else:
+                had = songs.known_song(pick.id)
+                meta = songs.download(pick, S.register_song, progress=lambda f, pick=pick, label=label, n=n: push(
+                    "song", 0.02 + 0.9 * (n + 0.4 * f) / per, f"Downloading {label}“{pick.title}”"))
+            if compare and ci + 1 < len(cands) and n + 1 < per:
+                fetch_ahead(cands[ci + 1])
         except ModelError:
             if pick is cands[-1] and not versions:
                 raise
