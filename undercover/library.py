@@ -110,6 +110,35 @@ def _quality() -> dict:
         return {}
 
 
+def _duplicate_voices(hist: list) -> tuple[list, str]:
+    """Voice folders whose model.pth is byte-identical to another voice's (e.g. 'biden' and 'joe-biden' from two
+    sites). Keeps the copy used for more covers (then the older install); returns (folders to remove, names)."""
+    import hashlib
+    from .models import list_voices
+    by_size: dict = {}
+    for v in list_voices():
+        try:
+            by_size.setdefault(v.pth.stat().st_size, []).append(v)
+        except OSError:
+            pass
+    used: dict = {}
+    for h in hist:
+        used[h.get("voice")] = used.get(h.get("voice"), 0) + 1
+    drop, pairs = [], []
+    for group in by_size.values():
+        if len(group) < 2:
+            continue
+        by_hash: dict = {}
+        for v in group:
+            by_hash.setdefault(hashlib.sha1(v.pth.read_bytes()).hexdigest(), []).append(v)
+        for same in by_hash.values():
+            if len(same) > 1:
+                same.sort(key=lambda v: (-used.get(v.name, 0), v.installed or ""))
+                drop += [v.dir for v in same[1:]]
+                pairs.append(" = ".join(v.name for v in same))
+    return drop, "; ".join(pairs)
+
+
 def remove_song(sid: str, stems_only: bool = False):
     """Delete a song's stems (and unless stems_only, the song file, its key and its YouTube link)."""
     _retry(lambda: shutil.rmtree(path("cache_dir") / "stems" / sid) if (path("cache_dir") / "stems" / sid).exists() else None)
@@ -326,6 +355,11 @@ def _cleanup_groups(S) -> dict:
                           "paths": unused_models, "default": True}
     g["unused_songs"] = {"title": "Songs never used for a cover (30+ days)", "detail": "The song files and their stems",
                          "paths": unused, "default": False}
+    dupes, names = _duplicate_voices(hist)
+    g["duplicate_voices"] = {"title": "The same voice installed twice",
+                             "detail": (f"Identical models under two names ({names}); the copy used for fewer covers goes"
+                                        if dupes else "Identical models under two names"),
+                             "paths": dupes, "default": False}
     done = [projects_dir() / p["name"] for p in list_projects() if p["train"].get("state") == "exported"]
     g["finished_training"] = {"title": "Training projects of finished voices",
                               "detail": f"{len(done)} projects: their clips are only needed to train those voices again (the voices stay)",
