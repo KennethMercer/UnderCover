@@ -19,6 +19,7 @@ from .config import path
 from .models import ModelError
 from .train.source import _QuietLogger, _short
 
+STOP = {"the", "in", "of", "by", "an", "and", "to", "on", "for", "my", "me", "you", "it", "is", "at", "with", "from"}
 BAD = [(re.compile(p, re.I), w) for p, w in [
     (r"\blive\b|\bconcert\b|\btour\b|\bperforms?\b|\bperformance\b", 2.0),
     (r"\bcover\b|\bkaraoke\b|\binstrumental\b|\bacapella\b|\ba cappella\b", 3.0),
@@ -144,9 +145,16 @@ def search(query: str, limit: int = 8, style: str | None = None, words: list[str
     if style:
         words = [w.lower() for w in (words or [style])]
         res = search(f"{query} {style} cover", limit=limit * 2)
+        # it must be the same song: "Muse - Propaganda (Acoustic)" matched "acoustic" and the artist and got picked
+        # for "acoustic Plug In Baby". Most of the request's meaningful words must be in the title.
+        key = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 1 and w not in STOP]
         for r in res:
             t = f"{r.raw_title} {r.title} {r.album}".lower()
             r.score = round(r.score + (5.0 if any(w in t for w in words) else -6.0), 2)
+            have = sum(w in f"{t} {r.channel.lower()}" for w in key)
+            if key and have < max(1, round(len(key) * 2 / 3)):
+                r.score -= 8.0
+                r.note = (r.note + " · " if r.note else "") + "probably another song"
             if re.search(r"\binstrumental\b|\bkaraoke\b|\btutorial\b|\blesson\b|\btabs?\b|\bchords\b|\bbacking track\b", t):
                 r.score -= 4.0   # we need someone singing
                 r.note = (r.note + " · " if r.note else "") + "probably no singing"
