@@ -124,7 +124,7 @@ def u_phone():
 @check("stems: FLAC and WAV lookup")
 def u_stems():
     import tempfile
-    from undercover.separate import stem_files
+    from undercover.core.separate import stem_files
     d = Path(tempfile.mkdtemp())
     try:
         for n in ("vocals.flac", "other.wav", "x.part.flac", "notes.txt"):
@@ -232,7 +232,7 @@ def a_cover():
 
 @check("training: quick run, pause, resume, cancel (scratch project)")
 def a_training():
-    from undercover.config import path
+    from undercover.core.config import path
     src = None
     for p in api("/api/train/projects"):
         if p.get("kept_minutes", 0) >= 2 and p["train"].get("state") not in ("training", "queued"):
@@ -263,7 +263,7 @@ def a_training():
     finally:
         time.sleep(2)
         shutil.rmtree(pdir / scratch, ignore_errors=True)
-        from undercover.models import remove_voice
+        from undercover.core.voices import remove_voice
         try:
             remove_voice("zz-smoke-voice")
         except Exception:   # noqa: BLE001 - only exists if export happened

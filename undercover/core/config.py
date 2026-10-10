@@ -3,7 +3,7 @@ import os
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 CONFIG = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
 
 if CONFIG["gpu"].get("hip_visible_devices"):

@@ -17,9 +17,9 @@ from pathlib import Path
 
 import numpy as np
 
-from ..config import CONFIG, path
-from ..models import ModelError, slug
-from ..timing import timed
+from ..core.config import CONFIG, path
+from ..core.voices import ModelError, slug
+from ..core.timing import timed
 from .source import Source
 
 TCFG = CONFIG["training"]
@@ -86,7 +86,7 @@ class Project:
         d = asdict(self)
         d["sources"] = [s.to_json() if isinstance(s, Source) else s for s in self.sources]
         d["phrases"] = [asdict(p) if isinstance(p, Phrase) else p for p in self.phrases]
-        from .. import fsutil
+        from ..core import fsutil
         fsutil.write_text(self.dir / "project.json", json.dumps(d, indent=1))   # unique temp + fsync + retrying swap
 
     def save_train(self):
@@ -256,7 +256,7 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
     """Download (if needed) -> separate voice from music/noise -> de-reverb -> split into phrases -> checks
     and speaker embeddings. Returns the number of phrases added. progress(fraction, label)."""
     import soundfile as sf
-    from ..separate import separate
+    from ..core.separate import separate
     from . import source as srcmod
     report = progress or (lambda f, label: None)
     raw = proj.dir / "raw" / f"{src.id}.wav"
@@ -328,7 +328,7 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
         proj.save_embeddings(emb)
     # The phrases are cut, so this source's separated stems (a few hundred MB) and the download itself are no longer
     # needed (re-downloading takes seconds if the source is ever re-processed).
-    from ..separate import file_hash
+    from ..core.separate import file_hash
     shutil.rmtree(path("cache_dir") / "stems" / file_hash(raw), ignore_errors=True)
     if src.url:   # the operator's own recordings have no other copy: keep those
         raw.unlink(missing_ok=True)

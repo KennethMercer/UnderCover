@@ -18,8 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import CONFIG
-from .models import ModelError, slug
+from .core.config import CONFIG
+from .core.voices import ModelError, slug
 
 PATTERNS = [
     # "cover of X by Y" / "X cover by Y" / "make X sung by Y" (the LAST "by" wins: "X by Miley Cyrus by Y")
@@ -122,7 +122,7 @@ def undertrained(v, min_steps: int = 900) -> bool:
 def installed_for(person: str) -> list:
     """Installed voices for this person: exact name, or a name built from it (morgan-freeman-uc, ...).
     Voices trained in UnderCover first, then the newest."""
-    from .models import list_voices
+    from .core.voices import list_voices
     key = slug(person)
     if not key:
         return None
@@ -149,7 +149,7 @@ def find_online(person: str):
 def online_for(person: str, n: int = 2) -> list:
     """Community models online whose name contains every word of the person's name (best ranked first),
     skipping ones already installed and ones that failed the quality check before."""
-    from .models import search, voices_dir
+    from .core.voices import search, voices_dir
     toks = [w for w in re.findall(r"\w+", person.lower()) if len(w) > 1]
     try:
         results = search(person, limit=15)
@@ -177,7 +177,7 @@ CHECK_VERSION = 3   # 2: 8 phrases, bootstrap lower bound, pitch + content (2026
 
 
 def _quality_file():
-    from .config import path
+    from .core.config import path
     return path("cache_dir") / "voice_quality.json"
 
 
@@ -267,7 +267,7 @@ def reference_clips(S, job, person: str, control, push):
     test material): prepares one source at a time, at most two. These are training clips too."""
     from .train import project as P
     from .train import source as srcmod
-    from .train.speaker import SpeakerEmbedder
+    from .core.speaker import SpeakerEmbedder
     proj = project_for(person)
     if not proj.sources:
         push("voice", 0.02, f"Finding clips of {person} to check voices against")
@@ -327,8 +327,8 @@ def _prefetch_voice_sources(person: str):
 def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: dict):
     """-> installed Voice to use (training one if nothing measured good enough)."""
     from . import voicecheck
-    from .models import download_and_install, get_voice, remove_voice
-    from .train.speaker import SpeakerEmbedder
+    from .core.voices import download_and_install, get_voice, remove_voice
+    from .core.speaker import SpeakerEmbedder
     cands = installed_for(person)
     trained = [v for v in cands if v.extra.get("trained")]
     if trained:
@@ -430,7 +430,7 @@ def voice_f0(v) -> tuple[float | None, bool]:
             data = torch.load(proj.dir / "train" / "data.pt", map_location="cpu", weights_only=True)
             ex["f0_median"], ex["from_speech"] = f0_median(data), proj.from_speech()
             ex["f0_range"] = f0_range(data)
-            from . import fsutil
+            from .core import fsutil
             fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
             return ex["f0_median"], ex["from_speech"]
         except Exception:
@@ -482,7 +482,7 @@ def song_vocal_f0(vocals: Path, rmvpe) -> float | None:
 def vocal_stats(vocals: Path, rmvpe) -> tuple[float | None, float]:
     """(median sung pitch Hz, share of the song with a voiced melody). Used to pick the octave, and to notice
     when a "cover" turns out to be instrumental (an acoustic guitar cover with no singing, say)."""
-    from .convert import load_16k
+    from .core.engine.convert import load_16k
     f0 = rmvpe.infer_from_audio(load_16k(vocals), thred=0.03)
     voiced = f0[f0 > 0]
     share = float(len(voiced)) / max(1, len(f0))
@@ -498,7 +498,7 @@ def _remember_range(v, rng: list, from_speech: bool, person: str):
     """A community voice that passed the check for a person: keep that person's measured range with the voice, so
     "Fit pitch to the voice" works for it on manual covers too."""
     import json
-    from . import fsutil
+    from .core import fsutil
     try:
         v.extra.update(person_range=rng, person_range_speech=bool(from_speech), person=person)
         fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
@@ -518,7 +518,7 @@ def _drop_song(sid: str):
 def vocal_cleanliness(vocals: Path) -> dict:
     """How clean a separated lead vocal is: `bleed` = level (dB, vs the singing) of the stem where nobody sings
     (guitar or piano leaking through), `hiss` = spectral flatness of the sung parts (train.project.noisiness)."""
-    from .convert import load_16k
+    from .core.engine.convert import load_16k
     from .train.project import noisiness
     x = load_16k(vocals)
     f0 = _LAST_F0.get(str(vocals) + "#all")
@@ -550,7 +550,7 @@ def backing_monophony(backing: Path, rmvpe, seconds: int = 120) -> tuple[float, 
     RVC follows a single pitch, so stacked harmonies come out garbled when converted. Measured 2026-10-09:
     single lines 77-89% (acoustic cover, "Find Your Love"); stacked harmonies ~45% while 87-97% pitched
     (Bohemian Rhapsody, "when the party's over"); rap ad-libs score low because they're mostly unpitched."""
-    from .convert import load_16k
+    from .core.engine.convert import load_16k
     x = load_16k(backing)[: 16000 * seconds]
     f0 = rmvpe.infer_from_audio(x, thred=0.03)
     n_fft, hop = 2048, 160
@@ -598,7 +598,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
     from .train import api as train_api
     from .train import project as P
     from .train import source as srcmod
-    from .train.speaker import SpeakerEmbedder
+    from .core.speaker import SpeakerEmbedder
     from .train.trainer import Trainer, export_voice
     TC = {**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
     key = slug(person)
@@ -722,7 +722,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
 def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = None):
     from . import songs
     from .pipeline import CoverOptions
-    from .separate import separate
+    from .core.separate import separate
     from .train.trainer import Control
     t0 = time.perf_counter()
     plan: dict = {"request": text}

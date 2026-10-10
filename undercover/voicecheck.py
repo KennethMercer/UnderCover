@@ -46,7 +46,7 @@ def sung_tests(person: str, max_phrases: int = 8, max_seconds: float = 45.0) -> 
     import json
     import re
     import soundfile as sf
-    from .config import path
+    from .core.config import path
     from .train.project import _resample16
     words = [w for w in re.findall(r"\w+", person.lower()) if len(w) > 2]
     picked, total = [], 0.0
@@ -145,7 +145,7 @@ def target_range(proj, rmvpe, n: int = 16) -> list | None:
 
 def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> Quality:
     """tests: a fixed (phrases, ref, kind) from test_phrases, so a training run compares its saves on the same test."""
-    from .convert import Settings
+    from .core.engine.convert import Settings
     from .train.project import _resample16
     phrases, ref, kind = tests or test_phrases(proj)
     if not phrases or ref is None:

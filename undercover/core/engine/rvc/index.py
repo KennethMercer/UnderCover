@@ -146,7 +146,7 @@ def read_vectors(path: Path) -> np.ndarray:
 
 def compact_in_place(path: Path) -> tuple[int, int]:
     """Rewrite an index file as the compact fp16 format (validated, crash-safe). Returns (old, new) bytes."""
-    from .. import fsutil
+    from ... import fsutil
     path = Path(path)
     old = path.stat().st_size
     if is_compact(path):

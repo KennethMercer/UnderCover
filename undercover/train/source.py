@@ -3,8 +3,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from ..config import CONFIG
-from ..models import ModelError
+from ..core.config import CONFIG
+from ..core.voices import ModelError
 
 TCFG = CONFIG["training"]
 

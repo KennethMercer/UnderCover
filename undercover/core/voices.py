@@ -1,10 +1,10 @@
 """Stage 4: voice model manager. Search Hugging Face, download, unpack, register RVC voices.
 
-    python -m undercover.models search plankton
-    python -m undercover.models download 1            # result number from the last search
-    python -m undercover.models download <url> --name plankton
-    python -m undercover.models list
-    python -m undercover.models remove plankton
+    python -m undercover.core.voices search plankton
+    python -m undercover.core.voices download 1            # result number from the last search
+    python -m undercover.core.voices download <url> --name plankton
+    python -m undercover.core.voices list
+    python -m undercover.core.voices remove plankton
 
 Supported sources: Hugging Face (repo/file refs and URLs), Google Drive, Pixeldrain, direct links.
 Downloaded .pth files are loaded with torch.load(weights_only=True) so a malicious file can't run code.
@@ -505,7 +505,7 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         if index:
             shutil.move(str(index), target / "model.index")
             try:   # half the size on disk (fp16); exports rebuild a faiss file for other tools
-                from .rvc.index import compact_in_place
+                from .engine.rvc.index import compact_in_place
                 compact_in_place(target / "model.index")
             except Exception:
                 pass   # unreadable/unusual index: keep it as it came (loading says so later)
@@ -558,7 +558,7 @@ def get_voice(name: str) -> Voice:
             return v
     names = ", ".join(v.name for v in list_voices()) or "none yet"
     raise ModelError(f"No voice called '{name}' is installed (installed: {names}). "
-                     f"Search for one with: python -m undercover.models search {name}")
+                     f"Search for one with: python -m undercover.core.voices search {name}")
 
 
 def remove_voice(name: str):
@@ -604,7 +604,7 @@ def main():
             for i, x in enumerate(res, 1):
                 print(f"{i:3d}. {x.name:28.28s} {_fmt_size(x.size)}  {x.repo}/{x.file}"[:150])
             if res:
-                print("\nInstall one with: python -m undercover.models download <number> [--name NAME]")
+                print("\nInstall one with: python -m undercover.core.voices download <number> [--name NAME]")
         elif a.cmd == "download":
             src = a.src
             if src.isdigit():
@@ -620,7 +620,7 @@ def main():
         elif a.cmd == "list":
             vs = list_voices()
             if not vs:
-                print("No voices installed yet. Try: python -m undercover.models search <name>")
+                print("No voices installed yet. Try: python -m undercover.core.voices search <name>")
             for v in vs:
                 print(f"{v.name:28s} {v.version:3s} {str(v.sr or '?'):>6s} Hz  index: {'yes' if v.index else 'no '}  {v.source[:70]}")
         elif a.cmd == "remove":

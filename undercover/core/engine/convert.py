@@ -3,7 +3,7 @@
 Port of RVC's inference pipeline (infer/vc/pipeline.py) onto the vendored modules in undercover/rvc,
 with HuBERT, RMVPE and recently used voices kept loaded on the GPU.
 
-    python -m undercover.convert vocals.wav --voice plankton --pitch 4
+    python -m undercover.core.engine.convert vocals.wav --voice plankton --pitch 4
 """
 import argparse
 import sys
@@ -16,9 +16,9 @@ import torch
 import torch.nn.functional as F
 from scipy import signal
 
-from .config import CONFIG, path
-from .models import ModelError, Voice, get_voice
-from .timing import timed
+from ..config import CONFIG, path
+from ..voices import ModelError, Voice, get_voice
+from ..timing import timed
 
 CCFG = CONFIG["conversion"]
 SR16 = 16000
@@ -43,8 +43,8 @@ class Settings:
 class LoadedVoice:
     def __init__(self, voice: Voice, device, half: bool):
         from .rvc.index import FeatureIndex, IndexFormatError
-        from .rvc.synth import (SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono,
-                                SynthesizerTrnMs768NSFsid, SynthesizerTrnMs768NSFsid_nono)
+        from .rvc.synth import (SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono, SynthesizerTrnMs768NSFsid,
+                                SynthesizerTrnMs768NSFsid_nono)
         ck = torch.load(voice.pth, map_location="cpu", weights_only=True)
         self.version = ck.get("version", "v1")
         self.f0 = int(ck.get("f0", 1))
@@ -78,7 +78,7 @@ class Converter:
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.half = CONFIG["gpu"]["fp16"] and self.device.type == "cuda"
         mdir = path("models_dir")
-        from . import setup_models
+        from .. import setup_models
         try:
             setup_models.ensure()  # no-op when present; first run downloads ~370 MB
         except Exception as e:

@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .config import path
+from .core.config import path
 
 
 @dataclass
@@ -70,14 +70,14 @@ class CoverEngine:
     @property
     def separator(self):
         if self._sep is None:
-            from .separate import StemSeparator
+            from .core.separate import StemSeparator
             self._sep = StemSeparator()
         return self._sep
 
     @property
     def converter(self):
         if self._conv is None:
-            from .convert import Converter
+            from .core.engine.convert import Converter
             self._conv = Converter()
         return self._conv
 
@@ -86,7 +86,7 @@ class CoverEngine:
         Needs a voice trained here (its range is measured); others keep the chosen octave/key."""
         from dataclasses import replace
         from .autopilot import pick_fit
-        from .convert import load_16k
+        from .core.engine.convert import load_16k
         ex = voice.extra or {}
         rng = ex.get("f0_range") or ex.get("person_range")   # trained here, or the checked person's range
         if not rng:
@@ -109,10 +109,10 @@ class CoverEngine:
         key_song: file to detect the musical key from (defaults to `song`)."""
         import numpy as np
         import soundfile as sf
-        from .convert import Settings, load_16k
-        from .models import get_voice
+        from .core.engine.convert import Settings, load_16k
+        from .core.voices import get_voice
         from .remix import MixSettings, remix
-        from .separate import separate
+        from .core.separate import separate
 
         report = progress or (lambda *a: None)
         song = Path(song).resolve()
@@ -201,7 +201,7 @@ class CoverEngine:
         import subprocess
         import uuid
         from dataclasses import replace
-        from .separate import separate
+        from .core.separate import separate
         report = progress or (lambda *a: None)
         song = Path(song).resolve()
         karaoke = True if opts.backing_voice else opts.karaoke
@@ -247,8 +247,8 @@ def busiest_window(vocals: Path, seconds: float) -> tuple[float, float]:
 
 def song_key(song: Path) -> dict:
     """Detected musical key of a song (from the full mix), cached per file hash."""
-    from .separate import file_hash
-    from .rvc.f0fix import detect_key, key_name
+    from .core.separate import file_hash
+    from .core.engine.rvc.f0fix import detect_key, key_name
     cache = path("cache_dir") / "keys" / f"{file_hash(Path(song))}.json"
     if cache.exists():
         return json.loads(cache.read_text(encoding="utf-8"))
@@ -273,14 +273,14 @@ def upload_title(song: Path) -> str | None:
 
 
 def _conv_cfg() -> dict:
-    from .config import CONFIG
+    from .core.config import CONFIG
     return CONFIG["conversion"]
 
 
 def pitch_plan(opts: CoverOptions) -> tuple[float, float]:
     """(whole-song key shift, vocal shift) in semitones. Vocal = key + 12 * octave keeps it in key.
     A legacy vocal-only `pitch` is used as-is only when key/octave aren't given."""
-    from .config import CONFIG
+    from .core.config import CONFIG
     c = CONFIG["conversion"]
     if opts.key is None and opts.octave is None and opts.pitch is not None:
         return 0.0, float(opts.pitch)
@@ -332,8 +332,8 @@ def estimate(song: Path, opts: CoverOptions) -> dict:
     """Expected seconds per stage for this song, from measured speeds in logs/timings.jsonl
     (falls back to Phase 5 measurements). Separation is 0 when stems are cached."""
     import statistics
-    from .config import CONFIG
-    from .separate import QUALITY, SEP, audio_seconds, file_hash
+    from .core.config import CONFIG
+    from .core.separate import QUALITY, SEP, audio_seconds, file_hash
     song = Path(song)
     dur = audio_seconds(song)
     quality = opts.quality or SEP["quality"]
@@ -357,7 +357,7 @@ def estimate(song: Path, opts: CoverOptions) -> dict:
     med = lambda xs, d: statistics.median(xs[-10:]) if xs else d
     sep_rt = med(speeds["sep"], {2: 10.6, 4: 5.1, 8: 2.7}[ov])
     stem_dir = path("cache_dir") / "stems" / file_hash(song) / (Path(SEP["vocal_model"]).stem + ("" if quality == "high" else f"_{quality}"))
-    from .separate import stem_files
+    from .core.separate import stem_files
     cached = stem_dir.exists() and bool(stem_files(stem_dir))
     sep = 0.0 if cached else dur / sep_rt
     # extra passes run on the vocal stem; each is skipped when its own output is already cached

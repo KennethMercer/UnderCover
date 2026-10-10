@@ -2,7 +2,7 @@
 
 Results are cached in cache/stems/<file sha256>/<model>/ so re-runs skip separation.
 
-    python -m undercover.separate song.mp3 [--dereverb] [--karaoke]
+    python -m undercover.core.separate song.mp3 [--dereverb] [--karaoke]
 """
 import argparse
 import hashlib

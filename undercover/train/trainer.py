@@ -20,10 +20,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..config import CONFIG, path
-from .. import fsutil
-from ..models import ModelError, slug
-from ..timing import timed
+from ..core.config import CONFIG, path
+from ..core import fsutil
+from ..core.voices import ModelError, slug
+from ..core.timing import timed
 from .project import CLIP_SR, Project
 
 TCFG = CONFIG["training"]
@@ -274,7 +274,7 @@ class Trainer:
 
     @torch.no_grad()
     def _validate(self, net_g, hold: list, c: dict, sr: int, seed=0) -> float:
-        from ..rvc.train_parts import mel_spectrogram_torch
+        from ..core.engine.rvc.train_parts import mel_spectrogram_torch
         if not hold:
             return float("nan")
         net_g.eval()
@@ -308,12 +308,12 @@ class Trainer:
     # ------------------------------------------------------------ main loop
     def run(self, control: Control, progress=None) -> dict:
         """Train until the epoch budget, early stop (auto), pause or stop. Returns proj.train."""
-        from ..rvc import commons
-        from ..rvc.synth import SynthesizerTrnMs768NSFsid
-        from ..rvc.train_parts import (MultiPeriodDiscriminatorV2, discriminator_loss, feature_loss,
-                                       generator_loss, kl_loss, mel_spectrogram_torch, spec_to_mel_torch,
-                                       spectrogram_torch)
-        from .. import setup_models
+        from ..core.engine.rvc import commons
+        from ..core.engine.rvc.synth import SynthesizerTrnMs768NSFsid
+        from ..core.engine.rvc.train_parts import (MultiPeriodDiscriminatorV2, discriminator_loss, feature_loss,
+                                                   generator_loss, kl_loss, mel_spectrogram_torch, spec_to_mel_torch,
+                                                   spectrogram_torch)
+        from ..core import setup_models
         if self.device.type != "cuda" or not torch.cuda.is_available():
             raise ModelError("Training a voice needs a supported graphics card. On the processor it would take days. "
                              "Covers with existing voices still work.")
@@ -533,9 +533,9 @@ class Trainer:
         if not self.converter or self._probe_ok is False:
             return None
         from .. import voicecheck
-        from ..convert import LoadedVoice
-        from ..models import Voice
-        from .speaker import SpeakerEmbedder
+        from ..core.engine.convert import LoadedVoice
+        from ..core.voices import Voice
+        from ..core.speaker import SpeakerEmbedder
         try:
             if not hasattr(self, "_emb"):
                 self._emb = SpeakerEmbedder()
@@ -618,8 +618,8 @@ def f0_median(data: dict) -> float | None:
 
 def export_voice(proj: Project, epoch: int | None = None, name: str | None = None, overwrite: bool = False):
     """Install a saved epoch (default: best) plus a freshly built index as a normal UnderCover voice."""
-    from ..models import install
-    from ..rvc.index import write_ivf_flat
+    from ..core.voices import install
+    from ..core.engine.rvc.index import write_ivf_flat
     st = proj.train
     epoch = int(epoch or st.get("best") or st.get("epoch") or 0)
     tdir = proj.dir / "train"

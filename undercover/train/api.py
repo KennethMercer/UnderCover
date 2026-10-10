@@ -22,8 +22,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import unquote
 
-from ..config import CONFIG, path
-from ..models import ModelError, slug
+from ..core.config import CONFIG, path
+from ..core.voices import ModelError, slug
 from . import project as P
 from .source import Source
 
@@ -229,7 +229,7 @@ def start_prepare(S, name: str):
     ACTIVE[proj.name] = {"job": job, "control": None, "kind": "prepare"}
 
     def run(job):
-        from .speaker import SpeakerEmbedder
+        from ..core.speaker import SpeakerEmbedder
 
         def progress(f, label, **kw):
             job.push(stage="matching" if label == "finding the voice" else "prepare", fraction=f, label=label, **kw)

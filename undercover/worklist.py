@@ -15,8 +15,8 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
-from .config import CONFIG, path
-from .models import ModelError, slug
+from .core.config import CONFIG, path
+from .core.voices import ModelError, slug
 
 TRAIN_KINDS = ("train", "train-prepare", "train-auto", "auto", "night")
 _LOCK = threading.RLock()
@@ -57,7 +57,7 @@ def _state() -> dict:
 
 
 def _save():
-    from . import fsutil
+    from .core import fsutil
     fsutil.write_text(_file(), json.dumps(_state(), indent=1))
 
 
@@ -161,7 +161,7 @@ def add(kind: str, target: str) -> dict:
     if not target:
         raise ModelError("Type a voice or a person's name.")
     if kind == "improve":
-        from .models import get_voice
+        from .core.voices import get_voice
         v = get_voice(target)   # friendly error if it doesn't exist
         target = v.name
     item = {"id": uuid.uuid4().hex[:8], "kind": kind, "target": target, "state": "queued",
@@ -263,7 +263,7 @@ def _project_for_item(item: dict, create: bool):
     from .train import project as P
     try:
         if item["kind"] == "improve":
-            from .models import get_voice
+            from .core.voices import get_voice
             v = get_voice(item["target"])
             name = (v.extra or {}).get("project")
             if name:
@@ -323,7 +323,7 @@ def _person_from_voice(v) -> str:
 def candidates() -> list:
     """Voices for the "Improve my voices" picker: what each was trained on, its last measured likeness, what an
     improve would do and roughly how long it takes."""
-    from .models import list_voices
+    from .core.voices import list_voices
     from . import autopilot
     queued = {(i["kind"], i["target"].lower()) for i in _state()["queue"] if i["state"] in ("queued", "paused", "running")}
     try:
@@ -575,7 +575,7 @@ def _push(job):
 
 def _new(job, item) -> dict:
     from . import autopilot, voicecheck
-    from .train.speaker import SpeakerEmbedder
+    from .core.speaker import SpeakerEmbedder
     known = _project_named(item["target"])   # reuse what's already prepared for this person
     known = known.name if known is not None and not known.train.get("exported") else None
     name = autopilot.train_new_voice(S, job, item["target"], _control(job), _push(job), project=known,
@@ -593,10 +593,10 @@ def _new(job, item) -> dict:
 def _improve(job, item) -> dict:
     """More material, re-checked clips, a fresh training, and the new voice only if it measures better."""
     from . import voicecheck
-    from .models import get_voice, remove_voice
+    from .core.voices import get_voice, remove_voice
     from .train import project as P
     from .train import source as srcmod
-    from .train.speaker import SpeakerEmbedder
+    from .core.speaker import SpeakerEmbedder
     from .train.trainer import Trainer, export_voice
     push, control = _push(job), _control(job)
     old = get_voice(item["target"])
