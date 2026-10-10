@@ -24,6 +24,7 @@ class Quality:
     low: float | None = None         # bootstrap 90% lower bound of `score` (few phrases = wide range)
     pitch_cents: float | None = None # median pitch error of the conversion vs the intended melody
     content: float | None = None     # mean HuBERT cosine, input vs output (how much of the words survive)
+    test: str = "speech"             # speech | sung (singers: other singers converted, vs their singing voice)
 
     def to_json(self):
         return asdict(self)
@@ -32,16 +33,80 @@ class Quality:
 GOOD, WEAK = 0.45, 0.30   # same scale as the training match threshold (same speaker ~> 0.5)
 LOW_OK = 0.40             # ...and the bootstrap lower bound must clear this (a lucky mean of 3 phrases isn't a pass)
 MAX_CENTS = 50.0          # a voice that can't hold pitch (cracks, wrong notes) fails regardless of likeness
+# Singers are tested on singing: other singers' vocals (songs in the library) converted, compared with the person's
+# SUNG voice. Measured 2026-10-10 on Elliott Smith, 12 phrases from 6 songs: his voices 0.59-0.64, another singer
+# (Michael Jackson model) 0.39, speech-trained voices 0.10-0.21, unconverted singers 0.36. Singing shares a lot
+# (the baseline is high), so a pass also needs a clear margin over it.
+SUNG_GOOD, SUNG_LOW_OK, SUNG_WEAK, SUNG_MARGIN = 0.50, 0.45, 0.40, 0.15
+
+
+def sung_tests(person: str, max_phrases: int = 8, max_seconds: float = 45.0) -> list:
+    """Other singers' phrases (3-7 s, 16 kHz) from the separated songs in the library, never the person's own
+    songs; two per song, spread over up to 6 songs, same picks every time (comparable across training saves)."""
+    import json
+    import re
+    import soundfile as sf
+    from .config import path
+    from .train.project import _resample16
+    words = [w for w in re.findall(r"\w+", person.lower()) if len(w) > 2]
+    picked, total = [], 0.0
+    for d in sorted((path("cache_dir") / "stems").iterdir()) if (path("cache_dir") / "stems").exists() else []:
+        meta = path("uploads_dir") / f"{d.name}.json"
+        try:
+            title = json.loads(meta.read_text(encoding="utf-8")).get("title", "") if meta.exists() else ""
+        except (OSError, ValueError):
+            title = ""
+        if words and any(w in title.lower() for w in words):
+            continue   # their own song: not a test of turning someone else into them
+        vocals = sorted(d.rglob("vocals.wav"), key=lambda p: (-len(p.parts), str(p)))   # deepest = lead only
+        if not vocals:
+            continue
+        try:
+            x, sr = sf.read(str(vocals[0]), dtype="float32")
+        except (OSError, RuntimeError):
+            continue
+        for seg in _sung_segments(_resample16(x if x.ndim == 1 else x.mean(1), sr)):
+            picked.append(seg)
+            total += len(seg) / 16000
+        if len(picked) >= max_phrases or total >= max_seconds:
+            break
+    return picked[:max_phrases]
+
+
+def _sung_segments(x16: np.ndarray, n: int = 2, lo: float = 3.0, hi: float = 7.0) -> list:
+    """n continuous sung stretches (lo-hi s), from the long ones but not the very longest (often a held outro)."""
+    hop = 800   # 50 ms
+    rms = np.sqrt(np.convolve(x16 ** 2, np.ones(hop) / hop, "same")[::hop] + 1e-12)
+    on = rms > rms.max() * 10 ** (-30 / 20)
+    out, i = [], 0
+    while i < len(on):
+        if not on[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(on) and (on[j] or on[j:j + 6].any()):   # bridge gaps under 0.3 s
+            j += 1
+        if (j - i) * hop / 16000 >= lo:
+            out.append(x16[i * hop: i * hop + int(min((j - i) * hop / 16000, hi) * 16000)])
+        i = j
+    out.sort(key=len, reverse=True)
+    return out[len(out) // 4: len(out) // 4 + n] if len(out) > n else out
 
 
 def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
-    """(other-speaker phrases, target reference vector, target median pitch) from a prepared project."""
+    """(test phrases, target reference vector, kind) from a prepared project. Singers (a sung reference exists):
+    other singers' singing vs their sung voice; everyone else: other speakers in their clips vs their speech."""
     import soundfile as sf
     from .train.project import _resample16
     emb = proj.load_embeddings()
+    if "speaker:sung" in emb:
+        tests = sung_tests(proj.person or proj.name, max_phrases, max_seconds)
+        if len(tests) >= 4:
+            ref = emb["speaker:sung"]
+            return tests, ref / (np.linalg.norm(ref) + 1e-9), "sung"
     ref = emb.get(f"speaker:{proj.reference.get('cluster')}")
     if ref is None:
-        return [], None
+        return [], None, "speech"
     others = sorted([p for p in proj.phrases if p.reason == "other speaker" and 2.0 <= p.dur <= 8.0 and p.score < 0.2],
                     key=lambda p: -p.dur)
     picked, total = [], 0.0
@@ -55,7 +120,7 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
         total += p.dur
         if len(picked) >= max_phrases or total >= max_seconds:
             break
-    return picked, ref / (np.linalg.norm(ref) + 1e-9)
+    return picked, ref / (np.linalg.norm(ref) + 1e-9), "speech"
 
 
 def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
@@ -71,10 +136,11 @@ def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
     return float(np.median(f)) if len(f) > 50 else None
 
 
-def check(voice: str, proj, converter, embedder) -> Quality:
+def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> Quality:
+    """tests: a fixed (phrases, ref, kind) from test_phrases, so a training run compares its saves on the same test."""
     from .convert import Settings
     from .train.project import _resample16
-    phrases, ref = test_phrases(proj)
+    phrases, ref, kind = tests or test_phrases(proj)
     if not phrases or ref is None:
         raise ValueError("no test phrases (the clips had only one speaker)")
     import torch
@@ -112,9 +178,14 @@ def check(voice: str, proj, converter, embedder) -> Quality:
     boots = [float(np.mean(rng.choice(sims, len(sims)))) for _ in range(1000)] if len(sims) > 1 else [score]
     low = float(np.percentile(boots, 5))
     pc = float(np.median(cents)) if cents else None
-    verdict = ("good" if score >= GOOD and low >= LOW_OK else "weak" if score >= WEAK else "bad")
+    if kind == "sung":
+        margin = score - (float(np.mean(base)) if base else 0.0)
+        verdict = ("good" if score >= SUNG_GOOD and low >= SUNG_LOW_OK and margin >= SUNG_MARGIN
+                   else "weak" if score >= SUNG_WEAK else "bad")
+    else:
+        verdict = ("good" if score >= GOOD and low >= LOW_OK else "weak" if score >= WEAK else "bad")
     if verdict == "good" and pc is not None and pc > MAX_CENTS:
         verdict = "weak"   # sounds like them but can't hold the melody
     return Quality(getattr(voice, "name", voice), round(score, 3), round(float(np.mean(base)) if base else 0.0, 3), len(phrases), round(secs, 1), verdict,
                    round(tgt_hz, 1) if tgt_hz else None, round(low, 3), round(pc, 1) if pc is not None else None,
-                   round(float(np.mean(content)), 3) if content else None)
+                   round(float(np.mean(content)), 3) if content else None, kind)

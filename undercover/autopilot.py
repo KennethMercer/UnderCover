@@ -173,7 +173,7 @@ def online_for(person: str, n: int = 2) -> list:
 
 # ---------------------------------------------------------------- measured quality (voicecheck.py)
 
-CHECK_VERSION = 2   # 2: 8 phrases, bootstrap lower bound, pitch + content measures (2026-10-09)
+CHECK_VERSION = 3   # 2: 8 phrases, bootstrap lower bound, pitch + content (2026-10-09); 3: singers tested on singing (2026-10-10)
 
 
 def _quality_file():
@@ -341,7 +341,7 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
             cached = _quality_cache().get(_qkey(person, ident))
             if cached and cached.get("v") == CHECK_VERSION:   # older, weaker checks are redone once
                 return voicecheck.Quality(**{k: cached.get(k) for k in ("voice", "score", "baseline", "phrases", "seconds",
-                                                                        "verdict", "target_hz", "low", "pitch_cents", "content")})
+                                                                        "verdict", "target_hz", "low", "pitch_cents", "content", "test")})
             push("voice", 0.16 + 0.04 * len(checked), f"Checking whether “{v.name}” sounds like {person}")
             q = voicecheck.check(v.name, proj, conv, emb)
             _remember(person, ident, q)
@@ -387,10 +387,12 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
         drop_downloads(keep=good[0]["name"] if good else None)
         if good:
-            plan["person_hz"] = good[0].get("target_hz") or voicecheck.target_pitch(proj, conv.rmvpe)
+            # the person's pitch from their kept clips: singing for singers (no speech headroom then)
+            hz = voicecheck.target_pitch(proj, conv.rmvpe)
+            plan["person_hz"], plan["person_speech"] = (hz, proj.from_speech()) if hz else (good[0].get("target_hz"), True)
             v = get_voice(good[0]["name"])
             plan["voice"] = {"name": v.name, "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
-                             "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.GOOD})"}
+                             "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ''})"}
             push("voice", 1.0, f"Using “{v.name}”: it sounds like {person} ({good[0]['score']:.2f})")
             return v
         push("voice", 0.2, "None of the existing voices sounded enough like " + person + ", so UnderCover will train one")
@@ -718,7 +720,7 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
                f"({rng[0]:.0f}-{rng[2]:.0f} Hz{' speech' if speech else ''}) at this octave")
     else:
         if not vhz and plan.get("person_hz"):   # community voice: use the real person's measured speaking pitch
-            vhz, speech = plan["person_hz"], True
+            vhz, speech = plan["person_hz"], plan.get("person_speech", True)
         octave = pick_octave(vhz, speech, song_hz)
         why = (f"song melody ~{song_hz:.0f} Hz, voice ~{vhz:.0f} Hz" if vhz and song_hz
                else "voice range unknown, kept the singer's octave")
