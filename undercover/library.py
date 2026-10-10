@@ -295,7 +295,7 @@ def songs() -> list[dict]:
 
 
 def voices() -> list[dict]:
-    from .autopilot import undertrained
+    from .mouthpiece.service import undertrained
     from .core.voices import list_voices
     from .pipeline import history
     hist = history()
@@ -325,7 +325,7 @@ def voices() -> list[dict]:
 
 
 def training() -> list[dict]:
-    from .train.project import list_projects, projects_dir
+    from .mouthpiece.project import list_projects, projects_dir
     out = []
     for p in list_projects():
         d = projects_dir() / p["name"]
@@ -342,7 +342,7 @@ def training() -> list[dict]:
 
 def _cleanup_groups() -> dict:
     from .pipeline import history
-    from .train.project import list_projects, projects_dir
+    from .mouthpiece.project import list_projects, projects_dir
     cache = path("cache_dir")
     now = time.time()
     hist = history()

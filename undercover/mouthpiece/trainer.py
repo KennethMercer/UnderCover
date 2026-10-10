@@ -522,7 +522,7 @@ class Trainer:
         do this (it measures rebuilding the target's own phrases, and goes flat early)."""
         if not self.converter or self._probe_ok is False:
             return None
-        from .. import voicecheck
+        from . import voicecheck
         from ..core.engine.convert import LoadedVoice
         from ..core.voices import Voice
         from ..core.speaker import SpeakerEmbedder
@@ -547,7 +547,7 @@ class Trainer:
         can't be compared with new ones, so measure them again with this run's test."""
         if not self.converter or not st.get("saves"):
             return
-        from .. import voicecheck
+        from . import voicecheck
         try:
             kind = voicecheck.test_phrases(self.proj)[2]
         except Exception:

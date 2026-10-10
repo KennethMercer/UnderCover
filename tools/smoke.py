@@ -98,7 +98,7 @@ def u_fit():
 @check("worklist: overnight window and deadline")
 def u_window():
     from datetime import datetime
-    import undercover.worklist as w
+    import undercover.core.worklist as w
     saved = w._STATE
     try:
         w._STATE = {"held": False, "resume": [], "queue": [], "armed": True, "report": None,
@@ -114,7 +114,7 @@ def u_window():
 @check("training data: compact features expand bit-identically")
 def u_phone():
     import torch
-    from undercover.train.trainer import _phone, index_feats
+    from undercover.mouthpiece.trainer import _phone, index_feats
     feats = torch.randn(10, 768).half()
     x = {"phone50": feats, "pitch": torch.zeros(19, dtype=torch.long)}
     assert torch.equal(_phone(x), feats.repeat_interleave(2, 0)[:19])
@@ -137,7 +137,7 @@ def u_stems():
 
 @check("sources: YouTube block and spoken-word detection")
 def u_sources():
-    from undercover.train import source as s
+    from undercover.mouthpiece import sources as s
     from undercover.core import youtube as yt
     try:
         yt.check_blocked(Exception("ERROR: Sign in to confirm you're not a bot"))

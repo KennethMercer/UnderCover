@@ -20,7 +20,7 @@ import numpy as np
 from ..core.config import CONFIG, path
 from ..core.voices import ModelError, slug
 from ..core.timing import timed
-from .source import Source
+from .sources import Source
 
 TCFG = CONFIG["training"]
 CLIP_SR = 44100
@@ -257,7 +257,7 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
     and speaker embeddings. Returns the number of phrases added. progress(fraction, label)."""
     import soundfile as sf
     from ..core.separate import separate
-    from . import source as srcmod
+    from . import sources as srcmod
     report = progress or (lambda f, label: None)
     raw = proj.dir / "raw" / f"{src.id}.wav"
     if not raw.exists():
@@ -269,7 +269,7 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
     src.status = "separating"
     report(0.25, "removing music and noise")
     # sung sources: lead only (harmonies are another pitch line; unison double-tracking stays with the lead)
-    from .source import is_sung
+    from .sources import is_sung
     stems = separate(raw, dereverb=TCFG["dereverb"], karaoke=(proj.mode == "singing" or is_sung(src)), separator=separator,
                      quality=TCFG["separation_quality"],
                      progress=lambda f, name: report(0.25 + 0.5 * f, "removing music and noise"))
@@ -348,7 +348,7 @@ def prepare_sources(name: str, ids: list[str], separator, embedder, progress=Non
     current one. Each finished source is merged into the saved project right away (the web page may be
     editing the same project). Re-scores at the end. Returns titles that failed."""
     from concurrent.futures import ThreadPoolExecutor
-    from . import source as srcmod
+    from . import sources as srcmod
     report = progress or (lambda f, label, **kw: None)
     cancel = cancel or (lambda: False)
     with lock(name):
@@ -432,7 +432,7 @@ def _music_limits(proj: Project) -> dict:
     """Leftover-music limit per source (dB vs the voice). Speech: -12 (music under talking = messy separation).
     Songs always have music under the singing; their separated vocals stay clean up to about +6 dB (Elliott Smith's
     album tracks: hiss the same at -2 and +6 dB; median phrase +3 dB, so -12 threw out 630 of 754 phrases)."""
-    from .source import is_sung
+    from .sources import is_sung
     singer = proj.mode != "speaking"
     return {s.id: (TCFG.get("music_db_sung", 6.0) if singer and is_sung(s) else TCFG["music_db"]) for s in proj.sources}
 
@@ -556,7 +556,7 @@ def score(proj: Project):
     singer = proj.mode != "speaking"
     sref = _sung_reference(proj, emb, ref) if singer else None
     lim = _music_limits(proj)
-    from .source import is_sung
+    from .sources import is_sung
     sung_src = {s.id for s in proj.sources if is_sung(s)} if singer else set()
     if sref is not None or "speaker:sung" in emb:   # kept for the voice check (tests singers on singing)
         if sref is None:
@@ -602,7 +602,7 @@ def _sung_reference(proj: Project, emb: dict, speech_ref: np.ndarray) -> np.ndar
     "other speaker"), so singing needs its own reference: the main voice across the sung sources, accepted only if
     it's recognisably the same person as the speaking reference (his: 0.40; other people: about 0.1)."""
     from sklearn.cluster import AgglomerativeClustering
-    from .source import is_sung
+    from .sources import is_sung
     sung_src = {s.id for s in proj.sources if is_sung(s)}
     lim = _music_limits(proj)
     usable = [p for p in proj.phrases if p.source in sung_src and p.id in emb and p.dur >= 1.5

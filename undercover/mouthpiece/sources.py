@@ -6,7 +6,7 @@ from pathlib import Path
 from ..core.config import CONFIG
 from ..core.voices import ModelError
 from ..core.youtube import (YouTubeBlocked, _cancelled_in, _music_tracks, _short, check_blocked, download_retrying,
-                             open_ydl)
+                            open_ydl)
 
 TCFG = CONFIG["training"]
 
