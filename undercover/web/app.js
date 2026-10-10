@@ -69,6 +69,7 @@ async function pollStatus() {
     if (t && !S.job && !S.osBusy) tabTitle(`⏳ Training${t.eta ? " · " + fmtSecs(t.eta) : ""}`);
     else if (!t && S.wasTraining && !S.job && !S.osBusy) tabTitle("✓ Training done");
     S.wasTraining = !!t;
+    if (typeof renderWorkBar === "function") renderWorkBar(s.work);   // work.js: Pause / Resume bar
     const m = $("#chip-models");
     if (s.models === "ready") m.textContent = s.queue ? `${s.queue} queued` : "models warm";
     else if (s.models.startsWith("error")) { m.textContent = s.gpu_problem ? "no GPU" : "model error"; showError(s.models.replace(/^error: /, ""), s.gpu_problem ? "GPU not available" : "Models failed to load"); return; }

@@ -284,12 +284,12 @@ def reference_clips(S, job, person: str, control, push):
             break
         push("voice", 0.04, f"Getting real clips of {person} to check voices against")
         try:
-            P.prepare_sources(proj.name, todo, S.ENGINE.separator, emb, cancel=lambda: job.cancel,
+            P.prepare_sources(proj.name, todo, S.ENGINE.separator, emb, cancel=lambda: job.cancel or job.pausing,
                               progress=lambda f, label, **kw: push("voice", 0.04 + 0.1 * f, f"Getting real clips of {person}: {label}"),
                               between=control.service,
                               friendly=lambda e: S.friendly(e, "preparing a source"))
         except P.Cancelled:
-            raise S.Cancelled()
+            raise Paused() if job.pausing else S.Cancelled()
     proj = P.Project.load(proj.name)
     if proj.speakers and not proj.reference.get("confirmed"):
         with P.lock(proj.name):
@@ -578,6 +578,11 @@ MIN_SUNG = 0.12   # under ~12% of the song with a voiced melody = basically inst
 
 # ---------------------------------------------------------------- training a new voice
 
+class Paused(Exception):
+    """Training was paused (Pause at the top of the page, or on the Train tab): the job ends as "paused" and
+    Resume starts it again from the same point."""
+
+
 NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably")   # source notes that mean someone else
 
 
@@ -631,9 +636,10 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
                          f"Preparing clips: {label}" + (f" ({kw['index']}/{kw['count']})" if kw.get("count") else ""))
                 try:
                     P.prepare_sources(proj.name, todo, S.ENGINE.separator, emb, progress=prog, between=control.service,
-                                      cancel=lambda: job.cancel, friendly=lambda e: S.friendly(e, "preparing a source"))
+                                      cancel=lambda: job.cancel or job.pausing,
+                                      friendly=lambda e: S.friendly(e, "preparing a source"))
                 except P.Cancelled:
-                    raise S.Cancelled()
+                    raise Paused() if job.pausing else S.Cancelled()
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
                 if proj.speakers and not proj.reference.get("confirmed"):
@@ -697,7 +703,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
         if job.cancel:
             raise S.Cancelled()
         if st.get("state") == "paused":
-            raise ModelError("Training was paused. Resume it on the Train a voice tab; the cover can be made after.")
+            raise Paused()
         push("voice", 0.98, "Adding the new voice")
         v = export_voice(P.Project.load(proj.name), overwrite=True)
         return v.name
@@ -815,6 +821,7 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
     if early:
         early.join()   # the project and its first downloads are ready (or failed quietly; resolve_voice redoes them)
     control = Control()
+    job.control = control   # Pause (top of the page) reaches a one-shot's training through this
 
     def service():
         while not S.GPU_QUEUE.empty():

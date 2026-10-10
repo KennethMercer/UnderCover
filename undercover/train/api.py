@@ -212,6 +212,13 @@ def _upload(S, h, proj, b):
 # ---------------------------------------------------------------- prepare (GPU job)
 
 def _prepare(S, h, proj, b):
+    h._json({"job": start_prepare(S, proj.name).id})
+
+
+def start_prepare(S, name: str):
+    """Prepare the ticked sources of a project (GPU job). Pausing stops after the current source; resuming
+    prepares the rest."""
+    proj = P.Project.load(name)
     if _busy(proj.name):
         raise ModelError("This project is already busy.")
     todo = [s.id for s in proj.sources if s.selected and s.status != "ready"]
@@ -228,14 +235,18 @@ def _prepare(S, h, proj, b):
             job.push(stage="matching" if label == "finding the voice" else "prepare", fraction=f, label=label, **kw)
         try:
             failed = P.prepare_sources(proj.name, todo, S.ENGINE.separator, SpeakerEmbedder(), progress=progress,
-                                       cancel=lambda: job.cancel, friendly=lambda e: S.friendly(e, "preparing a source"))
+                                       cancel=lambda: job.cancel or job.pausing,
+                                       friendly=lambda e: S.friendly(e, "preparing a source"))
         except P.Cancelled:
+            if job.pausing:
+                return job.finish("paused", message="Paused. The rest is prepared when you resume.", project=proj.name)
             raise S.Cancelled()
         note = f"Couldn't use: {', '.join(failed)}." if failed else ""
         job.finish("done", message=note, project=proj.name)
 
+    job.resume_spec = {"kind": "prepare", "project": proj.name, "label": f"Preparing clips for {proj.person or proj.name}"}
     S.GPU_QUEUE.put((job, run))
-    h._json({"job": job.id})
+    return job
 
 
 def _reference(S, h, proj, b):
@@ -266,7 +277,13 @@ def _phrases(S, h, proj, b):
 # ---------------------------------------------------------------- training (GPU job)
 
 def _train(S, h, proj, b):
+    h._json({"job": start_train(S, proj.name, b).id})
+
+
+def start_train(S, name: str, b: dict):
+    """Train a project (GPU job). A paused run resumes unless b["fresh"]."""
     from .trainer import LENGTHS, SR_CFG, Control, Trainer
+    proj = P.Project.load(name)
     if _busy(proj.name):
         raise ModelError("This project is already busy.")
     other = next((n for n, a in ACTIVE.items() if a["kind"] in ("train", "auto") and not a["job"].finished), None)
@@ -327,18 +344,28 @@ def _train(S, h, proj, b):
             pr.train["state"] = "paused" if pr.train.get("epoch") else "failed"
             pr.save_train()
             raise
+        if st.get("state") == "paused":
+            return job.finish("paused", message="Training paused. Resume continues from the same point.",
+                              train_state="paused", epoch=st.get("epoch"), best=st.get("best"))
         job.finish("done", message=f"Training {st['state']}.", train_state=st["state"], epoch=st.get("epoch"),
                    best=st.get("best"), outcome=st.get("outcome"))
 
+    job.resume_spec = {"kind": "train", "project": proj.name, "label": f"Training {proj.train.get('voice_name') or proj.name}"}
+    job.control = control
     S.GPU_QUEUE.put((job, run))
-    h._json({"job": job.id})
+    return job
 
 
 def _auto(S, h, proj, b):
+    h._json({"job": start_auto(S, proj.name, b).id})
+
+
+def start_auto(S, name: str, b: dict):
     """Do it all: prepare the ticked sources (and more if short of the target), confirm the main voice,
     train (auto length) and add the best save to the voices. Same steps as a one-shot cover's training."""
     from .. import autopilot
     from .trainer import Control
+    proj = P.Project.load(name)
     if _busy(proj.name):
         raise ModelError("This project is already busy.")
     if any(a["kind"] in ("train", "auto") and not a["job"].finished for a in ACTIVE.values()):
@@ -371,14 +398,18 @@ def _auto(S, h, proj, b):
             job.push(stage=stage, frac=round(frac, 3), message=message, **kw)
         try:
             name = autopilot.train_new_voice(S, job, proj.person, control, push, project=proj.name)
+        except autopilot.Paused:
+            return job.finish("paused", message="Paused. Resume continues where it stopped.")
         finally:
             ACTIVE.pop(proj.name, None)
         if S.ENGINE._conv:
             S.ENGINE._conv.voices.pop(name, None)
         job.finish("done", message=f"'{name}' is ready in your voices.", voice=name)
 
+    job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}
+    job.control = control
     S.GPU_QUEUE.put((job, run))
-    h._json({"job": job.id})
+    return job
 
 
 def _pause(S, h, proj, b):

@@ -31,6 +31,11 @@
     </div>
   </header>
 
+  <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
+    <i class="dot wait" aria-hidden="true"></i><span id="wb-text"></span>
+    <div class="wb-btns"><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-open" type="button">Queue</button></div>
+  </div>
+
   <div id="wa-main" aria-hidden="true">
     <div class="wa-title"><span>WINAMP</span><button class="wa-x" type="button" tabindex="-1" title="Back to the normal look">×</button></div>
     <div class="wa-body">
@@ -303,6 +308,33 @@
       <p class="meta" id="tr-intro">Name a person and UnderCover finds clips of them, keeps only their voice, and trains a voice model you can use for covers. For personal use: don't pass the results off as the real person.</p>
     </section>
 
+    <section class="panel" id="q-report" hidden>
+      <div class="row spread"><div><h2>Last night</h2><p class="meta" id="q-report-when"></p></div><button class="linkbtn" id="q-dismiss" type="button">Dismiss</button></div>
+      <div class="qreport" id="q-report-list"></div>
+    </section>
+
+    <section class="panel" id="q-panel">
+      <div class="row spread">
+        <div><h2>Overnight queue</h2><p class="qtotal" id="q-total"></p></div>
+        <div class="row"><button class="btn" id="q-start" type="button" hidden>Start now</button>
+          <span class="row qat"><button class="btn primary" id="q-at" type="button" hidden>Start at 11:00 pm</button><input type="time" id="q-at-time" value="23:00" aria-label="Start time"></span>
+          <button class="linkbtn" id="q-stop" type="button" hidden>Don't start more</button></div>
+      </div>
+      <div class="qadd">
+        <select id="q-kind" class="select" aria-label="What to do"><option value="improve">Improve a voice</option><option value="new">Train a new voice</option></select>
+        <input id="q-target" list="q-voices" autocomplete="off" placeholder="A voice to improve" aria-label="Voice or person">
+        <datalist id="q-voices"></datalist>
+        <button class="btn" id="q-add" type="button">Add</button>
+      </div>
+      <p class="meta">Improve = more singing (their album tracks first) or more speech, every clip checked again, a fresh training, and the new voice replaces the old only if it measures better.</p>
+      <div class="qlist" id="q-list"></div>
+      <div class="qopts">
+        <label class="toggle"><input type="checkbox" id="q-finish"><span>Finish by 7:00 am<br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="q-awake"><span>Keep the PC awake<br><span class="meta">Only while voice work runs.</span></span></label>
+      </div>
+      <p class="meta">Covers you start meanwhile go first. Pause / Resume at the top of the page stops and continues everything; the queue is saved, so a restart carries on.</p>
+    </section>
+
     <nav class="steps" id="tr-steps" aria-label="Training steps" hidden>
       <div class="step" data-step="1"><b>1 · Find clips</b><span></span></div>
       <div class="step" data-step="2"><b>2 · Confirm the voice</b><span></span></div>
@@ -438,6 +470,7 @@
 <script src="/static/train.js"></script>
 <script src="/static/oneshot.js"></script>
 <script src="/static/library.js"></script>
+<script src="/static/work.js"></script>
 <script src="/static/winamp.js"></script>
 </body>
 </html>
