@@ -628,5 +628,14 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     idx.unlink(missing_ok=True)
     st.update(exported=name, exported_epoch=epoch, state="exported")
     (tdir / "resume.pt").unlink(missing_ok=True)   # 1.3 GB; a finished voice doesn't need it (retraining starts fresh)
+    # keep the exported save and the two best alternatives (to try another on the Train tab); the rest are 55 MB each
+    alts = sorted([s for s in st.get("saves", []) if s["epoch"] != epoch and s.get("identity") is not None],
+                  key=lambda s: -s["identity"])[:2]
+    keep = {epoch} | {s["epoch"] for s in alts} | set(st.get("pinned", []))
+    for s in list(st.get("saves", [])):
+        if s["epoch"] not in keep:
+            (tdir / f"e{s['epoch']}.pth").unlink(missing_ok=True)
+            (tdir / "previews" / f"e{s['epoch']}.wav").unlink(missing_ok=True)
+            st["saves"].remove(s)
     proj.save_train()
     return v
