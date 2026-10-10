@@ -387,7 +387,8 @@ def _cleanup_groups(S) -> dict:
                              "paths": dupes, "default": False}
     done = [projects_dir() / p["name"] for p in list_projects() if p["train"].get("state") == "exported"]
     g["finished_training"] = {"title": "Training projects of finished voices",
-                              "detail": f"{len(done)} projects: their clips are only needed to train those voices again (the voices stay)",
+                              "detail": f"{len(done)} projects: the voices stay, but improving or retraining them later means downloading and "
+                                        "preparing all their clips again (about 30-60 min each)",
                               "paths": done, "default": False}
     paused = [projects_dir() / p["name"] / "train" / "resume.pt" for p in list_projects()
               if p["train"].get("state") != "exported" and (projects_dir() / p["name"] / "train" / "resume.pt").exists()]
