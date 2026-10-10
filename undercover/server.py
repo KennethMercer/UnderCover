@@ -950,7 +950,7 @@ def _options(body: dict):
                         backing_voice=bvoice, backing_octave=boct, backing_db=num("backing_db"),
                         pitch_cleanup=o.get("pitch_cleanup", True) is not False,
                         pitch_correction=num("pitch_correction"),
-                        polish=o.get("polish", True) is not False)
+                        polish=o.get("polish", True) is not False, fit=bool(o.get("fit")))
 
 
 def _ui_defaults() -> dict:
@@ -959,7 +959,8 @@ def _ui_defaults() -> dict:
             "volume_envelope": c["volume_envelope"], "quality": s["quality"], "dereverb": s["dereverb"],
             "karaoke": s["karaoke"], "reverb": r["reverb"], "format": r["format"],
             "backing_voice": "", "backing_octave": 0, "backing_db": r["backing_db"],
-            "pitch_cleanup": c["pitch_cleanup"], "pitch_correction": c["pitch_correction"], "polish": r["polish"]}
+            "pitch_cleanup": c["pitch_cleanup"], "pitch_correction": c["pitch_correction"], "polish": r["polish"],
+            "fit": False}
 
 
 class ExclusiveServer(ThreadingHTTPServer):

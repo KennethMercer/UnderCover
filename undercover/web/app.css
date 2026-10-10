@@ -378,3 +378,6 @@ svg.chart { width: 100%; height: 150px; display: block; }
 @media (max-width: 700px) { .os-plan-grid { grid-template-columns: 1fr; } }
 .os-opts summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .os-opts[open] summary { margin-bottom: 6px; }
+
+/* manual octave/key while "Fit pitch to the voice" is on */
+.field.off { opacity: .45; }

@@ -118,6 +118,9 @@
     <summary><span><b>Advanced settings</b></span><span id="adv-sum"></span></summary>
     <div class="adv-grid">
       <div class="field">
+        <label class="toggle"><input type="checkbox" id="fit"><span>Fit pitch to the voice<br><span class="meta">Picks the octave and key that keep the melody inside the voice's range. Works with voices trained in UnderCover (their range is measured).</span></span></label>
+      </div>
+      <div class="field" data-pitch>
         <span class="flabel">Voice octave</span>
         <div class="seg" id="octave">
           <button type="button" data-v="-2">−2</button>
@@ -128,7 +131,7 @@
         </div>
         <p>Moves only the new voice by whole octaves, so it stays in key. Female singer → male voice: try −1. Male singer → female voice: try +1.</p>
       </div>
-      <div class="field">
+      <div class="field" data-pitch>
         <label for="key">Song key <output id="key-o"></output></label>
         <input type="range" id="key" min="-6" max="6" step="1">
         <div class="ticks"><span>−6</span><span>−3</span><span>0</span><span>+3</span><span>+6</span></div>
