@@ -110,6 +110,30 @@ def _quality() -> dict:
         return {}
 
 
+def _ytdlp_version() -> str | None:
+    """Installed yt-dlp version, read from the package metadata (the loaded module may be older after an update)."""
+    try:
+        from importlib.metadata import version
+        return version("yt-dlp")
+    except Exception:
+        return None
+
+
+def _update_ytdlp() -> dict:
+    """YouTube changes often and older yt-dlp versions stop working: update it in place. --no-deps, so it can
+    never touch torch or anything else; takes effect after a restart (the old version stays loaded until then)."""
+    import subprocess
+    import sys
+    before = _ytdlp_version()
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "--no-deps", "--disable-pip-version-check",
+                        "yt-dlp"], capture_output=True, text=True, timeout=300)
+    if r.returncode:
+        tail = (r.stderr or r.stdout).strip().splitlines()[-1:] or ["unknown error"]
+        raise ModelError(f"Couldn't update the YouTube downloader ({tail[0][:160]}). Check the internet connection.")
+    after = _ytdlp_version()
+    return {"before": before, "after": after, "changed": before != after}
+
+
 def _duplicate_voices(hist: list) -> tuple[list, str]:
     """Voice folders whose model.pth is byte-identical to another voice's (e.g. 'biden' and 'joe-biden' from two
     sites). Keeps the copy used for more covers (then the older install); returns (folders to remove, names)."""
@@ -189,6 +213,7 @@ def summary(S) -> dict:
     }
     du = shutil.disk_usage(ROOT)
     return {"categories": cats, "total": sum(cats.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
+            "ytdlp": _ytdlp_version(),
             "counts": {"covers": len(covers(S)), "songs": len(_song_metas()),
                        "voices": len(list((path("models_dir") / "voices").glob("*/meta.json"))),
                        "training": len(list((cache / "training").glob("*/project.json")))}}
@@ -408,6 +433,8 @@ def _route(S, h, method, p):
     rest = p[len("/api/library/"):]
     if method == "GET" and rest in ("summary", "covers", "songs", "voices", "training"):
         return h._json(globals()[rest](S))
+    if rest == "tools/ytdlp-update" and method == "POST":
+        return h._json(_update_ytdlp())
     if rest == "cleanup":
         if method == "GET":
             return h._json({k: {kk: vv for kk, vv in v.items() if kk != "paths"} for k, v in _cleanup_groups(S).items()})

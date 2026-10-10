@@ -230,7 +230,8 @@ def download(src: Source, dest_dir: Path, progress=None) -> Path:
             except Exception as e:
                 if _cancelled_in(e) is not None:
                     raise
-                raise ModelError(f"Couldn't download '{src.title}' ({_short(e)}).")
+                raise ModelError(f"Couldn't download '{src.title}' ({_short(e)}). If YouTube downloads keep failing, "
+                                 "update the YouTube downloader (Library, top right).")
         cands = [p for p in work.glob(f"{src.id}.*") if p.suffix == ".wav"]
         if not cands or cands[0].stat().st_size == 0:
             raise ModelError(f"Downloaded '{src.title}' but couldn't convert it to audio.")
