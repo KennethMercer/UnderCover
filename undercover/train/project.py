@@ -443,7 +443,10 @@ def find_speakers(proj: Project):
     emb = proj.load_embeddings()
     # Cluster numbers are re-assigned on every run, so a confirmed reference is followed by its voice (centroid),
     # not its number: adding sources once switched Elliott Smith's project to another Elliot's speech.
-    old_ref = emb.get(f"speaker:{proj.reference.get('cluster')}") if proj.reference.get("confirmed") else None
+    # An automatic pick is re-made (Barack Obama: after the first round only a debate was in, Mitt Romney was the
+    # main voice there, and following that pick trained a "barack-obama" voice on Romney).
+    old_ref = (emb.get(f"speaker:{proj.reference.get('cluster')}")
+               if proj.reference.get("confirmed") and not proj.reference.get("auto") else None)
     lim = _music_limits(proj)
     usable = [p for p in proj.phrases if p.id in emb and p.dur >= 1.5 and p.music_db < lim.get(p.source, TCFG["music_db"])
               and not p.clipped]
@@ -485,13 +488,15 @@ def find_speakers(proj: Project):
             proj.reference = {**proj.reference, "cluster": -1, "confirmed": True}
     elif old_ref is not None:   # a single clip picked as the reference (cluster -1): keep it
         emb["speaker:-1"] = old_ref
-    elif not proj.reference.get("confirmed") or proj.reference.get("cluster") not in {c["cluster"] for c in clusters}:
+    elif (not proj.reference.get("confirmed") or proj.reference.get("auto")
+          or proj.reference.get("cluster") not in {c["cluster"] for c in clusters}):
         proj.reference = {**clusters[0], "confirmed": False}
     proj.save_embeddings(emb)
 
 
-def set_reference(proj: Project, cluster: int | None = None, clip: str | None = None):
-    """Operator picks a speaker (cluster) or a specific phrase as the voice to train."""
+def set_reference(proj: Project, cluster: int | None = None, clip: str | None = None, auto: bool = False):
+    """Operator picks a speaker (cluster) or a specific phrase as the voice to train. auto=True: the app picked the
+    dominant voice itself; that pick is re-made when more sources arrive (it isn't followed like an operator's)."""
     emb = proj.load_embeddings()
     if clip:
         if clip not in emb:
@@ -503,7 +508,7 @@ def set_reference(proj: Project, cluster: int | None = None, clip: str | None = 
         sp = next((s for s in proj.speakers if s["cluster"] == cluster), None)
         if sp is None:
             raise ModelError("That voice isn't in the list any more. Refresh and pick again.")
-        proj.reference = {**sp, "confirmed": True}
+        proj.reference = {**sp, "confirmed": True, "auto": auto}
     score(proj)
 
 

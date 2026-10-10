@@ -27,6 +27,7 @@ PREP_RT = 3.5          # minutes of source audio prepared per minute (separation
                        # realtime on Elliott Smith's album tracks; downloads and phrase cutting take the rest)
 EARLY_STOP = 0.7       # auto-length trainings stop on their own at ~70% of the step budget (Elliott: 219 of 296 epochs)
 COMPARE_MIN = 3.0      # export + likeness test of old and new voice
+SAME_PERSON = 0.35     # the current voice scoring under this against the new clips = they're probably someone else
 IMPROVE_SINGING_MIN = 30   # minutes of clean singing an "improve" aims for (more than ~30 rarely helps)
 
 
@@ -640,7 +641,7 @@ def _improve(job, item) -> dict:
         with P.lock(proj.name):
             proj = P.Project.load(proj.name)
             if proj.speakers and not proj.reference.get("confirmed"):
-                P.set_reference(proj, cluster=proj.reference["cluster"])
+                P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)
             else:
                 P.score(proj)
             proj.save()
@@ -676,6 +677,13 @@ def _improve(job, item) -> dict:
         before = None
     after = voicecheck.check(cand, proj, conv, emb, tests=tests).score
     kept_min = round(proj.kept_seconds() / 60, 1)
+    if before is not None and before < SAME_PERSON:
+        # the current voice doesn't sound like the clips found now: they're probably someone else's (a debate
+        # partner, an interviewer). Don't replace a working voice with that.
+        remove_voice(cand)
+        return {"voice": old.name, "before": before, "after": after, "replaced": False, "minutes_of_voice": kept_min,
+                "note": f"The clips found this time don't sound like the current voice (it scores {before} against them), "
+                        "so they may be someone else's. Kept the old voice; check the project on Train a voice."}
     if before is None or after > before + 0.005:
         proj = P.Project.load(proj.name)
         export_voice(proj, name=old.name, overwrite=True)
