@@ -3,9 +3,17 @@
 A small Windows installer for friends' PCs. It copies the app code, then `setup.ps1` detects the graphics card and
 downloads the matching PyTorch and tools. Nothing heavy is bundled.
 
-**Status (2026-10-09):** written and dry-run tested on the dev PC. **No real install has been run yet**, and the
-`.exe` hasn't been built (Inno Setup isn't installed). The core app still needs the edits in
-[CORE_CHANGES.md](CORE_CHANGES.md) before NVIDIA or CPU installs can make covers.
+**Status (2026-10-09, late):**
+- **AMD (ROCm): verified on the dev PC.** A real install into `D:\UnderCoverTest` passed the self-test. The
+  server started on port 7861, downloaded 1.2 GB of models on first start, and made a 30 s cover in 17.9 s.
+- **CPU: verified.** `-Backend cpu` into `D:\UnderCoverTestCPU`: 0.9 GB venv, self-test passed, the page shows
+  "Processor only (slow)", the same cover took 66 s, and training is refused with a friendly message.
+- **NVIDIA: not tested** (needs real hardware). The wheels exist and the code paths are in place.
+- **`.exe` builds:** `dist\UnderCover-Setup-0.1.0.exe`, about 2.2 MB. Its install wizard hasn't been clicked
+  through yet; setup.ps1, which it runs, has.
+- Core edits needed for non-ROCm installs are applied; the remaining items are in [CORE_CHANGES.md](CORE_CHANGES.md).
+- Bug found and fixed in the real run: Windows PowerShell wrote config.toml with a BOM, which made the app crash on
+  start. setup.ps1 now writes UTF-8 without one, and selftest.py loads the config so this fails setup instead.
 
 ## Files
 
@@ -48,19 +56,21 @@ adds cards.
   100 MB, Deno about 40 MB, Python about 30 MB.
 - Disk after setup: the ROCm venv is 6.4 GB on the dev PC (the ROCm SDK wheels are big); CUDA should be similar.
   Plan for about 10 GB free in total, including models.
-- First start: about 3 GB of models (separation 2.6 GB, HuBERT + RMVPE + RVC base about 0.56 GB, speaker
-  model 26 MB). The app already downloads these on first use.
+- First start: 1.2 GB of models (measured). The karaoke, de-reverb, training and speaker models (another ~2 GB)
+  download the first time those features are used.
+- CPU installs are much smaller: the venv is 0.9 GB.
 
 ## Next steps
 
-1. **Install Inno Setup 6 on the dev PC** to build the `.exe` (needs your OK):
-   `winget install --id JRSoftware.InnoSetup -e`
-2. **Real test on this PC:** `setup.ps1 -InstallDir D:\UnderCoverTest` (a separate folder, so the dev install is
-   untouched). This proves the ROCm path end to end. Use test port 7861 when starting it.
-3. Apply [CORE_CHANGES.md](CORE_CHANGES.md) (after `git init`, and with the main session's OK).
-4. **NVIDIA test** on a friend's PC or a rented cloud Windows GPU machine. Also test the CPU path
-   (`-Backend cpu` works on any PC).
-5. Optional: code-sign the `.exe` to avoid the SmartScreen warning.
+1. **NVIDIA test** on a friend's PC or a rented cloud Windows GPU machine: a cover, plus a short training run
+   (exercises the bf16/fp32 choice and fused AdamW).
+2. Click through the `.exe` wizard once on this PC, choosing a test folder on the folder page.
+3. Remaining items in [CORE_CHANGES.md](CORE_CHANGES.md): grey out training in CPU mode, VRAM tiers, restart
+   button check, and settings merge on update.
+4. Optional: code-sign the `.exe` to avoid the SmartScreen warning.
+
+Rebuild the `.exe` after any change: `"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\UnderCover.iss`
+(Inno Setup 6.7.3, installed per-user with winget).
 
 ## Known gaps
 

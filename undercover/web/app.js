@@ -55,6 +55,7 @@ async function pollStatus() {
     const s = await api("/api/status");
     const gpu = $("#chip-gpu");
     gpu.innerHTML = s.gpu ? `<i class="dot"></i><span>${esc(s.gpu.replace("AMD Radeon ", ""))} · ${s.vram_gb} GB</span>`
+                  : s.cpu_mode ? `<i class="dot wait"></i><span title="No supported graphics card: covers are slow and training is off">Processor only (slow)</span>`
                           : `<i class="dot wait"></i><span>Checking GPU…</span>`;
     if (s.stale) restartNeeded();
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident

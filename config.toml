@@ -4,6 +4,9 @@
 [gpu]
 # Substring of the GPU name to use. Picks the 7900 XTX over the integrated Radeon graphics.
 device_name = "7900 XTX"
+# PyTorch build this install expects: "rocm", "cuda" or "cpu" (the installer sets it). If the installed torch
+# doesn't match, the server refuses jobs and says so instead of silently running on the processor.
+backend = "rocm"
 # Optional: force HIP_VISIBLE_DEVICES before torch loads ("" = leave unset).
 hip_visible_devices = ""
 fp16 = true
