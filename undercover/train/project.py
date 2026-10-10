@@ -58,6 +58,7 @@ class Phrase:
     reason: str = ""         # why it's left out automatically ("" = kept)
     choice: bool | None = None   # operator override: True keep, False remove, None automatic
     sung: bool = False       # matched the person's singing voice better than their speaking voice
+    noise: float = -1.0      # spectral flatness of the loud frames (hiss, artifacts); -1 = not measured yet
 
     @property
     def kept(self) -> bool:
@@ -306,6 +307,7 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
             if rest is not None:
                 r = rest[a:b]
                 ph.music_db = round(float(20 * np.log10(np.sqrt(np.mean(r ** 2)) + 1e-9) - v_db), 1)
+            ph.noise = noisiness(seg, sr)
             oa, ob = int(a / sr * osr), int(b / sr * osr)
             o = orig[oa:ob]
             ph.clipped = bool(len(o) and np.mean(np.abs(o) >= 0.999) > 0.001)
@@ -478,8 +480,35 @@ def set_reference(proj: Project, cluster: int | None = None, clip: str | None = 
     score(proj)
 
 
+def noisiness(x: np.ndarray, sr: int) -> float:
+    """Median spectral flatness of a phrase's loud frames: ~0.14-0.19 for a clean voice, 0.35+ for hissy or
+    processed audio (badly separated fan acapellas). A voice trained on that sings with the hiss (measured on
+    Elliott Smith: the Clementine upload's 0.38 made the trained voice twice as hissy as the source song)."""
+    x = _resample16(x, sr)   # measured at 16 kHz (the threshold was calibrated there)
+    fr = x[: len(x) // 512 * 512].reshape(-1, 512)
+    if not len(fr):
+        return 0.0
+    e = (fr ** 2).mean(1)
+    loud = e > e.max() * 0.01   # within 20 dB of the loudest frame: mostly vowels
+    s = np.abs(np.fft.rfft(fr[loud] * np.hanning(512), axis=1)) + 1e-9
+    return round(float(np.median(np.exp(np.log(s).mean(1)) / s.mean(1))), 3)
+
+
+def _measure_noise(proj: Project):
+    """Backfill the noise measure for phrases cut before it existed (reads each clip once)."""
+    import soundfile as sf
+    for p in proj.phrases:
+        if p.noise < 0 and proj.clip_path(p.id).exists():
+            try:
+                x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")
+                p.noise = noisiness(x if x.ndim == 1 else x.mean(1), sr)
+            except (OSError, RuntimeError):
+                p.noise = 0.0
+
+
 def score(proj: Project):
     """Score every phrase against the reference voice and set the automatic keep/leave-out reason."""
+    _measure_noise(proj)
     emb = proj.load_embeddings()
     key = f"speaker:{proj.reference.get('cluster')}"
     if key not in emb:
@@ -513,6 +542,8 @@ def score(proj: Project):
             p.reason = "clipped"
         elif p.music_db > TCFG["music_db"]:
             p.reason = "music or noise"
+        elif p.noise > TCFG.get("noise_max", 0.30):
+            p.reason = "hiss or artifacts"
         elif p.score < TCFG["match_threshold"]:
             p.reason = "other speaker"
         elif p.mix < TCFG["mix_threshold"]:
