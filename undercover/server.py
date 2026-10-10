@@ -1077,6 +1077,11 @@ def _relaunch(extra_args: list[str]):
 
 def main():
     global SERVER
+    try:   # the app folder may have been moved or renamed: fix stored paths before anything reads them
+        from . import relocate
+        relocate.check_and_fix()
+    except Exception as e:   # noqa: BLE001 - never block startup
+        print(f"Couldn't check the app folder location: {e}", flush=True)
     host, port = UCFG["host"], UCFG["port"]
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])

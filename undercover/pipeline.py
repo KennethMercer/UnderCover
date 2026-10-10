@@ -321,6 +321,10 @@ def history() -> list[dict]:
             if not item.get("title") or re.fullmatch(r"[0-9a-f]{16}", item["title"]):
                 item["title"] = upload_title(Path(item["song"])) or Path(item["song"]).stem
             items.append(item)
+    out_dir = path("output_dir")
+    for i in items:   # stored before the app folder moved: the cover is still in the output folder by name
+        if not Path(i["output"]).exists() and (out_dir / Path(i["output"]).name).exists():
+            i["output"] = str(out_dir / Path(i["output"]).name)
     return [i for i in reversed(items) if Path(i["output"]).exists()]
 
 
