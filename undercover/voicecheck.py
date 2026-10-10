@@ -58,7 +58,8 @@ def sung_tests(person: str, max_phrases: int = 8, max_seconds: float = 45.0) -> 
             title = ""
         if words and any(w in title.lower() for w in words):
             continue   # their own song: not a test of turning someone else into them
-        vocals = sorted(d.rglob("vocals.wav"), key=lambda p: (-len(p.parts), str(p)))   # deepest = lead only
+        vocals = sorted([p for p in d.rglob("vocals.*") if p.suffix.lower() in (".flac", ".wav")],
+                        key=lambda p: (-len(p.parts), str(p)))   # deepest = lead only (FLAC since 2026-10-10)
         if not vocals:
             continue
         try:
