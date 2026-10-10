@@ -124,13 +124,21 @@ def gpu_worker():
         if torch.cuda.is_available():
             STATUS["gpu"] = torch.cuda.get_device_name(0)
             STATUS["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 2**30)
-        # Never fall back to the CPU silently (a cover would take ages, training hours): say what's wrong instead.
-        if "+rocm" not in torch.__version__:
-            STATUS["gpu_problem"] = (f"UnderCover's PyTorch ({torch.__version__}) isn't AMD's ROCm build, so the GPU can't be "
-                                     "used. Something reinstalled torch; see PLAN.md (torch guard) to restore it.")
+        # Which torch build this install expects ([gpu].backend; the installer writes it). Never fall back to the
+        # CPU silently when a GPU build was expected (a cover would take ages, training hours): say what's wrong instead.
+        want = CONFIG["gpu"].get("backend", "rocm")
+        have = "rocm" if "+rocm" in torch.__version__ else "cuda" if "+cu" in torch.__version__ else "cpu"
+        STATUS["backend"] = have
+        if have != want:
+            names = {"rocm": "AMD's ROCm build", "cuda": "the NVIDIA CUDA build", "cpu": "the CPU-only build"}
+            STATUS["gpu_problem"] = (f"UnderCover's PyTorch ({torch.__version__}) isn't {names[want]}, so the GPU can't be "
+                                     "used. Something reinstalled torch; run setup again to restore it.")
+        elif have == "cpu":
+            STATUS["cpu_mode"] = True   # no supported GPU: covers work but slowly; training is refused (trainer.py)
         elif not torch.cuda.is_available():
             STATUS["gpu_problem"] = ("The graphics card isn't available. Check Device Manager → Display adapters (it may be "
-                                     "disabled or showing an error after a crash), restart the PC if needed, then restart UnderCover.")
+                                     "disabled or showing an error after a crash), update the graphics driver or restart the "
+                                     "PC if needed, then restart UnderCover.")
         if STATUS.get("gpu_problem"):
             STATUS["models"] = "error: " + STATUS["gpu_problem"]   # the loop below keeps running, refusing jobs
         elif UCFG["preload_models"]:

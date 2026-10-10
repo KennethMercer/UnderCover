@@ -1,33 +1,34 @@
-# Core edits the installer needs (deferred)
+# Core edits for non-ROCm installs
 
-**Status: NOT applied.** The main UnderCover session said on 2026-10-09 that its batch is done, but it may resume.
-Ask the user before editing. It was editing `server.py`, `train/trainer.py`, `convert.py` and
-`autopilot.py`. Apply these only after it says it's finished, and after `git init` plus a first commit so each
-change can be reviewed and undone. On the dev machine (ROCm, 7900 XTX) every change below must keep behaviour
-exactly the same.
-
-Line numbers are from 2026-10-09 and will drift.
+**Status (2026-10-09, evening):** items 1, 3 and 5 are **applied**, with the user's OK and after telling the main
+session. Items 6-9 are still open. On the dev PC nothing changes: `backend = "rocm"`, bf16, same startup check.
 
 ## Required (otherwise non-ROCm installs can't make covers)
 
-1. **`undercover/server.py` ~124-135, GPU check at startup.** It sets `gpu_problem` when `"+rocm"` isn't in
+1. **DONE: `undercover/server.py` ~124-140, GPU check at startup.** Now compares the torch build with the new
+   `config.toml [gpu] backend` (rocm/cuda/cpu; setup.ps1 writes it), sets `STATUS["backend"]`, and on `cpu`
+   sets `cpu_mode` instead of refusing jobs. The page shows "Processor only (slow)". Original note: It sets `gpu_problem` when `"+rocm"` isn't in
    `torch.__version__`, and the GPU worker then refuses jobs. Change it to accept `+rocm`, `+cu1xx` and `+cpu`.
    Report the backend in `/api/status` (for example `"backend": "cuda"`). With `+cpu`, run jobs and show a
    "running on the processor, this will be slow" notice instead of an error. (The main session confirmed
    2026-10-09: `run_job` refuses every job while `gpu_problem` is set, and also when under 3 GB is free. Check
    which kind of "free" that means, because a 6-8 GB card or a CPU install must still pass.)
-2. **`undercover/server.py` ~125, `get_device_name(0)`.** Use the same device the converter uses. On a PC with
-   two GPUs, index 0 can be the wrong one.
+2. **NOT NEEDED: `get_device_name(0)`.** The converter and trainer also use device 0 (`"cuda"`), so the name
+   shown matches the card that's used. Choosing a different card on multi-GPU PCs would need `CUDA_VISIBLE_DEVICES`
+   set before torch loads. Leave it until someone has two NVIDIA cards.
 
 ## Needed for older NVIDIA and low-VRAM cards
 
-3. **`undercover/train/trainer.py` ~382, bf16 autocast.** GTX 10 / RTX 20 cards have no fast bf16. Use bf16 when
+3. **DONE (fp32 fallback): bf16 autocast.** bf16 on ROCm always, and on NVIDIA when
+   `is_bf16_supported(including_emulation=False)`; otherwise autocast is off (fp32). An fp16 + GradScaler speed-up
+   for RTX 20 cards is a possible later step. Original note: GTX 10 / RTX 20 cards have no fast bf16. Use bf16 when
    `torch.cuda.is_bf16_supported()` (and always on ROCm, as now). Otherwise use fp16 with
    `torch.amp.GradScaler`, the way upstream RVC does it, or fp32 if that's unstable. `selftest.py` already
    records `bf16_native`.
 4. **`undercover/train/trainer.py` ~333, fused AdamW.** This works on CUDA too. Keep `fused=dev.type == "cuda"`;
    just test it on NVIDIA.
-5. **Training on CPU.** Disable the Train tab and one-shot training on `+cpu` builds (show why), since it would
+5. **DONE (trainer side): training on CPU.** `Trainer.run` raises a friendly `ModelError`. Still open: grey out the
+   Train tab on `cpu_mode` so people don't prepare data first. Original note: Disable the Train tab and one-shot training on `+cpu` builds (show why), since it would
    take days.
 6. **VRAM tiers.** Separation chunk/batch size and training batch size should scale down under ~10 GB. Training
    peaked around 5 GB here. Read the VRAM at startup and pick smaller defaults; don't write them into

@@ -51,6 +51,19 @@ def main() -> int:
     if missing:
         rep["problems"] += [f"can't import {m}" for m in missing]
 
+    # The app's own config must load (setup.ps1 edits it; a stray BOM or bad edit breaks every start).
+    app = Path(__file__).resolve().parent.parent
+    if (app / "undercover" / "config.py").exists():
+        sys.path.insert(0, str(app))
+        try:
+            from undercover.config import CONFIG
+            rep["config_backend"] = CONFIG["gpu"].get("backend")
+            want = "cuda" if args.backend.startswith("cuda") else args.backend
+            if rep["config_backend"] != want:
+                rep["problems"].append(f"config.toml says backend = {rep['config_backend']!r}, expected {want!r}")
+        except Exception as e:
+            rep["problems"].append(f"config.toml doesn't load: {type(e).__name__}: {e}")
+
     for exe, why in TOOLS.items():
         if not shutil.which(exe):
             rep["problems"].append(f"{exe} not found ({why})")

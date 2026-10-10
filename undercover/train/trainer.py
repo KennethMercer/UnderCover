@@ -297,6 +297,9 @@ class Trainer:
                                        generator_loss, kl_loss, mel_spectrogram_torch, spec_to_mel_torch,
                                        spectrogram_torch)
         from .. import setup_models
+        if self.device.type != "cuda" or not torch.cuda.is_available():
+            raise ModelError("Training a voice needs a supported graphics card. On the processor it would take days. "
+                             "Covers with existing voices still work.")
         proj, st = self.proj, self.proj.train
         report = progress or (lambda **kw: None)
         sr = int(st.get("sr") or TCFG["sample_rate"])
@@ -379,7 +382,10 @@ class Trainer:
         patience = max(10, max_epochs // 4)     # auto: stop when held-out loss hasn't improved for a quarter of the run
         st.update(state="training", steps_per_epoch=steps_per_epoch, error="")
         proj.save_train()
-        ac = dict(device_type="cuda", dtype=torch.bfloat16, enabled=self.half and dev.type == "cuda")
+        # bf16 on ROCm (always, as before) and on NVIDIA cards with native bf16 (RTX 30+). Older NVIDIA cards
+        # train in fp32: slower, but no loss scaling needed and nothing to destabilise.
+        bf16 = torch.version.hip is not None or torch.cuda.is_bf16_supported(including_emulation=False)
+        ac = dict(device_type="cuda", dtype=torch.bfloat16, enabled=self.half and dev.type == "cuda" and bf16)
         t_start = time.time()
         epoch = epoch0
         outcome = "done"

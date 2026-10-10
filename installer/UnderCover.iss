@@ -28,7 +28,7 @@ MinVersion=10.0.19041
 UninstallDisplayName={#AppName}
 
 [Messages]
-FinishedLabel=UnderCover is installed. Start it from the Start menu. The first start downloads the voice and separation models (about 3 GB).
+FinishedLabel=UnderCover is installed. Start it from the Start menu. The first start downloads the voice and separation models (about 1-3 GB, depending on which features you use).
 
 [Files]
 ; App code. __pycache__ and anything personal (models, cache, output, uploads, logs, test, .venv) stay out.

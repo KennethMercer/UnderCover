@@ -199,12 +199,19 @@ if ($gpu -and $Backend -ne 'cpu') {
     $m = [regex]::Match($gpu.gpu, '(RX|RTX|GTX|PRO|Arc)\s.*$')
     $deviceName = if ($m.Success) { $m.Value.Trim() } else { $gpu.gpu }
 }
-if ($DryRun) { Info "[dry-run] config.toml [gpu] device_name = `"$deviceName`"" }
+$cfgBackend = $Backend -replace '^cuda\d+$', 'cuda'      # config knows rocm / cuda / cpu
+if ($DryRun) { Info "[dry-run] config.toml [gpu] device_name = `"$deviceName`", backend = `"$cfgBackend`"" }
 elseif (Test-Path $cfg) {
     $text = Get-Content $cfg -Raw
     $text = [regex]::Replace($text, '(?m)^device_name\s*=\s*".*?"', "device_name = `"$deviceName`"")
-    Set-Content -Path $cfg -Value $text -NoNewline -Encoding utf8
-    Info "device_name = `"$deviceName`""
+    if ($text -match '(?m)^backend\s*=') {
+        $text = [regex]::Replace($text, '(?m)^backend\s*=\s*".*?"', "backend = `"$cfgBackend`"")
+    } else {   # config.toml from before the setting existed: add it under device_name
+        $text = [regex]::Replace($text, '(?m)^(device_name\s*=.*)$', "`$1`r`nbackend = `"$cfgBackend`"", 1)
+    }
+    # UTF-8 without BOM (tomllib rejects a BOM, and Windows PowerShell's 'utf8' writes one).
+    [IO.File]::WriteAllText($cfg, $text, (New-Object Text.UTF8Encoding $false))
+    Info "device_name = `"$deviceName`", backend = `"$cfgBackend`""
 }
 
 # 7. Self-test --------------------------------------------------------------------------------
@@ -228,5 +235,5 @@ if ($DryRun) { Info "[dry-run] write $launcher" } else { Set-Content -Path $laun
 
 Write-Host ""
 Write-Host "Done. Start UnderCover from the Start menu or with UnderCover.cmd." -ForegroundColor Green
-Write-Host "The first start downloads the voice and separation models (about 3 GB)."
+Write-Host "The first start downloads the voice and separation models (about 1-3 GB, depending on which features you use)."
 if ($Pause) { Read-Host "Press Enter to close" | Out-Null }
