@@ -736,8 +736,14 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
         label = f"version {n + 1} of up to {VERSIONS}: " if compare else ""
         push("song", 0.02 + 0.9 * n / per, f"Downloading {label}“{pick.title}”")
         had = songs.known_song(pick.id)
-        meta = songs.download(pick, S.register_song, progress=lambda f, pick=pick, label=label, n=n: push(
-            "song", 0.02 + 0.9 * (n + 0.4 * f) / per, f"Downloading {label}“{pick.title}”"))
+        try:
+            meta = songs.download(pick, S.register_song, progress=lambda f, pick=pick, label=label, n=n: push(
+                "song", 0.02 + 0.9 * (n + 0.4 * f) / per, f"Downloading {label}“{pick.title}”"))
+        except ModelError:
+            if pick is cands[-1] and not versions:
+                raise
+            skipped.append(pick.title)   # unavailable (removed, region-locked): try the next candidate
+            continue
         song = Path(S.path("uploads_dir")) / meta["file"]
         # separate now (cached for the cover): catches a bad download early and gives the melody's pitch
         stems = separate(song, dereverb=True, karaoke=True, separator=S.ENGINE.separator, quality="high",
