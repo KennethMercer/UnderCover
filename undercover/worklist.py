@@ -15,13 +15,13 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
+from .core import gpu, jobs
 from .core.config import CONFIG, path
 from .core.voices import ModelError, slug
 
 TRAIN_KINDS = ("train", "train-prepare", "train-auto", "auto", "night")
 _LOCK = threading.RLock()
 _STATE: dict | None = None
-S = None   # the server module, set by start()
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
                        # realtime on Elliott Smith's album tracks; downloads and phrase cutting take the rest)
@@ -33,7 +33,7 @@ IMPROVE_SINGING_MIN = 30   # minutes of clean singing an "improve" aims for (mor
 
 def _file():
     """One file per server port, so a test server (7861) never touches the real queue or its pause."""
-    port = S.SERVER.server_address[1] if S is not None and getattr(S, "SERVER", None) else CONFIG["ui"]["port"]
+    port = jobs.PORT or CONFIG["ui"]["port"]
     return path("cache_dir") / ("worklist.json" if port == CONFIG["ui"]["port"] else f"worklist-{port}.json")
 
 
@@ -68,7 +68,7 @@ def _log(msg: str):
 
 
 def _voice_jobs():
-    return [j for j in list(S.JOBS.values()) if j.kind in TRAIN_KINDS and not j.finished]
+    return [j for j in list(jobs.JOBS.values()) if j.kind in TRAIN_KINDS and not j.finished]
 
 
 def active() -> bool:
@@ -138,13 +138,14 @@ def _start(spec: dict):
     from .train import api as train_api
     k = spec["kind"]
     if k == "prepare":
-        return train_api.start_prepare(S, spec["project"])
+        return train_api.start_prepare(spec["project"])
     if k == "train":
-        return train_api.start_train(S, spec["project"], {})
+        return train_api.start_train(spec["project"], {})
     if k == "auto":
-        return train_api.start_auto(S, spec["project"], {})
+        return train_api.start_auto(spec["project"], {})
     if k == "oneshot":
-        return S.start_oneshot({"text": spec["text"], "prefer_train": spec.get("prefer_train"), "song_url": spec.get("song_url")})
+        from .autopilot import start_oneshot
+        return start_oneshot({"text": spec["text"], "prefer_train": spec.get("prefer_train"), "song_url": spec.get("song_url")})
     raise ModelError(f"Don't know how to resume '{k}'.")
 
 
@@ -442,15 +443,13 @@ def _in_window(now: datetime) -> bool:
 
 # ---------------------------------------------------------------- runner
 
-def start(server_module):
-    global S
-    S = server_module
+def start():
     _state()
     threading.Thread(target=_loop, daemon=True, name="worklist").start()
 
 
 def _gpu_idle() -> bool:
-    return S.GPU_QUEUE.empty() and not any(not j.finished for j in list(S.JOBS.values()))
+    return jobs.GPU_QUEUE.empty() and not any(not j.finished for j in list(jobs.JOBS.values()))
 
 
 def _loop():
@@ -458,7 +457,7 @@ def _loop():
     while True:
         try:
             st = _state()
-            if S.STATUS.get("models") == "ready" and (st.get("resume_after_restart") or (st["resume"] and not st["held"])):
+            if jobs.STATUS.get("models") == "ready" and (st.get("resume_after_restart") or (st["resume"] and not st["held"])):
                 # paused only to restart (or paused work left without a hold): carry on
                 with _LOCK:
                     st.pop("resume_after_restart", None)
@@ -471,7 +470,7 @@ def _loop():
             if want_awake != awake:
                 _keep_awake(want_awake)
                 awake = want_awake
-            if not st["held"] and st["armed"] and _gpu_idle() and not S.STATUS.get("gpu_problem"):
+            if not st["held"] and st["armed"] and _gpu_idle() and not jobs.STATUS.get("gpu_problem"):
                 now = datetime.now()
                 nxt = next((i for i in st["queue"] if i["state"] == "queued" and i.get("retry_after", 0) <= time.time()), None)
                 waiting = any(i["state"] == "queued" for i in st["queue"])
@@ -503,8 +502,8 @@ def _keep_awake(on: bool):
 
 
 def _run_item(item: dict):
-    job = S.Job("night")
-    S.JOBS[job.id] = job
+    job = jobs.Job("night")
+    jobs.JOBS[job.id] = job
     label = (f"Improving {item['target']}" if item["kind"] == "improve" else f"Training a voice of {item['target']}")
     job.resume_spec = {"kind": "night", "item": item["id"], "label": label}
     with _LOCK:
@@ -535,7 +534,7 @@ def _run_item(item: dict):
             if type(e).__name__ == "Cancelled":
                 res, state = {"note": "cancelled"}, "skipped"
             else:
-                res, state = {"note": S.friendly(e, "")}, "failed"
+                res, state = {"note": jobs.friendly(e, "")}, "failed"
         mins = round((time.time() - t0) / 60)
         with _LOCK:
             item.update(state=state, finished=time.strftime("%H:%M"), result=res, minutes=mins)
@@ -546,7 +545,7 @@ def _run_item(item: dict):
             _save()
         job.finish("done" if state == "done" else "error", message=res.get("note") or "Done.", result=res)
 
-    S.GPU_QUEUE.put((job, run))
+    jobs.GPU_QUEUE.put((job, run))
 
 
 def _control(job):
@@ -554,12 +553,12 @@ def _control(job):
     control = Control()
 
     def service():
-        while not S.GPU_QUEUE.empty():
+        while not jobs.GPU_QUEUE.empty():
             try:
-                other, fn = S.GPU_QUEUE.get_nowait()
+                other, fn = jobs.GPU_QUEUE.get_nowait()
             except Exception:   # noqa: BLE001
                 return
-            S.run_job(other, fn)
+            jobs.run_job(other, fn)
     control.service = service
     job.control = control
     return control
@@ -568,7 +567,7 @@ def _control(job):
 def _push(job):
     def push(stage, frac, message, **kw):
         if job.cancel:
-            raise S.Cancelled()
+            raise jobs.Cancelled()
         job.push(stage=stage, frac=round(frac, 3), message=message, **kw)
     return push
 
@@ -578,13 +577,13 @@ def _new(job, item) -> dict:
     from .core.speaker import SpeakerEmbedder
     known = _project_named(item["target"])   # reuse what's already prepared for this person
     known = known.name if known is not None and not known.train.get("exported") else None
-    name = autopilot.train_new_voice(S, job, item["target"], _control(job), _push(job), project=known,
+    name = autopilot.train_new_voice(job, item["target"], _control(job), _push(job), project=known,
                                      target_minutes=IMPROVE_SINGING_MIN)
     proj = _project_for_item({"kind": "improve", "target": name}, create=False)
     score = None
     if proj is not None:
         try:
-            score = voicecheck.check(name, proj, S.ENGINE.converter, SpeakerEmbedder()).score
+            score = voicecheck.check(name, proj, gpu.MODELS.converter, SpeakerEmbedder()).score
         except Exception:   # noqa: BLE001 - only for the report
             pass
     return {"voice": name, "after": score, "note": f"'{name}' added to your voices."}
@@ -632,12 +631,12 @@ def _improve(job, item) -> dict:
             def prog(f, label, **kw):
                 push("night", 0.05 + 0.35 * f, f"Preparing clips: {label}" + (f" ({kw['index']}/{kw['count']})" if kw.get("count") else ""))
             try:
-                P.prepare_sources(proj.name, todo, S.ENGINE.separator, SpeakerEmbedder(), progress=prog,
+                P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=prog,
                                   between=control.service, cancel=lambda: job.cancel or job.pausing,
-                                  friendly=lambda e: S.friendly(e, "preparing a source"))
+                                  friendly=lambda e: jobs.friendly(e, "preparing a source"))
             except P.Cancelled:
-                from .autopilot import Paused
-                raise Paused() if job.pausing else S.Cancelled()
+                from .core.jobs import Paused
+                raise Paused() if job.pausing else jobs.Cancelled()
         with P.lock(proj.name):
             proj = P.Project.load(proj.name)
             if proj.speakers and not proj.reference.get("confirmed"):
@@ -652,7 +651,7 @@ def _improve(job, item) -> dict:
             proj.save()
         (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
     # 2. train
-    conv = S.ENGINE.converter
+    conv = gpu.MODELS.converter
     proj = P.Project.load(proj.name)
     push("night", 0.4, f"Training on {proj.kept_seconds() / 60:.1f} min of {proj.person}")
 
@@ -663,7 +662,7 @@ def _improve(job, item) -> dict:
                      message=f"Training: epoch {ev.get('epoch', 0)} of {ev['epochs']}")
     st = Trainer(proj, conv.hubert, conv.rmvpe, device=str(conv.device), half=conv.half, converter=conv).run(control, progress=tprog)
     if st.get("state") == "paused":
-        from .autopilot import Paused
+        from .core.jobs import Paused
         raise Paused()
     # 3. compare on the same test, keep the better one
     push("night", 0.96, "Comparing the new voice with the old one")
@@ -688,8 +687,7 @@ def _improve(job, item) -> dict:
         proj = P.Project.load(proj.name)
         export_voice(proj, name=old.name, overwrite=True)
         remove_voice(cand)
-        if S.ENGINE._conv:
-            S.ENGINE._conv.voices.pop(old.name, None)
+        gpu.forget_voice(old.name)
         return {"voice": old.name, "before": before, "after": after, "replaced": True, "minutes_of_voice": kept_min,
                 "note": f"Retrained on {kept_min} min of {'singing' if proj.mode != 'speaking' else 'speech'}; the new one sounds more like them."}
     remove_voice(cand)

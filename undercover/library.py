@@ -1,6 +1,6 @@
 """Library tab API: everything UnderCover keeps on disk, managed without Explorer.
 
-server.py routes /api/library/... here and passes itself as `S` (it usually runs as __main__).
+server.py routes /api/library/... here.
 
 GET    /api/library/summary                 storage per category + free space
 GET    /api/library/covers | songs | voices | training
@@ -23,6 +23,8 @@ import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
+from .core import gpu, jobs
+from .core.files import file_url
 from .core.config import CONFIG, ROOT, path
 from .core.voices import ModelError, slug
 
@@ -60,19 +62,19 @@ def _retry(fn, tries: int = 30):
             time.sleep(0.1)
 
 
-def _busy(S) -> str | None:
+def _busy() -> str | None:
     """A job that may be using these files right now."""
-    for j in S.JOBS.values():
+    for j in jobs.JOBS.values():
         if not j.finished and j.kind in ("cover", "auto", "train", "train-auto", "train-prepare", "train-export", "install"):
             return j.kind
     return None
 
 
-def _guard(S):
-    kind = _busy(S)
+def _guard():
+    kind = _busy()
     if kind:
         raise ModelError("UnderCover is busy (a cover, training or install is running). Try again when it's done.")
-    for j in S.JOBS.values():   # a background separation would just be redone; stop it so its files aren't in use
+    for j in jobs.JOBS.values():   # a background separation would just be redone; stop it so its files aren't in use
         if j.kind == "presep" and not j.finished:
             j.cancel = True
 
@@ -197,7 +199,7 @@ def _zip_response(h, name: str, files: list[tuple[Path, str]]):
 
 # ---------------------------------------------------------------- inventories
 
-def summary(S) -> dict:
+def summary() -> dict:
     cache = path("cache_dir")
     temp = [cache / "converted", cache / "keyshift", cache / "previews", cache / "_work", path("logs_dir")]
     temp += [p for p in cache.iterdir() if p.is_dir() and p.name.startswith(TEMP_PREFIXES)]
@@ -214,12 +216,12 @@ def summary(S) -> dict:
     du = shutil.disk_usage(ROOT)
     return {"categories": cats, "total": sum(cats.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
             "ytdlp": _ytdlp_version(),
-            "counts": {"covers": len(covers(S)), "songs": len(_song_metas()),
+            "counts": {"covers": len(covers()), "songs": len(_song_metas()),
                        "voices": len(list((path("models_dir") / "voices").glob("*/meta.json"))),
                        "training": len(list((cache / "training").glob("*/project.json")))}}
 
 
-def covers(S) -> list[dict]:
+def covers() -> list[dict]:
     from .pipeline import history
     metas = _song_metas()
     out = []
@@ -234,8 +236,8 @@ def covers(S) -> list[dict]:
             "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": opts, "notes": h.get("notes", []),
             "file": o.name, "format": o.suffix.lstrip(".").upper(), "size": _size(o), "duration": m.get("duration"),
             "song_id": song_id if m else None, "song_source": m.get("source_url"),
-            "url": S.file_url(o), "original": S.file_url(h["song"]) if Path(h["song"]).exists() else None,
-            "vocal": S.file_url(h.get("converted_vocal")) if h.get("converted_vocal") and Path(h["converted_vocal"]).exists() else None,
+            "url": file_url(o), "original": file_url(h["song"]) if Path(h["song"]).exists() else None,
+            "vocal": file_url(h.get("converted_vocal")) if h.get("converted_vocal") and Path(h["converted_vocal"]).exists() else None,
         })
     return out
 
@@ -243,7 +245,7 @@ def covers(S) -> list[dict]:
 STEM_LABELS = {"vocals": "Vocals", "instrumental": "Instrumental", "other": "Instrumental", "noreverb": "Vocals (dry)", "reverb": "Reverb (removed)"}
 
 
-def _stems_for(song_id: str, S) -> list[dict]:
+def _stems_for(song_id: str) -> list[dict]:
     root = path("cache_dir") / "stems" / song_id
     out = []
     if not root.exists():
@@ -258,11 +260,11 @@ def _stems_for(song_id: str, S) -> list[dict]:
         elif any(p.startswith("dereverb_") for p in rel[:-1]):
             label = {"noreverb": "Vocals (dry)", "reverb": "Reverb (removed)"}.get(f.stem, label)
         quality = "fast" if rel[0].endswith("_fast") else "max" if rel[0].endswith("_max") else "high"
-        out.append({"label": label, "size": _size(f), "url": S.file_url(f), "quality": quality, "model": rel[0]})
+        out.append({"label": label, "size": _size(f), "url": file_url(f), "quality": quality, "model": rel[0]})
     return out
 
 
-def songs(S) -> list[dict]:
+def songs() -> list[dict]:
     from .pipeline import history
     hist = history()
     current = Path(CONFIG["separation"]["vocal_model"]).stem
@@ -270,7 +272,7 @@ def songs(S) -> list[dict]:
     for sid, m in _song_metas().items():
         f = path("uploads_dir") / m.get("file", "")
         used = [h for h in hist if Path(h["song"]).stem == sid]
-        stems = _stems_for(sid, S)
+        stems = _stems_for(sid)
         last = max([_mtime(Path(h["output"])) for h in used] + [_mtime(f)])
         key = None
         kf = path("cache_dir") / "keys" / f"{sid}.json"
@@ -286,13 +288,13 @@ def songs(S) -> list[dict]:
             "source": "YouTube" if m.get("youtube_id") or m.get("source_url") else "dropped file", "source_url": m.get("source_url"),
             "size": _size(f), "stems": stems, "stems_size": sum(s["size"] for s in stems), "stems_old_model": old_model,
             "covers": len(used), "cover_titles": [Path(h["output"]).stem for h in used][:5], "last_used": last,
-            "url": S.file_url(f) if f.exists() else None,
+            "url": file_url(f) if f.exists() else None,
         })
     out.sort(key=lambda x: -x["last_used"])
     return out
 
 
-def voices(S) -> list[dict]:
+def voices() -> list[dict]:
     from .autopilot import undertrained
     from .core.voices import list_voices
     from .pipeline import history
@@ -308,7 +310,7 @@ def voices(S) -> list[dict]:
         sample = None
         if ex.get("trained") and ex.get("project"):
             pv = path("cache_dir") / "training" / ex["project"] / "train" / "previews" / f"e{ex.get('epoch')}.wav"
-            sample = S.file_url(pv) if pv.exists() else None
+            sample = file_url(pv) if pv.exists() else None
         used = [h for h in hist if h["voice"] == v.name or h.get("options", {}).get("backing_voice") == v.name]
         out.append({
             "name": v.name, "version": v.version, "sr": v.sr, "index": bool(v.index), "installed": v.installed,
@@ -322,7 +324,7 @@ def voices(S) -> list[dict]:
     return out
 
 
-def training(S) -> list[dict]:
+def training() -> list[dict]:
     from .train.project import list_projects, projects_dir
     out = []
     for p in list_projects():
@@ -338,7 +340,7 @@ def training(S) -> list[dict]:
 
 # ---------------------------------------------------------------- clean up
 
-def _cleanup_groups(S) -> dict:
+def _cleanup_groups() -> dict:
     from .pipeline import history
     from .train.project import list_projects, projects_dir
     cache = path("cache_dir")
@@ -352,14 +354,14 @@ def _cleanup_groups(S) -> dict:
     g["keyshift"] = {"title": "Saved key changes", "detail": "Transposed backing tracks, re-made in a few seconds when needed",
                      "paths": [f for f in (cache / "keyshift").glob("*") if f.is_file()], "default": True}
     old = []
-    for s in songs(S):
+    for s in songs():
         if s["stems"] and now - s["last_used"] > 30 * DAY:
             old.append(cache / "stems" / s["id"])
     g["old_stems"] = {"title": "Stems of songs not used for 30 days",
                       "detail": f"{len(old)} songs: separated again if you make another cover of them (~1 min each)",
                       "paths": old, "default": True}
     unused = []
-    for s in songs(S):
+    for s in songs():
         if s["covers"] == 0 and now - s["last_used"] > 30 * DAY:
             unused += [p for p in path("uploads_dir").glob(f"{s['id']}.*")] + [cache / "stems" / s["id"]]
     songs_known = {p.stem for p in path("uploads_dir").glob("*.json")}
@@ -417,11 +419,11 @@ def _remove(p: Path):
 
 # ---------------------------------------------------------------- routing
 
-def handle(S, h, method: str, p: str) -> bool:
+def handle(h, method: str, p: str) -> bool:
     if not p.startswith("/api/library/"):
         return False
     try:
-        _route(S, h, method, p)
+        _route(h, method, p)
     except ModelError as e:
         h._error(str(e))
     except LookupError as e:
@@ -429,20 +431,20 @@ def handle(S, h, method: str, p: str) -> bool:
     return True
 
 
-def _route(S, h, method, p):
+def _route(h, method, p):
     q = parse_qs(urlparse(h.path).query)
     rest = p[len("/api/library/"):]
     if method == "GET" and rest in ("summary", "covers", "songs", "voices", "training"):
-        return h._json(globals()[rest](S))
+        return h._json(globals()[rest]())
     if rest == "tools/ytdlp-update" and method == "POST":
         return h._json(_update_ytdlp())
     if rest == "cleanup":
         if method == "GET":
-            return h._json({k: {kk: vv for kk, vv in v.items() if kk != "paths"} for k, v in _cleanup_groups(S).items()})
-        _guard(S)
+            return h._json({k: {kk: vv for kk, vv in v.items() if kk != "paths"} for k, v in _cleanup_groups().items()})
+        _guard()
         want = set((h._body().get("groups") or []))
         freed = 0
-        for k, v in _cleanup_groups(S).items():
+        for k, v in _cleanup_groups().items():
             if k in want:
                 freed += v["size"]
                 for path_ in v["paths"]:
@@ -450,7 +452,7 @@ def _route(S, h, method, p):
         return h._json({"freed": freed})
     if rest == "covers/zip" and method == "GET":
         ids = {int(x) for x in (q.get("ids") or [""])[0].split(",") if x.isdigit()}
-        files = [(path("output_dir") / c["file"], c["file"]) for c in covers(S) if c["id"] in ids]
+        files = [(path("output_dir") / c["file"], c["file"]) for c in covers() if c["id"] in ids]
         if not files:
             raise LookupError("Nothing selected.")
         return _zip_response(h, f"UnderCover covers ({len(files)}).zip", files)
@@ -461,13 +463,13 @@ def _route(S, h, method, p):
         if not item:
             raise LookupError("That cover isn't there any more.")
         if method == "DELETE":
-            _guard(S)
+            _guard()
             for f in (item["output"], item.get("converted_vocal"), item.get("converted_backing")):
                 if f:   # history hides entries whose file is gone (ids stay stable)
                     _retry(lambda f=f: Path(f).unlink(missing_ok=True))
             return h._json({"ok": True})
         if method == "POST" and m.group(2) == "rename":
-            _guard(S)
+            _guard()
             name = re.sub(r'[<>:"/\\|?*]+', "_", (h._body().get("name") or "")).strip().strip(".")
             if not name:
                 raise ModelError("Type a name.")
@@ -483,7 +485,7 @@ def _route(S, h, method, p):
             return h._json({"ok": True, "file": new.name})
     m = re.fullmatch(r"songs/([0-9a-f]{16})", rest)
     if m and method == "DELETE":
-        _guard(S)
+        _guard()
         remove_song(m.group(1), stems_only=(q.get("stems_only") or ["0"])[0] == "1")
         return h._json({"ok": True})
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
@@ -500,7 +502,7 @@ def _route(S, h, method, p):
             finally:
                 tmp.unlink(missing_ok=True)
         if m.group(2) == "rename" and method == "POST":
-            _guard(S)
+            _guard()
             new = slug(h._body().get("name") or "")
             if not new:
                 raise ModelError("Use letters or numbers for the name.")
@@ -513,7 +515,6 @@ def _route(S, h, method, p):
                         index=str(target / "model.index") if meta.get("index") else None)
             from .core import fsutil
             fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
-            if S.ENGINE and S.ENGINE._conv:
-                S.ENGINE._conv.voices.pop(v.name, None)
+            gpu.forget_voice(v.name)
             return h._json({"ok": True, "name": new})
     raise LookupError("Not found")

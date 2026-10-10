@@ -61,25 +61,22 @@ def _safe(s: str) -> str:
 
 
 class CoverEngine:
-    """Long-lived: keeps separator and converter models loaded across covers."""
-
-    def __init__(self):
-        self._sep = None
-        self._conv = None
+    """Makes covers with the shared, long-lived separator and converter models (core.gpu)."""
 
     @property
     def separator(self):
-        if self._sep is None:
-            from .core.separate import StemSeparator
-            self._sep = StemSeparator()
-        return self._sep
+        from .core.gpu import MODELS
+        return MODELS.separator
 
     @property
     def converter(self):
-        if self._conv is None:
-            from .core.engine.convert import Converter
-            self._conv = Converter()
-        return self._conv
+        from .core.gpu import MODELS
+        return MODELS.converter
+
+    @property
+    def _conv(self):
+        from .core.gpu import MODELS
+        return MODELS._conv
 
     def _fit(self, opts: "CoverOptions", voice, stems: dict, notes: list, bvoice) -> "CoverOptions":
         """Octave + key that put the melody as fully inside the voice's range as possible (autopilot.pick_fit).
@@ -328,6 +325,32 @@ def history() -> list[dict]:
     return [i for i in reversed(items) if Path(i["output"]).exists()]
 
 
+def history_items() -> list[dict]:
+    """The covers history as the page shows it (file URLs instead of paths)."""
+    from .core.files import file_url
+    out = []
+    for h in history():
+        out.append({
+            "id": h["id"], "title": h.get("title") or Path(h["song"]).stem, "voice": h["voice"],
+            "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": h.get("options", {}),
+            "output": file_url(h["output"]), "output_name": Path(h["output"]).name,
+            "original": file_url(h["song"]), "vocal": file_url(h.get("converted_vocal")),
+            "backing": file_url(h.get("converted_backing")),
+            "backing_voice": (h.get("options", {}).get("backing_voice")
+                              if h.get("converted_backing") and h.get("options", {}).get("backing_voice") != h["voice"] else None),
+            "notes": h.get("notes", []),
+        })
+    return out
+
+
+def cancel_presep(keep=None):
+    """Cancel background separations, except one producing exactly the stems `keep` = (song id, quality, dereverb,
+    karaoke) needs (that one is about to be used)."""
+    from .core.jobs import JOBS
+    for j in JOBS.values():
+        if j.kind == "presep" and not j.finished and getattr(j, "presep", None) != keep:
+            j.cancel = True
+
 def estimate(song: Path, opts: CoverOptions) -> dict:
     """Expected seconds per stage for this song, from measured speeds in logs/timings.jsonl
     (falls back to Phase 5 measurements). Separation is 0 when stems are cached."""
@@ -375,3 +398,6 @@ def estimate(song: Path, opts: CoverOptions) -> dict:
     mix = 1.0 + dur / 120.0 + (dur / 50.0 if key else 0.0)  # Rubber Band key shift ~50x realtime
     return {"separating": round(sep, 1), "converting": round(conv, 1), "mixing": round(mix, 1),
             "total": round(sep + conv + mix, 1), "stems_cached": cached, "song_seconds": round(dur, 1)}
+
+
+ENGINE = CoverEngine()   # the one the server uses (state lives in core.gpu)

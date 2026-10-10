@@ -9,14 +9,12 @@ import hashlib
 import json
 import mimetypes
 import os
-import queue
 import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
-import traceback
 import uuid
 import webbrowser
 from http import HTTPStatus
@@ -24,21 +22,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from .core import gpu, jobs
 from .core.config import CONFIG, ROOT, path
+from .core.files import AUDIO_EXT, file_url, roots as _roots
+from .core.jobs import GPU_QUEUE, JOBS, STATUS, Cancelled, Job, friendly, gpu_worker
 from . import library
+from .pipeline import ENGINE, cancel_presep as _cancel_presep, history_items
+from .songs import register_song, song_meta
 from .train import api as train_api
 
 UCFG = CONFIG["ui"]
-THIS = sys.modules[__name__]   # passed to the training API (this file usually runs as __main__)
 WEB = Path(__file__).parent / "web"
-AUDIO_EXT = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".webm", ".mp4"}
 for ext, mt in ((".flac", "audio/flac"), (".mp3", "audio/mpeg"), (".wav", "audio/wav"), (".m4a", "audio/mp4"),
                 (".opus", "audio/ogg"), (".js", "text/javascript"), (".css", "text/css")):
     mimetypes.add_type(mt, ext)
-
-
-class Cancelled(Exception):
-    pass
 
 
 def code_stamp() -> float:
@@ -51,120 +48,8 @@ def code_stamp() -> float:
 STARTUP_STAMP = code_stamp()
 
 
-# ---------------------------------------------------------------- friendly errors
-
-def friendly(e: BaseException, stage: str = "") -> str:
-    """Turn an exception into a message that says what to do. Full traceback goes to logs/errors.log."""
-    from .core.voices import ModelError
-    from .remix import RemixError
-    if isinstance(e, (ModelError, RemixError)):
-        return str(e)
-    if isinstance(e, Cancelled):
-        return "Cancelled."
-    name = e.__class__.__name__
-    text = str(e)
-    if name == "OutOfMemoryError" or "out of memory" in text.lower():
-        return ("The GPU ran out of memory. Close other apps using the GPU (games, other AI tools) and try again, "
-                "or pick 'Fast' separation quality.")
-    if name in ("NoBackendError", "LibsndfileError") or "could not be opened" in text.lower():
-        return "That audio file couldn't be read. Try converting it to mp3, wav or flac first."
-    if isinstance(e, FileNotFoundError):
-        return f"A file is missing: {Path(getattr(e, 'filename', '') or text).name}. If you deleted something from the output folder, run the cover again."
-    if isinstance(e, PermissionError):
-        return "Windows blocked writing a file. Close any app that has the output file open (e.g. a media player) and try again."
-    with open(path("logs_dir") / "errors.log", "a", encoding="utf-8") as f:
-        f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {stage}\n{traceback.format_exc()}")
-    where = f" while {stage}" if stage else ""
-    return f"Something went wrong{where} ({name}). Details were saved to logs/errors.log."
-
-
-# ---------------------------------------------------------------- jobs
-
-class Job:
-    def __init__(self, kind: str):
-        self.id = uuid.uuid4().hex[:12]
-        self.kind = kind
-        self.state = "queued"
-        self.events: list[dict] = []
-        self.cond = threading.Condition()
-        self.cancel = False
-        self.result = None
-        self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
-        self.resume_spec = None   # how to start this work again (worklist.resume)
-        self.control = None       # trainer Control, for jobs that train
-
-    def push(self, **ev):
-        with self.cond:
-            ev.setdefault("state", self.state)
-            self.events.append(ev)
-            self.cond.notify_all()
-
-    def finish(self, state: str, **ev):
-        with self.cond:
-            self.state = state
-        self.push(state=state, final=True, **ev)
-
-    @property
-    def finished(self):
-        return self.state in ("done", "error", "cancelled", "paused")
-
-
-JOBS: dict[str, Job] = {}
-GPU_QUEUE: "queue.Queue[tuple[Job, callable]]" = queue.Queue()
-STATUS = {"models": "starting", "gpu": None, "vram_gb": None, "started": time.time()}
 SERVER = None          # the running ThreadingHTTPServer
 RESTART = threading.Event()
-ENGINE = None  # CoverEngine, created on the worker thread
-
-
-def gpu_worker():
-    """Single thread that owns the GPU: warm-up first, then queued cover jobs."""
-    global ENGINE
-    from .pipeline import CoverEngine
-    ENGINE = CoverEngine()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            STATUS["gpu"] = torch.cuda.get_device_name(0)
-            STATUS["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 2**30)
-        # Which torch build this install expects ([gpu].backend; the installer writes it). Never fall back to the
-        # CPU silently when a GPU build was expected (a cover would take ages, training hours): say what's wrong instead.
-        want = CONFIG["gpu"].get("backend", "rocm")
-        have = "rocm" if "+rocm" in torch.__version__ else "cuda" if "+cu" in torch.__version__ else "cpu"
-        STATUS["backend"] = have
-        if have != want:
-            names = {"rocm": "AMD's ROCm build", "cuda": "the NVIDIA CUDA build", "cpu": "the CPU-only build"}
-            STATUS["gpu_problem"] = (f"UnderCover's PyTorch ({torch.__version__}) isn't {names[want]}, so the GPU can't be "
-                                     "used. Something reinstalled torch; run setup again to restore it.")
-        elif have == "cpu":
-            STATUS["cpu_mode"] = True   # no supported GPU: covers work but slowly; training is refused (trainer.py)
-        elif not torch.cuda.is_available():
-            STATUS["gpu_problem"] = ("The graphics card isn't available. Check Device Manager → Display adapters (it may be "
-                                     "disabled or showing an error after a crash), update the graphics driver or restart the "
-                                     "PC if needed, then restart UnderCover.")
-        if STATUS.get("gpu_problem"):
-            STATUS["models"] = "error: " + STATUS["gpu_problem"]   # the loop below keeps running, refusing jobs
-        elif UCFG["preload_models"]:
-            from .core import setup_models
-            mdir = path("models_dir")
-            STATUS["first_run"] = not all((mdir / f).exists() for f in setup_models.FILES)   # ~600 MB to fetch, once
-            STATUS["models"] = "loading"
-            from .core.separate import SEP
-            ENGINE.separator._get(SEP["vocal_model"])
-            ENGINE.converter
-        if not STATUS.get("gpu_problem"):
-            STATUS["models"] = "ready"
-    except Exception as e:  # warm-up failure shouldn't kill the server; the job will report it
-        STATUS["models"] = "error: " + friendly(e, "loading models")
-    while True:
-        job, fn = GPU_QUEUE.get()
-        try:
-            run_job(job, fn)
-        except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
-            try:
-                job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).")
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------- heartbeat (what was happening if the PC dies)
@@ -226,201 +111,6 @@ def heartbeat_loop():
         _hb_write({"event": "beat", **_hb_state()})
         busy = any(not j.finished for j in list(JOBS.values()))
         time.sleep(30 if busy else 300)
-
-
-def start_oneshot(body: dict) -> "Job":
-    """Queue a one-shot cover (from the page, or Resume after a pause)."""
-    from . import autopilot
-    from .core.voices import ModelError
-    text = (body.get("text") or "").strip()
-    autopilot.parse(text)   # friendly error now rather than inside the job
-    if any(j.kind == "auto" and not j.finished for j in JOBS.values()):
-        raise ModelError("A one-shot cover is already running. Wait for it, or cancel it.")
-    _cancel_presep()
-    job = Job("auto")
-    JOBS[job.id] = job
-    job.resume_spec = {"kind": "oneshot", "text": text, "prefer_train": bool(body.get("prefer_train")),
-                       "song_url": body.get("song_url") or None, "label": f"One-shot: {text}"}
-    job.push(stage="queued", frac=0, message="Waiting for the GPU", plan={"request": text})
-    GPU_QUEUE.put((job, lambda job: autopilot.run(THIS, job, text, bool(body.get("prefer_train")),
-                                                  body.get("song_url") or None)))
-    return job
-
-
-def run_job(job: "Job", fn):
-    """Run one queued GPU job (also called between training steps, so covers don't wait for training)."""
-    if STATUS.get("gpu_problem"):
-        job.finish("error", message=STATUS["gpu_problem"])
-        return
-    free = shutil.disk_usage(ROOT).free
-    if free < 3e9:   # separations, conversions and trainings write GBs; failing halfway leaves partial files
-        job.finish("error", message=f"Only {free / 1e9:.1f} GB free on drive {ROOT.anchor.rstrip(chr(92))}. "
-                                    "Free some space (Library → Clean up) and try again.")
-        return
-    if job.cancel:
-        job.finish("cancelled", message="Cancelled.")
-        return
-    from . import worklist
-    if job.kind in worklist.TRAIN_KINDS and job.kind != "auto" and (job.pausing or worklist.held()):
-        job.finish("paused", message="Voice work is paused (top of the page). Resume starts it.")
-        worklist.remember(job)
-        return
-    if job.kind == "auto" and worklist.held():
-        job.pausing = True   # a one-shot still makes its cover, but sets aside any voice training
-    with job.cond:
-        job.state = "running"
-    for attempt in (1, 2):
-        try:
-            fn(job)
-        except Cancelled:
-            job.finish("cancelled", message="Cancelled.")
-        except Exception as e:
-            if type(e).__name__ == "Paused":   # autopilot.Paused: Pause at the top of the page
-                if not job.finished:
-                    job.finish("paused", message="Paused. Resume (top of the page) continues where it stopped.")
-                return
-            # Out of GPU memory: free what UnderCover holds (cached voices, allocator cache) and try once more.
-            # Separations are cached, so the retry picks up where it was; mostly hits smaller cards or a game open.
-            if attempt == 1 and _is_oom(e) and job.kind in ("cover", "preview", "auto"):
-                _free_gpu()
-                job.push(stage=(job.events[-1].get("stage") if job.events else "") or "converting",
-                         message="The GPU ran out of memory; freed some and trying again")
-                continue
-            job.finish("error", message=friendly(e, job.events[-1].get("stage", "") if job.events else ""))
-        if job.state == "paused":
-            worklist.remember(job)
-        return
-
-
-def _is_oom(e: Exception) -> bool:
-    return type(e).__name__ == "OutOfMemoryError" or "out of memory" in str(e).lower()
-
-
-def _free_gpu():
-    import gc
-    try:
-        if ENGINE and ENGINE._conv:
-            ENGINE._conv.voices.clear()   # loaded voices (+ their indexes) are re-loaded on demand
-    except Exception:
-        pass
-    gc.collect()
-    torch = sys.modules.get("torch")
-    if torch is not None:
-        try:
-            torch.cuda.empty_cache()
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------- songs (uploads)
-
-def _ffprobe(p: Path) -> dict:
-    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
-                          "format=duration:stream=sample_rate,channels", "-of", "json", str(p)],
-                         capture_output=True, text=True)
-    if out.returncode != 0:
-        raise ValueError("not audio")
-    d = json.loads(out.stdout)
-    st = (d.get("streams") or [{}])[0]
-    if not st:
-        raise ValueError("no audio stream")
-    return {"duration": float(d["format"]["duration"]), "sample_rate": int(st.get("sample_rate", 0)),
-            "channels": int(st.get("channels", 0))}
-
-
-def _peaks(p: Path, bins: int = 1200) -> list[float]:
-    """Waveform overview: peak level per bin, decoded via ffmpeg (any format)."""
-    import numpy as np
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
-                         capture_output=True).stdout
-    a = np.abs(np.frombuffer(raw, dtype=np.float32))
-    if not len(a):
-        return []
-    a = a[: len(a) // bins * bins].reshape(bins, -1).max(axis=1) if len(a) >= bins else a
-    top = float(a.max()) or 1.0
-    return [round(float(x) / top, 3) for x in a]
-
-
-def _cancel_presep(keep=None):
-    """Cancel background separations, except one producing exactly the stems `keep` = (song id, quality, dereverb,
-    karaoke) needs (that one is about to be used)."""
-    for j in JOBS.values():
-        if j.kind == "presep" and not j.finished and getattr(j, "presep", None) != keep:
-            j.cancel = True
-
-
-def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: dict | None = None) -> dict:
-    """Move an audio file into uploads/ (named by content hash, like the stem cache) and write its metadata.
-    Shared by dropped files and songs fetched from YouTube. Raises ValueError if it isn't readable audio."""
-    from .remix import lufs
-    up = path("uploads_dir")
-    if sha256_hex is None:
-        h = hashlib.sha256()
-        with open(tmp, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        sha256_hex = h.hexdigest()
-    song_id = sha256_hex[:16]
-    dest = up / f"{song_id}{Path(name).suffix.lower() or Path(tmp).suffix.lower()}"
-    if dest.exists():
-        Path(tmp).unlink(missing_ok=True)
-    else:
-        Path(tmp).replace(dest)
-    try:
-        info = _ffprobe(dest)
-    except (ValueError, KeyError, json.JSONDecodeError):
-        dest.unlink(missing_ok=True)
-        raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
-    meta = {"id": song_id, "name": name, "title": Path(name).stem, "file": dest.name, **info,
-            "lufs": round(lufs(dest), 1), "peaks": _peaks(dest), "url": file_url(dest), **(extra or {})}
-    (up / f"{song_id}.json").write_text(json.dumps(meta), encoding="utf-8")
-    return meta
-
-
-def song_meta(song_id: str) -> dict:
-    meta = path("uploads_dir") / f"{song_id}.json"
-    if not re.fullmatch(r"[0-9a-f]{16}", song_id) or not meta.exists():
-        raise LookupError("That song isn't loaded anymore. Drop it in again.")
-    return json.loads(meta.read_text(encoding="utf-8"))
-
-
-def file_url(p: Path | str | None) -> str | None:
-    """URL for a file inside an allowed folder, else None."""
-    if not p:
-        return None
-    p = Path(p).resolve()
-    for root_name, root in _roots().items():
-        try:
-            rel = p.relative_to(root)
-        except ValueError:
-            continue
-        return f"/files/{root_name}/{quote(rel.as_posix())}"
-    return None
-
-
-def _roots() -> dict[str, Path]:
-    return {"output": path("output_dir").resolve(), "uploads": path("uploads_dir").resolve(),
-            "converted": (path("cache_dir") / "converted").resolve(), "test": (ROOT / "test").resolve(),
-            "previews": (path("cache_dir") / "previews").resolve(),
-            "training": (path("cache_dir") / "training").resolve(),
-            "stems": (path("cache_dir") / "stems").resolve()}
-
-
-def history_items() -> list[dict]:
-    from .pipeline import history
-    out = []
-    for h in history():
-        out.append({
-            "id": h["id"], "title": h.get("title") or Path(h["song"]).stem, "voice": h["voice"],
-            "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": h.get("options", {}),
-            "output": file_url(h["output"]), "output_name": Path(h["output"]).name,
-            "original": file_url(h["song"]), "vocal": file_url(h.get("converted_vocal")),
-            "backing": file_url(h.get("converted_backing")),
-            "backing_voice": (h.get("options", {}).get("backing_voice")
-                              if h.get("converted_backing") and h.get("options", {}).get("backing_voice") != h["voice"] else None),
-            "notes": h.get("notes", []),
-        })
-    return out
 
 
 def voices_json() -> list[dict]:
@@ -493,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/work/lookup":
                 from . import worklist
                 return self._json(worklist.lookup((parse_qs(urlparse(self.path).query).get("q") or [""])[0]))
-            if train_api.handle(THIS, self, "GET", p) or library.handle(THIS, self, "GET", p):
+            if train_api.handle(self, "GET", p) or library.handle(self, "GET", p):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -565,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p.startswith("/api/work/"):
                 return self._work(p[len("/api/work/"):], self._body())
-            if train_api.handle(THIS, self, "POST", p) or library.handle(THIS, self, "POST", p):
+            if train_api.handle(self, "POST", p) or library.handle(self, "POST", p):
                 return
             if p == "/api/upload":
                 return self._upload()
@@ -605,7 +295,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._guard_host() or not self._guard_origin():
             return
-        if train_api.handle(THIS, self, "DELETE", urlparse(self.path).path) or library.handle(THIS, self, "DELETE", urlparse(self.path).path):
+        if train_api.handle(self, "DELETE", urlparse(self.path).path) or library.handle(self, "DELETE", urlparse(self.path).path):
             return
         m = re.fullmatch(r"/api/voices/([a-z0-9-]+)", urlparse(self.path).path)
         if not m:
@@ -613,8 +303,7 @@ class Handler(BaseHTTPRequestHandler):
         from .core.voices import ModelError, remove_voice
         try:
             remove_voice(m.group(1))
-            if ENGINE and ENGINE._conv:
-                ENGINE._conv.voices.pop(m.group(1), None)
+            gpu.forget_voice(m.group(1))
             self._json({"ok": True})
         except ModelError as e:
             self._error(str(e))
@@ -850,6 +539,7 @@ class Handler(BaseHTTPRequestHandler):
     def _start_auto(self, body: dict):
         from .core.voices import ModelError
         try:
+            from .autopilot import start_oneshot
             job = start_oneshot(body)
         except ModelError as e:
             return self._error(str(e), 409 if "already running" in str(e) else 400)
@@ -1100,11 +790,12 @@ def main():
         return
     srv.daemon_threads = True
     SERVER = srv
+    jobs.PORT = srv.server_address[1]
     _install_console_handler()
     _clean_old_previews()
     threading.Thread(target=gpu_worker, daemon=True, name="gpu").start()
     from . import worklist
-    worklist.start(THIS)
+    worklist.start()
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
     url = f"http://{host}:{port}/"
     print(f"UnderCover is running at {url}\nKeep this window open while you use it. Press Ctrl+C to stop.")
