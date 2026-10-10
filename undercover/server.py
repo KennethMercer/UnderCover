@@ -487,6 +487,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/work":
                 from . import worklist
                 return self._json(worklist.status())
+            if p == "/api/work/candidates":
+                from . import worklist
+                return self._json(worklist.candidates())
+            if p == "/api/work/lookup":
+                from . import worklist
+                return self._json(worklist.lookup((parse_qs(urlparse(self.path).query).get("q") or [""])[0]))
             if train_api.handle(THIS, self, "GET", p) or library.handle(THIS, self, "GET", p):
                 return
             if p in ("/", "/index.html"):

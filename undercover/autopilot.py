@@ -586,7 +586,8 @@ class Paused(Exception):
 NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably")   # source notes that mean someone else
 
 
-def train_new_voice(S, job, person: str, control, push, project: str | None = None) -> str:
+def train_new_voice(S, job, person: str, control, push, project: str | None = None,
+                    target_minutes: float | None = None) -> str:
     """Find clips -> prepare (topping up sources until the target) -> auto-confirm -> train -> add. Returns voice name.
     project: continue that Train-tab project (its ticked sources, choices and reference are kept)."""
     from .train import api as train_api
@@ -594,7 +595,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
     from .train import source as srcmod
     from .train.speaker import SpeakerEmbedder
     from .train.trainer import Trainer, export_voice
-    TC = CONFIG["training"]
+    TC = {**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
     key = slug(person)
     proj = P.Project.load(project) if project else project_for(person)
     busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished

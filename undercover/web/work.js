@@ -131,17 +131,70 @@ function dragSort() {
     };
   });
 }
-$("#q-add").onclick = async () => {
-  const target = $("#q-target").value.trim();
-  try { W.last = await api("/api/work/add", { json: { kind: $("#q-kind").value, target } }); $("#q-target").value = ""; renderQueue(); }
-  catch (e) { showError(e.message, "Couldn't add that"); }
-};
-$("#q-target").addEventListener("keydown", e => { if (e.key === "Enter") $("#q-add").click(); });
-$("#q-kind").onchange = () => { $("#q-target").placeholder = $("#q-kind").value === "improve" ? "A voice to improve" : "A person's name"; fillVoices(); };
-function fillVoices() {
-  const dl = $("#q-voices");
-  dl.innerHTML = $("#q-kind").value === "improve" ? (S.voices || []).map(v => `<option value="${esc(v.name)}">`).join("") : "";
+// ------------------------------------------------------------ the picker: improve my voices / new voices
+const PICK = { sel: new Set(), cands: [], timer: null, added: new Set() };
+$("#q-mode").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  $$("#q-mode button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  $("#q-improve").hidden = b.dataset.v !== "improve";
+  $("#q-new").hidden = b.dataset.v !== "new";
+  if (b.dataset.v === "new") $("#q-name").focus();
+});
+async function loadCandidates() {
+  try { PICK.cands = await api("/api/work/candidates"); } catch (e) { return; }
+  const can = PICK.cands.filter(c => c.can), off = PICK.cands.filter(c => !c.can);
+  [...PICK.sel].forEach(k => { if (!can.some(c => c.voice === k && !c.queued)) PICK.sel.delete(k); });
+  $("#q-cands").innerHTML = can.length ? can.map(c => {
+    const facts = [c.minutes ? `${Math.round(c.minutes)} min of ${c.singing ? "singing" : c.singing === false ? "speech" : "voice"}` : c.trained ? "" : "downloaded",
+                   c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : "", c.estimate ? `≈ ${fmtMin(c.estimate)}` : ""].filter(Boolean);
+    return `<label class="vcard ${c.queued ? "queued" : ""}">
+      <input type="checkbox" data-v="${esc(c.voice)}" ${c.queued ? "disabled" : PICK.sel.has(c.voice) ? "checked" : ""}>
+      <span><b>${esc(c.voice)}</b>${c.person && c.person.toLowerCase() !== c.voice.replace(/-uc$/, "").replace(/-/g, " ") ? ` <span class="meta">${esc(c.person)}</span>` : ""}
+        <span class="qchips">${facts.map(f => `<span class="qchip">${esc(f)}</span>`).join("")}${c.queued ? `<span class="qchip ok">in the queue</span>` : ""}</span>
+        <span class="meta">${esc(c.note)}</span></span></label>`;
+  }).join("") : `<p class="meta">No voices yet. Use "New voices" to train one.</p>`;
+  $$("#q-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? PICK.sel.add(cb.dataset.v) : PICK.sel.delete(cb.dataset.v); pickSummary(); });
+  $("#q-other").hidden = !off.length;
+  $("#q-cands-off").textContent = off.map(c => c.voice).join(", ") + ". These were downloaded and UnderCover doesn't know whose voices they are. To train your own, add the person under New voices.";
+  pickSummary();
 }
+function pickSummary() {
+  const chosen = PICK.cands.filter(c => PICK.sel.has(c.voice));
+  const mins = chosen.reduce((a, c) => a + (c.estimate || 0), 0);
+  $("#q-sel-sum").textContent = chosen.length ? `${chosen.length} selected · ≈ ${fmtMin(mins)}` : "Tick the voices to improve.";
+  $("#q-add-sel").disabled = !chosen.length;
+  $("#q-add-sel").textContent = chosen.length ? `Add ${chosen.length} to the queue` : "Add to the queue";
+}
+$("#q-add-sel").onclick = async () => {
+  const chosen = PICK.cands.filter(c => PICK.sel.has(c.voice));
+  for (const c of chosen) {
+    try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); }
+    catch (e) { showError(e.message, `Couldn't add ${c.voice}`); }
+  }
+  PICK.sel.clear(); renderQueue(); loadCandidates();
+};
+$("#q-name").addEventListener("input", () => {
+  clearTimeout(PICK.timer);
+  const q = $("#q-name").value.trim();
+  if (q.length < 2) { $("#q-sugg").innerHTML = ""; return; }
+  $("#q-sugg").innerHTML = `<p class="meta">Looking up “${esc(q)}”…</p>`;
+  PICK.timer = setTimeout(async () => {
+    let list = [];
+    try { list = await api(`/api/work/lookup?q=${encodeURIComponent(q)}`); } catch (e) {}
+    if ($("#q-name").value.trim() !== q) return;   // typed on meanwhile
+    const queued = new Set((W.last?.queue || []).filter(i => i.kind === "new" && ["queued", "paused", "running"].includes(i.state)).map(i => i.target.toLowerCase()));
+    $("#q-sugg").innerHTML = list.map(x => {
+      const inq = queued.has(x.name.toLowerCase());
+      return `<div class="srow"><div><b>${esc(x.name)}</b> <span class="qchip">${x.kind === "artist" ? "artist" : "person"}</span><p class="meta">${esc(x.detail)}</p></div>
+        <button class="btn" type="button" data-name="${esc(x.name)}" ${inq ? "disabled" : ""}>${inq ? "In the queue" : "Add"}</button></div>`;
+    }).join("") || `<p class="meta">Nothing found.</p>`;
+    $$("#q-sugg [data-name]").forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { W.last = await api("/api/work/add", { json: { kind: "new", target: b.dataset.name } }); b.textContent = "In the queue"; renderQueue(); }
+      catch (e) { b.disabled = false; showError(e.message, "Couldn't add that"); }
+    });
+  }, 450);
+});
 $("#q-start").onclick = async () => { W.last = await api("/api/work/start", { json: {} }); renderQueue(); pollStatusSoon(); };
 $("#q-at").onclick = async () => { W.last = await api("/api/work/start", { json: { at: $("#q-at-time").value } }); renderQueue(); pollStatusSoon(); };
 $("#q-at-time").onchange = () => renderQueue();
@@ -153,4 +206,4 @@ function pollStatusSoon() { setTimeout(() => api("/api/status").then(s => render
 
 // refresh the queue while the Train tab is visible
 setInterval(() => { W.open = !$("#view-train").hidden; if (W.open) loadQueue(); }, 5000);
-document.addEventListener("click", e => { if (e.target.closest("[data-tab=train]")) setTimeout(() => { fillVoices(); loadQueue(); }, 50); });
+document.addEventListener("click", e => { if (e.target.closest("[data-tab=train]")) setTimeout(() => { loadQueue(); loadCandidates(); }, 50); });

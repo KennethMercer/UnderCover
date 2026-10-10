@@ -622,7 +622,8 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     mins = st.get("train_minutes", 0)
     v = install([pth, idx], name, source=f"trained in UnderCover: {proj.person}, {mins:.1f} min, epoch {epoch}",
                 overwrite=overwrite)
-    v.extra.update(trained=True, project=proj.name, epoch=epoch, train_minutes=mins,
+    likeness = next((s.get("identity") for s in st.get("saves", []) if s["epoch"] == epoch), None)
+    v.extra.update(trained=True, project=proj.name, epoch=epoch, train_minutes=mins, likeness=likeness,
                    f0_median=f0_median(data), f0_range=f0_range(data), from_speech=proj.from_speech())
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     idx.unlink(missing_ok=True)
