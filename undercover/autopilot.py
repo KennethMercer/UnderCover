@@ -447,7 +447,7 @@ def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: in
     lo, hi = lo * 2 ** (-2 / 12), hi * 2 ** ((3 + (7 if from_speech else 0)) / 12)
     f = song_f0[song_f0 > 0]
     if len(f) < 50:
-        return {"octave": 0, "key": 0, "outside": 0.0, "below": 0.0, "above": 0.0}
+        return {"octave": 0, "key": 0, "outside": 0.0, "below": 0.0, "above": 0.0, "cost": 0.0}
     best = None
     for octave in (0, -1, 1, -2, 2):
         for key in sorted(range(-max_key, max_key + 1), key=abs):   # nearest the original first wins ties
@@ -456,7 +456,7 @@ def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: in
             cost = LOW_WEIGHT * below + above + KEY_COST * abs(key) + 0.001 * abs(octave)
             if best is None or cost < best[0] - 1e-9:
                 best = (cost, {"octave": octave, "key": key, "outside": round(below + above, 3),
-                               "below": round(below, 3), "above": round(above, 3)})
+                               "below": round(below, 3), "above": round(above, 3), "cost": round(cost, 4)})
     return best[1]
 
 
@@ -481,10 +481,50 @@ def vocal_stats(vocals: Path, rmvpe) -> tuple[float | None, float]:
     voiced = f0[f0 > 0]
     share = float(len(voiced)) / max(1, len(f0))
     _LAST_F0[str(vocals)] = voiced   # the melody's pitch track, reused to pick the octave
+    _LAST_F0[str(vocals) + "#all"] = f0   # frame-aligned, for vocal_cleanliness
     return (round(float(np.median(voiced)), 1) if len(voiced) > 50 else None), round(share, 3)
 
 
 _LAST_F0: dict = {}
+
+
+def _drop_song(sid: str):
+    """Remove a song this one-shot downloaded only to compare versions."""
+    try:
+        from .library import remove_song
+        remove_song(sid)
+    except Exception:
+        pass
+
+
+def vocal_cleanliness(vocals: Path) -> dict:
+    """How clean a separated lead vocal is: `bleed` = level (dB, vs the singing) of the stem where nobody sings
+    (guitar or piano leaking through), `hiss` = spectral flatness of the sung parts (train.project.noisiness)."""
+    from .convert import load_16k
+    from .train.project import noisiness
+    x = load_16k(vocals)
+    f0 = _LAST_F0.get(str(vocals) + "#all")
+    fr = x[: len(x) // 160 * 160].reshape(-1, 160)
+    e = 10 * np.log10((fr ** 2).mean(1) + 1e-12)
+    m = min(len(e), len(f0)) if f0 is not None else 0
+    if m < 100:
+        return {"bleed": -99.0, "hiss": noisiness(x, 16000)}
+    e, sung = e[:m], f0[:m] > 0
+    quiet = e[~sung]
+    bleed = float(np.percentile(quiet, 75) - np.median(e[sung])) if len(quiet) > 50 and sung.any() else -99.0
+    return {"bleed": round(bleed, 1), "hiss": noisiness(x, 16000)}
+
+
+def version_penalty(q: dict | None) -> float:
+    """Extra cost for a messy separation, on the same scale as pick_fit's cost (share of notes out of range)."""
+    if not q:
+        return 0.0
+    return BLEED_W * max(0.0, q["bleed"] - BLEED_OK) + HISS_W * max(0.0, q["hiss"] - HISS_OK)
+
+
+BLEED_OK, BLEED_W = -40.0, 0.01   # each dB of bleed above -40 dB costs like 1% of the melody out of range
+HISS_OK, HISS_W = 0.22, 1.0       # each 0.01 of flatness above a clean voice's ~0.2 costs like 1%
+VERSIONS = 3                      # style versions ("acoustic") compared before picking one
 
 
 def backing_monophony(backing: Path, rmvpe, seconds: int = 120) -> tuple[float, float]:
@@ -684,29 +724,48 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
     #    actually has singing in it)
     what = f"{style} version of “{song_q}”" if style else f"“{song_q}”"
     push("song", 0.0, f"Finding the {what} on YouTube" if style else f"Finding {what} on YouTube")
-    cands = [songs.from_link(song_url)] if song_url else songs.search(song_q, style=style, words=style_words(style))[:3]
-    skipped = []
-    for i, pick in enumerate(cands):
-        plan["song"] = {"title": pick.title, "channel": pick.channel, "url": pick.url, "note": pick.note, "style": style}
-        push("song", 0.1, f"Downloading “{pick.title}”")
-        meta = songs.download(pick, S.register_song, progress=lambda f: push("song", 0.1 + 0.4 * f, f"Downloading “{pick.title}”"))
-        plan["song"]["id"] = meta["id"]
+    cands = [songs.from_link(song_url)] if song_url else songs.search(song_q, style=style, words=style_words(style))[:VERSIONS + 2]
+    # A version ("acoustic") is someone's cover, and they differ a lot: compare up to VERSIONS that have singing
+    # and pick the one that suits the voice once it's known (melody range, clean separation). The album track
+    # (no style) or a pasted link: the first one with singing.
+    compare = bool(style) and not song_url
+    per = VERSIONS if compare else 1
+    skipped, versions = [], []
+    for pick in cands:
+        n = len(versions)
+        label = f"version {n + 1} of up to {VERSIONS}: " if compare else ""
+        push("song", 0.02 + 0.9 * n / per, f"Downloading {label}“{pick.title}”")
+        had = songs.known_song(pick.id)
+        meta = songs.download(pick, S.register_song, progress=lambda f, pick=pick, label=label, n=n: push(
+            "song", 0.02 + 0.9 * (n + 0.4 * f) / per, f"Downloading {label}“{pick.title}”"))
         song = Path(S.path("uploads_dir")) / meta["file"]
         # separate now (cached for the cover): catches a bad download early and gives the melody's pitch
-        push("song", 0.55, "Separating the vocals")
         stems = separate(song, dereverb=True, karaoke=True, separator=S.ENGINE.separator, quality="high",
-                         progress=lambda f, name: push("song", 0.55 + 0.4 * f, "Separating the vocals"))
+                         progress=lambda f, name, pick=pick, label=label, n=n: push(
+                             "song", 0.02 + 0.9 * (n + 0.4 + 0.6 * f) / per, f"Separating the vocals of {label}“{pick.title}”"))
         song_hz, sung = vocal_stats(stems["vocals"], S.ENGINE.converter.rmvpe)
-        plan["song"]["sung"] = sung
-        if sung >= MIN_SUNG or i == len(cands) - 1:
+        if sung < MIN_SUNG:
+            skipped.append(pick.title)
+            if not had and compare:
+                _drop_song(meta["id"])
+            push("song", 0.1, f"“{pick.title}” has hardly any singing (instrumental?), trying the next one")
+            continue
+        versions.append({"pick": pick, "meta": meta, "song": song, "stems": stems, "hz": song_hz, "sung": sung,
+                         "new": not had, "clean": vocal_cleanliness(stems["vocals"]) if compare else None})
+        if len(versions) >= per:
             break
-        skipped.append(pick.title)
-        push("song", 0.1, f"“{pick.title}” has hardly any singing (instrumental?), trying the next one")
-    if plan["song"]["sung"] < MIN_SUNG:
+    if not versions:
         raise ModelError(f"Couldn't find a version of “{song_q}” with singing in it"
                          + (f" (tried {len(cands)})" if len(cands) > 1 else "") + ". Paste a link to one you like.")
-    if skipped:
-        plan["song"]["skipped"] = skipped
+
+    def use(x):
+        pk = x["pick"]
+        plan["song"] = {"title": pk.title, "channel": pk.channel, "url": pk.url, "note": pk.note, "style": style,
+                        "id": x["meta"]["id"], "sung": x["sung"]}
+        if skipped:
+            plan["song"]["skipped"] = skipped
+        return x["meta"], x["song"], x["stems"], x["hz"]
+    meta, song, stems, song_hz = use(versions[0])
 
     # 2. voice
     if early:
@@ -726,6 +785,20 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
     # 3. settings + cover
     vhz, speech = voice_f0(v)
     rng = (v.extra or {}).get("f0_range")
+    if len(versions) > 1:   # pick the version that suits this voice: fits its range, separates cleanly
+        r = rng or plan.get("person_range")
+        sp = speech if rng else plan.get("person_speech", True)
+        for x in versions:
+            f0 = _LAST_F0.get(str(x["stems"]["vocals"]))
+            x["fit"] = pick_fit(r, sp, f0) if r and f0 is not None else None
+            x["cost"] = (x["fit"]["cost"] if x["fit"] else 0.0) + version_penalty(x["clean"])
+        best = min(versions, key=lambda x: x["cost"])
+        meta, song, stems, song_hz = use(best)
+        plan["song"]["compared"] = [{"title": x["pick"].title, "url": x["pick"].url, "chosen": x is best,
+                                     "outside": x["fit"]["outside"] if x["fit"] else None, **x["clean"]} for x in versions]
+        for x in versions:
+            if x is not best and x["new"]:
+                _drop_song(x["meta"]["id"])   # downloaded only for the comparison
     song_f0 = _LAST_F0.get(str(stems["vocals"]))
     if not rng and plan.get("person_range"):   # community voice: the real person's range, from their kept clips
         rng, speech = plan["person_range"], plan.get("person_speech", True)

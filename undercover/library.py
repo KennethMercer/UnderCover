@@ -110,6 +110,23 @@ def _quality() -> dict:
         return {}
 
 
+def remove_song(sid: str, stems_only: bool = False):
+    """Delete a song's stems (and unless stems_only, the song file, its key and its YouTube link)."""
+    _retry(lambda: shutil.rmtree(path("cache_dir") / "stems" / sid) if (path("cache_dir") / "stems" / sid).exists() else None)
+    if stems_only:
+        return
+    for f in path("uploads_dir").glob(f"{sid}.*"):
+        _retry(lambda f=f: f.unlink(missing_ok=True))
+    (path("cache_dir") / "keys" / f"{sid}.json").unlink(missing_ok=True)
+    yt = path("cache_dir") / "youtube_songs.json"
+    if yt.exists():
+        try:
+            d = {k: v for k, v in json.loads(yt.read_text(encoding="utf-8")).items() if v != sid}
+            yt.write_text(json.dumps(d, indent=1), encoding="utf-8")
+        except ValueError:
+            pass
+
+
 def _zip_response(h, name: str, files: list[tuple[Path, str]]):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:   # audio/models don't compress
@@ -405,19 +422,7 @@ def _route(S, h, method, p):
     m = re.fullmatch(r"songs/([0-9a-f]{16})", rest)
     if m and method == "DELETE":
         _guard(S)
-        sid = m.group(1)
-        _retry(lambda: shutil.rmtree(path("cache_dir") / "stems" / sid) if (path("cache_dir") / "stems" / sid).exists() else None)
-        if not (q.get("stems_only") or ["0"])[0] == "1":
-            for f in path("uploads_dir").glob(f"{sid}.*"):
-                _retry(lambda f=f: f.unlink(missing_ok=True))
-            (path("cache_dir") / "keys" / f"{sid}.json").unlink(missing_ok=True)
-            yt = path("cache_dir") / "youtube_songs.json"
-            if yt.exists():
-                try:
-                    d = {k: v for k, v in json.loads(yt.read_text(encoding="utf-8")).items() if v != sid}
-                    yt.write_text(json.dumps(d, indent=1), encoding="utf-8")
-                except ValueError:
-                    pass
+        remove_song(m.group(1), stems_only=(q.get("stems_only") or ["0"])[0] == "1")
         return h._json({"ok": True})
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
     if m:
