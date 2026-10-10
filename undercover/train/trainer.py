@@ -106,6 +106,20 @@ def _features(hubert, rmvpe, wav16: np.ndarray, device, half: bool):
     return phone.half().cpu(), feats.half().cpu(), f0.astype(np.float32)
 
 
+def _phone(x: dict) -> torch.Tensor:
+    """Training-rate (100 frames/s) content features of a prepared item, from either data.pt format."""
+    if "phone50" in x:
+        return x["phone50"].repeat_interleave(2, 0)[: len(x["pitch"])]
+    return x["phone"]
+
+
+def index_feats(data: dict) -> torch.Tensor:
+    """The vectors for the voice's .index: the training pieces' 50 frames/s features."""
+    if "feats" in data:
+        return data["feats"]
+    return torch.cat([i["phone50"] for i in data["items"]])
+
+
 def choose_holdout(proj: Project) -> list[str]:
     kept = [p for p in proj.phrases if p.kept]
     good = sorted([p for p in kept if 3.0 <= p.dur <= 8.0], key=lambda p: -p.score)
@@ -153,7 +167,7 @@ def prepare(proj: Project, hubert, rmvpe, sr: int, device, half: bool, progress=
         return out
     tdir.mkdir(parents=True, exist_ok=True)
     c = SR_CFG[sr]
-    items, hold, all_feats = [], [], []
+    items, hold = [], []
     train_ids = [k for k in kept if k not in holdout]
     with timed("train.prepare", phrases=len(kept), sr=sr):
         for n, pid in enumerate(holdout + train_ids):
@@ -178,19 +192,20 @@ def prepare(proj: Project, hubert, rmvpe, sr: int, device, half: bool, progress=
                 n_frames = min(phone.shape[0], len(f0), len(piece) // c["hop"])
                 if n_frames < c["segment"] // c["hop"] + 2:
                     continue
+                # HuBERT features once, at their own 50 frames/s: the 100 frames/s training copy is just each frame
+                # twice (expanded when loaded) and the index vectors are these same frames (data.pt ~halves)
                 item = {"wav": torch.from_numpy(piece[:n_frames * c["hop"]]).half(),
-                        "phone": phone[:n_frames], "pitch": torch.from_numpy(coarse_f0(f0[:n_frames])),
+                        "phone50": feats50, "pitch": torch.from_numpy(coarse_f0(f0[:n_frames])),
                         "pitchf": torch.from_numpy(f0[:n_frames])}
                 if pid in holdout:
                     item["id"] = pid
                     hold.append(item)
                 else:
                     items.append(item)
-                    all_feats.append(feats50)
             report((n + 1) / len(kept))
     if not items:
         raise ModelError("None of the kept samples could be prepared for training.")
-    fsutil.torch_save({"items": items, "holdout": hold, "feats": torch.cat(all_feats), "sr": sr}, out)
+    fsutil.torch_save({"items": items, "holdout": hold, "sr": sr, "format": 2}, out)
     proj.train["data_key"] = key
     proj.train["holdout"] = holdout
     proj.train["pieces"] = len(items)
@@ -323,8 +338,9 @@ class Trainer:
         dev = self.device
         def to_dev(x):
             spec = spectrogram_torch(x["wav"].float().to(dev)[None], c["n_fft"], c["hop"], c["n_fft"])[0]
-            n = min(spec.shape[-1], x["phone"].shape[0])
-            return {"wav": x["wav"].float().to(dev)[:n * c["hop"]], "phone": x["phone"].float().to(dev)[:n],
+            phone = _phone(x)
+            n = min(spec.shape[-1], phone.shape[0])
+            return {"wav": x["wav"].float().to(dev)[:n * c["hop"]], "phone": phone.float().to(dev)[:n],
                     "pitch": x["pitch"].to(dev)[:n], "pitchf": x["pitchf"].to(dev)[:n],
                     "spec": spec[:, :n], "n": n, "hop": c["hop"]}
         items = [to_dev(x) for x in data["items"]]
@@ -612,7 +628,7 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
         raise ModelError(f"There's no save from epoch {epoch}. Pick one of the saves listed.")
     name = slug(name or st.get("voice_name") or proj.name)
     data = torch.load(tdir / "data.pt", map_location="cpu", weights_only=True)
-    feats = data["feats"].float().numpy()
+    feats = index_feats(data).float().numpy()
     if len(feats) > 200_000:  # RVC: shrink very large sets to 10k k-means centres first
         from sklearn.cluster import MiniBatchKMeans
         feats = MiniBatchKMeans(n_clusters=10000, batch_size=256 * 8, n_init=1, random_state=0).fit(feats).cluster_centers_
