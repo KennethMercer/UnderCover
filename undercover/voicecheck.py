@@ -124,6 +124,12 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
 
 
 def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
+    r = target_range(proj, rmvpe, n)
+    return r[1] if r else None
+
+
+def target_range(proj, rmvpe, n: int = 16) -> list | None:
+    """[p5, median, p95] pitch (Hz) of the person's best kept phrases (their singing, for singers)."""
     import soundfile as sf
     from .train.project import _resample16
     kept = sorted([p for p in proj.phrases if p.kept and p.dur >= 2], key=lambda p: -p.score)[:n]
@@ -133,7 +139,7 @@ def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
         f = rmvpe.infer_from_audio(_resample16(x if x.ndim == 1 else x.mean(1), sr), thred=0.03)
         f0s.append(f[f > 0])
     f = np.concatenate(f0s) if f0s else np.zeros(0)
-    return float(np.median(f)) if len(f) > 50 else None
+    return [round(float(np.percentile(f, q)), 1) for q in (5, 50, 95)] if len(f) > 50 else None
 
 
 def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> Quality:

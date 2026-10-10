@@ -388,8 +388,11 @@ def resolve_voice(S, job, person: str, prefer_train: bool, control, push, plan: 
         drop_downloads(keep=good[0]["name"] if good else None)
         if good:
             # the person's pitch from their kept clips: singing for singers (no speech headroom then)
-            hz = voicecheck.target_pitch(proj, conv.rmvpe)
+            rng = voicecheck.target_range(proj, conv.rmvpe)
+            hz = rng[1] if rng else None
             plan["person_hz"], plan["person_speech"] = (hz, proj.from_speech()) if hz else (good[0].get("target_hz"), True)
+            if rng:
+                plan["person_range"] = rng
             v = get_voice(good[0]["name"])
             plan["voice"] = {"name": v.name, "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
                              "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ''})"}
@@ -429,22 +432,32 @@ def voice_f0(v) -> tuple[float | None, bool]:
     return None, False
 
 
-def pick_octave_range(f0_range: list, from_speech: bool, song_f0: np.ndarray) -> tuple[int, float]:
-    """Octave that leaves the fewest sung notes outside what the voice was trained on (its 5th-95th percentile,
-    -2 / +3 semitones of slack; +7 more on top for voices trained on speech, since people sing higher than they
-    talk). Ties go to the octave nearest the singer's. -> (octave, share of notes still out of range)."""
+MAX_KEY = 6          # whole-song transposition allowed when fitting a melody to a voice (semitones each way)
+KEY_COST = 0.004     # per semitone of key change: the band gets transposed too, so only when it buys real fit
+LOW_WEIGHT = 1.5     # a note under the voice's range (mumbled, growly) is worse than one above it (airier)
+
+
+def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: int = MAX_KEY) -> dict:
+    """Octave (vocal only) + key (whole song) that put the melody as fully inside the voice's range as possible.
+    Range = the voice's 5th-95th percentile pitch (-2 / +3 semitones of slack, +7 more for speech-trained voices).
+    A melody wider than the voice can't fit whole: notes below count 1.5x notes above, and each semitone of
+    key change costs a little. Example: Elliott Smith (149-280 Hz) on an acoustic Plug In Baby (165-716 Hz):
+    octave -1 alone left the low notes growling at ~82 Hz, octave 0 left most of it straining up high."""
     lo, _, hi = f0_range
     lo, hi = lo * 2 ** (-2 / 12), hi * 2 ** ((3 + (7 if from_speech else 0)) / 12)
     f = song_f0[song_f0 > 0]
     if len(f) < 50:
-        return 0, 0.0
+        return {"octave": 0, "key": 0, "outside": 0.0, "below": 0.0, "above": 0.0}
     best = None
-    for octave in (0, -1, 1, -2, 2):   # nearest-to-the-singer first wins ties
-        g = f * 2.0 ** octave
-        out = float(np.mean((g < lo) | (g > hi)))
-        if best is None or out < best[1] - 1e-9:
-            best = (octave, out)
-    return best[0], round(best[1], 3)
+    for octave in (0, -1, 1, -2, 2):
+        for key in sorted(range(-max_key, max_key + 1), key=abs):   # nearest the original first wins ties
+            g = f * 2.0 ** (octave + key / 12)
+            below, above = float(np.mean(g < lo)), float(np.mean(g > hi))
+            cost = LOW_WEIGHT * below + above + KEY_COST * abs(key) + 0.001 * abs(octave)
+            if best is None or cost < best[0] - 1e-9:
+                best = (cost, {"octave": octave, "key": key, "outside": round(below + above, 3),
+                               "below": round(below, 3), "above": round(above, 3)})
+    return best[1]
 
 
 def pick_octave(voice_hz: float | None, from_speech: bool, song_hz: float | None) -> int:
@@ -714,23 +727,30 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
     vhz, speech = voice_f0(v)
     rng = (v.extra or {}).get("f0_range")
     song_f0 = _LAST_F0.get(str(stems["vocals"]))
-    if rng and song_f0 is not None:   # voices trained here: octave from the range the voice can actually render
-        octave, outside = pick_octave_range(rng, speech, song_f0)
-        why = (f"{outside:.0%} of the melody outside the voice's trained range "
-               f"({rng[0]:.0f}-{rng[2]:.0f} Hz{' speech' if speech else ''}) at this octave")
+    if not rng and plan.get("person_range"):   # community voice: the real person's range, from their kept clips
+        rng, speech = plan["person_range"], plan.get("person_speech", True)
+    key = 0
+    if rng and song_f0 is not None:   # fit the melody into the range the voice can actually render
+        fit = pick_fit(rng, speech, song_f0)
+        octave, key = fit["octave"], fit["key"]
+        moved = " and ".join(x for x in (f"vocal {octave:+d} octave" if octave else "",
+                                          f"song {key:+d} semitones" if key else "") if x) or "nothing moved"
+        why = (f"{moved}: {fit['outside']:.0%} of the melody outside the voice's range "
+               f"({rng[0]:.0f}-{rng[2]:.0f} Hz{', from speech' if speech else ''})")
+        plan["settings_fit"] = fit
     else:
         if not vhz and plan.get("person_hz"):   # community voice: use the real person's measured speaking pitch
             vhz, speech = plan["person_hz"], plan.get("person_speech", True)
         octave = pick_octave(vhz, speech, song_hz)
         why = (f"song melody ~{song_hz:.0f} Hz, voice ~{vhz:.0f} Hz" if vhz and song_hz
                else "voice range unknown, kept the singer's octave")
-    plan["settings"] = {"octave": octave, "song_pitch_hz": song_hz, "voice_pitch_hz": vhz,
+    plan["settings"] = {"octave": octave, "key": key, "song_pitch_hz": song_hz, "voice_pitch_hz": vhz,
                         "why": why}
     # Stacked backing harmonies don't survive RVC (it follows one pitch): keep the original singers there, a bit
     # quieter, and convert only the lead (review B5).
     chordal = chordal_backing(stems.get("backing"), S.ENGINE.converter.rmvpe)
     plan["settings"]["backing"] = "original (stacked harmonies)" if chordal else "converted"
-    opts = CoverOptions(voice=v.name, key=0, octave=octave, quality="high", dereverb=True, karaoke=True,
+    opts = CoverOptions(voice=v.name, key=key, octave=octave, quality="high", dereverb=True, karaoke=True,
                         backing_voice=None if chordal else v.name, backing_octave=octave,
                         backing_db=-3.0 if chordal else None, polish=True, pitch_cleanup=True)
     stage_w = {"separating": (0.0, 0.1), "converting": (0.1, 0.85), "mixing": (0.85, 1.0)}
