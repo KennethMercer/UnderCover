@@ -806,9 +806,7 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
     if rng and song_f0 is not None:   # fit the melody into the range the voice can actually render
         fit = pick_fit(rng, speech, song_f0)
         octave, key = fit["octave"], fit["key"]
-        moved = " and ".join(x for x in (f"vocal {octave:+d} octave" if octave else "",
-                                          f"song {key:+d} semitones" if key else "") if x) or "nothing moved"
-        why = (f"{moved}: {fit['outside']:.0%} of the melody outside the voice's range "
+        why = (f"{fit['outside']:.0%} of the melody outside the voice's range "
                f"({rng[0]:.0f}-{rng[2]:.0f} Hz{', from speech' if speech else ''})")
         plan["settings_fit"] = fit
     else:
