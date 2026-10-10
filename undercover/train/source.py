@@ -5,6 +5,8 @@ from pathlib import Path
 
 from ..core.config import CONFIG
 from ..core.voices import ModelError
+from ..core.youtube import (YouTubeBlocked, _cancelled_in, _music_tracks, _short, check_blocked, download_retrying,
+                             open_ydl)
 
 TCFG = CONFIG["training"]
 
@@ -53,12 +55,11 @@ def album_tracks(name: str, n: int = 20) -> list:
     """The person's own studio recordings from YouTube Music (their "Artist - Topic" channel): consistent,
     well-recorded singing, separated here with the same model as covers. Fan acapellas vary a lot (Elliott Smith's
     Clementine upload was too hissy to use) and there are only a handful per artist."""
-    from .. import songs
     words = [w for w in re.findall(r"\w+", name.lower()) if len(w) > 2]
     out: dict = {}
     for q in (name, f"{name} songs"):
         try:
-            found = songs._music_tracks(q, n=n)
+            found = _music_tracks(q, n=n)
         except YouTubeBlocked:
             raise
         except Exception:
@@ -93,64 +94,8 @@ class Source:
 
 
 def _ydl(**opts):
-    try:
-        import yt_dlp
-    except ImportError:
-        raise ModelError("yt-dlp isn't installed in UnderCover's environment, so clips can't be found online. "
-                         "You can still add your own recordings.")
-    base = {"quiet": True, "no_warnings": True, "noprogress": True, "logger": _QuietLogger()}
-    return yt_dlp.YoutubeDL({**base, **opts})
-
-
-def _cancelled_in(e):
-    """A Cancelled raised in our progress hook comes back wrapped by yt-dlp: find it."""
-    cause = e
-    while cause is not None:
-        if cause.__class__.__name__ == "Cancelled":
-            return cause
-        cause = getattr(cause, "exc_info", [None, None])[1] if getattr(cause, "exc_info", None) else cause.__context__
-    return None
-
-
-class YouTubeBlocked(ModelError):
-    """YouTube's bot check ("Sign in to confirm you're not a bot"): too many requests from this PC. It clears by
-    itself after a while; retrying right away only prolongs it."""
-
-
-BLOCKED_MSG = ("YouTube is temporarily blocking downloads from this PC (it asks to confirm you're not a bot, usually "
-               "after a lot of downloads in a short time). It clears by itself, usually within a few hours.")
-
-
-def check_blocked(e: BaseException):
-    t = str(e)
-    if "not a bot" in t or "Sign in to confirm" in t:
-        raise YouTubeBlocked(BLOCKED_MSG)
-
-
-TRANSIENT = ("403", "429", "HTTP Error 5", "timed out", "Connection", "Remote end closed", "IncompleteRead")
-
-
-def download_retrying(ydl, url: str, attempts: int = 3):
-    """ydl.download with retries: YouTube throws a 403 at the audio stream now and then (2026-10-10: 4 of 7 videos
-    in a row, all fine on retry). Raises the last error; a cancel is raised immediately."""
-    import time
-    for i in range(attempts):
-        try:
-            return ydl.download([url])
-        except Exception as e:
-            c = _cancelled_in(e)
-            if c is not None:
-                raise c
-            if i == attempts - 1 or not any(t in str(e) for t in TRANSIENT):
-                raise
-            time.sleep(2 + 3 * i)
-
-
-class _QuietLogger:
-    def debug(self, msg): pass
-    def info(self, msg): pass
-    def warning(self, msg): pass
-    def error(self, msg): pass
+    return open_ydl("yt-dlp isn't installed in UnderCover's environment, so clips can't be found online. "
+                    "You can still add your own recordings.", **opts)
 
 
 def _rank(src: Source, name: str, mode: str) -> float:
@@ -237,11 +182,6 @@ def from_link(url: str) -> list[Source]:
                           title=e.get("title") or vid, channel=e.get("channel") or e.get("uploader") or "",
                           duration=float(e.get("duration") or 0), user=True, note="added by you"))
     return out
-
-
-def _short(e: Exception) -> str:
-    msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e)).replace("ERROR: ", "")
-    return msg.split("\n")[0][:160]
 
 
 def download(src: Source, dest_dir: Path, progress=None) -> Path:

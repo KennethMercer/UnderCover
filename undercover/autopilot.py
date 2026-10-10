@@ -218,12 +218,11 @@ def _ident(v) -> str:
 def is_musician(person: str) -> bool:
     """True when YouTube Music has album tracks by this person (so their singing voice is out there to learn
     from, not just interviews). ~3 s; any failure counts as "no"."""
-    from . import songs
+    from .core.youtube import YouTubeBlocked, _music_tracks
     toks = [w for w in re.findall(r"\w+", person.lower()) if len(w) > 1]
     for _ in range(2):
-        from .train.source import YouTubeBlocked
         try:
-            tracks = songs._music_tracks(person, n=6)
+            tracks = _music_tracks(person, n=6)
         except YouTubeBlocked:
             raise   # unknown, not "no": deciding now would build the wrong kind of project
         except Exception:

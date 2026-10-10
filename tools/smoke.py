@@ -138,10 +138,11 @@ def u_stems():
 @check("sources: YouTube block and spoken-word detection")
 def u_sources():
     from undercover.train import source as s
+    from undercover.core import youtube as yt
     try:
-        s.check_blocked(Exception("ERROR: Sign in to confirm you're not a bot"))
+        yt.check_blocked(Exception("ERROR: Sign in to confirm you're not a bot"))
         raise AssertionError("block not detected")
-    except s.YouTubeBlocked:
+    except yt.YouTubeBlocked:
         pass
     assert s.SPOKEN.search("Barack Obama - Obama DNC Speech")
     assert not s.SPOKEN.search("Elliott Smith - Between the Bars")

@@ -15,12 +15,11 @@ import re
 import shutil
 import subprocess
 import uuid
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .core.config import path
 from .core.voices import ModelError
-from .train.source import _QuietLogger, _short
+from .core.youtube import SongResult, _music_tracks, _short, _ydl
 
 STOP = {"the", "in", "of", "by", "an", "and", "to", "on", "for", "my", "me", "you", "it", "is", "at", "with", "from"}
 BAD = [(re.compile(p, re.I), w) for p, w in [
@@ -36,32 +35,6 @@ GOOD = [(re.compile(p, re.I), w) for p, w in [
     (r"official audio|\(audio\)|\[audio\]", 2.0),
     (r"\bofficial\b", 0.5),
 ]]
-
-
-@dataclass
-class SongResult:
-    id: str
-    url: str
-    title: str          # display title, "Artist - Song" when known
-    raw_title: str
-    channel: str
-    duration: float
-    score: float = 0.0
-    note: str = ""
-    album: str = ""
-    views: int = 0
-    kind: str = "video"     # "track" (YouTube Music album audio) | "video"
-
-    def to_json(self):
-        return asdict(self)
-
-
-def _ydl(**opts):
-    try:
-        import yt_dlp
-    except ImportError:
-        raise ModelError("yt-dlp isn't installed in UnderCover's environment, so songs can't be fetched from YouTube.")
-    return yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noprogress": True, "logger": _QuietLogger(), **opts})
 
 
 def _display_title(title: str, channel: str) -> str:
@@ -96,49 +69,6 @@ def _score(r: SongResult, q_tokens: list[str]) -> float:
     m = r.duration / 60
     s += 1.0 if 1.5 <= m <= 8 else (-3.0 if m > 15 or m < 1 else -0.5)
     return s
-
-
-def _music_tracks(query: str, n: int = 6) -> list[SongResult]:
-    """YouTube Music song search: album tracks with artist/album metadata (details fetched in parallel)."""
-    from concurrent.futures import ThreadPoolExecutor
-    url = "https://music.youtube.com/search?q=" + "+".join(query.split()) + "#songs"
-    try:
-        with _ydl(extract_flat="in_playlist", skip_download=True, playlistend=n + 1) as ydl:
-            ids = [e["id"] for e in (ydl.extract_info(url, download=False).get("entries") or [])[:n] if e.get("id")]
-    except Exception:
-        return []
-
-    blocked = []
-
-    def detail(vid):
-        try:
-            with _ydl(skip_download=True) as ydl:
-                return ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False, process=False)
-        except Exception as e:
-            if "not a bot" in str(e) or "Sign in to confirm" in str(e):
-                blocked.append(vid)
-            return None
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        infos = list(pool.map(detail, ids))
-    if ids and len(blocked) == len(ids):
-        # every lookup hit YouTube's bot check: say so, rather than "this artist has no music"
-        from .train.source import BLOCKED_MSG, YouTubeBlocked
-        raise YouTubeBlocked(BLOCKED_MSG)
-    out = []
-    for rank, d in enumerate(infos):
-        if not d or not d.get("duration"):
-            continue
-        artists = d.get("artists") or ([d["artist"]] if d.get("artist") else [])
-        artist = ", ".join(artists[:2]) if isinstance(artists, list) else str(artists)
-        title = d.get("track") or d.get("title") or d["id"]
-        r = SongResult(id=d["id"], url=f"https://www.youtube.com/watch?v={d['id']}", raw_title=d.get("title") or title,
-                       title=f"{artist} - {title}" if artist else title, channel=d.get("channel") or artist,
-                       duration=float(d["duration"]), album=d.get("album") or "", kind="track",
-                       views=int(d.get("view_count") or 0),
-                       note="album track" + (f" · {d['album']}" if d.get("album") else ""))
-        r.score = 0.6 - 0.3 * rank   # YouTube Music's own order (popularity) is a good tiebreaker
-        out.append(r)
-    return out
 
 
 def search(query: str, limit: int = 8, style: str | None = None, words: list[str] | None = None) -> list[SongResult]:
@@ -258,7 +188,7 @@ def download(r: SongResult, register, progress=None) -> dict:
                     progress(min(1.0, d.get("downloaded_bytes", 0) / total))
             opts["progress_hooks"] = [hook]
         with _ydl(**opts) as ydl:
-            from .train.source import _cancelled_in, check_blocked, download_retrying
+            from .core.youtube import _cancelled_in, check_blocked, download_retrying
             try:
                 download_retrying(ydl, r.url)
             except Exception as e:
