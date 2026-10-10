@@ -271,13 +271,25 @@ def _project_for_item(item: dict, create: bool):
                 except ModelError:
                     pass
             person = (v.extra or {}).get("person") or _person_from_voice(v)
+            speech = (v.extra or {}).get("from_speech")
         else:
-            person = item["target"]
+            person, speech = item["target"], None
         found = _project_named(person)
         if found or not create:
             return found
-        from . import autopilot
-        return autopilot.project_for(person)
+        if speech is None:   # a new voice: singers (YouTube Music) get songs, everyone else speech
+            from . import autopilot
+            return autopilot.project_for(person)
+        # rebuilding a cleaned-up project: same kind of material as the voice was trained on (a speech voice of an
+        # actor with narration albums mustn't turn into a singing project), with a full search
+        from .train import source as srcmod
+        proj = P.Project.create(person, "speaking" if speech else "both")
+        try:
+            proj.sources = srcmod.search(person, proj.mode)
+        except ModelError:
+            pass
+        proj.save()
+        return proj
     except ModelError:
         return None
 
