@@ -11,17 +11,17 @@ Steps (one GPU job, so covers started meanwhile still run between training steps
             with matching reverb put back, polish on, pitch cleanup on; octave picked from the voice's and the
             song's typical pitch when the voice's range is known (voices trained here)
 """
-import math
 import re
 import time
 from pathlib import Path
 
 import numpy as np
 
-from .core import gpu, jobs, worklist
-from .core.config import path
-from .core.voices import ModelError
-from .mouthpiece.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0
+from ..core import gpu, jobs, worklist
+from ..core.config import path
+from ..core.voices import ModelError
+from .fit import pick_fit, pick_octave
+from ..mouthpiece.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0
 
 PATTERNS = [
     # "cover of X by Y" / "X cover by Y" / "make X sung by Y" (the LAST "by" wins: "X by Miley Cyrus by Y")
@@ -106,43 +106,6 @@ def parse(text: str) -> tuple[str, str]:
 # ---------------------------------------------------------------- measured quality (voicecheck.py)
 
 
-MAX_KEY = 6          # whole-song transposition allowed when fitting a melody to a voice (semitones each way)
-KEY_COST = 0.004     # per semitone of key change: the band gets transposed too, so only when it buys real fit
-LOW_WEIGHT = 1.5     # a note under the voice's range (mumbled, growly) is worse than one above it (airier)
-
-
-def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: int = MAX_KEY) -> dict:
-    """Octave (vocal only) + key (whole song) that put the melody as fully inside the voice's range as possible.
-    Range = the voice's 5th-95th percentile pitch (-2 / +3 semitones of slack, +7 more for speech-trained voices).
-    A melody wider than the voice can't fit whole: notes below count 1.5x notes above, and each semitone of
-    key change costs a little. Example: Elliott Smith (149-280 Hz) on an acoustic Plug In Baby (165-716 Hz):
-    octave -1 alone left the low notes growling at ~82 Hz, octave 0 left most of it straining up high."""
-    lo, _, hi = f0_range
-    lo, hi = lo * 2 ** (-2 / 12), hi * 2 ** ((3 + (7 if from_speech else 0)) / 12)
-    f = song_f0[song_f0 > 0]
-    if len(f) < 50:
-        return {"octave": 0, "key": 0, "outside": 0.0, "below": 0.0, "above": 0.0, "cost": 0.0}
-    best = None
-    for octave in (0, -1, 1, -2, 2):
-        for key in sorted(range(-max_key, max_key + 1), key=abs):   # nearest the original first wins ties
-            g = f * 2.0 ** (octave + key / 12)
-            below, above = float(np.mean(g < lo)), float(np.mean(g > hi))
-            cost = LOW_WEIGHT * below + above + KEY_COST * abs(key) + 0.001 * abs(octave)
-            if best is None or cost < best[0] - 1e-9:
-                best = (cost, {"octave": octave, "key": key, "outside": round(below + above, 3),
-                               "below": round(below, 3), "above": round(above, 3), "cost": round(cost, 4)})
-    return best[1]
-
-
-def pick_octave(voice_hz: float | None, from_speech: bool, song_hz: float | None) -> int:
-    """Whole octaves that bring the song's melody nearest the voice's natural range. People sing roughly
-    half an octave above their speaking pitch, so speech-trained voices are nudged up by that."""
-    if not voice_hz or not song_hz:
-        return 0
-    target = voice_hz * (2 ** 0.5 if from_speech else 1.0)
-    return int(np.clip(round(math.log2(target / song_hz)), -2, 2))
-
-
 def song_vocal_f0(vocals: Path, rmvpe) -> float | None:
     return vocal_stats(vocals, rmvpe)[0]
 
@@ -150,7 +113,7 @@ def song_vocal_f0(vocals: Path, rmvpe) -> float | None:
 def vocal_stats(vocals: Path, rmvpe) -> tuple[float | None, float]:
     """(median sung pitch Hz, share of the song with a voiced melody). Used to pick the octave, and to notice
     when a "cover" turns out to be instrumental (an acoustic guitar cover with no singing, say)."""
-    from .core.engine.convert import load_16k
+    from ..core.engine.convert import load_16k
     f0 = rmvpe.infer_from_audio(load_16k(vocals), thred=0.03)
     voiced = f0[f0 > 0]
     share = float(len(voiced)) / max(1, len(f0))
@@ -165,7 +128,7 @@ _LAST_F0: dict = {}
 def _drop_song(sid: str):
     """Remove a song this one-shot downloaded only to compare versions."""
     try:
-        from .library import remove_song
+        from .songs import remove_song
         remove_song(sid)
     except Exception:
         pass
@@ -174,8 +137,8 @@ def _drop_song(sid: str):
 def vocal_cleanliness(vocals: Path) -> dict:
     """How clean a separated lead vocal is: `bleed` = level (dB, vs the singing) of the stem where nobody sings
     (guitar or piano leaking through), `hiss` = spectral flatness of the sung parts (mouthpiece.service.noisiness)."""
-    from .core.engine.convert import load_16k
-    from .mouthpiece.service import noisiness
+    from ..core.engine.convert import load_16k
+    from ..mouthpiece.service import noisiness
     x = load_16k(vocals)
     f0 = _LAST_F0.get(str(vocals) + "#all")
     fr = x[: len(x) // 160 * 160].reshape(-1, 160)
@@ -206,7 +169,7 @@ def backing_monophony(backing: Path, rmvpe, seconds: int = 120) -> tuple[float, 
     RVC follows a single pitch, so stacked harmonies come out garbled when converted. Measured 2026-10-09:
     single lines 77-89% (acoustic cover, "Find Your Love"); stacked harmonies ~45% while 87-97% pitched
     (Bohemian Rhapsody, "when the party's over"); rap ad-libs score low because they're mostly unpitched."""
-    from .core.engine.convert import load_16k
+    from ..core.engine.convert import load_16k
     x = load_16k(backing)[: 16000 * seconds]
     f0 = rmvpe.infer_from_audio(x, thred=0.03)
     n_fft, hop = 2048, 160
@@ -245,8 +208,8 @@ MIN_SUNG = 0.12   # under ~12% of the song with a voiced melody = basically inst
 def run(job, text: str, prefer_train: bool = False, song_url: str | None = None):
     from . import songs
     from .pipeline import ENGINE, CoverOptions, history_items
-    from .core.separate import separate
-    from .core.jobs import Control
+    from ..core.separate import separate
+    from ..core.jobs import Control
     t0 = time.perf_counter()
     plan: dict = {"request": text}
 

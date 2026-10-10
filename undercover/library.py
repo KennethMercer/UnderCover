@@ -25,6 +25,8 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from .core import gpu, jobs
 from .core.files import file_url
+from .core.fsutil import retry as _retry
+from .frontman.songs import remove_song
 from .core.config import CONFIG, ROOT, path
 from .core.voices import ModelError, slug
 
@@ -48,18 +50,6 @@ def _mtime(p: Path) -> float:
         return p.stat().st_mtime
     except OSError:
         return 0.0
-
-
-def _retry(fn, tries: int = 30):
-    """Windows refuses to rename/delete a file another handle has open (e.g. the page's player stream, which the
-    server is still finishing); retry for up to ~3 s."""
-    for i in range(tries):
-        try:
-            return fn()
-        except PermissionError:
-            if i == tries - 1:
-                raise
-            time.sleep(0.1)
 
 
 def _busy() -> str | None:
@@ -165,23 +155,6 @@ def _duplicate_voices(hist: list) -> tuple[list, str]:
     return drop, "; ".join(pairs)
 
 
-def remove_song(sid: str, stems_only: bool = False):
-    """Delete a song's stems (and unless stems_only, the song file, its key and its YouTube link)."""
-    _retry(lambda: shutil.rmtree(path("cache_dir") / "stems" / sid) if (path("cache_dir") / "stems" / sid).exists() else None)
-    if stems_only:
-        return
-    for f in path("uploads_dir").glob(f"{sid}.*"):
-        _retry(lambda f=f: f.unlink(missing_ok=True))
-    (path("cache_dir") / "keys" / f"{sid}.json").unlink(missing_ok=True)
-    yt = path("cache_dir") / "youtube_songs.json"
-    if yt.exists():
-        try:
-            d = {k: v for k, v in json.loads(yt.read_text(encoding="utf-8")).items() if v != sid}
-            yt.write_text(json.dumps(d, indent=1), encoding="utf-8")
-        except ValueError:
-            pass
-
-
 def _zip_response(h, name: str, files: list[tuple[Path, str]]):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:   # audio/models don't compress
@@ -222,7 +195,7 @@ def summary() -> dict:
 
 
 def covers() -> list[dict]:
-    from .pipeline import history
+    from .frontman.pipeline import history
     metas = _song_metas()
     out = []
     for h in history():
@@ -265,7 +238,7 @@ def _stems_for(song_id: str) -> list[dict]:
 
 
 def songs() -> list[dict]:
-    from .pipeline import history
+    from .frontman.pipeline import history
     hist = history()
     current = Path(CONFIG["separation"]["vocal_model"]).stem
     out = []
@@ -297,7 +270,7 @@ def songs() -> list[dict]:
 def voices() -> list[dict]:
     from .mouthpiece.service import undertrained
     from .core.voices import list_voices
-    from .pipeline import history
+    from .frontman.pipeline import history
     hist = history()
     q = _quality()
     out = []
@@ -341,7 +314,7 @@ def training() -> list[dict]:
 # ---------------------------------------------------------------- clean up
 
 def _cleanup_groups() -> dict:
-    from .pipeline import history
+    from .frontman.pipeline import history
     from .mouthpiece.project import list_projects, projects_dir
     cache = path("cache_dir")
     now = time.time()
@@ -458,7 +431,7 @@ def _route(h, method, p):
         return _zip_response(h, f"UnderCover covers ({len(files)}).zip", files)
     m = re.fullmatch(r"covers/(\d+)(?:/(rename))?", rest)
     if m:
-        from .pipeline import history
+        from .frontman.pipeline import history
         item = next((x for x in history() if x["id"] == int(m.group(1))), None)
         if not item:
             raise LookupError("That cover isn't there any more.")

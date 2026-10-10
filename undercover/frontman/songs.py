@@ -17,9 +17,10 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from .core.config import path
-from .core.voices import ModelError
-from .core.youtube import SongResult, _music_tracks, _short, _ydl
+from ..core.config import path
+from ..core.fsutil import retry
+from ..core.voices import ModelError
+from ..core.youtube import SongResult, _music_tracks, _short, _ydl
 
 STOP = {"the", "in", "of", "by", "an", "and", "to", "on", "for", "my", "me", "you", "it", "is", "at", "with", "from"}
 BAD = [(re.compile(p, re.I), w) for p, w in [
@@ -188,7 +189,7 @@ def download(r: SongResult, register, progress=None) -> dict:
                     progress(min(1.0, d.get("downloaded_bytes", 0) / total))
             opts["progress_hooks"] = [hook]
         with _ydl(**opts) as ydl:
-            from .core.youtube import _cancelled_in, check_blocked, download_retrying
+            from ..core.youtube import _cancelled_in, check_blocked, download_retrying
             try:
                 download_retrying(ydl, r.url)
             except Exception as e:
@@ -242,7 +243,7 @@ def _peaks(p: Path, bins: int = 1200) -> list[float]:
 def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: dict | None = None) -> dict:
     """Move an audio file into uploads/ (named by content hash, like the stem cache) and write its metadata.
     Shared by dropped files and songs fetched from YouTube. Raises ValueError if it isn't readable audio."""
-    from .core.files import file_url
+    from ..core.files import file_url
     from .remix import lufs
     up = path("uploads_dir")
     if sha256_hex is None:
@@ -273,3 +274,20 @@ def song_meta(song_id: str) -> dict:
     if not re.fullmatch(r"[0-9a-f]{16}", song_id) or not meta.exists():
         raise LookupError("That song isn't loaded anymore. Drop it in again.")
     return json.loads(meta.read_text(encoding="utf-8"))
+
+
+def remove_song(sid: str, stems_only: bool = False):
+    """Delete a song's stems (and unless stems_only, the song file, its key and its YouTube link)."""
+    retry(lambda: shutil.rmtree(path("cache_dir") / "stems" / sid) if (path("cache_dir") / "stems" / sid).exists() else None)
+    if stems_only:
+        return
+    for f in path("uploads_dir").glob(f"{sid}.*"):
+        retry(lambda f=f: f.unlink(missing_ok=True))
+    (path("cache_dir") / "keys" / f"{sid}.json").unlink(missing_ok=True)
+    yt = path("cache_dir") / "youtube_songs.json"
+    if yt.exists():
+        try:
+            d = {k: v for k, v in json.loads(yt.read_text(encoding="utf-8")).items() if v != sid}
+            yt.write_text(json.dumps(d, indent=1), encoding="utf-8")
+        except ValueError:
+            pass

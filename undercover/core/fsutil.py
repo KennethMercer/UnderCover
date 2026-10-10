@@ -40,3 +40,15 @@ def torch_save(obj, dest: Path):
         _replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def retry(fn, tries: int = 30):
+    """Windows refuses to rename/delete a file another handle has open (e.g. the page's player stream, which the
+    server is still finishing); retry for up to ~3 s."""
+    for i in range(tries):
+        try:
+            return fn()
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.1)
