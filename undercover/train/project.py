@@ -268,7 +268,9 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
         return 0
     src.status = "separating"
     report(0.25, "removing music and noise")
-    stems = separate(raw, dereverb=TCFG["dereverb"], karaoke=(proj.mode == "singing"), separator=separator,
+    # sung sources: lead only (harmonies are another pitch line; unison double-tracking stays with the lead)
+    from .source import is_sung
+    stems = separate(raw, dereverb=TCFG["dereverb"], karaoke=(proj.mode == "singing" or is_sung(src)), separator=separator,
                      quality=TCFG["separation_quality"],
                      progress=lambda f, name: report(0.25 + 0.5 * f, "removing music and noise"))
     if cancel and cancel():
@@ -575,7 +577,7 @@ def _sung_reference(proj: Project, emb: dict, speech_ref: np.ndarray) -> np.ndar
     it's recognisably the same person as the speaking reference (his: 0.40; other people: about 0.1)."""
     from sklearn.cluster import AgglomerativeClustering
     from .source import is_sung
-    sung_src = {s.id for s in proj.sources if is_sung(s.title)}
+    sung_src = {s.id for s in proj.sources if is_sung(s)}
     usable = [p for p in proj.phrases if p.source in sung_src and p.id in emb and p.dur >= 1.5
               and p.music_db < TCFG["music_db"] and not p.clipped]
     if len(usable) < 8 or len({p.source for p in usable}) < 2:
