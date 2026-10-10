@@ -240,12 +240,41 @@ def run_job(job: "Job", fn):
         return
     with job.cond:
         job.state = "running"
+    for attempt in (1, 2):
+        try:
+            fn(job)
+        except Cancelled:
+            job.finish("cancelled", message="Cancelled.")
+        except Exception as e:
+            # Out of GPU memory: free what UnderCover holds (cached voices, allocator cache) and try once more.
+            # Separations are cached, so the retry picks up where it was; mostly hits smaller cards or a game open.
+            if attempt == 1 and _is_oom(e) and job.kind in ("cover", "preview", "auto"):
+                _free_gpu()
+                job.push(stage=(job.events[-1].get("stage") if job.events else "") or "converting",
+                         message="The GPU ran out of memory; freed some and trying again")
+                continue
+            job.finish("error", message=friendly(e, job.events[-1].get("stage", "") if job.events else ""))
+        return
+
+
+def _is_oom(e: Exception) -> bool:
+    return type(e).__name__ == "OutOfMemoryError" or "out of memory" in str(e).lower()
+
+
+def _free_gpu():
+    import gc
     try:
-        fn(job)
-    except Cancelled:
-        job.finish("cancelled", message="Cancelled.")
-    except Exception as e:
-        job.finish("error", message=friendly(e, job.events[-1].get("stage", "") if job.events else ""))
+        if ENGINE and ENGINE._conv:
+            ENGINE._conv.voices.clear()   # loaded voices (+ their indexes) are re-loaded on demand
+    except Exception:
+        pass
+    gc.collect()
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------- songs (uploads)
