@@ -386,3 +386,40 @@ svg.chart { width: 100%; height: 150px; display: block; }
 .adv-h { grid-column: 1 / -1; margin: 6px 0 -8px; font-size: 13px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 6px; }
 .adv-h span { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
 .adv-h:first-child { margin-top: 0; }
+
+/* Pause / Resume bar for background voice work (work.js) */
+.workbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--accent);
+  border-radius: var(--r); padding: 8px 12px; font-size: 14px; }
+.workbar[data-state="held"] { border-color: var(--warn); }
+.workbar #wb-text { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.workbar .wb-btns { display: flex; gap: 8px; align-items: center; }
+.workbar[data-state="held"] .dot { background: var(--warn); animation: none; }
+/* overnight queue */
+.qtotal b { font-size: 20px; }
+.qadd { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; }
+.qadd input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; color: inherit; font: inherit; }
+.qat input[type=time] { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: inherit; font: inherit; }
+.qlist { display: grid; gap: 8px; }
+.qjob { display: grid; grid-template-columns: 18px 1fr auto; gap: 12px; align-items: start; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 9px; padding: 12px; }
+.qjob.running { border-color: var(--accent); }
+.qjob.done { opacity: .75; }
+.qjob.dragging { opacity: .4; }
+.qjob .grip { color: var(--muted); cursor: grab; user-select: none; }
+.qjob .bar { margin-top: 8px; }
+.qchips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.qchip { font: 12px var(--mono, monospace); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.qchip.ok { color: var(--ok); border-color: var(--ok); }
+.qchip.bad { color: var(--err); border-color: var(--err); }
+.qside { display: grid; gap: 4px; justify-items: end; text-align: right; }
+.qopts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.qreport { display: grid; gap: 8px; }
+.qres { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 12px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); }
+.qres .up { color: var(--ok); font-weight: 600; }
+.qres .same { color: var(--muted); font-weight: 600; }
+@media (max-width: 560px) {
+  .qadd { grid-template-columns: 1fr; }
+  .qjob { grid-template-columns: 1fr; }
+  .qjob .grip { display: none; }
+  .qside { justify-items: start; text-align: left; }
+}

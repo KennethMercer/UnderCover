@@ -89,6 +89,9 @@ class Job:
         self.cond = threading.Condition()
         self.cancel = False
         self.result = None
+        self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
+        self.resume_spec = None   # how to start this work again (worklist.resume)
+        self.control = None       # trainer Control, for jobs that train
 
     def push(self, **ev):
         with self.cond:
@@ -103,7 +106,7 @@ class Job:
 
     @property
     def finished(self):
-        return self.state in ("done", "error", "cancelled")
+        return self.state in ("done", "error", "cancelled", "paused")
 
 
 JOBS: dict[str, Job] = {}
@@ -225,6 +228,25 @@ def heartbeat_loop():
         time.sleep(30 if busy else 300)
 
 
+def start_oneshot(body: dict) -> "Job":
+    """Queue a one-shot cover (from the page, or Resume after a pause)."""
+    from . import autopilot
+    from .models import ModelError
+    text = (body.get("text") or "").strip()
+    autopilot.parse(text)   # friendly error now rather than inside the job
+    if any(j.kind == "auto" and not j.finished for j in JOBS.values()):
+        raise ModelError("A one-shot cover is already running. Wait for it, or cancel it.")
+    _cancel_presep()
+    job = Job("auto")
+    JOBS[job.id] = job
+    job.resume_spec = {"kind": "oneshot", "text": text, "prefer_train": bool(body.get("prefer_train")),
+                       "song_url": body.get("song_url") or None, "label": f"One-shot: {text}"}
+    job.push(stage="queued", frac=0, message="Waiting for the GPU", plan={"request": text})
+    GPU_QUEUE.put((job, lambda job: autopilot.run(THIS, job, text, bool(body.get("prefer_train")),
+                                                  body.get("song_url") or None)))
+    return job
+
+
 def run_job(job: "Job", fn):
     """Run one queued GPU job (also called between training steps, so covers don't wait for training)."""
     if STATUS.get("gpu_problem"):
@@ -238,6 +260,13 @@ def run_job(job: "Job", fn):
     if job.cancel:
         job.finish("cancelled", message="Cancelled.")
         return
+    from . import worklist
+    if job.kind in worklist.TRAIN_KINDS and job.kind != "auto" and (job.pausing or worklist.held()):
+        job.finish("paused", message="Voice work is paused (top of the page). Resume starts it.")
+        worklist.remember(job)
+        return
+    if job.kind == "auto" and worklist.held():
+        job.pausing = True   # a one-shot still makes its cover, but sets aside any voice training
     with job.cond:
         job.state = "running"
     for attempt in (1, 2):
@@ -246,6 +275,10 @@ def run_job(job: "Job", fn):
         except Cancelled:
             job.finish("cancelled", message="Cancelled.")
         except Exception as e:
+            if type(e).__name__ == "Paused":   # autopilot.Paused: Pause at the top of the page
+                if not job.finished:
+                    job.finish("paused", message="Paused. Resume (top of the page) continues where it stopped.")
+                return
             # Out of GPU memory: free what UnderCover holds (cached voices, allocator cache) and try once more.
             # Separations are cached, so the retry picks up where it was; mostly hits smaller cards or a game open.
             if attempt == 1 and _is_oom(e) and job.kind in ("cover", "preview", "auto"):
@@ -254,6 +287,8 @@ def run_job(job: "Job", fn):
                          message="The GPU ran out of memory; freed some and trying again")
                 continue
             job.finish("error", message=friendly(e, job.events[-1].get("stage", "") if job.events else ""))
+        if job.state == "paused":
+            worklist.remember(job)
         return
 
 
@@ -449,6 +484,9 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         p, q = u.path, parse_qs(u.query)
         try:
+            if p == "/api/work":
+                from . import worklist
+                return self._json(worklist.status())
             if train_api.handle(THIS, self, "GET", p) or library.handle(THIS, self, "GET", p):
                 return
             if p in ("/", "/index.html"):
@@ -466,8 +504,13 @@ class Handler(BaseHTTPRequestHandler):
                         ev = next((e for e in reversed(a["job"].events) if e.get("epoch") or e.get("eta")), {})
                         training = {"project": name, "epoch": ev.get("epoch"), "epochs": ev.get("epochs"), "eta": ev.get("eta")}
                         break
+                from . import worklist
+                w = worklist.status()
+                work = {"held": w["held"], "resume": w["resume"], "running": w["running"][:1],
+                        "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
+                        "start": w["start"], "start_at": w["settings"].get("start_at")}
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
-                                   "auto_job": auto, "cover_job": cover, "training": training})
+                                   "auto_job": auto, "cover_job": cover, "training": training, "work": work})
             if p == "/api/config":
                 return self._json(_ui_defaults())
             if p == "/api/voices":
@@ -514,6 +557,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         p = urlparse(self.path).path
         try:
+            if p.startswith("/api/work/"):
+                return self._work(p[len("/api/work/"):], self._body())
             if train_api.handle(THIS, self, "POST", p) or library.handle(THIS, self, "POST", p):
                 return
             if p == "/api/upload":
@@ -797,18 +842,37 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"song_query": song, "person": person, "style": req["style"], "voice": voice})
 
     def _start_auto(self, body: dict):
-        from . import autopilot
-        text = (body.get("text") or "").strip()
-        autopilot.parse(text)   # friendly error now rather than inside the job
-        if any(j.kind == "auto" and not j.finished for j in JOBS.values()):
-            return self._error("A one-shot cover is already running. Wait for it, or cancel it.", 409)
-        _cancel_presep()
-        job = Job("auto")
-        JOBS[job.id] = job
-        job.push(stage="queued", frac=0, message="Waiting for the GPU", plan={"request": text})
-        GPU_QUEUE.put((job, lambda job: autopilot.run(THIS, job, text, bool(body.get("prefer_train")),
-                                                      body.get("song_url") or None)))
+        from .models import ModelError
+        try:
+            job = start_oneshot(body)
+        except ModelError as e:
+            return self._error(str(e), 409 if "already running" in str(e) else 400)
         self._json({"job": job.id, "position": GPU_QUEUE.qsize()})
+
+    def _work(self, action: str, b: dict):
+        """Pause / Resume and the overnight queue (worklist.py)."""
+        from . import worklist
+        from .models import ModelError
+        try:
+            if action == "pause":
+                return self._json(worklist.pause_all())
+            if action == "resume":
+                return self._json(worklist.resume_all())
+            if action == "add":
+                return self._json(worklist.add(b.get("kind", ""), b.get("target", "")))
+            if action == "remove":
+                return self._json(worklist.remove(b.get("id", "")))
+            if action == "order":
+                return self._json(worklist.reorder(b.get("ids") or []))
+            if action == "start":   # {"at": "23:00"} or {} = now; {"stop": true} = don't start more
+                return self._json(worklist.arm(False if b.get("stop") else (b.get("at") or None)))
+            if action == "settings":
+                return self._json(worklist.settings(**{k: b[k] for k in ("finish_by", "keep_awake") if k in b}))
+            if action == "dismiss":
+                return self._json(worklist.dismiss_report())
+        except (ModelError, LookupError) as e:
+            return self._error(str(e))
+        self._error("Not found", 404)
 
     def _start_preview(self, body: dict):
         from .models import get_voice
@@ -1017,6 +1081,8 @@ def main():
     _install_console_handler()
     _clean_old_previews()
     threading.Thread(target=gpu_worker, daemon=True, name="gpu").start()
+    from . import worklist
+    worklist.start(THIS)
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
     url = f"http://{host}:{port}/"
     print(f"UnderCover is running at {url}\nKeep this window open while you use it. Press Ctrl+C to stop.")
