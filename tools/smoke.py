@@ -86,7 +86,7 @@ def u_imports():
 @check("pick_fit: key + octave fit")
 def u_fit():
     import numpy as np
-    from undercover.autopilot import pick_fit
+    from undercover.frontman.fit import pick_fit
     f0 = np.full(500, 440.0)   # A4 melody
     fit = pick_fit([110.0, 150.0, 220.0], False, f0)   # a low voice
     assert fit["octave"] <= -1 and fit["outside"] < 0.5, fit

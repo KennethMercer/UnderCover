@@ -15,12 +15,14 @@ from pathlib import Path
 
 import numpy as np
 
-from .core.config import CONFIG, path
-from .core.timing import timed
+from ..core import jobs
+from ..core.config import CONFIG, path
+from ..core.timing import timed
 
 RCFG = CONFIG["remix"]
 
 
+@jobs.register_user_error   # its messages are written for the user (jobs.friendly shows them as they are)
 class RemixError(Exception):
     pass
 
