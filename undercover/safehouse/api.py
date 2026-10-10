@@ -1,0 +1,144 @@
+"""SafeHouse HTTP routes (today's Library tab). The app's server routes /api/library/... here.
+
+GET    /api/library/summary                 storage per category + free space
+GET    /api/library/covers | songs | voices | training
+POST   /api/library/covers/<id>/rename      {name}
+DELETE /api/library/covers/<id>
+GET    /api/library/covers/zip?ids=1,2      zip download
+DELETE /api/library/songs/<id>[?stems_only=1]
+POST   /api/library/voices/<name>/rename    {name}
+GET    /api/library/voices/<name>/export    zip download
+GET    /api/library/cleanup                 what can be freed, per group
+POST   /api/library/cleanup                 {groups: [...]}
+(voices and training projects are deleted through the existing /api/voices/<name> and /api/train/projects/<p>)
+"""
+import io
+import json
+import re
+import zipfile
+from pathlib import Path
+from urllib.parse import parse_qs, quote, urlparse
+
+from ..core import gpu
+from ..core.config import path
+from ..core.fsutil import retry as _retry
+from ..core.voices import ModelError, slug
+from ..frontman.songs import remove_song
+from . import library
+from .library import _cleanup_groups, _guard, _remove, _update_ytdlp, _write_history_line, covers
+
+
+def handle(h, method: str, p: str) -> bool:
+    if not p.startswith("/api/library/"):
+        return False
+    try:
+        _route(h, method, p)
+    except ModelError as e:
+        h._error(str(e))
+    except LookupError as e:
+        h._error(str(e), 404)
+    return True
+
+
+def _route(h, method, p):
+    q = parse_qs(urlparse(h.path).query)
+    rest = p[len("/api/library/"):]
+    if method == "GET" and rest in ("summary", "covers", "songs", "voices", "training"):
+        return h._json(getattr(library, rest)())
+    if rest == "tools/ytdlp-update" and method == "POST":
+        return h._json(_update_ytdlp())
+    if rest == "cleanup":
+        if method == "GET":
+            return h._json({k: {kk: vv for kk, vv in v.items() if kk != "paths"} for k, v in _cleanup_groups().items()})
+        _guard()
+        want = set((h._body().get("groups") or []))
+        freed = 0
+        for k, v in _cleanup_groups().items():
+            if k in want:
+                freed += v["size"]
+                for path_ in v["paths"]:
+                    _remove(path_)
+        return h._json({"freed": freed})
+    if rest == "covers/zip" and method == "GET":
+        ids = {int(x) for x in (q.get("ids") or [""])[0].split(",") if x.isdigit()}
+        files = [(path("output_dir") / c["file"], c["file"]) for c in covers() if c["id"] in ids]
+        if not files:
+            raise LookupError("Nothing selected.")
+        return _zip_response(h, f"UnderCover covers ({len(files)}).zip", files)
+    m = re.fullmatch(r"covers/(\d+)(?:/(rename))?", rest)
+    if m:
+        from ..frontman.pipeline import history
+        item = next((x for x in history() if x["id"] == int(m.group(1))), None)
+        if not item:
+            raise LookupError("That cover isn't there any more.")
+        if method == "DELETE":
+            _guard()
+            for f in (item["output"], item.get("converted_vocal"), item.get("converted_backing")):
+                if f:   # history hides entries whose file is gone (ids stay stable)
+                    _retry(lambda f=f: Path(f).unlink(missing_ok=True))
+            return h._json({"ok": True})
+        if method == "POST" and m.group(2) == "rename":
+            _guard()
+            name = re.sub(r'[<>:"/\\|?*]+', "_", (h._body().get("name") or "")).strip().strip(".")
+            if not name:
+                raise ModelError("Type a name.")
+            old = Path(item["output"])
+            new = old.with_name(name + old.suffix)
+            if new.exists() and new != old:
+                raise ModelError(f"There's already a file called \"{new.name}\".")
+            _retry(lambda: old.rename(new))
+            item["output"] = str(new)
+            if not item.get("title_set"):
+                item["title"], item["title_set"] = name, True
+            _write_history_line(item["id"], item)
+            return h._json({"ok": True, "file": new.name})
+    m = re.fullmatch(r"songs/([0-9a-f]{16})", rest)
+    if m and method == "DELETE":
+        _guard()
+        remove_song(m.group(1), stems_only=(q.get("stems_only") or ["0"])[0] == "1")
+        return h._json({"ok": True})
+    m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
+    if m:
+        from ..core.voices import get_voice, voices_dir
+        v = get_voice(m.group(1))
+        if m.group(2) == "export" and method == "GET":
+            from ..core.engine.rvc.index import export_faiss
+            tmp = path("cache_dir") / f"_export_{v.name}.index"
+            try:   # stored compact (fp16): other RVC tools need the standard faiss layout
+                idx = export_faiss(v.index, tmp) if v.index else None
+                files = [(v.pth, f"{v.name}.pth")] + ([(idx, f"{v.name}.index")] if idx else [])
+                return _zip_response(h, f"{v.name}.zip", files)
+            finally:
+                tmp.unlink(missing_ok=True)
+        if m.group(2) == "rename" and method == "POST":
+            _guard()
+            new = slug(h._body().get("name") or "")
+            if not new:
+                raise ModelError("Use letters or numbers for the name.")
+            target = voices_dir() / new
+            if target.exists():
+                raise ModelError(f"A voice called '{new}' already exists.")
+            _retry(lambda: v.dir.rename(target))
+            meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+            meta.update(name=new, dir=str(target), pth=str(target / "model.pth"),
+                        index=str(target / "model.index") if meta.get("index") else None)
+            from ..core import fsutil
+            fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
+            gpu.forget_voice(v.name)
+            return h._json({"ok": True, "name": new})
+    raise LookupError("Not found")
+
+
+def _zip_response(h, name: str, files: list[tuple[Path, str]]):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:   # audio/models don't compress
+        for p, arc in files:
+            if p.exists():
+                z.write(p, arc)
+    data = buf.getvalue()
+    h.send_response(200)
+    h.send_header("Content-Type", "application/zip")
+    h.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
+    h.send_header("Content-Length", str(len(data)))
+    h.end_headers()
+    h.wfile.write(data)

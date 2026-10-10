@@ -53,10 +53,10 @@ def main() -> int:
 
     # The app's own config must load (setup.ps1 edits it; a stray BOM or bad edit breaks every start).
     app = Path(__file__).resolve().parent.parent
-    if (app / "undercover" / "config.py").exists():
+    if (app / "undercover" / "core" / "config.py").exists():
         sys.path.insert(0, str(app))
         try:
-            from undercover.config import CONFIG
+            from undercover.core.config import CONFIG
             rep["config_backend"] = CONFIG["gpu"].get("backend")
             want = "cuda" if args.backend.startswith("cuda") else args.backend
             if rep["config_backend"] != want:
