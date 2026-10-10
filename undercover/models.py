@@ -504,6 +504,11 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         shutil.move(str(pth), target / "model.pth")
         if index:
             shutil.move(str(index), target / "model.index")
+            try:   # half the size on disk (fp16); exports rebuild a faiss file for other tools
+                from .rvc.index import compact_in_place
+                compact_in_place(target / "model.index")
+            except Exception:
+                pass   # unreadable/unusual index: keep it as it came (loading says so later)
         voice = Voice(name=name, dir=target, pth=target / "model.pth",
                       index=(target / "model.index") if index else None,
                       version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
