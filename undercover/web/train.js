@@ -94,6 +94,7 @@ function follow(id, kind) {
     if (ev.final) {
       closeStream();
       if (ev.state === "error") showError(ev.message, kind === "train" ? "Training stopped" : "That didn't work");
+      else if (ev.state === "paused") { /* the Pause bar at the top says so, with Resume */ }
       else if (ev.message && kind === "prepare" && ev.message.length) showError(ev.message, "Some sources were skipped", null, true);
       if (kind === "auto") { clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true; if (ev.state === "done") loadVoices(); }
       refresh().then(() => { if (kind === "export" && ev.voice) loadVoices(); });
