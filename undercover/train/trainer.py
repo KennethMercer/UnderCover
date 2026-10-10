@@ -127,7 +127,9 @@ def choose_holdout(proj: Project) -> list[str]:
 def data_key_for(proj: Project, sr: int) -> tuple[str, list[str], list[str]]:
     """(key, kept ids, holdout ids) for the current sample selection; the key changes when samples change."""
     kept = sorted(p.id for p in proj.phrases if p.kept)
-    holdout = [h for h in (proj.train.get("holdout") or choose_holdout(proj)) if h in kept]
+    # a stored holdout whose phrases are all left out now (e.g. speech dropped for singing) would leave an empty set,
+    # and an empty set used to be re-chosen on the next call: a different key, so a paused run restarted from zero
+    holdout = [h for h in (proj.train.get("holdout") or []) if h in kept] or [h for h in choose_holdout(proj) if h in kept]
     key = f"{sr}:" + hashlib.sha1("|".join(kept + ["#"] + holdout).encode()).hexdigest()[:16]
     return key, kept, holdout
 
