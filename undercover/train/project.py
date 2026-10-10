@@ -433,7 +433,8 @@ def _music_limits(proj: Project) -> dict:
     Songs always have music under the singing; their separated vocals stay clean up to about +6 dB (Elliott Smith's
     album tracks: hiss the same at -2 and +6 dB; median phrase +3 dB, so -12 threw out 630 of 754 phrases)."""
     from .source import is_sung
-    return {s.id: (TCFG.get("music_db_sung", 6.0) if is_sung(s) else TCFG["music_db"]) for s in proj.sources}
+    singer = proj.mode != "speaking"
+    return {s.id: (TCFG.get("music_db_sung", 6.0) if singer and is_sung(s) else TCFG["music_db"]) for s in proj.sources}
 
 
 def find_speakers(proj: Project):
@@ -551,10 +552,12 @@ def score(proj: Project):
     if len(close) >= 5:
         r2 = np.mean(close, 0)
         ref = r2 / (np.linalg.norm(r2) + 1e-9)
-    sref = _sung_reference(proj, emb, ref)
+    # singing only matters for singers: a speaking project ignores song-like titles ("Obama Acapella" remixes)
+    singer = proj.mode != "speaking"
+    sref = _sung_reference(proj, emb, ref) if singer else None
     lim = _music_limits(proj)
     from .source import is_sung
-    sung_src = {s.id for s in proj.sources if is_sung(s)}
+    sung_src = {s.id for s in proj.sources if is_sung(s)} if singer else set()
     if sref is not None or "speaker:sung" in emb:   # kept for the voice check (tests singers on singing)
         if sref is None:
             emb.pop("speaker:sung")
