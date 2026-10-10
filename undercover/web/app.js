@@ -363,7 +363,7 @@ const SLIDERS = { key: v => keyLabel(+v),
                   volume_envelope: v => +v <= 0.15 ? "original's" : +v >= 0.85 ? "voice's own" : (+v).toFixed(2),
                   backing_db: v => +v ? `${+v > 0 ? "+" : "−"}${Math.abs(+v)} dB` : "0 dB" };
 const SEGS = ["quality", "format", "octave", "backing_octave", "reverb"];
-const CHECKS = ["karaoke", "dereverb", "pitch_cleanup", "polish"];
+const CHECKS = ["karaoke", "dereverb", "pitch_cleanup", "polish", "fit"];
 function loadOpts() {
   const saved = store.get("uc-opts", {});
   delete saved.pitch;  // old vocal-only pitch setting (put the vocal out of key); replaced by key + octave
@@ -376,11 +376,16 @@ function syncControls() {
   for (const k of CHECKS) $("#" + k).checked = !!S.opts[k];
   renderBackingSelect();
   for (const id of SEGS) $$(`#${id} button`).forEach(b => b.setAttribute("aria-pressed", b.dataset.v === String(S.opts[id])));
+  fitState();
   summary();
+}
+// "Fit pitch to the voice": octave and key are chosen per song, so the manual controls step back
+function fitState() {
+  $$("[data-pitch]").forEach(f => { f.classList.toggle("off", !!S.opts.fit); f.querySelectorAll("button, input").forEach(c => c.disabled = !!S.opts.fit); });
 }
 function saveOpts() { store.set("uc-opts", S.opts); summary(); refreshEstimate(); }
 for (const k in SLIDERS) $("#" + k).addEventListener("input", e => { S.opts[k] = +e.target.value; $(`#${k}-o`).textContent = SLIDERS[k](e.target.value); saveOpts(); });
-for (const k of CHECKS) $("#" + k).addEventListener("change", e => { S.opts[k] = e.target.checked; saveOpts(); });
+for (const k of CHECKS) $("#" + k).addEventListener("change", e => { S.opts[k] = e.target.checked; if (k === "fit") fitState(); saveOpts(); });
 for (const id of SEGS) $("#" + id).addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   $$(`#${id} button`).forEach(x => x.setAttribute("aria-pressed", x === b));
@@ -406,7 +411,7 @@ $("#reset").onclick = () => { store.set("uc-opts", {}); loadOpts(); refreshEstim
 
 function summary() {
   const o = S.opts;
-  $("#adv-sum").textContent = `${pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
+  $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
     (o.backing_voice ? ` · backing by ${o.backing_voice}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
   const busy = !!S.job || !!S.osBusy;   // a one-shot cover uses the GPU queue too

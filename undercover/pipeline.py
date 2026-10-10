@@ -34,6 +34,7 @@ class CoverOptions:
     pitch_correction: float | None = None # snap to the song's scale, 0..1
     backing_voice: str | None = None  # second voice for the backing vocals (needs the lead/backing split)
     backing_octave: int | None = None # backing voice only, whole octaves (on top of the song key)
+    fit: bool | None = None           # set octave + key from the voice's range and the song's melody (overrides both)
 
 
 @dataclass
@@ -80,6 +81,25 @@ class CoverEngine:
             self._conv = Converter()
         return self._conv
 
+    def _fit(self, opts: "CoverOptions", voice, stems: dict, notes: list, bvoice) -> "CoverOptions":
+        """Octave + key that put the melody as fully inside the voice's range as possible (autopilot.pick_fit).
+        Needs a voice trained here (its range is measured); others keep the chosen octave/key."""
+        from dataclasses import replace
+        from .autopilot import pick_fit
+        from .convert import load_16k
+        rng = (voice.extra or {}).get("f0_range")
+        if not rng:
+            notes.append(f"Fit to voice: {voice.name} has no measured range (only voices trained in UnderCover do), "
+                         "so your octave and key were used.")
+            return opts
+        f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
+        fit = pick_fit(rng, bool((voice.extra or {}).get("from_speech")), f0)
+        notes.append(f"Fit to voice: octave {fit['octave']:+d}, key {fit['key']:+d} "
+                     f"({fit['outside']:.0%} of the melody outside {voice.name}'s range {rng[0]:.0f}-{rng[2]:.0f} Hz).")
+        same_backing = bvoice is not None and bvoice.name == voice.name
+        return replace(opts, octave=fit["octave"], key=fit["key"], pitch=None,
+                       backing_octave=fit["octave"] if same_backing else opts.backing_octave)
+
     def make_cover(self, song: Path, opts: CoverOptions, out: Path | None = None,
                    progress: Progress | None = None, title: str | None = None,
                    stems: dict | None = None, record: bool = True, key_song: Path | None = None) -> CoverResult:
@@ -107,6 +127,8 @@ class CoverEngine:
                          progress=lambda f, step: report("separating", f, {"main": "Separating vocals", "karaoke": "Splitting lead and backing vocals", "dereverb": "Removing reverb"}[step]))
         secs["separate"] = round(time.perf_counter() - t, 2)
         report("separating", 1.0, "Stems ready")
+        if opts.fit:
+            opts = self._fit(opts, voice, stems, notes, bvoice)
 
         report("converting", 0.0, f"Converting the vocal to {voice.name}")
         t = time.perf_counter()
