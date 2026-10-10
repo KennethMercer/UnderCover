@@ -381,3 +381,8 @@ svg.chart { width: 100%; height: 150px; display: block; }
 
 /* manual octave/key while "Fit pitch to the voice" is on */
 .field.off { opacity: .45; }
+
+/* Advanced settings group headings (span the whole grid) */
+.adv-h { grid-column: 1 / -1; margin: 6px 0 -8px; font-size: 13px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.adv-h span { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
+.adv-h:first-child { margin-top: 0; }
