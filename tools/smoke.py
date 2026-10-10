@@ -83,6 +83,73 @@ def u_imports():
     return f"{len(mods)} modules"
 
 
+MODULES = ("frontman", "mouthpiece", "speakeasy")   # the suite's modules (safehouse and app have their own rules)
+
+
+def import_edges(pkg: Path) -> list:
+    """(importing module, imported module, file:line) for every import inside the package, including the ones inside
+    functions. Relative imports are resolved; `from X import name` counts as importing X.name when that's a module."""
+    import ast
+    names = {".".join(p.relative_to(pkg.parent).with_suffix("").parts).removesuffix(".__init__")
+             for p in pkg.rglob("*.py") if "__pycache__" not in p.parts}
+    edges = []
+    for f in pkg.rglob("*.py"):
+        if "__pycache__" in f.parts:
+            continue
+        mod = ".".join(f.relative_to(pkg.parent).with_suffix("").parts)
+        here = mod.removesuffix(".__init__") if f.name == "__init__.py" else mod.rsplit(".", 1)[0]
+        for n in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if isinstance(n, ast.Import):
+                targets = [a.name for a in n.names]
+            elif isinstance(n, ast.ImportFrom):
+                base = n.module or ""
+                if n.level:
+                    up = here.split(".")[: len(here.split(".")) - (n.level - 1)]
+                    base = ".".join(up + ([n.module] if n.module else []))
+                targets = [f"{base}.{a.name}" if f"{base}.{a.name}" in names else base for a in n.names]
+            else:
+                continue
+            where = f"{f.relative_to(pkg.parent).as_posix()}:{n.lineno}"
+            edges += [(mod.removesuffix(".__init__"), t, where) for t in targets if t.split(".")[0] == pkg.name]
+    return edges
+
+
+def dependency_problems(pkg: Path) -> list:
+    """ARCHITECTURE.md's dependency rules, checked on the import graph."""
+    def part(m):   # "core", "frontman", ..., "app", or "" for the package's own top level (the thin entry points)
+        bits = m.split(".")
+        return bits[1] if len(bits) > 2 or (len(bits) == 2 and (pkg / bits[1]).is_dir()) else ""
+    bad = []
+    for src, dst, where in import_edges(pkg):
+        s, d = part(src), part(dst)
+        if s == d:
+            continue
+        why = None
+        if s == "core" and d in (*MODULES, "safehouse", "app"):
+            why = "core imports nothing from the modules, safehouse or app"
+        elif s == "mouthpiece" and d != "core":
+            why = "mouthpiece imports core only"
+        elif s in ("frontman", "speakeasy") and d == "mouthpiece" and dst != f"{pkg.name}.mouthpiece.service":
+            why = f"{s} uses MouthPiece through mouthpiece.service only"
+        elif s in ("frontman", "speakeasy") and d in ("frontman", "speakeasy"):
+            why = "frontman and speakeasy never import each other"
+        elif d == "safehouse" and s != "app":
+            why = "only app imports safehouse"
+        elif d == "app" and src != f"{pkg.name}.server":
+            why = "nothing imports app except the undercover/server.py entry point"
+        if why:
+            bad.append(f"{where} imports {dst} ({why})")
+    return bad
+
+
+@check("dependencies: core / modules / safehouse / app rules (ARCHITECTURE.md)")
+def u_deps():
+    edges = import_edges(ROOT / "undercover")
+    bad = dependency_problems(ROOT / "undercover")
+    assert not bad, "; ".join(bad)
+    return f"{len(edges)} imports checked"
+
+
 @check("pick_fit: key + octave fit")
 def u_fit():
     import numpy as np
@@ -285,7 +352,7 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_fit, u_window, u_phone, u_stems, u_sources):
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")
