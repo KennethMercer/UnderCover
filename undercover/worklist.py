@@ -61,6 +61,10 @@ def _save():
 
 # ---------------------------------------------------------------- pause / resume
 
+def _log(msg: str):
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] worklist: {msg}", flush=True)
+
+
 def _voice_jobs():
     return [j for j in list(S.JOBS.values()) if j.kind in TRAIN_KINDS and not j.finished]
 
@@ -78,6 +82,7 @@ def pause_all(resume_after_restart: bool = False) -> dict:
         if resume_after_restart:
             st["resume_after_restart"] = True
         _save()
+        _log(f"pause (restart={resume_after_restart}); running: {[j.kind for j in _voice_jobs()]}")
         from .train import api as train_api
         for j in _voice_jobs():
             j.pausing = True
@@ -101,6 +106,7 @@ def remember(job):
         elif spec not in st["resume"]:
             st["resume"].append(spec)
         _save()
+        _log(f"remembered {spec.get('label')}; held={st['held']} resume={len(st['resume'])}")
 
 
 def resume_all() -> dict:
@@ -109,6 +115,7 @@ def resume_all() -> dict:
         st = _state()
         st["held"] = False
         specs, st["resume"] = st["resume"], []
+        _log(f"resume {[x.get('label') for x in specs]}")
         for it in st["queue"]:
             if it.get("state") == "paused":
                 it["state"] = "queued"
@@ -428,11 +435,14 @@ def _loop():
     while True:
         try:
             st = _state()
-            if st.get("resume_after_restart") and S.STATUS.get("models") == "ready":
+            if S.STATUS.get("models") == "ready" and (st.get("resume_after_restart") or (st["resume"] and not st["held"])):
+                # paused only to restart (or paused work left without a hold): carry on
                 with _LOCK:
                     st.pop("resume_after_restart", None)
                     _save()
-                resume_all()   # paused only to restart: carry on
+                r = resume_all()
+                if r.get("problems"):
+                    _log(f"resume problems: {r['problems']}")
             busy = bool(_voice_jobs())
             want_awake = busy and st["settings"].get("keep_awake", True)
             if want_awake != awake:
@@ -453,8 +463,8 @@ def _loop():
                         pass   # wouldn't finish before the deadline: waits for the next night
                     else:
                         _run_item(nxt)
-        except Exception:   # noqa: BLE001 - the loop must survive anything
-            pass
+        except Exception as e:   # noqa: BLE001 - the loop must survive anything
+            _log(f"loop error: {type(e).__name__}: {e}")
         time.sleep(10)
 
 
