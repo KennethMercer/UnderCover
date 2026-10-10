@@ -851,11 +851,11 @@ def run(S, job, text: str, prefer_train: bool = False, song_url: str | None = No
             x["cost"] = (x["fit"]["cost"] if x["fit"] else 0.0) + version_penalty(x["clean"])
         best = min(versions, key=lambda x: x["cost"])
         meta, song, stems, song_hz = use(best)
-        plan["song"]["compared"] = [{"title": x["pick"].title, "url": x["pick"].url, "chosen": x is best,
-                                     "outside": x["fit"]["outside"] if x["fit"] else None, **x["clean"]} for x in versions]
-        for x in versions:
-            if x is not best and x["new"]:
-                _drop_song(x["meta"]["id"])   # downloaded only for the comparison
+        # the other versions stay in the library (one click to try them; taste beats the numbers: the user preferred
+        # a version ranked second). Unused ones go with the Library's "songs never used" clean-up after 30 days.
+        plan["song"]["compared"] = [{"title": x["pick"].title, "url": x["pick"].url, "id": x["meta"]["id"],
+                                     "chosen": x is best, "outside": x["fit"]["outside"] if x["fit"] else None,
+                                     **x["clean"]} for x in versions]
     song_f0 = _LAST_F0.get(str(stems["vocals"]))
     if not rng and plan.get("person_range"):   # community voice: the real person's range, from their kept clips
         rng, speech = plan["person_range"], plan.get("person_speech", True)
