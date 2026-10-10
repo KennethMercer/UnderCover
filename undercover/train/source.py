@@ -65,6 +65,35 @@ def _ydl(**opts):
     return yt_dlp.YoutubeDL({**base, **opts})
 
 
+def _cancelled_in(e):
+    """A Cancelled raised in our progress hook comes back wrapped by yt-dlp: find it."""
+    cause = e
+    while cause is not None:
+        if cause.__class__.__name__ == "Cancelled":
+            return cause
+        cause = getattr(cause, "exc_info", [None, None])[1] if getattr(cause, "exc_info", None) else cause.__context__
+    return None
+
+
+TRANSIENT = ("403", "429", "HTTP Error 5", "timed out", "Connection", "Remote end closed", "IncompleteRead")
+
+
+def download_retrying(ydl, url: str, attempts: int = 3):
+    """ydl.download with retries: YouTube throws a 403 at the audio stream now and then (2026-10-10: 4 of 7 videos
+    in a row, all fine on retry). Raises the last error; a cancel is raised immediately."""
+    import time
+    for i in range(attempts):
+        try:
+            return ydl.download([url])
+        except Exception as e:
+            c = _cancelled_in(e)
+            if c is not None:
+                raise c
+            if i == attempts - 1 or not any(t in str(e) for t in TRANSIENT):
+                raise
+            time.sleep(2 + 3 * i)
+
+
 class _QuietLogger:
     def debug(self, msg): pass
     def info(self, msg): pass
@@ -197,13 +226,10 @@ def download(src: Source, dest_dir: Path, progress=None) -> Path:
     try:
         with _ydl(**opts) as ydl:
             try:
-                ydl.download([src.url])
+                download_retrying(ydl, src.url)
             except Exception as e:
-                cause = e   # a Cancelled raised in our progress hook comes back wrapped
-                while cause is not None:
-                    if cause.__class__.__name__ == "Cancelled":
-                        raise cause
-                    cause = getattr(cause, "exc_info", [None, None])[1] if getattr(cause, "exc_info", None) else cause.__context__
+                if _cancelled_in(e) is not None:
+                    raise
                 raise ModelError(f"Couldn't download '{src.title}' ({_short(e)}).")
         cands = [p for p in work.glob(f"{src.id}.*") if p.suffix == ".wav"]
         if not cands or cands[0].stat().st_size == 0:

@@ -239,14 +239,12 @@ def download(r: SongResult, register, progress=None) -> dict:
                     progress(min(1.0, d.get("downloaded_bytes", 0) / total))
             opts["progress_hooks"] = [hook]
         with _ydl(**opts) as ydl:
+            from .train.source import _cancelled_in, download_retrying
             try:
-                ydl.download([r.url])
+                download_retrying(ydl, r.url)
             except Exception as e:
-                cause = e
-                while cause is not None:   # yt-dlp wraps exceptions raised in our progress hook
-                    if cause.__class__.__name__ == "Cancelled":
-                        raise cause
-                    cause = getattr(cause, "exc_info", [None, None])[1] if getattr(cause, "exc_info", None) else cause.__context__
+                if _cancelled_in(e) is not None:
+                    raise
                 raise ModelError(f"Couldn't download '{r.title}' ({_short(e)}).")
         f = next(iter(work.glob("song.flac")), None)
         if not f:
