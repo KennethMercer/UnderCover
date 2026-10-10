@@ -702,7 +702,7 @@ def train_new_voice(S, job, person: str, control, push, project: str | None = No
                 control.stop = True
             if ev.get("stage") == "training" and ev.get("epochs"):
                 push("voice", 0.12 + 0.85 * ev.get("fraction", 0),
-                     f"Training: epoch {ev.get('epoch', 0)} of {ev['epochs']}", eta=ev.get("eta"))
+                     f"Training: epoch {ev.get('epoch', 0)} of {ev['epochs']}", eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"])
             elif ev.get("stage") == "preparing":
                 push("voice", 0.12, f"Training: {ev.get('note', 'getting ready')}")
         st = tr.run(control, progress=tprog)
