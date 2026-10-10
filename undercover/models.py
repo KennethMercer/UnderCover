@@ -543,8 +543,11 @@ def list_voices() -> list[Voice]:
     out = []
     for meta in sorted(voices_dir().glob("*/meta.json")):
         d = json.loads(meta.read_text(encoding="utf-8"))
-        d["dir"], d["pth"] = Path(d["dir"]), Path(d["pth"])
-        d["index"] = Path(d["index"]) if d.get("index") else None
+        # files are found next to meta.json, whatever folder was stored (the app folder may have been moved)
+        here = meta.parent
+        d["dir"] = here
+        d["pth"] = here / Path(d["pth"]).name if (here / Path(d["pth"]).name).exists() else Path(d["pth"])
+        d["index"] = (here / Path(d["index"]).name if (here / Path(d["index"]).name).exists() else Path(d["index"]))             if d.get("index") else None
         out.append(Voice(**d))
     return out
 
