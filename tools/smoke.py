@@ -1,7 +1,7 @@
 """Smoke test: does UnderCover still work end to end? Run after every phase of a restructure and before merging.
 
     .venv\\Scripts\\python.exe tools\\smoke.py               # unit + API + one cover + one speech (~2 min, test server on 7861)
-    .venv\\Scripts\\python.exe tools\\smoke.py --full        # + a quick training with Pause/Resume (~8 min)
+    .venv\\Scripts\\python.exe tools\\smoke.py --full        # + a quick training with Pause/Resume, transcripts + cadence (~13 min)
     .venv\\Scripts\\python.exe tools\\smoke.py --unit-only   # no server needed (~20 s)
 
 Needs the TEST server running on port 7861 (preview config "undercover-test"); refuses the user's server on 7860.
@@ -234,6 +234,73 @@ def u_sources():
 
 # ---------------------------------------------------------------- API checks (test server)
 
+@check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
+def u_paused():
+    """Known bug fixed in phase 4: run_job's Paused branch returned before worklist.remember(job)."""
+    from undercover.core import jobs, worklist
+    from undercover.core.jobs import Job, Paused
+    from undercover.core.config import path
+    old_port, old_state = jobs.PORT, worklist._STATE
+    jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
+    f = path("cache_dir") / "worklist-7999.json"
+    try:
+        worklist.PAUSABLE.add("zz-smoke")
+        job = Job("zz-smoke")
+        job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
+
+        def fn(job):
+            raise Paused()
+        jobs.run_job(job, fn)
+        assert job.state == "paused", job.state
+        assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
+        worklist.forget_paused()
+        assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
+        # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
+        import inspect
+        from undercover.frontman import oneshot
+        src = inspect.getsource(oneshot.run)
+        assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
+    finally:
+        worklist.PAUSABLE.discard("zz-smoke")
+        jobs.PORT, worklist._STATE = old_port, old_state
+        f.unlink(missing_ok=True)
+
+
+@check("cadence: text measures, reference rule, add-ons registry")
+def u_cadence():
+    from undercover.doubleagent import cadence
+    from undercover.core import addons
+    from undercover.core.cadence import ENGINES, default_engine
+    assert cadence.syllables("Is that the kind of country we want to leave to our children?") == 15
+    assert cadence.wer(["it was not easy"], ["it was not easy."]) == 0.0
+    assert cadence._plain("We did it together.") and not cadence._plain("In 2008, etc.")
+    assert {"chatterbox", "f5"} <= set(ENGINES) and default_engine() in ENGINES
+    ids = {a["id"] for a in addons.status()}
+    assert {"f5", "xtts"} <= ids, ids
+    # the accept / install / remove path, with a tiny fake add-on (no packages, no files)
+    st0 = addons._state()
+    state = {"on": False}
+    fake = addons.register(addons.Addon(id="zz-smoke", name="Smoke", adds="nothing", licence="TEST-1.0", licence_url="-",
+                                        licence_summary="test only", size_mb=0, check=lambda: state["on"]))
+    try:
+        try:
+            addons.install(fake.id, accept=False)
+            raise AssertionError("installed without accepting")
+        except addons.ModelError:
+            pass
+        assert not addons.available(fake.id)
+        state["on"] = True   # what its packages/files would do
+        r = addons.install(fake.id, accept=True)
+        assert r["accepted"] and r["installed_on"] and addons.available(fake.id), r
+        state["on"] = False
+        r = addons.remove(fake.id)
+        assert not r["installed_on"] and r["accepted"] and not addons.available(fake.id), r
+    finally:
+        addons.ADDONS.pop(fake.id, None)
+        addons._save(st0) if st0 else addons._file().unlink(missing_ok=True)
+    return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
+
+
 @check("api: status ready")
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
@@ -442,6 +509,92 @@ def a_training():
             pass
 
 
+CAD_VOICE, CAD_PROJ = "zz-smoke-cadence", "zz-smoke-cadence"
+
+
+@check("cadence: transcripts + Train cadence on a scratch voice, then SpeakEasy reads with it (cleaned up)")
+def a_cadence():
+    """A small copy of a speech project (~100 clips) and of its voice: transcribe, measure, pick a reference, keep it;
+    SpeakEasy then reads two sentences with the cadence. Everything is removed afterwards."""
+    from undercover.core.config import path
+    from undercover.core.voices import voices_dir, remove_voice
+    pdir, vdir = path("cache_dir") / "training", voices_dir()
+    src = next((v for v in ("morgan-freeman", "barack-obama") if (pdir / v / "project.json").exists()), None)
+    assert src, "needs the morgan-freeman or barack-obama project"
+    voice = {"morgan-freeman": "morgan-freeman-uc", "barack-obama": "barack-obama-uc"}[src]
+    shutil.rmtree(pdir / CAD_PROJ, ignore_errors=True)
+    shutil.rmtree(vdir / CAD_VOICE, ignore_errors=True)
+    pj = json.loads((pdir / src / "project.json").read_text(encoding="utf-8"))
+    kept = lambda p: (p.get("choice") if p.get("choice") is not None else not p.get("reason")) and not p.get("sung")
+    phr = sorted(pj["phrases"], key=lambda p: (p["source"], p["start"]))
+    take, n = [], 0
+    for p in phr:   # whole sources until ~100 kept clips (stretches of talk need neighbours)
+        if n >= 100 and take and p["source"] != take[-1]["source"]:
+            break
+        take.append(p)
+        n += kept(p)
+    (pdir / CAD_PROJ / "clips").mkdir(parents=True)
+    for p in take:
+        f = pdir / src / "clips" / f"{p['id']}.wav"
+        if f.exists():
+            shutil.copyfile(f, pdir / CAD_PROJ / "clips" / f.name)
+    shutil.copyfile(pdir / src / "embeddings.npz", pdir / CAD_PROJ / "embeddings.npz")
+    pj.update(name=CAD_PROJ, phrases=take, train={})
+    (pdir / CAD_PROJ / "project.json").write_text(json.dumps(pj), encoding="utf-8")
+    shutil.copytree(vdir / voice, vdir / CAD_VOICE, ignore=shutil.ignore_patterns("tts"))
+    meta = json.loads((vdir / CAD_VOICE / "meta.json").read_text(encoding="utf-8"))
+    meta["name"], meta["dir"] = CAD_VOICE, str(vdir / CAD_VOICE)
+    meta["extra"]["project"] = CAD_PROJ
+    meta["extra"].pop("tts", None)
+    (vdir / CAD_VOICE / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    item = None
+    try:
+        # 1. transcripts as their own job (pausable; resuming does the rest)
+        j = api(f"/api/train/projects/{CAD_PROJ}/transcribe", {})["job"]
+        wait_for(lambda: next((x for x in api("/api/jobs") if x["id"] == j and x["state"] in ("done", "error")), None), 900, every=3,
+                 what="transcripts")
+        done = next(x for x in api("/api/jobs") if x["id"] == j)
+        assert done["state"] == "done", done.get("final")
+        tr = json.loads((pdir / CAD_PROJ / "transcripts.json").read_text(encoding="utf-8"))["clips"]
+        assert len(tr) >= 50, f"only {len(tr)} transcripts"
+        # 2. Train cadence, as SpeakEasy's button does (a queue item that runs now)
+        w = api("/api/speak/cadence", {"voice": CAD_VOICE, "now": True})
+        item = next(i for i in w["queue"] if i["kind"] == "cadence" and i["target"] == CAD_VOICE)
+        st = lambda: next((i for i in api("/api/work")["queue"] if i["id"] == item["id"]), {})
+        wait_for(lambda: st().get("state") in ("done", "failed", "skipped"), 1200, every=5, what="cadence item")
+        res = st()
+        assert res["state"] == "done", res.get("result")
+        v = next(x for x in api("/api/speak/voices") if x["name"] == CAD_VOICE)
+        assert v["cadence"]["has"], v["cadence"]
+        sc = v["cadence"]["scores"]
+        # 3. SpeakEasy reads with it
+        r = api("/api/speak", {"text": "It was not easy. But we did it together, and we finished the work.", "voice": CAD_VOICE})
+        assert r["plan"]["mode"] == "cadence", r["plan"]
+        job = r["job"]
+        wait_for(lambda: next((x for x in api("/api/jobs") if x["id"] == job and x["state"] in ("done", "error")), None), 300, every=2,
+                 what="cadence speech")
+        sj = next(x for x in api("/api/jobs") if x["id"] == job)
+        assert sj["state"] == "done", sj.get("final")
+        sid = next(x for x in api("/api/speak/recent") if x["voice"] == CAD_VOICE)["id"]
+        api(f"/api/speak/{sid}", method="DELETE")
+        return f"{len(tr)} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}"
+    finally:
+        if item:
+            try:
+                api("/api/work/remove", {"id": item["id"]})
+            except Exception:   # noqa: BLE001
+                pass
+        for x in api("/api/speak/recent"):
+            if x["voice"] == CAD_VOICE:
+                api(f"/api/speak/{x['id']}", method="DELETE")
+        time.sleep(1)
+        try:
+            remove_voice(CAD_VOICE)
+        except Exception:   # noqa: BLE001
+            shutil.rmtree(vdir / CAD_VOICE, ignore_errors=True)
+        shutil.rmtree(pdir / CAD_PROJ, ignore_errors=True)
+
+
 def main():
     global BASE
     ap = argparse.ArgumentParser()
@@ -456,7 +609,7 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak):
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")
@@ -468,6 +621,7 @@ def main():
             a_jobs_feed()
         if a.full:
             a_training()
+            a_cadence()
     failed = [n for ok, n in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed in {time.time() - t0:.0f} s" + (f"; FAILED: {', '.join(failed)}" if failed else ""))
     sys.exit(1 if failed else 0)
