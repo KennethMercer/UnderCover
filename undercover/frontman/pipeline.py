@@ -10,7 +10,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from ..core import tray
 from ..core.config import path
+from . import history as hstore
 
 
 @dataclass
@@ -50,6 +52,7 @@ class CoverResult:
     options: dict = field(default_factory=dict)
     created: str = ""
     title: str = ""
+    id: str = ""   # permanent history id, set when the cover is recorded (frontman/history.py)
 
 
 # progress(stage, fraction 0..1, message)
@@ -188,7 +191,7 @@ class CoverEngine:
                           seconds=secs, options={k: v for k, v in asdict(opts).items() if v is not None},
                           created=time.strftime("%Y-%m-%d %H:%M:%S"), title=title)
         if record:
-            _append_history(res)
+            res.id = _append_history(res)["id"]
         return res
 
     def make_preview(self, song: Path, opts: CoverOptions, variants: list[dict], seconds: float = 15.0,
@@ -295,43 +298,38 @@ def _unique(base: Path, fmt: str) -> Path:
     return cand.with_name(f"{cand.name}.{fmt}")
 
 
-def _append_history(r: CoverResult):
+def _append_history(r: CoverResult) -> dict:
     rec = asdict(r)
+    rec.pop("id", None)
     rec.update(output=str(r.output), song=str(r.song), converted_vocal=str(r.converted_vocal),
                converted_backing=str(r.converted_backing) if r.converted_backing else None)
-    with open(path("output_dir") / "history.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec) + "\n")
+    return hstore.record(rec)   # adds the permanent id, then rolls the recent tray (frontman/history.py)
 
 
 def history() -> list[dict]:
-    p = path("output_dir") / "history.jsonl"
-    if not p.exists():
-        return []
-    items = []
-    for n, line in enumerate(p.read_text(encoding="utf-8").splitlines()):
-        if line.strip():
-            try:
-                item = json.loads(line)
-            except ValueError:   # a half-written last line (power cut mid-write) mustn't hide every cover
-                continue
-            item["id"] = n  # line number: stable, the log is append-only
-            if not item.get("title") or re.fullmatch(r"[0-9a-f]{16}", item["title"]):
-                item["title"] = upload_title(Path(item["song"])) or Path(item["song"]).stem
-            items.append(item)
-    out_dir = path("output_dir")
-    for i in items:   # stored before the app folder moved: the cover is still in the output folder by name
-        if not Path(i["output"]).exists() and (out_dir / Path(i["output"]).name).exists():
-            i["output"] = str(out_dir / Path(i["output"]).name)
-    return [i for i in reversed(items) if Path(i["output"]).exists()]
+    """Every finished cover whose file is there, newest first, each with its permanent `id`, `kept` / `kept_at` and
+    `recent` (it is in the recent tray: the latest 15)."""
+    items = hstore.finished()
+    recent = {i["id"] for i in tray.in_tray(items)}
+    for i in items:
+        if not i.get("title") or re.fullmatch(r"[0-9a-f]{16}", i["title"]):
+            i["title"] = upload_title(Path(i["song"])) or Path(i["song"]).stem
+        i["kept"] = bool(i.get("kept"))
+        i["recent"] = i["id"] in recent
+    return list(reversed(items))
 
 
-def history_items() -> list[dict]:
-    """The covers history as the page shows it (file URLs instead of paths)."""
+def history_items(everything: bool = False) -> list[dict]:
+    """The covers history as the page shows it (file URLs instead of paths): the recent tray, newest first (the latest
+    15 finished covers, kept or not), or every cover with everything=True."""
     from ..core.files import file_url
     out = []
     for h in history():
+        if not (everything or h["recent"]):
+            continue
         out.append({
             "id": h["id"], "title": h.get("title") or Path(h["song"]).stem, "voice": h["voice"],
+            "kept": h["kept"], "kept_at": h.get("kept_at"), "recent": h["recent"],
             "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": h.get("options", {}),
             "output": file_url(h["output"]), "output_name": Path(h["output"]).name,
             "original": file_url(h["song"]), "vocal": file_url(h.get("converted_vocal")),
