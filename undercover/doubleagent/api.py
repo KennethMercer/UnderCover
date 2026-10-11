@@ -451,7 +451,7 @@ def _export(h, proj, b):
         raise ModelError("Wait for training to finish (or stop it) before adding the voice.")
     if not proj.train.get("saves"):
         raise ModelError("There's nothing to add yet. Train first.")
-    job = jobs.Job("train-export")
+    job = jobs.Job("train-export", title=f"Adding the voice from {proj.person or proj.name}")
     jobs.JOBS[job.id] = job
     ACTIVE[proj.name] = {"job": job, "control": None, "kind": "export"}
 

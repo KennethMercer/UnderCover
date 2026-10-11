@@ -72,9 +72,10 @@ def friendly(e: BaseException, stage: str = "") -> str:
 # ---------------------------------------------------------------- jobs
 
 class Job:
-    def __init__(self, kind: str):
+    def __init__(self, kind: str, title: str | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.kind = kind
+        self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
         self.state = "queued"
         self.events: list[dict] = []
         self.cond = threading.Condition()
@@ -83,6 +84,8 @@ class Job:
         self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
         self.resume_spec = None   # how to start this work again (worklist.resume)
         self.control = None       # trainer Control, for jobs that train
+        self.created = time.time()
+        self.ended = None
 
     def push(self, **ev):
         with self.cond:
@@ -93,11 +96,41 @@ class Job:
     def finish(self, state: str, **ev):
         with self.cond:
             self.state = state
+            self.ended = time.time()
         self.push(state=state, final=True, **ev)
 
     @property
     def finished(self):
         return self.state in ("done", "error", "cancelled", "paused")
+
+    def snapshot(self) -> dict:
+        """The job's latest progress in one small dict (GET /api/jobs): the page's fallback when its event stream
+        stalls, how it finds running work after a reload, and SafeHouse's job list."""
+        evs = list(self.events)
+        last = evs[-1] if evs else {}
+        stage = last.get("stage")
+        snap = {"id": self.id, "kind": self.kind, "state": self.state, "title": self.title or (self.resume_spec or {}).get("label"),
+                "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
+                "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
+                "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs)}
+        # the newest value of each progress field within the current stage (some events carry only a note)
+        for ev in reversed(evs[-40:]):
+            if ev.get("stage") != stage and not ev.get("final"):
+                break
+            for k in ("frac", "fraction", "epoch", "epochs", "eta", "total_left", "stage_left", "index", "of", "elapsed"):
+                if ev.get(k) is not None:
+                    snap.setdefault(k, ev[k])
+        frac, fraction = snap.pop("frac", None), snap.pop("fraction", None)
+        snap["progress"] = frac if frac is not None else fraction
+        plan = next((ev["plan"] for ev in reversed(evs) if isinstance(ev.get("plan"), dict)), None)
+        if plan and self.kind == "auto":   # the one-shot: its request and what it chose
+            name = lambda v, k: v.get(k) if isinstance(v, dict) else v
+            snap["title"] = snap["title"] or plan.get("request")
+            snap["plan"] = {"request": plan.get("request"), "song": name(plan.get("song"), "title"),
+                            "voice": name(plan.get("voice"), "name")}
+        if last.get("final"):
+            snap["final"] = {"state": last.get("state"), "message": last.get("message")}
+        return snap
 
 
 JOBS: dict[str, Job] = {}
