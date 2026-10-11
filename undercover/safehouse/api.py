@@ -101,6 +101,7 @@ def _route(h, method, p):
             cover_history.remove_line(item["id"])   # the line goes too: no hidden entries, ids are never reused
             return h._json({"ok": True})
         if method == "POST" and m.group(2) in ("keep", "unkeep"):
+            h._body()   # read what the page sent, or it's taken for the start of its next request on the same connection
             cover_history.set_kept(item["id"], m.group(2) == "keep")
             return h._json(next(c for c in covers() if c["id"] == item["id"]))
         if method == "POST" and m.group(2) == "rename":
@@ -123,6 +124,7 @@ def _route(h, method, p):
         from ..speakeasy import speak
         try:
             if method == "POST" and m.group(2) in ("keep", "unkeep"):
+                h._body()
                 return h._json(speak.set_kept(m.group(1), m.group(2) == "keep"))
             if method == "DELETE" and not m.group(2):
                 _guard(SPEECH_WORK)

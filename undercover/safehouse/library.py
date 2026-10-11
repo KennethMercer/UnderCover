@@ -331,6 +331,8 @@ def _cleanup_groups() -> dict:
                           "paths": unused_models, "default": True}
     old_speech = []
     for x in speak.list_speech():
+        if x.get("kept"):   # sent to SafeHouse: clean-up never takes a kept track
+            continue
         try:
             age = now - time.mktime(time.strptime(x["created"], "%Y-%m-%d %H:%M:%S"))
         except (TypeError, ValueError):
@@ -338,7 +340,7 @@ def _cleanup_groups() -> dict:
         if age > 30 * DAY:
             d = speak.speech_dir()
             old_speech += [d / f for f in (x["file"], x["mp3"]) if f] + [d / f"{x['id']}.json"]
-    g["old_speech"] = {"title": "Speech older than 30 days", "detail": "Made in SpeakEasy; it can be made again from the same text",
+    g["old_speech"] = {"title": "Speech older than 30 days", "detail": "Made in SpeakEasy and not kept; it can be made again from the same text",
                        "paths": old_speech, "default": False}
     g["unused_songs"] = {"title": "Songs never used for a cover (30+ days)", "detail": "The song files and their stems",
                          "paths": unused, "default": False}
