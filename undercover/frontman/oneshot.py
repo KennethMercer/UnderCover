@@ -323,7 +323,16 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None)
                 return
             jobs.run_job(other, fn)
     control.service = service
-    v = resolve_voice(job, person, prefer_train, control, push, plan)
+    try:
+        v = resolve_voice(job, person, prefer_train, control, push, plan)
+    except jobs.Paused:
+        # Resume continues this one-shot, not a new one: the same song, and straight back to its voice's training
+        # (the project keeps its clips and its training's resume point) when that had started
+        spec = job.resume_spec or {}
+        spec["song_url"] = (plan.get("song") or {}).get("url") or spec.get("song_url")
+        if (plan.get("voice") or {}).get("how") == "train":
+            spec["prefer_train"] = True
+        raise
 
     # 3. settings + cover
     vhz, speech = voice_f0(v)

@@ -23,6 +23,7 @@ from ..core import fsutil, jobs
 from ..core.config import path
 from ..core.files import file_url
 from ..core.jobs import Cancelled
+from ..core.cadence import engine_info, engine_ready
 from ..core.voices import ModelError, get_voice
 from ..doubleagent import service
 from . import tts
@@ -49,20 +50,31 @@ def parts_dir(job_id: str) -> Path:
 
 # ---------------------------------------------------------------- plan: which Reader, which pitch
 
-def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0) -> dict:
-    """How a voice will read: the Reader (auto-picked from the voice's speaking pitch unless chosen) and the pitch
-    shift that puts the Reader's speech at the person's speaking pitch (+ nudge semitones)."""
+def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0, cadence=None) -> dict:
+    """How a voice will read: with the person's cadence when the voice has one (and cadence isn't False), else the
+    Reader (auto-picked from the voice's speaking pitch unless chosen) and the pitch shift that puts the Reader's
+    speech at the person's speaking pitch (+ nudge semitones)."""
     v = get_voice(voice)
     sp = service.speaking_pitch(v)
+    pack = service.cadence_pack(v)
+    if pack and cadence is not False and engine_ready(pack.get("engine", "chatterbox")):
+        info = engine_info(pack.get("engine", "chatterbox"))
+        return {"voice": v.name, "mode": "cadence", "engine": pack.get("engine"), "engine_name": info["name"],
+                "rtf": info["rtf"], "person": (v.extra or {}).get("person") or pack.get("project"),
+                "reader": None, "auto": True, "reader_label": None, "reader_hz": None,
+                "target_hz": sp and sp["hz"], "target_low": sp and sp["low"], "pitch_from": sp and sp["how"],
+                "pitch": float(nudge or 0), "nudge": float(nudge or 0), "speed": float(np.clip(speed or 1.0, *SPEEDS)),
+                "tempo": float(pack.get("tempo") or 1.0), "gap_s": float(pack.get("gap_s") or 0.4),
+                "para_gap_s": float(pack.get("para_gap_s") or 0.8), "has_cadence": True}
     auto = reader in (None, "", "auto")
     if not auto and reader not in tts.READERS:
         raise SpeakError(f"Unknown Reader '{reader}'.")
     r = tts.pick_reader(sp and sp["hz"], sp and sp["low"]) if auto else reader
     pitch = (tts.pitch_for(r, sp["hz"]) if sp else 0.0) + float(nudge or 0)
-    return {"voice": v.name, "reader": r, "auto": auto, "reader_label": tts.READERS[r][0], "reader_hz": tts.READERS[r][1][1],
-            "target_hz": sp and sp["hz"], "target_low": sp and sp["low"], "pitch_from": sp and sp["how"],
-            "pitch": float(np.clip(pitch, -24, 24)), "nudge": float(nudge or 0),
-            "speed": float(np.clip(speed or 1.0, *SPEEDS))}
+    return {"voice": v.name, "mode": "reader", "reader": r, "auto": auto, "reader_label": tts.READERS[r][0],
+            "reader_hz": tts.READERS[r][1][1], "target_hz": sp and sp["hz"], "target_low": sp and sp["low"],
+            "pitch_from": sp and sp["how"], "pitch": float(np.clip(pitch, -24, 24)), "nudge": float(nudge or 0),
+            "speed": float(np.clip(speed or 1.0, *SPEEDS)), "rtf": 3.0, "has_cadence": bool(pack)}
 
 
 def voices() -> list[dict]:
@@ -78,7 +90,7 @@ def voices() -> list[dict]:
         out.append({"name": v.name, "trained": bool(ex.get("trained")), "likeness": ex.get("likeness"),
                     "person": ex.get("person"), "kind": ("speech" if ex.get("from_speech") else "singing") if ex.get("trained")
                     else ("singing" if ex.get("person_range") and not ex.get("person_range_speech") else None),
-                    "undertrained": service.undertrained(v), "cadence": bool(ex.get("tts")),
+                    "undertrained": service.undertrained(v), "cadence": service.cadence_status(v),
                     "reader": p["reader"], "reader_label": p["reader_label"], "pitch": p["pitch"],
                     "target_hz": p["target_hz"], "target_low": p["target_low"], "pitch_from": p["pitch_from"]})
     out.sort(key=lambda x: (not x["trained"], x["name"]))
@@ -105,7 +117,8 @@ def _level(y: np.ndarray, rms_db: float = -20.0, peak: float = 0.89) -> np.ndarr
     return y.astype(np.float32)
 
 
-def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0) -> dict:
+def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0,
+                cadence=None) -> dict:
     """The speech job: sentences out as they're made (events with a URL each), then the finished WAV + MP3."""
     from scipy.signal import resample_poly
     from ..core import gpu
@@ -116,12 +129,14 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     if len(text) > MAX_CHARS:
         raise SpeakError(f"That's {len(text):,} characters; SpeakEasy reads up to {MAX_CHARS:,} at a time (about two hours). "
                          "Split it into parts.")
-    p = plan(voice, reader, speed, nudge)
+    p = plan(voice, reader, speed, nudge, cadence)
     sents = tts.sentences(text)
     if not sents:
         raise SpeakError("There's nothing to read in that text.")
+    if p["mode"] == "cadence":
+        return _make_cadence(job, text, sents, p)
     t0 = time.perf_counter()
-    job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents])
+    job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents], start_after=1)
     if not tts.ready():
         job.push(stage="reading", frac=0.0, message="Downloading the speech model (about 340 MB, once)")
         tts.kokoro(lambda f, d, t: job.push(stage="reading", frac=0.0, message=f"Downloading the speech model: {d / 1e6:.0f} of {t / 1e6:.0f} MB")
@@ -193,6 +208,69 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     return item
 
 
+START_AFTER = 3   # cadence engines read slower than realtime: playback starts once this many sentences are ready
+
+
+def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
+    """The person's cadence: the engine reads each sentence (worker process, one sentence ahead), the voice's RVC
+    model makes it their exact timbre, and their own gap between sentences follows."""
+    from ..core import gpu
+    from ..core.cadence import WorkerError, render
+    t0 = time.perf_counter()
+    v = get_voice(p["voice"])
+    pack = service.cadence_pack(v)
+    ref = service.cadence_ref(v)
+    job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents],
+             start_after=min(START_AFTER, len(sents)))
+    conv = gpu.MODELS.converter
+    lv = conv.voice(p["voice"])
+    sr = lv.tgt_sr
+    pdir = parts_dir(job.id)
+    pdir.mkdir(parents=True, exist_ok=True)
+    tempo = float(np.clip(p["tempo"] * p["speed"], 0.6, 1.5))
+    ahead = 2   # requests in the worker at once: it reads the next sentence while this one is converted
+
+    def progress(msg, done=0, total=0):
+        job.push(stage="reading", frac=0.0, message=msg)
+    reqs: list = []
+    pieces, made, t_tts, t_rvc = [], 0.0, 0.0, 0.0
+    try:
+        for i, s in enumerate(sents):
+            while len(reqs) < min(len(sents), i + ahead):
+                k = len(reqs)
+                reqs.append(render.request(sents[k]["text"], pack, ref, seed=1234 + k, progress=progress if k == 0 else None))
+            fut, wav = reqs[i]
+            t = time.perf_counter()
+            try:
+                render.client.wait(fut, cancel=lambda: job.cancel)
+            except WorkerError as e:
+                raise SpeakError(str(e))
+            t_tts += time.perf_counter() - t
+            t = time.perf_counter()
+            y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"])
+            y = _level(y)
+            t_rvc += time.perf_counter() - t
+            pause = 0.0 if s["pause"] == 0 else (p["para_gap_s"] if s["pause"] >= 0.5 else p["gap_s"])
+            y = np.concatenate([y, np.zeros(int(sr * pause), np.float32)])
+            f = pdir / f"s{i:04d}.wav"
+            sf.write(str(f), y, sr, subtype="PCM_16")
+            pieces.append(y)
+            made += len(y) / sr
+            el = time.perf_counter() - t0
+            left = el / (i + 1) * (len(sents) - i - 1)
+            job.push(stage="speaking", frac=round((i + 1) / len(sents), 3), index=i, of=len(sents), url=file_url(f),
+                     seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1),
+                     message=f"Sentence {i + 1} of {len(sents)} ready")
+    except BaseException:
+        for fut, wav in reqs:   # what the worker still makes is thrown away when it arrives
+            fut.add_done_callback(lambda _f, wav=wav: Path(wav).unlink(missing_ok=True))
+        shutil.rmtree(pdir, ignore_errors=True)
+        raise
+    job.push(stage="saving", frac=1.0, message="Saving")
+    return _save(np.concatenate(pieces) if pieces else np.zeros(sr, np.float32), sr, text, p,
+                 {"total": round(time.perf_counter() - t0, 2), "reader": round(t_tts, 2), "voice": round(t_rvc, 2)}, job.id)
+
+
 def _title(text: str, n: int = 6) -> str:
     words = re.findall(r"[\w'’-]+", text)
     return " ".join(words[:n]) + ("…" if len(words) > n else "") if words else "Speech"
@@ -217,6 +295,7 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
     mp3 = _mp3(wav)
     meta = {"id": sid, "title": title, "file": wav.name, "mp3": mp3.name if mp3 else None, "text": text,
             "voice": p["voice"], "reader": p["reader"], "reader_auto": p["auto"], "speed": p["speed"], "pitch": p["pitch"],
+            "mode": p.get("mode", "reader"), "engine": p.get("engine"),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
             "job": job_id}
     fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
@@ -240,7 +319,7 @@ def _item(m: dict) -> dict:
     wav, mp3 = d / m["file"], d / m["mp3"] if m.get("mp3") else None
     size = sum(f.stat().st_size for f in (wav, mp3) if f and f.exists())
     return {**{k: m.get(k) for k in ("id", "title", "text", "voice", "reader", "reader_auto", "speed", "pitch", "created",
-                                      "duration", "seconds", "file", "mp3")},
+                                      "duration", "seconds", "file", "mp3", "mode", "engine")},
             "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
             "format": "WAV" + (" + MP3" if mp3 and mp3.exists() else "")}
 

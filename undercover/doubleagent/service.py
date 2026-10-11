@@ -8,8 +8,12 @@ Other modules (FrontMan's one-shot, SpeakEasy) use voices through this file only
   project_for / is_musician    the person's training project (singers get their songs, not just interviews)
   voice_f0, undertrained       facts about a voice
   speaking_pitch               how the voice's person sounds when they talk (SpeakEasy pitches its Reader to it)
+  cadence_pack / cadence_ref   a voice's cadence (phase 4: the reference clip + numbers SpeakEasy reads by)
+  cadence_status               has / can make / queued, for a voice row
+  start_cadence, start_new_voice   "Train cadence" / "New voice" as queue items (now or tonight)
 """
 import re
+from pathlib import Path
 import time
 
 from ..core.config import CONFIG
@@ -394,9 +398,11 @@ NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably")   # sou
 
 
 def train_new_voice(job, person: str, control, push, project: str | None = None,
-                    target_minutes: float | None = None) -> str:
+                    target_minutes: float | None = None, prepare_only: bool = False, speaking: bool = False) -> str:
     """Find clips -> prepare (topping up sources until the target) -> auto-confirm -> train -> add. Returns voice name.
-    project: continue that Train-tab project (its ticked sources, choices and reference are kept)."""
+    project: continue that Train-tab project (its ticked sources, choices and reference are kept).
+    prepare_only: stop once the clips are ready and return the PROJECT name (a cadence for a downloaded voice);
+    speaking: a new project gathers speech even for a singer (a cadence is about how they talk)."""
     from . import api as train_api
     from . import project as P
     from . import sources as srcmod
@@ -404,7 +410,13 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
     from .trainer import Trainer, export_voice
     TC = {**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
     key = slug(person)
-    proj = P.Project.load(project) if project else project_for(person)
+    if project:
+        proj = P.Project.load(project)
+    elif speaking:
+        from .night import _project_named
+        proj = _project_named(person) or P.Project.create(person, "speaking")
+    else:
+        proj = project_for(person)
     busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
                  and (n == proj.name or a["kind"] in ("train", "auto"))), None)
     if busy:
@@ -488,6 +500,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         if mins < 3:
             raise ModelError(f"Only {mins:.1f} minutes of {person}'s voice could be found online (3+ needed). "
                              "Open DoubleAgent to add links or recordings, then try again.")
+        if prepare_only:
+            return proj.name
         push("voice", 0.12, f"Training a voice from {mins:.1f} min of {person}")
         st = proj.train
         if st.get("state") != "paused":
@@ -523,3 +537,43 @@ def noisiness(x, sr: int) -> float:
     """How hissy a recording is (spectral flatness of its voiced parts; ~0.2 for a clean voice)."""
     from .project import noisiness as n
     return n(x, sr)
+
+
+# ---------------------------------------------------------------- cadence (phase 4), for SpeakEasy
+
+def cadence_pack(v) -> dict | None:
+    """The voice's cadence (extra.tts + its reference clip), or None: SpeakEasy reads with it when present."""
+    from .cadence import pack_of
+    return pack_of(v)
+
+
+def cadence_ref(v) -> Path:
+    return v.dir / "tts" / ((v.extra or {}).get("tts") or {}).get("ref", "ref.wav")
+
+
+def cadence_status(v) -> dict:
+    """For a voice row: has a cadence? can one be made (and how)? queued or running in the queue?"""
+    from ..core import worklist
+    from .cadence import can_train
+    pack = cadence_pack(v)
+    can, why = can_train(v)
+    q = next((i for i in worklist._state()["queue"] if i["kind"] in ("cadence", "newcad") and i["state"] in ("queued", "paused", "running")
+              and (i["target"] == v.name or f"{slug(i['target'])}-uc" == v.name)), None)
+    out = {"has": bool(pack), "can": can, "why": why, "queue": q and q["state"]}
+    if pack:
+        out.update(engine=pack.get("engine"), made=pack.get("made"), data_minutes=pack.get("data_minutes"),
+                   scores=pack.get("scores"), gap_s=pack.get("gap_s"), tempo=pack.get("tempo"))
+    return out
+
+
+def start_cadence(voice: str, now: bool = True) -> dict:
+    """"Train cadence" (or "Find clips + cadence"): a queue item, run now (when the GPU is free) or tonight."""
+    from ..core import worklist
+    return worklist.add("cadence", voice, now=now)
+
+
+def start_new_voice(person: str, cadence: bool = True, now: bool = True) -> dict:
+    """"New voice" from SpeakEasy: DoubleAgent's full pipeline (voice, then its cadence); the voice shows up in
+    FrontMan too."""
+    from ..core import worklist
+    return worklist.add("newcad" if cadence else "new", person, now=now)
