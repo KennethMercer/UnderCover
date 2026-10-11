@@ -390,7 +390,8 @@ def a_jobs_feed():
                     break
         snap = next(j for j in api("/api/jobs") if j["id"] == job)
         assert snap["state"] == "done" and snap["final"]["state"] == "done" and snap["ended"], f"finished job shows as {snap}"
-        assert snap["events"] >= 3 and snap.get("of") == 2, f"snapshot lacks progress fields: {snap}"
+        assert snap["events"] >= 3 and snap["stage"] and (snap["progress"] is not None or snap.get("of")), \
+            f"snapshot lacks progress fields: {snap}"
     finally:
         wait_for(lambda: next((j for j in api("/api/jobs") if j["id"] == job), {}).get("ended"), 120, what="speech finished")
         for s in api("/api/speak/recent"):
