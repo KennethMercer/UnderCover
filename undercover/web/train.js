@@ -1,25 +1,18 @@
 "use strict";
-// Train a voice: find clips of a person, keep only their voice, review samples, train an RVC model.
+// MouthPiece's new voice wizard: find clips of a person, keep only their voice, review samples, train an RVC model.
 // Uses helpers from app.js ($, $$, esc, api, showError, store, fmtTime, VOL, loadVoices).
 
 const T = { list: [], proj: null, filter: store.get("uc-train-filter", "kept"), mode: "speaking", es: null,
             audio: new Audio(), playing: null, live: null, busy: false };
 
-// ------------------------------------------------------------ tabs
-function showTab(tab) {
-  const train = tab === "train";
-  for (const t of ["covers", "train", "library"]) {
-    $(`#view-${t}`).hidden = t !== tab;
-    $(`#tab-${t}`).setAttribute("aria-selected", t === tab);
-  }
+// ------------------------------------------------------------ module switch (shell.js showTab)
+document.addEventListener("uc:module", e => {
+  const train = e.detail === "mouthpiece";
   $("#drop-overlay div").textContent = train ? "Drop recordings of the person to add them as a source"
                                              : "Drop a song to load it, or a voice model (.zip / .pth) to install it";
-  store.set("uc-tab", tab);
   if (train && !T.loaded) { T.loaded = true; loadProjects(); }
   if (!train) stopClip();
-  if (tab === "library" && window.libShow) window.libShow(); else if (window.libHide) window.libHide();
-}
-$$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+});
 const STEP_TARGET = { 1: "#tr-find", 2: "#tr-ref", 3: "#tr-samples", 4: "#tr-train" };
 $$("#tr-steps .step").forEach(el => {
   el.tabIndex = 0; el.setAttribute("role", "button");
@@ -414,7 +407,7 @@ function renderDone() {
     d.innerHTML = `<div class="row spread"><div><h3 class="tr-h3">${esc(st.exported)} is ready</h3>
       <p class="meta">v2 · ${(st.sr || 40000) / 1000} kHz · epoch ${st.exported_epoch} · ${st.train_minutes} min of training audio · added to your voices</p></div>
       <div class="row"><button class="btn" id="tr-show-files">Show files</button><button class="btn primary" id="tr-use">Make a cover with it</button></div></div>`;
-    $("#tr-use").onclick = async () => { showTab("covers"); await loadVoices(st.exported); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    $("#tr-use").onclick = async () => { showTab("frontman"); await loadVoices(st.exported); window.scrollTo({ top: 0, behavior: "smooth" }); };
     $("#tr-show-files").onclick = () => api("/api/open-folder", { json: { voice: st.exported } }).catch(e => showError(e.message));
   } else if (st.state === "trained") {
     d.hidden = false;
@@ -465,4 +458,3 @@ function render() {
   renderReference(); renderSamples(); renderTrainForm(); renderRun(); renderListen(); renderDone();
 }
 
-if (store.get("uc-tab", "covers") === "train") showTab("train");

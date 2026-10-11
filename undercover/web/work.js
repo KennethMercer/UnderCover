@@ -1,8 +1,15 @@
 "use strict";
-// Background voice work: the Pause / Resume bar at the top of every tab, and the overnight queue (Train a voice).
-// Server side: undercover/worklist.py. The bar is fed by /api/status (polled by app.js); the queue by /api/work.
+// Suite-level work: the Pause / Resume bar under the top bar on every module, the overnight queue (its editor on
+// MouthPiece's page, and the drawer from the Queue button). Server side: undercover/core/worklist.py. The bar is fed by
+// /api/status (polled by app.js); the queue by /api/work.
 
 const W = { last: null, open: false };
+
+// which module owns a job: the one that started it (colour + label in the bar and the drawer)
+const OWNER = { auto: "frontman" };   // the one-shot; voice work ("train", "train-*", queue items) is MouthPiece's
+const MOD_NAME = { frontman: "FrontMan", mouthpiece: "MouthPiece", speakeasy: "SpeakEasy", safehouse: "SafeHouse" };
+const ownerOf = kind => OWNER[kind] || "mouthpiece";
+const glyph = m => `<svg class="ico" aria-hidden="true"><use href="#g-${m}"/></svg>`;
 
 function fmtMin(m) {
   m = Math.round(m || 0);
@@ -19,6 +26,9 @@ function renderWorkBar(w) {
   const bar = $("#workbar");
   if (!w) { bar.hidden = true; return; }
   const run = (w.running || [])[0];
+  // waiting + running queue jobs (the queue only runs while armed); /api/work, once loaded, knows exactly
+  queueCount(W.last ? W.last.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length
+                    : (w.queued || 0) + (w.armed ? (w.running || []).length : 0));
   let text = "", state = "";
   if (w.held) {
     const res = w.resume || [];
@@ -40,7 +50,13 @@ function renderWorkBar(w) {
   bar.hidden = !text;
   if (!text) return;
   bar.dataset.state = state;
+  const owner = run ? ownerOf(run.kind) : "mouthpiece";
+  bar.dataset.owner = owner;
+  $("#wb-who").innerHTML = `${glyph(owner)}${MOD_NAME[owner]}`;
   $("#wb-text").textContent = text;
+  const frac = state === "run" && run.fraction != null ? run.fraction : null;
+  $("#wb-bar").hidden = frac == null;
+  if (frac != null) $("#wb-bar i").style.width = Math.round(frac * 100) + "%";
   $("#wb-pause").hidden = state === "held";
   $("#wb-resume").hidden = state !== "held";
   $("#chip-train").hidden = true;   // the bar says it all
@@ -62,15 +78,43 @@ $("#wb-resume").onclick = async () => {
   $("#wb-resume").disabled = false;
   if (W.open) loadQueue();
 };
-$("#wb-open").onclick = () => { showTab("train"); $("#q-panel").scrollIntoView({ behavior: "smooth", block: "start" }); };
 
-// ------------------------------------------------------------ the overnight queue (Train a voice tab)
+// ------------------------------------------------------------ the overnight queue (MouthPiece's page + the drawer)
 async function loadQueue() {
   try { W.last = await api("/api/work"); } catch (e) { return; }
   renderQueue();
 }
+const jobWhat = i => i.kind === "improve" ? `Improve ${esc(i.target)}` : `Train a new voice: ${esc(i.target)}`;
+const jobKind = i => i.kind === "improve" ? "voice · improve" : i.kind === "new" ? "voice · new" : esc(i.kind);
+// the drawer: a short list, labelled by module and kind; the full editor stays on MouthPiece's page
+function renderDrawer() {
+  const w = W.last;
+  if (!w) { $("#qd-list").innerHTML = `<p class="meta">Loading…</p>`; return; }
+  const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
+  $("#qd-total").innerHTML = left.length
+    ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> of work · done by about <span class="mono">${clock(w.done_by)}</span>` +
+      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet (start it in MouthPiece)")
+    : "Nothing queued. Add a voice to improve, or a person to train, and let it run overnight.";
+  $("#qd-list").innerHTML = w.queue.map(i => {
+    const run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state), owner = ownerOf(i.kind);
+    const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
+    const note = done ? `${i.state} · ${fmtMin(i.minutes)}${i.result?.note ? " · " + i.result.note : ""}` : run ? live.message || "running"
+      : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
+    return `<div class="qd-job ${run ? "running" : ""} ${done ? "done" : ""}" data-owner="${owner}">
+      <div><span class="kind">${MOD_NAME[owner]} · ${jobKind(i)}</span><b>${jobWhat(i)}</b>${note ? `<small>${esc(note)}</small>` : ""}
+        ${run ? `<div class="bar"><i style="width:${Math.round((live.fraction || 0) * 100)}%"></i></div>` : ""}</div>
+      <div class="qside">${done ? "" : `<span>~${fmtMin((i.estimate || {}).total)}</span>`}
+        ${run ? "" : `<button class="linkbtn" type="button" data-qd-rm="${i.id}">${done ? "Clear" : "Remove"}</button>`}</div></div>`;
+  }).join("") || "";
+  $$("#qd-list [data-qd-rm]").forEach(b => b.onclick = async () => {
+    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.qdRm } }); renderQueue(); }
+    catch (e) { showError(e.message, "Couldn't remove that"); }
+  });
+}
 function renderQueue() {
   const w = W.last; if (!w) return;
+  if (!$("#q-drawer").hidden) renderDrawer();
+  queueCount(w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length);
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
   $("#q-total").innerHTML = left.length
     ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> <span class="meta">· done by about <span class="mono">${clock(w.done_by)}</span>${w.armed && w.settings.start_at ? ` if it starts at ${clock(w.settings.start_at)}` : ""}</span>`
@@ -83,7 +127,7 @@ function renderQueue() {
   at.textContent = w.armed && w.settings.start_at ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock($("#q-at-time").value)}`;
   $("#q-list").innerHTML = w.queue.map(i => {
     const e = i.estimate || {}, run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state);
-    const what = i.kind === "improve" ? `Improve ${esc(i.target)}` : `Train a new voice: ${esc(i.target)}`;
+    const what = jobWhat(i);
     const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
     const chips = done ? `<span class="qchip ${i.state === "done" ? "ok" : "bad"}">${esc(i.state)} · ${fmtMin(i.minutes)}</span>`
       : [["prepare", "prepare"], ["train", "train"], ["compare", i.kind === "improve" ? "compare" : "check"]]
@@ -155,8 +199,9 @@ async function loadCandidates() {
   }).join("") : `<p class="meta">No voices yet. Use "New voices" to train one.</p>`;
   $$("#q-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? PICK.sel.add(cb.dataset.v) : PICK.sel.delete(cb.dataset.v); pickSummary(); });
   $("#q-other").hidden = !off.length;
-  $("#q-cands-off").textContent = off.map(c => c.voice).join(", ") + ". These were downloaded and UnderCover doesn't know whose voices they are. To train your own, add the person under New voices.";
+  $("#q-cands-off").textContent = off.map(c => c.voice).join(", ") + ". These were downloaded and MouthPiece doesn't know whose voices they are. To train your own, add the person under New voices.";
   pickSummary();
+  renderVoiceCards(PICK.cands);   // mouthpiece.js
 }
 function pickSummary() {
   const chosen = PICK.cands.filter(c => PICK.sel.has(c.voice));
@@ -204,6 +249,6 @@ $("#q-awake").onchange = async e => { W.last = await api("/api/work/settings", {
 $("#q-dismiss").onclick = async () => { W.last = await api("/api/work/dismiss", { json: {} }); renderQueue(); };
 function pollStatusSoon() { setTimeout(() => api("/api/status").then(s => renderWorkBar(s.work)).catch(() => {}), 300); }
 
-// refresh the queue while the Train tab is visible
-setInterval(() => { W.open = !$("#view-train").hidden; if (W.open) loadQueue(); }, 5000);
-document.addEventListener("click", e => { if (e.target.closest("[data-tab=train]")) setTimeout(() => { loadQueue(); loadCandidates(); }, 50); });
+// refresh the queue while MouthPiece's page or the drawer is open
+setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden; if (W.open) loadQueue(); }, 5000);
+document.addEventListener("uc:module", e => { if (e.detail === "mouthpiece") { loadQueue(); loadCandidates(); } });
