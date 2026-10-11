@@ -127,7 +127,7 @@ function renderList() {
       title = x.title; sub = [x.voice + (x.backing_voice ? ` + ${x.backing_voice}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
       side = `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "speech") {
-      title = x.title; sub = [x.voice, `${(+x.speed).toFixed(1)}×`, when(x.created)].join(" · ");
+      title = x.title; sub = [x.voice, paceWord(x), when(x.created)].join(" · ");
       side = `<span class="mono">${fmtTime(x.duration)}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
       title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
@@ -267,7 +267,7 @@ function speechDetail(d, x) {
   d.innerHTML = `<div class="dhead">${art(x.title, true)}<div style="min-width:0"><h3>${esc(x.title)}</h3><p class="meta">spoken by <b>${esc(x.voice)}</b> · ${esc(when(x.created))}</p></div></div>
     ${playerHtml()}
     <dl class="kv"><dt>Text</dt><dd class="lib-speech-text">${esc(x.text.length > 1200 ? x.text.slice(0, 1200) + "…" : x.text)}</dd>
-      <dt>Settings</dt><dd>${esc([`${(+x.speed).toFixed(2)}× speed`, `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
+      <dt>Settings</dt><dd>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
       ${x.seconds?.total ? `<dt>Made in</dt><dd>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
       <dt>Files</dt><dd class="mono">${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
     <div id="lib-rename-box"></div>

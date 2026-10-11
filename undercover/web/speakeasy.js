@@ -35,7 +35,7 @@ const seText = $("#se-text");
 seText.value = store.get("uc-se-text", "");
 function seWords() { return (seText.value.match(/[\w'’-]+/g) || []).length; }
 function seCount() {
-  const w = seWords(), secs = w / 3.0 / (+$("#se-speed").value || 1);
+  const w = seWords(), secs = w / 3.0 / sePaceFactor();
   $("#se-count").textContent = w ? `${w.toLocaleString()} word${w === 1 ? "" : "s"} · about ${fmtTime(Math.max(1, secs))}` : "0 words";
   seSummary();
 }
@@ -116,9 +116,12 @@ function seReaders() {
   $("#se-reader").value = store.get("uc-se-reader", "auto");
   if (!$("#se-reader").value) $("#se-reader").value = "auto";
 }
-$("#se-speed").value = store.get("uc-se-speed", 1);
-$("#se-speed").addEventListener("input", () => { $("#se-speed-out").textContent = `${(+$("#se-speed").value).toFixed(2)}×`; store.set("uc-se-speed", +$("#se-speed").value); seCount(); });
-$("#se-speed-out").textContent = `${(+$("#se-speed").value).toFixed(2)}×`;
+// Pace (phase 4c): Slower / Natural / Faster, made at that pace (the server's PACES), never stretched afterwards
+SE.pace = store.get("uc-se-pace", "natural");
+const sePaceFactor = () => ({ slower: 0.87, natural: 1, faster: 1.12 })[SE.pace] || 1;   // for the length estimate
+function sePaceShow() { $$("#se-pace button").forEach(b => b.setAttribute("aria-pressed", b.dataset.p === SE.pace)); }
+$$("#se-pace button").forEach(b => b.onclick = () => { SE.pace = b.dataset.p; store.set("uc-se-pace", SE.pace); sePaceShow(); seCount(); sePlan(); });
+sePaceShow();
 $("#se-reader").onchange = () => { store.set("uc-se-reader", $("#se-reader").value); sePlan(); };
 $("#se-nudge").addEventListener("input", () => sePlan(true));
 
@@ -129,7 +132,7 @@ function sePlan(soon) {
     if (!SE.voice) { SE.plan = null; seSummary(); return; }
     const seq = ++sePlanSeq;
     const qs = new URLSearchParams({ voice: SE.voice, reader: $("#se-reader").value || "auto", nudge: $("#se-nudge").value,
-                                     cadence: $("#se-cad").checked ? "1" : "0" });
+                                     cadence: $("#se-cad").checked ? "1" : "0", pace: SE.pace });
     try { const p = await api(`/api/speak/plan?${qs}`); if (seq === sePlanSeq) { SE.plan = p; seShowPlan(); } }
     catch (e) { if (seq === sePlanSeq) { SE.plan = null; seSummary(); } }
   }, soon ? 120 : 0);
@@ -142,12 +145,14 @@ function seShowPlan() {
   const cadOn = p.mode === "cadence";
   $("#se-cad").disabled = !c.has;
   $("#se-cad-field").classList.toggle("off", !c.has);
-  $("#se-cad-note").textContent = c.has ? (cadOn ? "Their pace and pauses, from their own clips. Reading is slower than realtime, so it starts after the first few sentences."
+  $("#se-cad-note").textContent = c.has ? (cadOn ? "Their pace and pauses, from their own clips. It starts playing after the first few sentences."
       : "Off: the quick built-in Reader speaks, then the voice makes it sound like them.")
     : c.queue ? "Their cadence is being made (DoubleAgent); it's used as soon as it's ready."
     : c.can ? `Their pace and pauses, learned from their clips. "Train cadence" on the voice makes it (minutes).` : (c.why || "Not available for this voice.");
   $("#se-cad-deep").textContent = c.has ? `${p.engine_name || c.engine} · from ${c.data_minutes ?? "?"} min of speech · likeness ${c.scores?.likeness ?? "?"} · cadence gap ${c.scores?.cadence_gap ?? "?"} · gap between sentences ${c.gap_s ?? "?"} s · tempo ${c.tempo ?? 1}` : "";
   $("#se-reader-field").hidden = cadOn;
+  $("#se-pace-deep").textContent = cadOn ? `${p.pace}: cfg_weight ${p.cfg_weight} · exaggeration ${p.exaggeration} · gap between sentences ${p.gap_s} s · no stretching`
+    : `${p.pace}: the Reader reads at ${p.speed}× · pauses ×${p.gap_scale}`;
   if (cadOn) {
     $("#se-nudge-out").textContent = p.nudge ? st(p.nudge) : "their own";
     $("#se-pitch-note").textContent = "With their cadence, they speak at their own pitch. Nudge it only if it sounds off.";
@@ -168,7 +173,7 @@ function seSummary() {
   $("#se-generate").disabled = !w || !SE.voice || !!busy;
   $("#se-generate").textContent = busy ? "Speaking…" : "Generate";
   if (!SE.voice) { $("#se-summary").textContent = "Pick a voice first."; return; }
-  const secs = w / 3.0 / (+$("#se-speed").value || 1);
+  const secs = w / 3.0 / sePaceFactor();
   const cad = SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
   const when = cad ? `with their cadence · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))} · starts playing after the first few sentences`
     : "starts playing after the first sentence";
@@ -182,7 +187,7 @@ $("#se-generate").onclick = async () => {
   if (!text || !SE.voice) return;
   $("#se-generate").disabled = true;
   let r;
-  try { r = await api("/api/speak", { json: { text, voice: SE.voice, reader: $("#se-reader").value, speed: +$("#se-speed").value, nudge: +$("#se-nudge").value,
+  try { r = await api("/api/speak", { json: { text, voice: SE.voice, reader: $("#se-reader").value, pace: SE.pace, nudge: +$("#se-nudge").value,
                                                cadence: $("#se-cad").checked ? null : false } }); }
   catch (e) { seSummary(); return showError(e.message, "SpeakEasy couldn't start"); }
   seStart(r.job, r.plan, r.estimate);
@@ -209,6 +214,7 @@ function seStart(job, plan, estimate, resumed = false) {
     }
     if (ev.sentences && !SE.sents.length) { SE.sents = ev.sentences; seReading(); }
     if (ev.start_after) SE.startAfter = ev.start_after;
+    if (ev.total_left != null) { SE.left = ev.total_left; seTrack(); }
     if (ev.stage === "reading") $("#se-progress").textContent = ev.message.toLowerCase();
     if (ev.stage === "speaking") {
       SE.parts[ev.index] = { url: ev.url, seconds: ev.seconds };
@@ -298,7 +304,7 @@ function seTrack() {
   const [pl, rd] = $$("#se-track i");
   pl.style.width = pct(played); rd.style.width = pct(Math.max(0, ready - played));
   $("#se-time").textContent = `${fmtTime(played)} / ${fmtTime(ready)} ready`;
-  $("#se-left").textContent = SE.done ? (SE.result ? `${fmtTime(ready)} in all` : "") : `~${fmtTime(total)} when done${SE.left != null ? ` · ${Math.ceil(SE.left)} s left to make` : ""}`;
+  $("#se-left").textContent = SE.done ? (SE.result ? `${fmtTime(ready)} in all` : "") : SE.left != null ? `${leftText(SE.left)} to make · ~${fmtTime(total)} in all` : `~${fmtTime(total)} in all`;
   $("#se-track").setAttribute("aria-valuetext", `${fmtTime(played)} played of ${fmtTime(ready)} ready`);
 }
 function seSeek(t) {   // seconds from the start, within what's made
@@ -331,7 +337,7 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, 6).map(r => `<div class="se-rrow">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${esc(r.voice)} · ${(+r.speed).toFixed(1)}× · ${esc(seWhen(r.created))}</small></div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${esc(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));

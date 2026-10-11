@@ -266,6 +266,39 @@ def u_paused():
         f.unlink(missing_ok=True)
 
 
+@check("time left: every progress event gets total_left (whole-job and per-stage kinds, learned stage times)")
+def u_eta():
+    """Phase 4c: an ETA on every bar. Job.push adds total_left from the job's own eta, else extrapolates its progress
+    (a staged kind adds the typical length of the stages still to come, learned from past runs)."""
+    from undercover.core import jobs
+    t = [1000.0]
+    real = jobs.time.time
+    jobs.time.time = lambda: t[0]
+    old = jobs._ETA_FILE
+    try:
+        jobs._ETA_FILE = {"auto": {"total": [100], "stages": {"song": [20], "voice": [10], "cover": [60]}}}
+        j = jobs.Job("zz-whole")
+        for k, p in enumerate((0.1, 0.2, 0.3, 0.5)):
+            j.push(stage="x", frac=p)
+            t[0] += 5
+        # 0.1 at t0, 0.5 at t0 + 15 s: 15 s per 0.4, so the 0.5 left takes 18.75 s
+        assert abs(j.events[-1]["total_left"] - 18.8) < 0.11, j.events[-1]
+        a = jobs.Job("auto")
+        a.push(stage="song", frac=0.0)
+        t[0] += 4
+        a.push(stage="song", frac=0.5)   # no rate yet within the stage: typical song left (20-4) + voice + cover
+        assert a.events[-1]["total_left"] == 86.0, a.events[-1]
+        e = jobs.Job("speech")
+        e.push(stage="reading", frac=0.0, total_left=12.0)
+        assert e.events[-1]["total_left"] == 12.0
+        tr = jobs.Job("train")
+        tr.push(stage="training", fraction=0.3, eta=300)
+        assert tr.events[-1]["total_left"] == 300
+    finally:
+        jobs.time.time = real
+        jobs._ETA_FILE = old
+
+
 @check("cadence: text measures, reference rule, add-ons registry")
 def u_cadence():
     from undercover.doubleagent import cadence
@@ -405,13 +438,15 @@ def a_speech():
     assert plan["reader"] and plan["target_hz"], f"no speaking pitch / Reader for {v['name']}"
     r = api("/api/speak", {"text": "This is a smoke test. One, two, three.", "voice": v["name"], "cadence": False})
     req = urllib.request.Request(BASE + f"/api/jobs/{r['job']}/events")
-    parts, final = [], None
+    parts, final, progress = [], None, []
     with urllib.request.urlopen(req, timeout=300) as resp:
         for raw in resp:
             line = raw.decode("utf-8").strip()
             if not line.startswith("data: "):
                 continue
             ev = json.loads(line[6:])
+            if ev.get("frac") is not None and not ev.get("final"):
+                progress.append(ev)
             if ev.get("stage") == "speaking":
                 parts.append(ev)
             if ev.get("final"):
@@ -420,6 +455,7 @@ def a_speech():
     assert final and final["state"] == "done", f"speech job ended {final and final.get('state')}: {final and final.get('message')}"
     item = final["result"]
     assert len(parts) == 2 and all(p.get("url") for p in parts), f"expected 2 sentences with URLs, got {len(parts)}"
+    assert progress and all(e.get("total_left") is not None for e in progress), "a speech progress event without total_left"
     wav = path("output_dir") / "speech" / item["file"]
     assert wav.exists() and wav.stat().st_size > 50_000, "speech WAV missing or empty"
     assert item.get("mp3_url"), "no MP3"
@@ -609,7 +645,7 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence):
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")

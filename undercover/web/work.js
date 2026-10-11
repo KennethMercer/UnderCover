@@ -37,7 +37,7 @@ function jobLine(j) {
   else if (j.message) bits.push(j.message);
   else if (j.state === "queued") bits.push("waiting for the GPU");
   const left = j.total_left ?? j.eta;
-  if (left != null && !j.pausing) bits.push(`~${fmtSecs(Math.max(1, left))} left`);
+  if (left != null && !j.pausing) bits.push(leftText(left));
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
@@ -169,7 +169,7 @@ function renderDrawer() {
   $("#qd-list").innerHTML = w.queue.map(i => {
     const run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state), owner = ownerOf(i.kind);
     const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
-    const note = done ? `${i.state} · ${fmtMin(i.minutes)}${i.result?.note ? " · " + i.result.note : ""}` : run ? live.message || "running"
+    const note = done ? `${i.state} · ${fmtMin(i.minutes)}${i.result?.note ? " · " + i.result.note : ""}` : run ? [live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")
       : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
     return `<div class="qd-job ${run ? "running" : ""} ${done ? "done" : ""}" data-owner="${owner}">
       <div><span class="kind">${MOD_NAME[owner]} · ${jobKind(i)}</span><b>${jobWhat(i)}</b>${note ? `<small>${esc(note)}</small>` : ""}
@@ -205,7 +205,7 @@ function renderQueue() {
          : i.kind === "newcad" ? [["prepare", "prepare"], ["train", "train"], ["transcribe", "transcribe"], ["test", "cadence"]]
          : [["prepare", "prepare"], ["train", "train"], ["compare", i.kind === "improve" ? "compare" : "check"]])
           .filter(([k]) => e[k]).map(([k, l]) => `<span class="qchip">${l} ~${fmtMin(e[k])}</span>`).join("");
-    const note = done ? esc(i.result?.note || "") : run ? esc(live.message || "running") : i.state === "paused" ? "paused · Resume (top of the page) continues it"
+    const note = done ? esc(i.result?.note || "") : run ? esc([live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")) : i.state === "paused" ? "paused · Resume (top of the page) continues it"
       : i.now ? "starts as soon as the GPU is free" : esc(i.note || "");
     return `<div class="qjob ${run ? "running" : ""} ${done ? "done" : ""}" draggable="${!run && !done}" data-id="${i.id}">
       <span class="grip" aria-hidden="true">${run || done ? "" : "⋮⋮"}</span>
