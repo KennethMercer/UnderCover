@@ -24,7 +24,7 @@ from ..core.config import path
 from ..core.files import file_url
 from ..core.jobs import Cancelled
 from ..core.voices import ModelError, get_voice
-from ..mouthpiece import service
+from ..doubleagent import service
 from . import tts
 
 MAX_CHARS = 50_000   # about 2 hours of speech

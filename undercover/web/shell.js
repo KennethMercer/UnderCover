@@ -4,8 +4,8 @@
 // train.js, library.js and work.js listen to. Uses helpers from app.js ($, $$, store) and work.js (loadQueue, renderDrawer).
 
 // module -> its view; the old tab names (deep links, localStorage "uc-tab") still work
-const MODULES = { frontman: "covers", mouthpiece: "train", speakeasy: "speakeasy", safehouse: "library" };
-const OLD_TABS = { covers: "frontman", train: "mouthpiece", library: "safehouse" };
+const MODULES = { frontman: "covers", doubleagent: "train", speakeasy: "speakeasy", safehouse: "library" };
+const OLD_TABS = { covers: "frontman", train: "doubleagent", mouthpiece: "doubleagent", library: "safehouse" };   // mouthpiece: the name before phase 2b
 const moduleOf = t => MODULES[t] ? t : OLD_TABS[t] || null;
 
 function showTab(tab) {
@@ -42,15 +42,15 @@ $("#wb-open").onclick = () => queueDrawer(true);
 $("#qd-close").onclick = $("#q-scrim").onclick = () => queueDrawer(false);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#q-drawer").hidden) queueDrawer(false); });
 $$("[data-qadd]").forEach(b => b.onclick = () => {
-  queueDrawer(false); showTab("mouthpiece");
+  queueDrawer(false); showTab("doubleagent");
   $(`#q-mode button[data-v="${b.dataset.qadd}"]`).click();
   $("#q-panel").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-// the count on the Queue button and the MouthPiece tab: jobs waiting or running
+// the count on the Queue button and the DoubleAgent tab: jobs waiting or running
 function queueCount(n) {
   $("#q-count").textContent = n ? `Queue · ${n}` : "Queue";
-  $("#mp-badge").hidden = !n; $("#mp-badge").textContent = n || "";
+  $("#da-badge").hidden = !n; $("#da-badge").textContent = n || "";
 }
 
 // first page: deep link, else the remembered tab (old names map to the modules)

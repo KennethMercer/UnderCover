@@ -1,14 +1,14 @@
 "use strict";
 // Suite-level work: the Pause / Resume bar under the top bar on every module, the overnight queue (its editor on
-// MouthPiece's page, and the drawer from the Queue button). Server side: undercover/core/worklist.py. The bar is fed by
+// DoubleAgent's page, and the drawer from the Queue button). Server side: undercover/core/worklist.py. The bar is fed by
 // /api/status (polled by app.js); the queue by /api/work.
 
 const W = { last: null, open: false };
 
 // which module owns a job: the one that started it (colour + label in the bar and the drawer)
-const OWNER = { auto: "frontman" };   // the one-shot; voice work ("train", "train-*", queue items) is MouthPiece's
-const MOD_NAME = { frontman: "FrontMan", mouthpiece: "MouthPiece", speakeasy: "SpeakEasy", safehouse: "SafeHouse" };
-const ownerOf = kind => OWNER[kind] || "mouthpiece";
+const OWNER = { auto: "frontman" };   // the one-shot; voice work ("train", "train-*", queue items) is DoubleAgent's
+const MOD_NAME = { frontman: "FrontMan", doubleagent: "DoubleAgent", speakeasy: "SpeakEasy", safehouse: "SafeHouse" };
+const ownerOf = kind => OWNER[kind] || "doubleagent";
 const glyph = m => `<svg class="ico" aria-hidden="true"><use href="#g-${m}"/></svg>`;
 
 function fmtMin(m) {
@@ -50,7 +50,7 @@ function renderWorkBar(w) {
   bar.hidden = !text;
   if (!text) return;
   bar.dataset.state = state;
-  const owner = run ? ownerOf(run.kind) : "mouthpiece";
+  const owner = run ? ownerOf(run.kind) : "doubleagent";
   bar.dataset.owner = owner;
   $("#wb-who").innerHTML = `${glyph(owner)}${MOD_NAME[owner]}`;
   $("#wb-text").textContent = text;
@@ -79,21 +79,21 @@ $("#wb-resume").onclick = async () => {
   if (W.open) loadQueue();
 };
 
-// ------------------------------------------------------------ the overnight queue (MouthPiece's page + the drawer)
+// ------------------------------------------------------------ the overnight queue (DoubleAgent's page + the drawer)
 async function loadQueue() {
   try { W.last = await api("/api/work"); } catch (e) { return; }
   renderQueue();
 }
 const jobWhat = i => i.kind === "improve" ? `Improve ${esc(i.target)}` : `Train a new voice: ${esc(i.target)}`;
 const jobKind = i => i.kind === "improve" ? "voice · improve" : i.kind === "new" ? "voice · new" : esc(i.kind);
-// the drawer: a short list, labelled by module and kind; the full editor stays on MouthPiece's page
+// the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
 function renderDrawer() {
   const w = W.last;
   if (!w) { $("#qd-list").innerHTML = `<p class="meta">Loading…</p>`; return; }
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
   $("#qd-total").innerHTML = left.length
     ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> of work · done by about <span class="mono">${clock(w.done_by)}</span>` +
-      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet (start it in MouthPiece)")
+      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet (start it in DoubleAgent)")
     : "Nothing queued. Add a voice to improve, or a person to train, and let it run overnight.";
   $("#qd-list").innerHTML = w.queue.map(i => {
     const run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state), owner = ownerOf(i.kind);
@@ -199,9 +199,9 @@ async function loadCandidates() {
   }).join("") : `<p class="meta">No voices yet. Use "New voices" to train one.</p>`;
   $$("#q-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? PICK.sel.add(cb.dataset.v) : PICK.sel.delete(cb.dataset.v); pickSummary(); });
   $("#q-other").hidden = !off.length;
-  $("#q-cands-off").textContent = off.map(c => c.voice).join(", ") + ". These were downloaded and MouthPiece doesn't know whose voices they are. To train your own, add the person under New voices.";
+  $("#q-cands-off").textContent = off.map(c => c.voice).join(", ") + ". These were downloaded and DoubleAgent doesn't know whose voices they are. To train your own, add the person under New voices.";
   pickSummary();
-  renderVoiceCards(PICK.cands);   // mouthpiece.js
+  renderVoiceCards(PICK.cands);   // doubleagent.js
 }
 function pickSummary() {
   const chosen = PICK.cands.filter(c => PICK.sel.has(c.voice));
@@ -249,6 +249,6 @@ $("#q-awake").onchange = async e => { W.last = await api("/api/work/settings", {
 $("#q-dismiss").onclick = async () => { W.last = await api("/api/work/dismiss", { json: {} }); renderQueue(); };
 function pollStatusSoon() { setTimeout(() => api("/api/status").then(s => renderWorkBar(s.work)).catch(() => {}), 300); }
 
-// refresh the queue while MouthPiece's page or the drawer is open
+// refresh the queue while DoubleAgent's page or the drawer is open
 setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden; if (W.open) loadQueue(); }, 5000);
-document.addEventListener("uc:module", e => { if (e.detail === "mouthpiece") { loadQueue(); loadCandidates(); } });
+document.addEventListener("uc:module", e => { if (e.detail === "doubleagent") { loadQueue(); loadCandidates(); } });

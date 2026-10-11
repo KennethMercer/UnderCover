@@ -1,4 +1,4 @@
-"""MouthPiece's public surface: find, check, make and improve the voice of a person.
+"""DoubleAgent's public surface: find, check, make and improve the voice of a person.
 
 Other modules (FrontMan's one-shot, SpeakEasy) use voices through this file only:
   installed_for / online_for   voices for a person (installed: trained here first; online community models)
@@ -487,7 +487,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         mins = proj.kept_seconds() / 60
         if mins < 3:
             raise ModelError(f"Only {mins:.1f} minutes of {person}'s voice could be found online (3+ needed). "
-                             "Open MouthPiece to add links or recordings, then try again.")
+                             "Open DoubleAgent to add links or recordings, then try again.")
         push("voice", 0.12, f"Training a voice from {mins:.1f} min of {person}")
         st = proj.train
         if st.get("state") != "paused":
