@@ -27,7 +27,7 @@ from ..core.fsutil import retry as _retry
 from ..core.voices import ModelError, slug
 from ..frontman.songs import remove_song
 from . import library
-from .library import _cleanup_groups, _guard, _remove, _update_ytdlp, _write_history_line, covers
+from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _remove, _update_ytdlp, _write_history_line, covers
 
 
 def handle(h, method: str, p: str) -> bool:
@@ -74,13 +74,13 @@ def _route(h, method, p):
         if not item:
             raise LookupError("That cover isn't there any more.")
         if method == "DELETE":
-            _guard()
+            _guard(COVER_WORK)
             for f in (item["output"], item.get("converted_vocal"), item.get("converted_backing")):
                 if f:   # history hides entries whose file is gone (ids stay stable)
                     _retry(lambda f=f: Path(f).unlink(missing_ok=True))
             return h._json({"ok": True})
         if method == "POST" and m.group(2) == "rename":
-            _guard()
+            _guard(COVER_WORK)
             name = re.sub(r'[<>:"/\\|?*]+', "_", (h._body().get("name") or "")).strip().strip(".")
             if not name:
                 raise ModelError("Type a name.")
@@ -99,17 +99,17 @@ def _route(h, method, p):
         from ..speakeasy import speak
         try:
             if method == "DELETE" and not m.group(2):
-                _guard()
+                _guard(SPEECH_WORK)
                 speak.delete_speech(m.group(1))
                 return h._json({"ok": True})
             if method == "POST" and m.group(2) == "rename":
-                _guard()
+                _guard(SPEECH_WORK)
                 return h._json(speak.rename_speech(m.group(1), h._body().get("name") or ""))
         except speak.SpeakError as e:
             raise ModelError(str(e))
     m = re.fullmatch(r"songs/([0-9a-f]{16})", rest)
     if m and method == "DELETE":
-        _guard()
+        _guard(COVER_WORK)
         remove_song(m.group(1), stems_only=(q.get("stems_only") or ["0"])[0] == "1")
         return h._json({"ok": True})
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)

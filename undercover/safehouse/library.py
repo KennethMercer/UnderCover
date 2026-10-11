@@ -34,18 +34,27 @@ def _mtime(p: Path) -> float:
         return 0.0
 
 
-def _busy() -> str | None:
-    """A job that may be using these files right now."""
+ALL_WORK = ("cover", "preview", "speech", "auto", "train", "train-auto", "train-prepare", "train-export", "install")
+COVER_WORK = ("cover", "preview", "auto")   # jobs that read songs and write covers + history
+SPEECH_WORK = ("speech",)
+_BUSY_WHAT = {"cover": "a cover", "preview": "a preview", "auto": "a one-shot cover", "speech": "speech",
+              "install": "an install"}
+
+
+def _busy(kinds=ALL_WORK) -> str | None:
+    """A job of these kinds that may be using the files right now."""
     for j in jobs.JOBS.values():
-        if not j.finished and j.kind in ("cover", "speech", "auto", "train", "train-auto", "train-prepare", "train-export", "install"):
+        if not j.finished and j.kind in kinds:
             return j.kind
     return None
 
 
-def _guard():
-    kind = _busy()
+def _guard(kinds=ALL_WORK):
+    """Refuse only while work that could use these files runs (a training doesn't block deleting a cover)."""
+    kind = _busy(kinds)
     if kind:
-        raise ModelError("UnderCover is busy (a cover, training or install is running). Try again when it's done.")
+        what = _BUSY_WHAT.get(kind, "a voice training")
+        raise ModelError(f"Can't do that while {what} is running (it may be using these files). Try again when it's done.")
     for j in jobs.JOBS.values():   # a background separation would just be redone; stop it so its files aren't in use
         if j.kind == "presep" and not j.finished:
             j.cancel = True
