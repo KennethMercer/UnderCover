@@ -303,11 +303,17 @@ def remove_files(files, within, dirs=()):
             raise ModelError(f"{p} isn't inside the folders this may delete from; nothing was removed.")
         if p.is_dir() != is_dir:
             raise ModelError(f"{p} isn't the kind of thing expected here; nothing was removed.")
-    for p, is_dir in todo:
-        if is_dir:
-            fsutil.retry(lambda p=p: shutil.rmtree(p))
-        else:
-            fsutil.retry(lambda p=p: p.unlink(missing_ok=True))
+    first = None
+    for p, is_dir in todo:   # a locked file doesn't stop the others: remove what can go, then report
+        try:
+            if is_dir:
+                fsutil.retry(lambda p=p: shutil.rmtree(p))
+            else:
+                fsutil.retry(lambda p=p: p.unlink(missing_ok=True))
+        except OSError as e:
+            first = first or e
+    if first:
+        raise first
 
 
 def _release(group: str):

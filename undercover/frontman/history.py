@@ -24,7 +24,6 @@ from ..core.config import path
 LOCK = threading.RLock()
 ID = re.compile(r"[0-9a-f]{10}")
 BACKUP = "history.before-ids.jsonl"
-_checked: set = set()   # history files already looked at for lines without an id (this run)
 
 
 def _file() -> Path:
@@ -72,22 +71,20 @@ def resolved_output(item: dict) -> Path | None:
 def migrate() -> dict:
     """Give every line without an id one, once (a copy of the old file is kept as history.before-ids.jsonl). Lines whose
     cover file is gone are dropped then (they would come back to life when a new cover took the same name); the copy
-    keeps them. When the output folder isn't there at all (a drive that isn't plugged in) nothing is dropped."""
+    keeps them."""
     with LOCK:
         f = _file()
-        _checked.add(str(f))
         items = _lines()
         if not items or all(isinstance(i.get("id"), str) and ID.fullmatch(i["id"]) for i in items):
             return {"migrated": 0, "dropped": 0}
         backup = f.with_name(BACKUP)
         if not backup.exists():
             shutil.copy2(f, backup)
-        folder_there = f.parent.is_dir()
         taken = {i["id"] for i in items if isinstance(i.get("id"), str) and ID.fullmatch(i["id"])}
         out, dropped, n = [], 0, 0
         for i in items:
             if not (isinstance(i.get("id"), str) and ID.fullmatch(i["id"])):
-                if folder_there and resolved_output(i) is None:
+                if resolved_output(i) is None:
                     dropped += 1
                     continue
                 i["id"] = new_id(taken)
@@ -101,9 +98,11 @@ def migrate() -> dict:
 
 
 def _load() -> list:
-    if str(_file()) not in _checked:
-        migrate()
-    return _lines()
+    items = _lines()
+    if any(not (isinstance(i.get("id"), str) and ID.fullmatch(i["id"])) for i in items):
+        migrate()   # an older server may still append lines without an id
+        items = _lines()
+    return items
 
 
 def finished() -> list:
@@ -168,8 +167,7 @@ def record(rec: dict) -> dict:
     with LOCK:
         items = _load()
         rec = {**rec, "id": new_id({i.get("id") for i in items})}
-        with open(_file(), "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec) + "\n")
+        _write(items + [rec])   # not an append: after a power cut the last line may be half written and would swallow this one
         try:
             roll_off(rec["id"])
         except Exception as e:   # noqa: BLE001
@@ -189,7 +187,12 @@ def roll_off(new_id_: str) -> str | None:
         assert lv.get("id") != new_id_ and not lv.get("kept"), "roll-off picked the new or a kept cover"
         within = [path("output_dir"), path("cache_dir") / "converted"]
         files = files_of(lv)
-        storage.remove_files(files, within)   # refuses everything (and removes nothing) if one path is out of bounds
+        try:
+            storage.remove_files(files, within)   # refuses everything (and removes nothing) if one path is out of bounds
+        except Exception:
+            if resolved_output(lv) is None:   # the cover itself went (a leftover was locked): its line would hide the rest forever
+                remove_line(lv["id"])
+            raise
         remove_line(lv["id"])
         tray.log(f"roll-off (covers): removed {lv['id']} \"{lv.get('title') or Path(lv['output']).stem}\" "
                  f"({', '.join(p.name for p in files)}); the tray holds the latest {tray.TRAY_SIZE}")

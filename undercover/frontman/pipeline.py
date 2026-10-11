@@ -319,13 +319,13 @@ def history() -> list[dict]:
     return list(reversed(items))
 
 
-def history_items(everything: bool = False) -> list[dict]:
+def history_items() -> list[dict]:
     """The covers history as the page shows it (file URLs instead of paths): the recent tray, newest first (the latest
-    15 finished covers, kept or not), or every cover with everything=True."""
+    15 finished covers, kept or not)."""
     from ..core.files import file_url
     out = []
     for h in history():
-        if not (everything or h["recent"]):
+        if not h["recent"]:
             continue
         out.append({
             "id": h["id"], "title": h.get("title") or Path(h["song"]).stem, "voice": h["voice"],
