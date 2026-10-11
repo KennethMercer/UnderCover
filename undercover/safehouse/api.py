@@ -2,11 +2,15 @@
 
 GET    /api/library/summary                 storage per category + free space
 GET    /api/library/covers | speech | songs | voices | training
-POST   /api/library/covers/<id>/rename      {name}
-DELETE /api/library/covers/<id>
+POST   /api/library/covers/<id>/rename      {name}   (ids are permanent: 10 hex characters)
+POST   /api/library/covers/<id>/keep | unkeep    Send to SafeHouse (keep for good) / take it back
+DELETE /api/library/covers/<id>             removes the files and the history line
 POST   /api/library/speech/<id>/rename      {name}   (SpeakEasy's saved speech)
+POST   /api/library/speech/<id>/keep | unkeep
 DELETE /api/library/speech/<id>
-GET    /api/library/covers/zip?ids=1,2      zip download
+(covers and speech lists carry kept, kept_at and recent: in the module's recent tray, the latest 15; the page filters
+ Kept / Recent on them. Everything unkept that falls out of the tray is deleted by core/tray.py, never kept ones.)
+GET    /api/library/covers/zip?ids=a1b2c3d4e5,...   zip download
 DELETE /api/library/songs/<id>[?stems_only=1]
 POST   /api/library/voices/<name>/rename    {name}
 DELETE /api/library/voices/<name>/cadence   the voice's cadence only (the voice stays)
@@ -37,7 +41,7 @@ from ..core.fsutil import retry as _retry
 from ..core.voices import ModelError, slug
 from ..frontman.songs import remove_song
 from . import library
-from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _remove, _update_ytdlp, _write_history_line, covers
+from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _remove, _update_ytdlp, covers
 
 
 def handle(h, method: str, p: str) -> bool:
@@ -77,23 +81,28 @@ def _route(h, method, p):
                     _remove(path_)
         return h._json({"freed": freed})
     if rest == "covers/zip" and method == "GET":
-        ids = {int(x) for x in (q.get("ids") or [""])[0].split(",") if x.isdigit()}
+        ids = {x for x in (q.get("ids") or [""])[0].split(",") if re.fullmatch(r"[0-9a-f]{10}", x)}
         files = [(path("output_dir") / c["file"], c["file"]) for c in covers() if c["id"] in ids]
         if not files:
             raise LookupError("Nothing selected.")
         return _zip_response(h, f"UnderCover covers ({len(files)}).zip", files)
-    m = re.fullmatch(r"covers/(\d+)(?:/(rename))?", rest)
+    m = re.fullmatch(r"covers/([0-9a-f]{10})(?:/(rename|keep|unkeep))?", rest)
     if m:
+        from ..frontman import history as cover_history
         from ..frontman.pipeline import history
-        item = next((x for x in history() if x["id"] == int(m.group(1))), None)
+        item = next((x for x in history() if x["id"] == m.group(1)), None)
         if not item:
             raise LookupError("That cover isn't there any more.")
-        if method == "DELETE":
+        if method == "DELETE" and not m.group(2):
             _guard(COVER_WORK)
             for f in (item["output"], item.get("converted_vocal"), item.get("converted_backing")):
-                if f:   # history hides entries whose file is gone (ids stay stable)
+                if f and f != "None":
                     _retry(lambda f=f: Path(f).unlink(missing_ok=True))
+            cover_history.remove_line(item["id"])   # the line goes too: no hidden entries, ids are never reused
             return h._json({"ok": True})
+        if method == "POST" and m.group(2) in ("keep", "unkeep"):
+            cover_history.set_kept(item["id"], m.group(2) == "keep")
+            return h._json(next(c for c in covers() if c["id"] == item["id"]))
         if method == "POST" and m.group(2) == "rename":
             _guard(COVER_WORK)
             name = re.sub(r'[<>:"/\\|?*]+', "_", (h._body().get("name") or "")).strip().strip(".")
@@ -104,15 +113,17 @@ def _route(h, method, p):
             if new.exists() and new != old:
                 raise ModelError(f"There's already a file called \"{new.name}\".")
             _retry(lambda: old.rename(new))
-            item["output"] = str(new)
+            fields = {"output": str(new)}
             if not item.get("title_set"):
-                item["title"], item["title_set"] = name, True
-            _write_history_line(item["id"], item)
+                fields.update(title=name, title_set=True)
+            cover_history.update(item["id"], **fields)
             return h._json({"ok": True, "file": new.name})
-    m = re.fullmatch(r"speech/([0-9a-f]{10})(?:/(rename))?", rest)
+    m = re.fullmatch(r"speech/([0-9a-f]{10})(?:/(rename|keep|unkeep))?", rest)
     if m:
         from ..speakeasy import speak
         try:
+            if method == "POST" and m.group(2) in ("keep", "unkeep"):
+                return h._json(speak.set_kept(m.group(1), m.group(2) == "keep"))
             if method == "DELETE" and not m.group(2):
                 _guard(SPEECH_WORK)
                 speak.delete_speech(m.group(1))

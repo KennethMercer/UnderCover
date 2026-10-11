@@ -383,7 +383,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None)
         push("cover", a + (b - a) * frac, msg or stage.capitalize())
     push("cover", 0.0, f"Making the cover with “{v.name}”")
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
-    item = next((h for h in history_items() if h["output_name"] == res.output.name), None)
+    item = next((h for h in history_items() if h["id"] == res.id), None)
     job.finish("done", message="Finished", result=item, plan=plan, seconds=res.seconds, notes=res.notes,
                elapsed=round(time.perf_counter() - t0, 1))
 

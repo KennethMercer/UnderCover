@@ -63,20 +63,6 @@ def _guard(kinds=ALL_WORK):
             j.cancel = True
 
 
-def _history_lines() -> list[str]:
-    f = path("output_dir") / "history.jsonl"
-    return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
-
-
-def _write_history_line(n: int, item: dict):
-    f = path("output_dir") / "history.jsonl"
-    lines = _history_lines()
-    lines[n] = json.dumps({k: v for k, v in item.items() if k != "id"})
-    tmp = f.with_suffix(".jsonl.tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(f)
-
-
 def _song_metas() -> dict:
     out = {}
     for f in path("uploads_dir").glob("*.json"):
@@ -185,6 +171,7 @@ def covers() -> list[dict]:
         opts = h.get("options", {})
         out.append({
             "id": h["id"], "title": h.get("title") or o.stem, "voice": h["voice"],
+            "kept": h["kept"], "kept_at": h.get("kept_at"), "recent": h["recent"],
             "backing_voice": opts.get("backing_voice") if opts.get("backing_voice") != h["voice"] else None,
             "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": opts, "notes": h.get("notes", []),
             "file": o.name, "format": o.suffix.lstrip(".").upper(), "size": _size(o), "duration": m.get("duration"),
