@@ -1,7 +1,7 @@
 "use strict";
-// Library tab: everything UnderCover keeps on disk (covers, songs + stems, voices, training projects, clean up).
+// SafeHouse (was the Library tab): everything UnderCover keeps on disk (covers, songs + stems, voices, training projects, clean up).
 // Uses helpers from app.js ($, $$, esc, api, showError, store, fmtTime, fmtMB, S, VOL, renderSong, loadVoices,
-// loadHistory, syncControls, saveOpts, refreshEstimate, peaksFromUrl, drawWave) and showTab/openProject (train.js).
+// loadHistory, syncControls, saveOpts, refreshEstimate, peaksFromUrl, drawWave), showTab (shell.js) and openProject (train.js).
 
 const L = { cat: store.get("uc-lib-cat", "covers"), data: {}, sel: null, checked: new Set(), summary: null,
             audio: new Audio(), peaks: null, src: "url" };
@@ -30,7 +30,7 @@ async function libShow() {
   await Promise.all([loadSummary(), loadCat()]);
 }
 function libHide() { L.visible = false; L.audio.pause(); }
-window.libShow = libShow; window.libHide = libHide;
+document.addEventListener("uc:module", e => { if (e.detail === "safehouse") libShow(); else if (L.visible) libHide(); });
 
 async function loadSummary() {
   try { L.summary = await api("/api/library/summary"); } catch (e) { return; }
@@ -104,7 +104,7 @@ function renderList() {
   const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
   if (!all.length) {
     box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", songs: "Songs you drop in or get from YouTube collect here.",
-      voices: "Install a voice on the Covers tab, or train one on Train a voice.", training: "Voices you train get a project here." }[L.cat]}</div>`;
+      voices: "Install a voice in FrontMan, or train one in MouthPiece.", training: "Voices you train get a project here." }[L.cat]}</div>`;
     return;
   }
   const bulk = L.cat === "covers" && L.checked.size ? `<div class="bulk"><span><b>${L.checked.size} selected</b> · ${gb(all.filter(c => L.checked.has(String(c.id))).reduce((a, c) => a + c.size, 0))}</span>
@@ -236,7 +236,7 @@ function coverDetail(d, c) {
                     "backing_voice", "backing_octave", "backing_db", "pitch_cleanup", "pitch_correction", "polish"];
       S.opts = { ...S.defaults, ...Object.fromEntries(keep.filter(k => o[k] !== undefined && o[k] !== null).map(k => [k, o[k]])) };
       syncControls(); saveOpts(); refreshEstimate();
-      showTab("covers"); window.scrollTo({ top: 0, behavior: "smooth" });
+      showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) { showError(e.message, "Couldn't load that cover's settings"); }
   };
   renameFlow(c.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/covers/${c.id}/rename`, { json: { name } }); });
@@ -264,7 +264,7 @@ function songDetail(d, s) {
     L.audio.src = t.url; L.audio.volume = VOL.muted ? 0 : VOL.level; L.audio.muted = VOL.muted; L.audio.play().catch(() => {});
     b.setAttribute("aria-pressed", "true"); b.textContent = "❚❚";
   });
-  $("#lib-make").onclick = async () => { try { S.song = await api(`/api/songs/${s.id}`); store.set("uc-song", s.id); renderSong(); refreshEstimate(); showTab("covers"); window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) { showError(e.message); } };
+  $("#lib-make").onclick = async () => { try { S.song = await api(`/api/songs/${s.id}`); store.set("uc-song", s.id); renderSong(); refreshEstimate(); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) { showError(e.message); } };
   const ds = $("#lib-del-stems");
   if (ds) confirmClick(ds, `Delete ${gb(s.stems_size)} of stems?`, async () => { await api(`/api/library/songs/${s.id}?stems_only=1`, { method: "DELETE" }); afterChange(); });
   confirmClick($("#lib-del"), "Click again to delete", async () => {
@@ -290,8 +290,8 @@ function voiceDetail(d, v) {
       <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export">Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");
-  if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("train"); try { await openProject(v.project); } catch (e) {} };
-  $("#lib-make").onclick = async () => { await loadVoices(v.name); showTab("covers"); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("mouthpiece"); try { await openProject(v.project); } catch (e) {} };
+  $("#lib-make").onclick = async () => { await loadVoices(v.name); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
 }
@@ -302,8 +302,8 @@ function trainingDetail(d, p) {
     <dl class="kv"><dt>Status</dt><dd>${st.state === "exported" ? `finished: voice <b>${esc(st.exported)}</b>` : st.state === "paused" ? `paused at epoch ${st.epoch}` : st.state === "trained" ? "trained, not added to voices yet" : st.state || "not trained yet"}</dd>
       <dt>On disk</dt><dd>${Object.entries(p.parts).filter(([, b]) => b).map(([k, b]) => `${esc(k)} ${gb(b)}`).join(" · ") || "—"}</dd></dl>
     <p class="meta">${st.state === "exported" ? "Deleting the project keeps the voice; you'd only need these files to train it again." : "Deleting the project removes its clips and any unfinished training."}</p>
-    <div class="lactions"><button class="btn primary" id="lib-open">Open in Train a voice</button><button class="btn danger" id="lib-del">Delete project…</button></div>`;
-  $("#lib-open").onclick = async () => { store.set("uc-train-proj", p.name); showTab("train"); try { await openProject(p.name); } catch (e) {} };
+    <div class="lactions"><button class="btn primary" id="lib-open">Open in MouthPiece</button><button class="btn danger" id="lib-del">Delete project…</button></div>`;
+  $("#lib-open").onclick = async () => { store.set("uc-train-proj", p.name); showTab("mouthpiece"); try { await openProject(p.name); } catch (e) {} };
   confirmClick($("#lib-del"), `Delete ${gb(p.size)}?`, async () => { await api(`/api/train/projects/${p.name}`, { method: "DELETE" }); afterChange(); });
 }
 
@@ -344,6 +344,5 @@ $("#lib-clean-btn").onclick = async () => {
   };
 };
 $("#lib-clean-close").onclick = () => { $("#lib-clean").hidden = true; };
-$("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); showTab("library"); };
+$("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); showTab("safehouse"); };
 
-if (store.get("uc-tab", "covers") === "library") showTab("library");
