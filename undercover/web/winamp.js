@@ -1,6 +1,7 @@
 "use strict";
 // Hidden classic-WinAmp skin, suite-wide. Triple-click the UnderCover wordmark (top bar), or type "llama" outside a text box.
-// Uses helpers from app.js ($, $$, store, S, active, aCover, aOrig, togglePlay, stopAll, showResult, HIST, redrawAll).
+// Uses helpers from app.js ($, $$, store, S, active, aCover, aOrig, togglePlay, stopAll, showResult, HIST, redrawAll)
+// and speakeasy.js (SE, sePlayRecent): the main window plays covers and speech, prev/next walk both, newest first.
 
 const WA = { on: false, raf: 0, ctx: null, analyser: null, sources: new WeakSet(), typed: "" };
 
@@ -46,19 +47,23 @@ function waConnect(el) {
     if (WA.ctx.state === "suspended") WA.ctx.resume();
   } catch (e) { /* no analyser: the display still works */ }
 }
-[aCover, aOrig, T.audio].forEach(el => el.addEventListener("play", () => { if (WA.on) waConnect(el); }));
+[aCover, aOrig, T.audio, SE.audio, SE.rec].forEach(el => el.addEventListener("play", () => { if (WA.on) waConnect(el); }));
 
 function waNowPlaying() {
-  const tr = T.audio && !T.audio.paused ? T.audio : null;
-  const a = tr || active();
+  const a = [T.audio, SE.audio, SE.rec].find(x => x && !x.paused) || (WA.kind === "speech" && SE.rec.src ? SE.rec : active());
   return { a, playing: a && !a.paused && a.src };
+}
+function waTitle(a) {
+  if (a === SE.rec && SE.recItem) return `${SE.recItem.title} (${SE.recItem.voice})`;
+  if (a === SE.audio && SE.jobPlan) return `${SE.sents[SE.cur] || "Speaking"} (${SE.jobPlan.voice})`;
+  return S.result ? `${S.result.title} (${S.result.voice})` : S.song ? S.song.title || S.song.name : "UnderCover · AI voices";
 }
 function waLoop() {
   const { a, playing } = waNowPlaying();
   const t = a && a.src ? a.currentTime : 0;
   $("#wa-time").textContent = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
   $(".wa-state").textContent = playing ? "▶" : a && a.src && t > 0 ? "❚❚" : "■";
-  const title = S.result ? `${S.result.title} (${S.result.voice})` : S.song ? S.song.title || S.song.name : "UnderCover · AI voice covers";
+  const title = waTitle(a);
   const line = `*** UNDERCOVER *** ${title} *** `;
   if ($("#wa-song").textContent !== line) $("#wa-song").textContent = line;
   const c = $("#wa-vis"), g = c.getContext("2d");
@@ -81,21 +86,33 @@ function waLoop() {
   WA.raf = requestAnimationFrame(waLoop);
 }
 
-// transport buttons drive the normal player; prev/next walk through the history
+// transport buttons drive the normal players; prev/next walk covers and speech together, newest first
+function waList() {
+  const when = x => Date.parse((x.created || "").replace(" ", "T")) || 0;
+  return [...HIST.map(h => ({ kind: "cover", id: h.id, at: when(h), item: h })), ...SE.recent.map(r => ({ kind: "speech", id: r.id, at: when(r), item: r }))]
+    .sort((a, b) => b.at - a.at);
+}
 $(".wa-transport").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
-  const act = b.dataset.a;
-  if (act === "play") { const a = active(); if (a.src && a.paused) togglePlay(); else if (!a.src && HIST.length) waJump(0); }
-  else if (act === "pause") { if (!active().paused) togglePlay(); }
-  else if (act === "stop") { stopAll(); try { active().currentTime = 0; } catch (err) {} }
+  const act = b.dataset.a, { a } = waNowPlaying();
+  if (act === "play") { if (a.src && a.paused) { if (a === SE.rec) a.play().catch(() => {}); else if (a === active()) togglePlay(); else a.play().catch(() => {}); } else if (!a.src) waJump(0); }
+  else if (act === "pause") { if (!a.paused) { if (a === active()) togglePlay(); else a.pause(); } }
+  else if (act === "stop") { stopAll(); SE.rec.pause(); SE.audio.pause(); try { a.currentTime = 0; } catch (err) {} }
   else if (act === "prev" || act === "next") {
-    const i = HIST.findIndex(h => S.result && h.id === S.result.id);
-    waJump(i < 0 ? 0 : (i + (act === "next" ? 1 : -1) + HIST.length) % HIST.length);
+    const list = waList(); if (!list.length) return;
+    const cur = WA.kind === "speech" ? SE.recId : S.result?.id;
+    const i = list.findIndex(x => x.kind === (WA.kind || "cover") && x.id === cur);
+    waJump(i < 0 ? 0 : (i + (act === "next" ? 1 : -1) + list.length) % list.length);
   }
 });
+aCover.addEventListener("play", () => { WA.kind = "cover"; });   // whatever was played last is where prev/next start
+SE.rec.addEventListener("play", () => { WA.kind = "speech"; });
 function waJump(i) {
-  const h = HIST[i]; if (!h) return;
-  showResult(h).then(() => aCover.addEventListener("canplay", () => togglePlay(), { once: true }));
+  const x = waList()[i]; if (!x) return;
+  WA.kind = x.kind;
+  if (x.kind === "speech") { stopAll(); sePlayRecent(x.item); return; }
+  SE.rec.pause(); SE.audio.pause();
+  showResult(x.item).then(() => aCover.addEventListener("canplay", () => togglePlay(), { once: true }));
 }
 
 // FM / MP / SE / SH lights (where mono / stereo were): the module on screen is lit
