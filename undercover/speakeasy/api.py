@@ -2,9 +2,9 @@
 
 GET    /api/speak/voices                     every voice: group, likeness, auto Reader + pitch, cadence status
 GET    /api/speak/readers                    the Kokoro Readers (English)
-GET    /api/speak/plan?voice=&reader=&speed=&nudge=   which Reader and pitch a voice would use
+GET    /api/speak/plan?voice=&reader=&pace=&nudge=   which Reader and pitch a voice would use (pace: slower|natural|faster)
 GET    /api/speak/recent                     saved speech, newest first
-POST   /api/speak                            {text, voice, reader, speed, nudge, cadence} -> speech job (events: one URL per
+POST   /api/speak                            {text, voice, reader, pace, nudge, cadence} -> speech job (events: one URL per
                                              sentence; cadence false = the Reader even when the voice has a cadence)
 POST   /api/speak/cadence                    {voice, now} "Train cadence" / "Find clips + cadence" (DoubleAgent's queue)
 POST   /api/speak/newvoice                   {person, now} a new voice with its cadence (DoubleAgent's full pipeline)
@@ -44,7 +44,7 @@ def _route(h, method, p):
             return h._json(speak.list_speech())
         if rest == "plan":
             return h._json(speak.plan(q.get("voice", ""), q.get("reader", "auto"), _num(q.get("speed"), 1.0), _num(q.get("nudge"), 0.0),
-                                      False if q.get("cadence") in ("0", "false") else None))
+                                      False if q.get("cadence") in ("0", "false") else None, q.get("pace")))
         raise LookupError("Not found")
     if method == "POST" and rest == "":
         return _start(h, h._body())
@@ -78,8 +78,8 @@ def _start(h, body: dict):
         raise speak.SpeakError(f"That's {len(text):,} characters; SpeakEasy reads up to {speak.MAX_CHARS:,} at a time. Split it into parts.")
     args = dict(text=text, voice=body.get("voice") or "", reader=body.get("reader") or "auto",
                 speed=_num(body.get("speed"), 1.0), nudge=_num(body.get("nudge"), 0.0),
-                cadence=False if body.get("cadence") is False else None)
-    p = speak.plan(args["voice"], args["reader"], args["speed"], args["nudge"], args["cadence"])   # a bad voice/Reader fails now
+                cadence=False if body.get("cadence") is False else None, pace=body.get("pace"))
+    p = speak.plan(args["voice"], args["reader"], args["speed"], args["nudge"], args["cadence"], args["pace"])   # a bad voice/Reader fails now
     job = Job("speech", title=f"{text[:40].strip()}{'…' if len(text) > 40 else ''} · {args['voice']}")
     JOBS[job.id] = job
 

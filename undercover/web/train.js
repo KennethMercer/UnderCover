@@ -198,7 +198,8 @@ function onAutoEvent(ev) {
   if (ev.final) return;
   const f = ev.frac ?? ev.fraction ?? 0;
   $("#tr-prep-bar").style.width = Math.round(f * 100) + "%";
-  $("#tr-prep-pct").textContent = Math.round(f * 100) + "%" + (ev.eta ? ` · ~${fmtSecs(ev.eta)} left` : "");
+  const left = ev.total_left ?? ev.eta;
+  $("#tr-prep-pct").textContent = (left != null ? leftText(left) : Math.round(f * 100) + "%");
   $("#tr-prep-label").textContent = ev.message || ev.label || "Working…";
   if (!T.autoTimer) T.autoTimer = setInterval(() => { if (T.live?.kind === "auto") refresh(); else { clearInterval(T.autoTimer); T.autoTimer = null; } }, 15000);
 }

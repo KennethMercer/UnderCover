@@ -26,7 +26,7 @@ F5_FILES = {"tts/f5/model_1250000.safetensors": f"{HF}/SWivid/F5-TTS/resolve/{F5
 MODEL_FILES = {"chatterbox": CHATTERBOX_FILES, "f5": F5_FILES}
 
 ENGINES = {
-    "chatterbox": {"name": "Chatterbox", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 0.55,
+    "chatterbox": {"name": "Chatterbox", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 1.0,   # with RVC, measured phase 4
                    "vram_gb": 3.6, "size_mb": 3200, "module": "chatterbox",
                    "about": "Resemble AI's open model (MIT code and weights); closest to each person's cadence in our tests. "
                             "Every output carries Resemble's inaudible watermark."},
