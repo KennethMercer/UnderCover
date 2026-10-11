@@ -265,7 +265,7 @@ $("#q-mode").addEventListener("click", e => {
   if (b.dataset.v === "new") $("#q-name").focus();
 });
 async function loadCandidates() {
-  try { PICK.cands = await api("/api/work/candidates"); } catch (e) { return; }
+  try { PICK.cands = await api("/api/work/candidates"); noteVoices(PICK.cands); } catch (e) { return; }
   const can = PICK.cands.filter(c => c.can), off = PICK.cands.filter(c => !c.can);
   [...PICK.sel].forEach(k => { if (!can.some(c => c.voice === k && !c.queued)) PICK.sel.delete(k); });
   $("#q-cands").innerHTML = can.length ? can.map(c => {
@@ -273,13 +273,13 @@ async function loadCandidates() {
                    c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : "", c.estimate ? `≈ ${fmtMin(c.estimate)}` : ""].filter(Boolean);
     return `<label class="vcard ${c.queued ? "queued" : ""}">
       <input type="checkbox" data-v="${esc(c.voice)}" ${c.queued ? "disabled" : PICK.sel.has(c.voice) ? "checked" : ""}>
-      <span><b>${esc(c.voice)}</b>${c.person && c.person.toLowerCase() !== c.voice.replace(/-uc$/, "").replace(/-/g, " ") ? ` <span class="meta">${esc(c.person)}</span>` : ""}
+      <span><b>${vname(c.voice)}</b>${c.person && c.person.toLowerCase() !== voiceDisplay(c.voice).replace(/-uc$/, "").replace(/-/g, " ").toLowerCase() ? ` <span class="meta">${esc(c.person)}</span>` : ""}
         <span class="qchips">${facts.map(f => `<span class="qchip">${esc(f)}</span>`).join("")}${c.queued ? `<span class="qchip ok">in the queue</span>` : ""}</span>
         <span class="meta">${esc(c.note)}</span></span></label>`;
   }).join("") : `<p class="meta">No voices yet. Use "New voices" to train one.</p>`;
   $$("#q-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? PICK.sel.add(cb.dataset.v) : PICK.sel.delete(cb.dataset.v); pickSummary(); });
   $("#q-other").hidden = !off.length;
-  $("#q-cands-off").textContent = off.map(c => c.voice).join(", ") + ". These were downloaded and DoubleAgent doesn't know whose voices they are. To train your own, add the person under New voices.";
+  $("#q-cands-off").textContent = off.map(c => voiceDisplay(c.voice)).join(", ") + ". These were downloaded and DoubleAgent doesn't know whose voices they are. To train your own, add the person under New voices.";
   pickSummary();
   renderCadPicker();
   renderVoiceCards(PICK.cands);   // doubleagent.js
@@ -292,7 +292,7 @@ function renderCadPicker() {
   $("#q-cad-cands").innerHTML = list.length ? list.map(c => {
     const cd = c.cadence;
     return `<label class="vcard ${cd.queue ? "queued" : ""}"><input type="checkbox" data-cv="${esc(c.voice)}" ${cd.queue ? "disabled" : CADPICK.has(c.voice) ? "checked" : ""}>
-      <span><b>${esc(c.voice)}</b> <span class="qchips">${cd.has ? `<span class="qchip ok">has one</span>` : ""}${cd.queue ? `<span class="qchip ok">in the queue</span>` : ""}</span>
+      <span><b>${vname(c.voice)}</b> <span class="qchips">${cd.has ? `<span class="qchip ok">has one</span>` : ""}${cd.queue ? `<span class="qchip ok">in the queue</span>` : ""}</span>
         <span class="meta">${cd.has ? "tries again; kept only if better" : esc(cd.why || "")}</span></span></label>`;
   }).join("") : `<p class="meta">No voice can get a cadence yet: it needs a voice trained on speech, or a downloaded voice DoubleAgent has checked.</p>`;
   $$("#q-cad-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? CADPICK.add(cb.dataset.cv) : CADPICK.delete(cb.dataset.cv); cadSummary(); });

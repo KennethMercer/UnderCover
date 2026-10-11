@@ -7,7 +7,7 @@ const OS = { es: null, job: null, timer: null, t0: 0, planSeq: 0, planTimer: nul
 // ------------------------------------------------------------ plan preview (no downloads)
 function voiceLine(v) {
   if (!v) return "";
-  if (v.how === "installed") return `<b>${esc(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
+  if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
   if (v.how === "check") return `<b>${v.candidates.map(esc).join("</b> or <b>")}</b> <span class="meta">checked against real clips first (~2 min); if neither sounds like them, it trains one (~45 min, ~2 GB while training)</span>`;
   return `<span class="warn">none yet: trains <b>${esc(v.name)}</b> first (~45 min, ~2 GB while training)</span>`;
 }
