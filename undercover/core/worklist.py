@@ -6,7 +6,7 @@ a restart) and Resume starts it again in the same order. Covers aren't paused: t
 
 The overnight queue runs items one after another when the GPU is free, optionally from a start time and only if an
 item can finish before a "finish by" time. The kinds of items, how paused work is resumed and which job kinds Pause
-stops are registered by the modules (MouthPiece's improve / new voice items: mouthpiece/night.py).
+stops are registered by the modules (DoubleAgent's improve / new voice items: doubleagent/night.py).
 """
 import json
 import threading

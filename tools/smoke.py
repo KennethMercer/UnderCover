@@ -83,7 +83,7 @@ def u_imports():
     return f"{len(mods)} modules"
 
 
-MODULES = ("frontman", "mouthpiece", "speakeasy")   # the suite's modules (safehouse and app have their own rules)
+MODULES = ("frontman", "doubleagent", "speakeasy")   # the suite's modules (safehouse and app have their own rules)
 
 
 def import_edges(pkg: Path) -> list:
@@ -127,10 +127,10 @@ def dependency_problems(pkg: Path) -> list:
         why = None
         if s == "core" and d in (*MODULES, "safehouse", "app"):
             why = "core imports nothing from the modules, safehouse or app"
-        elif s == "mouthpiece" and d != "core":
-            why = "mouthpiece imports core only"
-        elif s in ("frontman", "speakeasy") and d == "mouthpiece" and dst != f"{pkg.name}.mouthpiece.service":
-            why = f"{s} uses MouthPiece through mouthpiece.service only"
+        elif s == "doubleagent" and d != "core":
+            why = "doubleagent imports core only"
+        elif s in ("frontman", "speakeasy") and d == "doubleagent" and dst != f"{pkg.name}.doubleagent.service":
+            why = f"{s} uses DoubleAgent through doubleagent.service only"
         elif s in ("frontman", "speakeasy") and d in ("frontman", "speakeasy"):
             why = "frontman and speakeasy never import each other"
         elif d == "safehouse" and s != "app":
@@ -181,7 +181,7 @@ def u_window():
 @check("training data: compact features expand bit-identically")
 def u_phone():
     import torch
-    from undercover.mouthpiece.trainer import _phone, index_feats
+    from undercover.doubleagent.trainer import _phone, index_feats
     feats = torch.randn(10, 768).half()
     x = {"phone50": feats, "pitch": torch.zeros(19, dtype=torch.long)}
     assert torch.equal(_phone(x), feats.repeat_interleave(2, 0)[:19])
@@ -219,7 +219,7 @@ def u_speak():
 
 @check("sources: YouTube block and spoken-word detection")
 def u_sources():
-    from undercover.mouthpiece import sources as s
+    from undercover.doubleagent import sources as s
     from undercover.core import youtube as yt
     try:
         yt.check_blocked(Exception("ERROR: Sign in to confirm you're not a bot"))
@@ -246,7 +246,7 @@ def a_page():
     import re
     html = api("/").decode("utf-8")
     assert "<title>UnderCover</title>" in html, "browser title isn't UnderCover"
-    views = {"frontman": "covers", "mouthpiece": "train", "speakeasy": "speakeasy", "safehouse": "library"}
+    views = {"frontman": "covers", "doubleagent": "train", "speakeasy": "speakeasy", "safehouse": "library"}
     for mod, view in views.items():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"

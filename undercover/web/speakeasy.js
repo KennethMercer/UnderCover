@@ -58,17 +58,17 @@ function seVoices() {
   const row = v => {
     const facts = v.trained ? [v.kind, v.likeness != null ? `likeness ${(+v.likeness).toFixed(2)}` : "", v.undertrained ? "under-trained" : ""]
                             : ["downloaded", v.person ? `checked: ${v.person}` : "", v.kind === "singing" ? "singing" : ""];
-    const act = v.trained ? `<button class="mini" type="button" disabled title="Phase 4: MouthPiece trains a cadence model from this voice's clips">Train cadence</button>`
-      : v.person ? `<button class="mini" type="button" disabled title="Phase 4: MouthPiece finds clips first">Find clips + cadence</button>` : "";
+    const act = v.trained ? `<button class="mini" type="button" disabled title="Phase 4: DoubleAgent trains a cadence model from this voice's clips">Train cadence</button>`
+      : v.person ? `<button class="mini" type="button" disabled title="Phase 4: DoubleAgent finds clips first">Find clips + cadence</button>` : "";
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${esc(v.name[0].toUpperCase())}</div>
       <div class="vtext"><b>${esc(v.name)}</b><small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · cadence –</span></small></div>
       <div class="se-vact">${act}</div></div>`;
   };
   const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
-  $("#se-voices").innerHTML = (trained.length ? `<div class="se-vgroup">Trained in MouthPiece</div>` + trained.map(row).join("") : "")
+  $("#se-voices").innerHTML = (trained.length ? `<div class="se-vgroup">Trained in DoubleAgent</div>` + trained.map(row).join("") : "")
     + (dl.length ? `<div class="se-vgroup">Downloaded (cadence needs clips first)</div>` + dl.map(row).join("") : "")
-    || `<p class="meta">${SE.voices.length ? `No voice matches “${esc(q)}”.` : "No voices yet: train one in MouthPiece or install one in FrontMan."}</p>`;
+    || `<p class="meta">${SE.voices.length ? `No voice matches “${esc(q)}”.` : "No voices yet: train one in DoubleAgent or install one in FrontMan."}</p>`;
   $$("#se-voices .voice").forEach(el => {
     const pick = () => { SE.voice = el.dataset.v; store.set("uc-se-voice", SE.voice); $$("#se-voices .voice").forEach(x => x.setAttribute("aria-selected", x === el)); sePlan(); };
     el.addEventListener("click", e => { if (!e.target.closest("button")) pick(); });
@@ -78,7 +78,7 @@ function seVoices() {
 $("#se-q").addEventListener("input", seVoices);
 $("#se-newgo").onclick = () => {
   const name = $("#se-newname").value.trim();
-  showTab("mouthpiece");
+  showTab("doubleagent");
   if (typeof newVoice === "function") newVoice();
   if (name) $("#tr-person").value = name;
   $("#tr-find").scrollIntoView({ behavior: "smooth", block: "start" });

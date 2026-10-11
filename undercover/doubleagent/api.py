@@ -1,7 +1,7 @@
-"""MouthPiece's HTTP routes (the Train a voice page and the overnight queue's pickers). The app's server routes
+"""DoubleAgent's HTTP routes (the Train a voice page and the overnight queue's pickers). The app's server routes
 /api/train/... and the two /api/work/ lookups here.
 
-GET    /api/work/candidates                     voices that can be improved overnight (mouthpiece/night.py)
+GET    /api/work/candidates                     voices that can be improved overnight (doubleagent/night.py)
 GET    /api/work/lookup?q=                      name suggestions for a new voice
 GET    /api/train/projects                      list
 POST   /api/train/projects                      {person, mode} -> create + search

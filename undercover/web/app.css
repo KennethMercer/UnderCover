@@ -10,18 +10,18 @@
   --mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
   --r: 10px;
   /* one colour per module (ARCHITECTURE.md "UI"); a module page only overrides --accent, via body[data-module] */
-  --c-frontman: #f2a33a; --c-mouthpiece: #b892f5; --c-speakeasy: #6fb3e8; --c-safehouse: #aab3c5;
+  --c-frontman: #f2a33a; --c-doubleagent: #b892f5; --c-speakeasy: #6fb3e8; --c-safehouse: #aab3c5;
   color-scheme: dark;
 }
 :root[data-theme="light"] {
   --bg: #f3f4f7; --panel: #ffffff; --panel-2: #eef0f5; --line: #d9dde6;
   --fg: #161a22; --muted: #5b6475; --accent: #9a5208; --accent-ink: #ffffff;
   --wave: #a7b1c6; --wave-on: #b8650f; --wave-alt: #3f6fae; --ok: #1f8a57; --warn: #9a7300; --err: #c2412f;
-  --c-frontman: #9a5208; --c-mouthpiece: #6b45bf; --c-speakeasy: #1f6aa5; --c-safehouse: #5b6475;
+  --c-frontman: #9a5208; --c-doubleagent: #6b45bf; --c-speakeasy: #1f6aa5; --c-safehouse: #5b6475;
   color-scheme: light;
 }
 body[data-module="frontman"] { --accent: var(--c-frontman); }
-body[data-module="mouthpiece"] { --accent: var(--c-mouthpiece); }
+body[data-module="doubleagent"] { --accent: var(--c-doubleagent); }
 body[data-module="speakeasy"] { --accent: var(--c-speakeasy); }
 body[data-module="safehouse"] { --accent: var(--c-safehouse); }
 * { box-sizing: border-box; }
@@ -181,7 +181,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .alert p { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
 @media (max-width: 520px) { .hrow { grid-template-columns: 1fr auto; } .hrow .hdate { display: none; } .convert { width: 100%; } }
 
-/* ---------------------------------------------------------------- MouthPiece view (was "Train a voice") */
+/* ---------------------------------------------------------------- DoubleAgent view (was "Train a voice") */
 .view { display: grid; gap: 18px; }
 #view-train .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
 #view-train .spread { justify-content: space-between; }

@@ -21,7 +21,7 @@ from ..core import gpu, jobs, worklist
 from ..core.config import path
 from ..core.voices import ModelError
 from .fit import pick_fit, pick_octave
-from ..mouthpiece.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0
+from ..doubleagent.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0
 
 PATTERNS = [
     # "cover of X by Y" / "X cover by Y" / "make X sung by Y" (the LAST "by" wins: "X by Miley Cyrus by Y")
@@ -136,9 +136,9 @@ def _drop_song(sid: str):
 
 def vocal_cleanliness(vocals: Path) -> dict:
     """How clean a separated lead vocal is: `bleed` = level (dB, vs the singing) of the stem where nobody sings
-    (guitar or piano leaking through), `hiss` = spectral flatness of the sung parts (mouthpiece.service.noisiness)."""
+    (guitar or piano leaking through), `hiss` = spectral flatness of the sung parts (doubleagent.service.noisiness)."""
     from ..core.engine.convert import load_16k
-    from ..mouthpiece.service import noisiness
+    from ..doubleagent.service import noisiness
     x = load_16k(vocals)
     f0 = _LAST_F0.get(str(vocals) + "#all")
     fr = x[: len(x) // 160 * 160].reshape(-1, 160)

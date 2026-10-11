@@ -114,7 +114,7 @@ function renderOS(ev) {
   OS.eta = ev.eta || null;
   if (!ev.final) tabTitle(`⏳ ${ev.stage === "song" ? "Song" : ev.stage === "voice" ? "Voice" : ev.stage === "cover" ? "Cover" : "Waiting"}${ev.eta ? " · " + fmtSecs(ev.eta) : ""}`);
   $("#os-foot").textContent = voice?.how === "train" && ev.stage === "voice"
-    ? "Covers you start meanwhile are made right away; training waits for them. You can watch it in MouthPiece."
+    ? "Covers you start meanwhile are made right away; training waits for them. You can watch it in DoubleAgent."
     : ev.stage === "queued" ? "Waiting for the GPU to finish the current job…" : "";
 }
 function osFollow(id, title) {
