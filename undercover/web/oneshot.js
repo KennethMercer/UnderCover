@@ -112,26 +112,23 @@ function renderOS(ev) {
   $("small", cc).textContent = ev.stage === "cover" && !ev.final ? ev.message
     : set ? `Best settings · ${fitWords(set)} (${set.why})` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
   OS.eta = ev.eta || null;
-  if (!ev.final) tabTitle(`⏳ ${ev.stage === "song" ? "Song" : ev.stage === "voice" ? "Voice" : ev.stage === "cover" ? "Cover" : "Waiting"}${ev.eta ? " · " + fmtSecs(ev.eta) : ""}`);
   $("#os-foot").textContent = voice?.how === "train" && ev.stage === "voice"
     ? "Covers you start meanwhile are made right away; training waits for them. You can watch it in DoubleAgent."
     : ev.stage === "queued" ? "Waiting for the GPU to finish the current job…" : "";
 }
 function osFollow(id, title) {
-  if (OS.es) OS.es.close();
+  if (OS.es) OS.es();
   OS.job = id; OS.plan = null;
+  store.set("uc-os-seen", id);
   setRunning(true, title || "Making your cover");
-  const es = new EventSource(`/api/jobs/${id}/events`);
-  OS.es = es;
-  es.onmessage = async m => {
-    const ev = JSON.parse(m.data);
+  const stop = OS.es = watchJob(id, async ev => {   // jobs.js: the live stream, or progress polled while it's quiet
     if (ev.plan?.request) $("#os-h").textContent = ev.plan.request;
+    if (ev.elapsed != null && !ev.final) OS.t0 = performance.now() - ev.elapsed * 1000;   // right after a reload too
     renderOS(ev);
     if (!ev.final) return;
-    es.close(); OS.es = null; OS.job = null;
+    stop(); OS.es = null; OS.job = null;
     const plan = ev.plan || OS.plan || {};
     setRunning(false);
-    tabTitle(ev.state === "done" ? "✓ Cover ready" : null);
     if (ev.state === "done") {
       $("#os-plan").innerHTML = `Done in ${fmtSecs(ev.elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with <b>${esc(plan.voice?.name || "")}</b>` +
         (plan.settings ? ` · ${esc(fitWords(plan.settings))} (${esc(plan.settings.why)})` : "") + ". Change anything below and press Convert to try a variation.";
@@ -170,10 +167,16 @@ function osFollow(id, title) {
       showError(ev.message, "The one-shot cover stopped");
       previewPlan();
     }
-  };
-  es.onerror = () => { if (es.readyState === EventSource.CLOSED) { OS.es = null; setRunning(false); } };
+  });
 }
-(async () => { try { const s = await api("/api/status"); if (s.auto_job) osFollow(s.auto_job); } catch (e) {} })();
+// after a reload: follow the one-shot that's running, or show how the last one ended if this page hasn't yet
+(async () => {
+  const list = await refreshJobs(true);
+  const run = list.find(j => j.kind === "auto" && isRunning(j));
+  const ended = list.find(j => j.kind === "auto" && !isRunning(j));
+  if (run) osFollow(run.id, run.title);
+  else if (ended && store.get("uc-os-seen", null) !== ended.id) osFollow(ended.id, ended.title);
+})();
 
 // ------------------------------------------------------------ songs from YouTube
 async function ytSearch() {
