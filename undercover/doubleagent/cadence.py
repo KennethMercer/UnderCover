@@ -49,10 +49,11 @@ STRETCHES = 40          # stretches of real talk measured (phase 3 used 35-60)
 MIN_MINUTES = 2.0       # transcribed speech needed for a cadence
 # score = likeness - W_GAP * cadence gap - W_WER * WER: likeness decides between similar deliveries, a clearly
 # closer cadence or a mumbled word outweighs a small likeness difference (phase 3: likeness 0.73-0.83, gap 0.3-0.55)
-W_GAP, W_WER = 0.5, 1.0   # 0.25 at first: Freeman's closest-cadence clip lost on 0.03 likeness, and the 10-sentence
-                          # check then read him 1.2 syl/s too fast (2026-10-11); cadence is what this is for
-CFG_SLOWER = 0.2          # also tried on the best clip: Chatterbox reads slower and pauses more at lower cfg_weight
-TEMPO_RANGE = (0.82, 1.0)   # slowing the engine toward the person's rate: at most 18% (beyond that it smears)
+W_GAP, W_WER = 0.25, 1.0
+# No time-stretching of the engine's reading: the user heard it (2026-10-11, Freeman slowed 20% toward his measured
+# rate) as "terrible, he sounds drunk". A pack's tempo stays 1.0; SpeakEasy's speed slider still works by hand. This
+# selection (W_GAP 0.25, cfg 0.3 only, three clips) made the pack the user approved; later tuning (cadence weighed more,
+# a cfg 0.2 try, a clip-sound score) measured better but sounded worse, so it was reverted (PLAN Phase 18).
 
 
 # ---------------------------------------------------------------- text helpers (same rules as phase 3)
@@ -469,41 +470,26 @@ def train(job, voice_name: str, push, control=None) -> dict:
     work.mkdir(exist_ok=True)
     tried = []
     try:
-        def attempt(p, cfg_weight: float) -> dict:
+        for i, p in enumerate(cands):
+            push("testing", i / (len(cands) + 1), f"Trying reference clip {i + 1} of {len(cands)}")
             ref = work / f"{p.id}.wav"
-            if not ref.exists():
-                x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")
-                sf.write(str(ref), x, sr, subtype="PCM_16")
-            pack = {**base, "cfg_weight": cfg_weight, "ref_text": tr.get(p.id, "")}
+            x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")
+            sf.write(str(ref), x, sr, subtype="PCM_16")
+            pack = {**base, "ref_text": tr.get(p.id, "")}
             wavs = tester.read(pack, ref)
             try:
                 m = tester.measure(wavs, 1.0)
                 best = m
-                # still faster than the person? try slowing it toward their rate, kept only if it measures better
-                if m.get("rate") and person.get("rate"):
-                    t = float(np.clip(person["rate"] / m["rate"], *TEMPO_RANGE))
-                    if t < 0.97:
-                        mt = tester.measure(wavs, t)
-                        if mt["score"] > m["score"]:
-                            best = mt
             finally:
                 _cleanup(wavs)
-            return {"clip": p.id, "source": p.source, "dur": round(p.dur, 2), "text": tr.get(p.id, ""),
-                    "cfg_weight": cfg_weight, "tempo1": m, **best}
-        steps = len(cands) + 2
-        for i, p in enumerate(cands):
-            push("testing", i / steps, f"Trying reference clip {i + 1} of {len(cands)}")
-            tried.append(attempt(p, base["cfg_weight"]))
+            tried.append({"clip": p.id, "source": p.source, "dur": round(p.dur, 2), "text": tr.get(p.id, ""),
+                          "tempo1": m, **best})
         win = max(tried, key=lambda t: t["score"])
-        if engine == "chatterbox" and CFG_SLOWER < base["cfg_weight"]:
-            push("testing", len(cands) / steps, "Trying a slower, more deliberate reading")
-            tried.append(attempt(next(p for p in cands if p.id == win["clip"]), CFG_SLOWER))
-            win = max(tried, key=lambda t: t["score"])
         # 4. the voice's current cadence, on the same test: keep the new one only if it's better
         old = pack_of(v)
         before = None
         if old:
-            push("testing", (steps - 1) / steps, "Comparing with the current cadence")
+            push("testing", len(cands) / (len(cands) + 1), "Comparing with the current cadence")
             try:
                 wavs = tester.read(old, v.dir / "tts" / old.get("ref", "ref.wav"))
                 try:
@@ -518,19 +504,27 @@ def train(job, voice_name: str, push, control=None) -> dict:
         if before is not None and win["score"] <= before["score"] + 0.005:
             result.update(replaced=False, note=f"Tried {len(tried)} reference clips; none beat the current cadence, so it stays.")
             return result
+        approved = old and approved_by_user(old)
         # 5. save the pack with the voice
         gaps = person.get("sentence_gap_s") or [0.3, 0.45, 0.8]
         gap = float(np.clip(gaps[1], 0.25, 1.0))
         tdir = v.dir / "tts"
-        tdir.mkdir(exist_ok=True)
+        if approved:   # the user approved the current one by ear: the new one waits next to it (tts/pending/)
+            tdir = v.dir / "tts" / "pending"
+        tdir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(work / f"{win['clip']}.wav", tdir / "ref.wav")
-        pack = {**base, "cfg_weight": win["cfg_weight"], "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
+        pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins, "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score")},
                 "person": {k: person.get(k) for k in ("rate", "pauses", "pause_ms", "range_st", "sentences", "sentence_gap_s")},
                 "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score")},
-                "made": time.strftime("%Y-%m-%d %H:%M")}
+                "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": (old or {}).get("verdicts", [])}
         fsutil.write_text(tdir / "cadence.json", json.dumps({**pack, "tried": tried}, indent=1))
+        if approved:
+            result.update(replaced=False, pending=True,
+                          note=f"Found a cadence for {v.name} that measures better ({before['score']:.3f} -> {win['score']:.3f}); "
+                               "the one you approved stays until you've listened to the new one.")
+            return result
         v = get_voice(v.name)   # fresh meta (an export may have happened meanwhile)
         v.extra["tts"] = pack
         fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
@@ -541,6 +535,33 @@ def train(job, voice_name: str, push, control=None) -> dict:
         return result
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def pack_id(pack: dict) -> str:
+    """Names a pack in verdicts: its reference clip and settings."""
+    return f"{pack.get('engine')}:{pack.get('clip')}:cfg{pack.get('cfg_weight')}:t{pack.get('tempo')}"
+
+
+def approved_by_user(pack: dict) -> bool:
+    """The user picked this pack by ear (its latest verdict where it was compared says it won)."""
+    me = pack_id(pack)
+    for vd in reversed(pack.get("verdicts") or []):
+        if me in vd.get("compared", []):
+            return vd.get("winner") == me
+    return False
+
+
+def record_verdict(voice_name: str, compared: list, winner: str, why: str, by: str = "user") -> dict:
+    """A listening verdict (the packs or readings compared, which won, why) kept with the voice's cadence: the first
+    data for a later "keep this one" A/B choice. compared / winner: pack ids (pack_id) or names like "kokoro_rvc"."""
+    v = get_voice(voice_name)
+    pack = (v.extra or {}).get("tts")
+    if not pack:
+        raise ModelError(f"{v.name} has no cadence to record a verdict on.")
+    pack.setdefault("verdicts", []).append({"date": time.strftime("%Y-%m-%d %H:%M"), "compared": list(compared),
+                                            "winner": winner, "why": why, "by": by})
+    fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    return pack
 
 
 def remove_pack(voice_name: str):
