@@ -108,7 +108,8 @@ class Job:
         stalls, how it finds running work after a reload, and SafeHouse's job list."""
         evs = list(self.events)
         last = evs[-1] if evs else {}
-        stage = last.get("stage")
+        ref = evs[-2] if last.get("final") and len(evs) > 1 else last   # a finished job: how far it got
+        stage = ref.get("stage")
         snap = {"id": self.id, "kind": self.kind, "state": self.state, "title": self.title or (self.resume_spec or {}).get("label"),
                 "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
