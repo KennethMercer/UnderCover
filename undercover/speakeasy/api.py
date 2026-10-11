@@ -68,7 +68,7 @@ def _start(h, body: dict):
     args = dict(text=text, voice=body.get("voice") or "", reader=body.get("reader") or "auto",
                 speed=_num(body.get("speed"), 1.0), nudge=_num(body.get("nudge"), 0.0))
     p = speak.plan(args["voice"], args["reader"], args["speed"], args["nudge"])   # a bad voice/Reader fails now, not in the job
-    job = Job("speech")
+    job = Job("speech", title=f"{text[:40].strip()}{'…' if len(text) > 40 else ''} · {args['voice']}")
     JOBS[job.id] = job
 
     def run(job: Job):

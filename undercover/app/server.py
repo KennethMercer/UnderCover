@@ -218,6 +218,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json([{"n": i + 1, "name": r.name, "repo": r.repo, "file": r.file,
                                     "size": r.size, "url": r.url, "version": r.version, "sr": r.sr,
                                     "epochs": r.epochs, "steps": r.steps} for i, r in enumerate(res)])
+            if p == "/api/jobs":   # running jobs + those finished in the last hour, newest first (the page's job feed)
+                now, out = time.time(), []
+                for j in sorted(list(JOBS.values()), key=lambda j: -j.created):
+                    if not j.finished or (j.ended and now - j.ended < 3600):
+                        try:
+                            out.append(j.snapshot())
+                        except Exception:   # noqa: BLE001 - one odd job mustn't hide the others
+                            out.append({"id": j.id, "kind": j.kind, "state": j.state, "title": j.title})
+                return self._json(out)
             m = re.fullmatch(r"/api/jobs/(\w+)/events", p)
             if m:
                 return self._sse(m.group(1))
@@ -350,7 +359,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")       # proxies / security software: pass events on as they come
+        self.send_header("Content-Encoding", "identity")
         self.end_headers()
+        self.wfile.write(b":" + b" " * 2048 + b"\n\n")   # some filters hold a stream back until a few KB have passed
+        self.wfile.flush()
         i = 0
         while True:
             with job.cond:
@@ -408,7 +421,7 @@ class Handler(BaseHTTPRequestHandler):
             src = res[int(n) - 1]
         if not src:
             return self._error("Paste a link or pick a search result.")
-        job = Job("install")
+        job = Job("install", title=f"Installing {name or getattr(src, 'name', None) or 'a voice'}")
         JOBS[job.id] = job
 
         def run():

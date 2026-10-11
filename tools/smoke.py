@@ -363,6 +363,43 @@ def a_speech():
     return f"{v['name']} via {plan['reader']} {plan['pitch']:+} st, {item['duration']:.1f} s of speech in {item['seconds']['total']:.1f} s"
 
 
+@check("jobs feed: /api/jobs while running and after, unbuffered stream, every page bar on the feed (phase 2c)")
+def a_jobs_feed():
+    # Phase 2c's bug: bars didn't move live and work vanished on reload. The page now reads every job through jobs.js
+    # (the stream, with /api/jobs as fallback and for finding work after a reload); these are the parts it relies on.
+    web = ROOT / "undercover" / "web"
+    own = [f.name for f in web.glob("*.js") if f.name != "jobs.js" and "new EventSource" in f.read_text(encoding="utf-8")]
+    assert not own, f"{own} open their own job streams (no fallback, lost on reload): use watchJob from jobs.js"
+    html = (web / "index.html").read_text(encoding="utf-8")
+    assert html.index("/static/app.js") < html.index("/static/jobs.js") < html.index("/static/train.js"), "jobs.js must load after app.js, before the modules"
+    voices = api("/api/speak/voices")
+    v = next((x for x in voices if x["trained"] and x["kind"] == "speech" and not x["undertrained"]), voices[0] if voices else None)
+    r = api("/api/speak", {"text": "Smoke test for the job list. It has two sentences.", "voice": v["name"]})
+    job = r["job"]
+    try:
+        snap = next((j for j in api("/api/jobs") if j["id"] == job), None)
+        assert snap and snap["kind"] == "speech", "a new job isn't in /api/jobs"
+        assert snap["state"] in ("queued", "running") and v["name"] in snap["title"], f"unexpected snapshot {snap}"
+        t0 = time.time()
+        with urllib.request.urlopen(BASE + f"/api/jobs/{job}/events", timeout=60) as resp:
+            assert resp.headers.get("X-Accel-Buffering") == "no", "event stream may be buffered on the way"
+            first = resp.read(1024)
+            assert first.startswith(b":") and time.time() - t0 < 5, "the stream's padding didn't arrive at once"
+            for raw in resp:
+                if raw.startswith(b"data: ") and json.loads(raw[6:]).get("final"):
+                    break
+        snap = next(j for j in api("/api/jobs") if j["id"] == job)
+        assert snap["state"] == "done" and snap["final"]["state"] == "done" and snap["ended"], f"finished job shows as {snap}"
+        assert snap["events"] >= 3 and snap["stage"] and (snap["progress"] is not None or snap.get("of")), \
+            f"snapshot lacks progress fields: {snap}"
+    finally:
+        wait_for(lambda: next((j for j in api("/api/jobs") if j["id"] == job), {}).get("ended"), 120, what="speech finished")
+        for s in api("/api/speak/recent"):
+            if s["text"].startswith("Smoke test for the job list"):
+                api(f"/api/speak/{s['id']}", method="DELETE")
+    return f"{snap['events']} events, listed while running and after"
+
+
 # ---------------------------------------------------------------- full: training with pause / resume
 
 @check("training: quick run, pause, resume, cancel (scratch project)")
@@ -428,6 +465,7 @@ def main():
         if not a.no_cover:
             a_cover()
             a_speech()
+            a_jobs_feed()
         if a.full:
             a_training()
     failed = [n for ok, n in RESULTS if not ok]

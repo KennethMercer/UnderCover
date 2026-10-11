@@ -1,14 +1,14 @@
 "use strict";
-// Suite-level work: the Pause / Resume bar under the top bar on every module, the overnight queue (its editor on
-// DoubleAgent's page, and the drawer from the Queue button). Server side: undercover/core/worklist.py. The bar is fed by
-// /api/status (polled by app.js); the queue by /api/work.
+// Suite-level work: the running bar under the top bar on every module (any running job, live, with Pause / Resume), the
+// overnight queue (its editor on DoubleAgent's page, and the drawer from the Queue button). Server side:
+// undercover/core/worklist.py. Running jobs come from jobs.js; Pause / Resume and the queue state from /api/status
+// (polled by app.js); the queue from /api/work.
 
 const W = { last: null, open: false };
 
-// which module owns a job: the one that started it (colour + label in the bar and the drawer)
-const OWNER = { auto: "frontman" };   // the one-shot; voice work ("train", "train-*", queue items) is DoubleAgent's
+// which module owns a job (colour + label in the bar and the drawer): jobOwner in jobs.js
+const ownerOf = kind => jobOwner(kind);
 const MOD_NAME = { frontman: "FrontMan", doubleagent: "DoubleAgent", speakeasy: "SpeakEasy", safehouse: "SafeHouse" };
-const ownerOf = kind => OWNER[kind] || "doubleagent";
 const glyph = m => `<svg class="ico" aria-hidden="true"><use href="#g-${m}"/></svg>`;
 
 function fmtMin(m) {
@@ -21,45 +21,104 @@ function clock(hhmm) {
   return `${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "am" : "pm"}`;
 }
 
-// ------------------------------------------------------------ the bar (called from app.js pollStatus)
-function renderWorkBar(w) {
-  const bar = $("#workbar");
-  if (!w) { bar.hidden = true; return; }
-  const run = (w.running || [])[0];
-  // waiting + running queue jobs (the queue only runs while armed); /api/work, once loaded, knows exactly
+// ------------------------------------------------------------ one running job, in words (the bar, the drawer, SafeHouse)
+const COVER_STAGES = ["separating", "converting", "mixing"];
+function jobProgress(j) {   // 0..1 over the whole job (a cover's events count each stage from 0)
+  const p = j.progress;
+  if (j.kind === "cover" && COVER_STAGES.includes(j.stage)) return (COVER_STAGES.indexOf(j.stage) + (p || 0)) / 3;
+  if (j.kind === "speech" && j.of) return ((j.index ?? -1) + 1) / j.of;
+  return p;
+}
+function jobLine(j) {
+  const bits = [];
+  if (j.pausing) bits.push("pausing…");
+  else if (j.epoch && j.epochs) bits.push(`epoch ${j.epoch} of ${j.epochs}`);
+  else if (j.kind === "speech" && j.of) bits.push(`sentence ${(j.index ?? -1) + 1} of ${j.of}`);
+  else if (j.message) bits.push(j.message);
+  else if (j.state === "queued") bits.push("waiting for the GPU");
+  const left = j.total_left ?? j.eta;
+  if (left != null && !j.pausing) bits.push(`~${fmtSecs(Math.max(1, left))} left`);
+  return bits.join(" · ");
+}
+const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
+
+// ------------------------------------------------------------ the bar: any running job, live (jobs.js), plus Pause / Resume
+W.work = null; W.watch = {};
+function renderWorkBar(w) { W.work = w; renderBar(); }   // called from app.js pollStatus with /api/status's "work"
+function renderBar() {
+  const bar = $("#workbar"), w = W.work || {};
   queueCount(W.last ? W.last.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length
                     : (w.queued || 0) + (w.armed ? (w.running || []).length : 0));
+  const run = runningJobs();
+  const ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
+  run.sort((a, b) => ((ORDER.indexOf(a.kind) + 1) || 9) - ((ORDER.indexOf(b.kind) + 1) || 9));
+  const main = run[0];
   let text = "", state = "";
-  if (w.held) {
+  if (main) {
+    text = [jobName(main), jobLine(main)].filter(Boolean).join(" · ");
+    state = "run";
+  } else if (w.held) {
     const res = w.resume || [];
     text = "Voice work is paused" + (res.length ? ` · ${res.slice(0, 2).join(", ")}${res.length > 2 ? ` and ${res.length - 2} more` : ""}` : "") +
            (w.queued ? ` · ${w.queued} in the overnight queue` : "");
     state = "held";
-  } else if (run) {
-    const bits = [run.label];
-    if (run.pausing) bits.push("pausing…");
-    else if (run.epoch && run.epochs) bits.push(`epoch ${run.epoch} of ${run.epochs}`);
-    else if (run.message) bits.push(run.message);
-    if (run.eta && !run.pausing) bits.push(`~${fmtSecs(run.eta)} left`);
-    text = bits.join(" · ");
-    state = "run";
   } else if (w.armed && w.queued) {
     text = `Overnight queue: ${w.queued} job${w.queued > 1 ? "s" : ""}` + (w.start_at ? `, starts at ${clock(w.start_at)}` : ", starting when the GPU is free");
     state = "armed";
   }
   bar.hidden = !text;
+  document.documentElement.style.setProperty("--wb-h", text ? $(".workbar-wrap").offsetHeight + "px" : "0px");
   if (!text) return;
   bar.dataset.state = state;
-  const owner = run ? ownerOf(run.kind) : "doubleagent";
+  const owner = main ? ownerOf(main.kind) : "doubleagent";
   bar.dataset.owner = owner;
   $("#wb-who").innerHTML = `${glyph(owner)}${MOD_NAME[owner]}`;
   $("#wb-text").textContent = text;
-  const frac = state === "run" && run.fraction != null ? run.fraction : null;
+  $("#wb-more").hidden = run.length < 2;
+  $("#wb-more").textContent = run.length > 1 ? `+${run.length - 1} more` : "";
+  const frac = main ? jobProgress(main) : null;
   $("#wb-bar").hidden = frac == null;
   if (frac != null) $("#wb-bar i").style.width = Math.round(frac * 100) + "%";
-  $("#wb-pause").hidden = state === "held";
-  $("#wb-resume").hidden = state !== "held";
+  const pausable = run.some(j => PAUSABLE_KINDS.has(j.kind)) || (w.running || []).length > 0;
+  $("#wb-pause").hidden = state === "held" || !pausable;
+  $("#wb-resume").hidden = !w.held;
+  $("#wb-main").dataset.goto = main ? owner : "doubleagent";
+  $("#wb-main").title = main ? `Open ${MOD_NAME[owner]}` : "";
   $("#chip-train").hidden = true;   // the bar says it all
+  document.documentElement.style.setProperty("--wb-h", $(".workbar-wrap").offsetHeight + "px");   // now its text is in
+}
+// every running job is watched, so its events move the bar as they come; the drawer and SafeHouse redraw too
+onJobs(list => {
+  for (const j of runningJobs()) if (!W.watch[j.id]) W.watch[j.id] = watchJob(j.id, ev => { if (ev.final) { W.watch[j.id]?.(); delete W.watch[j.id]; } });
+  renderBar();
+  if (!$("#q-drawer").hidden) renderRunning($("#qd-run"), { heading: "Running now" });
+  if (!$("#view-library").hidden) renderRunning($("#lib-jobs"), { recent: true, always: true });
+});
+document.addEventListener("uc:module", e => { if (e.detail === "safehouse") { renderRunning($("#lib-jobs"), { recent: true, always: true }); refreshJobs(true); } });
+// running jobs as rows (the drawer's "Running now"; SafeHouse uses the same with finished ones too)
+function renderRunning(box, opts = {}) {
+  if (!box) return;
+  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);   // the newest few that finished
+  const list = opts.recent ? [...runningJobs(), ...ended] : runningJobs();
+  box.hidden = !list.length && !opts.always;
+  if (!list.length) { box.innerHTML = opts.always ? `<p class="meta">Nothing running. Covers, speech, training and queue jobs show here while they run, and for an hour after.</p>` : ""; return; }
+  box.innerHTML = (opts.heading ? `<h3 class="qd-h">${opts.heading}</h3>` : "") + list.map(j => {
+    const live = isRunning(j), owner = ownerOf(j.kind), f = live ? jobProgress(j) : null;
+    const st = j.final?.state || j.state;
+    const note = live ? jobLine(j) : `${{ done: "done", error: "failed", cancelled: "cancelled", paused: "paused", lost: "stopped" }[st] || st}` +
+      (j.ended ? ` · ${new Date(j.ended * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "") +
+      (st !== "done" && j.final?.message ? ` · ${j.final.message}` : "");
+    return `<div class="qd-job ${live ? "running" : "done"}" data-owner="${owner}">
+      <div><span class="kind">${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}</span><b>${esc(jobName(j))}</b>${note ? `<small>${esc(note)}</small>` : ""}
+        ${live ? `<div class="bar"><i style="width:${Math.round((f || 0) * 100)}%"></i></div>` : ""}</div>
+      <div class="qside">${live && !opts.recent ? "" : live ? `<button class="linkbtn" type="button" data-jcancel="${j.id}">Cancel</button>` : ""}
+        <button class="linkbtn" type="button" data-goto="${owner}">Open</button></div></div>`;
+  }).join("");
+  $$("[data-jcancel]", box).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Cancelling…";
+    try { await api(`/api/jobs/${b.dataset.jcancel}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't cancel that"); }
+    refreshJobs(true);
+  });
 }
 $("#wb-pause").onclick = async () => {
   $("#wb-pause").disabled = true;
@@ -88,6 +147,7 @@ const jobWhat = i => i.kind === "improve" ? `Improve ${esc(i.target)}` : `Train 
 const jobKind = i => i.kind === "improve" ? "voice · improve" : i.kind === "new" ? "voice · new" : esc(i.kind);
 // the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
 function renderDrawer() {
+  renderRunning($("#qd-run"), { heading: "Running now" });
   const w = W.last;
   if (!w) { $("#qd-list").innerHTML = `<p class="meta">Loading…</p>`; return; }
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));

@@ -49,8 +49,8 @@
 <div class="workbar-wrap">
   <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
     <span class="who" id="wb-who"></span>
-    <div class="wb-main"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
-    <div class="wb-btns"><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-open" type="button">Queue</button></div>
+    <div class="wb-main" id="wb-main"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
+    <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-open" type="button">Queue</button></div>
   </div>
 </div>
 
@@ -479,6 +479,7 @@
   <div class="view" id="view-library" hidden>
     <div class="modhead"><div class="modmark"><svg class="ico" aria-hidden="true"><use href="#g-safehouse"/></svg></div>
       <div><h1>SafeHouse</h1><p>Everything the suite keeps on disk, and what can go.</p></div></div>
+    <section class="panel lib-jobs"><h2>Running and recent</h2><div class="qd-jobs" id="lib-jobs"></div></section>
     <section class="panel">
       <div class="lib-storage">
         <div class="lib-storage-main">
@@ -578,6 +579,7 @@
 <div class="scrim" id="q-scrim" hidden></div>
 <aside class="drawer" id="q-drawer" hidden role="dialog" aria-modal="true" aria-labelledby="qd-h">
   <div class="row spread"><h2 id="qd-h">Overnight queue</h2><button class="linkbtn" id="qd-close" type="button">Close</button></div>
+  <div class="qd-jobs" id="qd-run" hidden></div>
   <p class="meta" id="qd-total"></p>
   <div class="qd-jobs" id="qd-list"></div>
   <div class="row qd-add"><button class="btn" type="button" data-qadd="improve">+ Improve a voice</button><button class="btn" type="button" data-qadd="new">+ New voice</button>
@@ -587,6 +589,7 @@
 </aside>
 
 <script src="/static/app.js"></script>
+<script src="/static/jobs.js"></script>
 <script src="/static/train.js"></script>
 <script src="/static/oneshot.js"></script>
 <script src="/static/library.js"></script>
