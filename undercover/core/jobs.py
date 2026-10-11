@@ -169,7 +169,12 @@ class Job:
             ev["total_left"] = ev["eta"]
             return
         p = ev.get("frac", ev.get("fraction"))
-        if p is None or not 0 <= p < 1:
+        if p is None or p < 0:
+            return
+        if p >= 1 and (not STAGES.get(self.kind) or stage == STAGES[self.kind][-1]):
+            ev["total_left"] = 0.0   # all done but the saving
+            return
+        if p >= 1:
             return
         order = STAGES.get(self.kind)
         if order and stage in order:   # per-stage progress: this stage's left + the typical later stages
