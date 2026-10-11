@@ -17,6 +17,15 @@
 .PARAMETER DryRun
   Print every step and command without downloading or installing anything.
 
+.PARAMETER LibraryDir
+  Where your library lives (songs, covers, speech, voices): a folder that gets uploads\, output\ and voices\.
+  Default (or the install folder): inside the install folder, as before. Same for -WorkDir (cache\: stems, training
+  projects) and -ModelsDir (models\). Written to config.toml [paths].
+
+.PARAMETER Addons
+  Optional add-ons to install after setup, comma-separated ids (e.g. "f5"). Only pass ids whose licence the user has
+  read and accepted (the installer's add-ons page asks); each runs python -m undercover.addons install <id> --accept-licence.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun
 #>
@@ -25,17 +34,31 @@ param(
     [ValidateSet('auto', 'rocm', 'cuda128', 'cuda126', 'cpu')][string]$Backend = 'auto',
     [switch]$DryRun,
     [switch]$Force,
+    [string]$LibraryDir = '',
+    [string]$WorkDir = '',
+    [string]$ModelsDir = '',
+    [string]$Addons = '',
     [switch]$Pause      # keep the window open at the end (the installer runs setup in its own window)
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is ~10x slower with the progress bar
+# the installer passes "E:\." for a drive's root (a trailing \ would escape its closing quote): normalise
+foreach ($v in 'LibraryDir', 'WorkDir', 'ModelsDir') {
+    $d = Get-Variable $v -ValueOnly
+    if ($d) { Set-Variable $v ([IO.Path]::GetFullPath($d)) }
+}
 
-# Pinned tool versions. Bump deliberately, then re-test.
-$UvVersion   = '0.12.18'   # 2026-09-22; pick releases at least 2 weeks old
-$DenoVersion = '2.9.7'
-$PythonVer   = '3.12'
-$FfmpegUrl   = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+# Pinned tool versions + the SHA-256 of every download. Bump deliberately (releases at least 2 weeks old), take the
+# hash from the release page (GitHub shows each asset's sha256), then re-test with tools\smoke.py --full.
+$UvVersion    = '0.12.18'   # 2026-09-22
+$UvSha256     = 'cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff'
+$DenoVersion  = '2.9.7'     # 2026-09-17
+$DenoSha256   = 'a0c3101b4158d1dfb7d6a78a7bf0f3de80c96bb423c152beec8beb22786f2238'
+$PythonVer    = '3.12.10'   # exact, the dev venv's (uv checks its own Python downloads against its built-in hashes)
+$FfmpegVer    = '8.0'       # the dev PC's ffmpeg; a fixed GyanD/codexffmpeg release instead of gyan.dev's "latest"
+$FfmpegUrl    = "https://github.com/GyanD/codexffmpeg/releases/download/$FfmpegVer/ffmpeg-$FfmpegVer-essentials_build.zip"
+$FfmpegSha256 = '647e467caf82b9fa200a562769b5ff4d736aaf725804ed2c64ea9752106fa569'
 
 $Req     = Join-Path $PSScriptRoot 'requirements'
 $Tools   = Join-Path $InstallDir 'tools'
@@ -71,14 +94,21 @@ function Run([string]$exe, [string[]]$argv) {
     if ($LASTEXITCODE -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $LASTEXITCODE" }
 }
 
-function Fetch([string]$url, [string]$dest) {
-    if ($DryRun) { Write-Host "    [dry-run] download $url -> $dest" -ForegroundColor DarkGray; return }
+# Download, then check the file's SHA-256: a file that doesn't match is deleted and setup stops.
+function Fetch([string]$url, [string]$dest, [string]$sha256) {
+    if ($DryRun) { Write-Host "    [dry-run] download $url -> $dest (sha256 $($sha256.Substring(0, 12))...)" -ForegroundColor DarkGray; return }
     Log "GET $url"
     New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
     for ($i = 1; $i -le 3; $i++) {
-        try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; return }
+        try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; break }
         catch { if ($i -eq 3) { Fail "couldn't download $url ($($_.Exception.Message))" }; Start-Sleep -Seconds (2 * $i) }
     }
+    $got = (Get-FileHash -Algorithm SHA256 -Path $dest).Hash.ToLower()
+    if ($got -ne $sha256.ToLower()) {
+        Remove-Item -Force $dest
+        Fail "the download of $url isn't the expected file (SHA-256 $got, expected $sha256). Try again later; if it keeps happening, the release may have changed."
+    }
+    Log "    sha256 ok"
 }
 
 function Unzip([string]$zip, [string]$dest) {
@@ -123,7 +153,7 @@ Step "Getting the Python installer (uv $UvVersion)"
 if ((Test-Path $Uv) -and -not $DryRun) { Info "already there" }
 else {
     $zip = Join-Path $env:TEMP "uv-$UvVersion.zip"
-    Fetch "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" $zip
+    Fetch "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" $zip $UvSha256
     Unzip $zip (Join-Path $Tools 'uv')
 }
 # Keep uv's Python downloads and cache inside the install folder.
@@ -161,16 +191,23 @@ if (-not $DryRun) {
     Set-Content -Path $pins -Value $ver -Encoding ascii
     Info "pinned: $($ver -join ', ')"
 }
-Run $Uv @('pip', 'install', '--python', $Py, '-r', (Join-Path $Req 'common.txt'), '-c', $pins)
+# common.txt is the dev venv's complete package set (minus PyTorch and the cadence set), every line with its SHA-256
+# (installer/pin_hashes.py): installed exactly as listed (--no-deps; uv's hash mode needs every dependency listed up
+# front, and they are), and uv refuses any file that doesn't match its hash. The torch pins stop anything replacing it.
+Run $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'common.txt'), '-c', $pins)
+
+Step "Installing the cadence engine (Chatterbox + Whisper)"
+# --no-deps, like on the dev PC: their metadata asks for torch 2.6 / numpy < 2, which would replace the GPU's torch.
+Run $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'cadence.txt'))
 
 # 5. ffmpeg + Deno (portable, inside tools\) ---------------------------------------------------
-Step "Getting ffmpeg"
+Step "Getting ffmpeg $FfmpegVer"
 $ffBin = Join-Path $Tools 'ffmpeg\bin'
 if ((Test-Path (Join-Path $ffBin 'ffmpeg.exe')) -and -not $DryRun) { Info "already there" }
 else {
-    $zip = Join-Path $env:TEMP 'ffmpeg-essentials.zip'
+    $zip = Join-Path $env:TEMP "ffmpeg-$FfmpegVer-essentials.zip"
     $tmp = Join-Path $env:TEMP 'ffmpeg-unzip'
-    Fetch $FfmpegUrl $zip
+    Fetch $FfmpegUrl $zip $FfmpegSha256
     Unzip $zip $tmp
     if (-not $DryRun) {
         # The zip holds one versioned folder (ffmpeg-8.x-essentials_build\bin\...).
@@ -186,7 +223,7 @@ $denoDir = Join-Path $Tools 'deno'
 if ((Test-Path (Join-Path $denoDir 'deno.exe')) -and -not $DryRun) { Info "already there" }
 else {
     $zip = Join-Path $env:TEMP "deno-$DenoVersion.zip"
-    Fetch "https://github.com/denoland/deno/releases/download/v$DenoVersion/deno-x86_64-pc-windows-msvc.zip" $zip
+    Fetch "https://github.com/denoland/deno/releases/download/v$DenoVersion/deno-x86_64-pc-windows-msvc.zip" $zip $DenoSha256
     Unzip $zip $denoDir
 }
 
@@ -214,23 +251,82 @@ elseif (Test-Path $cfg) {
     Info "device_name = `"$deviceName`", backend = `"$cfgBackend`""
 }
 
+# 6b. Where the files live (the installer's "Where should UnderCover keep your files?" page) ----------------------
+# Each group is one folder holding today's sub-folders; the install folder (the default) changes nothing.
+function SameDir([string]$a, [string]$b) {
+    if (-not $a) { return $true }
+    return ([IO.Path]::GetFullPath($a).TrimEnd('\') -ieq [IO.Path]::GetFullPath($b).TrimEnd('\'))
+}
+$paths = [ordered]@{}
+if (-not (SameDir $LibraryDir $InstallDir)) {   # your library: songs, covers + speech, voices (with their cadence)
+    $paths['uploads_dir'] = "'" + (Join-Path $LibraryDir 'uploads') + "'"
+    $paths['output_dir']  = "'" + (Join-Path $LibraryDir 'output') + "'"
+    $paths['voices_dir']  = "'" + (Join-Path $LibraryDir 'voices') + "'"
+}
+if (-not (SameDir $WorkDir $InstallDir)) { $paths['cache_dir'] = "'" + (Join-Path $WorkDir 'cache') + "'" }
+if (-not (SameDir $ModelsDir $InstallDir)) {
+    $paths['models_dir'] = "'" + (Join-Path $ModelsDir 'models') + "'"
+    if (-not $paths.Contains('voices_dir')) { $paths['voices_dir'] = '"models/voices"' }   # voices stay with the library
+}
+if ($paths.Count) {
+    Step "Writing where your files live"
+    if ($DryRun) { $paths.GetEnumerator() | ForEach-Object { Info "[dry-run] config.toml [paths] $($_.Key) = $($_.Value)" } }
+    else {
+        $text = Get-Content $cfg -Raw
+        foreach ($k in $paths.Keys) {
+            $line = "$k = $($paths[$k])"
+            if ($text -match "(?m)^$k\s*=") { $text = [regex]::Replace($text, "(?m)^$k\s*=.*$", { param($m) $line }) }
+            else { $text = [regex]::Replace($text, '(?m)^(uploads_dir\s*=.*)$', { param($m) $m.Value + "`r`n" + $line }, 1) }
+            Info $line
+        }
+        [IO.File]::WriteAllText($cfg, $text, (New-Object Text.UTF8Encoding $false))
+    }
+}
+
 # 7. Self-test --------------------------------------------------------------------------------
 Step "Testing"
 $env:PATH = "$ffBin;$denoDir;$env:PATH"
 Run $Py @((Join-Path $PSScriptRoot 'selftest.py'), '--backend', $Backend, '--report', (Join-Path $InstallDir 'logs\selftest.json'))
 
+# 7b. Optional add-ons the user accepted on the installer's add-ons page ----------------------
+$addonIds = @($Addons -split '[,; ]+' | Where-Object { $_ })
+if ($addonIds.Count) {
+    Step "Adding the add-ons you accepted: $($addonIds -join ', ')"
+    foreach ($id in $addonIds) { Run $Py @('-m', 'undercover.addons', 'install', $id, '--accept-licence') }
+}
+
 # 8. Launcher --------------------------------------------------------------------------------
+# Same behaviour as UnderCover.bat (dev): from the Start menu / a shortcut (started by Explorer) it runs in the
+# background with no window (quit it from SafeHouse); from a terminal it stays in that window. --console / --background
+# force either.
 Step "Making the launcher"
 $launcher = Join-Path $InstallDir 'UnderCover.cmd'
-$body = @"
+$body = @'
 @echo off
 title UnderCover
-rem Starts UnderCover and opens it in your browser. Keep this window open while you use it.
+rem Starts UnderCover and opens it in your browser.
+rem  - From the Start menu or a shortcut: runs in the background, no window. Quit it from the page
+rem    (SafeHouse, "Quit UnderCover"); its output goes to logs\server.log.
+rem  - Run from a terminal: stays in that window with its output; Ctrl+C stops it.
+rem  - Force either way: UnderCover.cmd --console   or   UnderCover.cmd --background
 cd /d "%~dp0"
 set "PATH=%~dp0tools\ffmpeg\bin;%~dp0tools\deno;%PATH%"
-".venv\Scripts\python.exe" -m undercover.server %*
+set "UC_MODE="
+set "UC_ARGS=%*"
+if /i "%~1"=="--console" (set "UC_MODE=console" & set "UC_ARGS=")
+if /i "%~1"=="--background" (set "UC_MODE=background" & set "UC_ARGS=")
+rem Started by Explorer (Start menu, double-click, a shortcut)? Walk up: powershell <- for's cmd <- this cmd <- parent
+if not defined UC_MODE for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$i=$PID; foreach($n in 1..3){$i=(Get-CimInstance Win32_Process -Filter ('ProcessId='+$i)).ParentProcessId}; (Get-Process -Id $i -EA 0).ProcessName"`) do set "UC_PARENT=%%P"
+if not defined UC_MODE if /i "%UC_PARENT%"=="explorer" set "UC_MODE=background"
+if not defined UC_MODE set "UC_MODE=console"
+if "%UC_MODE%"=="background" (
+  if not exist logs mkdir logs
+  if exist ".venv\Scripts\pythonw.exe" (start "" ".venv\Scripts\pythonw.exe" -m undercover.core.relaunch 0) else (start "" /min ".venv\Scripts\python.exe" -m undercover.core.relaunch 0)
+  exit /b 0
+)
+".venv\Scripts\python.exe" -m undercover.server %UC_ARGS%
 if errorlevel 1 pause
-"@
+'@
 if ($DryRun) { Info "[dry-run] write $launcher" } else { Set-Content -Path $launcher -Value $body -Encoding ascii; Info $launcher }
 
 Write-Host ""

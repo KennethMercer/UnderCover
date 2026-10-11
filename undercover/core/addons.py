@@ -166,7 +166,11 @@ def _pip(*args) -> None:
     cmd = [str(uv), "pip", *args, "--python", sys.executable] if uv else [sys.executable, "-m", "pip", *args]
     if uv and args and args[0] == "uninstall":
         cmd = [c for c in cmd if c != "-y"]   # uv never asks
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
+    env = None
+    if uv:   # like setup.ps1: uv's cache and config stay inside the app folder, never in the user's profile
+        env = {**os.environ, "UV_CACHE_DIR": str(ROOT / "cache" / "uv"), "UV_NO_CONFIG": "1",
+               "UV_PYTHON_INSTALL_DIR": str(ROOT / "tools" / "python")}
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:
         with open(path("logs_dir") / "errors.log", "a", encoding="utf-8") as f:
@@ -195,7 +199,11 @@ def install(addon_id: str, accept: bool, progress=None, cancel=None) -> dict:
     if a.packages:
         if progress:
             progress(f"Installing {a.name}'s Python packages", 0, 0)
-        _pip("install", "--no-deps", "-c", str(ROOT / "constraints.txt"), *a.packages)
+        hashed = ROOT / "installer" / "requirements" / f"addon-{a.id}.txt"   # the same pins, each with its SHA-256
+        if hashed.exists():
+            _pip("install", "--no-deps", "--require-hashes", "-r", str(hashed))
+        else:
+            _pip("install", "--no-deps", "-c", str(ROOT / "constraints.txt"), *a.packages)
     if a.files:
         from . import setup_models
 
