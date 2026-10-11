@@ -5,6 +5,7 @@ leaves the old process stuck in the driver. So the old server spawns this small 
 exits, and the helper starts the new server only once the old process is gone.
 
     python -m undercover.core.relaunch <old_pid> [server args...]
+    python -m undercover.core.relaunch 0          (UnderCover.bat double-clicked: start windowless, nothing to wait for)
 """
 import subprocess
 import sys
@@ -48,12 +49,18 @@ def main():
     logs = ROOT / "logs"
     logs.mkdir(exist_ok=True)
     with open(logs / "server.log", "a", encoding="utf-8") as log:
-        ok = wait_for_exit(old_pid)
-        log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] restart: old server {old_pid} "
-                  f"{'exited' if ok else 'did NOT exit within 60 s'}; starting a new one\n")
+        if old_pid == 0:   # UnderCover.bat double-clicked: a fresh start in the background, no window
+            log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] start: in the background (no window)\n")
+        else:
+            ok = wait_for_exit(old_pid)
+            log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] restart: old server {old_pid} "
+                      f"{'exited' if ok else 'did NOT exit within 60 s'}; starting a new one\n")
         log.flush()
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        subprocess.Popen([sys.executable, "-m", "undercover.server", *args], cwd=str(ROOT),
+        # python.exe (not pythonw) with a hidden console: tools the server runs (ffmpeg...) share it, no pop-ups
+        exe = Path(sys.executable)
+        exe = exe.with_name("python.exe") if exe.name.lower() == "pythonw.exe" else exe
+        subprocess.Popen([str(exe), "-m", "undercover.server", *args], cwd=str(ROOT),
                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                          creationflags=flags, close_fds=True)
 
