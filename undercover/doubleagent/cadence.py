@@ -405,11 +405,11 @@ def can_train(v) -> tuple[bool, str]:
     ex = v.extra or {}
     if not C.engine_ready(C.default_engine()):
         return False, "The cadence engine isn't installed."
-    if ex.get("trained") and not ex.get("from_speech", True):
-        proj = project_for_voice(v)
-        if proj is None or proj.kept_seconds() - proj.sung_seconds() < MIN_MINUTES * 60:
-            return False, "Trained on singing: a cadence needs a few minutes of them talking (add interviews in DoubleAgent)."
-    if project_for_voice(v) is not None:
+    proj = project_for_voice(v)
+    if proj is not None:
+        if proj.kept_seconds() - proj.sung_seconds() < MIN_MINUTES * 60:
+            return False, (f"{proj.person}'s clips are mostly singing: a cadence needs a few minutes of them talking "
+                           "(add interviews in DoubleAgent).")
         return True, "from the voice's clips"
     if ex.get("person"):
         return True, f"finds clips of {ex['person']} first"
