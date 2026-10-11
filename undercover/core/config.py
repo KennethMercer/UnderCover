@@ -38,8 +38,11 @@ def set_values(section: str, values: dict, config_file: Path | None = None):
     new = text[:m.start(1)] + body + text[m.end(1):]
     tomllib.loads(new)   # never write a file the app can't read back
     fsutil.write_text(cf, new)
-    if config_file is None or Path(config_file) == CONFIG_FILE:
-        CONFIG.setdefault(section, {}).update(tomllib.loads(new)[section])
+    if Path(cf).resolve() == Path(CONFIG_FILE).resolve():
+        # only the keys written here: never re-read the section (a reload once put the real [paths] back into a test
+        # that was moving scratch folders, and it deleted the user's songs and covers; 2026-10-11)
+        written = tomllib.loads(new)[section]
+        CONFIG.setdefault(section, {}).update({k: written[k] for k in values})
 
 
 def path(key: str) -> Path:
