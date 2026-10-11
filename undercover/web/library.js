@@ -140,6 +140,7 @@ function renderList() {
   });
   const bd = $("#lib-bulk-del");
   if (bd) confirmClick(bd, `Delete ${L.checked.size}?`, async () => {
+    releaseAudio([...L.checked]);
     for (const id of [...L.checked]) { try { await api(`/api/library/covers/${id}`, { method: "DELETE" }); } catch (e) { showError(e.message, "Couldn't delete"); break; } }
     L.checked.clear(); afterChange();
   });
@@ -162,11 +163,14 @@ function confirmClick(btn, ask, run) {
   };
 }
 // let go of any file the page is playing, so Windows allows renaming/deleting it
-function releaseAudio() {
-  const sel = (L.data[L.cat] || []).find(i => idOf(i) === L.sel);
-  const files = sel ? [sel.url, sel.original, sel.vocal, sel.sample].filter(Boolean).map(u => decodeURIComponent(u.split("/").pop())) : [];
-  for (const a of [L.audio, T.audio, aCover, aOrig]) {
-    const mine = a === L.audio || a === T.audio || files.some(f => decodeURIComponent(a.src || "").endsWith(f));
+// Windows can't delete a file the page's players still stream: let go of it first (the selected item, or the given ids)
+function releaseAudio(ids = L.sel ? [L.sel] : []) {
+  const items = (L.data[L.cat] || []).filter(i => ids.includes(idOf(i)));
+  const files = items.flatMap(i => [i.url, i.original, i.vocal, i.sample]).filter(Boolean).map(u => decodeURIComponent(u.split("/").pop()));
+  const holds = a => files.some(f => decodeURIComponent(a.src || "").endsWith(f));
+  if (holds(aCover) && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // FrontMan's player had it open
+  for (const a of [L.audio, T.audio, MP.audio, aCover, aOrig]) {
+    const mine = a === L.audio || a === T.audio || holds(a);
     if (mine && a.src) { a.pause(); a.removeAttribute("src"); a.load(); }
   }
 }
