@@ -77,7 +77,8 @@ function setRunning(on, title) {
     OS.t0 = performance.now();
     OS.timer = setInterval(() => {
       const el = (performance.now() - OS.t0) / 1000;
-      $("#os-elapsed").textContent = `${fmtTime(el)} elapsed` + (OS.eta ? ` · ~${fmtSecs(OS.eta)} left` : "");
+      const left = OS.eta != null ? Math.max(0, OS.eta - (performance.now() - OS.etaAt) / 1000) : null;
+      $("#os-elapsed").textContent = (left != null ? leftText(left) + " · " : "") + `${fmtTime(el)} elapsed`;
     }, 500);
   }
 }
@@ -111,7 +112,7 @@ function renderOS(ev) {
   $("b", cc).textContent = ev.stage === "cover" ? "Making the cover" : (ev.final && ev.state === "done" ? "Done" : "Waiting");
   $("small", cc).textContent = ev.stage === "cover" && !ev.final ? ev.message
     : set ? `Best settings · ${fitWords(set)} (${set.why})` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
-  OS.eta = ev.eta || null;
+  OS.eta = ev.total_left ?? ev.eta ?? null; OS.etaAt = performance.now();
   $("#os-foot").textContent = voice?.how === "train" && ev.stage === "voice"
     ? "Covers you start meanwhile are made right away; training waits for them. You can watch it in DoubleAgent."
     : ev.stage === "queued" ? "Waiting for the GPU to finish the current job…" : "";

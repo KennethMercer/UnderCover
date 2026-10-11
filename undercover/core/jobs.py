@@ -69,6 +69,59 @@ def friendly(e: BaseException, stage: str = "") -> str:
     return f"Something went wrong{where} ({name}). Details were saved to logs/errors.log."
 
 
+# ---------------------------------------------------------------- time left (phase 4c: an ETA on every bar)
+
+# Kinds whose progress restarts at 0 in each stage, in stage order: their time left = this stage's (extrapolated) + the
+# typical length of the stages still to come (learned from past runs). Every other kind reports whole-job progress.
+STAGES = {"auto": ["song", "voice", "cover"]}
+_ETA_FILE = None
+_ETA_LOCK = threading.Lock()
+
+
+def _eta_file():
+    return path("cache_dir") / "eta.json"
+
+
+def _eta_load() -> dict:
+    global _ETA_FILE
+    if _ETA_FILE is None:
+        try:
+            import json
+            _ETA_FILE = json.loads(_eta_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _ETA_FILE = {}
+    return _ETA_FILE
+
+
+def _median(xs):
+    xs = sorted(xs)
+    return xs[len(xs) // 2] if xs else None
+
+
+def typical(kind: str, stage: str | None = None) -> float | None:
+    """How long a kind (or one of its stages) usually takes, in seconds: the median of its last runs."""
+    rec = _eta_load().get(kind) or {}
+    return _median(rec.get("stages", {}).get(stage, [])) if stage else _median(rec.get("total", []))
+
+
+def _eta_learn(job: "Job"):
+    """Remember how long a finished job (and each of its stages) took, for the next one's estimate."""
+    if job.state != "done" or not job.started:
+        return
+    import json
+    from . import fsutil
+    with _ETA_LOCK:
+        st = _eta_load()
+        rec = st.setdefault(job.kind, {"total": [], "stages": {}})
+        rec["total"] = (rec["total"] + [round(job.ended - job.started, 1)])[-12:]
+        for name, secs in job.stage_secs.items():
+            rec["stages"][name] = (rec["stages"].get(name, []) + [round(secs, 1)])[-12:]
+        try:
+            fsutil.write_text(_eta_file(), json.dumps(st))
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------- jobs
 
 class Job:
@@ -86,18 +139,73 @@ class Job:
         self.control = None       # trainer Control, for jobs that train
         self.created = time.time()
         self.ended = None
+        self.started = None       # when it started running (time left is measured from here)
+        self.stage_secs: dict = {}   # finished stages -> seconds (learned for the next estimate)
+        self._stage = None        # (name, started, first progress (t, p))
+        self._p0 = None           # first whole-job progress (t, p)
 
     def push(self, **ev):
         with self.cond:
             ev.setdefault("state", self.state)
+            if not ev.get("final"):
+                self._time_left(ev)
             self.events.append(ev)
             self.cond.notify_all()
+
+    def _time_left(self, ev: dict):
+        """Every progress event gets total_left (seconds), unless the job already said: from its own eta, else
+        extrapolated from its progress so far (+ the typical length of the stages still to come)."""
+        now = time.time()
+        if self.started is None:
+            self.started = now
+        stage = ev.get("stage")
+        if stage and (self._stage is None or self._stage[0] != stage):
+            if self._stage is not None:
+                self.stage_secs[self._stage[0]] = now - self._stage[1]
+            self._stage = (stage, now, None)
+        if ev.get("total_left") is not None:
+            return
+        if ev.get("eta") is not None:
+            ev["total_left"] = ev["eta"]
+            return
+        p = ev.get("frac", ev.get("fraction"))
+        if p is None or p < 0:
+            return
+        if p >= 1 and (not STAGES.get(self.kind) or stage == STAGES[self.kind][-1]):
+            ev["total_left"] = 0.0   # all done but the saving
+            return
+        if p >= 1:
+            return
+        order = STAGES.get(self.kind)
+        if order and stage in order:   # per-stage progress: this stage's left + the typical later stages
+            name, t0, first = self._stage
+            if first is None and p > 0:
+                self._stage = (name, t0, (now, p))
+                first = self._stage[2]
+            left = None
+            if first and p - first[1] > 0.01 and now - first[0] > 2:
+                left = (now - first[0]) * (1 - p) / (p - first[1])
+            elif typical(self.kind, stage):
+                left = max(0.0, typical(self.kind, stage) - (now - t0))
+            later = [typical(self.kind, x) for x in order[order.index(stage) + 1:]]
+            if left is not None and all(x is not None for x in later):
+                ev["total_left"] = round(left + sum(later), 1)
+            return
+        if self._p0 is None and p > 0:
+            self._p0 = (now, p)
+        if self._p0 and p - self._p0[1] > 0.01 and now - self._p0[0] > 2:
+            ev["total_left"] = round((now - self._p0[0]) * (1 - p) / (p - self._p0[1]), 1)
+        elif typical(self.kind):
+            ev["total_left"] = round(max(0.0, typical(self.kind) - (now - self.started)), 1)
 
     def finish(self, state: str, **ev):
         with self.cond:
             self.state = state
             self.ended = time.time()
+            if self._stage is not None:
+                self.stage_secs[self._stage[0]] = self.ended - self._stage[1]
         self.push(state=state, final=True, **ev)
+        _eta_learn(self)
 
     @property
     def finished(self):

@@ -30,6 +30,23 @@ from . import tts
 
 MAX_CHARS = 50_000   # about 2 hours of speech
 SPEEDS = (0.7, 1.4)
+# Pace is made, not stretched (phase 4c): time-stretching the finished audio sounded slurred ("drunk"). A cadence voice
+# reads slower or faster through the engine's own settings plus the person's own pauses scaled; Kokoro reads at that
+# speed itself. Measured 2026-10-11 on a 5-sentence passage (tools/research/pace4c.py): slower -15% / -11% (Obama /
+# Freeman), faster +23% / +7%, nothing stretched. The user picks by ear (samples in D:\UnderCoverResearch\samples\phase4c).
+PACES = {
+    "slower": {"label": "Slower", "cfg_weight": 0.15, "exaggeration": 0.4, "gap": 1.35, "kokoro": 0.85},
+    "natural": {"label": "Natural", "cfg_weight": None, "exaggeration": None, "gap": 1.0, "kokoro": 1.0},
+    "faster": {"label": "Faster", "cfg_weight": 0.6, "exaggeration": 0.6, "gap": 0.75, "kokoro": 1.15},
+}
+
+
+def pace_of(pace: str | None, speed: float | None = None) -> str:
+    """The pace asked for; pages from before phase 4c send a speed instead."""
+    if pace in PACES:
+        return pace
+    s = float(speed or 1.0)
+    return "slower" if s < 0.95 else "faster" if s > 1.05 else "natural"
 
 
 @jobs.register_user_error
@@ -50,22 +67,25 @@ def parts_dir(job_id: str) -> Path:
 
 # ---------------------------------------------------------------- plan: which Reader, which pitch
 
-def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0, cadence=None) -> dict:
+def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0, cadence=None, pace: str | None = None) -> dict:
     """How a voice will read: with the person's cadence when the voice has one (and cadence isn't False), else the
     Reader (auto-picked from the voice's speaking pitch unless chosen) and the pitch shift that puts the Reader's
     speech at the person's speaking pitch (+ nudge semitones)."""
     v = get_voice(voice)
     sp = service.speaking_pitch(v)
     pack = service.cadence_pack(v)
+    pace = pace_of(pace, speed)
+    pc = PACES[pace]
     if pack and cadence is not False and engine_ready(pack.get("engine", "chatterbox")):
         info = engine_info(pack.get("engine", "chatterbox"))
         return {"voice": v.name, "mode": "cadence", "engine": pack.get("engine"), "engine_name": info["name"],
                 "rtf": info["rtf"], "person": (v.extra or {}).get("person") or pack.get("project"),
                 "reader": None, "auto": True, "reader_label": None, "reader_hz": None,
                 "target_hz": sp and sp["hz"], "target_low": sp and sp["low"], "pitch_from": sp and sp["how"],
-                "pitch": float(nudge or 0), "nudge": float(nudge or 0), "speed": float(np.clip(speed or 1.0, *SPEEDS)),
-                "tempo": float(pack.get("tempo") or 1.0), "gap_s": float(pack.get("gap_s") or 0.4),
-                "para_gap_s": float(pack.get("para_gap_s") or 0.8), "has_cadence": True}
+                "pitch": float(nudge or 0), "nudge": float(nudge or 0), "speed": 1.0, "pace": pace,
+                "cfg_weight": pc["cfg_weight"] or pack.get("cfg_weight"), "exaggeration": pc["exaggeration"] or pack.get("exaggeration"),
+                "tempo": float(pack.get("tempo") or 1.0), "gap_s": round(float(pack.get("gap_s") or 0.4) * pc["gap"], 3),
+                "para_gap_s": round(float(pack.get("para_gap_s") or 0.8) * pc["gap"], 3), "has_cadence": True}
     auto = reader in (None, "", "auto")
     if not auto and reader not in tts.READERS:
         raise SpeakError(f"Unknown Reader '{reader}'.")
@@ -74,7 +94,8 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
     return {"voice": v.name, "mode": "reader", "reader": r, "auto": auto, "reader_label": tts.READERS[r][0],
             "reader_hz": tts.READERS[r][1][1], "target_hz": sp and sp["hz"], "target_low": sp and sp["low"],
             "pitch_from": sp and sp["how"], "pitch": float(np.clip(pitch, -24, 24)), "nudge": float(nudge or 0),
-            "speed": float(np.clip(speed or 1.0, *SPEEDS)), "rtf": 3.0, "has_cadence": bool(pack)}
+            "speed": float(np.clip(pc["kokoro"] if pace != "natural" or speed in (None, 1, 1.0) else speed, *SPEEDS)),
+            "pace": pace, "gap_scale": pc["gap"], "rtf": 3.0, "has_cadence": bool(pack)}
 
 
 def voices() -> list[dict]:
@@ -118,7 +139,7 @@ def _level(y: np.ndarray, rms_db: float = -20.0, peak: float = 0.89) -> np.ndarr
 
 
 def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0,
-                cadence=None) -> dict:
+                cadence=None, pace: str | None = None) -> dict:
     """The speech job: sentences out as they're made (events with a URL each), then the finished WAV + MP3."""
     from scipy.signal import resample_poly
     from ..core import gpu
@@ -129,14 +150,15 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     if len(text) > MAX_CHARS:
         raise SpeakError(f"That's {len(text):,} characters; SpeakEasy reads up to {MAX_CHARS:,} at a time (about two hours). "
                          "Split it into parts.")
-    p = plan(voice, reader, speed, nudge, cadence)
+    p = plan(voice, reader, speed, nudge, cadence, pace)
     sents = tts.sentences(text)
     if not sents:
         raise SpeakError("There's nothing to read in that text.")
     if p["mode"] == "cadence":
         return _make_cadence(job, text, sents, p)
     t0 = time.perf_counter()
-    job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents], start_after=1)
+    job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents], start_after=1,
+             total_left=round(tts.seconds_estimate(text, p["speed"]) / p["rtf"] + 2, 1))   # from the engine's measured speed
     if not tts.ready():
         job.push(stage="reading", frac=0.0, message="Downloading the speech model (about 340 MB, once)")
         tts.kokoro(lambda f, d, t: job.push(stage="reading", frac=0.0, message=f"Downloading the speech model: {d / 1e6:.0f} of {t / 1e6:.0f} MB")
@@ -187,7 +209,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
                 y, _ = conv.convert(a16, lv, settings)
                 y = _level(np.nan_to_num(y))
             t_rvc += time.perf_counter() - t
-            gap = np.zeros(int(sr * s["pause"]), np.float32)
+            gap = np.zeros(int(sr * s["pause"] * p.get("gap_scale", 1.0)), np.float32)
             y = np.concatenate([y, gap])
             f = pdir / f"s{i:04d}.wav"
             sf.write(str(f), y, sr, subtype="PCM_16")
@@ -196,7 +218,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
             el = time.perf_counter() - t0
             left = el / (i + 1) * (len(sents) - i - 1)
             job.push(stage="speaking", frac=round((i + 1) / len(sents), 3), index=i, of=len(sents), url=file_url(f),
-                     seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1),
+                     seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1), total_left=round(left, 1),
                      message=f"Sentence {i + 1} of {len(sents)} ready")
     except BaseException:
         stop.set()
@@ -218,16 +240,16 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
     from ..core.cadence import WorkerError, render
     t0 = time.perf_counter()
     v = get_voice(p["voice"])
-    pack = service.cadence_pack(v)
+    pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
     ref = service.cadence_ref(v)
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents],
-             start_after=min(START_AFTER, len(sents)))
+             start_after=min(START_AFTER, len(sents)), total_left=round(tts.seconds_estimate(text) / p["rtf"] + 5, 1))
     conv = gpu.MODELS.converter
     lv = conv.voice(p["voice"])
     sr = lv.tgt_sr
     pdir = parts_dir(job.id)
     pdir.mkdir(parents=True, exist_ok=True)
-    tempo = float(np.clip(p["tempo"] * p["speed"], 0.6, 1.5))
+    tempo = float(p["tempo"] or 1.0)   # no stretching: pace comes from generation (PACES)
     ahead = 2   # requests in the worker at once: it reads the next sentence while this one is converted
 
     def progress(msg, done=0, total=0):
@@ -259,7 +281,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
             el = time.perf_counter() - t0
             left = el / (i + 1) * (len(sents) - i - 1)
             job.push(stage="speaking", frac=round((i + 1) / len(sents), 3), index=i, of=len(sents), url=file_url(f),
-                     seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1),
+                     seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1), total_left=round(left, 1),
                      message=f"Sentence {i + 1} of {len(sents)} ready")
     except BaseException:
         for fut, wav in reqs:   # what the worker still makes is thrown away when it arrives
@@ -295,7 +317,7 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
     mp3 = _mp3(wav)
     meta = {"id": sid, "title": title, "file": wav.name, "mp3": mp3.name if mp3 else None, "text": text,
             "voice": p["voice"], "reader": p["reader"], "reader_auto": p["auto"], "speed": p["speed"], "pitch": p["pitch"],
-            "mode": p.get("mode", "reader"), "engine": p.get("engine"),
+            "mode": p.get("mode", "reader"), "engine": p.get("engine"), "pace": p.get("pace"),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
             "job": job_id}
     fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
@@ -319,7 +341,7 @@ def _item(m: dict) -> dict:
     wav, mp3 = d / m["file"], d / m["mp3"] if m.get("mp3") else None
     size = sum(f.stat().st_size for f in (wav, mp3) if f and f.exists())
     return {**{k: m.get(k) for k in ("id", "title", "text", "voice", "reader", "reader_auto", "speed", "pitch", "created",
-                                      "duration", "seconds", "file", "mp3", "mode", "engine")},
+                                      "duration", "seconds", "file", "mp3", "mode", "engine", "pace")},
             "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
             "format": "WAV" + (" + MP3" if mp3 and mp3.exists() else "")}
 
