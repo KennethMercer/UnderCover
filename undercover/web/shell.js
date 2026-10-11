@@ -38,7 +38,7 @@ function queueDrawer(open) {
   if (!open && was) $("#chip-queue").focus({ preventScroll: true });
 }
 $("#chip-queue").onclick = () => queueDrawer(true);
-$("#wb-open").onclick = () => queueDrawer(true);
+$("#wb-open").onclick = $("#wb-more").onclick = () => queueDrawer(true);
 $("#qd-close").onclick = $("#q-scrim").onclick = () => queueDrawer(false);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#q-drawer").hidden) queueDrawer(false); });
 $$("[data-qadd]").forEach(b => b.onclick = () => {
@@ -52,6 +52,10 @@ function queueCount(n) {
   $("#q-count").textContent = n ? `Queue · ${n}` : "Queue";
   $("#da-badge").hidden = !n; $("#da-badge").textContent = n || "";
 }
+
+// the top bar's height, for the running bar that sticks under it
+const topH = () => document.documentElement.style.setProperty("--top-h", $(".top").offsetHeight + "px");
+addEventListener("resize", topH); topH();
 
 // first page: deep link, else the remembered tab (old names map to the modules)
 showTab(moduleOf(location.hash.slice(1)) || moduleOf(store.get("uc-tab", "frontman")) || "frontman");
