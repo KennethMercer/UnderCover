@@ -445,7 +445,7 @@ $("#reset").onclick = () => { store.set("uc-opts", {}); loadOpts(); refreshEstim
 function summary() {
   const o = S.opts;
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
-    (o.backing_voice ? ` · backing by ${o.backing_voice}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
+    (o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
   const busy = !!S.job || !!S.osBusy;   // a one-shot cover uses the GPU queue too
   $("#convert").disabled = !ready || busy;
@@ -456,7 +456,7 @@ function summary() {
   else if (!S.voice) $("#summary").innerHTML = `<b>${esc(S.song.title)}</b>. Now pick a voice.`;
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
-    const bk = S.opts.backing_voice ? ` with <b>${esc(S.opts.backing_voice)}</b> on backing vocals` : "";
+    const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals` : "";
     $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta">· ${pitchText(o)}${est}</span>`;
   }
 }

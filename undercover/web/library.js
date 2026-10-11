@@ -242,7 +242,7 @@ function renderDetail() {
 function coverDetail(d, c) {
   const o = c.options || {};
   const settings = [o.octave ? `voice octave ${o.octave > 0 ? "+" : ""}${o.octave}` : "same octave", o.key ? `key ${o.key > 0 ? "+" : ""}${o.key}` : "key unchanged",
-                    c.backing_voice ? `backing by ${c.backing_voice}` : o.backing_voice ? "lead + backing converted" : o.karaoke ? "lead only" : "",
+                    c.backing_voice ? `backing by ${voiceDisplay(c.backing_voice)}` : o.backing_voice ? "lead + backing converted" : o.karaoke ? "lead only" : "",
                     o.dereverb ? "de-reverb" : "", o.polish === false ? "" : "polish", o.quality ? `${o.quality} quality` : ""].filter(Boolean).join(" · ");
   d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3><p class="meta">sung by <b>${vname(c.voice)}</b>${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""} · ${esc(when(c.created))}</p></div></div>
     ${playerHtml()}
