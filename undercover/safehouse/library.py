@@ -1,4 +1,4 @@
-"""SafeHouse: everything UnderCover keeps on disk (covers, songs and stems, voices, training projects), listed,
+"""SafeHouse: everything UnderCover keeps on disk (covers, speech, songs and stems, voices, training projects), listed,
 renamed, exported and cleaned up without Explorer. Its HTTP routes are in safehouse/api.py.
 """
 import json
@@ -10,6 +10,7 @@ from ..core import jobs
 from ..core.files import file_url
 from ..core.config import CONFIG, ROOT, path
 from ..core.voices import ModelError
+from ..speakeasy import speak
 
 DAY = 86400
 TEMP_PREFIXES = ("dl_", "yt_", "mix_", "tup_", "vup_", "inst_")
@@ -36,7 +37,7 @@ def _mtime(p: Path) -> float:
 def _busy() -> str | None:
     """A job that may be using these files right now."""
     for j in jobs.JOBS.values():
-        if not j.finished and j.kind in ("cover", "auto", "train", "train-auto", "train-prepare", "train-export", "install"):
+        if not j.finished and j.kind in ("cover", "speech", "auto", "train", "train-auto", "train-prepare", "train-export", "install"):
             return j.kind
     return None
 
@@ -145,17 +146,18 @@ def summary() -> dict:
     out_files = [p for p in path("output_dir").iterdir() if p.is_file() and p.name != "history.jsonl"]
     cats = {
         "covers": sum(_size(p) for p in out_files),
+        "speech": speak.storage(),
         "songs": _size(path("uploads_dir")),
         "stems": _size(cache / "stems"),
         "voices": _size(path("models_dir") / "voices"),
         "training": _size(cache / "training"),
         "temporary": sum(_size(p) for p in temp),
-        "app": sum(_size(path("models_dir") / d) for d in ("rvc", "separator", "speaker")),
+        "app": sum(_size(path("models_dir") / d) for d in ("rvc", "separator", "speaker", "tts")),
     }
     du = shutil.disk_usage(ROOT)
     return {"categories": cats, "total": sum(cats.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
             "ytdlp": _ytdlp_version(),
-            "counts": {"covers": len(covers()), "songs": len(_song_metas()),
+            "counts": {"covers": len(covers()), "speech": len(speak.list_speech()), "songs": len(_song_metas()),
                        "voices": len(list((path("models_dir") / "voices").glob("*/meta.json"))),
                        "training": len(list((cache / "training").glob("*/project.json")))}}
 
@@ -179,6 +181,11 @@ def covers() -> list[dict]:
             "vocal": file_url(h.get("converted_vocal")) if h.get("converted_vocal") and Path(h["converted_vocal"]).exists() else None,
         })
     return out
+
+
+def speech() -> list[dict]:
+    """SpeakEasy's saved speech (output/speech/)."""
+    return speak.list_speech()
 
 
 STEM_LABELS = {"vocals": "Vocals", "instrumental": "Instrumental", "other": "Instrumental", "noreverb": "Vocals (dry)", "reverb": "Reverb (removed)"}
@@ -319,6 +326,17 @@ def _cleanup_groups() -> dict:
     g["unused_models"] = {"title": "Separation models UnderCover doesn't use",
                           "detail": "From earlier comparisons; downloaded again automatically if a setting ever picks one",
                           "paths": unused_models, "default": True}
+    old_speech = []
+    for x in speak.list_speech():
+        try:
+            age = now - time.mktime(time.strptime(x["created"], "%Y-%m-%d %H:%M:%S"))
+        except (TypeError, ValueError):
+            continue
+        if age > 30 * DAY:
+            d = speak.speech_dir()
+            old_speech += [d / f for f in (x["file"], x["mp3"]) if f] + [d / f"{x['id']}.json"]
+    g["old_speech"] = {"title": "Speech older than 30 days", "detail": "Made in SpeakEasy; it can be made again from the same text",
+                       "paths": old_speech, "default": False}
     g["unused_songs"] = {"title": "Songs never used for a cover (30+ days)", "detail": "The song files and their stems",
                          "paths": unused, "default": False}
     dupes, names = _duplicate_voices(hist)
@@ -336,7 +354,7 @@ def _cleanup_groups() -> dict:
     g["resume_points"] = {"title": "Resume points of unfinished trainings",
                           "detail": "Those trainings would have to start over", "paths": paused, "default": False}
     temp = [p for p in cache.iterdir() if p.is_dir() and p.name.startswith(TEMP_PREFIXES)]
-    temp += [p for p in (cache / "previews").glob("*") if now - _mtime(p) > DAY]
+    temp += [p for p in (cache / "previews").glob("*") if now - _mtime(p) > DAY]   # incl. SpeakEasy's sentences (speech_<job>)
     temp += [p for p in (cache / "_work").glob("*")]
     logs = [f for f in path("logs_dir").glob("*.log") if _size(f) > 10e6]
     g["temp"] = {"title": "Old previews, leftovers and big logs", "detail": "Preview renders older than a day, interrupted downloads, logs over 10 MB",
