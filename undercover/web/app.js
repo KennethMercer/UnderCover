@@ -9,6 +9,16 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
 };
 
+// Deep Cover (ARCHITECTURE "UI backlog"): expert-only elements carry data-deep and stay hidden unless body.deep. The
+// real switch comes with the SafeHouse rooms; until then typing "deepcover" outside a text box toggles it (remembered).
+if (store.get("uc-deep", false)) document.body.classList.add("deep");
+let deepTyped = "";
+document.addEventListener("keydown", e => {
+  if (e.target.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
+  deepTyped = (deepTyped + e.key.toLowerCase()).slice(-9);
+  if (deepTyped === "deepcover") { deepTyped = ""; store.set("uc-deep", document.body.classList.toggle("deep")); }
+});
+
 const S = {
   song: null, voice: store.get("uc-voice", null), voices: [], defaults: {}, opts: {},
   job: null, es: null, estimate: null, result: null, online: [], searchSeq: 0,
