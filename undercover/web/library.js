@@ -135,7 +135,7 @@ function renderList() {
     } else if (L.cat === "voices") {
       const [cls, word] = quality(x);
       title = x.name; sub = [x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
-      side = `<span class="tag ${cls}">${word}</span><span class="mono">${gb(x.size)}</span>`;
+      side = (x.cadence ? `<span class="tag ok" title="Has a cadence for SpeakEasy">cadence ✓</span>` : "") + `<span class="tag ${cls}">${word}</span><span class="mono">${gb(x.size)}</span>`;
     } else {
       title = x.person || x.name; const st = x.train || {};
       sub = [`${x.kept_minutes} min kept`, st.state === "exported" ? `voice ${st.exported}` : st.state ? st.state : "not trained yet", `changed ${when(x.updated)}`].join(" · ");
@@ -325,7 +325,9 @@ function voiceDetail(d, v) {
       <dt>From</dt><dd>${src}</dd>
       ${v.trained ? `<dt>Training</dt><dd>${v.train_minutes ? `${v.train_minutes} min of ${v.from_speech ? "speech" : "audio"}` : ""}${v.epoch ? ` · epoch ${v.epoch}` : ""}${v.f0_range ? ` · range ${Math.round(v.f0_range[0])}–${Math.round(v.f0_range[2])} Hz` : ""}</dd>` : ""}
       <dt>Used in</dt><dd>${v.covers ? v.cover_titles.map(esc).join("<br>") : "no covers yet"}</dd>
-      <dt>Size</dt><dd>${gb(v.size)}</dd></dl>
+      <dt>Cadence</dt><dd>${v.cadence ? `yes, for SpeakEasy · ${gb(v.cadence.size)} <span class="meta" data-deep>· ${esc(v.cadence.engine || "")} · from ${v.cadence.data_minutes ?? "?"} min · made ${esc(when(v.cadence.made))}</span>
+        <button class="linkbtn" id="lib-del-cad" type="button">Delete cadence</button>` : "none"}</dd>
+      <dt>Size</dt><dd>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename">Rename…</button>
       <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export">Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
@@ -335,6 +337,8 @@ function voiceDetail(d, v) {
   $("#lib-make").onclick = async () => { await loadVoices(v.name); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
+  if ($("#lib-del-cad")) confirmClick($("#lib-del-cad"), "Click again: the voice stays", async () => {
+    await api(`/api/library/voices/${encodeURIComponent(v.name)}/cadence`, { method: "DELETE" }); afterChange(); });
 }
 
 function trainingDetail(d, p) {

@@ -50,7 +50,7 @@
   <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
     <span class="who" id="wb-who"></span>
     <div class="wb-main" id="wb-main"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
-    <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-open" type="button">Queue</button></div>
+    <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-forget" type="button" hidden title="Forget the paused work instead of resuming it">Dismiss</button><button class="linkbtn" id="wb-open" type="button">Queue</button></div>
   </div>
 </div>
 
@@ -347,12 +347,19 @@
         <div class="seg" id="q-mode" role="tablist" aria-label="Add to the queue">
           <button type="button" data-v="improve" aria-pressed="true">Improve my voices</button>
           <button type="button" data-v="new" aria-pressed="false">New voices</button>
+          <button type="button" data-v="cadence" aria-pressed="false">Cadence</button>
         </div>
         <div id="q-improve">
           <p class="meta">More singing (their album tracks first) or more speech, every clip checked again, a fresh training. The new voice replaces the old only if it measures better.</p>
           <div class="vpick" id="q-cands"></div>
           <div class="row spread"><span class="meta" id="q-sel-sum">Tick the voices to improve.</span><button class="btn primary" id="q-add-sel" type="button" disabled>Add to the queue</button></div>
           <details class="qother" id="q-other" hidden><summary class="meta">Voices that can't be improved</summary><p class="meta" id="q-cands-off"></p></details>
+        </div>
+        <div id="q-cadence" hidden>
+          <p class="meta">Teaches a voice how the person talks (their pace and pauses), for SpeakEasy. It transcribes their clips, measures
+            how they speak and picks the clip that reads most like them: minutes, not hours. Kept only if it sounds more like them.</p>
+          <div class="vpick" id="q-cad-cands"></div>
+          <div class="row spread"><span class="meta" id="q-cad-sum">Tick the voices.</span><button class="btn primary" id="q-cad-add" type="button" disabled>Add to the queue</button></div>
         </div>
         <div id="q-new" hidden>
           <div class="search"><input id="q-name" type="search" autocomplete="off" placeholder="Type a singer or a person, e.g. Adele" aria-label="Person or artist"></div>
@@ -527,9 +534,10 @@
         <div class="se-vlist" id="se-voices" role="listbox" aria-label="Voices"><p class="meta">Loading…</p></div>
         <div class="se-newv">
           <div class="row spread"><b>Someone who isn't here?</b><span class="meta">DoubleAgent builds the voice</span></div>
-          <div class="row"><input id="se-newname" placeholder="Dolly Parton" aria-label="Person's name"><button class="btn" id="se-newgo" type="button">New voice</button></div>
-          <p class="meta">DoubleAgent finds clean clips of them on YouTube and trains a voice (about 3 h; tonight's queue is fine). It then
-            appears here and in FrontMan. <span class="soon">phase 4</span> it learns their cadence from the same clips.</p>
+          <div class="row"><input id="se-newname" placeholder="Dolly Parton" aria-label="Person's name"><button class="btn" id="se-newgo" type="button">New voice</button>
+            <button class="linkbtn" id="se-newnight" type="button">Tonight instead</button></div>
+          <p class="meta" id="se-newnote">DoubleAgent finds clean clips of them on YouTube, trains a voice and learns how they talk (about 3 h).
+            It then appears here and in FrontMan. <button class="linkbtn" id="se-newsteps" type="button">Step by step in DoubleAgent</button></p>
         </div>
       </section>
     </div>
@@ -540,14 +548,15 @@
         <div class="se-field"><label for="se-speed">Speed <output id="se-speed-out">1.00×</output></label>
           <input type="range" id="se-speed" min="0.7" max="1.4" step="0.05" value="1">
           <div class="se-ticks"><span>0.7× slow</span><span>1×</span><span>1.4× fast</span></div></div>
-        <div class="se-field"><label for="se-reader">Reader <output id="se-reader-out">auto</output></label>
+        <div class="se-field" id="se-reader-field"><label for="se-reader">Reader <output id="se-reader-out">auto</output></label>
           <select class="se-search" id="se-reader"></select>
           <p>The built-in reader that speaks first; your voice model then makes it sound like the person. Auto picks the closest.</p></div>
         <div class="se-field"><label for="se-nudge">Pitch <output id="se-nudge-out">auto</output></label>
           <input type="range" id="se-nudge" min="-6" max="6" step="0.5" value="0">
           <p id="se-pitch-note">Set from the voice's speaking pitch; nudge it if they sound too high or low.</p></div>
-        <div class="se-field off"><label class="se-toggle"><input type="checkbox" disabled><span>Speak with <span id="se-cad-name">their</span> own cadence <span class="soon">phase 4</span></span></label>
-          <p>Their timing, pauses and emphasis, learned from their clips. Needs a cadence model: "Train cadence" on the voice.</p></div>
+        <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad"><span>Speak with <span id="se-cad-name">their</span> own cadence</span></label>
+          <p id="se-cad-note">Their pace and pauses, learned from their clips. Needs a cadence: "Train cadence" on the voice.</p>
+          <p class="meta" id="se-cad-deep" data-deep></p></div>
       </div>
     </section>
 
@@ -584,7 +593,7 @@
   <p class="meta" id="qd-total"></p>
   <div class="qd-jobs" id="qd-list"></div>
   <div class="row qd-add"><button class="btn" type="button" data-qadd="improve">+ Improve a voice</button><button class="btn" type="button" data-qadd="new">+ New voice</button>
-    <button class="btn" type="button" disabled title="Phase 4">+ Train cadence <span class="soon">phase 4</span></button></div>
+    <button class="btn" type="button" data-qadd="cadence">+ Train cadence</button></div>
   <p class="meta">Any module can add long jobs here. Covers you start meanwhile go first; Pause / Resume (under the top bar) stops and continues everything.</p>
   <button class="btn" type="button" id="qd-open" data-goto="doubleagent">Open the full queue in DoubleAgent →</button>
 </aside>

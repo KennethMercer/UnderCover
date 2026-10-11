@@ -251,6 +251,7 @@ def songs() -> list[dict]:
 
 def voices() -> list[dict]:
     from ..doubleagent.service import undertrained
+    from ..doubleagent.cadence import pack_of, pack_size
     from ..core.voices import list_voices
     from ..frontman.pipeline import history
     hist = history()
@@ -267,13 +268,16 @@ def voices() -> list[dict]:
             pv = path("cache_dir") / "training" / ex["project"] / "train" / "previews" / f"e{ex.get('epoch')}.wav"
             sample = file_url(pv) if pv.exists() else None
         used = [h for h in hist if h["voice"] == v.name or h.get("options", {}).get("backing_voice") == v.name]
+        pack = pack_of(v)   # its cadence (phase 4), listed and deleted with the voice or on its own
+        cad = {"size": pack_size(v), "engine": pack.get("engine"), "made": pack.get("made"),
+               "data_minutes": pack.get("data_minutes")} if pack else None
         out.append({
             "name": v.name, "version": v.version, "sr": v.sr, "index": bool(v.index), "installed": v.installed,
             "source": v.source, "trained": bool(ex.get("trained")), "project": ex.get("project"),
             "epoch": ex.get("epoch"), "train_minutes": ex.get("train_minutes"), "from_speech": ex.get("from_speech"),
             "f0_range": ex.get("f0_range"), "undertrained": undertrained(v), "score": score, "verdict": verdict,
             "size": _size(v.dir), "covers": len(used), "cover_titles": [h.get("title") or Path(h["output"]).stem for h in used][:5],
-            "sample": sample,
+            "sample": sample, "cadence": cad,
         })
     out.sort(key=lambda x: x["name"])
     return out

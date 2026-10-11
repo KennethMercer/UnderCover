@@ -9,6 +9,7 @@ DELETE /api/library/speech/<id>
 GET    /api/library/covers/zip?ids=1,2      zip download
 DELETE /api/library/songs/<id>[?stems_only=1]
 POST   /api/library/voices/<name>/rename    {name}
+DELETE /api/library/voices/<name>/cadence   the voice's cadence only (the voice stays)
 GET    /api/library/voices/<name>/export    zip download
 GET    /api/library/cleanup                 what can be freed, per group
 POST   /api/library/cleanup                 {groups: [...]}
@@ -111,6 +112,12 @@ def _route(h, method, p):
     if m and method == "DELETE":
         _guard(COVER_WORK)
         remove_song(m.group(1), stems_only=(q.get("stems_only") or ["0"])[0] == "1")
+        return h._json({"ok": True})
+    m = re.fullmatch(r"voices/([a-z0-9-]+)/cadence", rest)
+    if m and method == "DELETE":
+        from ..doubleagent.cadence import remove_pack
+        _guard(SPEECH_WORK + ("night",))   # speech may be reading with it; a queue job may be making one
+        remove_pack(m.group(1))
         return h._json({"ok": True})
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
     if m:
