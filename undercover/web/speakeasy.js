@@ -145,7 +145,7 @@ function seShowPlan() {
   const cadOn = p.mode === "cadence";
   $("#se-cad").disabled = !c.has;
   $("#se-cad-field").classList.toggle("off", !c.has);
-  $("#se-cad-note").textContent = c.has ? (cadOn ? "Their pace and pauses, from their own clips. Reading is slower than realtime, so it starts after the first few sentences."
+  $("#se-cad-note").textContent = c.has ? (cadOn ? "Their pace and pauses, from their own clips. It starts playing after the first few sentences."
       : "Off: the quick built-in Reader speaks, then the voice makes it sound like them.")
     : c.queue ? "Their cadence is being made (DoubleAgent); it's used as soon as it's ready."
     : c.can ? `Their pace and pauses, learned from their clips. "Train cadence" on the voice makes it (minutes).` : (c.why || "Not available for this voice.");
