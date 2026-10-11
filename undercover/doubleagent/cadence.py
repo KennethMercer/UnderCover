@@ -197,11 +197,16 @@ def summarize(rows: list[dict]) -> dict:
         if vals:
             s[k] = round(float(np.mean(vals)), 3)
             s[k + "_sd"] = round(float(np.std(vals)), 3)
+    if len(pl) > 1:   # the pause mean is pooled over every pause, so its spread is that of single pauses (as phase 3)
+        s["pause_ms_sd"] = round(float(np.std(pl)), 1)
+    else:
+        s.pop("pause_ms", None)
+        s.pop("pause_ms_sd", None)
     return s
 
 
 def cadence_gap(s: dict, person: dict) -> float | None:
-    ds = [abs(s[k] - person[k]) / max(person.get(k + "_sd", 0), 1e-6) for k in KEYS if k in s and k in person]
+    ds = [abs(s[k] - person[k]) / person[k + "_sd"] for k in KEYS if k in s and k in person and person.get(k + "_sd", 0) > 1e-3]
     return round(float(np.mean(ds)), 3) if ds else None
 
 
