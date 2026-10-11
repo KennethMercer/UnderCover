@@ -47,6 +47,7 @@ W.work = null; W.watch = {};
 function renderWorkBar(w) { W.work = w; renderBar(); }   // called from app.js pollStatus with /api/status's "work"
 function renderBar() {
   const bar = $("#workbar"), w = W.work || {};
+  if (typeof queueCount !== "function") return;   // shell.js (loaded last) isn't there yet: the job feed answered early
   queueCount(W.last ? W.last.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length
                     : (w.queued || 0) + (w.armed ? (w.running || []).length : 0));
   const run = runningJobs();

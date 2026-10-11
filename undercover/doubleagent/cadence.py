@@ -49,7 +49,9 @@ STRETCHES = 40          # stretches of real talk measured (phase 3 used 35-60)
 MIN_MINUTES = 2.0       # transcribed speech needed for a cadence
 # score = likeness - W_GAP * cadence gap - W_WER * WER: likeness decides between similar deliveries, a clearly
 # closer cadence or a mumbled word outweighs a small likeness difference (phase 3: likeness 0.73-0.83, gap 0.3-0.55)
-W_GAP, W_WER = 0.25, 1.0
+W_GAP, W_WER = 0.5, 1.0   # 0.25 at first: Freeman's closest-cadence clip lost on 0.03 likeness, and the 10-sentence
+                          # check then read him 1.2 syl/s too fast (2026-10-11); cadence is what this is for
+CFG_SLOWER = 0.2          # also tried on the best clip: Chatterbox reads slower and pauses more at lower cfg_weight
 TEMPO_RANGE = (0.82, 1.0)   # slowing the engine toward the person's rate: at most 18% (beyond that it smears)
 
 
@@ -126,7 +128,7 @@ def transcribe(proj_name: str, push, check) -> dict:
         check()
         batch = todo[k:k + 24]
         texts = C.transcribe([proj.clip_path(p.id) for p in batch],
-                             progress=lambda m, d=0, t=0: push(k / max(1, total), m if not t or m == "transcribing" else m))
+                             progress=lambda m, d=0, t=0: push((k + d) / max(1, total), m if not t else f"Transcribing {k + d} of {total} clips"))
         for p, t in zip(batch, texts):
             done[p.id] = t
         secs += sum(p.dur for p in batch)
@@ -417,6 +419,12 @@ def can_train(v) -> tuple[bool, str]:
 def train(job, voice_name: str, push, control=None) -> dict:
     """Train cadence of a voice (see the top of this file). push(stage, frac, message, **kw)."""
     from . import service
+    raw = push
+    span = {"clips": (0.0, 0.2), "transcripts": (0.2, 0.45), "measuring": (0.45, 0.6), "testing": (0.6, 0.98)}
+
+    def push(stage, f, m, **kw):   # one bar for the whole job: each step fills its share
+        a, b = span.get(stage, (0.0, 1.0))
+        raw(stage, a + (b - a) * min(1.0, max(0.0, f)), m, **kw)
 
     def check():
         if job.cancel:
@@ -436,7 +444,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
             raise ModelError(f"UnderCover doesn't know whose voice '{v.name}' is, so it can't find their clips.")
         push("clips", 0.0, f"Finding clips of {person} talking")
         name = service.train_new_voice(job, person, control or worklist.control_for(job),
-                                       lambda st, f, m, **kw: push("clips", 0.25 * f, m, **kw), prepare_only=True,
+                                       lambda st, f, m, **kw: push("clips", f, m, **kw), prepare_only=True,
                                        speaking=True)
         proj = P.Project.load(name)
     # 1. transcripts
@@ -461,12 +469,12 @@ def train(job, voice_name: str, push, control=None) -> dict:
     work.mkdir(exist_ok=True)
     tried = []
     try:
-        for i, p in enumerate(cands):
-            push("testing", i / (len(cands) + 1), f"Trying reference clip {i + 1} of {len(cands)}")
+        def attempt(p, cfg_weight: float) -> dict:
             ref = work / f"{p.id}.wav"
-            x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")
-            sf.write(str(ref), x, sr, subtype="PCM_16")
-            pack = {**base, "ref_text": tr.get(p.id, "")}
+            if not ref.exists():
+                x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")
+                sf.write(str(ref), x, sr, subtype="PCM_16")
+            pack = {**base, "cfg_weight": cfg_weight, "ref_text": tr.get(p.id, "")}
             wavs = tester.read(pack, ref)
             try:
                 m = tester.measure(wavs, 1.0)
@@ -480,14 +488,22 @@ def train(job, voice_name: str, push, control=None) -> dict:
                             best = mt
             finally:
                 _cleanup(wavs)
-            tried.append({"clip": p.id, "source": p.source, "dur": round(p.dur, 2), "text": tr.get(p.id, ""),
-                          "tempo1": m, **best})
+            return {"clip": p.id, "source": p.source, "dur": round(p.dur, 2), "text": tr.get(p.id, ""),
+                    "cfg_weight": cfg_weight, "tempo1": m, **best}
+        steps = len(cands) + 2
+        for i, p in enumerate(cands):
+            push("testing", i / steps, f"Trying reference clip {i + 1} of {len(cands)}")
+            tried.append(attempt(p, base["cfg_weight"]))
         win = max(tried, key=lambda t: t["score"])
+        if engine == "chatterbox" and CFG_SLOWER < base["cfg_weight"]:
+            push("testing", len(cands) / steps, "Trying a slower, more deliberate reading")
+            tried.append(attempt(next(p for p in cands if p.id == win["clip"]), CFG_SLOWER))
+            win = max(tried, key=lambda t: t["score"])
         # 4. the voice's current cadence, on the same test: keep the new one only if it's better
         old = pack_of(v)
         before = None
         if old:
-            push("testing", len(cands) / (len(cands) + 1), "Comparing with the current cadence")
+            push("testing", (steps - 1) / steps, "Comparing with the current cadence")
             try:
                 wavs = tester.read(old, v.dir / "tts" / old.get("ref", "ref.wav"))
                 try:
@@ -508,7 +524,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
         tdir = v.dir / "tts"
         tdir.mkdir(exist_ok=True)
         shutil.copyfile(work / f"{win['clip']}.wav", tdir / "ref.wav")
-        pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
+        pack = {**base, "cfg_weight": win["cfg_weight"], "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins, "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score")},
                 "person": {k: person.get(k) for k in ("rate", "pauses", "pause_ms", "range_st", "sentences", "sentence_gap_s")},
