@@ -11,6 +11,10 @@ document.addEventListener("uc:module", e => {
   $("#drop-overlay div").textContent = train ? "Drop recordings of the person to add them as a source"
                                              : "Drop a song to load it, or a voice model (.zip / .pth) to install it";
   if (train && !T.loaded) { T.loaded = true; loadProjects(); }
+  else if (train && !T.live) {   // something started training meanwhile (another page, the queue): show that project
+    const p = trainingProject();
+    if (p && p !== T.proj?.name) loadProjects(p);
+  }
   if (!train) stopClip();
 });
 const STEP_TARGET = { 1: "#tr-find", 2: "#tr-ref", 3: "#tr-samples", 4: "#tr-train" };
@@ -40,8 +44,11 @@ document.addEventListener("click", e => {
 });
 
 // ------------------------------------------------------------ projects
+// the project a running job works on (training, preparing, adding the voice), if any
+const trainingProject = () => runningJobs().find(j => j.project)?.project || null;
 async function loadProjects(select) {
   try { T.list = await api("/api/train/projects"); } catch (e) { return showError(e.message, "Couldn't load training projects"); }
+  if (select === undefined) { await refreshJobs(); select = trainingProject() ?? undefined; }
   const want = select ?? store.get("uc-train-proj", null);
   const pick = $("#tr-pick");
   pick.innerHTML = `<option value="">New voice…</option>` + T.list.map(p =>
@@ -72,28 +79,25 @@ const refresh = async () => { if (T.proj) await openProject(T.proj.name); };
 const P = (action, json) => api(`/api/train/projects/${T.proj.name}/${action}`, { json: json ?? {} });
 
 // ------------------------------------------------------------ job events
-function closeStream() { if (T.es) { T.es.close(); T.es = null; } T.live = null; }
+function closeStream() { if (T.es) { T.es(); T.es = null; } T.live = null; }
 function follow(id, kind) {
   closeStream();
   T.live = { id, kind };
-  const es = new EventSource(`/api/jobs/${id}/events`);
-  T.es = es;
-  es.onmessage = m => {
-    const ev = JSON.parse(m.data);
+  T.es = watchJob(id, ev => {   // jobs.js: the live stream, or progress polled while it's quiet
+    if (ev.synthetic && kind === "train" && !ev.epochs) return;   // a summary without epochs: nothing to chart
     if (kind === "prepare") onPrepareEvent(ev);
     else if (kind === "auto") onAutoEvent(ev);
     else if (kind === "train") onTrainEvent(ev);
     else if (kind === "export") onExportEvent(ev);
     if (ev.final) {
       closeStream();
-      if (ev.state === "error") showError(ev.message, kind === "train" ? "Training stopped" : "That didn't work");
+      if (ev.state === "error" || ev.state === "lost") showError(ev.message, kind === "train" ? "Training stopped" : "That didn't work");
       else if (ev.state === "paused") { /* the Pause bar at the top says so, with Resume */ }
       else if (ev.message && kind === "prepare" && ev.message.length) showError(ev.message, "Some sources were skipped", null, true);
       if (kind === "auto") { clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true; if (ev.state === "done") loadVoices(); }
       refresh().then(() => { if (kind === "export" && ev.voice) loadVoices(); });
     }
-  };
-  es.onerror = () => { if (es.readyState === EventSource.CLOSED) { closeStream(); setTimeout(refresh, 1500); } };
+  });
   render();
 }
 
@@ -327,7 +331,10 @@ function onTrainEvent(ev) {
   if (ev.final) return;
   T.trainEv = ev;
   if (ev.sec_per_epoch) T.proj.train.sec_per_epoch = ev.sec_per_epoch;
-  if (ev.history) { (T.proj.history = T.proj.history || []).push(ev.history); drawChart(); }
+  if (ev.history) {   // after a reload the events are replayed: the project's saved history already has the early epochs
+    const h = T.proj.history = T.proj.history || [];
+    if (!h.length || ev.history.epoch > h[h.length - 1].epoch) { h.push(ev.history); drawChart(); }
+  }
   if (ev.saved) refresh();
   renderRun();
 }
@@ -458,3 +465,11 @@ function render() {
   renderReference(); renderSamples(); renderTrainForm(); renderRun(); renderListen(); renderDone();
 }
 
+
+// a job on the open project that this page didn't start (Resume at the top, the queue, another tab): follow it too
+const TRAIN_KIND = { train: "train", "train-prepare": "prepare", "train-auto": "auto", "train-export": "export" };
+onJobs(() => {
+  if (!T.proj || T.live) return;
+  const j = runningJobs().find(x => x.project === T.proj.name && TRAIN_KIND[x.kind]);
+  if (j && T.picked !== j.id) { T.picked = j.id; refresh(); }   // openProject picks up its job and follows it (once)
+});

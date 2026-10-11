@@ -123,7 +123,7 @@ def _start_cover(h, body: dict):
         get_voice(opts.backing_voice)
     song = path("uploads_dir") / meta["file"]
     _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice)))
-    job = Job("cover")
+    job = Job("cover", title=f"{meta['title']} · {opts.voice}")
     JOBS[job.id] = job
 
     def run(job: Job):
@@ -241,7 +241,7 @@ def _start_preview(h, body: dict):
     if not 1 <= len(variants) <= 6:
         return h._error("Pick between 1 and 6 versions to preview.")
     song = path("uploads_dir") / meta["file"]
-    job = Job("cover")  # same GPU queue as covers
+    job = Job("cover", title=f"Preview: {meta['title']} · {opts.voice}")  # same GPU queue as covers
     JOBS[job.id] = job
 
     def run(job: Job):

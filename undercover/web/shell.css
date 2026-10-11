@@ -2,7 +2,8 @@
    Tokens (and the module colours) come from app.css; on a phone (< 680 px) the modules become a bottom tab bar. */
 .ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 /* sections scrolled into view (errors, the queue, wizard steps) stop below the sticky top bar */
-.wrap > *, .view > * { scroll-margin-top: 72px; }
+/* (and below the running bar while it shows: --wb-h, set by work.js) */
+.wrap > *, .view > * { scroll-margin-top: calc(var(--top-h, 57px) + var(--wb-h, 0px) + 14px); }
 .chips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .chip { white-space: nowrap; }
 .chip .ico { width: 13px; height: 13px; }
@@ -27,7 +28,12 @@
 @media (max-width: 860px) { .top .chip.gpu span { max-width: 9em; overflow: hidden; text-overflow: ellipsis; } .top-in { gap: 12px; } .mod { padding: 7px 9px; } }
 
 /* ---------- Pause / Resume bar: same on every module, edged in the colour of the module that owns the job ---------- */
-.workbar-wrap { max-width: 1000px; margin: 14px auto 0; padding: 0 20px; }
+/* sticky under the top bar (its height: --top-h, set by shell.js), so running work stays in sight while scrolling */
+.workbar-wrap { max-width: 1000px; margin: 0 auto; padding: 14px 20px 0; position: sticky; top: var(--top-h, 57px); z-index: 4;
+  background: linear-gradient(var(--bg) 80%, transparent); }
+.workbar #wb-main[data-goto] { cursor: pointer; }
+.workbar #wb-main[data-goto]:hover #wb-text { text-decoration: underline; text-underline-offset: 3px; }
+.workbar #wb-more { color: var(--jc); white-space: nowrap; }
 .workbar-wrap:has(> .workbar[hidden]) { display: none; }
 .workbar { --jc: var(--c-doubleagent); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center;
   background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--jc); border-radius: var(--r); padding: 9px 12px; font-size: 14px; }
@@ -79,6 +85,9 @@
 .drawer #qd-close { color: var(--fg); }
 .drawer #qd-open { justify-self: start; }
 .qd-jobs { display: grid; gap: 8px; }
+.qd-jobs[hidden] { display: none; }
+.qd-h { margin: 0; font: 600 12px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.qd-job .qside .linkbtn { font: 500 12.5px var(--body, inherit); }
 .qd-job { --jc: var(--c-doubleagent); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; background: var(--panel-2);
   border: 1px solid var(--line); border-left: 3px solid var(--jc); border-radius: 9px; padding: 10px 12px; }
 .qd-job[data-owner="frontman"] { --jc: var(--c-frontman); }
@@ -105,9 +114,11 @@ body.drawer-open { overflow: hidden; }
   .mod[aria-selected="true"]::after { top: -5px; bottom: auto; left: 30%; right: 30%; }
   .mod .badge { position: absolute; top: 2px; right: calc(50% - 22px); }
   .top .chip.gpu, .top .chip.models, .top .chip.train, .top .chip.theme { display: none; }
-  .workbar-wrap { padding: 0 16px; margin-top: 10px; }
-  .workbar { grid-template-columns: minmax(0, 1fr) auto; padding: 8px 10px; }
-  .workbar .who, .workbar #wb-open { display: none; }
+  .workbar-wrap { padding: 10px 16px 0; }
+  .workbar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 8px 10px; }
+  .workbar .who { font-size: 0; gap: 0; }   /* the module's icon only */
+  .workbar .who .ico { width: 18px; height: 18px; }
+  .workbar #wb-open { display: none; }
   .wrap { padding-inline: 16px; padding-block: 14px 96px; }
   .modmark { width: 38px; height: 38px; }
   .modhead h1 { font-size: 22px; }
