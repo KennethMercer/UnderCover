@@ -11,13 +11,19 @@ const store = {
 };
 
 // Deep Cover (ARCHITECTURE "UI backlog"): expert-only elements carry data-deep and stay hidden unless body.deep. The
-// real switch comes with the SafeHouse rooms; until then typing "deepcover" outside a text box toggles it (remembered).
-if (store.get("uc-deep", false)) document.body.classList.add("deep");
+// switch is remembered (localStorage uc-deep); a Settings room will carry it too.
+// The quick switch in the top bar (#deep-toggle, phase 5) and typing "deepcover" both flip it.
+function setDeep(on) {
+  document.body.classList.toggle("deep", on); store.set("uc-deep", on);
+  $("#deep-toggle")?.setAttribute("aria-pressed", on);
+}
+setDeep(!!store.get("uc-deep", false));
+$("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
 let deepTyped = "";
 document.addEventListener("keydown", e => {
   if (e.target.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
   deepTyped = (deepTyped + e.key.toLowerCase()).slice(-9);
-  if (deepTyped === "deepcover") { deepTyped = ""; store.set("uc-deep", document.body.classList.toggle("deep")); }
+  if (deepTyped === "deepcover") { deepTyped = ""; setDeep(!document.body.classList.contains("deep")); }
 });
 
 const S = {
