@@ -250,15 +250,15 @@ function wireMove() {
     inp.oninput();
   });
   $("#mv-cancel").onclick = () => { R.move = null; R.check = null; renderPlaces(); };
-  $("#mv-go").onclick = async () => {
+  // two clicks: moving the user's files is never one slip away
+  confirmClick($("#mv-go"), "Move them now? Click again", async () => {
     const m = R.move;
-    $("#mv-go").disabled = true;
     try {
-      const r = await api("/api/storage/move", { json: { group: m.group, folder: m.folder } });
+      const r = await api("/api/storage/move", { json: { group: m.group, folder: m.folder, confirm: true } });
       R.move = null;
       followMove({ id: r.job, title: "" }, m.group);
     } catch (e) { showError(e.message, "Couldn't move"); runCheck(); }
-  };
+  });
 }
 
 function followMove(job, group) {

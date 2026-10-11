@@ -230,7 +230,7 @@ def _storage_route(h, method, p):
     if p == "/api/storage/check" and method == "POST":
         return h._json(storage.check(body.get("group"), body.get("folder")))
     if p == "/api/storage/move" and method == "POST":
-        job = storage.start_move(body.get("group"), body.get("folder"))
+        job = storage.start_move(body.get("group"), body.get("folder"), confirmed=body.get("confirm") is True)
         return h._json({"job": job.id})
     raise LookupError("Not found")
 

@@ -7,8 +7,14 @@
 Needs the TEST server running on port 7861 (preview config "undercover-test"); refuses the user's server on 7860.
 Leaves nothing behind: the test cover and test speech are deleted, the scratch training project is removed.
 Exit code 0 = all passed. Prints one line per check.
+
+RULE (after 2026-10-11, when a check here deleted the user's songs and covers): a check must never be able to reach
+the user's data folders (uploads, output, models, cache, training projects). Unit checks that create, move or delete
+files run inside `isolated_data()`: every [paths] folder, config.toml and the storage allow-list point into a temp
+dir, and core/storage.py refuses the app's real folders in test mode. Never copy the real config.toml into a test.
 """
 import argparse
+import contextlib
 import json
 import shutil
 import sys
@@ -310,8 +316,13 @@ def u_cadence():
     assert {"chatterbox", "f5"} <= set(ENGINES) and default_engine() in ENGINES
     ids = {a["id"] for a in addons.status()}
     assert {"f5", "xtts"} <= ids, ids
-    # the accept / install / remove path, with a tiny fake add-on (no packages, no files)
-    st0 = addons._state()
+    # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
+    with isolated_data():
+        _fake_addon_roundtrip(addons)
+    return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
+
+
+def _fake_addon_roundtrip(addons):
     state = {"on": False}
     fake = addons.register(addons.Addon(id="zz-smoke", name="Smoke", adds="nothing", licence="TEST-1.0", licence_url="-",
                                         licence_summary="test only", size_mb=0, check=lambda: state["on"]))
@@ -330,14 +341,37 @@ def u_cadence():
         assert not r["installed_on"] and r["accepted"] and not addons.available(fake.id), r
     finally:
         addons.ADDONS.pop(fake.id, None)
-        addons._save(st0) if st0 else addons._file().unlink(missing_ok=True)
-    return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
+
+
+@contextlib.contextmanager
+def isolated_data():
+    """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
+    rule in this file's header). Asserts nothing points outside it before handing over; restores everything after."""
+    import tempfile
+    from undercover.core import config, storage
+    saved = (dict(config.CONFIG["paths"]), config.CONFIG_FILE, storage.ALLOWED_ROOTS)
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        t = Path(td)
+        app = t / "app"
+        keys = {"models_dir": "models", "cache_dir": "cache", "output_dir": "output", "logs_dir": "logs", "uploads_dir": "uploads"}
+        cfg = t / "config.toml"   # a minimal config of its own: never a copy of the real one (it holds the real paths)
+        cfg.write_text("[paths]\n" + "".join(f"{k} = '{app / v}'\n" for k, v in keys.items())
+                       + '\n[cadence]\nengine = "chatterbox"\n', encoding="utf-8")
+        try:
+            config.CONFIG_FILE = cfg
+            config.CONFIG["paths"] = {k: str(app / v) for k, v in keys.items()}
+            storage.ALLOWED_ROOTS = [t]
+            for k in (*keys, "voices_dir"):
+                p = config.path(k)
+                assert storage._inside(p, t) and not storage._inside(p, ROOT), f"{k} -> {p} is outside the test's folder"
+            yield t
+        finally:
+            config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved
 
 
 @check("add-ons: registry, CLI list, a fake add-on installs (checksum) and removes cleanly")
 def u_addons():
     import subprocess
-    import tempfile
     from undercover.core import addons
     from undercover.core.config import path
     out = subprocess.run([sys.executable, "-m", "undercover.addons", "list", "--json"], cwd=ROOT, capture_output=True,
@@ -346,23 +380,18 @@ def u_addons():
     rows = {r["id"]: r for r in json.loads(out.stdout)}
     assert {"f5", "xtts", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows), sorted(rows)
     assert rows["f5"]["installable"] and not rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["xtts"]
-    had = addons._state().get("test")
-    with tempfile.TemporaryDirectory() as td:
-        src = Path(td) / "fake.bin"
+    with isolated_data() as t:
+        src = t / "fake.bin"
         src.write_bytes(b"undercover smoke " * 4096)
         fake = addons.register_test_addon(src)
         dest = path("models_dir") / "_test" / "test-addon.bin"
         try:
-            try:
-                addons.install("test", accept=False)
-                raise AssertionError("installed without accepting")
-            except addons.ModelError:
-                pass
-            try:
-                addons.install("chatterbox", accept=True)
-                raise AssertionError("an included part was installable")
-            except addons.ModelError:
-                pass
+            for aid, ok in (("test", False), ("chatterbox", True)):   # no acceptance; an included part
+                try:
+                    addons.install(aid, accept=ok)
+                    raise AssertionError(f"{aid} installed (accept={ok})")
+                except addons.ModelError:
+                    pass
             r = addons.install("test", accept=True)
             assert r["installed"] and r["accepted"] and addons.available("test") and dest.exists(), r
             r = addons.remove("test")
@@ -375,60 +404,56 @@ def u_addons():
                 assert not dest.exists()
         finally:
             addons.ADDONS.pop("test", None)
-            dest.unlink(missing_ok=True)
-            if dest.parent.exists() and not any(dest.parent.iterdir()):
-                dest.parent.rmdir()
-            if not had:
-                addons.forget("test")
     return f"{len(rows)} parts, {sum(not r['included'] for r in rows.values())} optional"
 
 
-@check("data locations: move a scratch library and model files (voices stay the library's) and back")
+@check("data locations: guards, then a scratch move of model files and the library (voices stay the library's)")
 def u_storage():
-    import tempfile
     from undercover.core import config, storage
-    saved_paths, saved_file = dict(config.CONFIG["paths"]), config.CONFIG_FILE
 
     class FakeJob:
         id, cancel = "smoke", False
-        def push(self, **ev): pass
-    with tempfile.TemporaryDirectory() as td:
-        t = Path(td)
-        a, b, c = t / "app", t / "lib2", t / "models2"
-        for d in ("uploads", "output", "models/voices/v1", "models/tts", "cache", "logs"):
-            (a / d).mkdir(parents=True)
-        (a / "models/tts/m.bin").write_bytes(b"m" * 5000)
-        (a / "models/voices/v1/meta.json").write_text(json.dumps({"dir": str(a / "models/voices/v1")}), encoding="utf-8")
-        (a / "uploads/s.mp3").write_bytes(b"s" * 3000)
-        (a / "output/history.jsonl").write_text(json.dumps({"output": str(a / "output/c.mp3")}) + "\n", encoding="utf-8")
-        (a / "output/c.mp3").write_bytes(b"c" * 2000)
-        cfg = t / "config.toml"
-        cfg.write_text(saved_file.read_text(encoding="utf-8"), encoding="utf-8")
-        config.CONFIG_FILE = cfg
-        try:
-            config.CONFIG["paths"] = {k: str(a / v) for k, v in (("models_dir", "models"), ("cache_dir", "cache"),
-                                      ("output_dir", "output"), ("logs_dir", "logs"), ("uploads_dir", "uploads"))}
-            assert storage.path("voices_dir") == a / "models" / "voices"   # the default: inside models_dir
-            r = storage.move("models", str(c), FakeJob())                    # model files go; voices stay
-            assert (c / "models/tts/m.bin").exists() and not (c / "models/voices").exists(), r
-            assert (a / "models/voices/v1/meta.json").exists() and not (a / "models/tts").exists()
-            assert storage.path("voices_dir") == a / "models" / "voices"
-            r = storage.move("library", str(b), FakeJob())                   # songs, covers, voices together
-            assert (b / "voices/v1/meta.json").exists() and (b / "uploads/s.mp3").exists() and not (a / "output").exists(), r
-            hist = json.loads((b / "output/history.jsonl").read_text(encoding="utf-8"))
-            assert hist["output"] == str(b / "output" / "c.mp3"), hist
-            assert json.loads((b / "voices/v1/meta.json").read_text(encoding="utf-8"))["dir"] == str(b / "voices" / "v1")
-            back = storage.move("library", str(t / "lib3"), FakeJob())       # and on again (a fresh folder)
-            assert (t / "lib3/voices/v1/meta.json").exists() and not (b / "voices").exists(), back
-            chk = storage.check("library", str(t / "lib3" / "output"))
-            assert not chk["ok"], chk
-            text = cfg.read_text(encoding="utf-8")
-            assert "models2" in text and "lib3" in text and "[cadence]" in text, text[:400]
-        finally:
-            config.CONFIG["paths"] = saved_paths
-            config.CONFIG_FILE = saved_file
-    assert config.CONFIG_FILE.read_text(encoding="utf-8").count("uploads_dir") == 1
-    return "models, then library (paths rewritten), then library again"
+
+        def push(self, **ev):
+            pass
+    # the guards, checked without touching anything: the app's real folders are out of reach
+    assert storage.refuse([ROOT / "uploads"]) and storage.refuse([ROOT / "output"], from_room=True)
+    assert storage.refuse([ROOT / "models"], from_room=True, confirmed=True) is None   # only the room, confirmed
+    with isolated_data() as t:
+        app, lib, mod = t / "app", t / "lib2", t / "models2"
+        assert storage.refuse([ROOT / "cache"], True, True), "test mode must refuse the app folder"
+        assert storage.refuse([t.parent / "not-this-test"]), "test mode must refuse folders outside the test's own"
+        # regression (2026-10-11): writing [paths] must not reload the file's other keys into the running config
+        text = config.CONFIG_FILE.read_text(encoding="utf-8").replace(f"'{app / 'uploads'}'", '"uploads"')
+        config.CONFIG_FILE.write_text(text, encoding="utf-8")
+        config.set_values("paths", {"logs_dir": f"'{app / 'logs'}'"})
+        assert config.CONFIG["paths"]["uploads_dir"] == str(app / "uploads"), config.CONFIG["paths"]
+        assert storage._inside(config.path("uploads_dir"), t)
+        for d in ("uploads", "output", "models/voices/v1", "models/tts"):
+            (app / d).mkdir(parents=True, exist_ok=True)
+        (app / "models/tts/m.bin").write_bytes(b"m" * 5000)
+        (app / "models/voices/v1/meta.json").write_text(json.dumps({"dir": str(app / "models/voices/v1")}), encoding="utf-8")
+        (app / "uploads/s.mp3").write_bytes(b"s" * 3000)
+        (app / "output/c.mp3").write_bytes(b"c" * 2000)
+        (app / "output/history.jsonl").write_text(json.dumps({"output": str(app / "output/c.mp3")}) + "\n", encoding="utf-8")
+        storage.move("models", str(mod), FakeJob())                      # model files go; voices stay
+        assert (mod / "models/tts/m.bin").exists() and not (mod / "models/voices").exists()
+        assert (app / "models/voices/v1/meta.json").exists() and not (app / "models/tts").exists()
+        meta = json.loads((app / "models/voices/v1/meta.json").read_text(encoding="utf-8"))
+        assert meta["dir"] == str(app / "models/voices/v1"), meta   # voices stayed: their stored paths too
+        storage.move("library", str(lib), FakeJob())                     # songs, covers, voices together
+        assert (lib / "voices/v1/meta.json").exists() and (lib / "uploads/s.mp3").exists() and not (app / "output").exists()
+        hist = json.loads((lib / "output/history.jsonl").read_text(encoding="utf-8"))
+        assert hist["output"] == str(lib / "output" / "c.mp3"), hist
+        assert json.loads((lib / "voices/v1/meta.json").read_text(encoding="utf-8"))["dir"] == str(lib / "voices" / "v1")
+        storage.move("library", str(t / "lib3"), FakeJob())              # and on again
+        assert (t / "lib3/voices/v1/meta.json").exists() and not (lib / "voices").exists()
+        assert not storage.check("library", str(t / "lib3" / "output"))["ok"]
+        for k in ("models_dir", "uploads_dir", "output_dir", "voices_dir", "cache_dir"):
+            assert storage._inside(config.path(k), t), (k, config.path(k))
+        text = config.CONFIG_FILE.read_text(encoding="utf-8")
+        assert "models2" in text and "lib3" in text and "[cadence]" in text, text
+    return "guards hold; models, then library (paths rewritten), then library again"
 
 
 @check("api: status ready")

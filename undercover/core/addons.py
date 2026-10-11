@@ -105,7 +105,7 @@ def forget(addon_id: str):
     """Drop everything recorded about an add-on (tests clean up with this)."""
     st = _state()
     if st.pop(addon_id, None) is not None:
-        _save(st)
+        _save(st) if st else _file().unlink(missing_ok=True)
 
 
 def accepted(addon_id: str) -> dict | None:

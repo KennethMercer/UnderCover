@@ -13,6 +13,12 @@ likeness), their cadence packs hold real clips, and nothing can download them ag
 A move is a job: copy, check every file arrived (sizes + count), switch config.toml [paths], fix stored absolute
 paths (relocate.rewrite), and only then remove the old copy. Same drive: the folders are renamed instead (instant).
 Refused when the target lacks space or while other work runs; while a move runs, new jobs are refused.
+
+Safety (after 2026-10-11, when a smoke check reached the real folders and deleted the user's songs and covers):
+- a move whose files are under the app folder only runs when the Storage room asks for it and the user confirmed
+  (`from_room=True, confirmed=True`); nothing else (tests, scripts) can move or delete the app's real data;
+- test mode: ALLOWED_ROOTS (or UNDERCOVER_TEST_ROOTS=<dir>;<dir>) is an allow-list; every folder a move reads, writes or
+  deletes must be inside it, and anything under the app folder is refused outright.
 """
 import os
 import shutil
@@ -38,6 +44,9 @@ ABOUT = {"library": "Songs, covers, speech and voices (with their cadence). Your
          "models": "The AI models UnderCover downloads (separation, voice engine, speech, add-ons). Can be downloaded again."}
 SPARE = 1e9            # keep this much free on the target beyond what's copied
 MOVING: dict = {}      # while a move runs: {"group", "job"}; jobs.run_job refuses new work
+# test mode: the only folders a move may touch (None = normal use). Tests set it; a sandbox server gets it from the env.
+ALLOWED_ROOTS: list | None = ([Path(p) for p in os.environ["UNDERCOVER_TEST_ROOTS"].split(os.pathsep) if p]
+                              if os.environ.get("UNDERCOVER_TEST_ROOTS") else None)
 
 
 def _same(a: Path, b: Path) -> bool:
@@ -48,6 +57,20 @@ def _inside(a: Path, b: Path) -> bool:
     """a is b or inside b."""
     a, b = os.path.normcase(os.path.abspath(a)), os.path.normcase(os.path.abspath(b))
     return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
+def refuse(paths, from_room: bool = False, confirmed: bool = False) -> str | None:
+    """Why these folders may not be moved or deleted (None = they may). See the module's "Safety" notes."""
+    for p in paths:
+        p = Path(p)
+        if ALLOWED_ROOTS is not None:
+            if _inside(p, ROOT):
+                return f"Test mode: {p} is in the app folder; tests never touch it."
+            if not any(_inside(p, r) for r in ALLOWED_ROOTS):
+                return f"Test mode: {p} is outside the folders this test may touch."
+        elif _inside(p, ROOT) and not (from_room and confirmed):
+            return f"{p} holds UnderCover's own files: only SafeHouse's Storage room can move them, after you confirm."
+    return None
 
 
 def size_of(p: Path, skip: tuple = ()) -> tuple[int, int]:
@@ -241,8 +264,11 @@ def verify(src: Path, dst: Path, skip: tuple = ()) -> list[str]:
     return bad
 
 
-def remove_tree(p: Path, skip: tuple = ()):
-    """Delete p, except the folders in skip (and the folders that lead to them)."""
+def remove_tree(p: Path, skip: tuple = (), from_room: bool = False, confirmed: bool = False):
+    """Delete p, except the folders in skip (and the folders that lead to them). Refused like a move (refuse())."""
+    why = refuse([p], from_room, confirmed)
+    if why:
+        raise ModelError(why)
     if not skip:
         fsutil.retry(lambda: shutil.rmtree(p))
         return
@@ -250,7 +276,7 @@ def remove_tree(p: Path, skip: tuple = ()):
         if any(_same(child, s) for s in skip):
             continue
         if child.is_dir() and any(_inside(s, child) for s in skip):
-            remove_tree(child, skip)
+            remove_tree(child, skip, True, True)   # p itself was checked
         elif child.is_dir():
             fsutil.retry(lambda: shutil.rmtree(child))
         else:
@@ -268,13 +294,17 @@ def _release(group: str):
     gc.collect()
 
 
-def move(group: str, folder: str, job) -> dict:
-    """The move job (runs in its own thread). Pushes progress events on job."""
+def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool = False) -> dict:
+    """The move job (runs in its own thread). Pushes progress events on job. from_room + confirmed: the Storage room
+    asked and the user confirmed (needed for anything under the app folder)."""
     from . import relocate
     plan = check(group, folder)
     if not plan["ok"]:
         raise ModelError(plan["why"])
     moves = [(m["key"], Path(m["now"]), Path(m["new"])) for m in plan["moves"]]
+    why = refuse([p for _, now, new in moves for p in (now, new)], from_room, confirmed)
+    if why:
+        raise ModelError(why)
     skips = {k: _skips(k) for k, _, _ in moves}
     MOVING.update(group=group, job=job.id)
     done_keys, copied = [], []
@@ -329,7 +359,7 @@ def move(group: str, folder: str, job) -> dict:
         write_paths(vals)
         fixed = {}
         for key, now, new in moves:
-            fixed.update(relocate.rewrite(str(now), str(new)))
+            fixed.update(relocate.rewrite(str(now), str(new), keep=tuple(str(s) for s in skips[key])))
         # the old copies go last, once everything points at the new place
         left = []
         if not plan["same_drive"]:
@@ -337,7 +367,7 @@ def move(group: str, folder: str, job) -> dict:
             for key, now, new in moves:
                 try:
                     if now.exists() and not _same(now, new):
-                        remove_tree(now, skips[key])
+                        remove_tree(now, skips[key], from_room, confirmed)
                 except OSError:
                     left.append(str(now))
         _release(group)
@@ -356,12 +386,17 @@ def move(group: str, folder: str, job) -> dict:
         MOVING.clear()
 
 
-def start_move(group: str, folder: str):
-    """Start the move job in its own thread (disk work, not the GPU). -> the Job."""
+def start_move(group: str, folder: str, confirmed: bool = False):
+    """The Storage room's move: start the job in its own thread (disk work, not the GPU). -> the Job."""
     from . import jobs
     plan = check(group, folder)
     if not plan["ok"]:
         raise ModelError(plan["why"])
+    if not confirmed:
+        raise ModelError("Confirm the move first.")
+    why = refuse([Path(m[k]) for m in plan["moves"] for k in ("now", "new")], True, True)
+    if why:
+        raise ModelError(why)
     job = jobs.Job("move", title=f"Moving {LABELS[group].lower()} to {plan['folder']}")
     jobs.JOBS[job.id] = job
 
@@ -369,7 +404,7 @@ def start_move(group: str, folder: str):
         with job.cond:
             job.state = "running"
         try:
-            r = move(group, folder, job)
+            r = move(group, folder, job, from_room=True, confirmed=True)
             job.finish("done", **r)
         except InterruptedError:
             job.finish("cancelled", message="Cancelled. Nothing was moved; your files are where they were.")
