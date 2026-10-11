@@ -474,7 +474,8 @@ function setStage(name, cls, frac, eta) {
   if (frac != null) $(".bar i", el).style.width = Math.round(frac * 100) + "%";
   if (eta != null) $(".eta", el).textContent = eta;
 }
-function startProgress(job) {
+// elsewhere: a cover this page didn't start (another tab, a reload): shown, but not loaded into the player at the end
+function startProgress(job, elsewhere = false) {
   $("#progress").hidden = false; $("#progress-h").textContent = "Working"; $("#cancel").textContent = "Cancel"; $("#cancel").hidden = false;
   const est = S.estimate || {};
   ORDER.forEach(s => setStage(s, "", 0, est[s] != null ? (s === "separating" && est.stems_cached && !S.opts.karaoke && !S.opts.dereverb ? "cached" : `≈ ${fmtSecs(est[s])}`) : "—"));
@@ -512,7 +513,8 @@ function startProgress(job) {
         $("#sr-live").textContent = "Your cover is ready.";
         $("#elapsed").textContent = `Finished in ${(ev.elapsed || (performance.now() - jobStart) / 1000).toFixed(1)} s`;
         // without the stream's last event (only the summary got through) the newest cover is this one
-        if (ev.result) showResult(ev.result, ev.seconds); else loadHistory().then(() => { if (ev.synthetic && HIST[0]) showResult(HIST[0]); });
+        if (elsewhere) loadHistory();
+        else if (ev.result) showResult(ev.result, ev.seconds); else loadHistory().then(() => { if (ev.synthetic && HIST[0]) showResult(HIST[0]); });
         if (ev.notes?.length) showError(ev.notes.join(" "), "Heads up", null, true);
         refreshEstimate();
       } else if (ev.state === "cancelled") {
@@ -742,12 +744,12 @@ addEventListener("resize", redrawAll);
     await loadHistory();
     // a cover started before a reload is still running: show its progress again instead of inviting a duplicate
     // and later: a cover started somewhere else (another tab, a one-shot's "Make it with this version")
-    const follow = list => {
+    const follow = (list, elsewhere) => {
       const run = list.find(j => j.kind === "cover" && isRunning(j) && !/^Preview/.test(j.title || ""));
-      if (run && !S.job) { S.job = run.id; summary(); startProgress(run.id); }
+      if (run && !S.job) { S.job = run.id; summary(); startProgress(run.id, elsewhere); }
     };
-    follow(await refreshJobs(true));
-    onJobs(follow);
+    follow(await refreshJobs(true), false);
+    onJobs(list => follow(list, true));
     const last = store.get("uc-song", null);
     if (last) { try { S.song = await api(`/api/songs/${last}`); renderSong(); refreshEstimate(); } catch (e) { store.set("uc-song", null); } }
   } catch (e) { showError(e.message, "UnderCover isn't responding"); }
