@@ -105,7 +105,7 @@ function renderList() {
   const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
   if (!all.length) {
     box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", speech: "Speech you make in SpeakEasy collects here.", songs: "Songs you drop in or get from YouTube collect here.",
-      voices: "Install a voice in FrontMan, or train one in MouthPiece.", training: "Voices you train get a project here." }[L.cat]}</div>`;
+      voices: "Install a voice in FrontMan, or train one in DoubleAgent.", training: "Voices you train get a project here." }[L.cat]}</div>`;
     return;
   }
   const bulk = L.cat === "covers" && L.checked.size ? `<div class="bulk"><span><b>${L.checked.size} selected</b> · ${gb(all.filter(c => L.checked.has(String(c.id))).reduce((a, c) => a + c.size, 0))}</span>
@@ -174,7 +174,7 @@ function releaseAudio(ids = L.sel ? [L.sel] : []) {
   const holds = a => files.some(f => decodeURIComponent(a.src || "").endsWith(f));
   if (holds(aCover) && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // FrontMan's player had it open
   if (typeof seRelease === "function") seRelease(L.cat === "speech" ? ids[0] : "-");
-  for (const a of [L.audio, T.audio, MP.audio, aCover, aOrig]) {
+  for (const a of [L.audio, T.audio, DA.audio, aCover, aOrig]) {
     const mine = a === L.audio || a === T.audio || holds(a);
     if (mine && a.src) { a.pause(); a.removeAttribute("src"); a.load(); }
   }
@@ -321,7 +321,7 @@ function voiceDetail(d, v) {
       <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export">Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");
-  if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("mouthpiece"); try { await openProject(v.project); } catch (e) {} };
+  if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("doubleagent"); try { await openProject(v.project); } catch (e) {} };
   $("#lib-make").onclick = async () => { await loadVoices(v.name); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
@@ -333,8 +333,8 @@ function trainingDetail(d, p) {
     <dl class="kv"><dt>Status</dt><dd>${st.state === "exported" ? `finished: voice <b>${esc(st.exported)}</b>` : st.state === "paused" ? `paused at epoch ${st.epoch}` : st.state === "trained" ? "trained, not added to voices yet" : st.state || "not trained yet"}</dd>
       <dt>On disk</dt><dd>${Object.entries(p.parts).filter(([, b]) => b).map(([k, b]) => `${esc(k)} ${gb(b)}`).join(" · ") || "—"}</dd></dl>
     <p class="meta">${st.state === "exported" ? "Deleting the project keeps the voice; you'd only need these files to train it again." : "Deleting the project removes its clips and any unfinished training."}</p>
-    <div class="lactions"><button class="btn primary" id="lib-open">Open in MouthPiece</button><button class="btn danger" id="lib-del">Delete project…</button></div>`;
-  $("#lib-open").onclick = async () => { store.set("uc-train-proj", p.name); showTab("mouthpiece"); try { await openProject(p.name); } catch (e) {} };
+    <div class="lactions"><button class="btn primary" id="lib-open">Open in DoubleAgent</button><button class="btn danger" id="lib-del">Delete project…</button></div>`;
+  $("#lib-open").onclick = async () => { store.set("uc-train-proj", p.name); showTab("doubleagent"); try { await openProject(p.name); } catch (e) {} };
   confirmClick($("#lib-del"), `Delete ${gb(p.size)}?`, async () => { await api(`/api/train/projects/${p.name}`, { method: "DELETE" }); afterChange(); });
 }
 

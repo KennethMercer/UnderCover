@@ -1,5 +1,5 @@
 """The suite's web server: the HTTP shell (static files, /files/, status, restart), the routes every module shares
-(jobs, voices, Pause / Resume and the queue) and the route assembly (FrontMan, MouthPiece, SafeHouse). Python
+(jobs, voices, Pause / Resume and the queue) and the route assembly (FrontMan, DoubleAgent, SafeHouse). Python
 standard library only.
 
     python -m undercover.server        (or UnderCover.bat; undercover/server.py runs main() here)
@@ -28,9 +28,9 @@ from ..core.files import roots as _roots
 from ..core.jobs import GPU_QUEUE, JOBS, STATUS, Cancelled, Job, friendly, gpu_worker
 from ..safehouse import api as safehouse_api
 from ..frontman import api as frontman_api
-from ..mouthpiece import api as train_api
+from ..doubleagent import api as train_api
 from ..frontman import oneshot  # noqa: F401 - registers the one-shot with Pause / Resume
-from ..mouthpiece import night  # noqa: F401 - registers the overnight queue's improve / new items
+from ..doubleagent import night  # noqa: F401 - registers the overnight queue's improve / new items
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
 

@@ -61,7 +61,7 @@ async function pollStatus() {
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident
       store.set("uc-abrupt-seen", s.last_abrupt.at);
       showError(`Last time, UnderCover stopped suddenly at ${s.last_abrupt.at} while doing: ${s.last_abrupt.during}. That usually means the PC lost power or froze. ` +
-                "An unfinished training can be resumed in MouthPiece; logs/heartbeat.jsonl has the details.", "UnderCover didn't shut down cleanly", null, true);
+                "An unfinished training can be resumed in DoubleAgent; logs/heartbeat.jsonl has the details.", "UnderCover didn't shut down cleanly", null, true);
     }
     const tr = $("#chip-train"), t = s.training;   // training is visible from any tab
     tr.hidden = !t;
@@ -122,7 +122,7 @@ async function restartServer() {
             "If that fails, logs/server.log has the details.", "Restart failed");
 }
 function applyTheme() { $("#theme").textContent = document.documentElement.dataset.theme === "light" ? "Dark" : "Light"; redrawAll(); }
-$("#chip-train").onclick = () => { if (window.showTab) showTab("mouthpiece"); };
+$("#chip-train").onclick = () => { if (window.showTab) showTab("doubleagent"); };
 $("#theme").onclick = () => {
   const light = document.documentElement.dataset.theme !== "light";
   if (light) document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme;
@@ -277,7 +277,7 @@ function renderVoices() {
   const isLink = /^https?:\/\//i.test(q);
   const list = isLink ? [] : S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q));
   const box = $("#voices");
-  if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>MouthPiece</b>, or just type a request in the box at the top of the page.</p>`;
+  if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
   else box.innerHTML = list.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">

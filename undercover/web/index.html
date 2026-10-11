@@ -18,7 +18,7 @@
 <div class="drop-overlay" id="drop-overlay" hidden><div>Drop a song to load it, or a voice model (.zip / .pth) to install it</div></div>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="g-frontman" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3a9 9 0 0 1 9 9"/></symbol>
-  <symbol id="g-mouthpiece" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8"/><path d="M20 4v6M17 7h6"/></symbol>
+  <symbol id="g-doubleagent" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8"/><path d="M20 4v6M17 7h6"/></symbol>
   <symbol id="g-speakeasy" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 9h8M8 12h5"/></symbol>
   <symbol id="g-safehouse" viewBox="0 0 24 24"><path d="M5 4v16M9 4v16M13 5l4 15M4 20h16"/></symbol>
   <symbol id="g-queue" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
@@ -27,12 +27,12 @@
 <header class="top">
   <div class="top-in">
     <div class="suite" id="suite-logo" title="UnderCover">
-      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--panel-2)"/><rect x="6" y="13" width="3" height="6" rx="1.5" fill="var(--c-frontman)"/><rect x="11" y="8" width="3" height="16" rx="1.5" fill="var(--c-mouthpiece)"/><rect x="16" y="11" width="3" height="10" rx="1.5" fill="var(--c-speakeasy)"/><rect x="21" y="6" width="3" height="20" rx="1.5" fill="var(--c-safehouse)"/></svg>
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--panel-2)"/><rect x="6" y="13" width="3" height="6" rx="1.5" fill="var(--c-frontman)"/><rect x="11" y="8" width="3" height="16" rx="1.5" fill="var(--c-doubleagent)"/><rect x="16" y="11" width="3" height="10" rx="1.5" fill="var(--c-speakeasy)"/><rect x="21" y="6" width="3" height="20" rx="1.5" fill="var(--c-safehouse)"/></svg>
       <span class="suite-name">UnderCover</span>
     </div>
     <nav class="mods" role="tablist" aria-label="Modules">
       <a class="mod" role="tab" href="#frontman" id="tab-frontman" data-tab="frontman" aria-selected="true"><svg class="ico" aria-hidden="true"><use href="#g-frontman"/></svg><span>FrontMan</span></a>
-      <a class="mod" role="tab" href="#mouthpiece" id="tab-mouthpiece" data-tab="mouthpiece" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#g-mouthpiece"/></svg><span>MouthPiece</span><span class="badge" id="mp-badge" hidden></span></a>
+      <a class="mod" role="tab" href="#doubleagent" id="tab-doubleagent" data-tab="doubleagent" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#g-doubleagent"/></svg><span>DoubleAgent</span><span class="badge" id="da-badge" hidden></span></a>
       <a class="mod" role="tab" href="#speakeasy" id="tab-speakeasy" data-tab="speakeasy" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#g-speakeasy"/></svg><span>SpeakEasy</span></a>
       <a class="mod" role="tab" href="#safehouse" id="tab-safehouse" data-tab="safehouse" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#g-safehouse"/></svg><span>SafeHouse</span></a>
     </nav>
@@ -40,7 +40,7 @@
       <button class="chip chip-btn" id="chip-queue" type="button" aria-haspopup="dialog" aria-label="Open the overnight queue"><svg class="ico" aria-hidden="true"><use href="#g-queue"/></svg><span id="q-count">Queue</span></button>
       <span class="chip gpu" id="chip-gpu"><i class="dot wait"></i><span>Starting…</span></span>
       <span class="chip models" id="chip-models">loading models</span>
-      <button class="chip chip-btn train" id="chip-train" hidden aria-label="Training progress: open MouthPiece"></button>
+      <button class="chip chip-btn train" id="chip-train" hidden aria-label="Training progress: open DoubleAgent"></button>
       <button class="chip chip-btn theme" id="theme" aria-label="Switch light or dark theme">Light</button>
     </div>
   </div>
@@ -61,7 +61,7 @@
       <div class="wa-lcd"><div class="wa-time"><span class="wa-state">■</span><span id="wa-time">00:00</span></div><canvas id="wa-vis"></canvas></div>
       <div class="wa-info">
         <div class="wa-marquee"><span id="wa-song">UnderCover</span></div>
-        <div class="wa-meta"><b>320</b> kbps <b>44</b> kHz <span class="wa-lights"><span class="wa-st" data-m="frontman">FM</span><span class="wa-st" data-m="mouthpiece">MP</span><span class="wa-st" data-m="speakeasy">SE</span><span class="wa-st" data-m="safehouse">SH</span></span></div>
+        <div class="wa-meta"><b>320</b> kbps <b>44</b> kHz <span class="wa-lights"><span class="wa-st" data-m="frontman">FM</span><span class="wa-st" data-m="doubleagent">DA</span><span class="wa-st" data-m="speakeasy">SE</span><span class="wa-st" data-m="safehouse">SH</span></span></div>
       </div>
     </div>
     <div class="wa-transport"><button type="button" tabindex="-1" data-a="prev" title="Previous cover">⏮</button><button type="button" tabindex="-1" data-a="play" title="Play">▶</button><button type="button" tabindex="-1" data-a="pause" title="Pause">⏸</button><button type="button" tabindex="-1" data-a="stop" title="Stop">⏹</button><button type="button" tabindex="-1" data-a="next" title="Next cover">⏭</button><span class="wa-brand">UNDERCOVER</span></div>
@@ -322,18 +322,18 @@
   </div>
 
   <div class="view" id="view-train" hidden>
-    <div class="modhead"><div class="modmark"><svg class="ico" aria-hidden="true"><use href="#g-mouthpiece"/></svg></div>
-      <div><h1>MouthPiece</h1><p>Finds a person's voice, trains it, and keeps making it better.</p></div></div>
+    <div class="modhead"><div class="modmark"><svg class="ico" aria-hidden="true"><use href="#g-doubleagent"/></svg></div>
+      <div><h1>DoubleAgent</h1><p>Finds a person's voice, trains it, and keeps making it better.</p></div></div>
 
     <section class="panel" id="q-report" hidden>
       <div class="row spread"><div><h2>Last night</h2><p class="meta" id="q-report-when"></p></div><button class="linkbtn" id="q-dismiss" type="button">Dismiss</button></div>
       <div class="qreport" id="q-report-list"></div>
     </section>
 
-    <section class="panel" id="mp-voices">
-      <div class="row spread"><h2>Your voices</h2><span class="meta">downloaded voices can be improved once MouthPiece knows whose they are</span></div>
-      <div class="vcards" id="mp-cards"><p class="meta">Loading…</p></div>
-      <button class="linkbtn" id="mp-more" type="button" hidden></button>
+    <section class="panel" id="da-voices">
+      <div class="row spread"><h2>Your voices</h2><span class="meta">downloaded voices can be improved once DoubleAgent knows whose they are</span></div>
+      <div class="vcards" id="da-cards"><p class="meta">Loading…</p></div>
+      <button class="linkbtn" id="da-more" type="button" hidden></button>
     </section>
 
     <section class="panel" id="q-panel">
@@ -372,7 +372,7 @@
         <h2>New voice, step by step</h2>
         <div class="row"><select id="tr-pick" aria-label="Training project"></select><button class="btn" id="tr-new">New voice</button></div>
       </div>
-      <p class="meta" id="tr-intro">Name a person and MouthPiece finds clips of them, keeps only their voice, and trains a voice model you can use in FrontMan. For personal use: don't pass the results off as the real person.</p>
+      <p class="meta" id="tr-intro">Name a person and DoubleAgent finds clips of them, keeps only their voice, and trains a voice model you can use in FrontMan. For personal use: don't pass the results off as the real person.</p>
     </section>
 
     <nav class="steps" id="tr-steps" aria-label="Training steps" hidden>
@@ -524,9 +524,9 @@
         <input class="se-search" id="se-q" type="search" autocomplete="off" placeholder="Search your voices" aria-label="Search voices">
         <div class="se-vlist" id="se-voices" role="listbox" aria-label="Voices"><p class="meta">Loading…</p></div>
         <div class="se-newv">
-          <div class="row spread"><b>Someone who isn't here?</b><span class="meta">MouthPiece builds the voice</span></div>
+          <div class="row spread"><b>Someone who isn't here?</b><span class="meta">DoubleAgent builds the voice</span></div>
           <div class="row"><input id="se-newname" placeholder="Dolly Parton" aria-label="Person's name"><button class="btn" id="se-newgo" type="button">New voice</button></div>
-          <p class="meta">MouthPiece finds clean clips of them on YouTube and trains a voice (about 3 h; tonight's queue is fine). It then
+          <p class="meta">DoubleAgent finds clean clips of them on YouTube and trains a voice (about 3 h; tonight's queue is fine). It then
             appears here and in FrontMan. <span class="soon">phase 4</span> it learns their cadence from the same clips.</p>
         </div>
       </section>
@@ -583,7 +583,7 @@
   <div class="row qd-add"><button class="btn" type="button" data-qadd="improve">+ Improve a voice</button><button class="btn" type="button" data-qadd="new">+ New voice</button>
     <button class="btn" type="button" disabled title="Phase 4">+ Train cadence <span class="soon">phase 4</span></button></div>
   <p class="meta">Any module can add long jobs here. Covers you start meanwhile go first; Pause / Resume (under the top bar) stops and continues everything.</p>
-  <button class="btn" type="button" id="qd-open" data-goto="mouthpiece">Open the full queue in MouthPiece →</button>
+  <button class="btn" type="button" id="qd-open" data-goto="doubleagent">Open the full queue in DoubleAgent →</button>
 </aside>
 
 <script src="/static/app.js"></script>
@@ -591,7 +591,7 @@
 <script src="/static/oneshot.js"></script>
 <script src="/static/library.js"></script>
 <script src="/static/work.js"></script>
-<script src="/static/mouthpiece.js"></script>
+<script src="/static/doubleagent.js"></script>
 <script src="/static/speakeasy.js"></script>
 <script src="/static/shell.js"></script>
 <script src="/static/winamp.js"></script>
