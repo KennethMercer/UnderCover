@@ -53,6 +53,16 @@ async function loadSummary() {
     } catch (e) { showError(e.message, "Couldn't update"); }
     loadSummary();
   };
+  const quit = $("#lib-quit");
+  if (quit && !quit.dataset.wired) {
+    quit.dataset.wired = "1";
+    confirmClick(quit, "Quit UnderCover?", async () => {
+      try {
+        const r = await api("/api/quit", { json: {} });
+        document.body.innerHTML = `<div class="lib-empty" style="margin:20vh auto;max-width:420px;text-align:center"><b>UnderCover has stopped</b>${r.pausing ? "Voice work was paused; Resume continues it next time. " : ""}Start it again with UnderCover.bat, then reload this page.</div>`;
+      } catch (e) { showError(e.message, "Couldn't quit"); }
+    });
+  }
   renderCats();
 }
 async function loadCat(keepSel) {

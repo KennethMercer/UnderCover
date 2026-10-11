@@ -254,6 +254,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._open_folder(self._body())
             if p == "/api/restart":
                 return self._restart()
+            if p == "/api/quit":
+                return self._quit()
             m = re.fullmatch(r"/api/jobs/(\w+)/cancel", p)
             if m:
                 job = JOBS.get(m.group(1))
@@ -471,6 +473,23 @@ class Handler(BaseHTTPRequestHandler):
         RESTART.set()
         threading.Thread(target=SERVER.shutdown, daemon=True).start()  # makes serve_forever() return in main()
 
+    def _quit(self):
+        """Stop UnderCover (there may be no window to close when it was started by double-click). Refused while a
+        cover or speech is being made; voice work is paused first (it keeps its place for Resume next time)."""
+        if any(j.kind in ("cover", "preview", "speech", "auto") and not j.finished for j in JOBS.values()):
+            return self._error("Something is still being made. Wait for it to finish (or cancel it), then quit.", 409)
+        from ..core import worklist
+
+        def stop():
+            if worklist.active():
+                worklist.pause_all()
+                t0 = time.time()
+                while worklist.active() and time.time() - t0 < 180:
+                    time.sleep(1)
+            SERVER.shutdown()   # serve_forever() returns in main(), which exits
+        self._json({"ok": True, "pausing": worklist.active()})
+        threading.Thread(target=stop, daemon=True).start()
+
     def _voice_upload(self):
         """Install a voice from a dropped .zip/.pth/.index file (body = raw file bytes)."""
         import tempfile
@@ -595,6 +614,9 @@ def main():
         _relaunch(["--port", str(port)] if "--port" in sys.argv else [])
         print("Restarting UnderCover...", flush=True)
         _hard_exit()
+    print("UnderCover stopped (Quit).", flush=True)   # /api/quit
+    _hb_write({"event": "stop", "reason": "quit"})
+    _hard_exit()
 
 
 def _install_console_handler():
