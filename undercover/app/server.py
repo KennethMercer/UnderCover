@@ -39,7 +39,7 @@ UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
 WEB = PKG / "web"
 for ext, mt in ((".flac", "audio/flac"), (".mp3", "audio/mpeg"), (".wav", "audio/wav"), (".m4a", "audio/mp4"),
-                (".opus", "audio/ogg"), (".js", "text/javascript"), (".css", "text/css")):
+                (".opus", "audio/ogg"), (".js", "text/javascript"), (".css", "text/css"), (".woff2", "font/woff2")):
     mimetypes.add_type(mt, ext)
 
 
