@@ -7,6 +7,7 @@ Other modules (FrontMan's one-shot, SpeakEasy) use voices through this file only
   train_new_voice              find clips -> prepare -> auto-confirm the main voice -> train -> add to the voices
   project_for / is_musician    the person's training project (singers get their songs, not just interviews)
   voice_f0, undertrained       facts about a voice
+  speaking_pitch               how the voice's person sounds when they talk (SpeakEasy pitches its Reader to it)
 """
 import re
 import time
@@ -350,6 +351,29 @@ def voice_f0(v) -> tuple[float | None, bool]:
         except Exception:
             pass
     return None, False
+
+
+SUNG_TO_SPEECH = 0.5   # singers speak about an octave below their singing median: Elliott Smith sings at 212 Hz (the
+                       # voice's training data) and speaks at 104 Hz (2 min of an MTV interview, measured 2026-10-10)
+
+
+def speaking_pitch(v) -> dict | None:
+    """How this voice's person sounds when they TALK: {"hz": median, "low": p5, "how": where it comes from}, or None
+    when nothing is known (a downloaded voice never checked against a person). SpeakEasy pitches its Reader to this."""
+    ex = v.extra or {}
+    hz, speech = voice_f0(v)
+    rng = ex.get("f0_range")
+    if hz and rng:
+        if speech:
+            return {"hz": hz, "low": rng[0], "how": "its training speech"}
+        return {"hz": round(hz * SUNG_TO_SPEECH, 1), "low": round(rng[0] * SUNG_TO_SPEECH, 1), "how": "its singing, an octave down"}
+    pr = ex.get("person_range")
+    if pr:
+        if ex.get("person_range_speech"):
+            return {"hz": pr[1], "low": pr[0], "how": f"{ex.get('person') or 'the person'}'s real speech"}
+        return {"hz": round(pr[1] * SUNG_TO_SPEECH, 1), "low": round(pr[0] * SUNG_TO_SPEECH, 1),
+                "how": f"{ex.get('person') or 'the person'}'s singing, an octave down"}
+    return None
 
 
 def _remember_range(v, rng: list, from_speech: bool, person: str):
