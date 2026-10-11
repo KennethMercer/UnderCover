@@ -565,6 +565,7 @@ async function showResult(item, seconds) {
   S.result = item; playingHist = item.id;
   $("#result").hidden = false;
   $("#result-h").textContent = `${item.title} · ${item.voice}${item.backing_voice ? " + " + item.backing_voice : ""}`;
+  renderKeep();
   stopAll();
   aCover.src = item.output; aOrig.src = item.original || "";
   ab = "cover"; $$(".ab button").forEach(b => b.setAttribute("aria-pressed", b.dataset.ab === "cover"));
@@ -581,6 +582,20 @@ async function showResult(item, seconds) {
   $("#result").scrollIntoView({ block: "nearest", behavior: "smooth" });
   loadHistory();
 }
+// Keep (phase 6): "Send to SafeHouse" keeps a cover for good; unkept ones roll off the recent tray (the latest 15)
+function renderKeep() {
+  const r = S.result, b = $("#keep");
+  if (!r) return;
+  b.setAttribute("aria-pressed", !!r.kept); b.dataset.kept = r.kept ? "true" : "false";
+  b.textContent = r.kept ? "Kept in SafeHouse ✓" : "Send to SafeHouse";
+}
+async function toggleKeep(id, kept) {
+  try { await api(`/api/library/covers/${id}/${kept ? "unkeep" : "keep"}`, { json: {} }); }
+  catch (e) { return showError(e.message, "Couldn't change that"); }
+  if (S.result?.id === id) S.result.kept = !kept;
+  await loadHistory(); renderKeep();
+}
+$("#keep").onclick = () => S.result && toggleKeep(S.result.id, !!S.result.kept);
 function drawResultWave() {
   const a = active(), frac = a.duration ? a.currentTime / a.duration : 0;
   drawWave($("#wave-res"), wavePeaks[ab] || wavePeaks.cover, frac, ab === "cover" ? "--wave-on" : "--wave-alt");
@@ -723,7 +738,14 @@ function renderPreviews(list) {
 
 // ------------------------------------------------------------ history
 let HIST = [];
-async function loadHistory() { try { HIST = await api("/api/history"); } catch (e) { HIST = []; } renderHistory(); }
+async function loadHistory() {
+  let ok = true;
+  try { HIST = await api("/api/history"); } catch (e) { HIST = []; ok = false; }
+  const mine = S.result && HIST.find(x => x.id === S.result.id);
+  if (mine) { S.result.kept = mine.kept; renderKeep(); }
+  else if (ok && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // it rolled off the tray (or was deleted)
+  renderHistory();
+}
 function renderHistory() {
   const box = $("#hist");
   if (!HIST.length) { box.innerHTML = `<p class="meta">Your covers will appear here.</p>`; return; }
@@ -732,15 +754,16 @@ function renderHistory() {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
-    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}"><div><strong>${esc(h.title)} · ${esc(h.voice)}${h.backing_voice ? " + " + esc(h.backing_voice) : ""}</strong><small class="mono">${esc(bits)}</small></div>
+    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${esc(h.voice)}${h.backing_voice ? " + " + esc(h.backing_voice) : ""}</strong><small class="mono">${esc(bits)}</small></div>
       <small class="hdate">${esc((h.created || "").slice(0, 16))}</small>
-      <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
+      <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("");
   $$("[data-play]", box).forEach(b => b.onclick = () => {
-    const h = HIST.find(x => x.id === +b.dataset.play);
+    const h = HIST.find(x => x.id === b.dataset.play);
     if (S.result?.id === h.id) return togglePlay();
     showResult(h).then(() => { aCover.addEventListener("canplay", () => togglePlay(), { once: true }); });
   });
+  $$("[data-keep]", box).forEach(b => b.onclick = () => toggleKeep(b.dataset.keep, b.getAttribute("aria-pressed") === "true"));
 }
 
 // ------------------------------------------------------------ boot

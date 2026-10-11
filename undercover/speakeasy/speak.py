@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from ..core import fsutil, jobs
+from ..core import fsutil, jobs, tray
 from ..core.config import path
 from ..core.files import file_url
 from ..core.jobs import Cancelled
@@ -319,8 +319,13 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
             "voice": p["voice"], "reader": p["reader"], "reader_auto": p["auto"], "speed": p["speed"], "pitch": p["pitch"],
             "mode": p.get("mode", "reader"), "engine": p.get("engine"), "pace": p.get("pace"),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
-            "job": job_id}
-    fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
+            "job": job_id, "finished": round(time.time(), 3)}
+    with LOCK:
+        fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
+        try:
+            roll_off(sid)   # the recent tray: the latest 15 stay (core/tray.py); never lets a failure here fail the speech
+        except Exception as e:   # noqa: BLE001
+            tray.log(f"roll-off (speech): failed, nothing removed: {type(e).__name__}: {e}")
     return _item(meta)
 
 
@@ -336,13 +341,16 @@ def _mp3(wav: Path) -> Path | None:
 
 # ---------------------------------------------------------------- the saved results (SpeakEasy's Recent, SafeHouse)
 
+LOCK = threading.RLock()   # every change to a speech's JSON file and the roll-off
+
+
 def _item(m: dict) -> dict:
     d = speech_dir()
     wav, mp3 = d / m["file"], d / m["mp3"] if m.get("mp3") else None
     size = sum(f.stat().st_size for f in (wav, mp3) if f and f.exists())
     return {**{k: m.get(k) for k in ("id", "title", "text", "voice", "reader", "reader_auto", "speed", "pitch", "created",
-                                      "duration", "seconds", "file", "mp3", "mode", "engine", "pace")},
-            "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
+                                      "duration", "seconds", "file", "mp3", "mode", "engine", "pace", "kept_at")},
+            "kept": bool(m.get("kept")), "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
             "format": "WAV" + (" + MP3" if mp3 and mp3.exists() else "")}
 
 
@@ -356,17 +364,59 @@ def _meta(sid: str) -> tuple[Path, dict]:
         raise LookupError("That speech isn't there any more.")
 
 
-def list_speech() -> list[dict]:
+def _finished() -> list[dict]:
+    """The stored descriptions of every finished speech (its file is there), oldest first."""
     out = []
     for f in speech_dir().glob("*.json"):
         try:
             m = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if (speech_dir() / m.get("file", "")).exists():
-            out.append(_item(m))
-    out.sort(key=lambda x: x["created"] or "", reverse=True)
-    return out
+        if isinstance(m, dict) and re.fullmatch(r"[0-9a-f]{10}", m.get("id") or "") and (speech_dir() / m.get("file", "")).exists():
+            out.append((m.get("created") or "", m.get("finished") or 0.0, m))
+    out.sort(key=lambda x: x[:2])   # when it finished; `finished` breaks ties inside one second
+    return [m for _, _, m in out]
+
+
+def list_speech(everything: bool = True) -> list[dict]:
+    """Saved speech, newest first, each with `kept`, `kept_at` and `recent` (in the recent tray: the latest 15).
+    everything=False: just the tray (SpeakEasy's Recent)."""
+    metas = _finished()
+    recent = {m["id"] for m in tray.in_tray(metas)}
+    out = [{**_item(m), "recent": m["id"] in recent} for m in reversed(metas)]
+    return out if everything else [x for x in out if x["recent"]]
+
+
+def set_kept(sid: str, kept: bool) -> dict:
+    """Send to SafeHouse (keep) or take back (unkeep): flags the speech; files don't move."""
+    with LOCK:
+        f, m = _meta(sid)
+        if kept:
+            m["kept"], m["kept_at"] = True, time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            m.pop("kept", None)
+            m.pop("kept_at", None)
+        fsutil.write_text(f, json.dumps(m, indent=1))
+        recent = {x["id"] for x in tray.in_tray(_finished())}
+        return {**_item(m), "recent": m["id"] in recent}
+
+
+def roll_off(new_id: str) -> str | None:
+    """After the speech `new_id` was saved: the tray's one leaver, if any, is deleted when it isn't kept (a kept one just
+    stays in SafeHouse). Returns the id of what was deleted. See core/tray.py for why at most one, and never a kept one."""
+    from ..core import storage
+    with LOCK:
+        lv = tray.leaver(_finished())
+        if lv is None:
+            return None
+        assert lv["id"] != new_id and not lv.get("kept"), "roll-off picked the new or a kept speech"
+        d = speech_dir()
+        files = [d / n for n in (lv.get("file"), lv.get("mp3"), f"{lv['id']}.json") if n]   # its JSON goes last
+        dirs = [parts_dir(lv["job"])] if re.fullmatch(r"\w+", lv.get("job") or "") else []
+        storage.remove_files(files, [d, path("cache_dir") / "previews"], dirs)   # refuses all, removing nothing, on any doubt
+        tray.log(f"roll-off (speech): removed {lv['id']} \"{lv.get('title')}\" ({lv.get('file')}); "
+                 f"the tray holds the latest {tray.TRAY_SIZE}")
+        return lv["id"]
 
 
 def get_speech(sid: str) -> dict:
@@ -374,34 +424,36 @@ def get_speech(sid: str) -> dict:
 
 
 def delete_speech(sid: str):
-    f, m = _meta(sid)
-    for name in (m.get("file"), m.get("mp3")):
-        if name:
-            fsutil.retry(lambda name=name: (speech_dir() / name).unlink(missing_ok=True))
-    f.unlink(missing_ok=True)
-    if re.fullmatch(r"\w+", m.get("job") or ""):
-        shutil.rmtree(parts_dir(m["job"]), ignore_errors=True)   # its sentences, kept for the page's player
+    with LOCK:
+        f, m = _meta(sid)
+        for name in (m.get("file"), m.get("mp3")):
+            if name:
+                fsutil.retry(lambda name=name: (speech_dir() / name).unlink(missing_ok=True))
+        f.unlink(missing_ok=True)
+        if re.fullmatch(r"\w+", m.get("job") or ""):
+            shutil.rmtree(parts_dir(m["job"]), ignore_errors=True)   # its sentences, kept for the page's player
 
 
 def rename_speech(sid: str, name: str) -> dict:
-    f, m = _meta(sid)
-    name = _safe(name or "")
-    if not name:
-        raise SpeakError("Type a name.")
-    d = speech_dir()
-    moves = [(d / m[k], d / (name + Path(m[k]).suffix)) for k in ("file", "mp3") if m.get(k)]
-    for old, new in moves:
-        if new.exists() and new != old:
-            raise SpeakError(f"There's already a file called \"{new.name}\".")
-    for old, new in moves:
-        if old.exists():
-            fsutil.retry(lambda old=old, new=new: old.rename(new))
-    m["file"] = name + ".wav"
-    if m.get("mp3"):
-        m["mp3"] = name + ".mp3"
-    m["title"] = name
-    fsutil.write_text(f, json.dumps(m, indent=1))
-    return _item(m)
+    with LOCK:
+        f, m = _meta(sid)
+        name = _safe(name or "")
+        if not name:
+            raise SpeakError("Type a name.")
+        d = speech_dir()
+        moves = [(d / m[k], d / (name + Path(m[k]).suffix)) for k in ("file", "mp3") if m.get(k)]
+        for old, new in moves:
+            if new.exists() and new != old:
+                raise SpeakError(f"There's already a file called \"{new.name}\".")
+        for old, new in moves:
+            if old.exists():
+                fsutil.retry(lambda old=old, new=new: old.rename(new))
+        m["file"] = name + ".wav"
+        if m.get("mp3"):
+            m["mp3"] = name + ".mp3"
+        m["title"] = name
+        fsutil.write_text(f, json.dumps(m, indent=1))
+        return _item(m)
 
 
 def storage() -> int:

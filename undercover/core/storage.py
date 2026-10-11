@@ -283,6 +283,39 @@ def remove_tree(p: Path, skip: tuple = (), from_room: bool = False, confirmed: b
             fsutil.retry(child.unlink)
 
 
+def remove_files(files, within, dirs=()):
+    """The roll-off's delete (core/tray.py): remove these files, and these folders with what's in them, and nothing else.
+    Everything is checked before anything is removed, and one bad path refuses the whole call:
+    - every path must be inside one of `within` (the output / converted folders of the item's own module), and never
+      one of those folders itself;
+    - a file must be a plain file, never a folder (a folder only through `dirs`);
+    - test mode (ALLOWED_ROOTS): refuse() applies, so the app's real folders and anything outside the test's own are out
+      of reach, whatever the history says.
+    Normal use is allowed under the app folder on purpose: this is the user's own "keep or roll off" rule, not a move."""
+    todo = [(Path(p), False) for p in files if p] + [(Path(p), True) for p in dirs if p]
+    todo = [(p, d) for p, d in todo if p.exists()]   # what isn't there needs no removing (and can do no harm)
+    for p, is_dir in todo:
+        if ALLOWED_ROOTS is not None:
+            why = refuse([p])
+            if why:
+                raise ModelError(why)
+        if not any(_inside(p, w) and not _same(p, w) for w in within):
+            raise ModelError(f"{p} isn't inside the folders this may delete from; nothing was removed.")
+        if p.is_dir() != is_dir:
+            raise ModelError(f"{p} isn't the kind of thing expected here; nothing was removed.")
+    first = None
+    for p, is_dir in todo:   # a locked file doesn't stop the others: remove what can go, then report
+        try:
+            if is_dir:
+                fsutil.retry(lambda p=p: shutil.rmtree(p))
+            else:
+                fsutil.retry(lambda p=p: p.unlink(missing_ok=True))
+        except OSError as e:
+            first = first or e
+    if first:
+        raise first
+
+
 def _release(group: str):
     """Let go of what's loaded from the folders that move, so it's loaded again from the new place."""
     from . import gpu

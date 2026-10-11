@@ -3,12 +3,14 @@
 GET    /api/speak/voices                     every voice: group, likeness, auto Reader + pitch, cadence status
 GET    /api/speak/readers                    the Kokoro Readers (English)
 GET    /api/speak/plan?voice=&reader=&pace=&nudge=   which Reader and pitch a voice would use (pace: slower|natural|faster)
-GET    /api/speak/recent                     saved speech, newest first
+GET    /api/speak/recent                     the recent tray: the latest 15 finished speech, newest first (kept or not;
+                                             each has id, kept, kept_at); older unkept ones roll off (core/tray.py)
 POST   /api/speak                            {text, voice, reader, pace, nudge, cadence} -> speech job (events: one URL per
                                              sentence; cadence false = the Reader even when the voice has a cadence)
 POST   /api/speak/cadence                    {voice, now} "Train cadence" / "Find clips + cadence" (DoubleAgent's queue)
 POST   /api/speak/newvoice                   {person, now} a new voice with its cadence (DoubleAgent's full pipeline)
 POST   /api/speak/<id>/rename                {name}
+POST   /api/speak/<id>/keep | unkeep         Send to SafeHouse (keep for good) / take it back
 DELETE /api/speak/<id>
 """
 import re
@@ -41,7 +43,7 @@ def _route(h, method, p):
         if rest == "readers":
             return h._json(speak.readers())
         if rest == "recent":
-            return h._json(speak.list_speech())
+            return h._json(speak.list_speech(everything=False))
         if rest == "plan":
             return h._json(speak.plan(q.get("voice", ""), q.get("reader", "auto"), _num(q.get("speed"), 1.0), _num(q.get("nudge"), 0.0),
                                       False if q.get("cadence") in ("0", "false") else None, q.get("pace")))
@@ -54,9 +56,12 @@ def _route(h, method, p):
     if method == "POST" and rest == "newvoice":
         b = h._body()
         return h._json(service.start_new_voice(b.get("person") or "", cadence=True, now=b.get("now", True) is not False))
-    m = re.fullmatch(r"([0-9a-f]{10})(?:/(rename))?", rest)
+    m = re.fullmatch(r"([0-9a-f]{10})(?:/(rename|keep|unkeep))?", rest)
     if m and method == "POST" and m.group(2) == "rename":
         return h._json(speak.rename_speech(m.group(1), h._body().get("name", "")))
+    if m and method == "POST" and m.group(2) in ("keep", "unkeep"):
+        h._body()   # read what the page sent, or it's taken for the start of its next request on the same connection
+        return h._json(speak.set_kept(m.group(1), m.group(2) == "keep"))
     if m and method == "DELETE" and not m.group(2):
         speak.delete_speech(m.group(1))
         return h._json({"ok": True})
