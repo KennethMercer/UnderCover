@@ -10,7 +10,7 @@ import threading
 
 import numpy as np
 
-from ..core import setup_models
+from ..core import addons, setup_models
 from ..core.config import path
 from ..core.voices import ModelError
 
@@ -18,6 +18,14 @@ SR = 24000
 URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 FILES = {"tts/kokoro/kokoro-v1.0.onnx": f"{URL}/kokoro-v1.0.onnx",      # ~310 MB
          "tts/kokoro/voices-v1.0.bin": f"{URL}/voices-v1.0.bin"}        # ~27 MB
+SHA256 = {"tts/kokoro/kokoro-v1.0.onnx": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+          "tts/kokoro/voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"}
+addons.register(addons.Addon(
+    id="kokoro", name="Kokoro", included=True, modules=["speakeasy"],
+    adds="The quick Reader: SpeakEasy's speech for voices without a cadence.",
+    licence="Apache-2.0", licence_url="https://huggingface.co/hexgrad/Kokoro-82M",
+    licence_summary=addons.OPEN.format("Apache-2.0") + " Code (kokoro-onnx, MIT) and weights.",
+    size_mb=340, paths=["tts/kokoro"], check=lambda: all((path("models_dir") / f).exists() for f in FILES)))
 
 # The English Readers: (label, measured speaking pitch [p5, p50, p95] Hz, Kokoro's own quality grade).
 # Pitch measured with RMVPE on the same 3 sentences (2026-10-10). `auto` = good enough to be picked automatically.
@@ -97,7 +105,7 @@ def kokoro(progress=None):
     with _LOCK:
         if _K is None:
             try:
-                setup_models.ensure(progress, files=FILES)
+                setup_models.ensure(progress, files=FILES, sha256=SHA256)
             except Exception as e:
                 raise ModelError(f"Couldn't download the speech model ({e.__class__.__name__}). "
                                  "Check your internet connection and try again.")

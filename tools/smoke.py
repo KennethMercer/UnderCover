@@ -7,8 +7,14 @@
 Needs the TEST server running on port 7861 (preview config "undercover-test"); refuses the user's server on 7860.
 Leaves nothing behind: the test cover and test speech are deleted, the scratch training project is removed.
 Exit code 0 = all passed. Prints one line per check.
+
+RULE (after 2026-10-11, when a check here deleted the user's songs and covers): a check must never be able to reach
+the user's data folders (uploads, output, models, cache, training projects). Unit checks that create, move or delete
+files run inside `isolated_data()`: every [paths] folder, config.toml and the storage allow-list point into a temp
+dir, and core/storage.py refuses the app's real folders in test mode. Never copy the real config.toml into a test.
 """
 import argparse
+import contextlib
 import json
 import shutil
 import sys
@@ -310,8 +316,13 @@ def u_cadence():
     assert {"chatterbox", "f5"} <= set(ENGINES) and default_engine() in ENGINES
     ids = {a["id"] for a in addons.status()}
     assert {"f5", "xtts"} <= ids, ids
-    # the accept / install / remove path, with a tiny fake add-on (no packages, no files)
-    st0 = addons._state()
+    # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
+    with isolated_data():
+        _fake_addon_roundtrip(addons)
+    return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
+
+
+def _fake_addon_roundtrip(addons):
     state = {"on": False}
     fake = addons.register(addons.Addon(id="zz-smoke", name="Smoke", adds="nothing", licence="TEST-1.0", licence_url="-",
                                         licence_summary="test only", size_mb=0, check=lambda: state["on"]))
@@ -330,8 +341,119 @@ def u_cadence():
         assert not r["installed_on"] and r["accepted"] and not addons.available(fake.id), r
     finally:
         addons.ADDONS.pop(fake.id, None)
-        addons._save(st0) if st0 else addons._file().unlink(missing_ok=True)
-    return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
+
+
+@contextlib.contextmanager
+def isolated_data():
+    """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
+    rule in this file's header). Asserts nothing points outside it before handing over; restores everything after."""
+    import tempfile
+    from undercover.core import config, storage
+    saved = (dict(config.CONFIG["paths"]), config.CONFIG_FILE, storage.ALLOWED_ROOTS)
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        t = Path(td)
+        app = t / "app"
+        keys = {"models_dir": "models", "cache_dir": "cache", "output_dir": "output", "logs_dir": "logs", "uploads_dir": "uploads"}
+        cfg = t / "config.toml"   # a minimal config of its own: never a copy of the real one (it holds the real paths)
+        cfg.write_text("[paths]\n" + "".join(f"{k} = '{app / v}'\n" for k, v in keys.items())
+                       + '\n[cadence]\nengine = "chatterbox"\n', encoding="utf-8")
+        try:
+            config.CONFIG_FILE = cfg
+            config.CONFIG["paths"] = {k: str(app / v) for k, v in keys.items()}
+            storage.ALLOWED_ROOTS = [t]
+            for k in (*keys, "voices_dir"):
+                p = config.path(k)
+                assert storage._inside(p, t) and not storage._inside(p, ROOT), f"{k} -> {p} is outside the test's folder"
+            yield t
+        finally:
+            config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved
+
+
+@check("add-ons: registry, CLI list, a fake add-on installs (checksum) and removes cleanly")
+def u_addons():
+    import subprocess
+    from undercover.core import addons
+    from undercover.core.config import path
+    out = subprocess.run([sys.executable, "-m", "undercover.addons", "list", "--json"], cwd=ROOT, capture_output=True,
+                         text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-400:]
+    rows = {r["id"]: r for r in json.loads(out.stdout)}
+    assert {"f5", "xtts", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows), sorted(rows)
+    assert rows["f5"]["installable"] and not rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["xtts"]
+    with isolated_data() as t:
+        src = t / "fake.bin"
+        src.write_bytes(b"undercover smoke " * 4096)
+        fake = addons.register_test_addon(src)
+        dest = path("models_dir") / "_test" / "test-addon.bin"
+        try:
+            for aid, ok in (("test", False), ("chatterbox", True)):   # no acceptance; an included part
+                try:
+                    addons.install(aid, accept=ok)
+                    raise AssertionError(f"{aid} installed (accept={ok})")
+                except addons.ModelError:
+                    pass
+            r = addons.install("test", accept=True)
+            assert r["installed"] and r["accepted"] and addons.available("test") and dest.exists(), r
+            r = addons.remove("test")
+            assert not r["installed"] and r["accepted"] and r["freed"] == src.stat().st_size and not dest.parent.exists(), r
+            fake.sha256["_test/test-addon.bin"] = "0" * 64   # a download that doesn't match its checksum is refused
+            try:
+                addons.install("test", accept=True)
+                raise AssertionError("a file with the wrong checksum was installed")
+            except addons.ModelError:
+                assert not dest.exists()
+        finally:
+            addons.ADDONS.pop("test", None)
+    return f"{len(rows)} parts, {sum(not r['included'] for r in rows.values())} optional"
+
+
+@check("data locations: guards, then a scratch move of model files and the library (voices stay the library's)")
+def u_storage():
+    from undercover.core import config, storage
+
+    class FakeJob:
+        id, cancel = "smoke", False
+
+        def push(self, **ev):
+            pass
+    # the guards, checked without touching anything: the app's real folders are out of reach
+    assert storage.refuse([ROOT / "uploads"]) and storage.refuse([ROOT / "output"], from_room=True)
+    assert storage.refuse([ROOT / "models"], from_room=True, confirmed=True) is None   # only the room, confirmed
+    with isolated_data() as t:
+        app, lib, mod = t / "app", t / "lib2", t / "models2"
+        assert storage.refuse([ROOT / "cache"], True, True), "test mode must refuse the app folder"
+        assert storage.refuse([t.parent / "not-this-test"]), "test mode must refuse folders outside the test's own"
+        # regression (2026-10-11): writing [paths] must not reload the file's other keys into the running config
+        text = config.CONFIG_FILE.read_text(encoding="utf-8").replace(f"'{app / 'uploads'}'", '"uploads"')
+        config.CONFIG_FILE.write_text(text, encoding="utf-8")
+        config.set_values("paths", {"logs_dir": f"'{app / 'logs'}'"})
+        assert config.CONFIG["paths"]["uploads_dir"] == str(app / "uploads"), config.CONFIG["paths"]
+        assert storage._inside(config.path("uploads_dir"), t)
+        for d in ("uploads", "output", "models/voices/v1", "models/tts"):
+            (app / d).mkdir(parents=True, exist_ok=True)
+        (app / "models/tts/m.bin").write_bytes(b"m" * 5000)
+        (app / "models/voices/v1/meta.json").write_text(json.dumps({"dir": str(app / "models/voices/v1")}), encoding="utf-8")
+        (app / "uploads/s.mp3").write_bytes(b"s" * 3000)
+        (app / "output/c.mp3").write_bytes(b"c" * 2000)
+        (app / "output/history.jsonl").write_text(json.dumps({"output": str(app / "output/c.mp3")}) + "\n", encoding="utf-8")
+        storage.move("models", str(mod), FakeJob())                      # model files go; voices stay
+        assert (mod / "models/tts/m.bin").exists() and not (mod / "models/voices").exists()
+        assert (app / "models/voices/v1/meta.json").exists() and not (app / "models/tts").exists()
+        meta = json.loads((app / "models/voices/v1/meta.json").read_text(encoding="utf-8"))
+        assert meta["dir"] == str(app / "models/voices/v1"), meta   # voices stayed: their stored paths too
+        storage.move("library", str(lib), FakeJob())                     # songs, covers, voices together
+        assert (lib / "voices/v1/meta.json").exists() and (lib / "uploads/s.mp3").exists() and not (app / "output").exists()
+        hist = json.loads((lib / "output/history.jsonl").read_text(encoding="utf-8"))
+        assert hist["output"] == str(lib / "output" / "c.mp3"), hist
+        assert json.loads((lib / "voices/v1/meta.json").read_text(encoding="utf-8"))["dir"] == str(lib / "voices" / "v1")
+        storage.move("library", str(t / "lib3"), FakeJob())              # and on again
+        assert (t / "lib3/voices/v1/meta.json").exists() and not (lib / "voices").exists()
+        assert not storage.check("library", str(t / "lib3" / "output"))["ok"]
+        for k in ("models_dir", "uploads_dir", "output_dir", "voices_dir", "cache_dir"):
+            assert storage._inside(config.path(k), t), (k, config.path(k))
+        text = config.CONFIG_FILE.read_text(encoding="utf-8")
+        assert "models2" in text and "lib3" in text and "[cadence]" in text, text
+    return "guards hold; models, then library (paths rewritten), then library again"
 
 
 @check("api: status ready")
@@ -412,7 +534,24 @@ def _cover_target():
 @check("cover: end to end from cached stems (then deleted)")
 def a_cover():
     song, voice = _cover_target()
-    assert song and voice, "need a song with stems and a voice"
+    added = None
+    if not song and (ROOT / "test" / "smoke.wav").exists():   # an empty library: bring the test song, remove it after
+        data = (ROOT / "test" / "smoke.wav").read_bytes()
+        req = urllib.request.Request(BASE + "/api/upload", data=data, method="POST",
+                                     headers={"X-Filename": "smoke-test-song.wav", "Origin": BASE,
+                                              "Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            added = song = json.loads(r.read())
+        song.setdefault("title", "smoke-test-song")
+    try:
+        return _cover_with(song, voice)
+    finally:
+        if added:
+            api(f"/api/library/songs/{added['id']}", method="DELETE")   # the song and its stems
+
+
+def _cover_with(song, voice):
+    assert song and voice, "need a song (or test/smoke.wav) and a voice"
     before = {c["id"] for c in api("/api/library/covers")}
     job = api("/api/covers", {"song": song["id"], "voice": voice,
                               "options": {"fit": True, "karaoke": True, "dereverb": True, "quality": "high"}})["job"]
@@ -645,7 +784,7 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta):
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")

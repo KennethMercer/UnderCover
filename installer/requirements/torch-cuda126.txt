@@ -1,6 +1,9 @@
 # Older NVIDIA (GTX 900/10 series, compute capability 5.0-7.4). The CUDA 12.8 builds dropped these cards.
 # Installed from https://download.pytorch.org/whl/cu126 (setup.ps1 passes it as the only index).
 # Same torch version as the ROCm build so the app code sees the same API. UNTESTED on real hardware.
-torch==2.9.1+cu126
-torchaudio==2.9.1+cu126
-torchvision==0.24.1+cu126
+torch==2.9.1+cu126 \
+    --hash=sha256:f2f1c68c7957ed8b6b56fc450482eb3fa53947fb74838b03834a1760451cf60f
+torchaudio==2.9.1+cu126 \
+    --hash=sha256:7ba65b9bdf3fb124689c8f9050ff2cd0697f8083dd5e64b47a75e7b797418448
+torchvision==0.24.1+cu126 \
+    --hash=sha256:54c1902bad62bd113f66dd3cc0368aa4d0005837100d3ab9dc823aebf945ead0
