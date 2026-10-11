@@ -401,9 +401,9 @@ def a_speech():
     voices = api("/api/speak/voices")
     v = next((x for x in voices if x["trained"] and x["kind"] == "speech" and not x["undertrained"]), voices[0] if voices else None)
     assert v, "no voices"
-    plan = api(f"/api/speak/plan?voice={v['name']}")
+    plan = api(f"/api/speak/plan?voice={v['name']}&cadence=0")   # the quick Reader path (cadence: a_cadence)
     assert plan["reader"] and plan["target_hz"], f"no speaking pitch / Reader for {v['name']}"
-    r = api("/api/speak", {"text": "This is a smoke test. One, two, three.", "voice": v["name"]})
+    r = api("/api/speak", {"text": "This is a smoke test. One, two, three.", "voice": v["name"], "cadence": False})
     req = urllib.request.Request(BASE + f"/api/jobs/{r['job']}/events")
     parts, final = [], None
     with urllib.request.urlopen(req, timeout=300) as resp:
