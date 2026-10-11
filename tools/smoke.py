@@ -658,6 +658,31 @@ def u_stable_ids():
         assert [h["id"] for h in same] == [again["id"]], "the deleted line came back to life"
         H.update(recs[0]["id"], title="Renamed")
         assert [h["title"] for h in pipeline.history() if h["id"] == recs[0]["id"]] == ["Renamed"]
+        # a power cut can leave a half-written last line: the next cover must not be swallowed by it
+        with open(path("output_dir") / "history.jsonl", "a", encoding="utf-8") as f:
+            f.write('{"half": "writt')
+        late = H.record(_fake_cover(9))
+        assert late["id"] in [h["id"] for h in pipeline.history()], "a cover recorded after a half-written line was lost"
+        # an older server may still append a line without an id: it gets one at the next read
+        with open(path("output_dir") / "history.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(_fake_cover(10)) + "\n")
+        assert all(H.ID.fullmatch(h["id"]) for h in pipeline.history()) and len(pipeline.history()) == 8
+        # a roll-off that can only remove part of a cover (a locked leftover) still reports it and never hides the rest
+        from undercover.core import storage
+        a, b = _fake_cover(11), _fake_cover(12)
+        real_retry = storage.fsutil.retry
+        def locked(fn, *args, **kw):
+            if "__v.flac" in str((fn.__defaults__ or [""])[0]):   # remove_files passes each path as the lambda's default
+                raise PermissionError("locked")
+            return real_retry(fn, *args, **kw)
+        storage.fsutil.retry = locked
+        try:
+            storage.remove_files([Path(b["output"]), Path(b["converted_vocal"])], [path("output_dir"), path("cache_dir") / "converted"])
+            raise AssertionError("a locked file should be reported")
+        except PermissionError:
+            assert not Path(b["output"]).exists() and Path(b["converted_vocal"]).exists(), "the other file should still have been removed"
+        finally:
+            storage.fsutil.retry = real_retry
     return "ids stable across a delete; no revival"
 
 
