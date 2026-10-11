@@ -226,6 +226,23 @@ def a_status():
     return s.get("gpu")
 
 
+@check("page: the suite shell serves, with every module tab and its page")
+def a_page():
+    import re
+    html = api("/").decode("utf-8")
+    assert "<title>UnderCover</title>" in html, "browser title isn't UnderCover"
+    views = {"frontman": "covers", "mouthpiece": "train", "speakeasy": "speakeasy", "safehouse": "library"}
+    for mod, view in views.items():
+        assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
+        assert f'id="view-{view}"' in html, f"no page for {mod}"
+    for part in ('id="suite-logo"', 'id="chip-queue"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"'):
+        assert part in html, f"missing {part}"
+    files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+    for f in files:
+        assert len(api(f)) > 100, f"{f} is empty"
+    return f"4 modules, {len(files)} static files"
+
+
 @check("api: voices, history, config")
 def a_lists():
     v = api("/api/voices")
@@ -356,7 +373,7 @@ def main():
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")
-        for fn in (a_status, a_lists, a_library, a_train, a_work):
+        for fn in (a_status, a_page, a_lists, a_library, a_train, a_work):
             fn()
         if not a.no_cover:
             a_cover()
