@@ -30,10 +30,11 @@ PARTLY_PAUSABLE: set = set()   # job kinds that keep running when held, but set 
 CONTROL_LOOKUPS: list = []    # job -> trainer Control (for jobs that don't carry their own job.control)
 
 
-def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda item: item["target"]):
+def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda item: item["target"], follows=None):
     """A kind of queue item. run(job, item) -> result dict; estimate(item) -> minutes per step and "total";
-    target(text) -> the normalised target (raise ModelError if it's not valid); label(item) -> what the job shows."""
-    KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label}
+    target(text) -> the normalised target (raise ModelError if it's not valid); label(item) -> what the job shows;
+    follows(item, other) -> True when item must run after other (a voice's cadence after that voice's training)."""
+    KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label, "follows": follows}
 
 
 def register_resume(kind: str, start):
@@ -157,6 +158,19 @@ def resume_all() -> dict:
     return out
 
 
+def forget_paused() -> dict:
+    """Dismiss: drop the paused work Resume would start again (its files stay: a training project keeps its resume
+    point and can be continued from DoubleAgent). The hold is lifted unless queue items are still paused."""
+    with _LOCK:
+        st = _state()
+        _log(f"forget {[x.get('label') for x in st['resume']]}")
+        st["resume"] = []
+        if not any(i.get("state") == "paused" for i in st["queue"]):
+            st["held"] = False
+        _save()
+    return status()
+
+
 def _start(spec: dict):
     k = spec["kind"]
     if k in RESUMERS:
@@ -170,18 +184,36 @@ def held() -> bool:
 
 # ---------------------------------------------------------------- the overnight queue
 
-def add(kind: str, target: str) -> dict:
+def add(kind: str, target: str, now: bool = False) -> dict:
+    """Add a queue item. now=True: run it as soon as the GPU is free, without starting the rest of the queue
+    ("Start now" in SpeakEasy / DoubleAgent; it still waits for a training that's running)."""
     target = (target or "").strip()
     if kind not in KINDS:
         raise ModelError("Pick Improve a voice or Train a new voice.")
     if not target:
         raise ModelError("Type a voice or a person's name.")
     target = KINDS[kind]["target"](target)   # e.g. a voice that must exist (friendly error if it doesn't)
+    with _LOCK:
+        q = _state()["queue"]
+        if any(i["kind"] == kind and i["target"].lower() == target.lower() and i["state"] in ("queued", "paused", "running")
+               for i in q):
+            raise ModelError(f"That's already in the queue ({KINDS[kind]['label']({'kind': kind, 'target': target})}).")
     item = {"id": uuid.uuid4().hex[:8], "kind": kind, "target": target, "state": "queued",
             "added": time.strftime("%Y-%m-%d %H:%M")}
+    if now:
+        item["now"] = True
     item["estimate"] = estimate(item)
     with _LOCK:
-        _state()["queue"].append(item)
+        q = _state()["queue"]
+        active = [k for k, i in enumerate(q) if i["state"] in ("queued", "paused", "running")]
+        follows = KINDS[kind].get("follows")
+        after = [k for k in active if follows and follows(item, q[k])]
+        if after:   # e.g. a voice's cadence goes right after that voice's training
+            q.insert(after[-1] + 1, item)
+        elif now:   # first among the waiting ones
+            q.insert(next((k for k in active if q[k]["state"] == "queued" and not q[k].get("now")), len(q)), item)
+        else:
+            q.append(item)
         _save()
     return status()
 
@@ -315,7 +347,12 @@ def _loop():
             if want_awake != awake:
                 _keep_awake(want_awake)
                 awake = want_awake
-            if not st["held"] and st["armed"] and _gpu_idle() and not jobs.STATUS.get("gpu_problem"):
+            urgent = next((i for i in st["queue"] if i["state"] == "queued" and i.get("now")), None)
+            if urgent is not None and not st["held"] and _gpu_idle() and not jobs.STATUS.get("gpu_problem"):
+                if not any(i["state"] == "queued" and not i.get("now") and _before(i, urgent, st["queue"])
+                           for i in st["queue"] if KINDS.get(urgent["kind"], {}).get("follows")):
+                    _run_item(urgent)   # "Start now": runs without starting the rest of the queue
+            elif not st["held"] and st["armed"] and _gpu_idle() and not jobs.STATUS.get("gpu_problem"):
                 now = datetime.now()
                 nxt = next((i for i in st["queue"] if i["state"] == "queued" and i.get("retry_after", 0) <= time.time()), None)
                 waiting = any(i["state"] == "queued" for i in st["queue"])
@@ -334,6 +371,12 @@ def _loop():
         except Exception as e:   # noqa: BLE001 - the loop must survive anything
             _log(f"loop error: {type(e).__name__}: {e}")
         time.sleep(10)
+
+
+def _before(i: dict, item: dict, q: list) -> bool:
+    """i must run before item (item follows it, e.g. a cadence after its voice's training)."""
+    f = KINDS.get(item["kind"], {}).get("follows")
+    return bool(f and f(item, i) and q.index(i) < q.index(item))
 
 
 def _keep_awake(on: bool):

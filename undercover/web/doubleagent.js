@@ -1,6 +1,6 @@
 "use strict";
-// DoubleAgent's "Your voices" cards: each voice with its status (voice ✓ · cadence –, cadence from phase 4) and
-// Listen / Use in FrontMan / Improve. Fed by /api/work/candidates (work.js loadCandidates calls renderVoiceCards)
+// DoubleAgent's "Your voices" cards: each voice with its status (voice ✓ · cadence ✓ / – / queued) and
+// Listen / Use in FrontMan / Improve / Train cadence. Fed by /api/work/candidates (work.js loadCandidates calls renderVoiceCards)
 // plus the voice samples from SafeHouse's /api/library/voices. Uses helpers from app.js ($, $$, esc, api, showError,
 // loadVoices, VOL), work.js (W, renderQueue, loadCandidates, fmtMin) and shell.js (showTab).
 
@@ -26,13 +26,18 @@ function renderVoiceCards(cands) {
                             : c.can ? `downloaded · ${esc(c.person || "")}` : "downloaded";
     const improve = !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}">Train my own</button>`
       : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy ? "disabled" : ""}>${busy ? "Improving" : c.queued ? "Improve (queued)" : "Improve"}</button>`;
+    const cd = c.cadence || {};
+    const cadSt = cd.has ? `<span class="st ok">cadence ✓</span>` : cd.queue === "running" ? `<span class="st now">cadence: making it</span>`
+      : cd.queue ? `<span class="st now">cadence queued</span>` : `<span class="st">cadence –</span>`;
+    const cadDeep = cd.has ? `<small class="meta" data-deep>cadence: ${esc(cd.engine || "")} · ${cd.data_minutes ?? "?"} min · likeness ${cd.scores?.likeness ?? "?"} · gap ${cd.scores?.cadence_gap ?? "?"}</small>` : "";
+    const cadBtn = cd.can && !cd.queue ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}">${cd.has ? "Retrain cadence" : c.trained ? "Train cadence" : "Find clips + cadence"}</button>` : "";
     return `<div class="vc ${busy ? "busy" : ""}">
       <div class="vc-top"><div class="avatar" aria-hidden="true">${esc(c.voice[0].toUpperCase())}</div><div><b>${esc(c.voice)}</b><small>${esc(facts)}</small></div></div>
-      <div class="vc-status"><span class="st ok">voice ✓</span><span class="st later" title="Cadence arrives in phase 4">cadence –</span><span class="soon">phase 4</span>
-        ${busy ? `<span class="st now">improving now</span>` : c.queued ? `<span class="st now">in the queue</span>` : ""}</div>
+      <div class="vc-status"><span class="st ok">voice ✓</span>${cadSt}
+        ${busy ? `<span class="st now">improving now</span>` : c.queued ? `<span class="st now">in the queue</span>` : ""}</div>${cadDeep}
       <div class="vc-acts">${DA.samples[c.voice] ? `<button class="mini" type="button" data-listen="${esc(c.voice)}" aria-pressed="${DA.playing === c.voice}">${DA.playing === c.voice ? "Stop" : "Listen"}</button>` : ""}
         <button class="mini" type="button" data-use="${esc(c.voice)}">Use in FrontMan</button>${improve}
-        <button class="mini" type="button" disabled title="Phase 4">Train cadence</button></div></div>`;
+        ${cadBtn}</div></div>`;
   }).join("");
   $("#da-more").hidden = list.length <= 6;
   $("#da-more").textContent = DA.all ? "Show fewer" : `Show all ${list.length} voices`;
@@ -43,6 +48,11 @@ function renderVoiceCards(cands) {
     b.disabled = true;
     try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); renderQueue(); loadCandidates(); }
     catch (e) { b.disabled = false; showError(e.message, `Couldn't add ${c.voice}`); }
+  });
+  $$("[data-cad]", box).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Starting…";
+    try { W.last = await api("/api/work/add", { json: { kind: "cadence", target: b.dataset.cad, now: true } }); renderQueue(); loadCandidates(); refreshJobs(true); }
+    catch (e) { b.disabled = false; showError(e.message, "Couldn't start the cadence"); }
   });
   $$("[data-own]", box).forEach(b => b.onclick = () => {
     $(`#q-mode button[data-v="new"]`).click();

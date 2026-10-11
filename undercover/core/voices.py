@@ -498,9 +498,20 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         pth, meta = max(good, key=lambda g: g[0].stat().st_size)
         index = _pick_index(indexes)
 
+        # a voice's cadence (tts/ + extra.tts, made from the person's clips) outlives a new model of the same voice
+        keep_tts, old_tts = None, None
         if target.exists():
+            if (target / "tts").is_dir():
+                keep_tts = work / "_kept_tts"
+                shutil.move(str(target / "tts"), keep_tts)
+                try:
+                    old_tts = json.loads((target / "meta.json").read_text(encoding="utf-8")).get("extra", {}).get("tts")
+                except (OSError, ValueError):
+                    old_tts = None
             shutil.rmtree(target)
         target.mkdir(parents=True)
+        if keep_tts is not None:
+            shutil.move(str(keep_tts), target / "tts")
         shutil.move(str(pth), target / "model.pth")
         if index:
             shutil.move(str(index), target / "model.index")
@@ -513,7 +524,8 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
                       index=(target / "model.index") if index else None,
                       version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
                       installed=time.strftime("%Y-%m-%d %H:%M"),
-                      extra={"original_pth": pth.name, "original_index": index.name if index else None})
+                      extra={"original_pth": pth.name, "original_index": index.name if index else None,
+                             **({"tts": old_tts} if keep_tts is not None and old_tts else {})})
         from . import fsutil
         fsutil.write_text(target / "meta.json", json.dumps(voice.to_json(), indent=2))
         return voice

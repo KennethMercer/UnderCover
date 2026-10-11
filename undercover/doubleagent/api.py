@@ -16,6 +16,7 @@ POST   /api/train/projects/<p>/phrases          {ids: [...], choice: true|false|
 POST   /api/train/projects/<p>/train            {voice_name, length, sr, fresh} -> job
 POST   /api/train/projects/<p>/pause | /stop
 POST   /api/train/projects/<p>/export           {epoch?, name?, overwrite?} -> job
+POST   /api/train/projects/<p>/transcribe       job: transcripts of the kept speech clips (phase 4; resumable)
 """
 import json
 import re
@@ -143,7 +144,7 @@ def _route(h, method, p):
     b = {} if action == "upload" else h._body()
     fn = {"search": _search, "sources": _sources, "upload": _upload, "prepare": _prepare, "reference": _reference,
           "phrases": _phrases, "train": _train, "pause": _pause, "stop": _stop, "export": _export,
-          "auto": _auto}.get(action)
+          "auto": _auto, "transcribe": lambda h, proj, b: h._json({"job": start_transcribe(proj.name).id})}.get(action)
     if fn is None:
         raise LookupError("Not found")
     return fn(h, proj, b)
@@ -470,8 +471,34 @@ def _export(h, proj, b):
     h._json({"job": job.id})
 
 
+def start_transcribe(name: str):
+    """Transcripts of a project's kept speech (cadence.py): GPU job, pausable; resuming does the clips left."""
+    from . import cadence
+    proj = P.Project.load(name)
+    if _busy(proj.name):
+        raise ModelError("This project is already busy.")
+    job = jobs.Job("train-transcribe", title=f"Transcribing {proj.person or proj.name}")
+    jobs.JOBS[job.id] = job
+    ACTIVE[proj.name] = {"job": job, "control": None, "kind": "transcribe"}
+
+    def run(job):
+        def check():
+            if job.cancel:
+                raise jobs.Cancelled()
+            if job.pausing:
+                raise jobs.Paused()
+        r = cadence.transcribe(proj.name, lambda f, m, **kw: job.push(stage="transcribe", fraction=round(f, 3), label=m, **kw), check)
+        job.finish("done", message=f"{r['clips']} of {r['of']} clips transcribed ({r['minutes']} min of speech).",
+                   project=proj.name, result=r)
+
+    job.resume_spec = {"kind": "transcribe", "project": proj.name, "label": f"Transcribing {proj.person or proj.name}"}
+    jobs.GPU_QUEUE.put((job, run))
+    return job
+
+
 # Pause / Resume (core.worklist): these jobs are voice work; paused ones start again from their resume spec
-worklist.register_pausable("train", "train-prepare", "train-auto")
+worklist.register_pausable("train", "train-prepare", "train-auto", "train-transcribe")
+worklist.register_resume("transcribe", lambda spec: start_transcribe(spec["project"]))
 worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]))
 worklist.register_resume("train", lambda spec: start_train(spec["project"], {}))
 worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}))
