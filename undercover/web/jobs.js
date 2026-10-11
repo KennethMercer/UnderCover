@@ -16,8 +16,8 @@ const JOB_OWNER = { cover: "frontman", presep: "frontman", auto: "frontman", ins
 const jobOwner = kind => JOB_OWNER[kind] || "doubleagent";   // train, train-*, night (the overnight queue)
 const JOB_KIND = { cover: "cover", presep: "separating", auto: "one-shot", install: "voice install", speech: "speech",
                    train: "training", "train-prepare": "preparing clips", "train-auto": "new voice", "train-export": "adding a voice",
-                   night: "overnight queue" };
-const PAUSABLE_KINDS = new Set(["train", "train-prepare", "train-auto", "night", "auto"]);
+                   "train-transcribe": "transcripts", night: "voice work" };
+const PAUSABLE_KINDS = new Set(["train", "train-prepare", "train-auto", "train-transcribe", "night", "auto"]);
 const isRunning = j => j && !j.final && !["done", "error", "cancelled", "paused", "lost"].includes(j.state);
 
 // ------------------------------------------------------------ the job list (/api/jobs)
@@ -33,10 +33,20 @@ function refreshJobs(force) {
       if (ch) ch.snap = j;
     }
     for (const ch of Object.values(JF.ch)) jfCheckQuiet(ch);
+    jfAnnounce(list);
     jfNotify();
     return list;
   }).catch(() => JF.list).finally(() => { jfLoading = null; });
   return jfLoading;
+}
+// "uc:jobdone" (detail: the job) once for every job that finishes while this page is open, whoever started it (the page,
+// another tab, the queue, the API): voice lists, cards and projects refresh on it
+const JF_RUN = new Set();
+function jfAnnounce(list) {
+  for (const j of list) {
+    if (isRunning(j)) JF_RUN.add(j.id);
+    else if (JF_RUN.delete(j.id)) document.dispatchEvent(new CustomEvent("uc:jobdone", { detail: j }));
+  }
 }
 // fn(list) after every change (new list, or a live event moved a job on)
 // (not called at once: scripts subscribe while the page loads, before the ones they draw with are there)
@@ -135,7 +145,7 @@ addEventListener("focus", () => refreshJobs(true));
 
 // ------------------------------------------------------------ the tab title: the running job, then "✓ … done"
 const DONE_WORDS = { cover: "Cover ready", auto: "Cover ready", speech: "Speech ready", install: "Voice installed", train: "Training done",
-                     "train-auto": "Voice ready", "train-prepare": "Clips ready", "train-export": "Voice added", night: "Queue job done" };
+                     "train-auto": "Voice ready", "train-prepare": "Clips ready", "train-export": "Voice added", "train-transcribe": "Transcripts ready", night: "Voice work done" };
 function jfTitle() {
   const run = runningJobs();
   const main = run.find(j => j.kind === "cover" || j.kind === "auto" || j.kind === "speech") || run[0];

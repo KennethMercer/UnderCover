@@ -149,9 +149,11 @@ def candidates() -> list:
             c.update(person=person, kind="new", target=person, can=True,
                      note=f"downloaded voice: trains UnderCover's own {person} voice to compare with it")
         else:
-            out.append({**c, "can": False, "note": "downloaded voice: UnderCover doesn't know whose voice it is"})
+            out.append({**c, "can": False, "note": "downloaded voice: UnderCover doesn't know whose voice it is",
+                        "cadence": service.cadence_status(v)})
             continue
         c["estimate"] = estimate(item)["total"]
+        c["cadence"] = service.cadence_status(v)
         c["queued"] = (item["kind"], item["target"].lower()) in queued
         out.append(c)
     out.sort(key=lambda c: (not c["can"], not c["trained"], c["voice"]))

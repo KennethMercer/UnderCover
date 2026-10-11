@@ -42,6 +42,12 @@ def free():
             MODELS._conv.voices.clear()   # loaded voices (+ their indexes) are re-loaded on demand
     except Exception:
         pass
+    cad = sys.modules.get(__package__ + ".cadence.client")
+    if cad is not None:   # the cadence worker (a separate process) holds 4-8 GB while it's loaded
+        try:
+            cad.WORKER.stop("freeing GPU memory")
+        except Exception:
+            pass
     gc.collect()
     torch = sys.modules.get("torch")
     if torch is not None:

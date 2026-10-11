@@ -219,6 +219,7 @@ def run_job(job: "Job", fn):
             if type(e).__name__ == "Paused":   # Pause at the top of the page
                 if not job.finished:
                     job.finish("paused", message="Paused. Resume (top of the page) continues where it stopped.")
+                worklist.remember(job)   # its resume point (before 2026-10-11 this returned first: Resume did nothing)
                 return
             # Out of GPU memory: free what UnderCover holds (cached voices, allocator cache) and try once more.
             # Separations are cached, so the retry picks up where it was; mostly hits smaller cards or a game open.

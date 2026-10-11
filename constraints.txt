@@ -8,3 +8,44 @@ torchvision==0.24.1+rocm7.2.1
 
 # librosa 1.0 dropped audioread; audio-separator 0.47 still imports it directly.
 librosa<1
+
+# Cadence engine (phase 4, 2026-10-11): Chatterbox 0.1.7 + Whisper in the app venv, installed --no-deps (their metadata
+# pins torch 2.6 / numpy < 2, which would replace ROCm torch). They run in a worker process (undercover/core/cadence/).
+# s3tokenizer's `import onnx` is served by the venv's onnx-weekly. Weights: models/tts/chatterbox (HF revision
+# 5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18, core/cadence/engines.py) and models/whisper/large-v3-turbo.pt.
+# `pip check` is EXPECTED to report exactly these 9 lines (harmless; for the future Doctor):
+#   chatterbox-tts 0.1.7 requires gradio / pykakasi / spacy-pkuseg, which is not installed.   (UI + Japanese/Chinese only)
+#   s3tokenizer 0.3.0 requires onnx (onnx-weekly provides it) / pre-commit (a dev tool), which is not installed.
+#   chatterbox-tts 0.1.7 has requirement numpy<2.0.0 / safetensors==0.5.3 / torch==2.6.0 / torchaudio==2.6.0 (newer ones work)
+transformers==5.2.0
+tokenizers==0.22.2
+huggingface-hub==1.33.0
+hf-xet==1.7.0
+safetensors==0.8.0
+diffusers==0.29.0
+chatterbox-tts==0.1.7
+openai-whisper==20250625
+conformer==0.3.2
+s3tokenizer==0.3.0
+resemble-perth==1.0.1
+pyloudnorm==0.2.0
+omegaconf==2.3.1
+antlr4-python3-runtime==4.9.3
+tiktoken==0.14.0
+more-itertools==11.1.0
+regex==2026.9.29
+importlib-metadata==9.0.1
+zipp==4.1.1
+httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+anyio==4.15.1
+typer-slim==0.24.0
+typer==0.27.3
+click==8.5.0
+rich==13.9.4
+markdown-it-py==4.2.0
+mdurl==0.1.2
+pygments==2.21.0
+shellingham==1.5.4
+annotated-doc==0.0.5

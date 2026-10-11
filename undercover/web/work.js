@@ -47,6 +47,7 @@ W.work = null; W.watch = {};
 function renderWorkBar(w) { W.work = w; renderBar(); }   // called from app.js pollStatus with /api/status's "work"
 function renderBar() {
   const bar = $("#workbar"), w = W.work || {};
+  if (typeof queueCount !== "function") return;   // shell.js (loaded last) isn't there yet: the job feed answered early
   queueCount(W.last ? W.last.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length
                     : (w.queued || 0) + (w.armed ? (w.running || []).length : 0));
   const run = runningJobs();
@@ -82,6 +83,7 @@ function renderBar() {
   const pausable = run.some(j => PAUSABLE_KINDS.has(j.kind)) || (w.running || []).length > 0;
   $("#wb-pause").hidden = state === "held" || !pausable;
   $("#wb-resume").hidden = !w.held;
+  $("#wb-forget").hidden = !w.held || !(w.resume || []).length;
   $("#wb-main").dataset.goto = main ? owner : "doubleagent";
   $("#wb-main").title = main ? `Open ${MOD_NAME[owner]}` : "";
   $("#chip-train").hidden = true;   // the bar says it all
@@ -127,6 +129,14 @@ $("#wb-pause").onclick = async () => {
   $("#wb-pause").disabled = false;
   if (W.open) loadQueue();
 };
+$("#wb-forget").onclick = async () => {
+  const b = $("#wb-forget");
+  if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Forget it?"; setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Dismiss"; }, 4000); return; }
+  b.classList.remove("confirm"); b.textContent = "Dismiss";
+  try { const r = await api("/api/work/forget", { json: {} }); renderWorkBar({ ...r, queued: r.queue.filter(i => ["queued", "paused"].includes(i.state)).length }); }
+  catch (e) { showError(e.message, "Couldn't dismiss it"); }
+  if (W.open) loadQueue();
+};
 $("#wb-resume").onclick = async () => {
   $("#wb-resume").disabled = true;
   try {
@@ -143,8 +153,9 @@ async function loadQueue() {
   try { W.last = await api("/api/work"); } catch (e) { return; }
   renderQueue();
 }
-const jobWhat = i => i.kind === "improve" ? `Improve ${esc(i.target)}` : `Train a new voice: ${esc(i.target)}`;
-const jobKind = i => i.kind === "improve" ? "voice · improve" : i.kind === "new" ? "voice · new" : esc(i.kind);
+const jobWhat = i => ({ improve: `Improve ${esc(i.target)}`, cadence: `Cadence for ${esc(i.target)}`,
+                        newcad: `New voice with cadence: ${esc(i.target)}` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
+const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence" })[i.kind] || esc(i.kind);
 // the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
 function renderDrawer() {
   renderRunning($("#qd-run"), { heading: "Running now" });
@@ -190,9 +201,12 @@ function renderQueue() {
     const what = jobWhat(i);
     const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
     const chips = done ? `<span class="qchip ${i.state === "done" ? "ok" : "bad"}">${esc(i.state)} · ${fmtMin(i.minutes)}</span>`
-      : [["prepare", "prepare"], ["train", "train"], ["compare", i.kind === "improve" ? "compare" : "check"]]
-          .map(([k, l]) => `<span class="qchip">${l} ~${fmtMin(e[k])}</span>`).join("");
-    const note = done ? esc(i.result?.note || "") : run ? esc(live.message || "running") : i.state === "paused" ? "paused · Resume (top of the page) continues it" : esc(i.note || "");
+      : (i.kind === "cadence" ? [["clips", "find clips"], ["transcribe", "transcribe"], ["measure", "measure"], ["test", "test"]]
+         : i.kind === "newcad" ? [["prepare", "prepare"], ["train", "train"], ["transcribe", "transcribe"], ["test", "cadence"]]
+         : [["prepare", "prepare"], ["train", "train"], ["compare", i.kind === "improve" ? "compare" : "check"]])
+          .filter(([k]) => e[k]).map(([k, l]) => `<span class="qchip">${l} ~${fmtMin(e[k])}</span>`).join("");
+    const note = done ? esc(i.result?.note || "") : run ? esc(live.message || "running") : i.state === "paused" ? "paused · Resume (top of the page) continues it"
+      : i.now ? "starts as soon as the GPU is free" : esc(i.note || "");
     return `<div class="qjob ${run ? "running" : ""} ${done ? "done" : ""}" draggable="${!run && !done}" data-id="${i.id}">
       <span class="grip" aria-hidden="true">${run || done ? "" : "⋮⋮"}</span>
       <div><b>${what}</b>${note ? `<p class="meta">${note}</p>` : ""}<div class="qchips">${chips}</div>
@@ -214,8 +228,13 @@ function renderReport(r) {
   $("#q-report-list").innerHTML = r.results.map(x => {
     const score = x.before != null || x.after != null
       ? `${x.before != null ? x.before.toFixed(2) + " → " : ""}${x.after != null ? x.after.toFixed(2) : "?"}${x.replaced ? " ✓ replaced" : x.kind === "new" ? " ✓ new" : x.state === "done" ? " · kept the old" : ""}` : x.state;
-    return `<div class="qres"><div><b>${esc(x.voice || x.target)}</b> ${x.kind === "improve" ? (x.replaced ? "improved" : "tried") : "new voice"}<p class="meta">${esc(x.note || "")}</p></div>
-      <div class="mono ${x.replaced || (x.kind === "new" && x.state === "done") ? "up" : "same"}">${esc(score)}</div></div>`;
+    const what = x.kind === "improve" ? (x.replaced ? "improved" : "tried") : x.kind === "cadence" ? (x.replaced ? "cadence" : "cadence tried")
+      : x.kind === "newcad" ? "new voice + cadence" : "new voice";
+    const cad = x.kind === "cadence" ? x : x.cadence;   // cadence numbers: Deep Cover only
+    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: likeness ${cad.likeness} · gap ${cad.cadence_gap} · WER ${cad.wer} · from ${cad.data_minutes} min</p>` : "";
+    const up = x.replaced || (["new", "newcad"].includes(x.kind) && x.state === "done");
+    return `<div class="qres"><div><b>${esc(x.voice || x.target)}</b> ${what}<p class="meta">${esc(x.note || "")}</p>${deep}</div>
+      <div class="mono ${up ? "up" : "same"}" ${x.kind === "cadence" ? "data-deep" : ""}>${esc(score)}</div></div>`;
   }).join("");
 }
 function dragSort() {
@@ -242,6 +261,7 @@ $("#q-mode").addEventListener("click", e => {
   $$("#q-mode button").forEach(x => x.setAttribute("aria-pressed", x === b));
   $("#q-improve").hidden = b.dataset.v !== "improve";
   $("#q-new").hidden = b.dataset.v !== "new";
+  $("#q-cadence").hidden = b.dataset.v !== "cadence";
   if (b.dataset.v === "new") $("#q-name").focus();
 });
 async function loadCandidates() {
@@ -261,8 +281,34 @@ async function loadCandidates() {
   $("#q-other").hidden = !off.length;
   $("#q-cands-off").textContent = off.map(c => c.voice).join(", ") + ". These were downloaded and DoubleAgent doesn't know whose voices they are. To train your own, add the person under New voices.";
   pickSummary();
+  renderCadPicker();
   renderVoiceCards(PICK.cands);   // doubleagent.js
 }
+// "Cadence": voices that can get one (or a better one), ticked and added to tonight's queue
+const CADPICK = new Set();
+function renderCadPicker() {
+  const list = PICK.cands.filter(c => c.cadence?.can);
+  [...CADPICK].forEach(k => { if (!list.some(c => c.voice === k && !c.cadence.queue)) CADPICK.delete(k); });
+  $("#q-cad-cands").innerHTML = list.length ? list.map(c => {
+    const cd = c.cadence;
+    return `<label class="vcard ${cd.queue ? "queued" : ""}"><input type="checkbox" data-cv="${esc(c.voice)}" ${cd.queue ? "disabled" : CADPICK.has(c.voice) ? "checked" : ""}>
+      <span><b>${esc(c.voice)}</b> <span class="qchips">${cd.has ? `<span class="qchip ok">has one</span>` : ""}${cd.queue ? `<span class="qchip ok">in the queue</span>` : ""}</span>
+        <span class="meta">${cd.has ? "tries again; kept only if better" : esc(cd.why || "")}</span></span></label>`;
+  }).join("") : `<p class="meta">No voice can get a cadence yet: it needs a voice trained on speech, or a downloaded voice DoubleAgent has checked.</p>`;
+  $$("#q-cad-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? CADPICK.add(cb.dataset.cv) : CADPICK.delete(cb.dataset.cv); cadSummary(); });
+  cadSummary();
+}
+function cadSummary() {
+  $("#q-cad-sum").textContent = CADPICK.size ? `${CADPICK.size} selected · a few minutes each` : "Tick the voices.";
+  $("#q-cad-add").disabled = !CADPICK.size;
+}
+$("#q-cad-add").onclick = async () => {
+  for (const v of [...CADPICK]) {
+    try { W.last = await api("/api/work/add", { json: { kind: "cadence", target: v } }); }
+    catch (e) { showError(e.message, `Couldn't add ${v}`); }
+  }
+  CADPICK.clear(); renderQueue(); loadCandidates();
+};
 function pickSummary() {
   const chosen = PICK.cands.filter(c => PICK.sel.has(c.voice));
   const mins = chosen.reduce((a, c) => a + (c.estimate || 0), 0);
@@ -312,3 +358,13 @@ function pollStatusSoon() { setTimeout(() => api("/api/status").then(s => render
 // refresh the queue while DoubleAgent's page or the drawer is open
 setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden; if (W.open) loadQueue(); }, 5000);
 document.addEventListener("uc:module", e => { if (e.detail === "doubleagent") { loadQueue(); loadCandidates(); } });
+
+// a job finished somewhere (this page, another tab, the queue, the API): refresh what it may have changed
+document.addEventListener("uc:jobdone", e => {
+  const k = e.detail.kind;
+  if (!["train", "train-auto", "train-export", "train-prepare", "train-transcribe", "night", "install", "auto"].includes(k)) return;
+  if (typeof loadVoices === "function" && ["train", "train-auto", "train-export", "night", "install", "auto"].includes(k)) loadVoices();
+  loadQueue(); loadCandidates();
+  if (typeof seLoad === "function" && !$("#view-speakeasy").hidden) seLoad();
+  if (typeof refresh === "function" && typeof T !== "undefined" && T.proj) refresh();
+});
