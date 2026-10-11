@@ -258,18 +258,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._guard_host() or not self._guard_origin():
             return
-        if train_api.handle(self, "DELETE", urlparse(self.path).path) or safehouse_api.handle(self, "DELETE", urlparse(self.path).path):
-            return
-        m = re.fullmatch(r"/api/voices/([a-z0-9-]+)", urlparse(self.path).path)
-        if not m:
-            return self._error("Not found", 404)
         from ..core.voices import ModelError, remove_voice
+        p = urlparse(self.path).path
         try:
+            if train_api.handle(self, "DELETE", p) or safehouse_api.handle(self, "DELETE", p):
+                return
+            m = re.fullmatch(r"/api/voices/([a-z0-9-]+)", p)
+            if not m:
+                return self._error("Not found", 404)
             remove_voice(m.group(1))
             gpu.forget_voice(m.group(1))
             self._json({"ok": True})
         except ModelError as e:
             self._error(str(e))
+        except LookupError as e:
+            self._error(str(e), 404)
+        except PermissionError:
+            # still open after fsutil.retry's ~3 s: usually a player streaming it, here or in another app
+            self._error("Windows wouldn't let go of that file: something still has it open (a player on this page, or "
+                        "another app such as a media player). Close it, wait a few seconds and try again.", 409)
+        except Exception as e:
+            self._error(friendly(e), 500)
 
     # static + files
     def _static(self, f: Path):
