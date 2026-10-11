@@ -20,6 +20,23 @@ function setDeep(on) {
 setDeep(!!store.get("uc-deep", false));
 $("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
 let deepTyped = "";
+
+// Voice display names (ARCHITECTURE "UI backlog": voice display names). Wherever a voice is listed it shows the person's
+// name, never its folder id; voices trained here carry a small voiceprint (CSS on .vname[data-trained="1"]). Every voice
+// list the page loads goes through noteVoices(); the backend adds `display` and `trained` to the voice APIs, and until
+// it does the id shows and the "-uc" ending marks a voice trained in UnderCover.
+const VOICES = new Map();   // voice id -> { display, trained }
+function noteVoices(list) {
+  for (const v of list || []) {
+    const id = v.name || v.voice; if (!id) continue;
+    const was = VOICES.get(id) || {};
+    VOICES.set(id, { display: v.display ?? was.display, trained: v.trained ?? v.extra?.trained ?? was.trained });
+  }
+}
+const voiceDisplay = id => VOICES.get(id)?.display || id || "";
+const voiceTrained = id => { const t = VOICES.get(id)?.trained; return t != null ? !!t : /-uc$/.test(id || ""); };
+const vname = id => id ? `<span class="vname" data-voice="${esc(id)}"${voiceTrained(id) ? ' data-trained="1" title="Trained in UnderCover"' : ""}>${esc(voiceDisplay(id))}</span>` : "";
+const vinitial = id => esc((voiceDisplay(id).replace(/^[^a-z0-9]+/i, "")[0] || "?").toUpperCase());
 document.addEventListener("keydown", e => {
   if (e.target.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
   deepTyped = (deepTyped + e.key.toLowerCase()).slice(-9);
@@ -273,7 +290,7 @@ function renderSong() {
 
 // ------------------------------------------------------------ voices
 async function loadVoices(select) {
-  S.voices = await api("/api/voices");
+  S.voices = await api("/api/voices"); noteVoices(S.voices);
   S.voicesLoaded = true;
   if (select) S.voice = select;
   if (S.voice && !S.voices.some(v => v.name === S.voice)) S.voice = null;
@@ -288,15 +305,15 @@ function voiceDesc(v) {
 function renderVoices() {
   const q = $("#q").value.trim().toLowerCase();
   const isLink = /^https?:\/\//i.test(q);
-  const list = isLink ? [] : S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q));
+  const list = isLink ? [] : S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q) || voiceDisplay(v.name).toLowerCase().includes(q));
   const box = $("#voices");
   if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
   else box.innerHTML = list.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
-      <span class="avatar">${esc(v.name[0].toUpperCase())}</span>
-      <span class="vtext"><b>${esc(v.name)}</b><small>${esc(voiceDesc(v))}</small></span>
-      <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(v.name)}">Remove</button><span class="tag">${v.index ? "index" : "no index"}</span></span>
+      <span class="avatar">${vinitial(v.name)}</span>
+      <span class="vtext"><b>${vname(v.name)}</b><small>${esc(voiceDesc(v))}</small></span>
+      <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag">${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
     const pick = () => { S.voice = el.dataset.v; store.set("uc-voice", S.voice); renderVoices(); summary(); refreshEstimate(); };
@@ -412,7 +429,7 @@ for (const id of SEGS) $("#" + id).addEventListener("click", e => {
 function renderBackingSelect() {
   const sel = $("#backing_voice");
   if (S.voicesLoaded && S.opts.backing_voice && !S.voices.some(v => v.name === S.opts.backing_voice)) S.opts.backing_voice = "";
-  sel.innerHTML = `<option value="">Original singer</option>` + S.voices.map(v => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("");
+  sel.innerHTML = `<option value="">Original singer</option>` + S.voices.map(v => `<option value="${esc(v.name)}">${esc(voiceDisplay(v.name))}</option>`).join("");
   sel.value = S.opts.backing_voice || "";
   const on = !!S.opts.backing_voice;
   $("#backing-opts").hidden = !on;
@@ -435,12 +452,12 @@ function summary() {
   $("#preview-btn").disabled = !ready || busy;
   if (S.osBusy) { $("#summary").textContent = "Busy with the one-shot cover at the top of the page…"; return; }
   if (!S.song && !S.voice) $("#summary").textContent = "Drop a song and pick a voice.";
-  else if (!S.song) $("#summary").innerHTML = `Voice: <b>${esc(S.voice)}</b>. Now drop a song.`;
+  else if (!S.song) $("#summary").innerHTML = `Voice: <b>${vname(S.voice)}</b>. Now drop a song.`;
   else if (!S.voice) $("#summary").innerHTML = `<b>${esc(S.song.title)}</b>. Now pick a voice.`;
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     const bk = S.opts.backing_voice ? ` with <b>${esc(S.opts.backing_voice)}</b> on backing vocals` : "";
-    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${esc(S.voice)}</b>${bk} <span class="meta">· ${pitchText(o)}${est}</span>`;
+    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta">· ${pitchText(o)}${est}</span>`;
   }
 }
 function pitchText(o) {
@@ -760,7 +777,7 @@ function renderHistory() {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
-    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${esc(h.voice)}${h.backing_voice ? " + " + esc(h.backing_voice) : ""}</strong><small class="mono">${esc(bits)}</small></div>
+    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}</strong><small class="mono">${esc(bits)}</small></div>
       <small class="hdate">${esc((h.created || "").slice(0, 16))}</small>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("");

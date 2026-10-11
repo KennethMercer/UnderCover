@@ -12,7 +12,7 @@ async function loadSamples() {
   renderVoiceCards(DA.cands);
 }
 function renderVoiceCards(cands) {
-  DA.cands = cands || [];
+  DA.cands = cands || []; noteVoices(DA.cands);
   const box = $("#da-cards");
   if (!DA.cands.length) { box.innerHTML = `<p class="meta">No voices yet. Train one below, or install one in FrontMan.</p>`; $("#da-more").hidden = true; return; }
   const running = new Set((W.last?.queue || []).filter(i => i.state === "running").map(i => i.target));
@@ -32,7 +32,7 @@ function renderVoiceCards(cands) {
     const cadDeep = cd.has ? `<small class="meta" data-deep>cadence: ${esc(cd.engine || "")} · ${cd.data_minutes ?? "?"} min · likeness ${cd.scores?.likeness ?? "?"} · gap ${cd.scores?.cadence_gap ?? "?"}</small>` : "";
     const cadBtn = cd.can && !cd.queue ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}">${cd.has ? "Retrain cadence" : c.trained ? "Train cadence" : "Find clips + cadence"}</button>` : "";
     return `<div class="vc ${busy ? "busy" : ""}">
-      <div class="vc-top"><div class="avatar" aria-hidden="true">${esc(c.voice[0].toUpperCase())}</div><div><b>${esc(c.voice)}</b><small>${esc(facts)}</small></div></div>
+      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice)}</b><small>${esc(facts)}</small></div></div>
       <div class="vc-status"><span class="st ok">voice ✓</span>${cadSt}
         ${busy ? `<span class="st now">improving now</span>` : c.queued ? `<span class="st now">in the queue</span>` : ""}</div>${cadDeep}
       <div class="vc-acts">${DA.samples[c.voice] ? `<button class="mini" type="button" data-listen="${esc(c.voice)}" aria-pressed="${DA.playing === c.voice}">${DA.playing === c.voice ? "Stop" : "Listen"}</button>` : ""}

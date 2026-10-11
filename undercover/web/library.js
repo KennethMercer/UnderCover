@@ -66,7 +66,7 @@ async function loadSummary() {
   renderCats();
 }
 async function loadCat(keepSel) {
-  try { L.data[L.cat] = await api(`/api/library/${L.cat}`); }
+  try { L.data[L.cat] = await api(`/api/library/${L.cat}`); if (L.cat === "voices") noteVoices(L.data.voices); }
   catch (e) { return showError(e.message, "Couldn't read the library"); }
   if (!keepSel) { L.sel = null; L.checked.clear(); }
   renderTools(); renderList(); renderDetail();
@@ -143,7 +143,7 @@ function renderList() {
       side = (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono">${gb(x.size + x.stems_size)}</span>`;
     } else if (L.cat === "voices") {
       const [cls, word] = quality(x);
-      title = x.name; sub = [x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
+      title = voiceDisplay(x.name); sub = [x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
       side = (x.cadence ? `<span class="tag ok" title="Has a cadence for SpeakEasy">cadence ✓</span>` : "") + `<span class="tag ${cls}">${word}</span><span class="mono">${gb(x.size)}</span>`;
     } else {
       title = x.person || x.name; const st = x.train || {};
@@ -152,7 +152,7 @@ function renderList() {
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
-      <span style="min-width:0"><b>${esc(title)}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
+      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
   }).join("") : `<div class="lib-empty">Nothing matches “${esc($("#lib-q").value)}”.</div>`);
   $$(".litem", box).forEach(el => {
     const pick = () => { L.sel = el.dataset.id; $$(".litem", box).forEach(x => x.setAttribute("aria-selected", x === el)); renderDetail(); };
@@ -244,7 +244,7 @@ function coverDetail(d, c) {
   const settings = [o.octave ? `voice octave ${o.octave > 0 ? "+" : ""}${o.octave}` : "same octave", o.key ? `key ${o.key > 0 ? "+" : ""}${o.key}` : "key unchanged",
                     c.backing_voice ? `backing by ${c.backing_voice}` : o.backing_voice ? "lead + backing converted" : o.karaoke ? "lead only" : "",
                     o.dereverb ? "de-reverb" : "", o.polish === false ? "" : "polish", o.quality ? `${o.quality} quality` : ""].filter(Boolean).join(" · ");
-  d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3><p class="meta">sung by <b>${esc(c.voice)}</b>${c.backing_voice ? ` + ${esc(c.backing_voice)}` : ""} · ${esc(when(c.created))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3><p class="meta">sung by <b>${vname(c.voice)}</b>${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""} · ${esc(when(c.created))}</p></div></div>
     ${playerHtml()}
     <div class="row"><span class="meta">Listen to</span><span class="lactions" id="lib-src"><button class="btn" data-src="url" aria-pressed="true">Cover</button>${c.original ? `<button class="btn" data-src="original">Original</button>` : ""}${c.vocal ? `<button class="btn" data-src="vocal">Vocal only</button>` : ""}</span></div>
     <dl class="kv"><dt>Settings</dt><dd>${esc(settings)}</dd>
@@ -275,7 +275,7 @@ function coverDetail(d, c) {
 }
 
 function speechDetail(d, x) {
-  d.innerHTML = `<div class="dhead">${art(x.title, true)}<div style="min-width:0"><h3>${esc(x.title)}</h3><p class="meta">spoken by <b>${esc(x.voice)}</b> · ${esc(when(x.created))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(x.title, true)}<div style="min-width:0"><h3>${esc(x.title)}</h3><p class="meta">spoken by <b>${vname(x.voice)}</b> · ${esc(when(x.created))}</p></div></div>
     ${playerHtml()}
     <dl class="kv"><dt>Text</dt><dd class="lib-speech-text">${esc(x.text.length > 1200 ? x.text.slice(0, 1200) + "…" : x.text)}</dd>
       <dt>Settings</dt><dd>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
@@ -332,7 +332,8 @@ function voiceDetail(d, v) {
   const [cls, word] = quality(v);
   const src = v.trained ? `trained in UnderCover${v.project ? ` · <button class="linkbtn" id="lib-open-proj">open project</button>` : ""}`
     : esc(v.source.replace(/^https?:\/\//, "").slice(0, 90));
-  d.innerHTML = `<div class="dhead">${art(v.name, true)}<div style="min-width:0"><h3>${esc(v.name)}</h3><p class="meta">RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"} · added ${esc(when(v.installed))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span></p><p class="meta">RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"} · added ${esc(when(v.installed))}</p></div></div>
+    ${"display" in v ? `<div class="vname-edit"><label class="meta" for="lib-vname-edit">Shown as</label><div class="row"><input id="lib-vname-edit" type="text" autocomplete="off" value="${esc(v.display || "")}" placeholder="${esc(v.name)}"><button class="btn" id="lib-vname-save" type="button">Save</button></div></div>` : ""}
     ${v.sample ? `${playerHtml()}<p class="meta">A held-out phrase rebuilt by this voice</p>` : ""}
     <dl class="kv"><dt>Likeness</dt><dd><span class="tag ${cls}">${word}</span>${v.score != null ? ` <span class="meta">${v.score.toFixed(2)} (pass 0.45)</span>` : ""}</dd>
       <dt>From</dt><dd>${src}</dd>
@@ -348,6 +349,16 @@ function voiceDetail(d, v) {
   const op = $("#lib-open-proj");
   if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("doubleagent"); try { await openProject(v.project); } catch (e) {} };
   $("#lib-make").onclick = async () => { await loadVoices(v.name); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const nameIn = $("#lib-vname-edit");   // the display name (the folder id stays); shown once the voice API carries `display`
+  if (nameIn) {
+    const save = async () => {
+      try { await api(`/api/library/voices/${encodeURIComponent(v.name)}/display`, { json: { display: nameIn.value.trim() } }); }
+      catch (e) { showError(e.message, "Couldn't rename the voice"); return; }
+      afterChange(); loadVoices();
+    };
+    $("#lib-vname-save").onclick = save;
+    nameIn.onkeydown = e => { if (e.key === "Enter") save(); };
+  }
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
   if ($("#lib-del-cad")) confirmClick($("#lib-del-cad"), "Click again: the voice stays", async () => {

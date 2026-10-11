@@ -23,7 +23,7 @@ async function seLoad() {
   SE.loaded = true;
   try {
     const [voices, readers] = await Promise.all([api("/api/speak/voices"), first ? api("/api/speak/readers") : SE.readers]);
-    SE.voices = voices; SE.readers = readers;
+    SE.voices = voices; SE.readers = readers; noteVoices(voices);
   } catch (e) { $("#se-voices").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
   if (first) seReaders();
   if (!SE.voices.some(v => v.name === SE.voice)) SE.voice = (SE.voices.find(v => v.trained && !v.undertrained) || SE.voices[0] || {}).name || null;
@@ -53,7 +53,7 @@ seLoadRecent();   // the WinAmp skin walks speech too, on any page
 // ------------------------------------------------------------ 2 · voice
 function seVoices() {
   const q = $("#se-q").value.trim().toLowerCase();
-  const list = SE.voices.filter(v => !q || `${v.name} ${v.person || ""}`.toLowerCase().includes(q));
+  const list = SE.voices.filter(v => !q || `${v.name} ${v.person || ""} ${voiceDisplay(v.name)}`.toLowerCase().includes(q));
   $("#se-vcount").textContent = `${SE.voices.length} voice${SE.voices.length === 1 ? "" : "s"}`;
   const row = v => {
     const facts = v.trained ? [v.kind, v.likeness != null ? `likeness ${(+v.likeness).toFixed(2)}` : "", v.undertrained ? "under-trained" : ""]
@@ -63,8 +63,8 @@ function seVoices() {
     const act = c.has || c.queue || !c.can ? ""
       : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">${v.trained ? "Train cadence" : "Find clips + cadence"}</button>`;
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-selected="${v.name === SE.voice}">
-      <div class="avatar" aria-hidden="true">${esc(v.name[0].toUpperCase())}</div>
-      <div class="vtext"><b>${esc(v.name)}</b><small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · ${cad}</span></small></div>
+      <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
+      <div class="vtext"><b>${vname(v.name)}</b><small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · ${cad}</span></small></div>
       <div class="se-vact">${act}</div></div>`;
   };
   const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
@@ -177,8 +177,8 @@ function seSummary() {
   const cad = SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
   const when = cad ? `with their cadence · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))} · starts playing after the first few sentences`
     : "starts playing after the first sentence";
-  $("#se-summary").innerHTML = w ? `<b>${esc(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
-    : `<b>${esc(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
+  $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
+    : `<b>${vname(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
 }
 
 // ------------------------------------------------------------ Generate + Now speaking
@@ -339,7 +339,7 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${esc(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
