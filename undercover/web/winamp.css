@@ -1,8 +1,9 @@
-/* Hidden classic-WinAmp skin (html[data-skin="winamp"]). Toggle: triple-click the UnderCover logo, or type
-   "llama" anywhere outside a text box. Everything here is scoped to the skin; the normal look is untouched. */
+/* Hidden classic-WinAmp skin, suite-wide (html[data-skin="winamp"]). Toggle: triple-click the UnderCover wordmark, or
+   type "llama" anywhere outside a text box. Everything here is scoped to the skin; the normal look is untouched. */
 #wa-main, #wa-toast { display: none; }
 
-html[data-skin="winamp"] {
+/* :root[...] so the skin's colours win over :root[data-theme="light"] (same weight, this file loads later) */
+:root[data-skin="winamp"] {
   --bg: #11111a; --panel: #23233a; --panel-2: #000; --line: #4a4a6a;
   --fg: #00e800; --muted: #8ca8a0; --accent: #e8c84c; --accent-ink: #000;
   --wave: #0b5d0b; --wave-on: #00ff00; --wave-alt: #f0f000;
@@ -10,6 +11,7 @@ html[data-skin="winamp"] {
   --display: "Tahoma", "Verdana", sans-serif; --body: "Tahoma", "Verdana", "Segoe UI", sans-serif;
   --mono: "VT323", "Lucida Console", monospace;
   --r: 0px; color-scheme: dark;
+  --c-frontman: #e8c84c; --c-mouthpiece: #e8c84c; --c-speakeasy: #e8c84c; --c-safehouse: #e8c84c;   /* module accents collapse */
   --wa-face: linear-gradient(#5a5a7c, #34344d); --wa-hi: #a0a0c8; --wa-lo: #0a0a12;
   --wa-title: repeating-linear-gradient(180deg, #e8c84c 0 1px, #6e5a18 1px 2px, #23233a 2px 3px);
 }
@@ -20,7 +22,7 @@ html[data-skin="winamp"] body {
 
 /* windows */
 html[data-skin="winamp"] .panel, html[data-skin="winamp"] details.adv, html[data-skin="winamp"] .go,
-html[data-skin="winamp"] .step, html[data-skin="winamp"] .alert {
+html[data-skin="winamp"] .step, html[data-skin="winamp"] .alert, html[data-skin="winamp"] .workbar {
   background: var(--panel); border: 0; border-radius: 0;
   box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo), 0 0 0 1px #000, 3px 3px 0 #000;
 }
@@ -43,12 +45,37 @@ html[data-skin="winamp"] .panel > .hist-head:first-child {
   margin: 0 -16px; padding: 4px 12px;
 }
 html[data-skin="winamp"] h1 { font: bold 20px var(--body); letter-spacing: .25em; color: #e8c84c; text-shadow: 2px 2px 0 #000; text-transform: uppercase; }
-html[data-skin="winamp"] .brand span { display: none; }
+html[data-skin="winamp"] .modhead h1 { font-size: 18px; }
+html[data-skin="winamp"] .modmark { border-radius: 0; background: #000; color: #e8c84c; box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); }
+
+/* the suite's top bar: a WinAmp title strip; the module tabs (also the phone's bottom bar) are bevelled buttons */
+html[data-skin="winamp"] .top { background: linear-gradient(#5a5a7c, #34344d); border-bottom: 2px solid #000; backdrop-filter: none; }
+html[data-skin="winamp"] .suite-name { font: bold 15px var(--body); letter-spacing: .25em; color: #e8c84c; text-shadow: 2px 2px 0 #000; text-transform: uppercase; }
+html[data-skin="winamp"] .logo rect:first-child { fill: #000; }
+html[data-skin="winamp"] .mods { gap: 2px; }
+html[data-skin="winamp"] .mod { border-radius: 0; color: #c8c8e0; background: #34344d; box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo);
+  font: bold 11px var(--body); text-transform: uppercase; letter-spacing: .04em; padding: 6px 9px; gap: 5px; }
+html[data-skin="winamp"] .mod .ico { width: 15px; height: 15px; }
+html[data-skin="winamp"] .mod:hover { background: #3e3e5c; color: #fff; }
+html[data-skin="winamp"] .mod[aria-selected="true"] { color: #00e800; background: #000; box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); }
+html[data-skin="winamp"] .mod[aria-selected="true"]::after { display: none; }
+html[data-skin="winamp"] .mod .badge { border-radius: 0; background: #000; color: #00ff00; font-family: var(--mono); font-size: 13px; }
+@media (max-width: 680px) {
+  html[data-skin="winamp"] .mods { background: linear-gradient(#5a5a7c, #34344d); border-top: 2px solid #000; padding: 3px 3px calc(3px + env(safe-area-inset-bottom)); }
+  html[data-skin="winamp"] .mod { font-size: 9.5px; letter-spacing: 0; padding: 5px 1px; }
+  html[data-skin="winamp"] .mod .ico { width: 18px; height: 18px; }
+}
+html[data-skin="winamp"] .workbar { border-left: 0; }
+html[data-skin="winamp"] .workbar .who { color: #e8c84c; }
+html[data-skin="winamp"] .drawer { background: var(--panel); border: 0; box-shadow: inset 1px 1px 0 var(--wa-hi), -3px 0 0 #000; }
+html[data-skin="winamp"] .qd-job, html[data-skin="winamp"] .vc, html[data-skin="winamp"] .qjob, html[data-skin="winamp"] .vcard {
+  background: #000; border: 0; border-radius: 0; box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); }
+html[data-skin="winamp"] .st, html[data-skin="winamp"] .soon, html[data-skin="winamp"] .qchip { border-radius: 0; font-family: var(--mono); font-size: 14px; }
 
 /* buttons: bevelled 98-era plastic */
 html[data-skin="winamp"] .btn, html[data-skin="winamp"] .convert, html[data-skin="winamp"] .icon-btn,
 html[data-skin="winamp"] .install, html[data-skin="winamp"] .chip, html[data-skin="winamp"] .seg button,
-html[data-skin="winamp"] .ab button, html[data-skin="winamp"] .tabs button, html[data-skin="winamp"] .stoggle,
+html[data-skin="winamp"] .ab button, html[data-skin="winamp"] .stoggle, html[data-skin="winamp"] .mini,
 html[data-skin="winamp"] .ex button, html[data-skin="winamp"] .toggle-btn {
   background: var(--wa-face); color: #e0e0ff; border: 0; border-radius: 0;
   box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo);
@@ -56,13 +83,13 @@ html[data-skin="winamp"] .ex button, html[data-skin="winamp"] .toggle-btn {
 }
 html[data-skin="winamp"] .btn:active, html[data-skin="winamp"] .convert:active, html[data-skin="winamp"] .seg button:active,
 html[data-skin="winamp"] .seg button[aria-pressed="true"], html[data-skin="winamp"] .ab button[aria-pressed="true"],
-html[data-skin="winamp"] .tabs button[aria-selected="true"], html[data-skin="winamp"] .tplay[aria-pressed="true"] {
+html[data-skin="winamp"] .mini[aria-pressed="true"], html[data-skin="winamp"] .tplay[aria-pressed="true"] {
   box-shadow: inset 1px 1px 0 var(--wa-lo), inset -1px -1px 0 var(--wa-hi); color: #00ff00; background: #1a1a28;
 }
 html[data-skin="winamp"] .btn.primary, html[data-skin="winamp"] .convert {
   background: linear-gradient(#8a7a30, #4e4410); color: #fff8c0;
 }
-html[data-skin="winamp"] .tabs, html[data-skin="winamp"] .seg, html[data-skin="winamp"] .ab { background: none; border: 0; border-radius: 0; gap: 2px; padding: 0; }
+html[data-skin="winamp"] .seg, html[data-skin="winamp"] .ab { background: none; border: 0; border-radius: 0; gap: 2px; padding: 0; }
 html[data-skin="winamp"] .linkbtn { color: #e8c84c; text-decoration: underline; font-size: 12px; }
 html[data-skin="winamp"] .play, html[data-skin="winamp"] .tplay {
   border-radius: 0; background: var(--wa-face); color: #00ff00; border: 0;
@@ -129,7 +156,8 @@ html[data-skin="winamp"] #wa-main {
 @media (prefers-reduced-motion: reduce) { .wa-marquee span { animation: none; padding-left: 0; } }
 .wa-meta { font: 15px "VT323", monospace; color: #8ca8a0; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
 .wa-meta b { color: #00ff00; font-weight: normal; }
-.wa-st { margin-left: auto; color: #2a4a2a; } .wa-st.on { color: #00ff00; }
+.wa-lights { margin-left: auto; display: flex; gap: 6px; }
+.wa-st { color: #2a4a2a; } .wa-st.on { color: #00ff00; }
 .wa-transport { display: flex; gap: 2px; padding: 0 8px 8px; }
 .wa-transport button { width: 26px; height: 18px; padding: 0; font: 11px/1 Tahoma, sans-serif; color: #e0e0ff; background: var(--wa-face); border: 0;
   box-shadow: inset 1px 1px 0 var(--wa-hi), inset -1px -1px 0 var(--wa-lo); cursor: pointer; }
@@ -143,3 +171,5 @@ html[data-skin="winamp"] #wa-toast {
   animation: wa-toast 3.2s ease forwards; pointer-events: none;
 }
 @keyframes wa-toast { 0% { opacity: 0; } 10%, 80% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+/* bold uppercase labels are wider: let the GPU chip shorten rather than push the module tabs under it */
+html[data-skin="winamp"] .top .chip.gpu span { max-width: 8em; overflow: hidden; text-overflow: ellipsis; }
