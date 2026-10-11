@@ -1,9 +1,11 @@
 """SafeHouse HTTP routes (today's Library tab). The app's server routes /api/library/... here.
 
 GET    /api/library/summary                 storage per category + free space
-GET    /api/library/covers | songs | voices | training
+GET    /api/library/covers | speech | songs | voices | training
 POST   /api/library/covers/<id>/rename      {name}
 DELETE /api/library/covers/<id>
+POST   /api/library/speech/<id>/rename      {name}   (SpeakEasy's saved speech)
+DELETE /api/library/speech/<id>
 GET    /api/library/covers/zip?ids=1,2      zip download
 DELETE /api/library/songs/<id>[?stems_only=1]
 POST   /api/library/voices/<name>/rename    {name}
@@ -43,7 +45,7 @@ def handle(h, method: str, p: str) -> bool:
 def _route(h, method, p):
     q = parse_qs(urlparse(h.path).query)
     rest = p[len("/api/library/"):]
-    if method == "GET" and rest in ("summary", "covers", "songs", "voices", "training"):
+    if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training"):
         return h._json(getattr(library, rest)())
     if rest == "tools/ytdlp-update" and method == "POST":
         return h._json(_update_ytdlp())
@@ -92,6 +94,19 @@ def _route(h, method, p):
                 item["title"], item["title_set"] = name, True
             _write_history_line(item["id"], item)
             return h._json({"ok": True, "file": new.name})
+    m = re.fullmatch(r"speech/([0-9a-f]{10})(?:/(rename))?", rest)
+    if m:
+        from ..speakeasy import speak
+        try:
+            if method == "DELETE" and not m.group(2):
+                _guard()
+                speak.delete_speech(m.group(1))
+                return h._json({"ok": True})
+            if method == "POST" and m.group(2) == "rename":
+                _guard()
+                return h._json(speak.rename_speech(m.group(1), h._body().get("name") or ""))
+        except speak.SpeakError as e:
+            raise ModelError(str(e))
     m = re.fullmatch(r"songs/([0-9a-f]{16})", rest)
     if m and method == "DELETE":
         _guard()
