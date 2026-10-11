@@ -176,6 +176,7 @@ addEventListener("dragover", e => e.preventDefault());
 addEventListener("drop", e => {
   e.preventDefault(); dragDepth = 0; $("#drop-overlay").hidden = true;
   if (!$("#view-train").hidden && window.trainDrop) return window.trainDrop([...(e.dataTransfer?.files || [])]);
+  if (!$("#view-speakeasy").hidden && window.speakDrop) return window.speakDrop([...(e.dataTransfer?.files || [])]);
   const f = e.dataTransfer?.files?.[0]; if (!f) return;
   if (/\.(zip|pth)$/i.test(f.name)) installFile(f); else upload(f);
 });
@@ -629,7 +630,7 @@ $("#wave-res").addEventListener("click", e => {
   a.addEventListener("ended", () => { stopAll(); renderHistory(); });
 });
 addEventListener("keydown", e => {
-  if (e.code === "Space" && !$("#result").hidden && !/INPUT|TEXTAREA|BUTTON|SUMMARY/.test(document.activeElement.tagName)) { e.preventDefault(); togglePlay(); }
+  if (e.code === "Space" && !$("#result").hidden && !$("#view-covers").hidden && !/INPUT|TEXTAREA|BUTTON|SUMMARY/.test(document.activeElement.tagName)) { e.preventDefault(); togglePlay(); }
 });
 $("#open-folder").onclick = () => api("/api/open-folder", { json: { history_id: S.result?.id } }).catch(e => showError(e.message));
 $("#open-output").onclick = () => api("/api/open-folder", { json: {} }).catch(e => showError(e.message));
