@@ -534,7 +534,24 @@ def _cover_target():
 @check("cover: end to end from cached stems (then deleted)")
 def a_cover():
     song, voice = _cover_target()
-    assert song and voice, "need a song with stems and a voice"
+    added = None
+    if not song and (ROOT / "test" / "smoke.wav").exists():   # an empty library: bring the test song, remove it after
+        data = (ROOT / "test" / "smoke.wav").read_bytes()
+        req = urllib.request.Request(BASE + "/api/upload", data=data, method="POST",
+                                     headers={"X-Filename": "smoke-test-song.wav", "Origin": BASE,
+                                              "Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            added = song = json.loads(r.read())
+        song.setdefault("title", "smoke-test-song")
+    try:
+        return _cover_with(song, voice)
+    finally:
+        if added:
+            api(f"/api/library/songs/{added['id']}", method="DELETE")   # the song and its stems
+
+
+def _cover_with(song, voice):
+    assert song and voice, "need a song (or test/smoke.wav) and a voice"
     before = {c["id"] for c in api("/api/library/covers")}
     job = api("/api/covers", {"song": song["id"], "voice": voice,
                               "options": {"fit": True, "karaoke": True, "dereverb": True, "quality": "high"}})["job"]
