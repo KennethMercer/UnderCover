@@ -1,11 +1,11 @@
 """Smoke test: does UnderCover still work end to end? Run after every phase of a restructure and before merging.
 
-    .venv\\Scripts\\python.exe tools\\smoke.py               # unit + API + one cover (~2 min, test server on 7861)
+    .venv\\Scripts\\python.exe tools\\smoke.py               # unit + API + one cover + one speech (~2 min, test server on 7861)
     .venv\\Scripts\\python.exe tools\\smoke.py --full        # + a quick training with Pause/Resume (~8 min)
     .venv\\Scripts\\python.exe tools\\smoke.py --unit-only   # no server needed (~20 s)
 
 Needs the TEST server running on port 7861 (preview config "undercover-test"); refuses the user's server on 7860.
-Leaves nothing behind: the test cover is deleted from the library, the scratch training project is removed.
+Leaves nothing behind: the test cover and test speech are deleted, the scratch training project is removed.
 Exit code 0 = all passed. Prints one line per check.
 """
 import argparse
@@ -202,6 +202,21 @@ def u_stems():
         shutil.rmtree(d, ignore_errors=True)
 
 
+@check("speakeasy: sentences and Reader auto-pick")
+def u_speak():
+    from undercover.speakeasy import tts
+    s = tts.sentences("Hello there. How are you? I'm fine!\n\nNew paragraph, Mr. Smith said. " + "word, " * 80 + "end.")
+    assert [x["text"] for x in s[:3]] == ["Hello there.", "How are you?", "I'm fine!"], s[:3]
+    assert s[2]["pause"] > s[0]["pause"], "no paragraph pause"
+    assert s[3]["text"].startswith("New paragraph, Mr. Smith said."), f"split at an abbreviation: {s[3]['text'][:40]}"
+    assert all(len(x["text"]) <= tts.MAX_CHARS for x in s), "a sentence is too long for Kokoro"
+    assert tts.pick_reader(104.6, 72.0).startswith("am_"), "deep male voice got a female Reader"
+    assert tts.pick_reader(180.0, 109.3)[1] == "m", "Obama (180 Hz, p5 109) got a female Reader"
+    assert tts.pick_reader(210.0, 160.0)[1] == "f", "a female voice got a male Reader"
+    assert tts.pitch_for("am_michael", 110.6) == 0.0
+    return f"{len(s)} sentences"
+
+
 @check("sources: YouTube block and spoken-word detection")
 def u_sources():
     from undercover.mouthpiece import sources as s
@@ -256,7 +271,7 @@ def a_lists():
 def a_library():
     s = api("/api/library/summary")
     assert s["total"] > 0
-    for k in ("covers", "songs", "voices", "training"):
+    for k in ("covers", "speech", "songs", "voices", "training"):
         assert isinstance(api(f"/api/library/{k}"), list), k
     groups = api("/api/library/cleanup")
     assert "orphan_stems" in groups and "finished_training" in groups
@@ -311,6 +326,41 @@ def a_cover():
     api(f"/api/library/covers/{c['id']}", method="DELETE")
     assert c["id"] not in {x["id"] for x in api("/api/library/covers")}, "test cover not deleted"
     return f"{song['title'][:30]} with {voice}, {size / 1e6:.1f} MB"
+
+
+@check("speech: SpeakEasy end to end, sentence by sentence (then deleted)")
+def a_speech():
+    from undercover.core.config import path
+    voices = api("/api/speak/voices")
+    v = next((x for x in voices if x["trained"] and x["kind"] == "speech" and not x["undertrained"]), voices[0] if voices else None)
+    assert v, "no voices"
+    plan = api(f"/api/speak/plan?voice={v['name']}")
+    assert plan["reader"] and plan["target_hz"], f"no speaking pitch / Reader for {v['name']}"
+    r = api("/api/speak", {"text": "This is a smoke test. One, two, three.", "voice": v["name"]})
+    req = urllib.request.Request(BASE + f"/api/jobs/{r['job']}/events")
+    parts, final = [], None
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        for raw in resp:
+            line = raw.decode("utf-8").strip()
+            if not line.startswith("data: "):
+                continue
+            ev = json.loads(line[6:])
+            if ev.get("stage") == "speaking":
+                parts.append(ev)
+            if ev.get("final"):
+                final = ev
+                break
+    assert final and final["state"] == "done", f"speech job ended {final and final.get('state')}: {final and final.get('message')}"
+    item = final["result"]
+    assert len(parts) == 2 and all(p.get("url") for p in parts), f"expected 2 sentences with URLs, got {len(parts)}"
+    wav = path("output_dir") / "speech" / item["file"]
+    assert wav.exists() and wav.stat().st_size > 50_000, "speech WAV missing or empty"
+    assert item.get("mp3_url"), "no MP3"
+    assert item["id"] in {x["id"] for x in api("/api/library/speech")}, "not listed in SafeHouse"
+    api(f"/api/speak/{item['id']}", method="DELETE")
+    assert item["id"] not in {x["id"] for x in api("/api/speak/recent")} and not wav.exists(), "test speech not deleted"
+    assert not (path("cache_dir") / "previews" / f"speech_{r['job']}").exists(), "sentence files left behind"
+    return f"{v['name']} via {plan['reader']} {plan['pitch']:+} st, {item['duration']:.1f} s of speech in {item['seconds']['total']:.1f} s"
 
 
 # ---------------------------------------------------------------- full: training with pause / resume
@@ -369,7 +419,7 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources):
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")
@@ -377,6 +427,7 @@ def main():
             fn()
         if not a.no_cover:
             a_cover()
+            a_speech()
         if a.full:
             a_training()
     failed = [n for ok, n in RESULTS if not ok]

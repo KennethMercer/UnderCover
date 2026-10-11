@@ -5,11 +5,12 @@
 
 const L = { cat: store.get("uc-lib-cat", "covers"), data: {}, sel: null, checked: new Set(), summary: null,
             audio: new Audio(), peaks: null, src: "url" };
-const CATS = [["covers", "Covers"], ["songs", "Songs"], ["voices", "Voices"], ["training", "Training"]];
-const CAT_LABELS = { covers: "Covers", songs: "Songs", stems: "Stems", voices: "Voices", training: "Training",
+const CATS = [["covers", "Covers"], ["speech", "Speech"], ["songs", "Songs"], ["voices", "Voices"], ["training", "Training"]];
+const CAT_LABELS = { covers: "Covers", speech: "Speech", songs: "Songs", stems: "Stems", voices: "Voices", training: "Training",
                      temporary: "Temporary files", app: "App models" };
 const SORTS = {
   covers: [["new", "Newest first"], ["old", "Oldest first"], ["name", "Name"], ["big", "Biggest first"], ["voice", "Voice"]],
+  speech: [["new", "Newest first"], ["old", "Oldest first"], ["name", "Name"], ["long", "Longest first"], ["voice", "Voice"]],
   songs: [["used", "Recently used"], ["name", "Name"], ["big", "Biggest first"], ["covers", "Most covers"]],
   voices: [["name", "Name"], ["used", "Most used"], ["big", "Biggest first"], ["new", "Newest first"]],
   training: [["new", "Recently changed"], ["name", "Name"], ["big", "Biggest first"]],
@@ -35,7 +36,7 @@ document.addEventListener("uc:module", e => { if (e.detail === "safehouse") libS
 async function loadSummary() {
   try { L.summary = await api("/api/library/summary"); } catch (e) { return; }
   const s = L.summary, total = s.total || 1;
-  const order = ["covers", "songs", "stems", "voices", "training", "temporary", "app"];
+  const order = ["covers", "speech", "songs", "stems", "voices", "training", "temporary", "app"];
   $("#lib-stack").innerHTML = order.map(k => `<i style="width:${(s.categories[k] / total * 100).toFixed(2)}%;background:var(--c-${k})" title="${CAT_LABELS[k]} ${gb(s.categories[k])}"></i>`).join("");
   $("#lib-legend").innerHTML = order.map(k => `<span><i class="sw" style="background:var(--c-${k})"></i>${CAT_LABELS[k]} <b>${gb(s.categories[k])}</b></span>`).join("");
   $("#lib-total").textContent = gb(s.total);
@@ -69,12 +70,12 @@ function renderCats() {
   $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderCats(); loadCat(); });
 }
 function renderTools() {
-  $("#lib-q").placeholder = { covers: "Search covers by song or voice", songs: "Search songs", voices: "Search voices", training: "Search training projects" }[L.cat];
+  $("#lib-q").placeholder = { covers: "Search covers by song or voice", speech: "Search speech by text or voice", songs: "Search songs", voices: "Search voices", training: "Search training projects" }[L.cat];
   const sort = $("#lib-sort"), cur = store.get(`uc-lib-sort-${L.cat}`, SORTS[L.cat][0][0]);
   sort.innerHTML = SORTS[L.cat].map(([v, t]) => `<option value="${v}"${v === cur ? " selected" : ""}>${t}</option>`).join("");
   const f = $("#lib-filter");
-  if (L.cat === "covers") {
-    const voices = [...new Set((L.data.covers || []).map(c => c.voice))].sort();
+  if (L.cat === "covers" || L.cat === "speech") {
+    const voices = [...new Set((L.data[L.cat] || []).map(c => c.voice))].sort();
     f.hidden = voices.length < 2;
     const keep = f.value;
     f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option${v === keep ? " selected" : ""}>${esc(v)}</option>`).join("");
@@ -87,23 +88,23 @@ $("#lib-filter").onchange = () => renderList();
 function rows() {
   const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
   let list = (L.data[L.cat] || []).slice();
-  const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${x.backing_voice || ""}` : L.cat === "songs" ? `${x.title} ${x.source}`
+  const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${x.backing_voice || ""}` : L.cat === "speech" ? `${x.title} ${x.text} ${x.voice}` : L.cat === "songs" ? `${x.title} ${x.source}`
     : L.cat === "voices" ? `${x.name} ${x.source}` : `${x.person} ${x.name}`;
   if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
   if (voice) list = list.filter(x => x.voice === voice);
-  const key = { new: x => -(L.cat === "covers" ? Date.parse((x.created || "").replace(" ", "T")) || 0 : (x.updated || Date.parse((x.installed || "").replace(" ", "T")) / 1000 || 0)),
+  const key = { new: x => -(L.cat === "covers" || L.cat === "speech" ? Date.parse((x.created || "").replace(" ", "T")) || 0 : (x.updated || Date.parse((x.installed || "").replace(" ", "T")) / 1000 || 0)),
                 old: x => Date.parse((x.created || "").replace(" ", "T")) || 0, name: x => (x.title || x.name || x.person || "").toLowerCase(),
-                big: x => -(x.size + (x.stems_size || 0)), voice: x => x.voice, used: x => L.cat === "songs" ? -x.last_used : -x.covers, covers: x => -x.covers }[sort];
+                big: x => -(x.size + (x.stems_size || 0)), long: x => -x.duration, voice: x => x.voice, used: x => L.cat === "songs" ? -x.last_used : -x.covers, covers: x => -x.covers }[sort];
   if (key) list.sort((a, b) => { const ka = key(a), kb = key(b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
   return list;
 }
-const idOf = x => String(L.cat === "covers" ? x.id : L.cat === "songs" ? x.id : x.name);
+const idOf = x => String(L.cat === "covers" || L.cat === "speech" || L.cat === "songs" ? x.id : x.name);
 
 // ------------------------------------------------------------ list
 function renderList() {
   const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
   if (!all.length) {
-    box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", songs: "Songs you drop in or get from YouTube collect here.",
+    box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", speech: "Speech you make in SpeakEasy collects here.", songs: "Songs you drop in or get from YouTube collect here.",
       voices: "Install a voice in FrontMan, or train one in MouthPiece.", training: "Voices you train get a project here." }[L.cat]}</div>`;
     return;
   }
@@ -115,6 +116,9 @@ function renderList() {
     if (L.cat === "covers") {
       title = x.title; sub = [x.voice + (x.backing_voice ? ` + ${x.backing_voice}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
       side = `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
+    } else if (L.cat === "speech") {
+      title = x.title; sub = [x.voice, `${(+x.speed).toFixed(1)}×`, when(x.created)].join(" · ");
+      side = `<span class="mono">${fmtTime(x.duration)}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
       title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
       side = (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono">${gb(x.size + x.stems_size)}</span>`;
@@ -169,6 +173,7 @@ function releaseAudio(ids = L.sel ? [L.sel] : []) {
   const files = items.flatMap(i => [i.url, i.original, i.vocal, i.sample]).filter(Boolean).map(u => decodeURIComponent(u.split("/").pop()));
   const holds = a => files.some(f => decodeURIComponent(a.src || "").endsWith(f));
   if (holds(aCover) && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // FrontMan's player had it open
+  if (typeof seRelease === "function") seRelease(L.cat === "speech" ? ids[0] : "-");
   for (const a of [L.audio, T.audio, MP.audio, aCover, aOrig]) {
     const mine = a === L.audio || a === T.audio || holds(a);
     if (mine && a.src) { a.pause(); a.removeAttribute("src"); a.load(); }
@@ -209,6 +214,7 @@ function renderDetail() {
   const d = $("#lib-detail"), x = (L.data[L.cat] || []).find(i => idOf(i) === L.sel);
   if (!x) { d.innerHTML = `<p class="meta">Pick something on the left to see it here.</p>`; return; }
   if (L.cat === "covers") return coverDetail(d, x);
+  if (L.cat === "speech") return speechDetail(d, x);
   if (L.cat === "songs") return songDetail(d, x);
   if (L.cat === "voices") return voiceDetail(d, x);
   return trainingDetail(d, x);
@@ -245,6 +251,27 @@ function coverDetail(d, c) {
   };
   renameFlow(c.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/covers/${c.id}/rename`, { json: { name } }); });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/covers/${c.id}`, { method: "DELETE" }); afterChange(); });
+}
+
+function speechDetail(d, x) {
+  d.innerHTML = `<div class="dhead">${art(x.title, true)}<div style="min-width:0"><h3>${esc(x.title)}</h3><p class="meta">spoken by <b>${esc(x.voice)}</b> · ${esc(when(x.created))}</p></div></div>
+    ${playerHtml()}
+    <dl class="kv"><dt>Text</dt><dd class="lib-speech-text">${esc(x.text.length > 1200 ? x.text.slice(0, 1200) + "…" : x.text)}</dd>
+      <dt>Settings</dt><dd>${esc([`${(+x.speed).toFixed(2)}× speed`, `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
+      ${x.seconds?.total ? `<dt>Made in</dt><dd>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
+      <dt>Files</dt><dd class="mono">${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
+    <div id="lib-rename-box"></div>
+    <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><a class="btn" href="${x.url}?download">Download WAV</a>
+      ${x.mp3_url ? `<a class="btn" href="${x.mp3_url}?download">Download MP3</a>` : ""}
+      <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
+  wirePlayer(x.url);
+  $("#lib-again").onclick = () => {   // the same text and voice, ready to make again (or change)
+    $("#se-text").value = x.text; $("#se-text").dispatchEvent(new Event("input"));
+    if (typeof SE !== "undefined") { SE.voice = x.voice; store.set("uc-se-voice", x.voice); }
+    showTab("speakeasy"); window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  renameFlow(x.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/speech/${x.id}/rename`, { json: { name } }); });
+  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/speech/${x.id}`, { method: "DELETE" }); afterChange(); });
 }
 
 function songDetail(d, s) {

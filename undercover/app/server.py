@@ -31,6 +31,8 @@ from ..frontman import api as frontman_api
 from ..mouthpiece import api as train_api
 from ..frontman import oneshot  # noqa: F401 - registers the one-shot with Pause / Resume
 from ..mouthpiece import night  # noqa: F401 - registers the overnight queue's improve / new items
+from ..speakeasy import api as speakeasy_api
+from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -180,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
                 from ..core import worklist
                 return self._json(worklist.status())
             if (train_api.handle(self, "GET", p) or safehouse_api.handle(self, "GET", p)
-                    or frontman_api.handle(self, "GET", p)):
+                    or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -233,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
             if p.startswith("/api/work/"):
                 return self._work(p[len("/api/work/"):], self._body())
             if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
-                    or frontman_api.handle(self, "POST", p)):
+                    or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)):
                 return
             if p == "/api/voices/install":
                 return self._start_install(self._body())
@@ -261,7 +263,8 @@ class Handler(BaseHTTPRequestHandler):
         from ..core.voices import ModelError, remove_voice
         p = urlparse(self.path).path
         try:
-            if train_api.handle(self, "DELETE", p) or safehouse_api.handle(self, "DELETE", p):
+            if (train_api.handle(self, "DELETE", p) or safehouse_api.handle(self, "DELETE", p)
+                    or speakeasy_api.handle(self, "DELETE", p)):
                 return
             m = re.fullmatch(r"/api/voices/([a-z0-9-]+)", p)
             if not m:
