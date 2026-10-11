@@ -528,7 +528,7 @@ class Handler(BaseHTTPRequestHandler):
         from ..frontman.pipeline import history
         hid = body.get("history_id")
         item = next((h for h in history() if h["id"] == hid), None) if hid is not None else None
-        vdir = path("models_dir") / "voices" / str(body.get("voice") or "")
+        vdir = path("voices_dir") / str(body.get("voice") or "")
         if body.get("voice") and re.fullmatch(r"[a-z0-9-]+", body["voice"]) and vdir.is_dir():
             os.startfile(vdir)
         elif item:

@@ -18,7 +18,7 @@ def _variants(root: str) -> list[str]:
 
 def _files() -> list[Path]:
     out = [path("output_dir") / "history.jsonl"]
-    out += sorted((path("models_dir") / "voices").glob("*/meta.json"))
+    out += sorted(path("voices_dir").glob("*/meta.json"))
     out += sorted((path("cache_dir") / "training").glob("*/project.json"))
     out += sorted(path("uploads_dir").glob("*.json"))
     out += sorted(path("cache_dir").glob("*.json"))
@@ -26,17 +26,23 @@ def _files() -> list[Path]:
     return [f for f in out if f.exists()]
 
 
-def rewrite(old: str, new: str, dry_run: bool = False) -> dict:
-    """Replace the folder `old` with `new` wherever it starts a path in the app's JSON files. -> {file: count}."""
+def rewrite(old: str, new: str, dry_run: bool = False, keep: tuple = ()) -> dict:
+    """Replace the folder `old` with `new` wherever it starts a path in the app's JSON files. -> {file: count}.
+    keep: folders inside `old` that did NOT move (the voices inside models_dir when only the model files moved)."""
     from . import fsutil
     changed = {}
-    pairs = list(zip(_variants(old.rstrip("\\/")), _variants(new.rstrip("\\/"))))
+    old = old.rstrip("\\/")
+    rels = [Path(k).relative_to(old).parts for k in keep if Path(k).is_relative_to(old)]
+    # not when a kept folder follows: a separator (\\ in JSON, or /), its parts, then a separator or the string's end
+    sep = r'(?:\\\\|/)'
+    stay = "".join(r"(?!" + sep + sep.join(re.escape(x) for x in r) + r'(?=[\\/"]))' for r in rels)
+    pairs = list(zip(_variants(old), _variants(new.rstrip("\\/"))))
     for f in _files():
         text = f.read_text(encoding="utf-8")
         n = 0
         for a, b in pairs:
             # only whole folder names: followed by a separator or the end of the JSON string
-            rx = re.compile(re.escape(a) + r'(?=[\\/"])', re.I)
+            rx = re.compile(re.escape(a) + r'(?=[\\/"])' + stay, re.I)
             text, k = rx.subn(lambda m: b, text)
             n += k
         if n:
@@ -48,7 +54,7 @@ def rewrite(old: str, new: str, dry_run: bool = False) -> dict:
 
 def _guess_old_root() -> str | None:
     """Before root.txt existed: read it off a voice's stored folder (<root>\\models\\voices\\<name>)."""
-    for meta in (path("models_dir") / "voices").glob("*/meta.json"):
+    for meta in path("voices_dir").glob("*/meta.json"):
         try:
             d = Path(json.loads(meta.read_text(encoding="utf-8"))["dir"])
         except (OSError, ValueError, KeyError):

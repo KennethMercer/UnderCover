@@ -6,7 +6,8 @@
 // module -> its view; the old tab names (deep links, localStorage "uc-tab") still work
 const MODULES = { frontman: "covers", doubleagent: "train", speakeasy: "speakeasy", safehouse: "library" };
 const OLD_TABS = { covers: "frontman", train: "doubleagent", mouthpiece: "doubleagent", library: "safehouse" };   // mouthpiece: the name before phase 2b
-const moduleOf = t => MODULES[t] ? t : OLD_TABS[t] || null;
+// a module's own sub-page rides after a slash (#safehouse/addons: SafeHouse's Add-ons room)
+const moduleOf = t => { t = String(t || "").split("/")[0]; return MODULES[t] ? t : OLD_TABS[t] || null; };
 
 function showTab(tab) {
   const mod = moduleOf(tab) || "frontman";
@@ -16,14 +17,18 @@ function showTab(tab) {
   }
   document.body.dataset.module = mod;
   store.set("uc-tab", mod);
-  if (location.hash.slice(1) !== mod) history.replaceState(null, "", "#" + mod);
+  if (moduleOf(location.hash.slice(1)) !== mod || !location.hash.startsWith("#" + mod)) history.replaceState(null, "", "#" + mod);
   document.dispatchEvent(new CustomEvent("uc:module", { detail: mod }));
 }
 $$(".mods .mod").forEach(a => a.addEventListener("click", e => {
   if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;   // let "open in a new tab" work
   e.preventDefault(); showTab(a.dataset.tab); window.scrollTo({ top: 0 });
 }));
-addEventListener("hashchange", () => { const m = moduleOf(location.hash.slice(1)); if (m) showTab(m); });
+addEventListener("hashchange", () => {
+  const m = moduleOf(location.hash.slice(1));
+  if (m && m === document.body.dataset.module) document.dispatchEvent(new CustomEvent("uc:subpage", { detail: location.hash.slice(1) }));
+  else if (m) showTab(m);
+});
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-goto]"); if (!b) return;
   queueDrawer(false); showTab(b.dataset.goto); window.scrollTo({ top: 0 });
