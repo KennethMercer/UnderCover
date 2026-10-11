@@ -31,6 +31,7 @@ from ..frontman import api as frontman_api
 from ..doubleagent import api as train_api
 from ..frontman import oneshot  # noqa: F401 - registers the one-shot with Pause / Resume
 from ..doubleagent import night  # noqa: F401 - registers the overnight queue's improve / new items
+from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
 
@@ -395,8 +396,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(worklist.pause_all())
             if action == "resume":
                 return self._json(worklist.resume_all())
+            if action == "forget":   # Dismiss the paused work instead of resuming it
+                return self._json(worklist.forget_paused())
             if action == "add":
-                return self._json(worklist.add(b.get("kind", ""), b.get("target", "")))
+                return self._json(worklist.add(b.get("kind", ""), b.get("target", ""), now=bool(b.get("now"))))
             if action == "remove":
                 return self._json(worklist.remove(b.get("id", "")))
             if action == "order":
