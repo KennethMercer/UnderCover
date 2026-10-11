@@ -306,6 +306,7 @@
     <div class="result-actions">
       <div class="times" id="times"></div>
       <div class="btns">
+        <button class="btn" id="keep" type="button" aria-pressed="false" data-kept="false">Send to SafeHouse</button>
         <button class="btn" id="open-folder">Show in folder</button>
         <a class="btn" id="dl-vocal" href="#">Download vocal only</a>
         <a class="btn primary" id="dl-cover" href="#">Download</a>
@@ -318,6 +319,7 @@
   <section class="panel">
     <div class="hist-head"><h2>History</h2><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output">Open output folder</button></span></div>
     <div class="hist" id="hist"><p class="meta">Your covers will appear here.</p></div>
+    <p class="meta" id="hist-note">The latest 15 covers stay here. Older ones you haven't sent to SafeHouse roll off (are deleted); sent ones stay in SafeHouse.</p>
   </section>
   </div>
 
@@ -498,6 +500,7 @@
       <input type="search" id="lib-q" autocomplete="off" aria-label="Search the library">
       <select id="lib-sort" aria-label="Sort"></select>
       <select id="lib-filter" aria-label="Filter" hidden></select>
+      <select id="lib-kfilter" aria-label="Kept or recent" hidden><option value="">Kept and recent</option><option value="kept">Kept</option><option value="recent">Recent</option></select>
     </div>
     <section class="lib">
       <div class="panel items" id="lib-list" aria-label="Items"></div>
@@ -605,12 +608,13 @@
         </div>
       </div>
       <div class="se-reading" id="se-reading"></div>
-      <div class="row"><a class="btn" id="se-wav" aria-disabled="true">Download WAV</a><a class="btn" id="se-mp3" aria-disabled="true">Download MP3</a><span class="meta" id="se-dl-note">downloads unlock when the last sentence is made</span></div>
+      <div class="row"><a class="btn" id="se-wav" aria-disabled="true">Download WAV</a><a class="btn" id="se-mp3" aria-disabled="true">Download MP3</a><button class="btn" id="se-keep" type="button" aria-pressed="false" data-kept="false" hidden>Send to SafeHouse</button><span class="meta" id="se-dl-note">downloads unlock when the last sentence is made</span></div>
     </section>
 
     <section class="panel">
       <div class="row spread"><h2>Recent</h2><button class="linkbtn" id="se-all" type="button">Show all in SafeHouse</button></div>
       <div class="se-recent" id="se-recent"><p class="meta">Speech you make collects here.</p></div>
+      <p class="meta" id="se-recent-note">The latest 15 stay here. Older ones you haven't sent to SafeHouse roll off (are deleted); sent ones stay in SafeHouse.</p>
     </section>
   </div>
 </div>

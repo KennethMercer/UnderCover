@@ -456,6 +456,264 @@ def u_storage():
     return "guards hold; models, then library (paths rewritten), then library again"
 
 
+def _fake_cover(i, tag="c"):
+    """A finished cover's history record with real (tiny) files, in the isolated output / cache folders."""
+    from undercover.core.config import path
+    out, conv = path("output_dir"), path("cache_dir") / "converted"
+    out.mkdir(parents=True, exist_ok=True)
+    conv.mkdir(parents=True, exist_ok=True)
+    o, v = out / f"{tag}{i:02d}.mp3", conv / f"{tag}{i:02d}__v.flac"
+    o.write_bytes(b"x" * 100)
+    v.write_bytes(b"v" * 50)
+    return {"output": str(o), "song": str(out / "song.wav"), "voice": "zz", "stems": {}, "converted_vocal": str(v),
+            "converted_backing": None, "notes": [], "seconds": {}, "options": {}, "title": f"Cover {i}",
+            "created": f"2026-01-01 {i // 3600:02d}:{i // 60 % 60:02d}:{i % 60:02d}"}
+
+
+def _fake_speech(i, speak, tag="s"):
+    """A finished speech made by the real _save (files, JSON, roll-off), with its sentences folder."""
+    import numpy as np
+    from undercover.core.config import path
+    job = f"{tag}job{i:02d}"
+    parts = speak.parts_dir(job)
+    parts.mkdir(parents=True, exist_ok=True)
+    (parts / "s0000.wav").write_bytes(b"p" * 10)
+    p = {"voice": "zz", "reader": "am_michael", "auto": True, "speed": 1.0, "pitch": 0.0}
+    item = speak._save(np.zeros(2400, np.float32), 24000, f"Speech number {i} {tag}", p, {"total": 1.0}, job)
+    return item
+
+
+@check("keep or roll off (covers): the 16th finish takes the kept oldest out of the tray, the 17th deletes the next, never more than one")
+def u_rolloff_covers():
+    """Phase 6 guard rails (core/tray.py): at most one track leaves per finish, never a kept one, never outside the
+    module's folders, and never anywhere near the real folders from a test. Everything runs in isolated_data()."""
+    from undercover.core import storage, tray
+    from undercover.core.config import path
+    from undercover.frontman import history as H, pipeline
+    ids_of = lambda: [i["id"] for i in H.finished()]
+    files_left = lambda: sorted(p.name for p in path("output_dir").glob("*.mp3"))
+    with isolated_data() as t:
+        # the rule itself, on every shape of list: at most one, never kept, always the 16th newest
+        import random
+        rnd = random.Random(6)
+        for n in range(0, 41):
+            items = [{"id": f"{k:010x}", "kept": rnd.random() < 0.4} for k in range(n)]
+            lv = tray.leaver(items)
+            assert lv is None or (lv is items[n - 16] and not lv["kept"] and n > 15), (n, lv)
+            if n <= 15 or items[n - 16]["kept"]:
+                assert lv is None, (n, lv)
+        recs = []
+        for i in range(15):                       # the tray fills up: nothing leaves
+            recs.append(H.record(_fake_cover(i)))
+        assert len(ids_of()) == 15 and len(files_left()) == 15
+        H.set_kept(recs[0]["id"], True)           # keep the oldest
+        assert H.get(recs[0]["id"])["kept"] and H.get(recs[0]["id"])["kept_at"]
+        recs.append(H.record(_fake_cover(15)))    # the 16th finish: the oldest (kept) leaves the tray, nothing is deleted
+        assert len(ids_of()) == 16 and len(files_left()) == 16, "the kept oldest was deleted or lost"
+        hist = pipeline.history()                 # newest first, as SafeHouse lists it
+        assert [h["id"] for h in hist if h["recent"]] == [r["id"] for r in reversed(recs[1:])], "the tray isn't the latest 15"
+        assert hist[-1]["id"] == recs[0]["id"] and hist[-1]["kept"] and not hist[-1]["recent"], "the kept oldest isn't in the library"
+        assert H.resolved_output(H.get(recs[0]["id"])).exists() and Path(H.get(recs[0]["id"])["converted_vocal"]).exists()
+        assert len(pipeline.history_items()) == 15, "the page's list is the tray"
+        recs.append(H.record(_fake_cover(16)))    # the 17th: the next oldest (unkept) is deleted, exactly one
+        assert ids_of() == [r["id"] for r in recs if r["id"] != recs[1]["id"]], "not exactly the oldest unkept one left"
+        assert "c01.mp3" not in files_left() and len(files_left()) == 16, files_left()
+        assert not (path("cache_dir") / "converted" / "c01__v.flac").exists(), "its converted vocal stayed behind"
+        assert (path("cache_dir") / "converted" / "c02__v.flac").exists() and "c00.mp3" in files_left()
+        log = (path("logs_dir") / "server.log").read_text(encoding="utf-8")
+        assert log.count("roll-off (covers): removed") == 1 and recs[1]["id"] in log, log
+        H.set_kept(recs[5]["id"], True)           # a kept one in the middle of the tray is passed over when its turn comes
+        deleted = 1
+        for i in range(17, 30):                   # many finishes: exactly one leaves the tray each time, a kept one is never deleted
+            before = H.finished()
+            fell = before[-15]                    # (old list + the new one)[-16]: the one that falls out of the latest 15
+            n_files = len(files_left())
+            recs.append(H.record(_fake_cover(i)))
+            assert len(files_left()) == n_files + 1 - (0 if fell.get("kept") else 1), (i, "wrong number of covers removed")
+            assert (fell["id"] in ids_of()) == bool(fell.get("kept")), (i, "the one that fell out is kept or deleted wrongly")
+            deleted += 0 if fell.get("kept") else 1
+        assert {recs[0]["id"], recs[5]["id"]} <= set(ids_of()) and {"c00.mp3", "c05.mp3"} <= set(files_left()), "a kept cover was deleted"
+        want = {recs[0]["id"], recs[5]["id"]} | {r["id"] for r in recs[-15:]}
+        assert set(ids_of()) == want, "the library should be the kept ones plus the latest 15"
+        assert (path("logs_dir") / "server.log").read_text(encoding="utf-8").count("roll-off (covers): removed") == deleted
+        H.set_kept(recs[0]["id"], False)          # unkeeping what already left the tray does NOT delete it (only a finish rolls)
+        assert recs[0]["id"] in ids_of() and "c00.mp3" in files_left()
+        # a failing delete never fails the cover and removes nothing: a line pointing outside the module's folders
+        evil = path("output_dir").parent / "elsewhere"
+        evil.mkdir()
+        (evil / "precious.mp3").write_bytes(b"keep me")
+        target = H.finished()[-15]                # the one that falls out on the next finish
+        assert not target.get("kept")
+        H.update(target["id"], output=str(evil / "precious.mp3"))
+        before = set(ids_of())
+        H.record(_fake_cover(41))                 # its output is outside output_dir: refused, nothing removed, the cover still saved
+        assert (evil / "precious.mp3").read_bytes() == b"keep me", "roll-off deleted a file outside the output folder"
+        assert before <= set(ids_of()) and len(ids_of()) == len(before) + 1, "a line vanished although its delete was refused"
+        assert Path(target["converted_vocal"]).exists(), "a refused roll-off removed part of the cover"
+        assert "roll-off (covers): failed" in (path("logs_dir") / "server.log").read_text(encoding="utf-8")
+        # test mode refuses the app's real folders whatever a history line says (stubbed delete: nothing real can go)
+        real = ROOT / "constraints.txt"
+        assert real.exists()
+        calls = []
+        old_retry, storage.fsutil.retry = storage.fsutil.retry, lambda fn, *a, **k: calls.append(1)
+        try:
+            for within in ([ROOT], [real.parent], [t]):
+                try:
+                    storage.remove_files([real], within)
+                    raise AssertionError(f"a real file inside {within} wasn't refused in test mode")
+                except storage.ModelError:
+                    pass
+            try:
+                storage.remove_files([], within=[t], dirs=[ROOT / "output"])
+                raise AssertionError("a real folder wasn't refused in test mode")
+            except storage.ModelError:
+                pass
+            try:   # a folder where a file is expected, even inside the allowed place, is not removed as a file
+                storage.remove_files([path("output_dir")], [t])
+                raise AssertionError("a folder was accepted as a file")
+            except storage.ModelError:
+                pass
+        finally:
+            storage.fsutil.retry = old_retry
+        assert not calls, "something was deleted although every call was refused"
+    # structure: roll-offs run only after a successful record, and only the guarded delete removes anything
+    import re
+    calls = {}
+    for f in (ROOT / "undercover").rglob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        for name in ("roll_off(", "remove_files("):
+            for m in re.finditer(r"(?<![\w.])(?:\w+\.)?" + re.escape(name), text):
+                line = text[: m.start()].count("\n") + 1
+                if not text.splitlines()[line - 1].lstrip().startswith(("def ", "#", '"""')):
+                    calls.setdefault(name, []).append(f"{f.relative_to(ROOT / 'undercover').as_posix()}:{line}")
+    assert sorted(c.split(":")[0] for c in calls["roll_off("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
+    return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
+
+
+@check("keep or roll off (speech): the same rule for SpeakEasy; a failed or empty run never rolls anything off")
+def u_rolloff_speech():
+    from undercover.core import tray
+    from undercover.core.config import path
+    from undercover.speakeasy import speak
+    real_mp3, speak._mp3 = speak._mp3, lambda wav: None   # (ffmpeg is exercised by the real speech check)
+    try:
+        with isolated_data() as t:
+            items = []
+            for i in range(15):
+                items.append(_fake_speech(i, speak))
+            wavs = lambda: sorted(p.name for p in speak.speech_dir().glob("*.wav"))
+            assert len(wavs()) == 15 and len(speak.list_speech(everything=False)) == 15
+            speak.set_kept(items[0]["id"], True)
+            items.append(_fake_speech(15, speak))                 # the 16th: the kept oldest leaves the tray, nothing deleted
+            assert len(wavs()) == 16 and len(speak.list_speech(everything=False)) == 15
+            lib = {x["id"]: x for x in speak.list_speech()}
+            assert lib[items[0]["id"]]["kept"] and not lib[items[0]["id"]]["recent"] and len(lib) == 16, "kept oldest left the library"
+            assert not speak.list_speech(everything=False)[-1]["id"] == items[0]["id"]
+            # a run that fails (nothing to read) or an empty one never rolls: the tray is over full by one, so a roll would show
+            class J:
+                id, cancel = "failjob", False
+                def push(self, **k): pass
+            try:
+                speak.make_speech(J(), "", "zz")
+                raise AssertionError("empty text should fail")
+            except speak.SpeakError:
+                pass
+            assert len(wavs()) == 16, "a failed run deleted something"
+            # cancelling or failing midway reaches no roll-off: roll_off() is called only from _save (checked in the covers check)
+            items.append(_fake_speech(16, speak))                 # the 17th: the next oldest, unkept, is deleted with its sentences
+            left = {x["id"] for x in speak.list_speech()}
+            assert left == {i["id"] for i in items if i["id"] != items[1]["id"]}, "not exactly the oldest unkept speech left"
+            assert len(wavs()) == 16 and not (speak.speech_dir() / f"{items[1]['id']}.json").exists()
+            assert not speak.parts_dir("sjob01").exists() and speak.parts_dir("sjob02").exists(), "its sentences folder should go, and only its"
+            log = (path("logs_dir") / "server.log").read_text(encoding="utf-8")
+            assert log.count("roll-off (speech): removed") == 1 and items[1]["id"] in log, log
+            for i in range(17, 25):                               # one at a time, the kept one stays
+                _fake_speech(i, speak)
+            assert items[0]["id"] in {x["id"] for x in speak.list_speech()} and len(wavs()) == 16
+            speak.set_kept(items[0]["id"], False)                 # unkeeping what is out of the tray doesn't delete it
+            assert items[0]["id"] in {x["id"] for x in speak.list_speech()}
+    finally:
+        speak._mp3 = real_mp3
+    return "the same rule: kept oldest passed over on the 16th, next deleted on the 17th, failure deletes nothing"
+
+
+@check("stable ids: deleting one leaves the others' ids alone; a new cover with the same name doesn't revive a deleted line")
+def u_stable_ids():
+    from undercover.core.config import path
+    from undercover.frontman import history as H, pipeline
+    with isolated_data():
+        recs = [H.record(_fake_cover(i)) for i in range(6)]
+        assert all(H.ID.fullmatch(r["id"]) for r in recs) and len({r["id"] for r in recs}) == 6
+        before = [h["id"] for h in pipeline.history()]
+        gone = recs[2]
+        H.remove_line(gone["id"])
+        Path(gone["output"]).unlink()
+        after = [h["id"] for h in pipeline.history()]
+        assert after == [i for i in before if i != gone["id"]], "ids of the others changed"
+        assert len(H._lines()) == 5, "deleting must remove the line, not hide it"
+        again = H.record({**_fake_cover(2), "title": "Cover 2 again"})   # the same output name as the deleted one
+        assert again["id"] not in {r["id"] for r in recs}, "an id was reused"
+        same = [h for h in pipeline.history() if Path(h["output"]).name == Path(gone["output"]).name]
+        assert [h["id"] for h in same] == [again["id"]], "the deleted line came back to life"
+        H.update(recs[0]["id"], title="Renamed")
+        assert [h["title"] for h in pipeline.history() if h["id"] == recs[0]["id"]] == ["Renamed"]
+        # a power cut can leave a half-written last line: the next cover must not be swallowed by it
+        with open(path("output_dir") / "history.jsonl", "a", encoding="utf-8") as f:
+            f.write('{"half": "writt')
+        late = H.record(_fake_cover(9))
+        assert late["id"] in [h["id"] for h in pipeline.history()], "a cover recorded after a half-written line was lost"
+        # an older server may still append a line without an id: it gets one at the next read
+        with open(path("output_dir") / "history.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(_fake_cover(10)) + "\n")
+        assert all(H.ID.fullmatch(h["id"]) for h in pipeline.history()) and len(pipeline.history()) == 8
+        # a roll-off that can only remove part of a cover (a locked leftover) still reports it and never hides the rest
+        from undercover.core import storage
+        a, b = _fake_cover(11), _fake_cover(12)
+        real_retry = storage.fsutil.retry
+        def locked(fn, *args, **kw):
+            if "__v.flac" in str((fn.__defaults__ or [""])[0]):   # remove_files passes each path as the lambda's default
+                raise PermissionError("locked")
+            return real_retry(fn, *args, **kw)
+        storage.fsutil.retry = locked
+        try:
+            storage.remove_files([Path(b["output"]), Path(b["converted_vocal"])], [path("output_dir"), path("cache_dir") / "converted"])
+            raise AssertionError("a locked file should be reported")
+        except PermissionError:
+            assert not Path(b["output"]).exists() and Path(b["converted_vocal"]).exists(), "the other file should still have been removed"
+        finally:
+            storage.fsutil.retry = real_retry
+    return "ids stable across a delete; no revival"
+
+
+@check("stable ids: the history file migrates once (backup kept), then stays put")
+def u_migrate_ids():
+    from undercover.core.config import path
+    from undercover.frontman import history as H
+    with isolated_data():
+        out = path("output_dir")
+        out.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for i in range(4):   # a sample of the old file: no ids, in file order; the third one's cover is gone
+            rec = _fake_cover(i)
+            if i == 2:
+                Path(rec["output"]).unlink()
+            lines.append(json.dumps(rec))
+        f = out / "history.jsonl"
+        f.write_text("\n".join(lines) + "\n" + '{"half": "writt', encoding="utf-8")   # and a half-written last line
+        original = f.read_bytes()
+        r = H.migrate()
+        assert r == {"migrated": 3, "dropped": 1}, r
+        assert (out / H.BACKUP).read_bytes() == original, "the backup isn't the old file"
+        items = H._lines()
+        assert [i["title"] for i in items] == ["Cover 0", "Cover 1", "Cover 3"], "order or content changed"
+        assert all(H.ID.fullmatch(i["id"]) for i in items) and len({i["id"] for i in items}) == 3
+        ids = [i["id"] for i in items]
+        assert H.migrate() == {"migrated": 0, "dropped": 0} and [i["id"] for i in H._lines()] == ids, "a second run changed ids"
+        assert (out / H.BACKUP).read_bytes() == original, "the backup was overwritten"
+    return "3 lines got ids, 1 gone line dropped (kept in the backup), second run a no-op"
+
+
 @check("api: status ready")
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
@@ -522,6 +780,14 @@ def a_work():
     return f"{len(w['queue'])} queued items"
 
 
+def _tray_room(listing: str):
+    """Roll-off deletes the oldest unkept track when a finish would make the tray 16, so a check that finishes a track
+    on a server using the real folders must never run on a full tray (it would delete one of the user's tracks)."""
+    n = len(api(listing))
+    assert n < 15, (f"{listing} holds {n} finished tracks: finishing a test track would roll one of yours off. "
+                    "Nothing was run; keep or delete some first, or test on the sandbox server.")
+
+
 def _cover_target():
     """A song with cached stems (so no separation) and an installed voice."""
     songs = api("/api/library/songs")
@@ -533,6 +799,7 @@ def _cover_target():
 
 @check("cover: end to end from cached stems (then deleted)")
 def a_cover():
+    _tray_room("/api/history")
     song, voice = _cover_target()
     added = None
     if not song and (ROOT / "test" / "smoke.wav").exists():   # an empty library: bring the test song, remove it after
@@ -562,14 +829,35 @@ def _cover_with(song, voice):
     out = Path(c.get("output") or c.get("file") or "")
     size = out.stat().st_size if out.exists() else c.get("size", 0)
     assert size > 100_000, f"cover output looks empty ({size} bytes)"
+    import re
+    assert re.fullmatch(r"[0-9a-f]{10}", c["id"]) and not c["kept"] and c["recent"], f"a new cover should be unkept and recent: {c}"
+    assert c["id"] in {x["id"] for x in api("/api/history")}, "the new cover isn't in the recent tray"
+    k = api(f"/api/library/covers/{c['id']}/keep", {})
+    assert k["kept"] and k["kept_at"], k
+    assert next(x for x in api("/api/history") if x["id"] == c["id"])["kept"], "kept isn't in the history list"
+    assert not api(f"/api/library/covers/{c['id']}/unkeep", {})["kept"]
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", int(BASE.rsplit(":", 1)[1]), timeout=30)   # one connection, as the page uses
+    try:
+        conn.request("POST", f"/api/library/covers/{c['id']}/keep", body=b"{}", headers={"Content-Type": "application/json", "Origin": BASE})
+        assert conn.getresponse().read()
+        conn.request("GET", "/api/history", headers={"Origin": BASE})
+        r = conn.getresponse()
+        assert r.status == 200 and r.read().startswith(b"["), f"the request after a keep on the same connection failed: {r.status}"
+        conn.request("POST", f"/api/library/covers/{c['id']}/unkeep", body=b"{}", headers={"Content-Type": "application/json", "Origin": BASE})
+        conn.getresponse().read()
+    finally:
+        conn.close()
     api(f"/api/library/covers/{c['id']}", method="DELETE")
     assert c["id"] not in {x["id"] for x in api("/api/library/covers")}, "test cover not deleted"
+    assert c["id"] not in {x["id"] for x in api("/api/history")}
     return f"{song['title'][:30]} with {voice}, {size / 1e6:.1f} MB"
 
 
 @check("speech: SpeakEasy end to end, sentence by sentence (then deleted)")
 def a_speech():
     from undercover.core.config import path
+    _tray_room("/api/speak/recent")
     voices = api("/api/speak/voices")
     v = next((x for x in voices if x["trained"] and x["kind"] == "speech" and not x["undertrained"]), voices[0] if voices else None)
     assert v, "no voices"
@@ -599,6 +887,22 @@ def a_speech():
     assert wav.exists() and wav.stat().st_size > 50_000, "speech WAV missing or empty"
     assert item.get("mp3_url"), "no MP3"
     assert item["id"] in {x["id"] for x in api("/api/library/speech")}, "not listed in SafeHouse"
+    assert api(f"/api/speak/{item['id']}/keep", {})["kept"] and next(x for x in api("/api/speak/recent") if x["id"] == item["id"])["kept"]
+    assert not api(f"/api/speak/{item['id']}/unkeep", {})["kept"]
+    # the page reuses one connection: a POST route that doesn't read its body breaks the NEXT request ("501 {}GET")
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", int(BASE.rsplit(":", 1)[1]), timeout=30)
+    try:
+        for route in (f"/api/speak/{item['id']}/keep", f"/api/library/speech/{item['id']}/unkeep"):
+            conn.request("POST", route, body=b"{}", headers={"Content-Type": "application/json", "Origin": BASE})
+            resp = conn.getresponse()
+            assert resp.status == 200, f"{route}: {resp.status}"
+            resp.read()
+            conn.request("GET", "/api/speak/recent", headers={"Origin": BASE})
+            resp = conn.getresponse()
+            assert resp.status == 200 and resp.read().startswith(b"["), f"the request after {route} on the same connection failed: {resp.status}"
+    finally:
+        conn.close()
     api(f"/api/speak/{item['id']}", method="DELETE")
     assert item["id"] not in {x["id"] for x in api("/api/speak/recent")} and not wav.exists(), "test speech not deleted"
     assert not (path("cache_dir") / "previews" / f"speech_{r['job']}").exists(), "sentence files left behind"
@@ -607,6 +911,7 @@ def a_speech():
 
 @check("jobs feed: /api/jobs while running and after, unbuffered stream, every page bar on the feed (phase 2c)")
 def a_jobs_feed():
+    _tray_room("/api/speak/recent")
     # Phase 2c's bug: bars didn't move live and work vanished on reload. The page now reads every job through jobs.js
     # (the stream, with /api/jobs as fallback and for finding work after a reload); these are the parts it relies on.
     web = ROOT / "undercover" / "web"
@@ -743,6 +1048,7 @@ def a_cadence():
         assert v["cadence"]["has"], v["cadence"]
         sc = v["cadence"]["scores"]
         # 3. SpeakEasy reads with it
+        _tray_room("/api/speak/recent")
         r = api("/api/speak", {"text": "It was not easy. But we did it together, and we finished the work.", "voice": CAD_VOICE})
         assert r["plan"]["mode"] == "cadence", r["plan"]
         job = r["job"]
@@ -784,7 +1090,8 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage):
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage,
+               u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")

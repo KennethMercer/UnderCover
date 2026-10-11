@@ -90,10 +90,12 @@ function renderTools() {
     const keep = f.value;
     f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option${v === keep ? " selected" : ""}>${esc(v)}</option>`).join("");
   } else f.hidden = true;
+  $("#lib-kfilter").hidden = L.cat !== "covers" && L.cat !== "speech";   // Kept / Recent (phase 6)
 }
 $("#lib-q").addEventListener("input", () => renderList());
 $("#lib-sort").onchange = () => { store.set(`uc-lib-sort-${L.cat}`, $("#lib-sort").value); renderList(); };
 $("#lib-filter").onchange = () => renderList();
+$("#lib-kfilter").onchange = () => renderList();
 
 function rows() {
   const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
@@ -102,12 +104,19 @@ function rows() {
     : L.cat === "voices" ? `${x.name} ${x.source}` : `${x.person} ${x.name}`;
   if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
   if (voice) list = list.filter(x => x.voice === voice);
+  const kf = $("#lib-kfilter").hidden ? "" : $("#lib-kfilter").value;
+  if (kf === "kept") list = list.filter(x => x.kept);
+  else if (kf === "recent") list = list.filter(x => x.recent);
   const key = { new: x => -(L.cat === "covers" || L.cat === "speech" ? Date.parse((x.created || "").replace(" ", "T")) || 0 : (x.updated || Date.parse((x.installed || "").replace(" ", "T")) / 1000 || 0)),
                 old: x => Date.parse((x.created || "").replace(" ", "T")) || 0, name: x => (x.title || x.name || x.person || "").toLowerCase(),
                 big: x => -(x.size + (x.stems_size || 0)), long: x => -x.duration, voice: x => x.voice, used: x => L.cat === "songs" ? -x.last_used : -x.covers, covers: x => -x.covers }[sort];
   if (key) list.sort((a, b) => { const ka = key(a), kb = key(b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
   return list;
 }
+// kept covers and speech were sent to SafeHouse for good; "recent" ones are in the module's tray and roll off unless kept
+const keepTag = x => x.kept ? `<span class="tag ok" title="Sent to SafeHouse: kept for good">kept ✓</span>` : x.recent ? `<span class="tag" title="In the recent tray; rolls off when 15 newer ones are made">recent</span>` : "";
+const keepLine = x => x.kept ? `Kept in SafeHouse${x.kept_at ? ` since ${when(x.kept_at)}` : ""}.`
+  : x.recent ? "In the recent tray: it rolls off (is deleted) after 15 newer ones are made, unless you send it to SafeHouse." : "Not kept, and no longer in the recent tray.";
 const idOf = x => String(L.cat === "covers" || L.cat === "speech" || L.cat === "songs" ? x.id : x.name);
 
 // ------------------------------------------------------------ list
@@ -125,10 +134,10 @@ function renderList() {
     let title, sub, side;
     if (L.cat === "covers") {
       title = x.title; sub = [x.voice + (x.backing_voice ? ` + ${x.backing_voice}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
-      side = `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
+      side = keepTag(x) + `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "speech") {
       title = x.title; sub = [x.voice, paceWord(x), when(x.created)].join(" · ");
-      side = `<span class="mono">${fmtTime(x.duration)}</span><span class="tag">${esc(x.format)}</span>`;
+      side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
       title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
       side = (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono">${gb(x.size + x.stems_size)}</span>`;
@@ -141,7 +150,7 @@ function renderList() {
       sub = [`${x.kept_minutes} min kept`, st.state === "exported" ? `voice ${st.exported}` : st.state ? st.state : "not trained yet", `changed ${when(x.updated)}`].join(" · ");
       side = `<span class="mono">${gb(x.size)}</span>`;
     }
-    return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" role="option" tabindex="0" aria-selected="${L.sel === id}">
+    return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
       <span style="min-width:0"><b>${esc(title)}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
   }).join("") : `<div class="lib-empty">Nothing matches “${esc($("#lib-q").value)}”.</div>`);
@@ -242,8 +251,9 @@ function coverDetail(d, c) {
       ${c.seconds?.total ? `<dt>Made in</dt><dd>${c.seconds.total.toFixed(1)} s</dd>` : ""}
       ${c.notes?.length ? `<dt>Notes</dt><dd>${esc(c.notes.join(" "))}</dd>` : ""}
       <dt>File</dt><dd class="mono">${esc(c.file)} · ${gb(c.size)}</dd></dl>
+    <p class="meta" id="lib-keepline">${esc(keepLine(c))}</p>
     <div id="lib-rename-box"></div>
-    <div class="lactions">${c.song_id ? `<button class="btn primary" id="lib-reuse">Use these settings</button>` : ""}<a class="btn" href="${c.url}?download">Download</a>
+    <div class="lactions">${c.song_id ? `<button class="btn primary" id="lib-reuse">Use these settings</button>` : ""}<button class="btn" id="lib-keep" type="button" data-kept="${!!c.kept}">${c.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${c.url}?download">Download</a>
       <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
   wirePlayer(c.url);
   $$("#lib-src button").forEach(b => b.onclick = () => { $$("#lib-src button").forEach(x => x.setAttribute("aria-pressed", x === b)); switchSource(c[b.dataset.src]); });
@@ -259,6 +269,7 @@ function coverDetail(d, c) {
       showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) { showError(e.message, "Couldn't load that cover's settings"); }
   };
+  $("#lib-keep").onclick = async () => { try { await api(`/api/library/covers/${c.id}/${c.kept ? "unkeep" : "keep"}`, { json: {} }); afterChangeKeep(); } catch (e) { showError(e.message, "Couldn't change that"); } };
   renameFlow(c.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/covers/${c.id}/rename`, { json: { name } }); });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/covers/${c.id}`, { method: "DELETE" }); afterChange(); });
 }
@@ -270,8 +281,9 @@ function speechDetail(d, x) {
       <dt>Settings</dt><dd>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
       ${x.seconds?.total ? `<dt>Made in</dt><dd>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
       <dt>Files</dt><dd class="mono">${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
+    <p class="meta" id="lib-keepline">${esc(keepLine(x))}</p>
     <div id="lib-rename-box"></div>
-    <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><a class="btn" href="${x.url}?download">Download WAV</a>
+    <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><button class="btn" id="lib-keep" type="button" data-kept="${!!x.kept}">${x.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${x.url}?download">Download WAV</a>
       ${x.mp3_url ? `<a class="btn" href="${x.mp3_url}?download">Download MP3</a>` : ""}
       <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
   wirePlayer(x.url);
@@ -280,6 +292,7 @@ function speechDetail(d, x) {
     if (typeof SE !== "undefined") { SE.voice = x.voice; store.set("uc-se-voice", x.voice); }
     showTab("speakeasy"); window.scrollTo({ top: 0, behavior: "smooth" });
   };
+  $("#lib-keep").onclick = async () => { try { await api(`/api/library/speech/${x.id}/${x.kept ? "unkeep" : "keep"}`, { json: {} }); afterChangeKeep(); } catch (e) { showError(e.message, "Couldn't change that"); } };
   renameFlow(x.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/speech/${x.id}/rename`, { json: { name } }); });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/speech/${x.id}`, { method: "DELETE" }); afterChange(); });
 }
@@ -364,7 +377,7 @@ function renameFlow(current, save) {
     $("#lib-rename-x").onclick = () => { box.innerHTML = ""; };
   };
 }
-async function afterChangeKeep() { L.audio.pause(); await refreshAll(true); loadHistory(); loadVoices().catch(() => {}); }
+async function afterChangeKeep() { L.audio.pause(); await refreshAll(true); loadHistory(); loadVoices().catch(() => {}); if (typeof seLoadRecent === "function") seLoadRecent(); }
 
 // ------------------------------------------------------------ clean up
 $("#lib-clean-btn").onclick = async () => {

@@ -527,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
         """Show a cover in Explorer (by history id), or open the output folder."""
         from ..frontman.pipeline import history
         hid = body.get("history_id")
-        item = next((h for h in history() if h["id"] == hid), None) if hid is not None else None
+        item = next((h for h in history() if h["id"] == hid), None) if isinstance(hid, str) else None
         vdir = path("voices_dir") / str(body.get("voice") or "")
         if body.get("voice") and re.fullmatch(r"[a-z0-9-]+", body["voice"]) and vdir.is_dir():
             os.startfile(vdir)
@@ -576,6 +576,11 @@ def main():
         relocate.check_and_fix()
     except Exception as e:   # noqa: BLE001 - never block startup
         print(f"Couldn't check the app folder location: {e}", flush=True)
+    try:   # covers get permanent ids once (a copy of the old history file is kept next to it)
+        from ..frontman import history as cover_history
+        cover_history.migrate()
+    except Exception as e:   # noqa: BLE001
+        print(f"Couldn't check the cover history: {e}", flush=True)
     host, port = UCFG["host"], UCFG["port"]
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])

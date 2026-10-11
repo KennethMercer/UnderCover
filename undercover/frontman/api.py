@@ -1,7 +1,8 @@
 """FrontMan's HTTP routes (the Covers tab): songs, covers, previews and the one-shot. The app's server routes here.
 
 GET    /api/config                          the page's default cover options (config.toml)
-GET    /api/history                         covers made so far
+GET    /api/history                         the recent tray: the latest 15 finished covers, newest first (kept or not;
+                                            each has id, kept, kept_at). Keep/unkeep: POST /api/library/covers/<id>/keep|unkeep
 GET    /api/songs/search?q=                 YouTube song search
 GET    /api/songs/<id> | /api/songs/<id>/key
 GET    /api/auto/plan?text=&train=          what a one-shot would do (nothing downloaded)
@@ -150,7 +151,7 @@ def _start_cover(h, body: dict):
         job.push(stage="queued", frac=0, message="Starting", estimate=est, elapsed=0)
         res = ENGINE.make_cover(song, opts, progress=progress, title=meta["title"])
         hist = history_items()
-        item = next((h for h in hist if h["output_name"] == res.output.name), None)
+        item = next((h for h in hist if h["id"] == res.id), None)
         job.finish("done", message="Finished", result=item, seconds=res.seconds, notes=res.notes,
                    elapsed=round(time.perf_counter() - t0, 1))
 
