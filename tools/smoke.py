@@ -811,6 +811,18 @@ def _cover_with(song, voice):
     assert k["kept"] and k["kept_at"], k
     assert next(x for x in api("/api/history") if x["id"] == c["id"])["kept"], "kept isn't in the history list"
     assert not api(f"/api/library/covers/{c['id']}/unkeep", {})["kept"]
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", int(BASE.rsplit(":", 1)[1]), timeout=30)   # one connection, as the page uses
+    try:
+        conn.request("POST", f"/api/library/covers/{c['id']}/keep", body=b"{}", headers={"Content-Type": "application/json", "Origin": BASE})
+        assert conn.getresponse().read()
+        conn.request("GET", "/api/history", headers={"Origin": BASE})
+        r = conn.getresponse()
+        assert r.status == 200 and r.read().startswith(b"["), f"the request after a keep on the same connection failed: {r.status}"
+        conn.request("POST", f"/api/library/covers/{c['id']}/unkeep", body=b"{}", headers={"Content-Type": "application/json", "Origin": BASE})
+        conn.getresponse().read()
+    finally:
+        conn.close()
     api(f"/api/library/covers/{c['id']}", method="DELETE")
     assert c["id"] not in {x["id"] for x in api("/api/library/covers")}, "test cover not deleted"
     assert c["id"] not in {x["id"] for x in api("/api/history")}
@@ -852,6 +864,20 @@ def a_speech():
     assert item["id"] in {x["id"] for x in api("/api/library/speech")}, "not listed in SafeHouse"
     assert api(f"/api/speak/{item['id']}/keep", {})["kept"] and next(x for x in api("/api/speak/recent") if x["id"] == item["id"])["kept"]
     assert not api(f"/api/speak/{item['id']}/unkeep", {})["kept"]
+    # the page reuses one connection: a POST route that doesn't read its body breaks the NEXT request ("501 {}GET")
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", int(BASE.rsplit(":", 1)[1]), timeout=30)
+    try:
+        for route in (f"/api/speak/{item['id']}/keep", f"/api/library/speech/{item['id']}/unkeep"):
+            conn.request("POST", route, body=b"{}", headers={"Content-Type": "application/json", "Origin": BASE})
+            resp = conn.getresponse()
+            assert resp.status == 200, f"{route}: {resp.status}"
+            resp.read()
+            conn.request("GET", "/api/speak/recent", headers={"Origin": BASE})
+            resp = conn.getresponse()
+            assert resp.status == 200 and resp.read().startswith(b"["), f"the request after {route} on the same connection failed: {resp.status}"
+    finally:
+        conn.close()
     api(f"/api/speak/{item['id']}", method="DELETE")
     assert item["id"] not in {x["id"] for x in api("/api/speak/recent")} and not wav.exists(), "test speech not deleted"
     assert not (path("cache_dir") / "previews" / f"speech_{r['job']}").exists(), "sentence files left behind"

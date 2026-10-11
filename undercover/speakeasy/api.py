@@ -60,6 +60,7 @@ def _route(h, method, p):
     if m and method == "POST" and m.group(2) == "rename":
         return h._json(speak.rename_speech(m.group(1), h._body().get("name", "")))
     if m and method == "POST" and m.group(2) in ("keep", "unkeep"):
+        h._body()   # read what the page sent, or it's taken for the start of its next request on the same connection
         return h._json(speak.set_kept(m.group(1), m.group(2) == "keep"))
     if m and method == "DELETE" and not m.group(2):
         speak.delete_speech(m.group(1))
