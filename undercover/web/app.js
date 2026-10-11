@@ -66,10 +66,7 @@ async function pollStatus() {
     const tr = $("#chip-train"), t = s.training;   // training is visible from any tab
     tr.hidden = !t;
     if (t) tr.innerHTML = `<i class="dot wait"></i><span>Training ${esc(t.project)}${t.eta ? ` · ${fmtSecs(t.eta)} left` : t.epoch ? ` · ${t.epoch}/${t.epochs}` : ""}</span>`;
-    if (t && !S.job && !S.osBusy) tabTitle(`⏳ Training${t.eta ? " · " + fmtSecs(t.eta) : ""}`);
-    else if (!t && S.wasTraining && !S.job && !S.osBusy) tabTitle("✓ Training done");
-    S.wasTraining = !!t;
-    if (typeof renderWorkBar === "function") renderWorkBar(s.work);   // work.js: Pause / Resume bar
+    if (typeof renderWorkBar === "function") renderWorkBar(s.work);   // work.js: Pause / Resume bar (the tab title: jobs.js)
     const m = $("#chip-models");
     m.hidden = s.models === "ready" && !s.queue;   // only worth a chip while loading, failing or with covers waiting
     if (s.models === "ready") m.textContent = s.queue ? `${s.queue} queued` : "models warm";
@@ -211,17 +208,14 @@ function presep() {
   const id = S.song.id;
   api(`/api/songs/${id}/presep`, { json: { options: S.opts } }).then(r => {
     if (!r.started) return;
-    const es = new EventSource(`/api/jobs/${r.job}/events`);
-    es.onmessage = async m => {
-      const ev = JSON.parse(m.data);
+    const stop = watchJob(r.job, async ev => {
       if (!ev.final) return;
-      es.close();
+      stop();
       if (ev.state === "done" && S.song?.id === id) {   // show "stems already separated" and the shorter estimate
         try { S.song = await api(`/api/songs/${id}`); renderSong(); } catch (e) {}
         refreshEstimate();
       }
-    };
-    es.onerror = () => es.close();
+    });
   }).catch(() => {});
 }
 function upload(file) {
@@ -349,17 +343,14 @@ function renderOnline(q, isLink) {
 function install(btn, body) {
   btn.disabled = true; btn.textContent = "Starting…";
   api("/api/voices/install", { json: body }).then(({ job }) => {
-    const es = new EventSource(`/api/jobs/${job}/events`);
-    es.onmessage = async m => {
-      const ev = JSON.parse(m.data);
-      if (ev.stage === "downloading") btn.textContent = ev.frac != null ? `${Math.round(ev.frac * 100)}%` : ev.message.replace("Downloading ", "");
+    const stop = watchJob(job, async ev => {
+      if (ev.stage === "downloading") btn.textContent = ev.frac != null ? `${Math.round(ev.frac * 100)}%` : (ev.message || "").replace("Downloading ", "");
       if (ev.final) {
-        es.close();
+        stop();
         if (ev.state === "done") { btn.textContent = "Installed"; $("#q").value = ""; S.online = []; await loadVoices(ev.voice); }
-        else { btn.disabled = false; btn.textContent = "Install"; if (ev.state === "error") showError(ev.message, "That voice couldn't be installed"); }
+        else { btn.disabled = false; btn.textContent = "Install"; if (ev.state === "error" || ev.state === "lost") showError(ev.message, "That voice couldn't be installed"); }
       }
-    };
-    es.onerror = () => { es.close(); btn.disabled = false; btn.textContent = "Install"; };
+    });
   }).catch(e => { btn.disabled = false; btn.textContent = "Install"; showError(e.message, "That voice couldn't be installed"); });
 }
 
@@ -496,11 +487,10 @@ function startProgress(job) {
     $("#elapsed").textContent = `${el.toFixed(0)} s elapsed` + (totalLeft != null ? ` · about ${fmtSecs(Math.max(1, totalLeft))} to go` : "");
   }, 250);
   let current = null, lastStageStart = 0;
-  const es = new EventSource(`/api/jobs/${job}/events`);
-  S.es = es;
-  es.onmessage = m => {
-    const ev = JSON.parse(m.data);
+  if (S.es) S.es();
+  const stop = S.es = watchJob(job, ev => {   // jobs.js: the live stream, or progress polled while it's quiet
     if (ev.estimate) { S.estimate = ev.estimate; totalLeft = ev.estimate.total; }
+    if (ev.elapsed != null && !ev.final) jobStart = performance.now() - ev.elapsed * 1000;   // right after a reload too
     if (ORDER.includes(ev.stage)) {
       if (ev.stage !== current) {
         ORDER.slice(0, ORDER.indexOf(ev.stage)).forEach(s => { const el = $(`.stage[data-s=${s}]`); if (!el.classList.contains("done")) setStage(s, "done", 1, el.dataset.took || "done"); });
@@ -511,19 +501,18 @@ function startProgress(job) {
       $(`.stage[data-s=${ev.stage}] .sname`).textContent = ev.message;
       setStage(ev.stage, ev.frac >= 1 ? "done" : "active", ev.frac, ev.frac >= 1 ? `${(ev.elapsed - lastStageStart).toFixed(1)} s` : `${fmtSecs(Math.max(1, ev.stage_left))} left`);
       totalLeft = ev.total_left;
-      if (totalLeft != null) tabTitle(`⏳ ${fmtSecs(Math.max(1, totalLeft))}`);
     }
     if (ev.final) {
-      es.close(); S.es = null; clearInterval(elapsedTimer); S.job = null; summary(); tabTitle(null);
+      stop(); S.es = null; clearInterval(elapsedTimer); S.job = null; summary();
       if (ev.state === "done") {
         const sec = ev.seconds || {};
         const took = { separating: sec.separate < 0.5 ? "cached" : sec.separate, converting: sec.convert, mixing: sec.remix };
         ORDER.forEach(s => setStage(s, "done", 1, typeof took[s] === "number" ? `${took[s].toFixed(1)} s` : (took[s] || "done")));
         $("#progress-h").textContent = "Done"; $("#cancel").hidden = true;
         $("#sr-live").textContent = "Your cover is ready.";
-        tabTitle("✓ Cover ready");
-        $("#elapsed").textContent = `Finished in ${ev.elapsed.toFixed(1)} s`;
-        if (ev.result) showResult(ev.result, ev.seconds); else loadHistory();
+        $("#elapsed").textContent = `Finished in ${(ev.elapsed || (performance.now() - jobStart) / 1000).toFixed(1)} s`;
+        // without the stream's last event (only the summary got through) the newest cover is this one
+        if (ev.result) showResult(ev.result, ev.seconds); else loadHistory().then(() => { if (ev.synthetic && HIST[0]) showResult(HIST[0]); });
         if (ev.notes?.length) showError(ev.notes.join(" "), "Heads up", null, true);
         refreshEstimate();
       } else if (ev.state === "cancelled") {
@@ -533,12 +522,7 @@ function startProgress(job) {
         showError(ev.message, "The cover didn't finish");
       }
     }
-  };
-  es.onerror = () => {
-    if (!S.job) return;
-    es.close(); clearInterval(elapsedTimer); S.job = null; summary(); $("#progress").hidden = true;
-    showError("Lost contact with UnderCover during the cover. If you closed its window, start it again with UnderCover.bat.", "The cover didn't finish");
-  };
+  });
 }
 
 // ------------------------------------------------------------ result player (A/B)
@@ -675,18 +659,15 @@ $("#preview-go").onclick = async () => {
   try {
     const { job } = await api("/api/preview", { json: { song: S.song.id, voice: S.voice, options: S.opts, variants } });
     S.job = job; summary();
-    const es = new EventSource(`/api/jobs/${job}/events`);
-    es.onmessage = m => {
-      const ev = JSON.parse(m.data);
+    const stop = watchJob(job, ev => {
       if (ev.message) $("#preview-status").textContent = ev.message;
       if (ev.frac != null) $("#preview-bar i").style.width = Math.round((ev.stage === "rendering" ? 0.3 + 0.7 * ev.frac : 0.3 * ev.frac) * 100) + "%";
       if (!ev.final) return;
-      es.close(); S.job = null; summary(); $("#preview-go").disabled = false; $("#preview-bar").hidden = true;
+      stop(); S.job = null; summary(); $("#preview-go").disabled = false; $("#preview-bar").hidden = true;
       if (ev.state === "done") { renderPreviews(ev.previews); refreshEstimate(); }
       else if (ev.state === "cancelled") $("#preview-status").textContent = "Cancelled.";
       else { $("#preview-status").textContent = ""; showError(ev.message, "Preview failed"); }
-    };
-    es.onerror = () => { es.close(); S.job = null; summary(); $("#preview-go").disabled = false; $("#preview-bar").hidden = true; };
+    });
   } catch (e) {
     $("#preview-go").disabled = false; $("#preview-bar").hidden = true; $("#preview-status").textContent = "";
     showError(e.message, "Preview failed");
@@ -760,7 +741,13 @@ addEventListener("resize", redrawAll);
     await loadVoices();
     await loadHistory();
     // a cover started before a reload is still running: show its progress again instead of inviting a duplicate
-    try { const st = await api("/api/status"); if (st.cover_job && !S.job) { S.job = st.cover_job; summary(); startProgress(st.cover_job); } } catch (e) {}
+    // and later: a cover started somewhere else (another tab, a one-shot's "Make it with this version")
+    const follow = list => {
+      const run = list.find(j => j.kind === "cover" && isRunning(j) && !/^Preview/.test(j.title || ""));
+      if (run && !S.job) { S.job = run.id; summary(); startProgress(run.id); }
+    };
+    follow(await refreshJobs(true));
+    onJobs(follow);
     const last = store.get("uc-song", null);
     if (last) { try { S.song = await api(`/api/songs/${last}`); renderSong(); refreshEstimate(); } catch (e) { store.set("uc-song", null); } }
   } catch (e) { showError(e.message, "UnderCover isn't responding"); }

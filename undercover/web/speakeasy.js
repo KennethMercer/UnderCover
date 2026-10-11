@@ -2,7 +2,7 @@
 // SpeakEasy (docs/mockups/speakeasy.html): text -> pick a voice -> Generate. Speech is made sentence by sentence and
 // "Now speaking" plays each one as soon as it's ready (played / ready / striped = still being made). Recent lists saved
 // speech (SafeHouse has them all). Listens for the shell's "uc:module" event. Uses helpers from app.js ($, $$, esc, api,
-// showError, store, fmtTime, VOL, tabTitle), train.js (newVoice) and shell.js (showTab, via the event's timing).
+// showError, store, fmtTime, VOL), jobs.js (watchJob), train.js (newVoice) and shell.js (showTab, via the event's timing).
 
 const SE = { voices: [], readers: [], voice: store.get("uc-se-voice", null), plan: null, recent: [], loaded: false,
              job: null, es: null, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: false,
@@ -143,10 +143,11 @@ $("#se-generate").onclick = async () => {
   catch (e) { seSummary(); return showError(e.message, "SpeakEasy couldn't start"); }
   seStart(r.job, r.plan, r.estimate);
 };
-function seStart(job, plan, estimate) {
-  if (SE.es) SE.es.close();
+// resumed: a speech that was being made when the page reloaded (shown again, but it doesn't start talking by itself)
+function seStart(job, plan, estimate, resumed = false) {
+  if (SE.es) SE.es();
   SE.audio.pause(); SE.rec.pause(); seRecIcons();
-  Object.assign(SE, { job, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: false, estimate, jobPlan: plan });
+  Object.assign(SE, { job, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: resumed, estimate, jobPlan: plan });
   $("#se-now").hidden = false;
   $("#se-track").classList.remove("done");
   for (const id of ["#se-wav", "#se-mp3"]) { $(id).setAttribute("aria-disabled", "true"); $(id).removeAttribute("href"); }
@@ -156,10 +157,11 @@ function seStart(job, plan, estimate) {
   $("#se-reading").innerHTML = `<span class="pending">Getting ready…</span>`;
   seSummary(); seTrack();
   $("#se-now").scrollIntoView({ block: "nearest", behavior: "smooth" });
-  const es = new EventSource(`/api/jobs/${job}/events`);
-  SE.es = es;
-  es.onmessage = m => {
-    const ev = JSON.parse(m.data);
+  const stop = SE.es = watchJob(job, ev => {   // jobs.js: the live stream, or progress polled while it's quiet
+    if (ev.synthetic) {   // a summary while the stream is quiet: no sentence files in it, only how far along
+      if (ev.of) $("#se-progress").textContent = `sentence ${(ev.index ?? -1) + 1} of ${ev.of} ready`;
+      return;
+    }
     if (ev.sentences && !SE.sents.length) { SE.sents = ev.sentences; seReading(); }
     if (ev.stage === "reading") $("#se-progress").textContent = ev.message.toLowerCase();
     if (ev.stage === "speaking") {
@@ -169,11 +171,10 @@ function seStart(job, plan, estimate) {
       seReading();
       if (!SE.started) { SE.started = true; sePlayPart(0); }   // talk as soon as the first sentence is there
       else if (SE.waiting && SE.parts[SE.cur + 1]) { SE.waiting = false; sePlayPart(SE.cur + 1); }
-      tabTitle(`🗣 ${ev.index + 1}/${ev.of}`);
       seTrack();
     }
     if (ev.final) {
-      es.close(); SE.es = null; SE.done = true; tabTitle(null);
+      stop(); SE.es = null; SE.done = true;
       $("#se-stop").hidden = true;
       if (ev.state === "done" && ev.result) {
         SE.result = ev.result;
@@ -191,8 +192,7 @@ function seStart(job, plan, estimate) {
       }
       seSummary(); seTrack(); seReading();
     }
-  };
-  es.onerror = () => { if (SE.done) es.close(); };
+  });
 }
 $("#se-stop").onclick = async () => {
   SE.audio.pause(); SE.waiting = false; sePlayIcon();
@@ -324,3 +324,9 @@ function seRelease(id) {
 $("#se-all").onclick = () => { if (typeof L !== "undefined") L.cat = "speech"; store.set("uc-lib-cat", "speech"); showTab("safehouse"); window.scrollTo({ top: 0 }); };
 
 seCount();
+
+// after a reload: a speech still being made shows again in "Now speaking" (it carries on from the server's events)
+(async () => {
+  const run = (await refreshJobs(true)).find(j => j.kind === "speech" && isRunning(j));
+  if (run && !SE.job) seStart(run.id, null, 0, true);
+})();
