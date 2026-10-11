@@ -237,6 +237,7 @@ function seStart(job, plan, estimate, resumed = false) {
         if (ev.result.mp3_url) { $("#se-mp3").href = ev.result.mp3_url + "?download"; $("#se-mp3").removeAttribute("aria-disabled"); }
         $("#se-dl-note").textContent = `saved as “${ev.result.file}” (SafeHouse → Speech)`;
         $("#se-track").classList.add("done");
+        seKeepShow();
         seLoadRecent();
       } else {
         $("#se-progress").textContent = ev.state === "cancelled" ? "stopped" : "failed";
@@ -327,20 +328,22 @@ $("#se-track").addEventListener("keydown", e => {
 // ------------------------------------------------------------ Recent
 async function seLoadRecent() {
   try { SE.recent = await api("/api/speak/recent"); } catch (e) { SE.recent = []; }
-  if (SE.result && !SE.recent.some(r => r.id === SE.result.id)) {   // deleted (here or in SafeHouse): its player goes too
+  const mine = SE.result && SE.recent.find(r => r.id === SE.result.id);
+  if (SE.result && !mine) {   // deleted (here or in SafeHouse) or rolled off the tray: its player goes too
     SE.audio.pause(); SE.audio.removeAttribute("src"); SE.result = null; SE.job = null; $("#se-now").hidden = true;
-  }
+  } else if (mine) { SE.result.kept = mine.kept; seKeepShow(); }
   seRecent();
 }
 function seRecent() {
   const box = $("#se-recent");
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
-  box.innerHTML = SE.recent.slice(0, 6).map(r => `<div class="se-rrow">
+  box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
       <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${esc(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
-      <span class="row"><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
+      <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
+  $$("[data-rkeep]", box).forEach(b => b.onclick = () => seToggleKeep(b.dataset.rkeep, b.getAttribute("aria-pressed") === "true"));
   $$("[data-rdel]", box).forEach(b => b.onclick = async () => {
     if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); b.textContent = "Remove"; } }, 4000); return; }
     const id = b.dataset.rdel;
@@ -349,6 +352,21 @@ function seRecent() {
     seLoadRecent();
   });
 }
+// Keep (phase 6): "Send to SafeHouse" keeps a speech for good; unkept ones roll off the recent tray (the latest 15)
+function seKeepShow() {
+  const b = $("#se-keep"), r = SE.result;
+  b.hidden = !r;
+  if (!r) return;
+  b.setAttribute("aria-pressed", !!r.kept); b.dataset.kept = r.kept ? "true" : "false";
+  b.textContent = r.kept ? "Kept in SafeHouse ✓" : "Send to SafeHouse";
+}
+async function seToggleKeep(id, kept) {
+  try { await api(`/api/speak/${id}/${kept ? "unkeep" : "keep"}`, { json: {} }); }
+  catch (e) { return showError(e.message, "Couldn't change that"); }
+  if (SE.result?.id === id) SE.result.kept = !kept;
+  await seLoadRecent(); seKeepShow();
+}
+$("#se-keep").onclick = () => SE.result && seToggleKeep(SE.result.id, !!SE.result.kept);
 function seWhen(s) {
   const d = new Date((s || "").replace(" ", "T")); if (isNaN(d)) return s || "";
   const days = Math.floor((Date.now() - d) / 864e5);
