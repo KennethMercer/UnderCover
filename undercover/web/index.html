@@ -486,25 +486,13 @@
   <div class="view" id="view-library" hidden>
     <div class="modhead"><div class="modmark"><svg class="ico" aria-hidden="true"><use href="#g-safehouse"/></svg></div>
       <div><h1>SafeHouse</h1><p>Everything the suite keeps on disk, and what can go.</p></div></div>
+    <div class="rooms" role="tablist" aria-label="Rooms">
+      <button class="room" role="tab" type="button" data-room="library" aria-selected="true">Library</button>
+      <button class="room" role="tab" type="button" data-room="storage" aria-selected="false">Storage <small id="room-n-storage"></small></button>
+      <button class="room" role="tab" type="button" data-room="addons" aria-selected="false">Add-ons <small id="room-n-addons"></small></button>
+    </div>
+    <div class="sh-room" id="room-library">
     <section class="panel lib-jobs"><h2>Running and recent</h2><div class="qd-jobs" id="lib-jobs"></div></section>
-    <section class="panel">
-      <div class="lib-storage">
-        <div class="lib-storage-main">
-          <h2>Storage</h2>
-          <div class="stack" id="lib-stack" role="img" aria-label="Storage by type"></div>
-          <div class="legend" id="lib-legend"></div>
-        </div>
-        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn">Clean up…</button>
-          <span class="meta" id="lib-ytdlp"></span>
-          <button class="linkbtn" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button></div>
-      </div>
-    </section>
-    <section class="panel" id="lib-clean" hidden>
-      <div class="row spread"><h2>Clean up</h2><span class="meta">Frees space without touching your covers, songs or voices (unless you tick those)</span></div>
-      <div class="clean" id="lib-clean-list"></div>
-      <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
-        <span class="meta">Can't be undone, but anything here is re-made automatically if it's needed again.</span></div>
-    </section>
     <div class="cats" id="lib-cats" role="group" aria-label="Show"></div>
     <div class="lib-tools">
       <input type="search" id="lib-q" autocomplete="off" aria-label="Search the library">
@@ -515,6 +503,43 @@
       <div class="panel items" id="lib-list" aria-label="Items"></div>
       <aside class="panel detail" id="lib-detail" aria-live="polite"></aside>
     </section>
+    </div>
+
+    <div class="sh-room" id="room-storage" hidden>
+    <div class="roomhead"><h3>Storage</h3><p>What UnderCover keeps, where it lives, and what can go.</p></div>
+    <section class="panel">
+      <div class="lib-storage">
+        <div class="lib-storage-main">
+          <div class="stack" id="st-stack" role="img" aria-label="Storage by group"></div>
+          <div class="legend" id="st-legend"></div>
+          <div data-deep><div class="stack thin" id="lib-stack" role="img" aria-label="Storage by type"></div>
+            <div class="legend" id="lib-legend"></div></div>
+        </div>
+        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn">Clean up…</button>
+          <span class="meta" id="lib-ytdlp"></span></div>
+      </div>
+    </section>
+    <section class="panel" id="lib-clean" hidden>
+      <div class="row spread"><h2>Clean up</h2><span class="meta">Frees space without touching your covers, songs or voices (unless you tick those)</span></div>
+      <div class="clean" id="lib-clean-list"></div>
+      <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
+        <span class="meta">Can't be undone, but anything here is re-made automatically if it's needed again.</span></div>
+    </section>
+    <section class="panel">
+      <div class="row spread"><h2>Where your files live</h2><span class="meta">Keep UnderCover on C: and its files somewhere roomier</span></div>
+      <div class="places" id="st-places"></div>
+      <div class="row spread"><span class="meta">Logs and settings stay with the app.</span>
+        <button class="linkbtn" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button></div>
+    </section>
+    </div>
+
+    <div class="sh-room" id="room-addons" hidden>
+    <div class="roomhead"><h3>Add-ons</h3>
+      <p>The parts UnderCover is built from. <b>Included</b> ones come with it. <b>Optional</b> ones have their own licence, so
+        they're never installed unless you choose to add them. Everything keeps working without them.</p></div>
+    <div class="filters" id="ad-filters" role="group" aria-label="Show"></div>
+    <div class="addons" id="ad-list"></div>
+    </div>
   </div>
 
   <div class="view" id="view-speakeasy" hidden>
@@ -607,6 +632,7 @@
 <script src="/static/train.js"></script>
 <script src="/static/oneshot.js"></script>
 <script src="/static/library.js"></script>
+<script src="/static/rooms.js"></script>
 <script src="/static/work.js"></script>
 <script src="/static/doubleagent.js"></script>
 <script src="/static/speakeasy.js"></script>

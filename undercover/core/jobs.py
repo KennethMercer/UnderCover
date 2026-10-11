@@ -309,6 +309,10 @@ def run_job(job: "Job", fn):
     if job.cancel:
         job.finish("cancelled", message="Cancelled.")
         return
+    from . import storage
+    if storage.MOVING:   # SafeHouse is moving UnderCover's files: nothing may read or write them meanwhile
+        job.finish("error", message="UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done.")
+        return
     from . import worklist
     if job.kind in worklist.PAUSABLE and job.kind not in worklist.PARTLY_PAUSABLE and (job.pausing or worklist.held()):
         job.finish("paused", message="Voice work is paused (top of the page). Resume starts it.")

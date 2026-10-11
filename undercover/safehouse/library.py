@@ -51,6 +51,9 @@ def _busy(kinds=ALL_WORK) -> str | None:
 
 def _guard(kinds=ALL_WORK):
     """Refuse only while work that could use these files runs (a training doesn't block deleting a cover)."""
+    from ..core import storage
+    if storage.MOVING:
+        raise ModelError("UnderCover's files are being moved (Storage). Try again when that's done.")
     kind = _busy(kinds)
     if kind:
         what = _BUSY_WHAT.get(kind, "a voice training")
@@ -158,7 +161,7 @@ def summary() -> dict:
         "speech": speak.storage(),
         "songs": _size(path("uploads_dir")),
         "stems": _size(cache / "stems"),
-        "voices": _size(path("models_dir") / "voices"),
+        "voices": _size(path("voices_dir")),
         "training": _size(cache / "training"),
         "temporary": sum(_size(p) for p in temp),
         "app": sum(_size(path("models_dir") / d) for d in ("rvc", "separator", "speaker", "tts")),
@@ -167,7 +170,7 @@ def summary() -> dict:
     return {"categories": cats, "total": sum(cats.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
             "ytdlp": _ytdlp_version(),
             "counts": {"covers": len(covers()), "speech": len(speak.list_speech()), "songs": len(_song_metas()),
-                       "voices": len(list((path("models_dir") / "voices").glob("*/meta.json"))),
+                       "voices": len(list(path("voices_dir").glob("*/meta.json"))),
                        "training": len(list((cache / "training").glob("*/project.json")))}}
 
 

@@ -73,11 +73,12 @@ def _progress(rid):
 
 def _ensure(files: dict, what: str, rid):
     from .. import setup_models
+    from .engines import MODEL_SHA256
     missing = [f for f in files if not (path("models_dir") / f).exists()]
     if missing:
         p = _progress(rid)
         setup_models.ensure(lambda f, d, t: p(f"Downloading {what} (once): {d / 1e6:.0f} of {t / 1e6:.0f} MB", d, t),
-                            files={f: files[f] for f in missing})
+                            files={f: files[f] for f in missing}, sha256=MODEL_SHA256)
 
 
 # ---------------------------------------------------------------- engines

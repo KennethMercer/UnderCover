@@ -334,6 +334,103 @@ def u_cadence():
     return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
 
 
+@check("add-ons: registry, CLI list, a fake add-on installs (checksum) and removes cleanly")
+def u_addons():
+    import subprocess
+    import tempfile
+    from undercover.core import addons
+    from undercover.core.config import path
+    out = subprocess.run([sys.executable, "-m", "undercover.addons", "list", "--json"], cwd=ROOT, capture_output=True,
+                         text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-400:]
+    rows = {r["id"]: r for r in json.loads(out.stdout)}
+    assert {"f5", "xtts", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows), sorted(rows)
+    assert rows["f5"]["installable"] and not rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["xtts"]
+    had = addons._state().get("test")
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "fake.bin"
+        src.write_bytes(b"undercover smoke " * 4096)
+        fake = addons.register_test_addon(src)
+        dest = path("models_dir") / "_test" / "test-addon.bin"
+        try:
+            try:
+                addons.install("test", accept=False)
+                raise AssertionError("installed without accepting")
+            except addons.ModelError:
+                pass
+            try:
+                addons.install("chatterbox", accept=True)
+                raise AssertionError("an included part was installable")
+            except addons.ModelError:
+                pass
+            r = addons.install("test", accept=True)
+            assert r["installed"] and r["accepted"] and addons.available("test") and dest.exists(), r
+            r = addons.remove("test")
+            assert not r["installed"] and r["accepted"] and r["freed"] == src.stat().st_size and not dest.parent.exists(), r
+            fake.sha256["_test/test-addon.bin"] = "0" * 64   # a download that doesn't match its checksum is refused
+            try:
+                addons.install("test", accept=True)
+                raise AssertionError("a file with the wrong checksum was installed")
+            except addons.ModelError:
+                assert not dest.exists()
+        finally:
+            addons.ADDONS.pop("test", None)
+            dest.unlink(missing_ok=True)
+            if dest.parent.exists() and not any(dest.parent.iterdir()):
+                dest.parent.rmdir()
+            if not had:
+                addons.forget("test")
+    return f"{len(rows)} parts, {sum(not r['included'] for r in rows.values())} optional"
+
+
+@check("data locations: move a scratch library and model files (voices stay the library's) and back")
+def u_storage():
+    import tempfile
+    from undercover.core import config, storage
+    saved_paths, saved_file = dict(config.CONFIG["paths"]), config.CONFIG_FILE
+
+    class FakeJob:
+        id, cancel = "smoke", False
+        def push(self, **ev): pass
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td)
+        a, b, c = t / "app", t / "lib2", t / "models2"
+        for d in ("uploads", "output", "models/voices/v1", "models/tts", "cache", "logs"):
+            (a / d).mkdir(parents=True)
+        (a / "models/tts/m.bin").write_bytes(b"m" * 5000)
+        (a / "models/voices/v1/meta.json").write_text(json.dumps({"dir": str(a / "models/voices/v1")}), encoding="utf-8")
+        (a / "uploads/s.mp3").write_bytes(b"s" * 3000)
+        (a / "output/history.jsonl").write_text(json.dumps({"output": str(a / "output/c.mp3")}) + "\n", encoding="utf-8")
+        (a / "output/c.mp3").write_bytes(b"c" * 2000)
+        cfg = t / "config.toml"
+        cfg.write_text(saved_file.read_text(encoding="utf-8"), encoding="utf-8")
+        config.CONFIG_FILE = cfg
+        try:
+            config.CONFIG["paths"] = {k: str(a / v) for k, v in (("models_dir", "models"), ("cache_dir", "cache"),
+                                      ("output_dir", "output"), ("logs_dir", "logs"), ("uploads_dir", "uploads"))}
+            assert storage.path("voices_dir") == a / "models" / "voices"   # the default: inside models_dir
+            r = storage.move("models", str(c), FakeJob())                    # model files go; voices stay
+            assert (c / "models/tts/m.bin").exists() and not (c / "models/voices").exists(), r
+            assert (a / "models/voices/v1/meta.json").exists() and not (a / "models/tts").exists()
+            assert storage.path("voices_dir") == a / "models" / "voices"
+            r = storage.move("library", str(b), FakeJob())                   # songs, covers, voices together
+            assert (b / "voices/v1/meta.json").exists() and (b / "uploads/s.mp3").exists() and not (a / "output").exists(), r
+            hist = json.loads((b / "output/history.jsonl").read_text(encoding="utf-8"))
+            assert hist["output"] == str(b / "output" / "c.mp3"), hist
+            assert json.loads((b / "voices/v1/meta.json").read_text(encoding="utf-8"))["dir"] == str(b / "voices" / "v1")
+            back = storage.move("library", str(t / "lib3"), FakeJob())       # and on again (a fresh folder)
+            assert (t / "lib3/voices/v1/meta.json").exists() and not (b / "voices").exists(), back
+            chk = storage.check("library", str(t / "lib3" / "output"))
+            assert not chk["ok"], chk
+            text = cfg.read_text(encoding="utf-8")
+            assert "models2" in text and "lib3" in text and "[cadence]" in text, text[:400]
+        finally:
+            config.CONFIG["paths"] = saved_paths
+            config.CONFIG_FILE = saved_file
+    assert config.CONFIG_FILE.read_text(encoding="utf-8").count("uploads_dir") == 1
+    return "models, then library (paths rewritten), then library again"
+
+
 @check("api: status ready")
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
@@ -645,7 +742,7 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta):
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")
