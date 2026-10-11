@@ -189,7 +189,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
         raise
     job.push(stage="saving", frac=1.0, message="Saving")
     item = _save(np.concatenate(pieces) if pieces else np.zeros(sr, np.float32), sr, text, p,
-                 {"total": round(time.perf_counter() - t0, 2), "reader": round(t_tts, 2), "voice": round(t_rvc, 2)})
+                 {"total": round(time.perf_counter() - t0, 2), "reader": round(t_tts, 2), "voice": round(t_rvc, 2)}, job.id)
     return item
 
 
@@ -202,7 +202,7 @@ def _safe(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip().strip(".")[:120]
 
 
-def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict) -> dict:
+def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str) -> dict:
     d = speech_dir()
     sid = uuid.uuid4().hex[:10]
     title = _title(text)
@@ -217,7 +217,8 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict) -> dict:
     mp3 = _mp3(wav)
     meta = {"id": sid, "title": title, "file": wav.name, "mp3": mp3.name if mp3 else None, "text": text,
             "voice": p["voice"], "reader": p["reader"], "reader_auto": p["auto"], "speed": p["speed"], "pitch": p["pitch"],
-            "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds}
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
+            "job": job_id}
     fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
     return _item(meta)
 
@@ -277,6 +278,8 @@ def delete_speech(sid: str):
         if name:
             fsutil.retry(lambda name=name: (speech_dir() / name).unlink(missing_ok=True))
     f.unlink(missing_ok=True)
+    if re.fullmatch(r"\w+", m.get("job") or ""):
+        shutil.rmtree(parts_dir(m["job"]), ignore_errors=True)   # its sentences, kept for the page's player
 
 
 def rename_speech(sid: str, name: str) -> dict:

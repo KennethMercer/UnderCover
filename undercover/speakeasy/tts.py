@@ -129,6 +129,7 @@ def _trim(a: np.ndarray, db: float = -45.0, keep: float = 0.05) -> np.ndarray:
 # ---------------------------------------------------------------- sentences
 
 _END = re.compile(r'(?<=[.!?…])["\')\]]*\s+(?=["\'(\[]?[A-Z0-9])')
+_ABBR = re.compile(r"\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Prof|Mt|Gen|Col|Lt|Sgt|Rev|vs|etc|e\.g|i\.e|[A-Z])\.$")
 MAX_CHARS = 280   # Kokoro reads up to ~510 phonemes at once; long sentences are split at a comma or semicolon
 
 
@@ -138,8 +139,13 @@ def sentences(text: str) -> list[dict]:
     paras = [p.strip() for p in re.split(r"\n\s*\n", text.replace("\r", "")) if p.strip()]
     for pi, para in enumerate(paras):
         para = re.sub(r"\s+", " ", para)
-        parts = [s.strip() for s in _END.split(para) if s.strip()]
-        for si, s in enumerate(parts):
+        parts = []
+        for s in (s.strip() for s in _END.split(para) if s.strip()):
+            if parts and _ABBR.search(parts[-1]):   # "Mr. Smith" isn't two sentences
+                parts[-1] += " " + s
+            else:
+                parts.append(s)
+        for s in parts:
             for piece in _split_long(s):
                 out.append({"text": piece, "pause": 0.3})
         if out:
@@ -164,5 +170,5 @@ def _split_long(s: str) -> list[str]:
 
 
 def seconds_estimate(text: str, speed: float = 1.0) -> float:
-    """Rough length of the speech: ~2.6 words per second at 1x (measured on Kokoro's American voices)."""
-    return len(re.findall(r"\w+", text)) / 2.6 / max(0.5, speed)
+    """Rough length of the speech: ~3 words per second at 1x (measured on Kokoro's American voices)."""
+    return len(re.findall(r"\w+", text)) / 3.0 / max(0.5, speed)
