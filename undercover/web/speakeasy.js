@@ -1,0 +1,326 @@
+"use strict";
+// SpeakEasy (docs/mockups/speakeasy.html): text -> pick a voice -> Generate. Speech is made sentence by sentence and
+// "Now speaking" plays each one as soon as it's ready (played / ready / striped = still being made). Recent lists saved
+// speech (SafeHouse has them all). Listens for the shell's "uc:module" event. Uses helpers from app.js ($, $$, esc, api,
+// showError, store, fmtTime, VOL, tabTitle), train.js (newVoice) and shell.js (showTab, via the event's timing).
+
+const SE = { voices: [], readers: [], voice: store.get("uc-se-voice", null), plan: null, recent: [], loaded: false,
+             job: null, es: null, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: false,
+             audio: new Audio(), rec: new Audio(), recId: null, visible: false };
+const SE_GROUPS = { af: "American women", bf: "British women", am: "American men", bm: "British men" };
+
+// ------------------------------------------------------------ show / hide
+document.addEventListener("uc:module", e => {
+  SE.visible = e.detail === "speakeasy";
+  $("#drop-overlay > div").textContent = SE.visible ? "Drop a .txt file to read it out"
+    : "Drop a song to load it, or a voice model (.zip / .pth) to install it";
+  if (SE.visible) seLoad();
+  else { SE.rec.pause(); seRecIcons(); }   // the speech being made keeps playing only on this page
+  if (!SE.visible && !SE.audio.paused) { SE.audio.pause(); sePlayIcon(); }
+});
+async function seLoad() {
+  const first = !SE.loaded;
+  SE.loaded = true;
+  try {
+    const [voices, readers] = await Promise.all([api("/api/speak/voices"), first ? api("/api/speak/readers") : SE.readers]);
+    SE.voices = voices; SE.readers = readers;
+  } catch (e) { $("#se-voices").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
+  if (first) seReaders();
+  if (!SE.voices.some(v => v.name === SE.voice)) SE.voice = (SE.voices.find(v => v.trained && !v.undertrained) || SE.voices[0] || {}).name || null;
+  seVoices(); sePlan(); seLoadRecent();
+}
+
+// ------------------------------------------------------------ 1 · text
+const seText = $("#se-text");
+seText.value = store.get("uc-se-text", "");
+function seWords() { return (seText.value.match(/[\w'’-]+/g) || []).length; }
+function seCount() {
+  const w = seWords(), secs = w / 3.0 / (+$("#se-speed").value || 1);
+  $("#se-count").textContent = w ? `${w.toLocaleString()} word${w === 1 ? "" : "s"} · about ${fmtTime(Math.max(1, secs))}` : "0 words";
+  seSummary();
+}
+let seSave = null;
+seText.addEventListener("input", () => { seCount(); clearTimeout(seSave); seSave = setTimeout(() => store.set("uc-se-text", seText.value.slice(0, 200000)), 400); });
+$("#se-clear").onclick = () => { seText.value = ""; store.set("uc-se-text", ""); seCount(); seText.focus(); };
+window.speakDrop = async files => {   // app.js hands file drops to this page while it's shown
+  const f = files.find(x => /\.(txt|md|text)$/i.test(x.name) || x.type.startsWith("text/"));
+  if (!f) return showError("SpeakEasy reads plain text files (.txt). Paste anything else into the box.", "Not a text file", null, true);
+  if (f.size > 2e6) return showError("That file is over 2 MB of text; split it into parts.", "Too long");
+  seText.value = (await f.text()).trim(); store.set("uc-se-text", seText.value.slice(0, 200000)); seCount();
+seLoadRecent();   // the WinAmp skin walks speech too, on any page
+};
+
+// ------------------------------------------------------------ 2 · voice
+function seVoices() {
+  const q = $("#se-q").value.trim().toLowerCase();
+  const list = SE.voices.filter(v => !q || `${v.name} ${v.person || ""}`.toLowerCase().includes(q));
+  $("#se-vcount").textContent = `${SE.voices.length} voice${SE.voices.length === 1 ? "" : "s"}`;
+  const row = v => {
+    const facts = v.trained ? [v.kind, v.likeness != null ? `likeness ${(+v.likeness).toFixed(2)}` : "", v.undertrained ? "under-trained" : ""]
+                            : ["downloaded", v.person ? `checked: ${v.person}` : "", v.kind === "singing" ? "singing" : ""];
+    const act = v.trained ? `<button class="mini" type="button" disabled title="Phase 4: MouthPiece trains a cadence model from this voice's clips">Train cadence</button>`
+      : v.person ? `<button class="mini" type="button" disabled title="Phase 4: MouthPiece finds clips first">Find clips + cadence</button>` : "";
+    return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-selected="${v.name === SE.voice}">
+      <div class="avatar" aria-hidden="true">${esc(v.name[0].toUpperCase())}</div>
+      <div class="vtext"><b>${esc(v.name)}</b><small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · cadence –</span></small></div>
+      <div class="se-vact">${act}</div></div>`;
+  };
+  const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
+  $("#se-voices").innerHTML = (trained.length ? `<div class="se-vgroup">Trained in MouthPiece</div>` + trained.map(row).join("") : "")
+    + (dl.length ? `<div class="se-vgroup">Downloaded (cadence needs clips first)</div>` + dl.map(row).join("") : "")
+    || `<p class="meta">${SE.voices.length ? `No voice matches “${esc(q)}”.` : "No voices yet: train one in MouthPiece or install one in FrontMan."}</p>`;
+  $$("#se-voices .voice").forEach(el => {
+    const pick = () => { SE.voice = el.dataset.v; store.set("uc-se-voice", SE.voice); $$("#se-voices .voice").forEach(x => x.setAttribute("aria-selected", x === el)); sePlan(); };
+    el.addEventListener("click", e => { if (!e.target.closest("button")) pick(); });
+    el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+  });
+}
+$("#se-q").addEventListener("input", seVoices);
+$("#se-newgo").onclick = () => {
+  const name = $("#se-newname").value.trim();
+  showTab("mouthpiece");
+  if (typeof newVoice === "function") newVoice();
+  if (name) $("#tr-person").value = name;
+  $("#tr-find").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#tr-person").focus({ preventScroll: true });
+};
+$("#se-newname").addEventListener("keydown", e => { if (e.key === "Enter") $("#se-newgo").click(); });
+
+// ------------------------------------------------------------ 3 · how
+function seReaders() {
+  const groups = {};
+  for (const r of SE.readers) (groups[r.id.slice(0, 2)] ||= []).push(r);
+  $("#se-reader").innerHTML = `<option value="auto">Auto: picked from the voice's pitch</option>` + Object.entries(SE_GROUPS).filter(([k]) => groups[k])
+    .map(([k, label]) => `<optgroup label="${label}">${groups[k].map(r => `<option value="${r.id}">${esc(r.id)} · ${esc(r.label.replace(/^(American|British) (wo)?man,? ?/, "") || "")} ${Math.round(r.hz)} Hz</option>`).join("")}</optgroup>`).join("");
+  $("#se-reader").value = store.get("uc-se-reader", "auto");
+  if (!$("#se-reader").value) $("#se-reader").value = "auto";
+}
+$("#se-speed").value = store.get("uc-se-speed", 1);
+$("#se-speed").addEventListener("input", () => { $("#se-speed-out").textContent = `${(+$("#se-speed").value).toFixed(2)}×`; store.set("uc-se-speed", +$("#se-speed").value); seCount(); });
+$("#se-speed-out").textContent = `${(+$("#se-speed").value).toFixed(2)}×`;
+$("#se-reader").onchange = () => { store.set("uc-se-reader", $("#se-reader").value); sePlan(); };
+$("#se-nudge").addEventListener("input", () => sePlan(true));
+
+let sePlanTimer = null, sePlanSeq = 0;
+function sePlan(soon) {
+  clearTimeout(sePlanTimer);
+  sePlanTimer = setTimeout(async () => {
+    if (!SE.voice) { SE.plan = null; seSummary(); return; }
+    const seq = ++sePlanSeq;
+    const qs = new URLSearchParams({ voice: SE.voice, reader: $("#se-reader").value || "auto", nudge: $("#se-nudge").value });
+    try { const p = await api(`/api/speak/plan?${qs}`); if (seq === sePlanSeq) { SE.plan = p; seShowPlan(); } }
+    catch (e) { if (seq === sePlanSeq) { SE.plan = null; seSummary(); } }
+  }, soon ? 120 : 0);
+}
+function seShowPlan() {
+  const p = SE.plan, st = v => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v)} st`;
+  $("#se-reader-out").textContent = `${p.auto ? "auto · " : ""}${p.reader}`;
+  $("#se-nudge-out").textContent = p.nudge ? `${st(p.pitch)} (auto ${st(p.pitch - p.nudge)})` : `auto · ${st(p.pitch)}`;
+  $("#se-pitch-note").textContent = p.target_hz
+    ? `Speaks around ${Math.round(p.target_hz)} Hz (from ${p.pitch_from}); the Reader is at ${Math.round(p.reader_hz)} Hz. Nudge it if they sound too high or low.`
+    : "This voice's speaking pitch isn't known (a downloaded voice nobody checked), so the Reader's own pitch is used. Nudge it, or pick another Reader, if it sounds off.";
+  const v = SE.voices.find(x => x.name === p.voice);
+  $("#se-cad-name").textContent = v?.person ? `${v.person}'s` : `${p.voice}'s`;
+  seSummary();
+}
+function seSummary() {
+  const w = seWords(), busy = SE.job && !SE.done;
+  $("#se-generate").disabled = !w || !SE.voice || !!busy;
+  $("#se-generate").textContent = busy ? "Speaking…" : "Generate";
+  if (!SE.voice) { $("#se-summary").textContent = "Pick a voice first."; return; }
+  const secs = w / 3.0 / (+$("#se-speed").value || 1);
+  $("#se-summary").innerHTML = w ? `<b>${esc(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · starts playing after the first sentence</span>`
+    : `<b>${esc(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
+}
+
+// ------------------------------------------------------------ Generate + Now speaking
+$("#se-generate").onclick = async () => {
+  const text = seText.value.trim();
+  if (!text || !SE.voice) return;
+  $("#se-generate").disabled = true;
+  let r;
+  try { r = await api("/api/speak", { json: { text, voice: SE.voice, reader: $("#se-reader").value, speed: +$("#se-speed").value, nudge: +$("#se-nudge").value } }); }
+  catch (e) { seSummary(); return showError(e.message, "SpeakEasy couldn't start"); }
+  seStart(r.job, r.plan, r.estimate);
+};
+function seStart(job, plan, estimate) {
+  if (SE.es) SE.es.close();
+  SE.audio.pause(); SE.rec.pause(); seRecIcons();
+  Object.assign(SE, { job, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: false, estimate, jobPlan: plan });
+  $("#se-now").hidden = false;
+  $("#se-track").classList.remove("done");
+  for (const id of ["#se-wav", "#se-mp3"]) { $(id).setAttribute("aria-disabled", "true"); $(id).removeAttribute("href"); }
+  $("#se-dl-note").textContent = "downloads unlock when the last sentence is made";
+  $("#se-stop").hidden = false; $("#se-stop").textContent = "Stop";
+  $("#se-progress").textContent = "starting…";
+  $("#se-reading").innerHTML = `<span class="pending">Getting ready…</span>`;
+  seSummary(); seTrack();
+  $("#se-now").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  const es = new EventSource(`/api/jobs/${job}/events`);
+  SE.es = es;
+  es.onmessage = m => {
+    const ev = JSON.parse(m.data);
+    if (ev.sentences && !SE.sents.length) { SE.sents = ev.sentences; seReading(); }
+    if (ev.stage === "reading") $("#se-progress").textContent = ev.message.toLowerCase();
+    if (ev.stage === "speaking") {
+      SE.parts[ev.index] = { url: ev.url, seconds: ev.seconds };
+      $("#se-progress").textContent = `sentence ${ev.index + 1} of ${ev.of} ready`;
+      SE.left = ev.left;
+      seReading();
+      if (!SE.started) { SE.started = true; sePlayPart(0); }   // talk as soon as the first sentence is there
+      else if (SE.waiting && SE.parts[SE.cur + 1]) { SE.waiting = false; sePlayPart(SE.cur + 1); }
+      tabTitle(`🗣 ${ev.index + 1}/${ev.of}`);
+      seTrack();
+    }
+    if (ev.final) {
+      es.close(); SE.es = null; SE.done = true; tabTitle(null);
+      $("#se-stop").hidden = true;
+      if (ev.state === "done" && ev.result) {
+        SE.result = ev.result;
+        $("#se-progress").textContent = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"} · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s`;
+        $("#se-wav").href = ev.result.url + "?download"; $("#se-wav").removeAttribute("aria-disabled");
+        if (ev.result.mp3_url) { $("#se-mp3").href = ev.result.mp3_url + "?download"; $("#se-mp3").removeAttribute("aria-disabled"); }
+        $("#se-dl-note").textContent = `saved as “${ev.result.file}” (SafeHouse → Speech)`;
+        $("#se-track").classList.add("done");
+        seLoadRecent();
+      } else {
+        $("#se-progress").textContent = ev.state === "cancelled" ? "stopped" : "failed";
+        $("#se-dl-note").textContent = ev.state === "cancelled" ? "stopped before the end, so nothing was saved" : "";
+        if (ev.state === "error") showError(ev.message, "SpeakEasy couldn't finish");
+        if (SE.waiting) { SE.waiting = false; sePlayIcon(); }
+      }
+      seSummary(); seTrack(); seReading();
+    }
+  };
+  es.onerror = () => { if (SE.done) es.close(); };
+}
+$("#se-stop").onclick = async () => {
+  SE.audio.pause(); SE.waiting = false; sePlayIcon();
+  if (SE.job && !SE.done) { $("#se-stop").textContent = "Stopping…"; try { await api(`/api/jobs/${SE.job}/cancel`, { json: {} }); } catch (e) {} }
+};
+
+function seReading() {
+  const box = $("#se-reading");
+  if (!SE.sents.length) return;
+  box.innerHTML = SE.sents.map((s, i) => {
+    const ready = !!SE.parts[i];
+    return i === SE.cur ? `<mark data-i="${i}">${esc(s)}</mark>` : `<span data-i="${i}" class="${ready ? "ready" : SE.done ? "" : "pending"}">${esc(s)}</span>`;
+  }).join(" ");
+  $$("[data-i]", box).forEach(el => el.onclick = () => { const i = +el.dataset.i; if (SE.parts[i]) sePlayPart(i); });
+  box.querySelector("mark")?.scrollIntoView({ block: "nearest" });
+}
+function seVol(a) { a.volume = VOL.muted ? 0 : VOL.level; a.muted = VOL.muted; }
+function sePlayPart(i, offset = 0) {
+  const p = SE.parts[i]; if (!p) return;
+  SE.rec.pause(); seRecIcons();
+  SE.cur = i; SE.waiting = false;
+  SE.audio.src = p.url; seVol(SE.audio);
+  if (offset) SE.audio.addEventListener("loadedmetadata", () => { try { SE.audio.currentTime = offset; } catch (e) {} }, { once: true });
+  SE.audio.play().catch(() => {});
+  sePlayIcon(); seReading(); seTrack();
+}
+SE.audio.addEventListener("ended", () => {
+  if (SE.parts[SE.cur + 1]) sePlayPart(SE.cur + 1);
+  else if (!SE.done) { SE.waiting = true; sePlayIcon(); }       // caught up with the making: carries on when the next is ready
+  else { SE.cur = -1; sePlayIcon(); seReading(); seTrack(); }  // the end
+});
+SE.audio.addEventListener("timeupdate", () => seTrack());
+function sePlayIcon() {
+  const on = !SE.audio.paused || SE.waiting;
+  $("#se-play").textContent = on ? "❚❚" : "▶"; $("#se-play").setAttribute("aria-label", on ? "Pause" : "Play");
+}
+$("#se-play").onclick = () => {
+  if (SE.waiting) { SE.waiting = false; return sePlayIcon(); }
+  if (!SE.audio.paused) { SE.audio.pause(); return sePlayIcon(); }
+  if (SE.cur < 0 || !SE.audio.src) return sePlayPart(0);
+  SE.rec.pause(); seRecIcons(); seVol(SE.audio); SE.audio.play().catch(() => {}); sePlayIcon();
+};
+function seTimes() {
+  const ready = SE.parts.reduce((a, p) => a + (p ? p.seconds : 0), 0);
+  const before = SE.parts.slice(0, Math.max(0, SE.cur)).reduce((a, p) => a + (p ? p.seconds : 0), 0);
+  const played = SE.cur >= 0 ? before + (SE.audio.currentTime || 0) : 0;
+  // what's still to make, from the text left (made seconds per character so far)
+  const madeChars = SE.sents.reduce((a, s, i) => a + (SE.parts[i] ? s.length : 0), 0);
+  const leftChars = SE.sents.reduce((a, s, i) => a + (SE.parts[i] ? 0 : s.length), 0);
+  const total = SE.done || !madeChars ? Math.max(ready, SE.done ? ready : SE.estimate || 0) : ready + leftChars * ready / madeChars;
+  return { ready, played, total };
+}
+function seTrack() {
+  const { ready, played, total } = seTimes(), pct = x => total ? `${Math.min(100, x / total * 100).toFixed(2)}%` : "0%";
+  const [pl, rd] = $$("#se-track i");
+  pl.style.width = pct(played); rd.style.width = pct(Math.max(0, ready - played));
+  $("#se-time").textContent = `${fmtTime(played)} / ${fmtTime(ready)} ready`;
+  $("#se-left").textContent = SE.done ? (SE.result ? `${fmtTime(ready)} in all` : "") : `~${fmtTime(total)} when done${SE.left != null ? ` · ${Math.ceil(SE.left)} s left to make` : ""}`;
+  $("#se-track").setAttribute("aria-valuetext", `${fmtTime(played)} played of ${fmtTime(ready)} ready`);
+}
+function seSeek(t) {   // seconds from the start, within what's made
+  let acc = 0;
+  for (let i = 0; i < SE.parts.length; i++) {
+    const p = SE.parts[i]; if (!p) return;
+    if (t < acc + p.seconds) return sePlayPart(i, t - acc);
+    acc += p.seconds;
+  }
+}
+$("#se-track").addEventListener("click", e => {
+  const r = e.currentTarget.getBoundingClientRect(), { total } = seTimes();
+  seSeek((e.clientX - r.left) / r.width * total);
+});
+$("#se-track").addEventListener("keydown", e => {
+  const step = { ArrowLeft: -5, ArrowRight: 5 }[e.key]; if (step === undefined) return;
+  e.preventDefault(); seSeek(Math.max(0, seTimes().played + step));
+});
+
+// ------------------------------------------------------------ Recent
+async function seLoadRecent() {
+  try { SE.recent = await api("/api/speak/recent"); } catch (e) { SE.recent = []; }
+  if (SE.result && !SE.recent.some(r => r.id === SE.result.id)) {   // deleted (here or in SafeHouse): its player goes too
+    SE.audio.pause(); SE.audio.removeAttribute("src"); SE.result = null; SE.job = null; $("#se-now").hidden = true;
+  }
+  seRecent();
+}
+function seRecent() {
+  const box = $("#se-recent");
+  if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
+  box.innerHTML = SE.recent.slice(0, 6).map(r => `<div class="se-rrow">
+      <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${esc(r.voice)} · ${(+r.speed).toFixed(1)}× · ${esc(seWhen(r.created))}</small></div>
+      <span class="mono meta dur">${fmtTime(r.duration)}</span>
+      <span class="row"><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
+  $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
+  $$("[data-rdel]", box).forEach(b => b.onclick = async () => {
+    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); b.textContent = "Remove"; } }, 4000); return; }
+    const id = b.dataset.rdel;
+    seRelease(id);
+    try { await api(`/api/speak/${id}`, { method: "DELETE" }); } catch (e) { return showError(e.message, "Couldn't remove it"); }
+    seLoadRecent();
+  });
+}
+function seWhen(s) {
+  const d = new Date((s || "").replace(" ", "T")); if (isNaN(d)) return s || "";
+  const days = Math.floor((Date.now() - d) / 864e5);
+  return days < 1 && d.getDate() === new Date().getDate() ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : d.toLocaleDateString();
+}
+function sePlayRecent(r) {
+  if (!r) return;
+  if (SE.recId === r.id && SE.rec.src) { if (SE.rec.paused) { seVol(SE.rec); SE.rec.play().catch(() => {}); } else SE.rec.pause(); return seRecIcons(); }
+  SE.audio.pause(); SE.waiting = false; sePlayIcon();
+  SE.recId = r.id; SE.recItem = r; SE.rec.src = r.url; seVol(SE.rec); SE.rec.play().catch(() => {});
+  seRecIcons();
+}
+function seRecIcons() { $$("[data-rplay]").forEach(b => { const on = b.dataset.rplay === SE.recId && !SE.rec.paused; b.textContent = on ? "❚❚" : "▶"; b.setAttribute("aria-label", on ? "Pause" : "Play"); }); }
+SE.rec.addEventListener("ended", seRecIcons);
+SE.rec.addEventListener("pause", seRecIcons);
+// let go of a file before it's renamed or deleted (Windows won't while a player streams it)
+function seRelease(id) {
+  const r = SE.recent.find(x => x.id === id) || {};
+  for (const a of [SE.rec, SE.audio]) {
+    const src = decodeURIComponent(a.src || "");
+    if (a.src && (!id || [r.url, r.mp3_url, SE.result?.id === id ? SE.result.url : null].filter(Boolean).some(u => src.endsWith(decodeURIComponent(u))))) {
+      a.pause(); a.removeAttribute("src"); a.load();
+    }
+  }
+  if (SE.recId === id) SE.recId = null;
+}
+$("#se-all").onclick = () => { if (typeof L !== "undefined") L.cat = "speech"; store.set("uc-lib-cat", "speech"); showTab("safehouse"); window.scrollTo({ top: 0 }); };
+
+seCount();

@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=VT323&display=swap">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="/static/speakeasy.css">
 <link rel="stylesheet" href="/static/winamp.css">
 <script>try { if (localStorage.getItem("uc-theme") === "light") document.documentElement.dataset.theme = "light";
   if (JSON.parse(localStorage.getItem("uc-skin")) === "winamp") document.documentElement.dataset.skin = "winamp"; } catch (e) {}</script>
@@ -509,12 +510,67 @@
 
   <div class="view" id="view-speakeasy" hidden>
     <div class="modhead"><div class="modmark"><svg class="ico" aria-hidden="true"><use href="#g-speakeasy"/></svg></div>
-      <div><h1>SpeakEasy</h1><p>Type anything and hear it in one of your voices.</p></div></div>
-    <section class="panel soon-panel">
-      <h2>Coming in phase 2</h2>
-      <p>Text to speech in any voice you have: paste or drop text, pick a voice, and it plays sentence by sentence while the rest is made.
-        Later (phase 4) MouthPiece learns a person's cadence too, so it sounds like them, not just their voice.</p>
-      <p class="meta">Nothing to set up yet. Your voices are in <button class="linkbtn" type="button" data-goto="mouthpiece">MouthPiece</button>.</p>
+      <div><h1>SpeakEasy</h1><p>Type it, and hear it in any of your voices.</p></div></div>
+
+    <div class="se-grid">
+      <section class="panel">
+        <div class="row spread"><h2>1 · What should they say?</h2><span class="mono meta" id="se-count">0 words</span></div>
+        <textarea class="se-text" id="se-text" aria-label="Text to speak" placeholder="Type or paste what they should say."></textarea>
+        <div class="row spread"><span class="se-hint">Paste or type as much as you like (a whole chapter is fine), or drop a .txt file.</span><button class="linkbtn" id="se-clear" type="button">Clear</button></div>
+      </section>
+
+      <section class="panel">
+        <div class="row spread"><h2>2 · Who says it?</h2><span class="meta" id="se-vcount"></span></div>
+        <input class="se-search" id="se-q" type="search" autocomplete="off" placeholder="Search your voices" aria-label="Search voices">
+        <div class="se-vlist" id="se-voices" role="listbox" aria-label="Voices"><p class="meta">Loading…</p></div>
+        <div class="se-newv">
+          <div class="row spread"><b>Someone who isn't here?</b><span class="meta">MouthPiece builds the voice</span></div>
+          <div class="row"><input id="se-newname" placeholder="Dolly Parton" aria-label="Person's name"><button class="btn" id="se-newgo" type="button">New voice</button></div>
+          <p class="meta">MouthPiece finds clean clips of them on YouTube and trains a voice (about 3 h; tonight's queue is fine). It then
+            appears here and in FrontMan. <span class="soon">phase 4</span> it learns their cadence from the same clips.</p>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>3 · How</h2>
+      <div class="se-opts">
+        <div class="se-field"><label for="se-speed">Speed <output id="se-speed-out">1.00×</output></label>
+          <input type="range" id="se-speed" min="0.7" max="1.4" step="0.05" value="1">
+          <div class="se-ticks"><span>0.7× slow</span><span>1×</span><span>1.4× fast</span></div></div>
+        <div class="se-field"><label for="se-reader">Reader <output id="se-reader-out">auto</output></label>
+          <select class="se-search" id="se-reader"></select>
+          <p>The built-in reader that speaks first; your voice model then makes it sound like the person. Auto picks the closest.</p></div>
+        <div class="se-field"><label for="se-nudge">Pitch <output id="se-nudge-out">auto</output></label>
+          <input type="range" id="se-nudge" min="-6" max="6" step="0.5" value="0">
+          <p id="se-pitch-note">Set from the voice's speaking pitch; nudge it if they sound too high or low.</p></div>
+        <div class="se-field off"><label class="se-toggle"><input type="checkbox" disabled><span>Speak with <span id="se-cad-name">their</span> own cadence <span class="soon">phase 4</span></span></label>
+          <p>Their timing, pauses and emphasis, learned from their clips. Needs a cadence model: "Train cadence" on the voice.</p></div>
+      </div>
+    </section>
+
+    <div class="se-go">
+      <div><span id="se-summary">Pick a voice and type something.</span>
+        <p class="meta">For personal use: don't pass speech off as the real person.</p></div>
+      <button class="convert" id="se-generate" type="button" disabled>Generate</button>
+    </div>
+
+    <section class="panel" id="se-now" hidden>
+      <div class="row spread"><h2>Now speaking</h2><span class="row"><span class="mono meta" id="se-progress"></span><button class="linkbtn" id="se-stop" type="button">Stop</button></span></div>
+      <div class="player">
+        <button class="play" id="se-play" type="button" aria-label="Play">▶</button>
+        <div>
+          <div class="se-track" id="se-track" role="slider" tabindex="0" aria-label="Played, ready and still being made"><i class="played"></i><i class="ready"></i><i class="making"></i></div>
+          <div class="se-ttime"><span id="se-time">0:00</span><span id="se-left"></span></div>
+        </div>
+      </div>
+      <div class="se-reading" id="se-reading"></div>
+      <div class="row"><a class="btn" id="se-wav" aria-disabled="true">Download WAV</a><a class="btn" id="se-mp3" aria-disabled="true">Download MP3</a><span class="meta" id="se-dl-note">downloads unlock when the last sentence is made</span></div>
+    </section>
+
+    <section class="panel">
+      <div class="row spread"><h2>Recent</h2><button class="linkbtn" id="se-all" type="button">Show all in SafeHouse</button></div>
+      <div class="se-recent" id="se-recent"><p class="meta">Speech you make collects here.</p></div>
     </section>
   </div>
 </div>
@@ -536,6 +592,7 @@
 <script src="/static/library.js"></script>
 <script src="/static/work.js"></script>
 <script src="/static/mouthpiece.js"></script>
+<script src="/static/speakeasy.js"></script>
 <script src="/static/shell.js"></script>
 <script src="/static/winamp.js"></script>
 </body>
