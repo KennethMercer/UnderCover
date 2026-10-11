@@ -21,7 +21,7 @@
 .mod[aria-selected="true"] { color: var(--fg); background: var(--panel-2); }
 .mod[aria-selected="true"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -11px; height: 2px; border-radius: 2px; background: var(--c); }
 .mod .badge { font: 10.5px var(--mono); background: var(--c); color: var(--accent-ink); border-radius: 99px; padding: 0 6px; }
-.mod[data-tab="frontman"] { --c: var(--c-frontman); } .mod[data-tab="mouthpiece"] { --c: var(--c-mouthpiece); }
+.mod[data-tab="frontman"] { --c: var(--c-frontman); } .mod[data-tab="doubleagent"] { --c: var(--c-doubleagent); }
 .mod[data-tab="speakeasy"] { --c: var(--c-speakeasy); } .mod[data-tab="safehouse"] { --c: var(--c-safehouse); }
 @media (max-width: 1000px) { .top .chip.models { display: none; } }
 @media (max-width: 860px) { .top .chip.gpu span { max-width: 9em; overflow: hidden; text-overflow: ellipsis; } .top-in { gap: 12px; } .mod { padding: 7px 9px; } }
@@ -29,7 +29,7 @@
 /* ---------- Pause / Resume bar: same on every module, edged in the colour of the module that owns the job ---------- */
 .workbar-wrap { max-width: 1000px; margin: 14px auto 0; padding: 0 20px; }
 .workbar-wrap:has(> .workbar[hidden]) { display: none; }
-.workbar { --jc: var(--c-mouthpiece); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center;
+.workbar { --jc: var(--c-doubleagent); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center;
   background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--jc); border-radius: var(--r); padding: 9px 12px; font-size: 14px; }
 .workbar[data-owner="frontman"] { --jc: var(--c-frontman); }
 .workbar[data-owner="speakeasy"] { --jc: var(--c-speakeasy); }
@@ -53,7 +53,7 @@
 .soon-panel p { margin: 0; }
 .soon-panel h2 { color: var(--accent); }
 
-/* ---------- MouthPiece: voice cards (mouthpiece.js) ---------- */
+/* ---------- DoubleAgent: voice cards (doubleagent.js) ---------- */
 .vcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 .vc { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 8px; align-content: start; min-width: 0; }
 .vc.busy { border-color: var(--accent); }
@@ -79,7 +79,7 @@
 .drawer #qd-close { color: var(--fg); }
 .drawer #qd-open { justify-self: start; }
 .qd-jobs { display: grid; gap: 8px; }
-.qd-job { --jc: var(--c-mouthpiece); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; background: var(--panel-2);
+.qd-job { --jc: var(--c-doubleagent); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; background: var(--panel-2);
   border: 1px solid var(--line); border-left: 3px solid var(--jc); border-radius: 9px; padding: 10px 12px; }
 .qd-job[data-owner="frontman"] { --jc: var(--c-frontman); }
 .qd-job[data-owner="speakeasy"] { --jc: var(--c-speakeasy); }

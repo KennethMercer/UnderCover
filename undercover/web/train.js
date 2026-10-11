@@ -1,5 +1,5 @@
 "use strict";
-// MouthPiece's new voice wizard: find clips of a person, keep only their voice, review samples, train an RVC model.
+// DoubleAgent's new voice wizard: find clips of a person, keep only their voice, review samples, train an RVC model.
 // Uses helpers from app.js ($, $$, esc, api, showError, store, fmtTime, VOL, loadVoices).
 
 const T = { list: [], proj: null, filter: store.get("uc-train-filter", "kept"), mode: "speaking", es: null,
@@ -7,7 +7,7 @@ const T = { list: [], proj: null, filter: store.get("uc-train-filter", "kept"), 
 
 // ------------------------------------------------------------ module switch (shell.js showTab)
 document.addEventListener("uc:module", e => {
-  const train = e.detail === "mouthpiece";
+  const train = e.detail === "doubleagent";
   $("#drop-overlay div").textContent = train ? "Drop recordings of the person to add them as a source"
                                              : "Drop a song to load it, or a voice model (.zip / .pth) to install it";
   if (train && !T.loaded) { T.loaded = true; loadProjects(); }

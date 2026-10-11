@@ -115,7 +115,7 @@ function waJump(i) {
   showResult(x.item).then(() => aCover.addEventListener("canplay", () => togglePlay(), { once: true }));
 }
 
-// FM / MP / SE / SH lights (where mono / stereo were): the module on screen is lit
+// FM / DA / SE / SH lights (where mono / stereo were): the module on screen is lit
 function waLights() { $$(".wa-lights .wa-st").forEach(l => l.classList.toggle("on", l.dataset.m === document.body.dataset.module)); }
 document.addEventListener("uc:module", waLights);
 waLights();

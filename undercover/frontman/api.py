@@ -204,7 +204,7 @@ def _auto_plan(h, text: str, prefer_train: bool):
     """What a one-shot request would do, without downloading anything (shown before it starts)."""
     from ..core.voices import ModelError, slug
     from . import oneshot
-    from ..mouthpiece import service
+    from ..doubleagent import service
     try:
         req = oneshot.parse_request(text)
     except ModelError as e:
