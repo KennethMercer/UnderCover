@@ -14,6 +14,15 @@ GET    /api/library/voices/<name>/export    zip download
 GET    /api/library/cleanup                 what can be freed, per group
 POST   /api/library/cleanup                 {groups: [...]}
 (voices and training projects are deleted through the existing /api/voices/<name> and /api/train/projects/<p>)
+
+The Add-ons and Storage rooms (phase 4b):
+GET    /api/addons                          every part: included + optional, installed, licence, accepted, size
+POST   /api/addons/<id>/install             {accept: true} -> {job}  (the job feed shows it: kind "addon")
+POST   /api/addons/<id>/remove              -> its info + freed (bytes)
+POST   /api/addons/<id>/use                 {on} an engine add-on: read cadence speech with it ([cadence] engine)
+GET    /api/storage                         the three groups (folder, size), drives, a move running?
+POST   /api/storage/check                   {group, folder} -> can it move there? (need, free, why)
+POST   /api/storage/move                    {group, folder} -> {job}  (kind "move")
 """
 import io
 import json
@@ -22,7 +31,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from ..core import gpu
+from ..core import gpu, jobs
 from ..core.config import path
 from ..core.fsutil import retry as _retry
 from ..core.voices import ModelError, slug
@@ -32,10 +41,15 @@ from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _remove, 
 
 
 def handle(h, method: str, p: str) -> bool:
-    if not p.startswith("/api/library/"):
+    if not p.startswith(("/api/library/", "/api/addons", "/api/storage")):
         return False
     try:
-        _route(h, method, p)
+        if p.startswith("/api/addons"):
+            _addons_route(h, method, p)
+        elif p.startswith("/api/storage"):
+            _storage_route(h, method, p)
+        else:
+            _route(h, method, p)
     except ModelError as e:
         h._error(str(e))
     except LookupError as e:
@@ -148,6 +162,76 @@ def _route(h, method, p):
             fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
             gpu.forget_voice(v.name)
             return h._json({"ok": True, "name": new})
+    raise LookupError("Not found")
+
+
+def _engine_of(addon_id: str) -> str | None:
+    """The cadence engine an add-on provides (F5-TTS -> "f5"), if it is one."""
+    from ..core.cadence.engines import ENGINES
+    return next((k for k, e in ENGINES.items() if e.get("addon") == addon_id), None)
+
+
+def _addon_row(a: dict) -> dict:
+    from ..core.config import CONFIG
+    eng = _engine_of(a["id"])
+    if eng:
+        a["engine"] = eng
+        a["in_use"] = (CONFIG.get("cadence") or {}).get("engine") == eng and a["installed"] and bool(a["accepted"])
+    return a
+
+
+def _set_engine(name: str):
+    from ..core.config import set_values
+    set_values("cadence", {"engine": f'"{name}"'})
+
+
+def _addons_route(h, method, p):
+    from ..core import addons
+    if p == "/api/addons" and method == "GET":
+        return h._json({"addons": [_addon_row(a) for a in addons.status()]})
+    m = re.fullmatch(r"/api/addons/([a-z0-9-]+)/(install|remove|use)", p)
+    if not m or method != "POST":
+        raise LookupError("Not found")
+    aid, act = m.groups()
+    a = addons.get(aid)
+    body = h._body()
+    if act == "install":
+        job = addons.start_install(aid, bool(body.get("accept")))
+        return h._json({"job": job.id})
+    if act == "remove":
+        _guard(SPEECH_WORK + ("night", "train-transcribe"))   # cadence speech or training may be using it
+        if any(j.kind == "addon" and not j.finished for j in jobs.JOBS.values()):
+            raise ModelError("An add-on is being installed. Wait for it to finish.")
+        gpu.free()   # the cadence worker may hold its files open
+        eng = _engine_of(aid)
+        r = addons.remove(aid)
+        from ..core.config import CONFIG
+        if eng and (CONFIG.get("cadence") or {}).get("engine") == eng:
+            _set_engine("chatterbox")   # back to the open default
+        return h._json(_addon_row(r))
+    eng = _engine_of(aid)
+    if not eng:
+        raise ModelError(f"{a.name} isn't a speech engine; there's nothing to switch.")
+    on = bool(body.get("on"))
+    if on and not addons.available(aid):
+        raise ModelError(f"Install {a.name} (and accept its licence) first.")
+    _guard(SPEECH_WORK)
+    _set_engine(eng if on else "chatterbox")
+    gpu.free()   # the worker reloads with the new engine on next use
+    return h._json(_addon_row(addons.info(a)))
+
+
+def _storage_route(h, method, p):
+    from ..core import storage
+    if p == "/api/storage" and method == "GET":
+        return h._json({"groups": storage.where(), "drives": storage.drives(), "app": str(storage.ROOT),
+                        "moving": dict(storage.MOVING) or None})
+    body = h._body() if method == "POST" else {}
+    if p == "/api/storage/check" and method == "POST":
+        return h._json(storage.check(body.get("group"), body.get("folder")))
+    if p == "/api/storage/move" and method == "POST":
+        job = storage.start_move(body.get("group"), body.get("folder"))
+        return h._json({"job": job.id})
     raise LookupError("Not found")
 
 

@@ -12,11 +12,13 @@
 const JF = { list: [], at: 0, ch: {}, subs: new Set(), polling: null, seen: new Set(), titled: null };
 
 // which module a job belongs to (colour, label, where the bar's click goes)
-const JOB_OWNER = { cover: "frontman", presep: "frontman", auto: "frontman", install: "frontman", speech: "speakeasy" };
+const JOB_OWNER = { cover: "frontman", presep: "frontman", auto: "frontman", install: "frontman", speech: "speakeasy",
+                    addon: "safehouse", move: "safehouse" };
 const jobOwner = kind => JOB_OWNER[kind] || "doubleagent";   // train, train-*, night (the overnight queue)
 const JOB_KIND = { cover: "cover", presep: "separating", auto: "one-shot", install: "voice install", speech: "speech",
                    train: "training", "train-prepare": "preparing clips", "train-auto": "new voice", "train-export": "adding a voice",
-                   "train-transcribe": "transcripts", night: "voice work" };
+                   "train-transcribe": "transcripts", night: "voice work",
+                   addon: "add-on", move: "moving files" };
 const PAUSABLE_KINDS = new Set(["train", "train-prepare", "train-auto", "train-transcribe", "night", "auto"]);
 const isRunning = j => j && !j.final && !["done", "error", "cancelled", "paused", "lost"].includes(j.state);
 

@@ -18,7 +18,7 @@ def _variants(root: str) -> list[str]:
 
 def _files() -> list[Path]:
     out = [path("output_dir") / "history.jsonl"]
-    out += sorted((path("models_dir") / "voices").glob("*/meta.json"))
+    out += sorted(path("voices_dir").glob("*/meta.json"))
     out += sorted((path("cache_dir") / "training").glob("*/project.json"))
     out += sorted(path("uploads_dir").glob("*.json"))
     out += sorted(path("cache_dir").glob("*.json"))
@@ -48,7 +48,7 @@ def rewrite(old: str, new: str, dry_run: bool = False) -> dict:
 
 def _guess_old_root() -> str | None:
     """Before root.txt existed: read it off a voice's stored folder (<root>\\models\\voices\\<name>)."""
-    for meta in (path("models_dir") / "voices").glob("*/meta.json"):
+    for meta in path("voices_dir").glob("*/meta.json"):
         try:
             d = Path(json.loads(meta.read_text(encoding="utf-8"))["dir"])
         except (OSError, ValueError, KeyError):

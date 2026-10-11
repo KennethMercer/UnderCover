@@ -44,7 +44,7 @@ class ModelError(Exception):
 
 
 def voices_dir() -> Path:
-    d = path("models_dir") / "voices"
+    d = path("voices_dir")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
