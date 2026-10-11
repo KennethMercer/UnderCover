@@ -4,6 +4,7 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const paceWord = x => x.pace ? x.pace[0].toUpperCase() + x.pace.slice(1) : `${(+x.speed).toFixed(1)}×`;
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
@@ -48,6 +49,8 @@ $("#err-x").onclick = () => { $("#err").hidden = true; };
 
 const fmtTime = s => { s = Math.max(0, Math.round(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const fmtSecs = s => s >= 90 ? `${Math.round(s / 60)} min` : `${Math.max(1, Math.round(s))} s`;
+// the one way every bar says how long is left (phase 4c): "about 3 min left", "about 40 s left", "almost done"
+const leftText = s => s == null ? "" : s < 5 ? "almost done" : `about ${fmtSecs(s)} left`;
 const fmtPitch = v => { v = +v; return (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v); };
 const fmtMB = b => b ? `${Math.round(b / 1e6)} MB` : "";
 
@@ -491,16 +494,16 @@ function startProgress(job, elsewhere = false) {
   ORDER.forEach(s => setStage(s, "", 0, est[s] != null ? (s === "separating" && est.stems_cached && !S.opts.karaoke && !S.opts.dereverb ? "cached" : `≈ ${fmtSecs(est[s])}`) : "—"));
   $(".stage[data-s=converting] .sname").textContent = `Converting to ${S.voice}`;
   $("#progress").scrollIntoView({ block: "nearest", behavior: "smooth" });
-  jobStart = performance.now(); let totalLeft = est.total;
+  jobStart = performance.now(); let totalLeft = est.total, leftAt = performance.now();
   clearInterval(elapsedTimer);
   elapsedTimer = setInterval(() => {
     const el = (performance.now() - jobStart) / 1000;
-    $("#elapsed").textContent = `${el.toFixed(0)} s elapsed` + (totalLeft != null ? ` · about ${fmtSecs(Math.max(1, totalLeft))} to go` : "");
+    $("#elapsed").textContent = (totalLeft != null ? leftText(Math.max(0, totalLeft - ((performance.now() - leftAt) / 1000))) + " · " : "") + `${el.toFixed(0)} s elapsed`;
   }, 250);
   let current = null, lastStageStart = 0;
   if (S.es) S.es();
   const stop = S.es = watchJob(job, ev => {   // jobs.js: the live stream, or progress polled while it's quiet
-    if (ev.estimate) { S.estimate = ev.estimate; totalLeft = ev.estimate.total; }
+    if (ev.estimate) { S.estimate = ev.estimate; totalLeft = ev.estimate.total; leftAt = performance.now(); }
     if (ev.elapsed != null && !ev.final) jobStart = performance.now() - ev.elapsed * 1000;   // right after a reload too
     if (ORDER.includes(ev.stage)) {
       if (ev.stage !== current) {
@@ -511,7 +514,7 @@ function startProgress(job, elsewhere = false) {
       }
       $(`.stage[data-s=${ev.stage}] .sname`).textContent = ev.message;
       setStage(ev.stage, ev.frac >= 1 ? "done" : "active", ev.frac, ev.frac >= 1 ? `${(ev.elapsed - lastStageStart).toFixed(1)} s` : `${fmtSecs(Math.max(1, ev.stage_left))} left`);
-      totalLeft = ev.total_left;
+      totalLeft = ev.total_left; leftAt = performance.now();
     }
     if (ev.final) {
       stop(); S.es = null; clearInterval(elapsedTimer); S.job = null; summary();

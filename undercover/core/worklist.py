@@ -278,7 +278,8 @@ def status() -> dict:
         running.append({"job": j.id, "kind": j.kind, "label": (j.resume_spec or {}).get("label") or j.kind,
                         "message": ev.get("message") or ev.get("note") or ev.get("label") or ev.get("stage"),
                         "epoch": ev.get("epoch"), "epochs": ev.get("epochs"), "eta": ev.get("eta"),
-                        "fraction": ev.get("fraction", ev.get("frac")), "pausing": j.pausing})
+                        "fraction": ev.get("fraction", ev.get("frac")), "pausing": j.pausing,
+                        "total_left": next((e["total_left"] for e in reversed(j.events[-20:]) if e.get("total_left") is not None), None)})
     left = [i for i in st["queue"] if i["state"] in ("queued", "paused", "running")]
     total = sum(i.get("estimate", {}).get("total", 0) for i in left)
     start = now
