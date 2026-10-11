@@ -1,5 +1,5 @@
 "use strict";
-// Hidden classic-WinAmp skin. Triple-click the UnderCover logo, or type "llama" outside a text box.
+// Hidden classic-WinAmp skin, suite-wide. Triple-click the UnderCover wordmark (top bar), or type "llama" outside a text box.
 // Uses helpers from app.js ($, $$, store, S, active, aCover, aOrig, togglePlay, stopAll, showResult, HIST, redrawAll).
 
 const WA = { on: false, raf: 0, ctx: null, analyser: null, sources: new WeakSet(), typed: "" };
@@ -20,7 +20,7 @@ function waToast(text) {
 
 // triggers
 let waClicks = 0, waClickTimer = null;
-$("h1").addEventListener("click", () => {
+$("#suite-logo").addEventListener("click", () => {
   waClicks++;
   clearTimeout(waClickTimer);
   waClickTimer = setTimeout(() => { waClicks = 0; }, 600);
@@ -59,7 +59,7 @@ function waLoop() {
   $("#wa-time").textContent = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
   $(".wa-state").textContent = playing ? "▶" : a && a.src && t > 0 ? "❚❚" : "■";
   const title = S.result ? `${S.result.title} (${S.result.voice})` : S.song ? S.song.title || S.song.name : "UnderCover · AI voice covers";
-  const line = `1. ${title} *** `;
+  const line = `*** UNDERCOVER *** ${title} *** `;
   if ($("#wa-song").textContent !== line) $("#wa-song").textContent = line;
   const c = $("#wa-vis"), g = c.getContext("2d");
   const W = c.width = c.clientWidth || 96, H = c.height = 22;
@@ -97,5 +97,10 @@ function waJump(i) {
   const h = HIST[i]; if (!h) return;
   showResult(h).then(() => aCover.addEventListener("canplay", () => togglePlay(), { once: true }));
 }
+
+// FM / MP / SE / SH lights (where mono / stereo were): the module on screen is lit
+function waLights() { $$(".wa-lights .wa-st").forEach(l => l.classList.toggle("on", l.dataset.m === document.body.dataset.module)); }
+document.addEventListener("uc:module", waLights);
+waLights();
 
 if (store.get("uc-skin", null) === "winamp") waSet(true, false);

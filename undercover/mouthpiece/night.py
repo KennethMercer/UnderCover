@@ -296,7 +296,7 @@ def _improve(job, item) -> dict:
         remove_voice(cand)
         return {"voice": old.name, "before": before, "after": after, "replaced": False, "minutes_of_voice": kept_min,
                 "note": f"The clips found this time don't sound like the current voice (it scores {before} against them), "
-                        "so they may be someone else's. Kept the old voice; check the project on Train a voice."}
+                        "so they may be someone else's. Kept the old voice; check the project in MouthPiece."}
     if before is None or after > before + 0.005:
         proj = P.Project.load(proj.name)
         export_voice(proj, name=old.name, overwrite=True)

@@ -463,7 +463,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         mins = proj.kept_seconds() / 60
         if mins < 3:
             raise ModelError(f"Only {mins:.1f} minutes of {person}'s voice could be found online (3+ needed). "
-                             "Open Train a voice to add links or recordings, then try again.")
+                             "Open MouthPiece to add links or recordings, then try again.")
         push("voice", 0.12, f"Training a voice from {mins:.1f} min of {person}")
         st = proj.train
         if st.get("state") != "paused":
