@@ -145,14 +145,15 @@ def fetch(url: str, dest, want: str | None, local: str = "", progress=None, trie
 PINNED: dict = {}   # path under models_dir -> {"urls": [...], "sha256": ..., "part": ..., "about": ...}
 
 
-def register_pinned(files: dict, sha256: dict, part: str, about: str = "") -> None:
+def register_pinned(files: dict, sha256: dict, part: str, about: str = "", sizes: dict | None = None) -> None:
     """Add model files to the pinned list. files: path under models_dir -> URL or a list of URLs (tried in order);
-    sha256: path -> SHA-256 (a file without one isn't registered: nothing could check it)."""
+    sha256: path -> SHA-256 (a file without one isn't registered: nothing could check it); sizes: path -> bytes, where
+    known (a file of another size is cut off or damaged, found without reading it)."""
     for local, urls in files.items():
         want = sha256.get(local) or _expected(urls if isinstance(urls, str) else urls[0], sha256)
         if want:
             PINNED[local] = {"urls": [urls] if isinstance(urls, str) else list(urls), "sha256": want, "part": part,
-                             "about": about}
+                             "about": about, "size": (sizes or {}).get(local)}
 
 
 def refetch(local: str, progress=None) -> None:

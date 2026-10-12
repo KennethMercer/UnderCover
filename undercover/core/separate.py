@@ -33,6 +33,13 @@ SEPARATOR_SHA256 = {
 }
 
 
+SEPARATOR_SIZE = {   # bytes: a cut-off download is found from its size alone
+    "separator/mel_band_roformer_kim_ft_unwa.ckpt": 913100690,
+    "separator/dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt": 913107578,
+    "separator/mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": 913096801,
+}
+
+
 def _sources(name: str) -> list:
     return [f"{_UVR}/{name}", f"{_UVR}/mdx_model_data/mdx_c_configs/{name}", f"{_AS}/{name}"]
 
@@ -40,7 +47,7 @@ def _sources(name: str) -> list:
 def _register_pins():
     from . import setup_models
     setup_models.register_pinned({k: _sources(k.split("/", 1)[1]) for k in SEPARATOR_SHA256}, SEPARATOR_SHA256,
-                                 "separation")
+                                 "separation", sizes=SEPARATOR_SIZE)
 
 
 _register_pins()
