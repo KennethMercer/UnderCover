@@ -176,6 +176,8 @@ def refetch(local: str, progress=None) -> None:
             fetch(url, dest, rec["sha256"], local, progress)
             _record(local, dest, rec["sha256"])
             return
+        except InterruptedError:
+            raise   # cancelled: not a reason to try the next source
         except Exception as e:   # noqa: BLE001 - try the next source; report the last problem
             last = e
     raise last if isinstance(last, ModelError) else ModelError(

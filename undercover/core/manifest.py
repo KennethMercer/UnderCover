@@ -35,14 +35,9 @@ NEVER_FROM_APP = {"torch", "torchaudio", "torchvision", "rocm", "rocm-sdk-core",
 def file() -> Path:
     """Where the manifest lives: the app folder; a sandbox / test server (UNDERCOVER_TEST_ROOTS) keeps its own."""
     from . import storage
-    if _TEST_FILE[0]:
-        return _TEST_FILE[0]
     if storage.ALLOWED_ROOTS is not None:   # test mode (a sandbox server, isolated_data()): never the app's own record
         return path("logs_dir") / "manifest.json"
     return ROOT / "manifest.json"
-
-
-_TEST_FILE: list = [None]   # tests point this at their own folder
 
 
 def load() -> dict | None:
@@ -120,10 +115,11 @@ def installed() -> dict:
     return out
 
 
-def expected_packages() -> dict:
-    """{name: version} the checks hold this venv to: the manifest's record where it has one, else the pins."""
-    m = load() or {}
-    exp = {n: r["version"] for n, r in pins().items() if r.get("version")}
+def expected_packages(m: dict | None = None, p: dict | None = None) -> dict:
+    """{name: version} the checks hold this venv to: the manifest's record where it has one, else the pins. m / p: the
+    record and the pins when the caller has them already."""
+    m = (m if m is not None else load()) or {}
+    exp = {n: r["version"] for n, r in (p if p is not None else pins()).items() if r.get("version")}
     exp.update({norm(k): v for k, v in (m.get("packages") or {}).items()})
     return exp
 
@@ -160,22 +156,18 @@ def tool(name: str) -> Path | None:
 def model_files() -> list:
     """Every model file UnderCover downloaded (paths under models_dir), the voices and the add-ons record left out:
     voices are the user's own work, not downloads."""
+    from . import storage
     mdir, vdir = path("models_dir"), path("voices_dir")
     out = []
     for dirpath, dirs, files in os.walk(mdir):
         d = Path(dirpath)
-        dirs[:] = [x for x in dirs if not _inside(d / x, vdir)]
+        dirs[:] = [x for x in dirs if not storage._inside(d / x, vdir)]
         for f in files:
             p = d / f
             if f.endswith((".part", ".tmp")) or (d == mdir and f == "addons.json"):
                 continue
             out.append(p.relative_to(mdir).as_posix())
     return sorted(out)
-
-
-def _inside(a: Path, b: Path) -> bool:
-    a, b = os.path.normcase(os.path.abspath(a)), os.path.normcase(os.path.abspath(b))
-    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
 
 
 def observe(kind: str = "observed", by: str = "", hash_files: bool = True, progress=None, cancel=None) -> dict:

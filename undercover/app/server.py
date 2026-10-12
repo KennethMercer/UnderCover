@@ -180,6 +180,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # routing
     def do_GET(self):
+        self._read = None   # a keep-alive connection reuses this handler: never hand on the last request's body
         if not self._guard_host():
             return
         u = urlparse(self.path)
@@ -299,6 +300,8 @@ class Handler(BaseHTTPRequestHandler):
             j = JOBS.get(jid)
             if j is not None and j.origin is self and j.kind in self.RETRY_KINDS and isinstance(self._read, dict):
                 j.retry_req = (p, dict(self._read))
+            if j is not None and j.origin is self:
+                j.origin = None   # only needed until now: don't keep the request (and its connection) alive
 
     def _retry(self, job_id: str):
         job = JOBS.get(job_id)
@@ -320,10 +323,11 @@ class Handler(BaseHTTPRequestHandler):
         if r.status >= 400 or not new:
             return self._error((r.out or {}).get("error") or "It couldn't be started again.", r.status if r.status >= 400 else 409)
         for j in new:
-            j.retry_req = (p, body)
+            j.retry_req, j.origin = (p, body), None
         self._json({"ok": True, "job": new[0].id, "was": job_id})
 
     def do_DELETE(self):
+        self._read = None
         if not self._guard_host() or not self._guard_origin():
             return
         from ..core.voices import ModelError, remove_voice
