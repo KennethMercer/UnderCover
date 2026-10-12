@@ -196,10 +196,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self.remote:
             return self._guard_host() and (method == "GET" or self._guard_origin())
         if not phone.enabled():
-            return self._deny(401)
-        port = self.server.server_address[1]
+            return self._deny(401, b"Phone access is off on the PC. Switch it on there: SafeHouse, Settings, Phone access.")
+        own, port = self.server.server_address[:2]
+        if own in ("0.0.0.0", ""):   # [ui] host set to every address by hand: the home-network one is ours
+            own = phone.lan_address()
         host = (self.headers.get("Host") or "").lower()
-        if host not in {f"{a}:{port}" for a in (self.server.server_address[0], phone.lan_address()) if a}:
+        if not own or host != f"{own}:{port}":
             return self._deny(403)
         if method != "GET":
             o = urlparse(self.headers.get("Origin") or "")
@@ -212,18 +214,18 @@ class Handler(BaseHTTPRequestHandler):
         if self.device is None:
             return self._deny(401)
         if pol == "pc":
-            self.close_connection = True   # its body is never read
-            self._error(f"That needs the PC ({what}): it can't be done from a phone.", 403)
-            return False
+            return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
+                              "application/json")
         return True
 
-    def _deny(self, status: int) -> bool:
+    def _deny(self, status: int, body: bytes | None = None, ctype: str = "text/plain; charset=utf-8") -> bool:
         """401 / 403 and nothing else: no page, no data, the connection closed (the body is never read)."""
-        body = (b"This phone isn't paired with UnderCover. On the PC: SafeHouse, Settings, Phone access."
-                if status == 401 else b"Forbidden")
+        if body is None:
+            body = (b"This phone isn't paired with UnderCover. On the PC: SafeHouse, Settings, Phone access."
+                    if status == 401 else b"Forbidden")
         self.close_connection = True
         self.send_response(status)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
@@ -237,6 +239,13 @@ class Handler(BaseHTTPRequestHandler):
             if k == name:
                 return v
         return None
+
+    def _other_method(self):
+        if getattr(self.server, "phone", False) or not _loopback(self.client_address[0]):
+            return self._deny(401)
+        self.send_error(HTTPStatus.NOT_IMPLEMENTED, f"Unsupported method ({self.command!r})")
+
+    do_HEAD = do_PUT = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _other_method
 
     # routing
     def do_GET(self):
@@ -680,10 +689,13 @@ class ExclusiveServer(ThreadingHTTPServer):
     UnderCover would answer requests at random. Bind exclusively so a second launch detects the first."""
     allow_reuse_address = False
 
-    def server_bind(self):
+    def _exclusive(self):
         import socket
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+
+    def server_bind(self):
+        self._exclusive()
         super().server_bind()
 
 
@@ -695,10 +707,8 @@ class PhoneServer(ExclusiveServer):
     def server_bind(self):
         """As ExclusiveServer, without HTTPServer's reverse DNS lookup of the address (getfqdn: ~5 s for an address
         with no name, so switching Phone access on hung that long)."""
-        import socket
         import socketserver
-        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        self._exclusive()
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 

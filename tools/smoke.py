@@ -1666,7 +1666,7 @@ def u_qr():
 def u_phone_pairing():
     from undercover.core import phone
     with isolated_data() as t:
-        saved = (phone._FILE[0], phone.PAIRING, list(phone._TRIES))
+        saved = (None, phone.PAIRING, list(phone._TRIES))
         phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, None, []
         try:
             assert phone.state_file().parent == t, phone.state_file()
@@ -1727,8 +1727,10 @@ def u_phone_pairing():
             assert phone.name_from_agent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)") == "iPhone"
             assert phone.usable("192.168.1.5") and phone.usable("10.1.2.3") and not phone.usable("8.8.8.8")
             assert not phone.usable("127.0.0.1") and not phone.usable("169.254.1.1")
-        finally:
-            phone._FILE[0], phone.PAIRING, phone._TRIES[:] = saved[0], saved[1], saved[2]
+        finally:   # forget the test's state: the next use reads its own file again
+            phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, saved[1], saved[2]
+            phone._STATE.clear()
+            phone._SEEN_AT.clear()
     return "6-character codes, hashed tokens, 5 wrong codes, 10 tries per address"
 
 
@@ -1783,7 +1785,7 @@ def u_phone_routes():
     assert not unused, f"table rows with no example here: {unused}"
     # every literal /api/... path in the server code and the pages starts at least one example (a new route needs a row)
     lits = set()
-    for f in [*(ROOT / "undercover").rglob("*.py"), *(ROOT / "undercover" / "web").glob("*.js"), ROOT / "undercover" / "web" / "pair.html"]:
+    for f in [*(ROOT / "undercover").rglob("*.py"), *(ROOT / "undercover" / "web").glob("*.js"), *(ROOT / "undercover" / "web").glob("*.html")]:
         for lit in re.findall(r"""["'`](/api/[A-Za-z0-9_./-]*)""", f.read_text(encoding="utf-8")):
             lits.add(lit.rstrip("/."))
     paths = [p for _, p in PHONE_SAMPLES]
@@ -1879,6 +1881,9 @@ def a_phone():
             assert status == 401 and body == unpaired and hd.get("connection") == "close", (m, p, status, body[:200])
     # 2. the guards before the token: another Host (DNS rebinding), a missing or foreign Origin
     assert _lan("GET", "/", host="evil.example:7862")[0] == 403
+    for m in ("HEAD", "PUT", "OPTIONS"):   # any other method: the same 401
+        status, _, body = _lan(m, "/api/status")
+        assert status == 401, (m, status)
     assert _lan("POST", "/api/phone/claim", body={}, origin=False)[0] == 403
     assert _lan("POST", "/api/phone/claim", body={}, origin="http://evil.example")[0] == 403
     # 3. pairing: the code from the PC, wrong then right, then never again
@@ -1912,8 +1917,8 @@ def a_phone():
     refused = 0
     for m, p in PHONE_SAMPLES:
         if phone_api.policy(m, p)[0] == "pc":
-            status, _, body = _lan(m, p, token, {} if m == "POST" else None)
-            assert status == 403 and b"needs the PC" in body, (m, p, status, body[:200])
+            status, hd, body = _lan(m, p, token, {} if m == "POST" else None)
+            assert status == 403 and b"needs the PC" in body and hd.get("connection") == "close", (m, p, status, body[:200])
             refused += 1
     assert api("/api/status")["client"] == "pc", "the sandbox server stopped (Quit or Restart went through from the phone?)"
     # 5. this PC's own requests: exactly as before (a phone's cookie means nothing here; Host and Origin checks as they were)
