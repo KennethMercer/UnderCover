@@ -522,10 +522,10 @@ def _cadence_ab(h, method, voice: str, action):
         return
     if method != "POST":
         raise LookupError("Not found")
+    b = h._body()   # always read: an unread body would be taken for the start of the next request on this connection
     if action == "ab":
         return h._json(start_ab(voice))
     if action == "verdict":
-        b = h._body()
         return h._json(cadence.verdict(voice, str(b.get("keep") or ""), str(b.get("why") or "")))
     raise LookupError("Not found")
 
