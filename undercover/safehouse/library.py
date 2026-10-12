@@ -83,18 +83,26 @@ def _quality() -> dict:
 
 
 def ytdlp_info() -> dict:
-    """What System shows: the installed version, the version UnderCover has pinned, whether Update has anything to do,
-    and when the app last updated it."""
-    st = addons.pin_state("ytdlp")
-    return {"ytdlp": st["installed"], "ytdlp_pinned": st["pinned"], "ytdlp_update": st["update"],
-            "ytdlp_updated": addons.updated("ytdlp")}
+    """What System shows (phase 16, core/ytdlp): the yt-dlp and puzzle solver in use, whether it's a checked update or the
+    pinned pair, the last check, the auto-update switch, a heal running."""
+    from ..core import ytdlp
+    s = ytdlp.status()
+    return {"ytdlp": s["yt"], "ytdlp_ejs": s["ejs"], "ytdlp_source": s["source"], "ytdlp_pinned": s["pinned"]["yt"],
+            "ytdlp_auto": s["auto"], "ytdlp_last": s.get("last_result"), "ytdlp_checked": s.get("last_check"),
+            "ytdlp_updated": s.get("swapped") or addons.updated("ytdlp"), "ytdlp_job": s["job"], "ytdlp_broken": bool(s["broken"])}
 
 
 def _update_ytdlp() -> dict:
-    """YouTube changes often and older yt-dlp versions stop working: bring it to the version pinned in the add-ons
-    registry (its wheel's SHA-256 checked, torch held by constraints.txt, never "latest"). Takes effect after a restart
-    (the old version stays loaded until then)."""
-    return addons.update_pinned("ytdlp")
+    """The System room's Update (phase 16): the self-heal as a job: PyPI's newest yt-dlp + its pinned solver, hash
+    checked, staged, tested on known videos, used only if it does at least as well; or back to the last known good."""
+    from ..core import ytdlp
+    return {"job": ytdlp.start_heal().id}
+
+
+def _ytdlp_auto(on: bool) -> dict:
+    from ..core import ytdlp
+    ytdlp.set_auto(on)
+    return ytdlp_info()
 
 
 def _duplicate_voices(hist: list) -> tuple[list, str]:

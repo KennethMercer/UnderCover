@@ -385,9 +385,17 @@ if ($Repair -and $Fix.models) {
     try { Run $Py @('-m', 'undercover.doctor', 'fix', 'models') } finally { if (-not $DryRun) { Pop-Location } }
 }
 
+# 6d. The YouTube downloader (phase 16, the one exception to pinned-only): PyPI's newest yt-dlp + the solver it pins,
+# each wheel checked against PyPI's SHA-256, unpacked beside the venv (cache\ytdlp) and tested on known public videos;
+# used only if it does at least as well as the pinned pair common.txt just installed. If PyPI can't be reached, a hash
+# fails or the test does, the pinned pair stays in use (the command always succeeds). Repair runs it too.
+$env:PATH = "$ffBin;$denoDir;$env:PATH"
+Step "Bringing the YouTube downloader up to date"
+if (-not $DryRun) { Push-Location $InstallDir }
+try { Run $Py @('-m', 'undercover.ytdlp', 'install') } finally { if (-not $DryRun) { Pop-Location } }
+
 # 7. Self-test --------------------------------------------------------------------------------
 Step "Testing"
-$env:PATH = "$ffBin;$denoDir;$env:PATH"
 Run $Py @((Join-Path $PSScriptRoot 'selftest.py'), '--backend', $Backend, '--report', (Join-Path $InstallDir 'logs\selftest.json'))
 
 # 7b. Optional add-ons the user accepted on the installer's add-ons page ----------------------
