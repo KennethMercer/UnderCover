@@ -15,20 +15,27 @@ function planTime(p) {
   const v = p.voice?.how;
   return v === "train" ? "about 45–50 min" : v === "check" ? "about 3–5 min (45+ if it has to train)" : "about 1–3 min";
 }
-// An ambiguous song title ("Hello"): the plan lists the songs it could be as plain buttons (#auto-choices, button[data-choice]);
-// the one picked goes with the request. While an earlier answer is in effect the plan returns it as `chosen`, the rest as `others`.
+// An ambiguous song title ("Hello"): the plan lists the songs it could be as a choice card (#auto-choices: a question, then one
+// button[data-choice] per song with artist, year and title); the one picked goes with the request. While an earlier answer is
+// in effect the plan returns it as `chosen`, the rest as `others`, and the card says so with the others offered as a switch.
 function choiceLabel(c) { return `${c.artist || "this one"}${c.year ? " (" + c.year + ")" : ""}${c.title ? " · " + c.title : ""}`; }
+function choiceButton(c, on) {
+  return `<button class="choice" type="button" data-choice="${esc(c.song_url)}" aria-pressed="${on ? "true" : "false"}">
+    <b>${esc(c.artist || "this one")}</b><small>${[c.year, c.title].filter(Boolean).map(esc).join(" · ")}</small></button>`;
+}
 function renderChoices(p) {
   const box = $("#auto-choices");
   OS.choice = p.chosen?.song_url || null;
   const list = p.ask ? p.choices : p.chosen ? p.others : [];
   box.hidden = !list?.length;
-  box.innerHTML = (p.ask ? `<span class="meta">Which one?</span> ` : `<span class="meta">Using ${esc(choiceLabel(p.chosen))}. The other one:</span> `) +
-    (list || []).map(c => `<button class="btn" type="button" data-choice="${esc(c.song_url)}">${esc(choiceLabel(c))}</button>`).join(" ");
+  if (box.hidden) return;
+  const song = p.song ? `“${esc(p.song)}”` : "this song";
+  const q = p.ask ? `Which ${song}?` : `Going with <b>${esc(choiceLabel(p.chosen))}</b> for ${song}. Or switch:`;
+  box.innerHTML = `<div class="choice-q">${q}</div><div class="choices">${(list || []).map(c => choiceButton(c, false)).join("")}</div>`;
   $$("button[data-choice]", box).forEach(b => b.onclick = () => {
     OS.choice = b.dataset.choice; resetGo();
     $$("button[data-choice]", box).forEach(x => x.setAttribute("aria-pressed", String(x === b)));
-    $("#os-plan").insertAdjacentHTML("beforeend", ` <span class="meta">Picked: ${esc(b.textContent)}.</span>`);
+    $(".choice-q", box).innerHTML = `Going with <b>${esc(b.querySelector("b").textContent)}</b> for ${song}.`;
   });
 }
 function planKey() { return $("#os-text").value.trim() + "|" + $("#os-train").checked; }
