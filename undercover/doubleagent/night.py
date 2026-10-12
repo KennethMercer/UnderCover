@@ -108,10 +108,8 @@ def _project_named(person: str):
 
 
 def _person_from_voice(v) -> str:
-    src = (v.source or "")
-    if src.startswith("trained in UnderCover: "):
-        return src.split(": ", 1)[1].split(",")[0]
-    return v.name.removesuffix("-uc").replace("-", " ")
+    from ..core.voices import trained_person
+    return trained_person(v) or v.name.removesuffix("-uc").replace("-", " ")
 
 
 def candidates() -> list:
@@ -320,11 +318,12 @@ def _improve_target(target: str) -> str:
     return get_voice(target).name   # friendly error if it doesn't exist
 
 
-def _shown_voice(item: dict) -> str:
+def shown_voice(item: dict) -> str:
+    """A queue item whose target is a voice id, as people read it (cadence items use this too)."""
     from ..core.voices import label_of
     return label_of(item["target"])
 
 
-worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=_shown_voice,
-                       label=lambda item: f"Improving {_shown_voice(item)}")
+worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=shown_voice,
+                       label=lambda item: f"Improving {shown_voice(item)}")
 worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}")

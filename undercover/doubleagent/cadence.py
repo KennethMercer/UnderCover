@@ -641,8 +641,8 @@ def _follows(item: dict, other: dict) -> bool:
 
 
 def _shown_voice(item: dict) -> str:
-    from ..core.voices import label_of
-    return label_of(item["target"])
+    from .night import shown_voice
+    return shown_voice(item)
 
 
 worklist.register_kind("cadence", run=_run, estimate=estimate, target=_target, follows=_follows, shown=_shown_voice,

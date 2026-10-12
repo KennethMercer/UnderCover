@@ -237,9 +237,8 @@ class Job:
             snap["title"] = snap["title"] or plan.get("request")
             vid = name(plan.get("voice"), "name")
             snap["plan"] = {"request": plan.get("request"), "song": name(plan.get("song"), "title"), "voice": vid}
-            if vid:   # ids stay in the data; this is what the strip and the drawer show
-                from .voices import label_of
-                snap["plan"]["voice_display"] = label_of(vid)
+            if vid:   # ids stay in the data; this is what the strip and the drawer show (the plan carries it)
+                snap["plan"]["voice_display"] = name(plan.get("voice"), "display") or vid
         if last.get("final"):
             snap["final"] = {"state": last.get("state"), "message": last.get("message")}
         return snap
