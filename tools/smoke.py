@@ -1568,24 +1568,74 @@ def _old(p: Path, hours: float = 8):
     os.utime(p, (t, t))
 
 
+def best_time(run, limit: float, tries: int = 3) -> tuple[float, list]:
+    """A timing check that a busy PC can't fail by itself: run() -> (seconds, value), up to `tries` times, stopping at
+    the first under `limit`. Load only ever adds time, so one fast run proves the code is fast; a real slowdown is slow
+    every time and still fails. -> (the best seconds, every (seconds, value) tried)."""
+    tried = []
+    for _ in range(tries):
+        tried.append(run())
+        if tried[-1][0] < limit:
+            break
+    return min(t for t, _ in tried), tried
+
+
+def _slowest_doctor_checks(n: int = 3) -> str:
+    """Each fast check timed on its own: which ones made the Doctor slow (for a timing failure's message)."""
+    from undercover.core import doctor, manifest
+    ctx = {"full": False, "status": None, "manifest": manifest.load(), "installed": manifest.installed(),
+           "pins": manifest.pins(), "hash": lambda p: ""}
+    ctx["expected"] = manifest.expected_packages(ctx["manifest"], ctx["pins"])
+    took = []
+    for c in doctor.CHECKS:
+        t0 = time.time()
+        try:
+            c(ctx)
+        except Exception:   # noqa: BLE001 - timing only; u_doctor_fast checks the results
+            pass
+        took.append((time.time() - t0, c.__name__))
+    return ", ".join(f"{name} {t:.2f} s" for t, name in sorted(took, reverse=True)[:n])
+
+
 @check("doctor (phase 10): fast checks run in < 2 s with no GPU, every result well-formed, the CLI answers")
 def u_doctor_fast():
     import subprocess
     from undercover.core import doctor
-    with isolated_data():
+
+    def here():
         t0 = time.time()
         rep = doctor.run(False)
-        took = time.time() - t0
+        return time.time() - t0, rep
+
+    def cold():   # a fresh Python: imports included, as the command line runs it
+        out = subprocess.run([sys.executable, "-c", "import sys, time; t=time.time(); from undercover import doctor as d; "
+                              "r=d.doctor.run(False); print(round(time.time()-t,2), 'torch' in sys.modules, r['counts']['bad'])"],
+                             cwd=ROOT, capture_output=True, text=True, timeout=120, env=env)
+        secs, torch_loaded, _ = out.stdout.split()
+        return float(secs), torch_loaded
+
+    with isolated_data() as box:
+        took, tried = best_time(here, 2)
+        rep = tried[-1][1]
         for r in rep["results"]:
             assert set(r) >= {"id", "group", "state", "title", "say", "detail", "fix"} and r["state"] in ("ok", "info", "warn", "bad"), r
-        assert took < 2, f"fast checks took {took:.1f} s"
-    out = subprocess.run([sys.executable, "-c", "import sys, time; t=time.time(); from undercover import doctor as d; "
-                          "r=d.doctor.run(False); print(round(time.time()-t,2), 'torch' in sys.modules, r['counts']['bad'])"],
-                         cwd=ROOT, capture_output=True, text=True, timeout=120)
-    secs, torch_loaded, _ = out.stdout.split()
-    assert torch_loaded == "False", "the fast checks imported torch"
-    assert float(secs) < 2, f"the command line's fast check took {secs} s"
-    return f"{len(rep['results'])} checks in {took:.2f} s here, {secs} s from a cold start, no torch"
+        assert took < 2, (f"fast checks took {', '.join(f'{t:.2f}' for t, _ in tried)} s in {len(tried)} tries; "
+                          f"slowest: {_slowest_doctor_checks()}")
+        # the fresh Python gets this sandbox too (the settings with these [paths], as _sandbox_config does): the user's
+        # own state (phone access on means a PowerShell firewall read the command line waits for, ~1 s) mustn't decide
+        # the result, and it never reads the real folders
+        import re
+        from undercover.core import config
+        block = "[paths]\n" + "".join(f"{k} = '{v}'\n" for k, v in config.CONFIG["paths"].items()) + "\n"
+        cold_cfg = box / "cold.toml"
+        cold_cfg.write_text(re.sub(r"(?ms)^\[paths\][ \t]*$.*?(?=^\[|\Z)", lambda _: block,
+                                   (ROOT / "config.toml").read_text(encoding="utf-8"), count=1), encoding="utf-8")
+        env = {**os.environ, "UNDERCOVER_CONFIG": str(cold_cfg), "UNDERCOVER_TEST_ROOTS": str(box)}
+        secs, tried_cold = best_time(cold, 2)
+    assert all(t == "False" for _, t in tried_cold), "the fast checks imported torch"
+    assert secs < 2, f"the command line's fast check took {', '.join(f'{t:.2f}' for t, _ in tried_cold)} s in {len(tried_cold)} tries"
+    retries = f" (best of {len(tried)} / {len(tried_cold)})" if len(tried) + len(tried_cold) > 2 else ""
+    return f"{len(rep['results'])} checks in {took:.2f} s here, {secs:.2f} s from a cold start{retries}, no torch"
 
 
 @check("doctor: a damaged model file is found (size, then checksum) and fetched again: replaced only once the new copy checks out")
@@ -2881,8 +2931,17 @@ def u_phone_routes():
 def a_doctor():
     import io
     import zipfile
-    r = api("/api/doctor")
-    assert r["about"]["version"] and r["results"] and r["mode"] == "fast" and r["seconds"] < 2, r.get("seconds")
+    def report():   # the server keeps a fast report 5 s: a retry waits it out
+        if report.n:
+            time.sleep(5.2)
+        report.n += 1
+        rep = api("/api/doctor")
+        return rep["seconds"], rep
+    report.n = 0
+    secs, tried = best_time(report, 2)
+    r = tried[-1][1]
+    assert r["about"]["version"] and r["results"] and r["mode"] == "fast", r.get("mode")
+    assert secs < 2, f"the server's fast check took {', '.join(f'{t:.2f}' for t, _ in tried)} s in {len(tried)} tries"
     assert all(x["state"] in ("ok", "info", "warn", "bad") for x in r["results"])
     pv = api("/api/doctor/fix/packages")   # read only: installs nothing
     assert isinstance(pv.get("packages"), list) and isinstance(pv.get("refused"), list), pv
