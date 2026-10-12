@@ -17,6 +17,12 @@ POST   /api/train/projects/<p>/train            {voice_name, length, sr, fresh} 
 POST   /api/train/projects/<p>/pause | /stop
 POST   /api/train/projects/<p>/export           {epoch?, name?, overwrite?} -> job
 POST   /api/train/projects/<p>/transcribe       job: transcripts of the kept speech clips (phase 4; resumable)
+
+"Keep this one" (phase 9): a new cadence for a voice that has one waits in tts/pending/ until the user picks by ear
+GET    /api/train/voices/<v>/cadence             the live pack and the waiting one (ids, scores, readings made?)
+POST   /api/train/voices/<v>/cadence/ab          job: both packs read the same short line (once; kept with each pack)
+GET    /api/train/voices/<v>/cadence/sample/<current|pending>   that reading (WAV)
+POST   /api/train/voices/<v>/cadence/verdict     {keep: "current"|"pending", why?} -> swap or set aside; verdict saved
 """
 import json
 import re
@@ -124,6 +130,9 @@ def _route(h, method, p):
                 return h._json({**project_json(proj), "warning": str(e)})
             proj.save()
             return h._json(project_json(proj))
+    m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9_.-]+)/cadence(?:/(ab|verdict|sample/current|sample/pending))?", p)
+    if m:
+        return _cadence_ab(h, method, unquote(m.group(1)), m.group(2))
     m = re.fullmatch(r"/api/train/projects/([a-z0-9-]+)(?:/(\w+))?", p)
     if not m:
         raise LookupError("Not found")
@@ -494,6 +503,55 @@ def start_transcribe(name: str):
     job.resume_spec = {"kind": "transcribe", "project": proj.name, "label": f"Transcribing {proj.person or proj.name}"}
     jobs.GPU_QUEUE.put((job, run))
     return job
+
+
+# ---------------------------------------------------------------- "Keep this one" (phase 9)
+
+def _cadence_ab(h, method, voice: str, action):
+    from . import cadence
+    if action is None and method == "GET":
+        return h._json(cadence.ab_state(voice))
+    if action and action.startswith("sample/") and method == "GET":
+        body = cadence.sample_file(voice, action.split("/")[1]).read_bytes()
+        h.send_response(200)
+        h.send_header("Content-Type", "audio/wav")
+        h.send_header("Content-Length", str(len(body)))
+        h.send_header("Cache-Control", "no-store")
+        h.end_headers()
+        h.wfile.write(body)
+        return
+    if method != "POST":
+        raise LookupError("Not found")
+    if action == "ab":
+        return h._json(start_ab(voice))
+    if action == "verdict":
+        b = h._body()
+        return h._json(cadence.verdict(voice, str(b.get("keep") or ""), str(b.get("why") or "")))
+    raise LookupError("Not found")
+
+
+def start_ab(voice: str) -> dict:
+    """Both packs read the A/B line (a GPU job), unless both readings are already there."""
+    from . import cadence
+    st = cadence.ab_state(voice)
+    if not (st["current"] and st["pending"]):
+        raise ModelError(f"{st['display']} has no new cadence waiting to compare.")
+    if st["ready"]:
+        return {"ready": True, "state": st}
+    running = next((j for j in list(jobs.JOBS.values()) if j.kind == "cadence-ab" and getattr(j, "voice", None) == st["voice"]
+                    and not j.finished), None)
+    if running:
+        return {"job": running.id, "state": st}
+    job = jobs.Job("cadence-ab", title=f"Listening copies: {st['display']}")
+    job.voice = st["voice"]
+    jobs.JOBS[job.id] = job
+
+    def run(job):
+        r = cadence.make_samples(job, st["voice"])
+        job.finish("done", message="Both readings are ready: listen and keep the one you like.", result=r)
+
+    jobs.GPU_QUEUE.put((job, run))
+    return {"job": job.id, "state": st}
 
 
 # Pause / Resume (core.worklist): these jobs are voice work; paused ones start again from their resume spec
