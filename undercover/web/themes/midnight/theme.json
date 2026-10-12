@@ -1,0 +1,17 @@
+{
+  "id": "midnight",
+  "name": "Midnight",
+  "author": "UnderCover",
+  "licence": "same as UnderCover",
+  "version": "1.0",
+  "modes": [
+    "dark",
+    "light"
+  ],
+  "based_on": "casefile",
+  "fonts": [
+    "Manrope",
+    "DM Mono"
+  ],
+  "about": "The city at 3 am: a blue-black air, the four colours cooled a step."
+}

@@ -1,0 +1,21 @@
+/* Midnight: The city at 3 am: a blue-black air, the four colours cooled a step. A theme is tokens only (docs/design/themes.md). */
+:root[data-uc-theme="midnight"] {
+  --base: #07080c; --panel-base: #0f1116; --panel-2-base: #161a21; --panel-3-base: #1f242c; --line-base: #22272f;
+  --fg: #e6e9ef; --muted: #8e96a3; --accent-ink: #07080c;
+  --c-frontman: #c3a070; --c-doubleagent: #b48fab; --c-speakeasy: #8db3cb; --c-safehouse: #9ea7b1;
+  --c-frontman-deep: #6b4f24; --c-doubleagent-deep: #552d4c; --c-speakeasy-deep: #1b3d5c; --c-safehouse-deep: #2c3744;
+  --ok: #8dbba5; --warn: #cdb37a; --err: #d08a86;
+  --wave: #2d2f36; --wave-on: #c3a070; --wave-alt: #8db3cb;
+  --lit: 20%; --tint: 8%; --tint2: 9%; --lamp: 14%;
+  --display: "Manrope", "Segoe UI", system-ui, sans-serif; --body: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --mono: "DM Mono", Consolas, ui-monospace, monospace;
+}
+:root[data-uc-theme="midnight"][data-theme="light"] {
+  --base: #e3e6ea; --panel-base: #f4f6f8; --panel-2-base: #e8ebef; --panel-3-base: #dadfe5; --line-base: #cdd3da;
+  --fg: #12151a; --muted: #5d6572; --accent-ink: #f6f8fb;
+  --c-frontman: #6a4a17; --c-doubleagent: #6b2f5c; --c-speakeasy: #1f4c6b; --c-safehouse: #46525f;
+  --c-frontman-deep: #a67a3c; --c-doubleagent-deep: #9c5e8e; --c-speakeasy-deep: #4d7899; --c-safehouse-deep: #76838f;
+  --ok: #2c6f4d; --warn: #765717; --err: #a43f3a;
+  --wave: #c3c8ce; --wave-on: #6a4a17; --wave-alt: #1f4c6b;
+  --lit: 10%; --tint: 4%; --tint2: 3%; --lamp: 8%;
+}
