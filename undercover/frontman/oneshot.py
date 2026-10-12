@@ -267,8 +267,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
         pick, went = ambiguity.resolve(title_q, choice)
         if pick and pick["artist"] and pick["title"]:
             title_q, artist = pick["title"], pick["artist"]
-            if style:   # a version of that song: search for it by its artist (a pinned link would skip the versions)
-                search_q = f"{title_q} {artist}"
+            if style or not pick.get("track", True):   # a version of that song, or only its video was found:
+                search_q = f"{title_q} {artist}"            # search for it by its artist (the album track wins)
             else:
                 song_url = pick["song_url"]
         elif pick:
