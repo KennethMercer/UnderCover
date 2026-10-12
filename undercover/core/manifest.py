@@ -34,8 +34,11 @@ NEVER_FROM_APP = {"torch", "torchaudio", "torchvision", "rocm", "rocm-sdk-core",
 
 def file() -> Path:
     """Where the manifest lives: the app folder; a sandbox / test server (UNDERCOVER_TEST_ROOTS) keeps its own."""
-    if os.environ.get("UNDERCOVER_TEST_ROOTS") or _TEST_FILE[0]:
-        return _TEST_FILE[0] or path("logs_dir") / "manifest.json"
+    from . import storage
+    if _TEST_FILE[0]:
+        return _TEST_FILE[0]
+    if storage.ALLOWED_ROOTS is not None:   # test mode (a sandbox server, isolated_data()): never the app's own record
+        return path("logs_dir") / "manifest.json"
     return ROOT / "manifest.json"
 
 

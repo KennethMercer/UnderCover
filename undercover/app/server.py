@@ -34,6 +34,7 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
+from . import doctor_api
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -148,13 +149,17 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": message}, status)
 
     def _body(self) -> dict:
+        if getattr(self, "_read", None) is not None:   # read once per request (Retry replays what was sent)
+            return self._read
         n = int(self.headers.get("Content-Length") or 0)
         if not n:
+            self._read = {}
             return {}
         try:
-            return json.loads(self.rfile.read(n))
+            self._read = json.loads(self.rfile.read(n))
         except ValueError:
-            return {}
+            self._read = {}
+        return self._read
 
     def _guard_host(self) -> bool:
         """Refuse requests whose Host isn't this server (a DNS-rebinding page could otherwise READ local files)."""
@@ -184,7 +189,8 @@ class Handler(BaseHTTPRequestHandler):
                 from ..core import worklist
                 return self._json(worklist.status())
             if (train_api.handle(self, "GET", p) or safehouse_api.handle(self, "GET", p)
-                    or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)):
+                    or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)
+                    or doctor_api.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -244,33 +250,73 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard_host() or not self._guard_origin():
             return
         p = urlparse(self.path).path
+        self._read = None
+        before = set(JOBS)
         try:
-            if p.startswith("/api/work/"):
-                return self._work(p[len("/api/work/"):], self._body())
-            if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
-                    or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)):
-                return
-            if p == "/api/voices/install":
-                return self._start_install(self._body())
-            if p == "/api/voices/upload":
-                return self._voice_upload()
-            if p == "/api/open-folder":
-                return self._open_folder(self._body())
-            if p == "/api/restart":
-                return self._restart()
-            if p == "/api/quit":
-                return self._quit()
-            m = re.fullmatch(r"/api/jobs/(\w+)/cancel", p)
+            m = re.fullmatch(r"/api/jobs/(\w+)/retry", p)
             if m:
-                job = JOBS.get(m.group(1))
-                if job:
-                    job.cancel = True
-                return self._json({"ok": True})
-            self._error("Not found", 404)
+                return self._retry(m.group(1))
+            return self._route_post(p)
         except LookupError as e:
             self._error(str(e), 404)
         except Exception as e:
             self._error(friendly(e), 500)
+        finally:
+            self._remember_request(p, before)
+
+    def _route_post(self, p: str):
+        if p.startswith("/api/work/"):
+            return self._work(p[len("/api/work/"):], self._body())
+        if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
+                or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)
+                or doctor_api.handle(self, "POST", p)):
+            return
+        if p == "/api/voices/install":
+            return self._start_install(self._body())
+        if p == "/api/voices/upload":
+            return self._voice_upload()
+        if p == "/api/open-folder":
+            return self._open_folder(self._body())
+        if p == "/api/restart":
+            return self._restart()
+        if p == "/api/quit":
+            return self._quit()
+        m = re.fullmatch(r"/api/jobs/(\w+)/cancel", p)
+        if m:
+            job = JOBS.get(m.group(1))
+            if job:
+                job.cancel = True
+            return self._json({"ok": True})
+        self._error("Not found", 404)
+
+    # Retry (phase 10): a failed cover, speech, one-shot or voice install starts again from the request that started it
+    RETRY_KINDS = ("cover", "speech", "auto", "install")
+
+    def _remember_request(self, p: str, before: set):
+        for jid in set(JOBS) - before:
+            j = JOBS.get(jid)
+            if j is not None and j.kind in self.RETRY_KINDS and isinstance(self._read, dict):
+                j.retry_req = (p, dict(self._read))
+
+    def _retry(self, job_id: str):
+        job = JOBS.get(job_id)
+        if job is None or not getattr(job, "retry_req", None):
+            return self._error("That job can't be started again from here: start it from its module.", 404)
+        if job.state != "error":
+            return self._error("Only work that failed can be retried.")
+        p, body = job.retry_req
+        r = _Replay(p, body)
+        before = set(JOBS)
+        try:
+            r._route_post(p)
+        except LookupError as e:
+            return self._error(str(e), 404)
+        new = [JOBS[j] for j in set(JOBS) - before if j in JOBS]
+        if r.status >= 400 or not new:
+            return self._error((r.out or {}).get("error") or "It couldn't be started again.", r.status if r.status >= 400 else 409)
+        for j in new:
+            j.retry_req = (p, body)
+        self._json({"ok": True, "job": new[0].id, "was": job_id})
 
     def do_DELETE(self):
         if not self._guard_host() or not self._guard_origin():
@@ -542,6 +588,19 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True})
 
 
+class _Replay(Handler):
+    """A request played again without a connection (Retry): the same routes, the answer kept instead of sent."""
+    def __init__(self, p: str, body: dict):   # noqa: D107 - no socket, so BaseHTTPRequestHandler's own setup is skipped
+        self.path, self._read, self.out, self.status = p, dict(body), None, 200
+        self.headers = {"Content-Length": "0"}
+
+    def _json(self, obj, status=200):
+        self.out, self.status = obj, status
+
+    def _error(self, message, status=400):
+        self.out, self.status = {"error": message}, status
+
+
 class ExclusiveServer(ThreadingHTTPServer):
     """On Windows, Python's default SO_REUSEADDR lets a SECOND server bind the same port, so two copies of
     UnderCover would answer requests at random. Bind exclusively so a second launch detects the first."""
@@ -609,6 +668,12 @@ def main():
     srv.daemon_threads = True
     SERVER = srv
     jobs.PORT = srv.server_address[1]
+    try:   # the Doctor's startup check and its safe steps (< 2 s; downloads and the first install record in the background)
+        from ..core import doctor, storage
+        hb = path("logs_dir") / ("heartbeat.jsonl" if jobs.PORT == UCFG["port"] else f"heartbeat-{jobs.PORT}.jsonl")
+        doctor.heal_at_startup(hb, STATUS, hash_new_manifest=storage.ALLOWED_ROOTS is None)
+    except Exception as e:   # noqa: BLE001 - never block startup
+        print(f"The Doctor's startup check failed: {e}", flush=True)
     _install_console_handler()
     _clean_old_previews()
     threading.Thread(target=gpu_worker, daemon=True, name="gpu").start()

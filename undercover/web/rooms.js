@@ -25,6 +25,7 @@ function showRoom(room) {
   if (room === "running") loadRunRoom();
   if (room === "addons") loadAddons();
   if (room === "storage") loadStorage();
+  if (room === "system") loadDoctor();
 }
 // on a phone the row scrolls: keep the open room in sight, again whenever a tab changes width (the font arriving, a count)
 function roomInSight() {
@@ -297,3 +298,86 @@ function followMove(job, group) {
     }
   });
 }
+
+// ------------------------------------------------------------ System: the UnderCover row and the Doctor's sweep (phase 10)
+// /api/doctor: fast checks (+ the last full run); a row per problem with button[data-fix]; long fixes and "Check everything"
+// are jobs (kind "doctor") on the shared feed. The diagnostics file: its contents are shown before it's saved.
+const D = { rep: null, watching: {} };
+const DSTATE = { bad: ["bad", "problem"], warn: ["warn", "check"], info: ["now", "note"], ok: ["ok", "fine"] };
+async function loadDoctor() {
+  try { D.rep = await api("/api/doctor"); }
+  catch (e) { $("#sys-doctor").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
+  renderDoctor();
+  if (D.rep.full_job) watchFix(D.rep.full_job, $("#sys-doctor-full"), "Check everything");
+}
+function doctorRow(r) {
+  const [cls, word] = DSTATE[r.state] || DSTATE.info, f = r.fix;
+  const act = !f ? "" : f.how === "offer" ? `<small class="meta">${esc(f.label)}</small>`
+    : `<button class="btn" type="button" data-fix="${esc(f.id)}">${esc(f.label)}</button>`;
+  return `<div class="sys" data-check="${esc(r.id)}"><span><b>${esc(r.title)}</b><small>${esc(r.say)}</small>${r.detail ? `<span class="kv2" data-deep>${esc(r.detail)}</span>` : ""}</span>
+    <span class="acts"><span class="dotw ${cls}">${esc(word)}</span>${act}</span></div>`;
+}
+function renderDoctor() {
+  const r = D.rep, a = r.about || {};
+  $("#sys-version").textContent = `Version ${a.version}${a.git && a.git.branch ? ` · ${a.git.branch}` : ""}`;
+  $("#sys-about-deep").textContent = [a.folder, `Python ${a.python}`, `PyTorch ${a.torch || "not found"}`, a.git && a.git.commit, a.os].filter(Boolean).join(" · ");
+  // a row per problem; notes that carry a Fix (leftovers, the install record) or tell what happened (interrupted work) too
+  const rows = r.results.filter(x => x.state === "bad" || x.state === "warn" || (x.state === "info" && (x.fix || x.id === "interrupted")));
+  const order = { bad: 0, warn: 1, info: 2 };
+  rows.sort((x, y) => order[x.state] - order[y.state]);
+  const fine = r.results.filter(x => x.state === "ok");
+  $("#sys-doctor").innerHTML = (rows.length ? rows.map(doctorRow).join("")
+    : `<p class="meta">All clear: ${r.results.length} checks passed.</p>`) +
+    (fine.length ? `<div data-deep>${fine.map(doctorRow).join("")}</div>` : "");
+  const lf = r.last_full;
+  $("#sys-doctor-when").textContent = `Quick check ${r.seconds} s` + (lf ? ` · last full check ${lf.made.replace("T", " ").slice(0, 16)}, ${lf.counts.bad + lf.counts.warn} problem(s)` : " · no full check yet");
+  document.body.dataset.doctor = r.counts.bad ? "bad" : r.counts.warn ? "warn" : "ok";   // hook: a dot on SafeHouse / System
+}
+function watchFix(jobId, btn, label) {
+  if (D.watching[jobId]) return;
+  D.watching[jobId] = true;
+  if (btn) { btn.disabled = true; }
+  const off = watchJob(jobId, ev => {
+    const f = ev.frac ?? ev.fraction ?? ev.progress;
+    if (btn && !ev.final) btn.textContent = f != null ? `${Math.round(f * 100)}%` : "Working…";
+    if (ev.final) {
+      off();
+      delete D.watching[jobId];
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+      if (ev.state === "error") showError(ev.message, "That didn't work");
+      else if (ev.state === "done") showError(ev.message, "Done", null, true);
+      loadDoctor();
+    }
+  });
+}
+$("#sys-doctor").addEventListener("click", async e => {
+  const b = e.target.closest("[data-fix]"); if (!b) return;
+  const label = b.textContent;
+  b.disabled = true;
+  try {
+    const r = await api(`/api/doctor/fix/${encodeURIComponent(b.dataset.fix)}`, { method: "POST" });
+    if (r.job) return watchFix(r.job, b, label);
+    if (r.message) showError(r.message, r.ok === false ? "Not now" : "Done", null, r.ok !== false);
+    loadDoctor();
+  } catch (err) { showError(err.message, "That didn't work"); b.disabled = false; }
+});
+$("#sys-doctor-full").onclick = async () => {
+  const b = $("#sys-doctor-full");
+  try { watchFix((await api("/api/doctor/full", { method: "POST" })).job, b, "Check everything"); }
+  catch (err) { showError(err.message, "Couldn't start the check"); }
+};
+$("#sys-logs").onclick = async () => {
+  try { await api("/api/doctor/open-logs", { method: "POST" }); } catch (err) { showError(err.message, "Couldn't open the logs"); }
+};
+$("#sys-bundle").onclick = async () => {
+  let c;
+  try { c = await api("/api/doctor/bundle"); } catch (err) { return showError(err.message, "Couldn't list it"); }
+  $("#sys-bundle-list").innerHTML = c.files.map(f => `<li><b>${esc(f.about)}</b> <span class="meta" data-deep>${esc(f.name)} · ${(f.size / 1e3).toFixed(0)} KB</span></li>`).join("");
+  $("#sys-bundle-size").textContent = `about ${(c.size / 1e6).toFixed(1)} MB before it's zipped`;
+  $("#sys-bundle-note").innerHTML = `${esc(c.never)}<span data-deep> ${c.shortened.map(s => `${esc(s.folder)} → ${esc(s.reads)}`).join(" · ")}</span>`;
+  $("#sys-bundle-save").setAttribute("download", c.name);
+  $("#sys-bundle-box").hidden = false;
+};
+$("#sys-bundle-cancel").onclick = () => { $("#sys-bundle-box").hidden = true; };
+$("#sys-bundle-save").addEventListener("click", () => setTimeout(() => { $("#sys-bundle-box").hidden = true; }, 500));
+setTimeout(loadDoctor, 4000);   // once after the page opens, so a problem shows on the tab before the room is opened
