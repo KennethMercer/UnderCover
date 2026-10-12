@@ -19,6 +19,7 @@ A route a phone asks for that isn't in the table is refused too (a new route is 
 """
 import re
 import threading
+import time
 
 from ..core import phone, qr
 from ..core.phone import PhoneError
@@ -98,13 +99,26 @@ def policy(method: str, p: str) -> tuple[str, str]:
 
 _L = {"srv": None, "addr": None, "problem": None, "make": None, "port": None}
 _LLOCK = threading.Lock()
+_QR: dict = {}
 
 
 def setup(make_server, port: int):
-    """Called once at startup: make_server(addr, port) returns a server whose requests are all from the network."""
+    """Called once at startup: make_server(addr, port) returns a server whose requests are all from the network.
+    While Phone access is on, the listener is checked every minute: opened when the PC gets a home-network address after
+    UnderCover started (Wi-Fi comes up after login), moved when the router hands out a new one."""
     _L["make"], _L["port"] = make_server, port
     if phone.enabled():
         listen()
+
+    def keep():
+        while True:
+            time.sleep(60)
+            try:
+                if phone.enabled():
+                    listen()
+            except Exception:   # noqa: BLE001 - try again next minute
+                pass
+    threading.Thread(target=keep, daemon=True, name="phone-keep").start()
 
 
 def listen() -> bool:
@@ -157,7 +171,9 @@ def state() -> dict:
            "devices": phone.devices(), "pairing": None}
     if p and url():
         link = f"{url()}/pair#{p['code']}"
-        out["pairing"] = {"code": p["code"], "until": p["until"], "url": f"{url()}/pair", "link": link, "qr": qr.svg(link)}
+        if _QR.get("link") != link:   # the room asks every few seconds while a code is shown
+            _QR.update(link=link, svg=qr.svg(link))
+        out["pairing"] = {"code": p["code"], "until": p["until"], "url": f"{url()}/pair", "link": link, "qr": _QR["svg"]}
     return out
 
 
