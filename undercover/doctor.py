@@ -4,6 +4,7 @@
     python -m undercover.doctor --full                + every model file's checksum, the graphics card and its driver
     python -m undercover.doctor --json                the report as JSON (setup.ps1 -Repair reads it)
     python -m undercover.doctor fix <id> [--dry-run]  run one Fix: stale | models | model:<path> | packages | manifest
+    python -m undercover.doctor bundle <file.zip>      save the diagnostics file (logs, record, report; no audio)
     python -m undercover.doctor manifest [--installed] [--no-hash]
                                                       write the install record (setup.ps1 runs it with --installed)
 
@@ -23,7 +24,7 @@ MARK = {"ok": "  ok ", "info": " info", "warn": " WARN", "bad": "  BAD"}
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m undercover.doctor", description="Check UnderCover's install")
-    ap.add_argument("action", nargs="?", default="check", choices=["check", "fix", "manifest"])
+    ap.add_argument("action", nargs="?", default="check", choices=["check", "fix", "manifest", "bundle"])
     ap.add_argument("id", nargs="?")
     ap.add_argument("--full", action="store_true", help="also every model file's checksum, the card and its driver")
     ap.add_argument("--json", action="store_true")
@@ -38,6 +39,19 @@ def main(argv=None) -> int:
         doctor.log(f"install record written ({m['kind']}) by the command line: {len(m['models'])} model files")
         print(json.dumps({"file": str(manifest.file()), "kind": m["kind"], "models": len(m["models"]),
                           "packages": len(m["packages"])}) if a.json else f"\nWrote {manifest.file()} ({m['kind']}).")
+        return 0
+
+    if a.action == "bundle":
+        from .core import diagnostics
+        rep = doctor.run(full=False)
+        out = diagnostics.contents(rep)
+        dest = a.id or out["name"]
+        for f in out["files"]:
+            print(f"  {f['name']:28} {f['size'] / 1e3:8.0f} KB  {f['about']}")
+        print(out["never"])
+        with open(dest, "wb") as fh:
+            fh.write(diagnostics.build(rep))
+        print(f"Saved {dest}")
         return 0
 
     if a.action == "fix":
@@ -84,7 +98,6 @@ def _fix(fix_id: str, dry_run: bool, as_json: bool) -> int:
                     continue
                 doctor.log(f"re-downloading {local} (command line)")
                 setup_models.refetch(local, None if as_json else _bar)
-                doctor._note_model(local)
                 doctor.log(f"re-downloaded {local}: checksum ok")
             out = {"message": f"{'Would download' if dry_run else 'Downloaded'} {len(todo)} file(s) again.", "files": todo}
         else:

@@ -5,6 +5,8 @@ cache/
 output/
 uploads/
 logs/
+# The install record (phase 10): what this PC has; written by setup or the app.
+manifest.json
 test/
 .claude/
 __pycache__/

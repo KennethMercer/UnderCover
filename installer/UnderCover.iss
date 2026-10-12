@@ -8,7 +8,7 @@
 ; "Where should UnderCover keep your files?" page (phase 4b).
 
 #define AppName "UnderCover"
-#define AppVersion "0.2.0"
+#define AppVersion "0.3.0"
 
 [Setup]
 AppId={{E6B05D70-0109-4D65-8AEC-89622D0F5C91}
