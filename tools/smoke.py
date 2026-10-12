@@ -846,27 +846,28 @@ def u_pace_pitch():
     from undercover.doubleagent import cadence as K
     from undercover.speakeasy import speak
     # the person: two speeches, a debate; a source with too few sentences doesn't vote on the pace
-    rows = ([{"src": "speech1", "syl": 40, "dur": 10.0, "f0_med": 180.0}] * 4 + [{"src": "speech2", "syl": 42, "dur": 10.0, "f0_med": 190.0}] * 3
-            + [{"src": "debate", "syl": 46, "dur": 10.0, "f0_med": 140.0}] * 3 + [{"src": "clip", "syl": 90, "dur": 10.0, "f0_med": 300.0}])
+    rows = ([{"src": "speech1", "syl": 40, "dur": 10.0, "f0_med": 180.0}] * 8 + [{"src": "speech2", "syl": 42, "dur": 10.0, "f0_med": 190.0}] * 8
+            + [{"src": "debate", "syl": 46, "dur": 10.0, "f0_med": 140.0}] * 8 + [{"src": "clip", "syl": 90, "dur": 10.0, "f0_med": 300.0}] * 1
+            + [{"src": "rally", "syl": 50, "dur": 10.0, "f0_med": 260.0}] * 4)
     prof = K.voice_profile(rows)
-    assert prof["by_source"]["speech1"] == {"n": 4, "pace": 4.0, "f0_hz": 180.0} and prof["f0_hz"] == 180.0, prof
-    assert K.pace_target(prof) == 4.2, K.pace_target(prof)   # the median of 4.0, 4.2, 4.6; "clip" (n 1) left out
-    assert len(prof["sents"]) == 11 and prof["sents"][0] == ["speech1", 40, 10.0, 180.0]
+    assert prof["by_source"]["speech1"] == {"n": 8, "pace": 4.0, "f0_hz": 180.0} and prof["f0_hz"] == 180.0, prof
+    assert K.pace_target(prof) == 4.4, K.pace_target(prof)   # the median of 4.0, 4.2, 4.6, 5.0; "clip" (n 1) left out
+    assert len(prof["sents"]) == 29 and prof["sents"][0] == ["speech1", 40, 10.0, 180.0]
     # readings: fast and high (Obama's live pack in phase 12: x1.14, +4.5 st), slow, on pitch
-    fast = K.pace_pitch(4.8, 233.0, prof)
+    fast = K.pace_pitch(5.0, 233.0, prof)
     assert fast["pace_heard"] == "fast" and abs(fast["pitch_st"] - 4.47) < 0.01, fast
-    assert K.pace_pitch(3.8, 180.0, prof)["pace_heard"] == "slow" and K.pace_pitch(4.3, 181.0, prof)["pace_heard"] == "ok"
+    assert K.pace_pitch(4.0, 180.0, prof)["pace_heard"] == "slow" and K.pace_pitch(4.5, 181.0, prof)["pace_heard"] == "ok"
     # pitch is a register (phase 12b): inside the range of their own sources (140 .. 190 Hz here) it's theirs, and only
     # past it does a pack get a nudge, back to the nearest edge (not to the median)
-    assert K.pitch_range(prof) == (140.0, 190.0)
+    assert K.pitch_range(prof) == (140.0, 190.0)   # "rally" (4 sentences) is too thin to set an edge of the range
     assert abs(fast["pitch_off_st"] - 3.53) < 0.01, fast
     m = {"score": 0.67, **fast}
     assert K.nudge_for(m) == -3.5 and K.nudge_for({"pitch_off_st": 0.4}) == 0.0
     assert K.heard(m) == round(0.67 - min(K.CAP_PITCH, K.W_PITCH * (3.53 - K.PITCH_DEAD)), 4) and K.heard(m, K.nudge_for(m)) == 0.67
-    debate = K.pace_pitch(4.3, 145.0, prof)   # 3.7 st under the median, but where their debate voice is
+    debate = K.pace_pitch(4.5, 145.0, prof)   # 3.7 st under the median, but where their debate voice is
     assert debate["pitch_st"] < -3 and debate["pitch_off_st"] == 0.0 and K.nudge_for(debate) == 0.0, debate
     assert K.heard({"score": 0.6, **debate}) == 0.6
-    low = K.pace_pitch(4.3, 120.0, prof)
+    low = K.pace_pitch(4.5, 120.0, prof)
     assert abs(low["pitch_off_st"] + 2.67) < 0.01 and K.nudge_for(low) == 2.7, low
     m3 = dict(m)
     K.as_heard(m3, -3.5)
