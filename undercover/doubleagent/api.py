@@ -404,14 +404,14 @@ def start_auto(name: str, b: dict):
     jobs.JOBS[job.id] = job
     ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
 
-    def service():
+    def between():   # not `service`: that name is the module this function calls below ("Do it all" failed with an AttributeError)
         while not jobs.GPU_QUEUE.empty():
             try:
                 other, fn = jobs.GPU_QUEUE.get_nowait()
             except Exception:
                 return
             jobs.run_job(other, fn)
-    control.service = service
+    control.service = between
 
     def run(job):
         def push(stage, frac, message, **kw):
