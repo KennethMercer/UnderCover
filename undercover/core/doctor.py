@@ -445,8 +445,39 @@ def c_phone(ctx) -> list:
     return out
 
 
+def c_ytdlp(ctx) -> list:
+    """YouTube's downloader (phase 16): the pair in use, a missing puzzle solver (yt-dlp-ejs: without it YouTube refuses
+    most videos), a breakage nobody has healed yet. The Fix is the self-heal (core/ytdlp.heal) as a job."""
+    from . import ytdlp
+    s = ytdlp.status()
+    if not s["yt"]:
+        return [_r("ytdlp", "tools", "bad", "YouTube downloader",
+                   "yt-dlp isn't installed, so songs and voice clips can't be fetched from YouTube.", "", REPAIR)]
+    heal = _fix("ytdlp", "Find a working version", "job")
+    out = []
+    if not s["ejs"]:
+        out.append(_r("ytdlp-ejs", "tools", "bad", "YouTube's puzzle solver is missing",
+                      "yt-dlp needs its puzzle solver (yt-dlp-ejs) to get past YouTube's checks; without it most videos are "
+                      "refused. The Fix fetches yt-dlp with its solver, checks it and switches to it.",
+                      f"yt-dlp {s['yt']} ({s['source']}), no yt-dlp-ejs next to it", heal))
+    if s["broken"]:
+        out.append(_r("ytdlp-broken", "tools", "warn", "YouTube is refusing videos",
+                      f"{s['broken']['videos']} videos failed the same way lately: YouTube probably changed something. A "
+                      "newer yt-dlp usually fixes it" + ("; it's being looked for." if s["job"] else
+                                                         ("; auto-update is off, so it waits for you." if not s["auto"] else ".")),
+                      s.get("last_result") or "", None if s["job"] else heal))
+    where = "a checked update" if s["source"] == "side" else "the version UnderCover pins"
+    out.append(_r("ytdlp", "tools", "ok", "YouTube downloader",
+                  f"yt-dlp {s['yt']} with its puzzle solver {s['ejs'] or '(missing)'}, {where}. "
+                  + ("It updates itself when YouTube starts refusing videos." if s["auto"] else "Auto-update is off."),
+                  " · ".join(x for x in (f"last check {s['last_check'].replace('T', ' ')[:16]}: {s['last_result']}"
+                                         if s.get("last_check") else "", f"last known good {s['last_good']}"
+                                         if s.get("last_good") else "") if x)))
+    return out
+
+
 CHECKS = [c_manifest, c_python, c_torch, c_gpu, c_packages, c_tools, c_models, c_disk, c_paths, c_port, c_stale, c_work,
-          c_phone]
+          c_phone, c_ytdlp]
 
 
 def run(full: bool = False, status: dict | None = None, progress=None, cancel=None) -> dict:
@@ -636,6 +667,9 @@ def fix(fix_id: str, status: dict | None = None, dry_run: bool = False) -> dict:
         return {"ok": True, **worklist.resume_all()}
     if fix_id == "packages":
         return _job("packages", "Reinstalling the pinned packages", lambda job: fix_packages(dry_run=dry_run))
+    if fix_id == "ytdlp":   # the self-heal (phase 16): its own job, one at a time
+        from . import ytdlp
+        return {"job": ytdlp.start_heal(reason="the Doctor's Fix", dry_run=dry_run).id}
     if fix_id == "manifest":
         if OBSERVING.is_set():
             return {"ok": True, "message": "The install record is being written already."}
