@@ -408,6 +408,10 @@ def c_phone(ctx) -> list:
     if not phone.usable(addr):
         return [_r("phone-network", "network", "info", "Phone access",
                    f"Phone access is on, on a test address ({addr}): there's no network or firewall to check.", "")]
+    from . import platform
+    if not platform.supports("firewall")[0]:
+        return [_r("phone-network", "network", "info", "Phone access",
+                   "Phone access is on. Checking the network type and the firewall works on Windows only for now.", "")]
     port = jobs.PORT or CONFIG["ui"]["port"]
     # the server (startup, the System room) never waits on PowerShell: a cold cache is read in the background
     w = phone.windows_check(addr, port, phone_programs(), wait=ctx.get("status") is None, fresh=bool(ctx.get("full")))

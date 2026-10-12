@@ -46,13 +46,16 @@ def supports(feature: str) -> tuple[bool, str]:
 
 def open_folder(path):
     """Show a folder in the file manager."""
+    import shutil
     path = str(path)
     if WINDOWS:
         os.startfile(path)   # noqa: S606 - a folder of ours, never a URL from a request
     elif sys.platform == "darwin":
         subprocess.Popen(["open", path])
-    else:
+    elif shutil.which("xdg-open"):
         subprocess.Popen(["xdg-open", path])
+    else:
+        raise NotOnThisOS(f"There's no file manager to open here (xdg-open isn't installed). The folder is {path}.")
 
 
 def show_in_folder(file):

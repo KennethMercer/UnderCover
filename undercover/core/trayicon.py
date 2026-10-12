@@ -170,14 +170,21 @@ class Server:
 
 
 def quit_reason(logs_dir: Path, port: int) -> str | None:
-    """The server's last word in its heartbeat ("quit" when the user quit it), for deciding whether the icon goes too."""
+    """The server's last word in its heartbeat: None when it didn't stop on purpose (a crash, or still running), "" for
+    a stop without a reason (Ctrl+C), else the reason ("quit", "restart", "window closed", "log off", "shutdown")."""
     from .config import CONFIG
     f = logs_dir / ("heartbeat.jsonl" if port == CONFIG["ui"]["port"] else f"heartbeat-{port}.jsonl")
     try:
         last = json.loads(f.read_text(encoding="utf-8").strip().splitlines()[-1])
     except (OSError, ValueError, IndexError):
         return None
-    return last.get("reason") if last.get("event") == "stop" else None
+    return (last.get("reason") or "") if last.get("event") == "stop" else None
+
+
+def leaves_with_server(reason: str | None) -> bool:
+    """Does the icon go when the server has gone? Yes after any stop on purpose but a restart; a crash keeps it (grey,
+    with Start)."""
+    return reason is not None and reason != "restart"
 
 
 def launcher() -> Path:
@@ -194,8 +201,9 @@ def run(port: int):
     import pystray
     from .config import path
     srv = Server(port)
-    st = {"status": None, "jobs": [], "phone": None, "doctor_bad": False, "doctor_at": 0.0, "down_since": None,
-          "startup": None}
+    st = {"status": None, "jobs": [], "phone": None, "phone_at": 0.0, "doctor_bad": False, "doctor_at": 0.0,
+          "down_since": None, "startup": None}
+    lock = threading.Lock()   # one icon / menu update at a time (the poll and the actions both update)
     try:
         st["startup"] = platform.startup_entry_state()
     except platform.NotOnThisOS:
@@ -209,8 +217,10 @@ def run(port: int):
             return
         st["down_since"] = None
         st["jobs"] = srv.get("/api/jobs") or []
-        ph = srv.get("/api/phone")
-        st["phone"] = ph.get("enabled") if isinstance(ph, dict) else None
+        if time.time() - st["phone_at"] > 60:   # the tick changes only when someone flips it (the action re-reads it)
+            ph = srv.get("/api/phone")
+            st["phone"] = ph.get("enabled") if isinstance(ph, dict) else None
+            st["phone_at"] = time.time()
         if time.time() - st["doctor_at"] > 300:
             d = srv.get("/api/doctor", timeout=15)
             st["doctor_bad"] = bool(d and (d.get("counts") or {}).get("bad"))
@@ -232,6 +242,7 @@ def run(port: int):
                     say(msg)
             elif item_id == "phone":
                 ok, msg = srv.post("/api/phone", {"on": not st["phone"]})
+                st["phone_at"] = 0.0
                 if not ok:
                     say(msg)
             elif item_id == "restart":
@@ -272,20 +283,22 @@ def run(port: int):
     icons = {}
 
     def update():
-        state, module = icon_state(st["status"], st["jobs"], st["doctor_bad"])
-        key = (state, module)
-        if key not in icons:
-            icons[key] = draw_icon(state, module)
-        icon.icon = icons[key]
-        icon.title = tooltip(st["status"], st["jobs"], st["doctor_bad"])
-        icon.update_menu()
+        with lock:
+            state, module = icon_state(st["status"], st["jobs"], st["doctor_bad"])
+            key = (state, module)
+            if key not in icons:
+                icons[key] = draw_icon(state, module)
+            icon.icon = icons[key]
+            icon.title = tooltip(st["status"], st["jobs"], st["doctor_bad"])
+            icon.update_menu()
 
     def loop():
         while True:
             refresh()
             update()
-            if st["down_since"] and time.time() - st["down_since"] > 10 and quit_reason(path("logs_dir"), port) == "quit":
-                icon.stop()   # the user quit UnderCover: the icon goes with it
+            if (st["down_since"] and time.time() - st["down_since"] > 10
+                    and leaves_with_server(quit_reason(path("logs_dir"), port))):
+                icon.stop()   # UnderCover was stopped on purpose (Quit, its window closed, Ctrl+C): the icon goes with it
                 return
             time.sleep(5)
 
