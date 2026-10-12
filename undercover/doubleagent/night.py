@@ -117,7 +117,7 @@ def _person_from_voice(v) -> str:
 def candidates() -> list:
     """Voices for the "Improve my voices" picker: what each was trained on, its last measured likeness, what an
     improve would do and roughly how long it takes."""
-    from ..core.voices import list_voices
+    from ..core.voices import list_voices, voice_info
     from . import service
     queued = {(i["kind"], i["target"].lower()) for i in worklist._state()["queue"] if i["state"] in ("queued", "paused", "running")}
     try:
@@ -127,7 +127,7 @@ def candidates() -> list:
     out = []
     for v in list_voices():
         ex = v.extra or {}
-        c = {"voice": v.name, "trained": bool(ex.get("trained")), "minutes": ex.get("train_minutes"),
+        c = {"voice": v.name, **voice_info(v), "minutes": ex.get("train_minutes"),
              "singing": None if ex.get("from_speech") is None else not ex.get("from_speech"), "likeness": None}
         if ex.get("trained"):
             person = _person_from_voice(v)
@@ -320,6 +320,11 @@ def _improve_target(target: str) -> str:
     return get_voice(target).name   # friendly error if it doesn't exist
 
 
-worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target,
-                       label=lambda item: f"Improving {item['target']}")
+def _shown_voice(item: dict) -> str:
+    from ..core.voices import label_of
+    return label_of(item["target"])
+
+
+worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=_shown_voice,
+                       label=lambda item: f"Improving {_shown_voice(item)}")
 worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}")

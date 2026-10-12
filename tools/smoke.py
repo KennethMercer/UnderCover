@@ -714,6 +714,233 @@ def u_migrate_ids():
     return "3 lines got ids, 1 gone line dropped (kept in the backup), second run a no-op"
 
 
+def _fake_voice(name: str, source: str = "", extra: dict | None = None, display: str = ""):
+    """A voice folder with a meta.json (and an empty model.pth) in the isolated models/voices; no model is loaded."""
+    from undercover.core.voices import Voice, voices_dir
+    d = voices_dir() / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "model.pth").write_bytes(b"x")
+    v = Voice(name=name, dir=d, pth=d / "model.pth", index=None, source=source, installed="2026-10-11 00:00",
+              extra=extra or {}, display=display)
+    (d / "meta.json").write_text(json.dumps(v.to_json(), indent=2), encoding="utf-8")
+    return v
+
+
+class _FakeHandler:
+    """Just enough of the HTTP handler for the route functions: path, _body, _json, _error."""
+
+    def __init__(self, path="", body=None):
+        self.path, self._b, self.out, self.err = path, body or {}, None, None
+
+    def _body(self):
+        return self._b
+
+    def _json(self, obj, status=200):
+        self.out = obj
+
+    def _error(self, msg, status=400):
+        self.err = msg
+
+
+@check("voice display names: defaults (trained / downloaded / explicit), the /display route, every voice API")
+def u_display_names():
+    from undercover.core import voices as V
+    from undercover.safehouse import api as shapi, library
+    with isolated_data():
+        _fake_voice("barack-obama-uc", "trained in UnderCover: barack obama, 12.0 min, epoch 5", {"trained": True, "project": "p1"})
+        _fake_voice("ac-dc-uc", "trained in UnderCover: AC/DC, 30.0 min, epoch 9", {"trained": True})
+        _fake_voice("mj", "https://huggingface.co/x/y", {"person": "Michael Jackson"})
+        _fake_voice("michael-jackson-botdf-era", "https://huggingface.co/x/z")
+        _fake_voice("kermit", "https://huggingface.co/x/k", display="The Frog")
+        got = {v.name: V.display_name(v) for v in V.list_voices()}
+        assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
+                       "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False}
+        # the route: set, read back through the APIs, clear
+        h = _FakeHandler(body={"display": "  Barry   O  "})
+        assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
+        assert V.get_voice("barack-obama-uc").display == "Barry O" and V.get_voice("barack-obama-uc").name == "barack-obama-uc"
+        lib = {v["name"]: v for v in library.voices()}
+        assert lib["barack-obama-uc"]["display"] == "Barry O" and lib["barack-obama-uc"]["trained"] is True, lib["barack-obama-uc"]
+        assert lib["mj"]["display"] == "Michael Jackson" and lib["mj"]["trained"] is False
+        assert V.voice_labels()["barack-obama-uc"] == "Barry O" and V.label_of("gone-voice") == "gone-voice"
+        from undercover.app import server
+        assert {v["name"]: v["display"] for v in server.voices_json()}["barack-obama-uc"] == "Barry O"
+        # a rewrite of meta.json (cadence, export, ...) keeps the display and the rest
+        v = V.get_voice("barack-obama-uc")
+        (v.dir / "meta.json").write_text(json.dumps(v.to_json(), indent=2), encoding="utf-8")
+        assert V.get_voice("barack-obama-uc").display == "Barry O" and V.get_voice("barack-obama-uc").extra["project"] == "p1"
+        for text in ("", "   "):   # empty clears: back to the default
+            h = _FakeHandler(body={"display": text})
+            shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display")
+            assert h.out["display"] == "Barack Obama" and h.out["custom"] is False and V.get_voice("barack-obama-uc").display == "", (text, h.out)
+        h = _FakeHandler(body={"display": "x" * 81})
+        shapi.handle(h, "POST", "/api/library/voices/mj/display")
+        assert h.err and V.get_voice("mj").display == "", "an 81-character name was accepted"
+        h = _FakeHandler(body={"display": "x"})
+        shapi.handle(h, "POST", "/api/library/voices/nobody/display")
+        assert h.err, "a voice that doesn't exist took a display name"
+    return "5 defaults, set / clear round-trip, library + app APIs carry display and trained"
+
+
+@check("one-shot grammar: '<song> by <artist> as <person>', '<song> as <person>', and today's forms")
+def u_grammar():
+    from undercover.frontman.oneshot import parse_request as pr
+    from undercover.core.voices import ModelError
+    want = {
+        "Hello by Adele as Peter Griffin": ("Hello", "Peter Griffin", "Adele", False, None),
+        "cover of Hello by Adele as Peter Griffin": ("Hello", "Peter Griffin", "Adele", False, None),
+        "acoustic cover of Hello by Adele as Peter Griffin": ("Hello", "Peter Griffin", "Adele", False, "acoustic"),
+        "Hello as Peter Griffin": ("Hello", "Peter Griffin", None, False, None),
+        "Hello as sung by Peter Griffin": ("Hello", "Peter Griffin", None, False, None),
+        "Stand By Me as Peter Griffin": ("Stand By Me", "Peter Griffin", None, False, None),
+        "Stand By Me by Ben E. King as Peter Griffin": ("Stand By Me", "Peter Griffin", "Ben E. King", False, None),
+        "As It Was as A Tribe Called Quest": ("As It Was", "A Tribe Called Quest", None, False, None),
+        "Hello by Peter Griffin": ("Hello", "Peter Griffin", None, True, None),               # ambiguous: read as the voice
+        "acoustic version of Hello by Peter Griffin": ("Hello", "Peter Griffin", None, True, "acoustic"),
+        "cover of Party In The USA by Morgan Freeman": ("Party In The USA", "Morgan Freeman", None, True, None),
+        "Party in the USA by Miley Cyrus by Morgan Freeman": ("Party in the USA", "Morgan Freeman", "Miley Cyrus", False, None),
+        "Bohemian Rhapsody sung by Obama": ("Bohemian Rhapsody", "Obama", None, False, None),
+        "have SpongeBob sing Toxic": ("Toxic", "SpongeBob", None, False, None),
+        "Obama sings Hello as a ballad": ("Hello", "Obama", None, False, "ballad"),
+        "Hello cover by Peter Griffin": ("Hello", "Peter Griffin", None, False, None),
+        "Peter Griffin sings Hello by Adele": ("Hello", "Peter Griffin", "Adele", False, None),
+    }
+    for text, w in want.items():
+        r = pr(text)
+        got = (r["song"], r["person"], r["artist"], r["by_only"], r["style"])
+        assert got == w, f"{text!r}: {got} != {w}"
+    try:
+        pr("just some words")
+        raise AssertionError("an unreadable request was accepted")
+    except ModelError as e:
+        assert "Hello by Adele as Peter Griffin" in str(e)
+    return f"{len(want)} requests read as expected"
+
+
+def _track(title, artist, views, url=None, year=0, kind="track"):
+    from undercover.core.youtube import SongResult
+    return SongResult(id=url or f"{artist}-{title}", url=f"https://youtu.be/{url or artist}-{title}".replace(" ", "_"),
+                      title=f"{artist} - {title}", raw_title=title, channel=artist, duration=240.0, views=views,
+                      kind=kind, artist=artist if kind == "track" else "", song=title if kind == "track" else "", year=year)
+
+
+@check("one-shot asks: ambiguity detection on fixed search results (no network), the answer lasts until a different song")
+def u_ambiguity():
+    from undercover.frontman import ambiguity as A
+    hello = [_track("Hello", "Adele", 1_500_000_000, year=2015), _track("Hello", "Lionel Richie", 300_000_000, year=1984),
+             _track("Hello - Remastered 2011", "Martin Solveig", 200_000_000, year=2010),
+             _track("Hello (Live)", "Adele", 5_000_000, kind="video"), _track("Hello Again", "Neil Diamond", 9_000_000)]
+    ch = A.detect("Hello", hello)
+    assert [c["artist"] for c in ch] == ["Adele", "Lionel Richie", "Martin Solveig"], ch
+    assert ch[0]["year"] == 2015 and ch[1]["year"] == 1984 and all(c["song_url"].startswith("https://") for c in ch)
+    # not ambiguous: one artist (live / duplicate uploads don't count), a nobody's namesake, a different title
+    assert A.detect("Hello", [_track("Hello", "Adele", 9e8), _track("Hello", "Adele", 1e6, url="b"), _track("Hello (Live)", "Adele", 1e5, kind="video")]) == []
+    assert A.detect("Hello", [_track("Hello", "Adele", 1_500_000_000), _track("Hello", "Some Garage Band", 4_000)]) == []
+    assert A.detect("Toxic", hello) == [] and A.detect("", hello) == []
+    assert A.detect("Party in the USA", [_track("Party in the U.S.A.", "Miley Cyrus", 8e8), _track("Party in the USA", "Cover Kid", 2e5)]) == []
+    assert len(A.detect("HELLO!", hello[:2])) == 2   # case and punctuation don't matter
+    # the lookup: searched once per title (cached); a failing search never raises (the plan just doesn't ask)
+    A.reset()
+    calls = []
+
+    def fake_search(q, limit=8):
+        calls.append(q)
+        return hello
+    assert A.choices_for("Hello", fake_search) == ch and A.choices_for("hello", fake_search) == ch and len(calls) == 1, calls
+    assert A.cached_choices("Hello") == ch and A.cached_choices("Toxic") == []
+
+    def broken(q, limit=8):
+        raise RuntimeError("offline")
+    assert A.choices_for("Something", broken) == []
+    # never a silent guess: no choice -> the first, with the sentence; a choice -> that one, no sentence
+    pick, went = A.resolve("Hello")
+    assert pick["artist"] == "Adele" and went == "I went with Adele's Hello", (pick, went)
+    pick, went = A.resolve("Hello", ch[1]["song_url"])
+    assert pick["artist"] == "Lionel Richie" and went is None
+    # the answer lasts until a different song is requested
+    k = A.song_key("Hello")
+    assert A.recall(k) is None
+    A.remember(k, ch[1]["song_url"], ch)
+    r = A.recall(k)
+    assert r["chosen"]["artist"] == "Lionel Richie" and [c["artist"] for c in r["others"]] == ["Adele", "Martin Solveig"], r
+    assert A.recall(A.song_key("hello!")) is not None, "the same title typed differently must be the same song"
+    A.requested(k)                                    # the same song again: still in effect
+    assert A.recall(k) is not None
+    assert A.recall(A.song_key("Toxic")) is None      # asking about another song doesn't show Hello's answer
+    A.requested(A.song_key("Toxic"))                  # ...and a request for another song forgets it
+    assert A.recall(k) is None, "the answer outlived a request for a different song"
+    A.remember(k, ch[0]["song_url"], ch)
+    A.requested(A.song_key("Hello", "Adele"))         # the same title with an artist named is a different request
+    assert A.recall(k) is None
+    A.remember(k, "https://youtu.be/pasted", [])      # a pasted link that was never a choice: known by its url alone
+    assert A.recall(k)["chosen"]["song_url"] == "https://youtu.be/pasted" and A.recall(k)["others"] == []
+    A.reset()
+    return "3 choices for Hello; one artist / a nobody / covers are not ambiguous; went-with sentence; answer kept until a different song"
+
+
+@check("one-shot asks: the plan step asks, the choice is remembered across requests, a different song forgets it")
+def u_ask_flow():
+    from undercover.core import jobs
+    from undercover.doubleagent import service
+    from undercover.frontman import ambiguity as A, api as fapi, oneshot
+    hello = [_track("Hello", "Adele", 1_500_000_000, year=2015), _track("Hello", "Lionel Richie", 300_000_000, year=1984)]
+    A.reset()
+    A.choices_for("Hello", lambda q, limit=8: hello)       # the lookup the plan step does, answered from the fixture
+    keep = (service.installed_for, service.online_for)
+    service.installed_for, service.online_for = (lambda p: []), (lambda p, n=2: [])   # no network, no voices
+    made = []
+
+    def plan(text):
+        h = _FakeHandler()
+        fapi._auto_plan(h, text, False)
+        assert h.err is None, h.err
+        return h.out
+
+    def start(body):
+        job = oneshot.start_oneshot(body)
+        made.append(job)
+        job.finish("cancelled", message="smoke")             # not run: the GPU queue is only drained below
+        return job
+    try:
+        p = plan("Hello as Peter Griffin")
+        assert p["ask"] is True and [c["artist"] for c in p["choices"]] == ["Adele", "Lionel Richie"] and "chosen" not in p, p
+        assert p["voice"]["how"] == "train" and p["voice"]["display"] == "Peter Griffin" and p["song_query"] == "Hello", p
+        assert plan("Hello by Adele as Peter Griffin")["ask"] is False, "an artist named: nothing to ask"
+        assert plan("Toxic as Peter Griffin")["ask"] is False and "chosen" not in plan("Toxic as Peter Griffin")
+        pn = plan("Hello by Peter Griffin")
+        assert pn["ask"] is True and "voice" in pn["note"] and pn["person"] == "Peter Griffin", pn   # said out loud
+        assert "note" not in p
+        # no choice: the job still starts (the run goes with the first and says so); nothing is remembered
+        j = start({"text": "Hello as Peter Griffin"})
+        assert j.resume_spec["choice"] is None and plan("Hello as Peter Griffin")["ask"] is True
+        # the user chose Lionel Richie: remembered, so the next plan doesn't ask and offers "the other one"
+        lionel = hello[1].url
+        j = start({"text": "Hello as Peter Griffin", "choice": lionel})
+        assert j.resume_spec["choice"] == lionel
+        p = plan("Hello as Obama")
+        assert p["ask"] is False and p["chosen"]["artist"] == "Lionel Richie" and [c["artist"] for c in p["others"]] == ["Adele"], p
+        # a later request for the same song, no choice sent: the answer given is still in effect
+        j = start({"text": "Hello as Obama"})
+        assert j.resume_spec["choice"] == lionel, j.resume_spec
+        # the other one, chosen from the offer
+        j = start({"text": "Hello as Obama", "choice": hello[0].url})
+        p = plan("Hello as Obama")
+        assert p["chosen"]["artist"] == "Adele" and [c["artist"] for c in p["others"]] == ["Lionel Richie"], p
+        # a different song is requested: the answer is forgotten, Hello asks again
+        start({"text": "Toxic as Obama"})
+        assert plan("Hello as Obama")["ask"] is True
+    finally:
+        service.installed_for, service.online_for = keep
+        while not jobs.GPU_QUEUE.empty():
+            jobs.GPU_QUEUE.get_nowait()
+        for j in made:
+            jobs.JOBS.pop(j.id, None)
+        A.reset()
+    return "asks for Hello, remembers Lionel Richie, offers Adele, forgets on Toxic"
+
+
 @check("api: status ready")
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
@@ -1091,7 +1318,8 @@ def main():
     t0 = time.time()
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage,
-               u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids):
+               u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
+               u_display_names, u_grammar, u_ambiguity, u_ask_flow):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")

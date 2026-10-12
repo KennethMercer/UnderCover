@@ -17,7 +17,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 from ..core.jobs import GPU_QUEUE, JOBS, Job
-from ..core.voices import ModelError
+from ..core.voices import ModelError, label_of
 from ..doubleagent import service
 from . import speak, tts
 
@@ -85,7 +85,7 @@ def _start(h, body: dict):
                 speed=_num(body.get("speed"), 1.0), nudge=_num(body.get("nudge"), 0.0),
                 cadence=False if body.get("cadence") is False else None, pace=body.get("pace"))
     p = speak.plan(args["voice"], args["reader"], args["speed"], args["nudge"], args["cadence"], args["pace"])   # a bad voice/Reader fails now
-    job = Job("speech", title=f"{text[:40].strip()}{'…' if len(text) > 40 else ''} · {args['voice']}")
+    job = Job("speech", title=f"{text[:40].strip()}{'…' if len(text) > 40 else ''} · {label_of(args['voice'])}")
     JOBS[job.id] = job
 
     def run(job: Job):

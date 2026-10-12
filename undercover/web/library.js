@@ -343,7 +343,7 @@ function voiceDetail(d, v) {
         <button class="linkbtn" id="lib-del-cad" type="button">Delete cadence</button>` : "none"}</dd>
       <dt>Size</dt><dd>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
-    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename">Rename…</button>
+    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep>Rename folder…</button>
       <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export">Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");

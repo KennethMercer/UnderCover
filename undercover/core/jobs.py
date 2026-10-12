@@ -235,8 +235,11 @@ class Job:
         if plan and self.kind == "auto":   # the one-shot: its request and what it chose
             name = lambda v, k: v.get(k) if isinstance(v, dict) else v
             snap["title"] = snap["title"] or plan.get("request")
-            snap["plan"] = {"request": plan.get("request"), "song": name(plan.get("song"), "title"),
-                            "voice": name(plan.get("voice"), "name")}
+            vid = name(plan.get("voice"), "name")
+            snap["plan"] = {"request": plan.get("request"), "song": name(plan.get("song"), "title"), "voice": vid}
+            if vid:   # ids stay in the data; this is what the strip and the drawer show
+                from .voices import label_of
+                snap["plan"]["voice_display"] = label_of(vid)
         if last.get("final"):
             snap["final"] = {"state": last.get("state"), "message": last.get("message")}
         return snap

@@ -17,7 +17,7 @@ from pathlib import Path
 import time
 
 from ..core.config import CONFIG
-from ..core.voices import ModelError, slug
+from ..core.voices import ModelError, display_name, slug
 from ..core import gpu, jobs
 from ..core.jobs import Paused
 
@@ -253,8 +253,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     cands = installed_for(person)
     trained = [v for v in cands if v.extra.get("trained")]
     if trained:
-        plan["voice"] = {"name": trained[0].name, "how": "installed", "checked": "trained in UnderCover"}
-        push("voice", 1.0, f"Using your voice “{trained[0].name}” (trained in UnderCover)")
+        plan["voice"] = {"name": trained[0].name, "display": display_name(trained[0]), "how": "installed",
+                         "checked": "trained in UnderCover"}
+        push("voice", 1.0, f"Using your voice “{display_name(trained[0])}” (trained in UnderCover)")
         return trained[0]
     community = [] if prefer_train else cands
     online = [] if prefer_train else online_for(person, 2)
@@ -268,7 +269,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             if cached and cached.get("v") == CHECK_VERSION:   # older, weaker checks are redone once
                 return voicecheck.Quality(**{k: cached.get(k) for k in ("voice", "score", "baseline", "phrases", "seconds",
                                                                         "verdict", "target_hz", "low", "pitch_cents", "content", "test")})
-            push("voice", 0.16 + 0.04 * len(checked), f"Checking whether “{v.name}” sounds like {person}")
+            push("voice", 0.16 + 0.04 * len(checked), f"Checking whether “{display_name(v)}” sounds like {person}")
             q = voicecheck.check(v.name, proj, conv, emb)
             _remember(person, ident, q)
             return q
@@ -320,12 +321,12 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             if rng:
                 plan["person_range"] = rng
                 _remember_range(v, rng, plan["person_speech"], person)
-            plan["voice"] = {"name": v.name, "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
+            plan["voice"] = {"name": v.name, "display": display_name(v), "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
                              "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ''})"}
-            push("voice", 1.0, f"Using “{v.name}”: it sounds like {person} ({good[0]['score']:.2f})")
+            push("voice", 1.0, f"Using “{display_name(v)}”: it sounds like {person} ({good[0]['score']:.2f})")
             return v
         push("voice", 0.2, "None of the existing voices sounded enough like " + person + ", so UnderCover will train one")
-    plan["voice"] = {"name": f"{slug(person)}-uc", "how": "train"}
+    plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
     push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 45 minutes)")
     name = train_new_voice(job, person, control, push)
     v = get_voice(name)

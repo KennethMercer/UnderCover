@@ -94,9 +94,20 @@ class SongResult:
     album: str = ""
     views: int = 0
     kind: str = "video"     # "track" (YouTube Music album audio) | "video"
+    artist: str = ""        # tracks only: the song's artist(s) as YouTube Music lists them
+    song: str = ""          # tracks only: the song's own title ("Hello"), without the artist
+    year: int = 0           # tracks only: release year when YouTube Music says (0 = unknown)
 
     def to_json(self):
         return asdict(self)
+
+
+def _year(d: dict) -> int:
+    try:
+        y = int(d.get("release_year") or str(d.get("release_date") or "")[:4] or 0)
+    except (TypeError, ValueError):
+        return 0
+    return y if 1900 < y < 2100 else 0
 
 
 def _music_tracks(query: str, n: int = 6) -> list[SongResult]:
@@ -134,7 +145,7 @@ def _music_tracks(query: str, n: int = 6) -> list[SongResult]:
         r = SongResult(id=d["id"], url=f"https://www.youtube.com/watch?v={d['id']}", raw_title=d.get("title") or title,
                        title=f"{artist} - {title}" if artist else title, channel=d.get("channel") or artist,
                        duration=float(d["duration"]), album=d.get("album") or "", kind="track",
-                       views=int(d.get("view_count") or 0),
+                       views=int(d.get("view_count") or 0), artist=artist, song=title, year=_year(d),
                        note="album track" + (f" · {d['album']}" if d.get("album") else ""))
         r.score = 0.6 - 0.3 * rank   # YouTube Music's own order (popularity) is a good tiebreaker
         out.append(r)

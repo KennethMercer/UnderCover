@@ -119,9 +119,9 @@ def heartbeat_loop():
 
 
 def voices_json() -> list[dict]:
-    from ..core.voices import list_voices
+    from ..core.voices import list_voices, voice_info
     return [{"name": v.name, "version": v.version, "sr": v.sr, "index": bool(v.index), "f0": v.f0,
-             "source": v.source, "installed": v.installed} for v in list_voices()]
+             "source": v.source, "installed": v.installed, **voice_info(v)} for v in list_voices()]
 
 
 # ---------------------------------------------------------------- HTTP handler
@@ -444,7 +444,8 @@ class Handler(BaseHTTPRequestHandler):
                 with job.cond:
                     job.state = "running"
                 v = download_and_install(src, name, progress)
-                job.finish("done", message=f"Installed {v.name}", voice=v.name)
+                from ..core.voices import display_name
+                job.finish("done", message=f"Installed {display_name(v)}", voice=v.name)
             except Cancelled:
                 job.finish("cancelled", message="Cancelled.")
             except ModelError as e:

@@ -12,7 +12,8 @@ DELETE /api/library/speech/<id>
  Kept / Recent on them. Everything unkept that falls out of the tray is deleted by core/tray.py, never kept ones.)
 GET    /api/library/covers/zip?ids=a1b2c3d4e5,...   zip download
 DELETE /api/library/songs/<id>[?stems_only=1]
-POST   /api/library/voices/<name>/rename    {name}
+POST   /api/library/voices/<name>/rename    {name}   (the FOLDER; the page calls it "Rename folder...", Deep Cover)
+POST   /api/library/voices/<name>/display   {display}  what the pages show for the voice; empty = the default
 DELETE /api/library/voices/<name>/cadence   the voice's cadence only (the voice stays)
 GET    /api/library/voices/<name>/export    zip download
 GET    /api/library/cleanup                 what can be freed, per group
@@ -146,6 +147,11 @@ def _route(h, method, p):
         _guard(SPEECH_WORK + ("night",))   # speech may be reading with it; a queue job may be making one
         remove_pack(m.group(1))
         return h._json({"ok": True})
+    m = re.fullmatch(r"voices/([a-z0-9-]+)/display", rest)
+    if m and method == "POST":
+        from ..core.voices import display_name, set_display
+        v = set_display(m.group(1), str(h._body().get("display") or ""))   # no _guard: a label, no file is touched
+        return h._json({"ok": True, "name": v.name, "display": display_name(v), "custom": bool(v.display)})
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
     if m:
         from ..core.voices import get_voice, voices_dir
