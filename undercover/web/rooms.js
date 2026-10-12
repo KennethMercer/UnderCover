@@ -21,10 +21,20 @@ function showRoom(room) {
   store.set("uc-sh-room", room);
   $$(".room").forEach(b => b.setAttribute("aria-selected", b.dataset.room === room));
   for (const r of ROOMS) $(`#room-${r}`).hidden = r !== room;
+  roomInSight();
   if (room === "running") loadRunRoom();
   if (room === "addons") loadAddons();
   if (room === "storage") loadStorage();
 }
+// on a phone the row scrolls: keep the open room in sight, again whenever a tab changes width (the font arriving, a count)
+function roomInSight() {
+  const tab = $('.room[aria-selected="true"]'), row = tab?.parentNode;
+  if (!tab || !row.clientWidth) return;
+  const x = tab.getBoundingClientRect().left - row.getBoundingClientRect().left;
+  if (x < 0 || x + tab.offsetWidth > row.clientWidth) row.scrollLeft += x - 16;
+}
+const roomSizes = new ResizeObserver(roomInSight);
+$$(".room").forEach(b => roomSizes.observe(b));
 $$(".room").forEach(b => b.onclick = () => { location.hash = b.dataset.room === "library" ? "safehouse" : `safehouse/${b.dataset.room}`; });
 document.addEventListener("uc:module", e => {
   if (e.detail !== "safehouse") return;

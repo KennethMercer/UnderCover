@@ -423,8 +423,8 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
   .rn-lbl .end { margin-left: 0; }
   .rn-more { flex-direction: column; gap: 8px; }
   .rn-more .meta { display: none; }
-  .lib .items { max-height: none; }
-  .lib .items .detail { position: static; margin: 4px 0 12px; }   /* opens under the tapped row (library.js placeDetail) */
+  #lib-list { max-height: none; }   /* the page scrolls, not the list */
+  #lib-list .detail { position: static; margin: 0 0 10px; padding: 12px 10px 14px; background: none; }   /* opens under the tapped row (library.js placeDetail) */
 }
 .stack.thin { height: 6px; }
 /* Add-ons room */
