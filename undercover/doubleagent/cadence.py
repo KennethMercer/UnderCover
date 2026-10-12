@@ -77,13 +77,15 @@ W_SOUND = 1.0
 # apart between runs (phase 9b: 0.668 and 0.694), and the best of five noisy scores is biased upward (was 0.005 with three)
 KEEP_MARGIN = 0.02
 # Phase 12: pace and pitch of a pack's readings against the person (docs/research/pace-pitch.md). Pitch is a property
-# of the pack (steady across readings): a pack gets the pitch nudge that puts its readings on the person's median, and a
-# pack heard off-pitch (no nudge) loses W_PITCH per semitone past the dead zone when packs are compared. Pace is measured
-# and kept, not scored: one pack's pace moves +-10% between readings (the engine samples), and as a penalty it would
-# have overturned the user's blind verdict on Freeman.
+# of the pack (steady across readings) and a register: the user heard Obama at 235 Hz as "a fire speech" and at 182 Hz
+# as "a calmer interview", both like him (phase 12b). So a pitch inside the range of the person's own sources (his
+# debate 137 Hz .. his rallies 233 Hz) is on pitch; only a pitch past it gets the nudge back to the nearest edge of it,
+# and a pack heard past it (no nudge) loses W_PITCH per semitone past the dead zone when packs are compared. Pace is
+# measured and kept, not scored: one pack's pace moves +-10% between readings (the engine samples), and as a penalty it
+# would have overturned the user's blind verdict on Freeman.
 PACE_MIN_N = 3       # a source counts toward the target pace once this many of its sentences were measured
 PACE_DEAD = 0.06     # within 6% of their pace: "ok" (about the smallest tempo change people notice in speech)
-PITCH_DEAD = 0.5     # semitones: no nudge, no penalty within it
+PITCH_DEAD = 0.5     # semitones past the person's range of registers: no nudge, no penalty within it
 W_PITCH = 0.05       # score units per semitone heard off the person's pitch, past the dead zone
 CAP_PITCH = 0.15
 
@@ -283,25 +285,36 @@ def pace_pitch(pace: float | None, f0_hz: float | None, person: dict) -> dict:
         out.update(pace_target=target, pace_ratio=round(r, 3),
                    pace_heard="fast" if r > 1 + PACE_DEAD else "slow" if r < 1 / (1 + PACE_DEAD) else "ok")
     if f0_hz and person.get("f0_hz"):
-        out["pitch_st"] = round(12 * math.log2(f0_hz / person["f0_hz"]), 2)
+        out["pitch_st"] = round(12 * math.log2(f0_hz / person["f0_hz"]), 2)   # from their median (for reading)
+        lo, hi = pitch_range(person)
+        out["pitch_off_st"] = round(12 * math.log2(f0_hz / hi) if f0_hz > hi else 12 * math.log2(f0_hz / lo) if f0_hz < lo
+                                    else 0.0, 2)   # past the range of their own sources: what counts
     return out
 
 
+def pitch_range(person: dict) -> tuple[float, float]:
+    """The person's own registers, lowest and highest: the median pitch of each source with PACE_MIN_N+ measured
+    sentences (Obama: a debate 137 Hz .. a rally 233 Hz). Without sources, just their median."""
+    f = [b["f0_hz"] for b in (person.get("by_source") or {}).values() if b.get("f0_hz") and b.get("n", 0) >= PACE_MIN_N]
+    return (min(f), max(f)) if f else (person["f0_hz"], person["f0_hz"])
+
+
 def pitch_pen(st: float | None) -> float:
-    """Score units lost for readings heard `st` semitones off the person's median pitch."""
+    """Score units lost for readings heard `st` semitones past the person's range of registers."""
     return round(min(CAP_PITCH, W_PITCH * max(0.0, abs(st or 0.0) - PITCH_DEAD)), 4)
 
 
 def nudge_for(m: dict) -> float:
-    """The pitch nudge (semitones, 0.1 steps) that puts a pack's readings on the person's median pitch."""
-    st = m.get("pitch_st")
+    """The pitch nudge (semitones, 0.1 steps) that brings a pack's readings back to the nearest edge of the person's
+    range of registers; none inside it (a speech pitch or an interview pitch are both theirs)."""
+    st = m.get("pitch_off_st")
     return -round(st, 1) if st is not None and abs(st) > PITCH_DEAD else 0.0
 
 
 def heard(m: dict, nudge: float = 0.0) -> float:
     """A pack's score as it would be heard: m measured its readings (with whatever nudge they already had), `nudge`
-    more semitones on top; readings heard off the person's pitch lose pitch_pen."""
-    st = m.get("pitch_st")
+    more semitones on top; readings heard past the person's range of registers lose pitch_pen."""
+    st = m.get("pitch_off_st")
     return round(m["score"] - pitch_pen(None if st is None else st + nudge), 4)
 
 
@@ -311,6 +324,8 @@ def as_heard(m: dict, nudge: float):
     if m.get("pitch_st") is not None:
         m["pitch_raw_st"] = m["pitch_st"]
         m["pitch_st"] = round(m["pitch_st"] + nudge, 2)
+    if m.get("pitch_off_st") is not None and nudge:
+        m["pitch_off_st"] = round(m["pitch_off_st"] + nudge, 2)
 
 
 def cadence_gap(s: dict, person: dict) -> float | None:
@@ -669,11 +684,11 @@ def train(job, voice_name: str, push, control=None) -> dict:
                 "pitch_nudge": win["pitch_nudge"],
                 "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score", "score_voice", "sound",
                                                     "heard", "pace", "pace_target", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
-                                                    "pitch_raw_st")},
+                                                    "pitch_raw_st", "pitch_off_st")},
                 "person": {k: person.get(k) for k in ("rate", "pauses", "pause_ms", "range_st", "sentences", "sentence_gap_s")},
                 "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score", "score_voice", "sound",
                                                                  "heard", "pace", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
-                                                                 "pitch_raw_st")},
+                                                                 "pitch_raw_st", "pitch_off_st")},
                 "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": []}
         new = work / "pack"
         new.mkdir(exist_ok=True)

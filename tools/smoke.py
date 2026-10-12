@@ -841,7 +841,7 @@ def _speechlike(sr: int = 44100, secs: float = 8.0, seed: int = 3):
     return (0.8 * y / np.abs(y).max()).astype(np.float32), sr
 
 
-@check("pace + pitch: the person per source, a pack's readings against them, the nudge and the score as heard")
+@check("pace + pitch: the person per source, a pack's readings against them, registers, the nudge and the score as heard")
 def u_pace_pitch():
     from undercover.doubleagent import cadence as K
     from undercover.speakeasy import speak
@@ -856,9 +856,26 @@ def u_pace_pitch():
     fast = K.pace_pitch(4.8, 233.0, prof)
     assert fast["pace_heard"] == "fast" and abs(fast["pitch_st"] - 4.47) < 0.01, fast
     assert K.pace_pitch(3.8, 180.0, prof)["pace_heard"] == "slow" and K.pace_pitch(4.3, 181.0, prof)["pace_heard"] == "ok"
+    # pitch is a register (phase 12b): inside the range of their own sources (140 .. 190 Hz here) it's theirs, and only
+    # past it does a pack get a nudge, back to the nearest edge (not to the median)
+    assert K.pitch_range(prof) == (140.0, 190.0)
+    assert abs(fast["pitch_off_st"] - 3.53) < 0.01, fast
     m = {"score": 0.67, **fast}
-    assert K.nudge_for(m) == -4.5 and K.nudge_for({"pitch_st": 0.4}) == 0.0
-    assert K.heard(m) == round(0.67 - min(K.CAP_PITCH, K.W_PITCH * (4.47 - K.PITCH_DEAD)), 4) and K.heard(m, K.nudge_for(m)) == 0.67
+    assert K.nudge_for(m) == -3.5 and K.nudge_for({"pitch_off_st": 0.4}) == 0.0
+    assert K.heard(m) == round(0.67 - min(K.CAP_PITCH, K.W_PITCH * (3.53 - K.PITCH_DEAD)), 4) and K.heard(m, K.nudge_for(m)) == 0.67
+    debate = K.pace_pitch(4.3, 145.0, prof)   # 3.7 st under the median, but where their debate voice is
+    assert debate["pitch_st"] < -3 and debate["pitch_off_st"] == 0.0 and K.nudge_for(debate) == 0.0, debate
+    assert K.heard({"score": 0.6, **debate}) == 0.6
+    low = K.pace_pitch(4.3, 120.0, prof)
+    assert abs(low["pitch_off_st"] + 2.67) < 0.01 and K.nudge_for(low) == 2.7, low
+    m3 = dict(m)
+    K.as_heard(m3, -3.5)
+    assert m3["pitch_off_st"] == 0.03 and m3["pitch_raw_st"] == 4.47 and m3["pitch_st"] == 0.97, m3
+    # the user's ear on Obama (phase 12b): his live pack at 235 Hz is "a fire speech", within his registers (137 .. 233 Hz)
+    obama = {"f0_hz": 181.1, "by_source": {"debate": {"n": 18, "f0_hz": 137.0}, "rally": {"n": 24, "f0_hz": 232.9},
+                                           "speech": {"n": 46, "f0_hz": 161.5}, "few": {"n": 2, "f0_hz": 300.0}}}
+    a = K.pace_pitch(None, 234.8, obama)
+    assert a["pitch_st"] > 4 and K.nudge_for(a) == 0.0 and K.pitch_pen(a["pitch_off_st"]) == 0.0, a
     # a pack id names its nudge (none: the ids verdicts already use)
     pk = {"engine": "chatterbox", "clip": "c1", "cfg_weight": 0.3, "tempo": 1.0}
     assert K.pack_id(pk) == "chatterbox:c1:cfg0.3:t1.0" and K.pack_id({**pk, "pitch_nudge": -4.4}) == "chatterbox:c1:cfg0.3:t1.0:p-4.4"
@@ -881,7 +898,8 @@ def u_pace_pitch():
             speak.engine_ready = ready
         assert p["mode"] == "cadence" and p["pack_nudge"] == -4.5 and p["nudge"] == 1.0, p
     assert len(K.PACE_TEST) == 6 and K.PACE_TEST[0] == K.AB_LINE
-    return f"target {K.pace_target(prof)} syl/s, fast x{fast['pace_ratio']}, +{fast['pitch_st']} st -> nudge {K.nudge_for(m)}"
+    return (f"target {K.pace_target(prof)} syl/s, fast x{fast['pace_ratio']}; +{fast['pitch_st']} st from the median is "
+            f"+{fast['pitch_off_st']} past their registers -> nudge {K.nudge_for(m)}; a debate pitch and Obama's 235 Hz: no nudge")
 
 
 @check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
@@ -2341,7 +2359,7 @@ def a_cadence():
         # phase 12: the readings' pace and pitch against the person, and the pack's nudge from it
         meta = json.loads((vdir / CAD_VOICE / "meta.json").read_text(encoding="utf-8"))["extra"]["tts"]
         assert sc.get("pace_ratio") and sc.get("pitch_st") is not None and sc.get("pace_heard") in ("fast", "slow", "ok"), sc
-        assert abs(float(meta.get("pitch_nudge") or 0) + (sc["pitch_raw_st"] if abs(sc["pitch_raw_st"]) > 0.5 else 0)) < 0.06 and abs(sc["pitch_st"]) <= 0.55, (meta.get("pitch_nudge"), sc)
+        assert abs(sc["pitch_off_st"]) <= 0.55 and (not meta.get("pitch_nudge") or abs(sc["pitch_off_st"]) <= 0.06), (meta.get("pitch_nudge"), sc)
         # 3. SpeakEasy reads with it
         _tray_room("/api/speak/recent")
         r = api("/api/speak", {"text": "It was not easy. But we did it together, and we finished the work.", "voice": CAD_VOICE})
