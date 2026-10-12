@@ -455,9 +455,10 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .maker-ctl { display: grid; gap: 16px; min-width: 0; }
 .mk { display: grid; gap: 7px; min-width: 0; }
 .mk-h { font-weight: 600; font-size: 14px; }
-.mk-h small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.mk-h small { display: inline; color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }   /* .setting small is a block */
+.theme-maker input:not([type]), .theme-maker select { width: 100%; min-width: 0; background: var(--panel-2); color: var(--fg); border: 0; border-radius: 8px; padding: 8px 10px; font: inherit; }
 details.mk summary { cursor: pointer; }
-.mk .row .in { flex: 1 1 140px; }
+.mk .row .in { flex: 1 1 140px; display: flex; min-width: 0; }
 .mk-wells { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 .mk-well { display: grid; gap: 4px; cursor: pointer; }
 .mk-well input[type=color] { width: 100%; height: 34px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
@@ -481,7 +482,13 @@ details.mk summary { cursor: pointer; }
 .mk-pv-wave i { flex: 1; border-radius: 2px; background: var(--wave); } .mk-pv-wave i.on { background: var(--accent); }
 .mk-pv small { grid-column: 1 / -1; font: 12px var(--mono); color: var(--muted); }
 .mk-out { gap: 10px 14px; }
-@media (max-width: 760px) { .maker-grid { grid-template-columns: minmax(0, 1fr); } .maker-pv { order: -1; } }
+.theme-maker .seg { flex-wrap: wrap; }   /* "Start from" grows with the user's own themes */
+@media (max-width: 760px) {
+  .maker-grid { grid-template-columns: minmax(0, 1fr); }
+  .maker-pv { order: -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }   /* a compact 2 x 2 above the controls */
+  .maker-pv .mk-h { grid-column: 1 / -1; }
+  .mk-pv { padding: 10px 12px; } .mk-pv small, .mk-pv .btn { display: none; } .mk-pv b { font-size: 14px; }
+}
 
 /* the System room's sweep (phase 10's Doctor): a row per problem, the fine ones (Deep Cover) quieter under them */
 .sys .acts { display: flex; gap: 12px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
