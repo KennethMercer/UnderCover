@@ -1180,7 +1180,7 @@ def a_jobs_feed():
     try:
         snap = next((j for j in api("/api/jobs") if j["id"] == job), None)
         assert snap and snap["kind"] == "speech", "a new job isn't in /api/jobs"
-        assert snap["state"] in ("queued", "running") and v["name"] in snap["title"], f"unexpected snapshot {snap}"
+        assert snap["state"] in ("queued", "running") and v["display"] in snap["title"], f"unexpected snapshot {snap}"   # titles show the display name (phase 7)
         t0 = time.time()
         with urllib.request.urlopen(BASE + f"/api/jobs/{job}/events", timeout=60) as resp:
             assert resp.headers.get("X-Accel-Buffering") == "no", "event stream may be buffered on the way"
