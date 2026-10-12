@@ -2,6 +2,7 @@
 
     GET  /api/doctor                 fast checks (cached a few seconds) + the last full run, startup notes, the UnderCover row
     POST /api/doctor/full            a full run as a job (kind "doctor": every model file's checksum)
+    GET  /api/doctor/fix/<id>        what a Fix would do, read only (the package Fix: each package and version)
     POST /api/doctor/fix/<id>        run a Fix: {"ok", "message"} or {"job"}
     GET  /api/doctor/bundle          what the diagnostics file would hold (shown before saving)
     GET  /api/doctor/bundle.zip      the diagnostics file
@@ -42,6 +43,8 @@ def handle(h, method: str, p: str) -> bool:
         elif method == "POST" and p == "/api/doctor/full":
             h._body()
             h._json({"job": _start_full().id})
+        elif method == "GET" and p.startswith("/api/doctor/fix/"):
+            h._json(doctor.fix_preview(unquote(p[len("/api/doctor/fix/"):])))
         elif method == "POST" and p.startswith("/api/doctor/fix/"):
             h._body()
             r = doctor.fix(unquote(p[len("/api/doctor/fix/"):]), STATUS)

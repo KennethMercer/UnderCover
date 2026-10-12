@@ -677,6 +677,18 @@ def package_fix_lines() -> tuple[list, list]:
     return lines, refused
 
 
+def fix_preview(fix_id: str) -> dict:
+    """What a Fix would do, read only: the page names it before the user's click installs anything. Only the package
+    Fix needs one: {"packages": [{"name", "version" (pinned), "now" (installed, or None)}], "refused": [...]}; others {}."""
+    if fix_id != "packages":
+        return {}
+    have, pins = manifest.installed(), manifest.pins()
+    lines, refused = package_fix_lines()
+    name_of = {rec["line"]: n for n, rec in pins.items()}
+    return {"packages": [{"name": name_of[l], "version": pins[name_of[l]].get("version"), "now": have.get(name_of[l])} for l in lines],
+            "refused": refused}
+
+
 def fix_packages(dry_run: bool = False) -> dict:
     """Put back the pinned version of every package that differs: exactly those lines from installer/requirements, each
     with its SHA-256, --no-deps --require-hashes, the torch pins held by constraints.txt. Only on the user's click (or
