@@ -196,6 +196,8 @@ html:not([data-skin="winamp"]) {
   & .assign-in { max-width: 1080px; margin: 0 auto; padding: 11px 24px 13px; }
   & .assign-brief { background: var(--lit-bg); }
   & .assign-brief h2 { font: 700 20px/1.15 var(--display); letter-spacing: -.02em; }
+  & .uc-updated { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); }
+  & .os-quality { border-left: 0; box-shadow: inset 3px 0 0 var(--warn); }
   /* the Doctor's confirm and the diagnostics box: tone, no edge but the warning's */
   & .fix-ask { border-left: 0; box-shadow: inset 3px 0 0 var(--warn); }
   & body[data-doctor="bad"] .mod[data-tab="safehouse"]::before {

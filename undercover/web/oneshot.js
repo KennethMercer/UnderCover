@@ -35,10 +35,14 @@ function bindQuality() {
 function subjectHtml(p) {
   const sj = p.subject;
   if (!sj || !sj.label) return "";
-  const ask = sj.ask && !OS.subject;
-  const opts = ask ? sj.ask.choices : sj.choices || [];
-  return `<div id="os-subject" class="meta"${ask ? ' role="alert"' : ""}>${ask ? `<b>${esc(sj.ask.question)}</b> ${esc(sj.label)}` : esc(sj.label)}
-    ${opts.map(c => `<button class="linkbtn" type="button" data-os-subject="${esc(c.id)}">${esc(ask ? c.label : `Not right? ${c.label}`)}</button>`).join(" ")}</div>`;
+  if (sj.ask && !OS.subject) {   // the same card as "Which Hello?": the question, then one button per reading
+    const split = l => { const m = String(l).match(/^(.*?),\s+(.+)$/); return m ? [m[1], m[2]] : [l, ""]; };   // "Chris Evans, the actor"
+    return `<div id="os-subject" class="os-subject-ask" role="alert"><div class="choice-q"><b>${esc(sj.ask.question)}</b> ${esc(sj.label)}</div>
+      <div class="choices">${sj.ask.choices.map(c => { const [name, who] = split(c.label);
+        return `<button class="choice" type="button" data-os-subject="${esc(c.id)}" aria-pressed="false"><b>${esc(name)}</b>${who ? `<small>${esc(who)}</small>` : ""}</button>`; }).join("")}</div></div>`;
+  }
+  return `<div id="os-subject" class="meta">${esc(sj.label)}
+    ${(sj.choices || []).map(c => `<button class="linkbtn" type="button" data-os-subject="${esc(c.id)}">${esc(`Not right? ${c.label}`)}</button>`).join(" ")}</div>`;
 }
 function bindSubject() {
   $$("#os-plan [data-os-subject]").forEach(b => b.onclick = () => { OS.subject = b.dataset.osSubject; resetGo(); previewPlan(); });

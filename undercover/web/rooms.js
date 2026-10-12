@@ -426,6 +426,7 @@ function renderPhone() {
   $("#phone-where").textContent = !s.enabled ? "" : s.problem ? s.problem
     : `Listening at ${s.url} on your home network. Only paired phones get in. The first time, Windows may ask whether Python may use the network: allow it on private networks only.`;
   $("#phone-pair").disabled = !s.listening;
+  if (s.enabled) phoneChecks(); else { $("#phone-checks").innerHTML = ""; phoneChecksAt = 0; }   // switched on again: read at once
   $("#phone-pairing").hidden = !p;
   if (p) {
     $("#phone-qr").innerHTML = p.qr;   // an SVG made by the server (core/qr.py)
@@ -453,6 +454,16 @@ function renderPhone() {
   $$("#phone-devices [data-revoke]").forEach(b => confirmClick(b, "Revoke? Click again", async () => {
     PH.st = await api("/api/phone/revoke", { json: { id: b.dataset.revoke } }); renderPhone();
   }));
+}
+// the Doctor's two network rows (home network type, Windows Firewall) where Phone access is switched on; at most every 10 s
+let phoneChecksAt = 0;
+async function phoneChecks() {
+  if (Date.now() - phoneChecksAt < 10000) return;
+  phoneChecksAt = Date.now();
+  try {
+    const rows = (await api("/api/doctor")).results.filter(r => r.group === "network");
+    $("#phone-checks").innerHTML = rows.map(doctorRow).join("");
+  } catch (e) { $("#phone-checks").innerHTML = ""; }
 }
 $("#set-phone").onclick = async () => {
   const on = $("#set-phone").getAttribute("aria-checked") !== "true";
