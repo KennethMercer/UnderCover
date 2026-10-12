@@ -3073,6 +3073,11 @@ def a_untouched(before: dict, dirs: dict):
 
 def main():
     global BASE
+    for stream in (sys.stdout, sys.stderr):   # a Windows console (cp1252) can't print "≥" in a check's note
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, help="use a server that is already running (read-only API checks only)")
     ap.add_argument("--full", action="store_true")

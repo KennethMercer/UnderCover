@@ -250,10 +250,14 @@ def search_more(name: str, have: set, character: bool) -> list:
     return sorted(out, key=rank)[:6]
 
 
-def search(name: str, mode: str = "speaking", per_query: int | None = None) -> list[Source]:
+def search(name: str, mode: str = "speaking", per_query: int | None = None, force: str | None = None,
+           words: str = "") -> list[Source]:
     """Search YouTube with a few query variants, dedupe, flag suspicious titles, rank best first. A speaking search
-    that turns out to be about a fictional character searches again for the character's scenes (phase 15)."""
+    that turns out to be about a fictional character searches again for the character's scenes (phase 15).
+    force: "character" / "person" (the user's correction in the one-shot's plan) instead of deciding from the finds;
+    words: added to every query ("actor" for "Chris Evans, the actor")."""
     name = name.strip()
+    q_name = f"{name} {words}".strip()
     if not name:
         raise ModelError("Type the name of the person whose voice you want.")
     per_query = per_query or TCFG["search_per_query"]
@@ -263,7 +267,7 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None) -> l
         def run(queries):
             for q in queries:
                 try:
-                    info = ydl.extract_info(f"ytsearch{per_query}:{q.format(name=name)}", download=False)
+                    info = ydl.extract_info(f"ytsearch{per_query}:{q.format(name=q_name)}", download=False)
                 except Exception:
                     continue
                 for e in info.get("entries") or []:
@@ -272,10 +276,14 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None) -> l
                         continue  # live streams and shorts without a duration are skipped
                     found[vid] = Source(id=vid, url=f"https://www.youtube.com/watch?v={vid}", title=e.get("title") or vid,
                                         channel=e.get("channel") or e.get("uploader") or "", duration=float(e["duration"]))
-        run(QUERIES.get(mode, QUERIES["speaking"]))
-        if mode == "speaking" and looks_like_character(name, list(found.values())):
+        if force == "character":
             character = True
             run(CHAR_QUERIES)
+        else:
+            run(QUERIES.get(mode, QUERIES["speaking"]))
+            if mode == "speaking" and force != "person" and looks_like_character(name, list(found.values())):
+                character = True
+                run(CHAR_QUERIES)
     show = show_of(name, list(found.values())) if character else None
     for src in found.values():
         if character:

@@ -252,11 +252,19 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     from ..core.speaker import SpeakerEmbedder
     cands = installed_for(person)
     trained = [v for v in cands if v.extra.get("trained")]
+    weak_trained = None
     if trained:
-        plan["voice"] = {"name": trained[0].name, "display": display_name(trained[0]), "how": "installed",
-                         "checked": "trained in UnderCover"}
-        push("voice", 1.0, f"Using your voice “{display_name(trained[0])}” (trained in UnderCover)")
-        return trained[0]
+        tq = voice_quality(trained[0])
+        if tq["ok"] or prefer_train:
+            plan["voice"] = {"name": trained[0].name, "display": display_name(trained[0]), "how": "installed",
+                             "checked": "trained in UnderCover", "quality": tq}
+            push("voice", 1.0, f"Using your voice “{display_name(trained[0])}” (trained in UnderCover)")
+            return trained[0]
+        # a voice trained here that the gate calls weak (phase 15: the old SpongeBob voice learned a podcast host)
+        # doesn't end the search: a community voice that checks better is used instead; it's the fallback
+        weak_trained = trained[0]
+        push("voice", 0.05, f"Your voice “{display_name(weak_trained)}” is weak ({tq['problems'][0]}); checking others first")
+        cands = [v for v in cands if v.name != weak_trained.name]
     community = [] if prefer_train else cands
     online = [] if prefer_train else online_for(person, 2)
     checked = []
@@ -311,6 +319,12 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             checked.append({"name": "-", "verdict": "unknown", "note": "couldn't test (clips had only one speaker)"})
         plan["checked"] = checked
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
+        quick = False
+        if not good and not prefer_train:
+            # quick first (phase 15): a voice that sounds somewhat like them makes a cover in minutes; training one
+            # takes about an hour. Said plainly, with the way to a closer voice (tick Train a new voice).
+            good = sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"])[:1]
+            quick = bool(good)
         drop_downloads(keep=good[0]["name"] if good else None)
         if good:
             # the person's pitch from their kept clips: singing for singers (no speech headroom then)
@@ -323,12 +337,30 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                 _remember_range(v, rng, plan["person_speech"], person)
             plan["voice"] = {"name": v.name, "display": display_name(v), "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
                              "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ''})"}
+            if quick:
+                plan["voice"].update(quick=True, checked=f"sounds somewhat like {person}: {good[0]['score']:.2f} "
+                                                         f"(a close match is {voicecheck.GOOD})")
+                plan["voice"]["quality"] = {
+                    "ok": False, "quick": True,
+                    "summary": f"Quick: using “{display_name(v)}”, which sounds somewhat like {person} ({good[0]['score']:.2f}). "
+                               f"For a closer voice, tick Train a new voice (about 1 hour).",
+                    "advice": f"Train a proper voice for {person} tonight",
+                    "action": {"kind": "new", "target": person, "now": False}}
+                push("voice", 1.0, plan["voice"]["quality"]["summary"])
+                return v
             push("voice", 1.0, f"Using “{display_name(v)}”: it sounds like {person} ({good[0]['score']:.2f})")
             return v
         push("voice", 0.2, "None of the existing voices sounded enough like " + person + ", so UnderCover will train one")
+    if weak_trained is not None:   # nothing better: the weak voice makes a quick cover, said plainly (the gate)
+        tq = voice_quality(weak_trained)
+        plan["voice"] = {"name": weak_trained.name, "display": display_name(weak_trained), "how": "installed",
+                         "checked": "trained in UnderCover", "quality": tq}
+        push("voice", 1.0, f"Using your voice “{display_name(weak_trained)}”, though it's weak")
+        return weak_trained
     plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
-    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 45 minutes)")
-    name = train_new_voice(job, person, control, push)
+    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 1 hour)"
+         + (f". {plan['subject']['label']}" if (plan.get("subject") or {}).get("label") else ""))
+    name = train_new_voice(job, person, control, push, subject=plan.get("subject"))
     v = get_voice(name)
     plan["voice"]["name"] = v.name
     gpu.forget_voice(v.name)
@@ -446,7 +478,8 @@ NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably", "talk a
 
 
 def train_new_voice(job, person: str, control, push, project: str | None = None,
-                    target_minutes: float | None = None, prepare_only: bool = False, speaking: bool = False) -> str:
+                    target_minutes: float | None = None, prepare_only: bool = False, speaking: bool = False,
+                    subject: dict | None = None) -> str:
     """Find clips -> prepare (topping up sources until the target) -> auto-confirm -> train -> add. Returns voice name.
     project: continue that Train-tab project (its ticked sources, choices and reference are kept).
     prepare_only: stop once the clips are ready and return the PROJECT name (a cadence for a downloaded voice);
@@ -474,7 +507,9 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
     try:
         if not proj.sources:
             push("voice", 0.01, f"Searching YouTube for {person}")
-            proj.sources = srcmod.search(person, proj.mode)
+            from .subject import search_kind
+            force, words = search_kind(subject)   # the one-shot plan's reading of the request, or the user's correction
+            proj.sources = srcmod.search(person, proj.mode, force=force, words=words)
             proj.save()
         emb = SpeakerEmbedder()
         # Singers: the voice will sing, so gather singing first; interviews only top up when songs run out.
