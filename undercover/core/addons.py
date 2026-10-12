@@ -21,6 +21,10 @@ What the user accepted, and when, is kept in models/addons.json (local only, nev
 An add-on installs pinned pip packages (`--no-deps -c constraints.txt`, so the GPU's torch is never replaced; through
 the installer's uv when there is one, since its venv has no pip) and model files (core.setup_models.ensure: pinned
 revisions, SHA-256 checked). Removing it deletes its model files and the packages only it uses.
+
+A part that is updated in place (yt-dlp: YouTube changes often) lists its pin in `packages` and the wheel's SHA-256 in
+`hashes`; `update_pinned()` installs exactly that (`--no-deps --require-hashes -c constraints.txt`), never "latest".
+Moving a pin is a code change MasterPlan approves; installer/requirements/common.txt must carry the same pin (smoke checks).
 """
 import json
 import os
@@ -55,6 +59,7 @@ class Addon:
     modules: list = field(default_factory=list)    # the suite modules that use it ("speakeasy", ...)
     paths: list = field(default_factory=list)      # folders/files under models/ it occupies (default: its files)
     open_note: str = ""        # included parts: anything to know about the licence ("credit the authors")
+    hashes: dict = field(default_factory=dict)     # package name -> SHA-256 of its wheel: the pin "Update" installs
 
     def installed(self) -> bool:
         if self.check is not None:
@@ -161,7 +166,7 @@ def _uv() -> Path | None:
     return None
 
 
-def _pip(*args) -> None:
+def _pip(*args, what="the add-on's Python packages") -> None:
     uv = _uv()
     cmd = [str(uv), "pip", *args, "--python", sys.executable] if uv else [sys.executable, "-m", "pip", *args]
     if uv and args and args[0] == "uninstall":
@@ -175,8 +180,91 @@ def _pip(*args) -> None:
     if r.returncode != 0:
         with open(path("logs_dir") / "errors.log", "a", encoding="utf-8") as f:
             f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] add-on {' '.join(cmd)}\n{r.stdout}\n{r.stderr}")
-        raise ModelError("Installing the add-on's Python packages failed (details in logs/errors.log). "
+        raise ModelError(f"Installing {what} failed (details in logs/errors.log). "
                          "Check your internet connection and try again.")
+
+
+# ---------------------------------------------------------------- pinned updates (yt-dlp)
+
+def package_version(name: str) -> str | None:
+    """Installed version of a package, from its metadata (a loaded module may be older after an update)."""
+    try:
+        from importlib.metadata import version
+        return version(name)
+    except Exception:
+        return None
+
+
+def _vkey(v: str | None) -> tuple:
+    import re
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+def pin_of(addon_id: str) -> tuple[str, str, str] | None:
+    """(package, pinned version, wheel SHA-256) for a part that has a hashed pin, else None."""
+    a = ADDONS.get(addon_id)
+    if not a:
+        return None
+    for spec in a.packages:
+        name, _, ver = spec.partition("==")
+        sha = a.hashes.get(name)
+        if ver and sha:
+            return name, ver, sha
+    return None
+
+
+def pin_state(addon_id: str) -> dict:
+    """{"package", "installed", "pinned", "update"}: update is True only when the package is installed and older
+    than the pin (a missing one would be an install, which needs the user's OK; a newer one is left alone)."""
+    pin = pin_of(addon_id)
+    if not pin:
+        return {"package": None, "installed": None, "pinned": None, "update": False}
+    name, ver, _ = pin
+    have = package_version(name)
+    return {"package": name, "installed": have, "pinned": ver, "update": bool(have) and _vkey(have) < _vkey(ver)}
+
+
+def updated(addon_id: str) -> str | None:
+    """When the app last updated this part to its pin (ISO date and time, local), or None."""
+    return (_state().get(addon_id) or {}).get("updated")
+
+
+def _need_pin(addon_id: str) -> tuple[str, str, str]:
+    pin = pin_of(addon_id)
+    if not pin:
+        raise ModelError(f"There's no pinned version for '{addon_id}', so it can't be updated. Updates only install a "
+                         "version UnderCover has checked.")
+    return pin
+
+
+def pin_command(addon_id: str, req_file) -> list:
+    """The pip arguments that install the pin: this one version, its wheel's SHA-256 required, torch and everything
+    else held by constraints.txt, no dependencies. Raises ModelError when the part has no hashed pin."""
+    name, ver, sha = _need_pin(addon_id)
+    Path(req_file).write_text(f"{name}=={ver} --hash=sha256:{sha}\n", encoding="utf-8")
+    return ["install", "--no-deps", "--require-hashes", "-c", str(ROOT / "constraints.txt"), "-r", str(req_file)]
+
+
+def update_pinned(addon_id: str) -> dict:
+    """Bring an installed part to its pinned version. Takes effect after a restart. -> before / after / pinned / changed."""
+    import tempfile
+    _need_pin(addon_id)
+    st = pin_state(addon_id)
+    if not st["installed"]:
+        raise ModelError(f"{get(addon_id).name} isn't installed, and it comes with UnderCover, so this install is "
+                         "damaged. Run UnderCover's setup again to repair it.")
+    if not st["update"]:
+        return {"before": st["installed"], "after": st["installed"], "pinned": st["pinned"], "changed": False}
+    with tempfile.TemporaryDirectory() as d:
+        _pip(*pin_command(addon_id, Path(d) / "pin.txt"), what=f"the pinned {get(addon_id).name}")
+    after = package_version(st["package"])
+    if after != st["pinned"]:
+        raise ModelError(f"The update finished but {st['package']} reads {after or 'nothing'}, not {st['pinned']}. "
+                         "Restart UnderCover and check again.")
+    s = _state()
+    s.setdefault(addon_id, {}).update({"updated": time.strftime("%Y-%m-%dT%H:%M:%S"), "from": st["installed"]})
+    _save(s)
+    return {"before": st["installed"], "after": after, "pinned": st["pinned"], "changed": True}
 
 
 def _optional(a: Addon, doing: str) -> None:
@@ -305,6 +393,15 @@ register(Addon(
                      "also commercially, as long as the authors are credited."),
     open_note="Attribution: the WeSpeaker authors (wenet-e2e).",
     size_mb=26, paths=["speaker"], check=lambda: (path("models_dir") / "speaker").is_dir()))
+
+register(Addon(
+    id="ytdlp", name="YouTube downloader (yt-dlp)", included=True, modules=["frontman", "doubleagent"],
+    adds="Finds songs and clips on YouTube. System's Update installs the version pinned here.",
+    licence="Unlicense", licence_url="https://github.com/yt-dlp/yt-dlp/blob/master/LICENSE",
+    licence_summary="Public domain (The Unlicense): free to use, change and share, also commercially.",
+    size_mb=3, packages=["yt-dlp==2026.8.19"],
+    hashes={"yt-dlp": "1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf"},   # yt_dlp-2026.8.19-py3-none-any.whl
+    imports=["yt_dlp"], check=lambda: _imports_ok(["yt_dlp"])))
 
 
 def register_test_addon(src) -> Addon:

@@ -6,7 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
-from ..core import jobs
+from ..core import addons, jobs
 from ..core.files import file_url
 from ..core.config import CONFIG, ROOT, path
 from ..core.voices import ModelError
@@ -82,28 +82,19 @@ def _quality() -> dict:
         return {}
 
 
-def _ytdlp_version() -> str | None:
-    """Installed yt-dlp version, read from the package metadata (the loaded module may be older after an update)."""
-    try:
-        from importlib.metadata import version
-        return version("yt-dlp")
-    except Exception:
-        return None
+def ytdlp_info() -> dict:
+    """What System shows: the installed version, the version UnderCover has pinned, whether Update has anything to do,
+    and when the app last updated it."""
+    st = addons.pin_state("ytdlp")
+    return {"ytdlp": st["installed"], "ytdlp_pinned": st["pinned"], "ytdlp_update": st["update"],
+            "ytdlp_updated": addons.updated("ytdlp")}
 
 
 def _update_ytdlp() -> dict:
-    """YouTube changes often and older yt-dlp versions stop working: update it in place. --no-deps, so it can
-    never touch torch or anything else; takes effect after a restart (the old version stays loaded until then)."""
-    import subprocess
-    import sys
-    before = _ytdlp_version()
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "--no-deps", "--disable-pip-version-check",
-                        "yt-dlp"], capture_output=True, text=True, timeout=300)
-    if r.returncode:
-        tail = (r.stderr or r.stdout).strip().splitlines()[-1:] or ["unknown error"]
-        raise ModelError(f"Couldn't update the YouTube downloader ({tail[0][:160]}). Check the internet connection.")
-    after = _ytdlp_version()
-    return {"before": before, "after": after, "changed": before != after}
+    """YouTube changes often and older yt-dlp versions stop working: bring it to the version pinned in the add-ons
+    registry (its wheel's SHA-256 checked, torch held by constraints.txt, never "latest"). Takes effect after a restart
+    (the old version stays loaded until then)."""
+    return addons.update_pinned("ytdlp")
 
 
 def _duplicate_voices(hist: list) -> tuple[list, str]:
@@ -154,7 +145,7 @@ def summary() -> dict:
     }
     du = shutil.disk_usage(ROOT)
     return {"categories": cats, "total": sum(cats.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
-            "ytdlp": _ytdlp_version(),
+            **ytdlp_info(),
             "counts": {"covers": len(covers()), "speech": len(speak.list_speech()), "songs": len(_song_metas()),
                        "voices": len(list(path("voices_dir").glob("*/meta.json"))),
                        "training": len(list((cache / "training").glob("*/project.json")))}}
