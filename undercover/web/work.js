@@ -46,7 +46,7 @@ const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9)
 
 // ------------------------------------------------------------ the bar: any running job, live (jobs.js), plus Pause / Resume
 W.work = null; W.watch = {};
-function renderWorkBar(w) { W.work = w; renderBar(); }   // called from app.js pollStatus with /api/status's "work"
+function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); }   // called from app.js pollStatus with /api/status's "work"
 function renderBar() {
   const bar = $("#workbar"), w = W.work || {};
   if (typeof queueCount !== "function") return;   // shell.js (loaded last) isn't there yet: the job feed answered early
@@ -138,6 +138,9 @@ const runRoomOpen = () => !$("#view-library").hidden && !$("#room-running").hidd
 function loadRunRoom() { renderRunRoom(); refreshJobs(true); loadQueue(); }   // rooms.js, when the room opens
 const ENDED = { done: ["ok", "done"], error: ["bad", "failed"], cancelled: ["warn", "cancelled"], paused: ["warn", "paused"], lost: ["bad", "stopped"] };
 const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+// the room redraws on every job event: a part is rewritten only when its HTML changed, so focus and clicks survive
+const shown = new WeakMap();
+const put = (el, html) => { if (shown.get(el) === html) return false; el.innerHTML = html; shown.set(el, html); return true; };
 function renderRunRoom() {
   const w = W.last, work = W.work || {};
   // now: the job the user waits for first is the lit one; any others are rows under it
@@ -148,7 +151,8 @@ function renderRunRoom() {
     now = `<div class="rn-now" data-owner="${owner}"><div class="who">${MOD_NAME[owner]} · ${esc(JOB_KIND[main.kind] || main.kind)}</div>
       <div class="rn-pl"><span><b>${esc(jobName(main))}</b>${line ? ` · ${esc(line)}` : ""}</span>${left != null && !main.pausing ? `<span class="meta">${esc(leftText(left))}</span>` : ""}</div>
       ${f != null ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ""}
-      <div class="row">${PAUSABLE_KINDS.has(main.kind) ? `<button class="btn" type="button" data-rn-pause>Pause</button>` : `<button class="btn" type="button" data-jcancel="${esc(main.id)}">Cancel</button>`}
+      <div class="row">${PAUSABLE_KINDS.has(main.kind) ? `<button class="btn" type="button" data-rn-pause>Pause</button>`
+        : W.cancelAsk === main.id ? `<button class="btn confirm" type="button" data-jcancel="${esc(main.id)}">Cancel it?</button>` : `<button class="btn" type="button" data-jcancel="${esc(main.id)}">Cancel</button>`}
         <button class="linkbtn" type="button" data-goto="${owner}">Open in ${MOD_NAME[owner]}</button>
         <span class="meta mono" data-deep>job ${esc(main.id)} · started ${hhmm(main.created)}</span></div></div>` +
       (rest.length ? `<div class="rn-list">${rest.map(j => {
@@ -161,15 +165,21 @@ function renderRunRoom() {
       <p>Voice work is paused${res.length ? `: ${esc(res.slice(0, 3).join(", "))}${res.length > 3 ? ` and ${res.length - 3} more` : ""}` : ""}. It carries on where it stopped.</p>
       <div class="row"><button class="btn primary" type="button" data-rn-resume>Resume</button></div></div>`;
   }
-  $("#rn-now").innerHTML = now;
-  $$("[data-rn-pause]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await pauseWork(); b.disabled = false; });
-  $$("[data-rn-resume]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
-  $$("[data-jcancel]", $("#rn-now")).forEach(b => b.onclick = async () => {   // two clicks
-    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Cancel it?"; return; }
-    b.disabled = true; b.textContent = "Cancelling…";
-    try { await api(`/api/jobs/${b.dataset.jcancel}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't cancel that"); }
-    refreshJobs(true);
-  });
+  if (put($("#rn-now"), now)) {
+    $$("[data-rn-pause]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await pauseWork(); b.disabled = false; });
+    $$("[data-rn-resume]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
+    $$("[data-jcancel]", $("#rn-now")).forEach(b => b.onclick = async () => {   // two clicks; the first is remembered across redraws
+      const id = b.dataset.jcancel;
+      clearTimeout(W.cancelTimer);
+      if (W.cancelAsk !== id) {
+        W.cancelAsk = id; W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000);
+        return renderRunRoom();
+      }
+      W.cancelAsk = null; b.disabled = true; b.textContent = "Cancelling…";
+      try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't cancel that"); }
+      refreshJobs(true);
+    });
+  }
 
   // tonight: the overnight queue (its full editor stays on DoubleAgent's page)
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
@@ -180,13 +190,13 @@ function renderRunRoom() {
   $("#rn-at").setAttribute("aria-pressed", at);
   $("#rn-go").setAttribute("aria-pressed", going);
   $("#rn-stop").hidden = !w?.armed;
-  $("#rn-list").innerHTML = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
+  const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
     const run = i.state === "running";
     const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
     return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobKind(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
       <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
   }).join("") : `<p class="meta">Nothing queued for tonight. Add a voice to improve, or train a new one, and it runs while you sleep.</p>`;
-  $$("#rn-list [data-rn-rm]").forEach(b => b.onclick = async () => {
+  if (put($("#rn-list"), list)) $$("#rn-list [data-rn-rm]").forEach(b => b.onclick = async () => {
     try { W.last = await api("/api/work/remove", { json: { id: b.dataset.rnRm } }); renderQueue(); }
     catch (e) { showError(e.message, "Couldn't remove that"); }
   });
@@ -194,12 +204,12 @@ function renderRunRoom() {
 
   // recent: the last five finished, and how they ended (from each job's final event)
   const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);
-  $("#rn-recent").innerHTML = ended.length ? ended.map(j => {
+  put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : j.final?.message || "";
     return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}${how ? ` · ${esc(how)}` : ""}</small></span>
       <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span><button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
-  }).join("") : `<p class="meta">Nothing has finished in the last hour.</p>`;
+  }).join("") : `<p class="meta">Nothing has finished in the last hour.</p>`);
 }
 const startWork = async body => {
   try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); }
@@ -208,8 +218,12 @@ const startWork = async body => {
 $("#rn-at").onclick = () => startWork({ at: $("#q-at-time").value || "23:00" });
 $("#rn-go").onclick = () => startWork({});
 $("#rn-stop").onclick = () => startWork({ stop: true });
-$("#rn-finish").onchange = async e => { W.last = await api("/api/work/settings", { json: { finish_by: e.target.checked ? "07:00" : null } }); renderQueue(); };
-$("#rn-awake").onchange = async e => { W.last = await api("/api/work/settings", { json: { keep_awake: e.target.checked } }); renderQueue(); };
+const workSettings = async body => {
+  try { W.last = await api("/api/work/settings", { json: body }); } catch (e) { showError(e.message, "Couldn't change that"); }
+  renderQueue();
+};
+$("#rn-finish").onchange = e => workSettings({ finish_by: e.target.checked ? "07:00" : null });
+$("#rn-awake").onchange = e => workSettings({ keep_awake: e.target.checked });
 
 // ------------------------------------------------------------ the overnight queue (DoubleAgent's page + the drawer)
 async function loadQueue() {
