@@ -86,6 +86,7 @@ KEEP_MARGIN = 0.02
 PACE_MIN_N = 3       # a source counts toward the target pace once this many of its sentences were measured
 PACE_DEAD = 0.06     # within 6% of their pace: "ok" (about the smallest tempo change people notice in speech)
 PITCH_DEAD = 0.5     # semitones past the person's range of registers: no nudge, no penalty within it
+PITCH_MIN_N = 8      # a source sets an edge of that range once this many of its sentences were measured
 W_PITCH = 0.05       # score units per semitone heard off the person's pitch, past the dead zone
 CAP_PITCH = 0.15
 
@@ -286,17 +287,21 @@ def pace_pitch(pace: float | None, f0_hz: float | None, person: dict) -> dict:
                    pace_heard="fast" if r > 1 + PACE_DEAD else "slow" if r < 1 / (1 + PACE_DEAD) else "ok")
     if f0_hz and person.get("f0_hz"):
         out["pitch_st"] = round(12 * math.log2(f0_hz / person["f0_hz"]), 2)   # from their median (for reading)
-        lo, hi = pitch_range(person)
-        out["pitch_off_st"] = round(12 * math.log2(f0_hz / hi) if f0_hz > hi else 12 * math.log2(f0_hz / lo) if f0_hz < lo
-                                    else 0.0, 2)   # past the range of their own sources: what counts
+        out["pitch_off_st"] = pitch_off(f0_hz, person)   # past the range of their own sources: what counts
     return out
 
 
 def pitch_range(person: dict) -> tuple[float, float]:
-    """The person's own registers, lowest and highest: the median pitch of each source with PACE_MIN_N+ measured
-    sentences (Obama: a debate 137 Hz .. a rally 233 Hz). Without sources, just their median."""
-    f = [b["f0_hz"] for b in (person.get("by_source") or {}).values() if b.get("f0_hz") and b.get("n", 0) >= PACE_MIN_N]
+    """The person's own registers, lowest and highest: the median pitch of each source with PITCH_MIN_N+ measured
+    sentences (Obama: a debate 137 Hz .. a rally 233 Hz). Without such sources, just their median."""
+    f = [b["f0_hz"] for b in (person.get("by_source") or {}).values() if b.get("f0_hz") and b.get("n", 0) >= PITCH_MIN_N]
     return (min(f), max(f)) if f else (person["f0_hz"], person["f0_hz"])
+
+
+def pitch_off(f0_hz: float, person: dict) -> float:
+    """Semitones a pitch lies past the person's range of registers (0 inside it; negative = below)."""
+    lo, hi = pitch_range(person)
+    return round(12 * math.log2(f0_hz / hi) if f0_hz > hi else 12 * math.log2(f0_hz / lo) if f0_hz < lo else 0.0, 2)
 
 
 def pitch_pen(st: float | None) -> float:
