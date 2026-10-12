@@ -274,7 +274,7 @@ async function loadCandidates() {
     return `<label class="vcard ${c.queued ? "queued" : ""}">
       <input type="checkbox" data-v="${esc(c.voice)}" ${c.queued ? "disabled" : PICK.sel.has(c.voice) ? "checked" : ""}>
       <span><b>${vname(c.voice)}</b>${c.person && c.person.toLowerCase() !== voiceDisplay(c.voice).replace(/-uc$/, "").replace(/-/g, " ").toLowerCase() ? ` <span class="meta">${esc(c.person)}</span>` : ""}
-        <span class="qchips">${facts.map(f => `<span class="qchip">${esc(f)}</span>`).join("")}${c.queued ? `<span class="qchip ok">in the queue</span>` : ""}</span>
+        <span class="qchips">${facts.map(f => `<span class="qchip" data-deep>${esc(f)}</span>`).join("")}${c.queued ? `<span class="qchip ok">in the queue</span>` : ""}</span>
         <span class="meta">${esc(c.note)}</span></span></label>`;
   }).join("") : `<p class="meta">No voices yet. Use "New voices" to train one.</p>`;
   $$("#q-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? PICK.sel.add(cb.dataset.v) : PICK.sel.delete(cb.dataset.v); pickSummary(); });

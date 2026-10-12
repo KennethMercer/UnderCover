@@ -21,9 +21,9 @@ function renderVoiceCards(cands) {
   const shown = DA.all ? list : list.slice(0, 6);
   box.innerHTML = shown.map(c => {
     const busy = running.has(c.target);
-    const facts = c.trained ? [c.singing ? "singing" : c.singing === false ? "speech" : "", c.minutes ? `${Math.round(c.minutes)} min` : "",
-                               c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : ""].filter(Boolean).join(" · ")
+    const facts = c.trained ? [c.singing ? "singing" : c.singing === false ? "speech" : "", c.minutes ? `${Math.round(c.minutes)} min` : ""].filter(Boolean).join(" · ")
                             : c.can ? `downloaded · ${esc(c.person || "")}` : "downloaded";
+    const likeness = c.likeness != null ? `<small data-deep>likeness ${(+c.likeness).toFixed(2)}</small>` : "";
     const improve = !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}">Train my own</button>`
       : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy ? "disabled" : ""}>${busy ? "Improving" : c.queued ? "Improve (queued)" : "Improve"}</button>`;
     const cd = c.cadence || {};
@@ -32,7 +32,7 @@ function renderVoiceCards(cands) {
     const cadDeep = cd.has ? `<small class="meta" data-deep>cadence: ${esc(cd.engine || "")} · ${cd.data_minutes ?? "?"} min · likeness ${cd.scores?.likeness ?? "?"} · gap ${cd.scores?.cadence_gap ?? "?"}</small>` : "";
     const cadBtn = cd.can && !cd.queue ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}">${cd.has ? "Retrain cadence" : c.trained ? "Train cadence" : "Find clips + cadence"}</button>` : "";
     return `<div class="vc ${busy ? "busy" : ""}">
-      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice)}</b><small>${esc(facts)}</small></div></div>
+      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice)}</b><small>${esc(facts)}</small>${likeness}</div></div>
       <div class="vc-status"><span class="st ok">voice ✓</span>${cadSt}
         ${busy ? `<span class="st now">improving now</span>` : c.queued ? `<span class="st now">in the queue</span>` : ""}</div>${cadDeep}
       <div class="vc-acts">${DA.samples[c.voice] ? `<button class="mini" type="button" data-listen="${esc(c.voice)}" aria-pressed="${DA.playing === c.voice}">${DA.playing === c.voice ? "Stop" : "Listen"}</button>` : ""}
