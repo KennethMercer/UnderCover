@@ -47,7 +47,7 @@ TEST = [
     "So let us remember what brought us together, and let us finish the work we started.",
 ]
 SEED = 1234
-CANDIDATES = 3          # reference clips tried per voice
+CANDIDATES = 5          # reference clips tried per voice (3 until phase 9b: more room for the clip-sound term)
 STRETCHES = 40          # stretches of real talk measured (phase 3 used 35-60)
 MIN_MINUTES = 2.0       # transcribed speech needed for a cadence
 # score = likeness - W_GAP * cadence gap - W_WER * WER: likeness decides between similar deliveries, a clearly
@@ -62,6 +62,9 @@ W_GAP, W_WER = 0.25, 1.0
 # Freeman v2 clip loses to the approved one by it). Only new picks see it, and a new pick waits for the user's ear
 # (tts/pending/) whenever the voice already has a cadence.
 W_SOUND = 1.0
+# A new pack is offered only when it beats the live one by more than the test's own noise: the same clip scores 0.02-0.03
+# apart between runs (phase 9b: 0.668 and 0.694), and the best of five noisy scores is biased upward (was 0.005 with three)
+KEEP_MARGIN = 0.02
 
 
 # ---------------------------------------------------------------- text helpers (same rules as phase 3)
@@ -533,7 +536,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
         mins = tr_info["minutes"]
         result = {"voice": v.name, "after": win["score"], "before": before and before["score"], "likeness": win["likeness"],
                   "cadence_gap": win["cadence_gap"], "wer": win["wer"], "data_minutes": mins, "engine": engine}
-        if before is not None and win["score"] <= before["score"] + 0.005:
+        if before is not None and win["score"] <= before["score"] + KEEP_MARGIN:
             result.update(replaced=False, note=f"Tried {len(tried)} reference clips; none beat the current cadence, so it stays.")
             return result
         if old is not None and win["clip"] == old.get("clip") and all(base[k] == old.get(k) for k in base):
@@ -820,7 +823,8 @@ TR_RT = 13.0   # transcription runs ~13x realtime on the GPU (phase 3)
 
 
 def estimate(item: dict) -> dict:
-    """Minutes: [find clips] + transcribe + measure + test the reference clips (each ~4 sentences at ~0.55x realtime)."""
+    """Minutes: [find clips] + transcribe + measure + test the reference clips (four sentences each, 16-18 s a clip on
+    a free GPU, measured in phase 9b; five clips + the live pack + loading the engine ~3 min; more when the GPU is shared)."""
     from .night import estimate as voice_estimate
     est = {"clips": 0, "transcribe": 0, "measure": 2, "test": 4}
     if item["kind"] == "newcad":
