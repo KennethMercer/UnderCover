@@ -191,6 +191,8 @@ html:not([data-skin="winamp"]) {
   & .switch { transition: background var(--t-fast); }
   & .tab { transition: color var(--t-fast); }
   & .sh-room { gap: 20px; }
+  & .rooms, & .cats { scrollbar-width: none; }   /* rows that scroll sideways on a phone show no bar */
+  & #rn-when .seg button, & .setting .seg button { white-space: nowrap; padding-inline: 12px; }
   & .addon h4 { font: 600 16px var(--display); }
   /* licence and module chips read as words with a dot, not pills */
   & .chip.open, & .chip.nc { background: none; box-shadow: none; padding: 2px 0; font: 600 12.5px var(--body); }

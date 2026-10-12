@@ -41,8 +41,8 @@ function jobLine(j, withLeft = true) {
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
-const ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
-const byWait = run => run.sort((a, b) => ((ORDER.indexOf(a.kind) + 1) || 9) - ((ORDER.indexOf(b.kind) + 1) || 9));
+const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
+const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9) - ((WAIT_ORDER.indexOf(b.kind) + 1) || 9));
 
 // ------------------------------------------------------------ the bar: any running job, live (jobs.js), plus Pause / Resume
 W.work = null; W.watch = {};
@@ -146,7 +146,7 @@ function renderRunRoom() {
   if (main) {
     const owner = ownerOf(main.kind), f = jobProgress(main), left = main.total_left ?? main.eta, line = jobLine(main, false);
     now = `<div class="rn-now" data-owner="${owner}"><div class="who">${MOD_NAME[owner]} · ${esc(JOB_KIND[main.kind] || main.kind)}</div>
-      <div class="rn-pl"><span><b>${esc(jobName(main))}</b>${line ? ` · ${esc(line)}` : ""}</span>${left != null && !main.pausing ? `<span class="mono">${esc(leftText(left))}</span>` : ""}</div>
+      <div class="rn-pl"><span><b>${esc(jobName(main))}</b>${line ? ` · ${esc(line)}` : ""}</span>${left != null && !main.pausing ? `<span class="meta">${esc(leftText(left))}</span>` : ""}</div>
       ${f != null ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ""}
       <div class="row">${PAUSABLE_KINDS.has(main.kind) ? `<button class="btn" type="button" data-rn-pause>Pause</button>` : `<button class="btn" type="button" data-jcancel="${esc(main.id)}">Cancel</button>`}
         <button class="linkbtn" type="button" data-goto="${owner}">Open in ${MOD_NAME[owner]}</button>
