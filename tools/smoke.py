@@ -989,6 +989,9 @@ def u_characters():
         w = _fake_voice("zz-weak-uc", "trained in UnderCover: Zed, 3.0 min, epoch 5", {"trained": True, "likeness": 0.5, "train_minutes": 3.0})
         q = service.voice_quality(get_voice(w.name))
         assert not q["ok"] and len(q["problems"]) == 2, q
+        # Train a new voice ticked with a trained voice there: it's used, said plainly, Improve offered (not trained over)
+        n = service.train_note(get_voice(w.name), {"ok": True, "problems": []})
+        assert n["ok"] and "doesn't train over it" in n["kept"] and n["action"] == {"kind": "improve", "target": w.name}, n
         assert service.voice_quality(get_voice(_fake_voice("zz-dl", "https://x/y").name))["ok"]   # not trained here: not judged
     # the subject, in plain words, from what the search finds (subject.py), and the user's picks over it
     from undercover.doubleagent import subject as SJ

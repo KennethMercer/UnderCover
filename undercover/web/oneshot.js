@@ -12,9 +12,10 @@ const OS = { es: null, job: null, timer: null, t0: 0, planSeq: 0, planTimer: nul
 // queue). Plain hooks: .os-quality, button[data-os-act] with data-kind / data-now.
 function qualityHtml(v) {
   const q = v && v.quality;
-  if (!q || q.ok) return "";
+  if (!q || (q.ok && !q.kept)) return "";
   const a = q.action || { kind: "improve", target: v.name, now: true };
-  return `<div class="os-quality" role="alert"><b>${q.quick ? "Quick:" : "Heads-up:"}</b> ${esc((q.summary || "").replace(/^Quick: /, ""))}
+  const text = [q.ok ? "" : (q.summary || "").replace(/^Quick: /, ""), q.kept || ""].filter(Boolean).join(" ");
+  return `<div class="os-quality" role="alert"><b>${q.quick ? "Quick:" : q.ok ? "Note:" : "Heads-up:"}</b> ${esc(text)}
     <button class="linkbtn" type="button" data-os-act="${esc(a.target || v.name || "")}" data-kind="${esc(a.kind)}" data-now="${a.now === false ? 0 : 1}">${esc(q.advice || "Find better clips and train it again")}</button></div>`;
 }
 function bindQuality() {
