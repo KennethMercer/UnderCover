@@ -438,6 +438,35 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .tab[aria-pressed="true"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
 .tab:disabled { opacity: .45; }
 
+/* the First assignment (tutorial.js): a strip under the top bar naming one action; the thing to press is the page's lit edge */
+.assign { --accent: var(--c-safehouse); position: relative; background: var(--panel); border-radius: var(--r); margin-bottom: 8px; }
+.assign-in { display: flex; align-items: center; gap: 16px; padding: 10px 14px 12px; font-size: 14px; }
+.assign-tag { display: flex; align-items: center; gap: 8px; font-weight: 600; white-space: nowrap; }
+.assign-tag .ico { width: 16px; height: 16px; }
+.assign-tag small { font: 500 12.5px var(--mono); color: var(--muted); }
+.assign .say { flex: 1; min-width: 0; } .assign .say b { font-weight: 600; }
+.assign .acts { display: flex; gap: 16px; align-items: center; white-space: nowrap; }
+.assign .linkbtn.quiet, .assign-brief .linkbtn.quiet { color: var(--muted); }
+.assign-line { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.assign-line i { display: block; height: 100%; width: 0; background: var(--fg); opacity: .55; transition: width var(--t-slow, .24s) ease-out; }
+.assign.done .assign-line i { background: var(--ok); opacity: 1; }
+.aim { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 28px -6px color-mix(in srgb, var(--deep, var(--accent)) 90%, transparent) !important;
+  border-radius: var(--r); position: relative; z-index: 1; }
+.assign-brief { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 18px; align-items: start; }
+.assign-brief .mark { width: 44px; height: 44px; border-radius: 10px; background: var(--panel-2); display: grid; place-items: center; }
+.assign-brief .mark .ico { width: 24px; height: 24px; }
+.assign-brief h2 { font: 700 20px/1.15 var(--display); letter-spacing: -.02em; text-transform: none; color: var(--fg); margin: 0 0 4px; }
+.assign-brief p { margin: 0; color: var(--muted); max-width: 64ch; }
+.assign-steps { display: flex; gap: 6px 18px; flex-wrap: wrap; margin: 8px 0 0; padding: 0; list-style: none; counter-reset: s; font: 500 12.5px var(--mono); color: var(--muted); }
+.assign-steps li::before { counter-increment: s; content: counter(s) " "; color: var(--accent); }
+.assign-brief .row { grid-column: 2; }
+@media (max-width: 680px) {
+  .assign-in { flex-wrap: wrap; gap: 6px 12px; }
+  .assign .say { flex-basis: 100%; order: 3; }
+  .assign .acts { margin-left: auto; }
+  .assign-brief { grid-template-columns: minmax(0, 1fr); } .assign-brief .mark { display: none; } .assign-brief .row { grid-column: 1; }
+}
+
 /* the Theme row (Settings, Deep Cover): installed themes as swatch cards, then the maker in place (themes.js) */
 .setting .set-theme-btns { gap: 8px 14px; }
 .theme-cards, .theme-maker { grid-column: 1 / -1; }

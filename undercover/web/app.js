@@ -348,7 +348,7 @@ function renderVoices() {
   else box.innerHTML = list.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
-      <span class="vtext"><b>${vname(v.name)}</b><small>${voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
+      <span class="vtext"><b>${vname(v.name)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
       <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
