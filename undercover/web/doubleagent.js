@@ -81,7 +81,14 @@ function renderVoiceCards(cands) {
       a.ontimeupdate = () => { bar.style.width = `${Math.min(100, a.currentTime / (a.duration || 1) * 100)}%`; };
     });
     const rv = $("[data-ab-reveal]", ab);
-    if (rv) rv.onclick = () => { DA.ab.reveal = !DA.ab.reveal; renderVoiceCards(DA.cands); };
+    if (rv) rv.onclick = () => {   // in place: a reading that's playing keeps playing
+      DA.ab.reveal = !DA.ab.reveal;
+      $$(".ab-side", ab).forEach(sd => {
+        $(".ab-name", sd)?.remove();
+        if (DA.ab.reveal) $(".ab-head", sd).insertAdjacentHTML("beforeend", `<span class="ab-name">${sd.dataset.side === "current" ? "Current" : "New"}</span>`);
+      });
+      rv.textContent = DA.ab.reveal ? "Hide which is which" : "Which is which?";
+    };
     const why = $("#cad-ab-why", ab);
     if (why) why.oninput = () => { DA.ab.why = why.value; };
     $$("[data-keep]", ab).forEach(b => b.onclick = () => keepAb(b.dataset.keep));
@@ -110,7 +117,7 @@ function abHtml() {
       <small class="meta" data-deep>${esc(s.clip || "")} · score ${sc.score ?? "?"} · likeness ${sc.likeness ?? "?"} · gap ${sc.cadence_gap ?? "?"}${sc.sound != null ? ` · clip sound −${sc.sound}` : ""}</small>
       <button class="btn" type="button" data-keep="${w}" ${a.busy ? "disabled" : ""}>Keep ${L}</button></div>`;
   };
-  return `<div id="cad-ab" data-voice="${esc(st.voice)}" data-key="${esc([st.current.id, st.pending.id, a.busy ? 1 : 0, a.err || "", named ? 1 : 0].join("|"))}">
+  return `<div id="cad-ab" data-voice="${esc(st.voice)}" data-key="${esc([st.current.id, st.pending.id, a.busy ? 1 : 0, a.err || ""].join("|"))}">
     <div class="ab-q"><b>Which sounds more like them?</b><span class="meta">Both read the same line: “${esc(st.line)}”</span></div>
     <div class="ab-sides">${abOrder(st).map(side).join("")}</div>
     <textarea id="cad-ab-why" rows="2" placeholder="What did you hear? (optional)">${esc(a.why || "")}</textarea>
