@@ -42,6 +42,11 @@ CHARACTER_HINT = re.compile(r"\bcast\b|voice actors?|\bvoices? of\b|\bepisodes?\
                             r"nicktoons|disney|pixar|dreamworks|cartoon network|\banime\b|movie clip|\bseason \d|"
                             r"full episode|\bcharacters?\b|out of character", re.I)
 CHAR_QUERIES = ["{name} scenes", "{name} best moments", "{name} voice lines", "{name} quotes"]
+# A second round when most of what was found can't be downloaded here (blocked in this region: nearly every SpongeBob
+# video was): other uploads of the same material, under other words
+MORE_QUERIES = {"character": ["{name} full episode", "{name} episode clip", "{name} movie scene", "{name} funny moments"],
+                "speaking": ["{name} speech", "{name} conversation", "{name} on stage", "{name} keynote"]}
+BLOCKED = "not available"   # yt-dlp's words for a video this PC can't get (region, rights, removed)
 CHAR_GOOD = re.compile(r"\bscenes?\b|\bmoments\b|\bclips?\b|\bepisodes?\b|\bquotes?\b|voice lines|\blines\b|"
                        r"compilation|\bofficial\b|full episode|\bmovie\b|\bspeech\b|\bsong\b", re.I)
 CHAR_TALK = re.compile(r"podcast|interview|\bcast\b|voice actors?|\bvoices? of\b|\birl\b|in real life|\breacts?\b|reaction|\breview|explained|"
@@ -207,6 +212,42 @@ def _rank(src: Source, name: str, mode: str) -> float:
     if shouty or COMMENTARY.search(t):
         score -= 1.5
     return score
+
+
+def blocked_share(sources) -> tuple[int, int]:
+    """(videos that couldn't be had here, videos tried)."""
+    tried = [s for s in sources if s.status in ("ready", "failed") and not s.user]
+    return sum(s.status == "failed" and BLOCKED in (s.error or "") for s in tried), len(tried)
+
+
+def search_more(name: str, have: set, character: bool) -> list:
+    """Other uploads of the same person or character, for when most of the first finds were blocked here."""
+    found: dict = {}
+    with _ydl(extract_flat="in_playlist", skip_download=True) as ydl:
+        for q in MORE_QUERIES["character" if character else "speaking"]:
+            try:
+                info = ydl.extract_info(f"ytsearch{TCFG['search_per_query']}:{q.format(name=name)}", download=False)
+            except Exception:
+                continue
+            for e in info.get("entries") or []:
+                vid = e.get("id")
+                if vid and vid not in have and vid not in found and e.get("duration"):
+                    found[vid] = Source(id=vid, url=f"https://www.youtube.com/watch?v={vid}", title=e.get("title") or vid,
+                                        channel=e.get("channel") or e.get("uploader") or "", duration=float(e["duration"]))
+    out = []
+    for src in found.values():
+        if character:
+            src.extra["kind"] = char_kind(src)
+        for rx, why in SUSPECT:
+            if rx.search(src.title) and not (why == "probably another singer") and not (character and why == "edited or mixed audio"):
+                src.selected, src.note = False, why
+                break
+        if character and src.selected and src.extra["kind"] == "talk":
+            src.selected, src.note = False, TALK_NOTE
+        if src.selected and src.duration >= 60:
+            out.append(src)
+    rank = (lambda s: -_rank_character(s, name)) if character else (lambda s: -_rank(s, name, "speaking"))
+    return sorted(out, key=rank)[:6]
 
 
 def search(name: str, mode: str = "speaking", per_query: int | None = None) -> list[Source]:
