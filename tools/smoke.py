@@ -842,6 +842,23 @@ def u_ambiguity():
     assert A.detect("Toxic", hello) == [] and A.detect("", hello) == []
     assert A.detect("Party in the USA", [_track("Party in the U.S.A.", "Miley Cyrus", 8e8), _track("Party in the USA", "Cover Kid", 2e5)]) == []
     assert len(A.detect("HELLO!", hello[:2])) == 2   # case and punctuation don't matter
+    # deeper: a famous version known only by its official upload on the artist's channel counts (by its video views,
+    # far below the top one's but famous); the same upload on someone else's channel, a cover or karaoke does not
+    def vid(raw, channel, views):
+        r = _track(raw, channel, views, url=raw[:12], kind="video")
+        r.raw_title = raw
+        return r
+    deep = [_track("Hello", "Adele", 40_000_000, year=2015), vid("Adele - Hello (Official Music Video)", "Adele", 3_300_000_000),
+            vid("Lionel Richie - Hello (Official Music Video)", "lionelrichie", 140_000_000),
+            vid("Pop Smoke - Hello (Official) ft. A Boogie wit da Hoodie", "POP SMOKE", 218_000_000),
+            vid("Cardi B - Hello [Official Audio]", "Cardi B", 7_700_000),
+            vid("Lionel Richie - Hello (Karaoke Version)", "Sing King", 9_600_000),
+            vid("Martin Solveig & Dragonette - Hello (Official Music Video)", "Spinnin' Records", 27_000_000)]
+    ch4 = A.detect("Hello", deep)
+    assert [(c["artist"], c["track"]) for c in ch4] == [("Adele", True), ("Pop Smoke", False), ("Lionel Richie", False)], ch4
+    assert ch4[0]["song_url"] == deep[0].url and ch4[2]["title"] == "Hello", ch4   # the album track is the one linked
+    assert A.detect("Hello", deep[:2] + deep[4:]) == []   # Adele twice, a nobody, karaoke, a label's upload
+    assert A.MAX_CHOICES == 4
     # the lookup: searched once per title (cached); a failing search never raises (the plan just doesn't ask)
     A.reset()
     calls = []
@@ -911,6 +928,7 @@ def u_ask_flow():
     hello = [_track("Hello", "Adele", 1_500_000_000, year=2015), _track("Hello", "Lionel Richie", 300_000_000, year=1984)]
     A.reset()
     A.choices_for("Hello", lambda q, limit=8: hello)       # the lookup the plan step does, answered from the fixture
+    A.choices_for("Toxic", lambda q, limit=8: [_track("Toxic", "Britney Spears", 9e8)])   # no network: one artist
     A.settle({"song": "Hello", "artist": "Adele"}, lambda q, limit=8: [hello[0]])   # "Hello by Adele" checks out
     keep = (service.installed_for, service.online_for)
     service.installed_for, service.online_for = (lambda p: []), (lambda p, n=2: [])   # no network, no voices
