@@ -1,17 +1,23 @@
 """Smoke test: does UnderCover still work end to end? Run after every phase of a restructure and before merging.
 
-    .venv\\Scripts\\python.exe tools\\smoke.py               # unit + API + one cover + one speech (~2 min, test server on 7861)
+    .venv\\Scripts\\python.exe tools\\smoke.py               # unit + API + one cover + one speech (~3 min, on its own sandbox server)
     .venv\\Scripts\\python.exe tools\\smoke.py --full        # + a quick training with Pause/Resume, transcripts + cadence (~13 min)
     .venv\\Scripts\\python.exe tools\\smoke.py --unit-only   # no server needed (~20 s)
+    .venv\\Scripts\\python.exe tools\\smoke.py --port 7861   # read-only API checks against a server that is already running
 
-Needs the TEST server running on port 7861 (preview config "undercover-test"); refuses the user's server on 7860.
-Leaves nothing behind: the test cover and test speech are deleted, the scratch training project is removed.
+Since phase 8 the checks that make and delete things (cover, speech, training, cadence) run on a SANDBOX server that smoke
+starts itself on port 7862: scratch uploads / output / cache / logs / voices (a copy of one voice and its training project),
+the real models/ read-only, and the app's delete guards limited to the scratch folder. Stop anything on 7862 first. The
+user's folders are listed before and after the whole run; any difference fails it. Refuses the user's server on 7860;
+7861 stays free for people's manual checks.
 Exit code 0 = all passed. Prints one line per check.
 
 RULE (after 2026-10-11, when a check here deleted the user's songs and covers): a check must never be able to reach
 the user's data folders (uploads, output, models, cache, training projects). Unit checks that create, move or delete
 files run inside `isolated_data()`: every [paths] folder, config.toml and the storage allow-list point into a temp
 dir, and core/storage.py refuses the app's real folders in test mode. Never copy the real config.toml into a test.
+(The one config derived from the real one is the sandbox server's: the real settings with [paths] replaced, and the
+result asserted to point only into the scratch folder, apart from the read-only model files, before anything starts.)
 """
 import argparse
 import contextlib
@@ -405,6 +411,64 @@ def u_addons():
         finally:
             addons.ADDONS.pop("test", None)
     return f"{len(rows)} parts, {sum(not r['included'] for r in rows.values())} optional"
+
+
+@check("yt-dlp Update (phase 8): a pinned, hashed install; no pin or nothing newer = no install; the date is recorded")
+def u_ytdlp():
+    from undercover.core import addons
+    from undercover.safehouse import api as shapi, library
+    name, ver, sha = addons.pin_of("ytdlp")
+    common = [ln.strip() for ln in (ROOT / "installer" / "requirements" / "common.txt").read_text(encoding="utf-8").splitlines()]
+    i = common.index(f"yt-dlp=={ver} \\")   # the installer carries the same pin as the registry
+    assert common[i + 1] == f"--hash=sha256:{sha}", "installer/requirements/common.txt and core/addons.py pin different yt-dlp wheels"
+    calls, state = [], {"v": "2026.1.1", "installs": True}
+    real_pip, real_ver = addons._pip, addons.package_version
+
+    def fake_pip(*args, what=""):   # never a real install: record the arguments and the requirements file it was given
+        calls.append((args, Path(args[args.index("-r") + 1]).read_text(encoding="utf-8")))
+        if state["installs"]:
+            state["v"] = ver
+
+    def post():
+        h = _FakeHandler()
+        assert shapi.handle(h, "POST", "/api/library/tools/ytdlp-update")
+        return h
+    addons._pip, addons.package_version = fake_pip, lambda n: state["v"]
+    try:
+        with isolated_data():
+            assert addons.updated("ytdlp") is None and library.ytdlp_info()["ytdlp_update"] is True
+            h = post()
+            assert not h.err and h.out == {"before": "2026.1.1", "after": ver, "pinned": ver, "changed": True}, (h.out, h.err)
+            args, req = calls[-1]
+            assert len(calls) == 1 and req == f"yt-dlp=={ver} --hash=sha256:{sha}\n", (calls, req)
+            assert "--require-hashes" in args and "--no-deps" in args and "--upgrade" not in args, args
+            assert args[args.index("-c") + 1] == str(ROOT / "constraints.txt") and "yt-dlp" not in args, args
+            import re
+            assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", addons.updated("ytdlp") or ""), addons.updated("ytdlp")
+            info = library.ytdlp_info()
+            assert info["ytdlp"] == info["ytdlp_pinned"] == ver and info["ytdlp_update"] is False and info["ytdlp_updated"], info
+            h = post()   # equal: nothing to do
+            assert h.out["changed"] is False and len(calls) == 1, (h.out, calls)
+            state["v"] = "2099.1.1"   # newer than the pin: left alone
+            h = post()
+            assert h.out["changed"] is False and len(calls) == 1 and library.ytdlp_info()["ytdlp_update"] is False
+            state["v"] = None   # not installed: that would be an install, which needs an OK
+            h = post()
+            assert h.err and len(calls) == 1 and library.ytdlp_info()["ytdlp_update"] is False, (h.err, calls)
+            state.update(v="2026.1.1", installs=False)   # pip "succeeds" but the version didn't move: reported, not recorded
+            addons.forget("ytdlp")
+            h = post()
+            assert h.err and len(calls) == 2 and addons.updated("ytdlp") is None, (h.err, calls)
+            hashes = dict(addons.ADDONS["ytdlp"].hashes)
+            addons.ADDONS["ytdlp"].hashes.clear()   # no pin: refused before pip is reached
+            try:
+                h = post()
+                assert h.err and "pinned" in h.err and len(calls) == 2, (h.err, calls)
+            finally:
+                addons.ADDONS["ytdlp"].hashes.update(hashes)
+    finally:
+        addons._pip, addons.package_version = real_pip, real_ver
+    return f"pin {ver}, hash checked against the installer's list; 5 cases, no real install"
 
 
 @check("data locations: guards, then a scratch move of model files and the library (voices stay the library's)")
@@ -980,6 +1044,62 @@ def u_display_names():
     return "5 defaults, set / clear round-trip, library + app APIs carry display and trained"
 
 
+@check("voice person (phase 8): stored at export, a name with commas survives, the one-time backfill (backup first, one key)")
+def u_person():
+    from undercover.core import voices as V
+    from undercover.doubleagent import night, service, trainer, project as P
+    from undercover.core.engine.rvc import index as rvc_index
+    comma = "Earth, Wind & Fire"
+    with isolated_data():
+        # 1. export stores the person it was made for (the heavy parts stubbed: no torch data, no real RVC model)
+        proj = P.Project.create(comma, "speaking")
+        tdir = proj.dir / "train"
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "e5.pth").write_bytes(b"x")
+        proj.train = {"best": 5, "train_minutes": 9.0, "saves": [{"epoch": 5, "identity": 0.8}]}
+        proj.save()
+        real = (trainer.torch.load, trainer.index_feats, trainer.f0_median, trainer.f0_range, V.install, rvc_index.write_ivf_flat)
+        trainer.torch.load = lambda *a, **k: {}
+        trainer.index_feats = lambda data: trainer.torch.zeros(4, 4)
+        trainer.f0_median, trainer.f0_range = (lambda d: 110.0), (lambda d: [90.0, 110.0, 150.0])
+        rvc_index.write_ivf_flat = lambda dest, feats: Path(dest).write_bytes(b"i")
+        V.install = lambda files, name, source="", overwrite=False: _fake_voice(name, source)
+        try:
+            trainer.export_voice(proj, 5, "earth-wind-fire-uc")
+        finally:
+            trainer.torch.load, trainer.index_feats, trainer.f0_median, trainer.f0_range, V.install, rvc_index.write_ivf_flat = real
+        v = V.get_voice("earth-wind-fire-uc")
+        assert v.extra["person"] == comma and v.extra["trained"] and v.extra["project"] == proj.name, v.extra
+        assert V.trained_person(v) == comma and V.display_name(v) == comma and night._person_from_voice(v) == comma
+        # 2. voices exported before it: the person is read from `source` (whole, commas included); backfill adds the key
+        old = {"hello-uc": ("trained in UnderCover: Hello, Goodbye, 12.0 min, epoch 7", {"trained": True, "project": "p1"}),
+               "plain-uc": ("trained in UnderCover: barack obama, 12.0 min, epoch 5", {"trained": True}),
+               "odd-uc": ("trained in UnderCover: Somebody", {"trained": True}),
+               "mixed-uc": ("trained in UnderCover: Old Name, 3.0 min, epoch 2", {"trained": True, "person": "Kept Name"}),
+               "down-uc": ("https://huggingface.co/x/y", {"person": "Michael Jackson"})}
+        for n, (src, ex) in old.items():
+            _fake_voice(n, src, ex)
+        meta = lambda n: V.voices_dir() / n / "meta.json"
+        before = {n: meta(n).read_bytes() for n in old}
+        assert V.trained_person(V.get_voice("hello-uc")) == "Hello, Goodbye" and V.trained_person(V.get_voice("odd-uc")) == "Somebody"
+        assert service.installed_for(comma) and service.installed_for(comma)[0].name == "earth-wind-fire-uc"
+        names = V.backfill_person()
+        assert sorted(names) == ["hello-uc", "plain-uc"], names
+        for n in old:
+            bak = meta(n).with_name("meta.json.before-person")
+            if n in names:   # the old file kept byte for byte; the new one is the old content plus the one key
+                assert bak.exists() and bak.read_bytes() == before[n], f"{n}: no exact backup"
+                new, was = json.loads(meta(n).read_text(encoding="utf-8")), json.loads(before[n])
+                assert new["extra"].pop("person") and new == was, f"{n}: more than the one key changed"
+            else:
+                assert meta(n).read_bytes() == before[n] and not bak.exists(), f"{n} was touched"
+        assert V.get_voice("hello-uc").extra["person"] == "Hello, Goodbye" and V.get_voice("plain-uc").extra["person"] == "barack obama"
+        assert V.display_name(V.get_voice("plain-uc")) == "Barack Obama"
+        assert V.backfill_person() == [] and (V.voices_dir() / "hello-uc" / "meta.json.before-person").read_bytes() == before["hello-uc"]
+        assert [v.name for v in V.list_voices()].count("hello-uc") == 1, "a backup folder or file became a voice"
+    return "export stores it, \"Hello, Goodbye\" read whole, 2 of 5 old voices backfilled (exact backups), the others untouched"
+
+
 @check("one-shot grammar: '<song> by <artist> as <person>', '<song> as <person>', and today's forms")
 def u_grammar():
     from undercover.frontman.oneshot import parse_request as pr
@@ -1186,6 +1306,7 @@ def u_ask_flow():
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
     assert s.get("gpu"), "no GPU reported"
+    assert "ytdlp_updated" in s, "/api/status doesn't carry ytdlp_updated"
     return s.get("gpu")
 
 
@@ -1265,7 +1386,7 @@ def _cover_target():
     return song, voice
 
 
-@check("cover: end to end from cached stems (then deleted)")
+@check("cover: end to end, from a song with cached stems or the test song (then deleted)")
 def a_cover():
     _tray_room("/api/history")
     song, voice = _cover_target()
@@ -1568,35 +1689,224 @@ def a_cadence():
         shutil.rmtree(pdir / CAD_PROJ, ignore_errors=True)
 
 
+# ---------------------------------------------------------------- the sandbox server (phase 8)
+#
+# The end-to-end checks make and delete covers, speech, voices and training projects through the server's own routes.
+# On a server that uses the real folders that is a risk (the incident of 2026-10-11), so smoke starts its own server on
+# SANDBOX_PORT with a config of its own: uploads, output, cache, logs and voices in a scratch folder, the model files
+# read from the real models/ (never written), UNDERCOVER_TEST_ROOTS set so the app's delete/move guards refuse anything
+# outside the scratch folder. The real folders are listed before and after the whole run and any difference fails it.
+
+SANDBOX_PORT = 7862
+WATCHED = ("uploads_dir", "output_dir", "models_dir", "cache_dir", "voices_dir")
+
+
+def real_dirs() -> dict:
+    """The user's folders, read straight from the real config.toml (never through a config a test may have repointed)."""
+    import tomllib
+    cfg = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))["paths"]
+    out = {k: (Path(v) if Path(v).is_absolute() else ROOT / v) for k, v in cfg.items()}
+    out.setdefault("voices_dir", out["models_dir"] / "voices")
+    return out
+
+
+def snapshot_real(dirs: dict) -> dict:
+    """{file: (size, mtime_ns)} of everything in the user's library, model and working folders."""
+    import os
+    snap = {}
+    for k in WATCHED:
+        for dp, _, files in os.walk(dirs[k]):
+            for f in files:
+                p = os.path.join(dp, f)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                snap[p] = (st.st_size, st.st_mtime_ns)
+    return snap
+
+
+def _sandbox_config(root: Path, real: dict) -> tuple[Path, dict]:
+    """The sandbox's config.toml: the real settings with [paths] replaced. Asserted before anything starts: every
+    folder but the read-only model files is inside `root`."""
+    import re
+    import tomllib
+    mine = {"uploads_dir": root / "uploads", "output_dir": root / "output", "cache_dir": root / "cache",
+            "logs_dir": root / "logs", "voices_dir": root / "voices", "models_dir": real["models_dir"]}
+    block = "[paths]\n" + "".join(f"{k} = '{v}'\n" for k, v in mine.items()) + "\n"
+    text = re.sub(r"(?ms)^\[paths\][ \t]*$.*?(?=^\[|\Z)", lambda _: block, (ROOT / "config.toml").read_text(encoding="utf-8"), count=1)
+    cfg = root / "config.toml"
+    cfg.write_text(text, encoding="utf-8")
+    got = {k: Path(v) for k, v in tomllib.loads(text)["paths"].items()}
+    assert got == mine, f"the sandbox config's [paths] isn't what was meant: {got}"
+    from undercover.core import storage
+    for k, p in got.items():
+        p.mkdir(parents=True, exist_ok=True)
+        if k == "models_dir":
+            assert p == real["models_dir"], p
+        else:
+            assert storage._inside(p, root) and not storage._inside(p, ROOT), f"{k} -> {p} is outside the sandbox"
+    return cfg, mine
+
+
+def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
+    """Copies (read from the real folders, written only into the sandbox) of one trained voice and its training
+    project, so the cover, speech, training and cadence checks have something to work with."""
+    tr = real["cache_dir"] / "training"
+    src = next((v for v in ("morgan-freeman", "barack-obama") if (tr / v / "project.json").exists()), None)
+    assert src, "the sandbox's training and cadence checks need the morgan-freeman or barack-obama project"
+    voice = f"{src}-uc"
+    vdst = mine["voices_dir"] / voice
+    shutil.copytree(real["voices_dir"] / voice, vdst)
+    meta = json.loads((vdst / "meta.json").read_text(encoding="utf-8"))
+    meta["dir"], meta["pth"] = str(vdst), str(vdst / "model.pth")
+    if meta.get("index"):
+        meta["index"] = str(vdst / "model.index")
+    (vdst / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    assert str(ROOT) not in json.dumps(meta), "a path into the real app folder is left in the copied voice's meta.json"
+    pdst = mine["cache_dir"] / "training" / src
+    pdst.mkdir(parents=True)
+    for f in ("project.json", "embeddings.npz"):
+        shutil.copyfile(tr / src / f, pdst / f)
+    shutil.copytree(tr / src / "clips", pdst / "clips")
+    return src
+
+
+@contextlib.contextmanager
+def sandbox_server(port: int = SANDBOX_PORT):
+    """Start a sandbox server, point this process's own config and the app's guards at the same scratch folders (so
+    checks that touch folders directly stay inside it too), and stop and remove everything afterwards."""
+    import os
+    import subprocess
+    import tempfile
+    from undercover.core import config, storage
+    global BASE
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=2)
+        sys.exit(f"Something already answers on port {port}. The sandbox server must be smoke's own: stop that one first.")
+    except OSError:
+        pass
+    real = real_dirs()
+    root = Path(tempfile.mkdtemp(prefix="uc-sandbox-")).resolve()
+    assert root.name.startswith("uc-sandbox-") and storage._inside(root, Path(tempfile.gettempdir()).resolve()) and not storage._inside(root, ROOT)
+    saved = (dict(config.CONFIG["paths"]), config.CONFIG_FILE, storage.ALLOWED_ROOTS, BASE)
+    proc = log = None
+    try:
+        cfg, mine = _sandbox_config(root, real)
+        _sandbox_fixtures(root, real, mine)
+        env = {**os.environ, "UNDERCOVER_CONFIG": str(cfg), "UNDERCOVER_TEST_ROOTS": str(root)}
+        env.pop("UNDERCOVER_TEST_ADDON", None)
+        log = open(root / "server.log", "w", encoding="utf-8")
+        proc = subprocess.Popen([sys.executable, "-m", "undercover.server", "--no-browser", "--port", str(port)], cwd=ROOT, env=env,
+                                stdout=log, stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        BASE = f"http://127.0.0.1:{port}"
+
+        def up():
+            if proc.poll() is not None:
+                raise RuntimeError(f"the sandbox server stopped at start-up (exit {proc.returncode}); see {root / 'server.log'}")
+            try:
+                return api("/api/status", timeout=5)
+            except OSError:
+                return None
+        wait_for(up, 120, every=1, what="the sandbox server answering")
+        groups = api("/api/storage")["groups"]   # the running server's own idea of its folders, before any check touches it
+        keys = {k: Path(v) for g in groups.values() for k, v in g["keys"].items()}
+        for k, p in keys.items():
+            if k == "models_dir":
+                assert p == real["models_dir"], f"{k} -> {p}"
+            else:
+                assert storage._inside(p, root), f"the sandbox server's {k} is {p}, outside {root}: stopping before any check runs"
+        config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = {k: str(v) for k, v in mine.items()}, cfg, [root]
+        yield root
+    finally:
+        config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved[:3]
+        stopped = proc is None
+        if proc is not None:
+            try:
+                api("/api/quit", {}, timeout=10)
+            except Exception:   # noqa: BLE001 - busy (409) or already gone: the process is ours, end it below
+                pass
+            try:
+                proc.wait(60)
+            except subprocess.TimeoutExpired:
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+                try:
+                    proc.wait(30)
+                except subprocess.TimeoutExpired:
+                    pass
+            stopped = proc.poll() is not None
+        BASE = saved[3]
+        if log:
+            log.close()
+        if stopped and storage._inside(root, Path(tempfile.gettempdir()).resolve()) and root.name.startswith("uc-sandbox-"):
+            for _ in range(15):   # the cadence worker may still be closing its log when the server has gone
+                shutil.rmtree(root, ignore_errors=True)
+                if not root.exists():
+                    break
+                time.sleep(1)
+            else:
+                print(f"  (the sandbox's scratch folder couldn't be removed: {root})")
+        else:
+            print(f"  (the sandbox server is still running or its folder was left: {root})")
+
+
+@check("the real folders (uploads, output, models, cache, voices) are exactly as they were when this run started")
+def a_untouched(before: dict, dirs: dict):
+    after = snapshot_real(dirs)
+    added = sorted(set(after) - set(before))
+    gone = sorted(set(before) - set(after))
+    changed = sorted(p for p in set(before) & set(after) if before[p] != after[p])
+    if added or gone or changed:
+        lines = [f"+ {p}" for p in added[:6]] + [f"- {p}" for p in gone[:6]] + [f"~ {p}" for p in changed[:6]]
+        raise AssertionError(f"{len(added)} added, {len(gone)} removed, {len(changed)} changed:\n    " + "\n    ".join(lines))
+    return f"{len(after)} files compared"
+
+
 def main():
     global BASE
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=7861)
+    ap.add_argument("--port", type=int, help="use a server that is already running (read-only API checks only)")
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--unit-only", action="store_true")
     ap.add_argument("--no-cover", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     if a.port == 7860:
-        sys.exit("Refusing to run against the user's server (7860). Start the test server on 7861.")
-    BASE = f"http://127.0.0.1:{a.port}"
+        sys.exit("Refusing to run against the user's server (7860).")
+    if a.port and a.full:
+        sys.exit("--full makes and deletes covers, speech and voices: it only runs on the sandbox server smoke starts itself "
+                 f"(port {SANDBOX_PORT}). Leave --port out.")
     t0 = time.time()
+    dirs = real_dirs()
+    before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard):
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard):
         fn()
     if not a.unit_only:
-        print(f"API checks ({BASE})")
-        for fn in (a_status, a_page, a_lists, a_library, a_train, a_work):
-            fn()
-        if not a.no_cover:
-            a_cover()
-            a_speech()
-            a_jobs_feed()
-        if a.full:
-            a_training()
-            a_cadence()
+        if a.port:   # someone else's server (7861 for a manual look): nothing that writes
+            BASE = f"http://127.0.0.1:{a.port}"
+            print(f"API checks ({BASE}, reads only: anything that makes, deletes or pauses work runs on the sandbox only)")
+            for fn in (a_status, a_page, a_lists, a_library, a_train):
+                fn()
+        else:
+            print(f"API checks (a sandbox server on port {SANDBOX_PORT}: scratch folders, the real models read-only)")
+            try:
+                with sandbox_server():
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work):
+                        fn()
+                    if not a.no_cover:
+                        a_cover()
+                        a_speech()
+                        a_jobs_feed()
+                    if a.full:
+                        a_training()
+                        a_cadence()
+            except Exception as e:   # noqa: BLE001 - the sandbox couldn't start: that is a failed run, not a crash
+                RESULTS.append((False, "sandbox server"))
+                print(f"  FAIL  sandbox server: {type(e).__name__}: {e}", flush=True)
+    a_untouched(before, dirs)
     failed = [n for ok, n in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed in {time.time() - t0:.0f} s" + (f"; FAILED: {', '.join(failed)}" if failed else ""))
     sys.exit(1 if failed else 0)

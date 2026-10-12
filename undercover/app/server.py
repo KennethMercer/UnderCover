@@ -205,8 +205,10 @@ class Handler(BaseHTTPRequestHandler):
                 work = {"held": w["held"], "resume": w["resume"], "running": w["running"][:1],
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
                         "start": w["start"], "start_at": w["settings"].get("start_at")}
+                from ..core import addons
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
-                                   "auto_job": auto, "cover_job": cover, "training": training, "work": work})
+                                   "auto_job": auto, "cover_job": cover, "training": training, "work": work,
+                                   "ytdlp_updated": addons.updated("ytdlp")})
             if p == "/api/voices":
                 return self._json(voices_json())
             if p == "/api/search":
@@ -577,6 +579,11 @@ def main():
         relocate.check_and_fix()
     except Exception as e:   # noqa: BLE001 - never block startup
         print(f"Couldn't check the app folder location: {e}", flush=True)
+    try:   # voices trained here learn whose they are once (extra.person; each meta.json is copied first)
+        from ..core import voices as voices_mod
+        voices_mod.backfill_person()
+    except Exception as e:   # noqa: BLE001
+        print(f"Couldn't add the person to the trained voices: {e}", flush=True)
     try:   # covers get permanent ids once (a copy of the old history file is kept next to it)
         from ..frontman import history as cover_history
         cover_history.migrate()
