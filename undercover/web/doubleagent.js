@@ -3,7 +3,7 @@
 // Listen / Use in FrontMan / Improve / Train cadence. Fed by /api/work/candidates (work.js loadCandidates calls renderVoiceCards)
 // plus the voice samples from SafeHouse's /api/library/voices. Uses helpers from app.js ($, $$, esc, api, showError,
 // loadVoices, VOL), work.js (W, renderQueue, loadCandidates, fmtMin) and shell.js (showTab).
-// "Keep this one" (phase 9): a voice with a new cadence waiting shows "Listen and choose" ([data-ab]); it opens the
+// "Keep this one" (phase 9): a voice with a new cadence waiting shows "Listen and choose" ([data-cad-ab]); it opens the
 // #cad-ab block in that card (one at a time): both readings of the same line, button[data-keep="current"|"pending"]
 // and a textarea for why. Plain hooks for the look chat to design.
 
@@ -35,7 +35,7 @@ function renderVoiceCards(cands) {
       : cd.queue ? `<span class="st now">cadence queued</span>` : `<span class="st">cadence –</span>`)
       + (cd.pending ? `<span class="st now">new cadence to hear</span>` : "");
     const abOpen = DA.ab?.voice === c.voice;
-    const abBtn = cd.pending ? `<button class="mini" type="button" data-ab="${esc(c.voice)}" aria-expanded="${abOpen}">${abOpen ? "Close" : "Listen and choose"}</button>` : "";
+    const abBtn = cd.pending ? `<button class="mini" type="button" data-cad-ab="${esc(c.voice)}" aria-expanded="${abOpen}">${abOpen ? "Close" : "Listen and choose"}</button>` : "";
     const cadDeep = cd.has ? `<small class="meta" data-deep>cadence: ${esc(cd.engine || "")} · ${cd.data_minutes ?? "?"} min · likeness ${cd.scores?.likeness ?? "?"} · gap ${cd.scores?.cadence_gap ?? "?"}</small>` : "";
     const cadBtn = cd.can && !cd.queue ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}">${cd.has ? "Retrain cadence" : c.trained ? "Train cadence" : "Find clips + cadence"}</button>` : "";
     return `<div class="vc ${busy ? "busy" : ""}">
@@ -61,7 +61,7 @@ function renderVoiceCards(cands) {
     try { W.last = await api("/api/work/add", { json: { kind: "cadence", target: b.dataset.cad, now: true } }); renderQueue(); loadCandidates(); refreshJobs(true); }
     catch (e) { b.disabled = false; showError(e.message, "Couldn't start the cadence"); }
   });
-  $$("[data-ab]", box).forEach(b => b.onclick = () => openAb(b.dataset.ab));
+  $$("[data-cad-ab]", box).forEach(b => b.onclick = () => openAb(b.dataset.cadAb));
   const ab = $("#cad-ab", box);
   if (ab) {
     $$("audio", ab).forEach(a => a.onplay = () => {   // one at a time, at the page's volume (muted stays silent)
