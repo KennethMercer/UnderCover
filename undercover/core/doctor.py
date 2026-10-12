@@ -42,6 +42,7 @@ STALE_HOURS = 6
 AUTO_RESUME = {"train", "transcribe"}   # resume specs that continue from a saved point (MasterPlan, 2026-10-12)
 LAST: dict = {"fast": None, "full": None, "startup": None}   # the latest reports (the System room shows them)
 _LOCK = threading.Lock()
+_LOG_LOCK = threading.Lock()   # startup's background thread and a request can log at once
 OBSERVING = threading.Event()   # the install record is being written (startup's background thread or the Fix)
 
 
@@ -50,11 +51,14 @@ OBSERVING = threading.Event()   # the install record is being written (startup's
 def log(msg: str):
     """One line in logs/doctor.log (and the console)."""
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    try:
-        with open(path("logs_dir") / "doctor.log", "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
+    with _LOG_LOCK:
+        for i in range(10):   # Windows can refuse the file for a moment (a scanner, a reader): a line is worth a retry
+            try:
+                with open(path("logs_dir") / "doctor.log", "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+                break
+            except OSError:
+                time.sleep(0.05 * (i + 1))
     try:
         print(f"doctor: {msg}", flush=True)
     except (UnicodeEncodeError, OSError):   # a console or log file in the Windows code page (an arrow, a name's accent)
