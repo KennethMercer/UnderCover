@@ -1,11 +1,12 @@
 "use strict";
-// SafeHouse rooms (phase 4b): the room strip (Library · Storage · Add-ons, deep links #safehouse/<room>), the Add-ons room
-// (every part UnderCover is built from; optional add-ons are accepted and installed here) and the Storage room (where the
-// three groups of files live, and moving them). The Library room is library.js. The pattern every later room follows.
+// SafeHouse rooms (phase 4b, rooms build): the room strip (Library · Running · Storage · Add-ons · System · Settings, deep links
+// #safehouse/<room>), the Add-ons room (every part UnderCover is built from; optional add-ons are accepted and installed here)
+// and the Storage room (where the three groups of files live, and moving them). The Library room is library.js, Running is
+// work.js (renderRunRoom), System's rows come from app.js (sysStatus) and library.js (yt-dlp, Quit), Settings from app.js.
 // Uses helpers from app.js ($, $$, esc, api, showError, store, leftText), jobs.js (watchJob, runningJobs, onJobs) and
 // library.js (gb, confirmClick, loadSummary).
 
-const ROOMS = ["library", "storage", "addons"];
+const ROOMS = ["library", "running", "storage", "addons", "system", "settings"];
 const R = { room: null, addons: null, filter: store.get("uc-ad-filter", "all"), open: null, jobs: {}, storage: null,
             move: null, check: null, moving: null };
 const MOD_NAMES = { frontman: "FrontMan", doubleagent: "DoubleAgent", speakeasy: "SpeakEasy", safehouse: "SafeHouse" };
@@ -20,6 +21,7 @@ function showRoom(room) {
   store.set("uc-sh-room", room);
   $$(".room").forEach(b => b.setAttribute("aria-selected", b.dataset.room === room));
   for (const r of ROOMS) $(`#room-${r}`).hidden = r !== room;
+  if (room === "running") loadRunRoom();
   if (room === "addons") loadAddons();
   if (room === "storage") loadStorage();
 }

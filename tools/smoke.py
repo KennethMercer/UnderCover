@@ -1002,7 +1002,7 @@ def a_page():
     for mod, view in views.items():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
-    for part in ('id="suite-logo"', 'id="chip-queue"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"'):
+    for part in ('id="suite-logo"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"'):
         assert part in html, f"missing {part}"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
