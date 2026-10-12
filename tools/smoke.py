@@ -841,6 +841,35 @@ def _speechlike(sr: int = 44100, secs: float = 8.0, seed: int = 3):
     return (0.8 * y / np.abs(y).max()).astype(np.float32), sr
 
 
+@check("pace + pitch: the person per source, a pack's readings against them, the nudge and the score as heard")
+def u_pace_pitch():
+    from undercover.doubleagent import cadence as K
+    from undercover.speakeasy import speak
+    # the person: two speeches, a debate; a source with too few sentences doesn't vote on the pace
+    rows = ([{"src": "speech1", "syl": 40, "dur": 10.0, "f0_med": 180.0}] * 4 + [{"src": "speech2", "syl": 42, "dur": 10.0, "f0_med": 190.0}] * 3
+            + [{"src": "debate", "syl": 46, "dur": 10.0, "f0_med": 140.0}] * 3 + [{"src": "clip", "syl": 90, "dur": 10.0, "f0_med": 300.0}])
+    prof = K.voice_profile(rows)
+    assert prof["by_source"]["speech1"] == {"n": 4, "pace": 4.0, "f0_hz": 180.0} and prof["f0_hz"] == 180.0, prof
+    assert K.pace_target(prof) == 4.2, K.pace_target(prof)   # the median of 4.0, 4.2, 4.6; "clip" (n 1) left out
+    assert len(prof["sents"]) == 11 and prof["sents"][0] == ["speech1", 40, 10.0, 180.0]
+    # readings: fast and high (Obama's live pack in phase 12: x1.14, +4.5 st), slow, on pitch
+    fast = K.pace_pitch(4.8, 233.0, prof)
+    assert fast["pace_heard"] == "fast" and abs(fast["pitch_st"] - 4.47) < 0.01, fast
+    assert K.pace_pitch(3.8, 180.0, prof)["pace_heard"] == "slow" and K.pace_pitch(4.3, 181.0, prof)["pace_heard"] == "ok"
+    m = {"score": 0.67, **fast}
+    assert K.nudge_for(m) == -4.5 and K.nudge_for({"pitch_st": 0.4}) == 0.0
+    assert K.heard(m) == round(0.67 - min(K.CAP_PITCH, K.W_PITCH * (4.47 - K.PITCH_DEAD)), 4) and K.heard(m, K.nudge_for(m)) == 0.67
+    # a pack id names its nudge (none: the ids verdicts already use)
+    pk = {"engine": "chatterbox", "clip": "c1", "cfg_weight": 0.3, "tempo": 1.0}
+    assert K.pack_id(pk) == "chatterbox:c1:cfg0.3:t1.0" and K.pack_id({**pk, "pitch_nudge": -4.4}) == "chatterbox:c1:cfg0.3:t1.0:p-4.4"
+    assert K.approved_by_user({**pk, "pitch_nudge": -4.4, "verdicts": [{"compared": ["chatterbox:c1:cfg0.3:t1.0", "chatterbox:c1:cfg0.3:t1.0:p-4.4"],
+                                                                        "winner": "chatterbox:c1:cfg0.3:t1.0:p-4.4"}]})
+    # SpeakEasy reads a cadence pack with its nudge under the user's own
+    assert "nudge=p[\"nudge\"] + p.get(\"pack_nudge\", 0.0)" in (ROOT / "undercover" / "speakeasy" / "speak.py").read_text(encoding="utf-8")
+    assert len(K.PACE_TEST) == 6 and K.PACE_TEST[0] == K.AB_LINE
+    return f"target {K.pace_target(prof)} syl/s, fast x{fast['pace_ratio']}, +{fast['pitch_st']} st -> nudge {K.nudge_for(m)}"
+
+
 @check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
 def u_clipsound():
     import numpy as np
@@ -2295,6 +2324,10 @@ def a_cadence():
         v = next(x for x in api("/api/speak/voices") if x["name"] == CAD_VOICE)
         assert v["cadence"]["has"], v["cadence"]
         sc = v["cadence"]["scores"]
+        # phase 12: the readings' pace and pitch against the person, and the pack's nudge from it
+        meta = json.loads((vdir / CAD_VOICE / "meta.json").read_text(encoding="utf-8"))["extra"]["tts"]
+        assert sc.get("pace_ratio") and sc.get("pitch_st") is not None and sc.get("pace_heard") in ("fast", "slow", "ok"), sc
+        assert abs(float(meta.get("pitch_nudge") or 0) + (sc["pitch_st"] if abs(sc["pitch_st"]) > 0.5 else 0)) < 0.06, (meta.get("pitch_nudge"), sc)
         # 3. SpeakEasy reads with it
         _tray_room("/api/speak/recent")
         r = api("/api/speak", {"text": "It was not easy. But we did it together, and we finished the work.", "voice": CAD_VOICE})
@@ -2330,7 +2363,8 @@ def a_cadence():
         v = next(x for x in api("/api/speak/voices") if x["name"] == CAD_VOICE)
         assert v["cadence"]["has"] and not v["cadence"].get("pending"), v["cadence"]
         return (f"{len(tr)} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}, "
-                f"clip sound -{sc.get('sound')}; A/B readings {len(wav) // 1000} KB, new pack kept")
+                f"clip sound -{sc.get('sound')}, pace x{sc.get('pace_ratio')} ({sc.get('pace_heard')}), pitch {sc.get('pitch_st'):+} st "
+                f"(nudge {meta.get('pitch_nudge')}); A/B readings {len(wav) // 1000} KB, new pack kept")
     finally:
         if item:
             try:
@@ -2546,7 +2580,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes):
         fn()

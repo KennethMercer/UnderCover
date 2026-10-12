@@ -76,13 +76,16 @@ W_SOUND = 1.0
 # A new pack is offered only when it beats the live one by more than the test's own noise: the same clip scores 0.02-0.03
 # apart between runs (phase 9b: 0.668 and 0.694), and the best of five noisy scores is biased upward (was 0.005 with three)
 KEEP_MARGIN = 0.02
-# Phase 12: pace and pitch of a pack's readings against the person (calibrated in docs/research/pace-pitch.md)
+# Phase 12: pace and pitch of a pack's readings against the person (docs/research/pace-pitch.md). Pitch is a property
+# of the pack (steady across readings): a pack gets the pitch nudge that puts its readings on the person's median, and a
+# pack heard off-pitch (no nudge) loses W_PITCH per semitone past the dead zone when packs are compared. Pace is measured
+# and kept, not scored: one pack's pace moves +-10% between readings (the engine samples), and as a penalty it would
+# have overturned the user's blind verdict on Freeman.
 PACE_MIN_N = 3       # a source counts toward the target pace once this many of its sentences were measured
-PACE_DEAD = 0.06     # within 6% of their pace: no penalty (about the smallest tempo change people notice in speech)
-W_PACE = 0.5         # score units per unit of log ratio past the dead zone (10% past it ~ 0.05)
-PITCH_DEAD = 0.5     # semitones
-W_PITCH = 0.05       # score units per semitone past the dead zone
-CAP_PP = 0.15
+PACE_DEAD = 0.06     # within 6% of their pace: "ok" (about the smallest tempo change people notice in speech)
+PITCH_DEAD = 0.5     # semitones: no nudge, no penalty within it
+W_PITCH = 0.05       # score units per semitone heard off the person's pitch, past the dead zone
+CAP_PITCH = 0.15
 
 
 # ---------------------------------------------------------------- text helpers (same rules as phase 3)
@@ -240,7 +243,7 @@ def summarize(rows: list[dict]) -> dict:
 def _pace(rows: list[dict]) -> float | None:
     """Syllables per second over whole sentences (their pauses included): total syllables / total time."""
     dur = sum(r["dur"] for r in rows if r.get("dur"))
-    return round(sum(r["syl"] for r in rows if r.get("dur")) / dur, 3) if dur > 0 else None
+    return round(float(sum(r["syl"] for r in rows if r.get("dur")) / dur), 3) if dur > 0 else None
 
 
 def voice_profile(rows: list[dict]) -> dict:
@@ -271,19 +274,35 @@ def pace_target(person: dict) -> float | None:
 
 
 def pace_pitch(pace: float | None, f0_hz: float | None, person: dict) -> dict:
-    """A pack's readings against the person: pace as a ratio to their target pace, pitch in semitones from their
-    median (positive = faster / higher), each with its penalty past a dead zone (phase 12)."""
+    """A pack's readings against the person: pace as a ratio to their target pace ("fast" / "slow" / "ok" past the
+    dead zone), pitch in semitones from their median (positive = faster / higher; phase 12)."""
     out = {"pace": pace, "f0_hz": f0_hz and round(f0_hz, 1)}
     target = pace_target(person)
     if pace and target:
-        out["pace_target"] = target
-        out["pace_ratio"] = round(pace / target, 3)
-        out["pace_pen"] = round(min(CAP_PP, W_PACE * max(0.0, abs(math.log(pace / target)) - math.log(1 + PACE_DEAD))), 4)
+        r = pace / target
+        out.update(pace_target=target, pace_ratio=round(r, 3),
+                   pace_heard="fast" if r > 1 + PACE_DEAD else "slow" if r < 1 / (1 + PACE_DEAD) else "ok")
     if f0_hz and person.get("f0_hz"):
-        st = 12 * math.log2(f0_hz / person["f0_hz"])
-        out["pitch_st"] = round(st, 2)
-        out["pitch_pen"] = round(min(CAP_PP, W_PITCH * max(0.0, abs(st) - PITCH_DEAD)), 4)
+        out["pitch_st"] = round(12 * math.log2(f0_hz / person["f0_hz"]), 2)
     return out
+
+
+def pitch_pen(st: float | None) -> float:
+    """Score units lost for readings heard `st` semitones off the person's median pitch."""
+    return round(min(CAP_PITCH, W_PITCH * max(0.0, abs(st or 0.0) - PITCH_DEAD)), 4)
+
+
+def nudge_for(m: dict) -> float:
+    """The pitch nudge (semitones, 0.1 steps) that puts a pack's readings on the person's median pitch."""
+    st = m.get("pitch_st")
+    return -round(st, 1) if st is not None and abs(st) > PITCH_DEAD else 0.0
+
+
+def heard(m: dict, nudge: float = 0.0) -> float:
+    """A pack's score as it would be heard: m measured its readings (with whatever nudge they already had), `nudge`
+    more semitones on top; readings heard off the person's pitch lose pitch_pen."""
+    st = m.get("pitch_st")
+    return round(m["score"] - pitch_pen(None if st is None else st + nudge), 4)
 
 
 def cadence_gap(s: dict, person: dict) -> float | None:
@@ -592,6 +611,8 @@ def train(job, voice_name: str, push, control=None) -> dict:
             wavs = tester.read(pack, ref)
             try:
                 m = tester.measure(wavs, 1.0, ref=ref)
+                m["pitch_nudge"] = nudge_for(m)
+                m["heard"] = heard(m, m["pitch_nudge"])
                 best = m
             finally:
                 _cleanup(wavs)
@@ -606,18 +627,22 @@ def train(job, voice_name: str, push, control=None) -> dict:
             try:
                 wavs = tester.read(old, v.dir / "tts" / old.get("ref", "ref.wav"))
                 try:
-                    before = tester.measure(wavs, float(old.get("tempo", 1.0)), ref=v.dir / "tts" / old.get("ref", "ref.wav"))
+                    before = tester.measure(wavs, float(old.get("tempo", 1.0)), ref=v.dir / "tts" / old.get("ref", "ref.wav"),
+                                            nudge=float(old.get("pitch_nudge") or 0))
+                    before["heard"] = heard(before)   # as it sounds today, with its own nudge
                 finally:
                     _cleanup(wavs)
             except (ModelError, C.WorkerError):
                 before = None   # e.g. made with an engine that's gone: the new one replaces it
         mins = tr_info["minutes"]
-        result = {"voice": v.name, "after": win["score"], "before": before and before["score"], "likeness": win["likeness"],
+        result = {"voice": v.name, "after": win["heard"], "before": before and before["heard"], "likeness": win["likeness"],
                   "cadence_gap": win["cadence_gap"], "wer": win["wer"], "data_minutes": mins, "engine": engine}
-        if before is not None and win["score"] <= before["score"] + KEEP_MARGIN:
+        # compared as heard: a pack off the person's pitch loses points, and a new one comes with its nudge
+        if before is not None and win["heard"] <= before["heard"] + KEEP_MARGIN:
             result.update(replaced=False, note=f"Tried {len(tried)} reference clips; none beat the current cadence, so it stays.")
             return result
-        if old is not None and win["clip"] == old.get("clip") and all(base[k] == old.get(k) for k in base):
+        if (old is not None and win["clip"] == old.get("clip") and all(base[k] == old.get(k) for k in base)
+                and abs(win["pitch_nudge"] - float(old.get("pitch_nudge") or 0)) < 0.25):
             result.update(replaced=False, note="The best reference clip is the one it already speaks with, so the cadence stays.")
             return result
         # 5. save the pack with the voice. A voice that already speaks with a cadence keeps it: the new one waits in
@@ -630,16 +655,19 @@ def train(job, voice_name: str, push, control=None) -> dict:
         pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins,
-                "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score", "score_voice", "sound")},
+                "pitch_nudge": win["pitch_nudge"],
+                "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score", "score_voice", "sound",
+                                                    "heard", "pace", "pace_target", "pace_ratio", "pace_heard", "f0_hz", "pitch_st")},
                 "person": {k: person.get(k) for k in ("rate", "pauses", "pause_ms", "range_st", "sentences", "sentence_gap_s")},
-                "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score", "score_voice", "sound")},
+                "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score", "score_voice", "sound",
+                                                                 "heard", "pace", "pace_ratio", "pace_heard", "f0_hz", "pitch_st")},
                 "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": []}
         new = work / "pack"
         new.mkdir(exist_ok=True)
         shutil.copyfile(work / f"{win['clip']}.wav", new / "ref.wav")
         fsutil.write_text(new / "cadence.json", json.dumps({**pack, "tried": tried}, indent=1))
         if save_pack(v.name, new, pack, waits) == "pending":
-            how = (f"that measures better ({before['score']:.3f} -> {win['score']:.3f})" if before is not None else
+            how = (f"that measures better ({before['heard']:.3f} -> {win['heard']:.3f})" if before is not None else
                    "(the current one couldn't be measured this time)")
             result.update(replaced=False, pending=True,
                           note=f"Found a cadence for {label_of(v.name)} {how}. Listen to both and keep the one you like: "
@@ -655,7 +683,8 @@ def train(job, voice_name: str, push, control=None) -> dict:
 
 def pack_id(pack: dict) -> str:
     """Names a pack in verdicts: its reference clip and settings."""
-    return f"{pack.get('engine')}:{pack.get('clip')}:cfg{pack.get('cfg_weight')}:t{pack.get('tempo')}"
+    n = float(pack.get("pitch_nudge") or 0)
+    return f"{pack.get('engine')}:{pack.get('clip')}:cfg{pack.get('cfg_weight')}:t{pack.get('tempo')}" + (f":p{n:+.1f}" if n else "")
 
 
 def approved_by_user(pack: dict) -> bool:
@@ -781,10 +810,12 @@ def ab_state(voice_name: str) -> dict:
     ci, pi = _ids(cur, pen) if cur and pen else (cur and pack_id(cur), pen and pack_id(pen))
     if cur:
         out["current"] = {"id": ci, "clip": cur.get("clip"), "made": cur.get("made"), "scores": cur.get("scores"),
-                          "approved": approved_by_user(cur), "sample": _sample_ok(tts, ci)}
+                          "approved": approved_by_user(cur), "sample": _sample_ok(tts, ci),
+                          "nudge": float(cur.get("pitch_nudge") or 0)}
     if pen:
         out["pending"] = {"id": pi, "clip": pen.get("clip"), "made": pen.get("made"), "scores": pen.get("scores"),
-                          "current_same_test": pen.get("before"), "sample": _sample_ok(tts / "pending", pi)}
+                          "current_same_test": pen.get("before"), "sample": _sample_ok(tts / "pending", pi),
+                          "nudge": float(pen.get("pitch_nudge") or 0)}
     out["ready"] = bool(cur and pen and out["current"]["sample"] and out["pending"]["sample"])
     return out
 
@@ -819,7 +850,8 @@ def make_samples(job, voice_name: str) -> dict:
         job.push(stage="reading", frac=i / max(1, len(todo)), message=f"Reading the line with the {'new' if d != tts else 'current'} cadence")
         fut, wav = render.request(AB_LINE, pack, d / pack.get("ref", "ref.wav"), seed=AB_SEED)
         render.client.wait(fut, cancel=lambda: job.cancel)
-        y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)))
+        y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)),
+                              nudge=float(pack.get("pitch_nudge") or 0))
         y = render.level(y)   # SpeakEasy's loudness, so both sound as they would there
         with _LOCK:
             fresh = get_voice(v.name)
