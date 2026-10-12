@@ -93,6 +93,8 @@ async function pollStatus() {
   try {
     const s = await api("/api/status");
     document.body.dataset.gpu = s.gpu_problem ? "bad" : s.gpu ? "ok" : s.cpu_mode ? "cpu" : "wait";
+    document.body.dataset.client = s.client || "pc";   // "phone": a paired phone (phase 11); [data-pc] controls hide
+    if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
     sysStatus(s);
     if (s.stale) restartNeeded();
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident
