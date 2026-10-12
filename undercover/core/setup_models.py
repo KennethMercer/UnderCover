@@ -151,7 +151,14 @@ def refetch(local: str, progress=None) -> None:
     rec = PINNED.get(local)
     if not rec:
         raise ModelError(f"{local} isn't a file UnderCover knows how to download again.")
+    from . import storage
     dest = path("models_dir") / local
+    if not storage._inside(dest, path("models_dir")) or storage._same(dest, path("models_dir")):
+        raise ModelError(f"{local} isn't inside the model files folder; nothing was downloaded.")
+    if storage.ALLOWED_ROOTS is not None:   # test mode: the same guard as every delete and move (core/storage.py)
+        why = storage.refuse([dest])
+        if why:
+            raise ModelError(why)
     last = None
     for url in rec["urls"]:
         try:

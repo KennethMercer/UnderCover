@@ -137,6 +137,7 @@ class Job:
         self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
         self.resume_spec = None   # how to start this work again (worklist.resume)
         self.control = None       # trainer Control, for jobs that train
+        self.retry_req = None     # (route, body) that started it: Retry on a failed one (app/server.py, phase 10)
         self.created = time.time()
         self.ended = None
         self.started = None       # when it started running (time left is measured from here)
@@ -221,6 +222,7 @@ class Job:
         snap = {"id": self.id, "kind": self.kind, "state": self.state, "title": self.title or (self.resume_spec or {}).get("label"),
                 "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
+                "retry": self.state == "error" and self.retry_req is not None,
                 "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs)}
         # the newest value of each progress field within the current stage (some events carry only a note)
         for ev in reversed(evs[-40:]):
