@@ -22,6 +22,8 @@ POST   /api/library/cleanup                 {groups: [...]}
 
 The Add-ons and Storage rooms (phase 4b):
 GET    /api/addons                          every part: included + optional, installed, licence, accepted, size
+POST   /api/library/tools/ytdlp-update      the YouTube downloader's self-heal as a job (phase 16) -> {job}
+POST   /api/library/tools/ytdlp-auto        {on} let it update itself when YouTube starts refusing videos (Deep Cover)
 POST   /api/addons/<id>/install             {accept: true} -> {job}  (the job feed shows it: kind "addon")
 POST   /api/addons/<id>/remove              -> its info + freed (bytes)
 POST   /api/addons/<id>/use                 {on} an engine add-on: read cadence speech with it ([cadence] engine)
@@ -42,7 +44,7 @@ from ..core.fsutil import retry as _retry
 from ..core.voices import ModelError, slug
 from ..frontman.songs import remove_song
 from . import library
-from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _remove, _update_ytdlp, covers
+from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _remove, _update_ytdlp, _ytdlp_auto, covers
 
 
 def handle(h, method: str, p: str) -> bool:
@@ -68,7 +70,10 @@ def _route(h, method, p):
     if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training"):
         return h._json(getattr(library, rest)())
     if rest == "tools/ytdlp-update" and method == "POST":
+        h._body()
         return h._json(_update_ytdlp())
+    if rest == "tools/ytdlp-auto" and method == "POST":
+        return h._json(_ytdlp_auto(bool(h._body().get("on"))))
     if rest == "cleanup":
         if method == "GET":
             return h._json({k: {kk: vv for kk, vv in v.items() if kk != "paths"} for k, v in _cleanup_groups().items()})
