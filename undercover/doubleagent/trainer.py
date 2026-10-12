@@ -631,6 +631,8 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     likeness = next((s.get("identity") for s in st.get("saves", []) if s["epoch"] == epoch), None)
     v.extra.update(trained=True, project=proj.name, epoch=epoch, train_minutes=mins, likeness=likeness,
                    f0_median=f0_median(data), f0_range=f0_range(data), from_speech=proj.from_speech())
+    if (proj.person or "").strip():   # who it is for, whatever the source text looks like ("Earth, Wind & Fire")
+        v.extra["person"] = proj.person.strip()
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     idx.unlink(missing_ok=True)
     st.update(exported=name, exported_epoch=epoch, state="exported")
