@@ -191,6 +191,11 @@ html:not([data-skin="winamp"]) {
   & .switch { transition: background var(--t-fast); }
   & .tab { transition: color var(--t-fast); }
   & .sh-room { gap: 20px; }
+  /* the First assignment: the strip is a band like the running strip; the brief is the page's lit object */
+  & .assign { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border-radius: 0; margin: 0; }
+  & .assign-in { max-width: 1080px; margin: 0 auto; padding: 11px 24px 13px; }
+  & .assign-brief { background: var(--lit-bg); }
+  & .assign-brief h2 { font: 700 20px/1.15 var(--display); letter-spacing: -.02em; }
   /* the Doctor's confirm and the diagnostics box: tone, no edge but the warning's */
   & .fix-ask { border-left: 0; box-shadow: inset 3px 0 0 var(--warn); }
   & body[data-doctor="bad"] .mod[data-tab="safehouse"]::before {

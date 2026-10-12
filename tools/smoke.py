@@ -6,8 +6,9 @@
     .venv\\Scripts\\python.exe tools\\smoke.py --port 7861   # read-only API checks against a server that is already running
 
 Since phase 8 the checks that make and delete things (cover, speech, training, cadence) run on a SANDBOX server that smoke
-starts itself on port 7862: scratch uploads / output / cache / logs / voices (a copy of one voice and its training project),
-the real models/ read-only, and the app's delete guards limited to the scratch folder. Stop anything on 7862 first. The
+starts itself on the first free port in 7862-7869 (or UNDERCOVER_SANDBOX_PORT), so runs from several worktrees can overlap:
+scratch uploads / output / cache / logs / voices (a copy of one voice and its training project), the real models/
+read-only, and the app's delete guards limited to the scratch folder. The
 user's folders are listed before and after the whole run; any difference fails it. Refuses the user's server on 7860;
 7861 stays free for people's manual checks.
 Exit code 0 = all passed. Prints one line per check.
@@ -1641,7 +1642,7 @@ def u_themes_shipped():
                 assert ratio(t["--accent-ink"], t[f"--c-{m}"]) >= 4.5, f"{d.name} {mode}: button text on --c-{m}"
         names.append(d.name)
     assert {"casefile", "midnight", "dossier", "gaslight", "carbon"} <= set(names), names
-    return f"{len(names)} themes ({', '.join(names)}): checked, fonts bundled, text ≥ 7:1 and colours ≥ 4.5:1 in both modes"
+    return f"{len(names)} themes ({', '.join(names)}): checked, fonts bundled, text >= 7:1 and colours >= 4.5:1 in both modes"
 
 
 @check("doctor: a package version faked through the install record is reported; the Fix installs only its hashed pin (fake pip)")
@@ -2430,6 +2431,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
+    ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/reset"),
 ]
 
 
@@ -2665,7 +2667,7 @@ def a_page():
     for mod, view in views.items():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
-    for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"'):
+    for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"'):
         assert part in html, f"missing {part}"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
@@ -3046,11 +3048,41 @@ def a_cadence():
 #
 # The end-to-end checks make and delete covers, speech, voices and training projects through the server's own routes.
 # On a server that uses the real folders that is a risk (the incident of 2026-10-11), so smoke starts its own server on
-# SANDBOX_PORT with a config of its own: uploads, output, cache, logs and voices in a scratch folder, the model files
+# a port of its own (sandbox_port) with a config of its own: uploads, output, cache, logs and voices in a scratch folder, the model files
 # read from the real models/ (never written), UNDERCOVER_TEST_ROOTS set so the app's delete/move guards refuse anything
 # outside the scratch folder. The real folders are listed before and after the whole run and any difference fails it.
 
-SANDBOX_PORT = 7862
+SANDBOX_PORTS = range(7862, 7870)   # chats in other worktrees run smoke too: each run takes the first free one
+
+
+def _port_taken(port: int) -> bool:
+    """Anything on 127.0.0.1:<port>: an UnderCover answering /api/status (as smoke always checked), or anything bound."""
+    import socket
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=2)
+        return True
+    except OSError:
+        pass
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def sandbox_port() -> int:
+    """UNDERCOVER_SANDBOX_PORT if set (it must be free), else the first free port in 7862-7869."""
+    import os
+    want = os.environ.get("UNDERCOVER_SANDBOX_PORT")
+    if want:
+        port = int(want)
+        if port in (7860, 7861):
+            sys.exit(f"UNDERCOVER_SANDBOX_PORT={port}: 7860 is the user's server and 7861 is for manual looks. Pick another.")
+        if _port_taken(port):
+            sys.exit(f"Something already answers on port {port} (UNDERCOVER_SANDBOX_PORT). The sandbox server must be smoke's own.")
+        return port
+    for port in SANDBOX_PORTS:
+        if not _port_taken(port):
+            return port
+    sys.exit(f"Ports {SANDBOX_PORTS.start}-{SANDBOX_PORTS.stop - 1} are all taken (other smoke runs?). Wait, or set UNDERCOVER_SANDBOX_PORT.")
 WATCHED = ("uploads_dir", "output_dir", "models_dir", "cache_dir", "voices_dir", "themes_dir")
 
 
@@ -3133,7 +3165,7 @@ def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
 
 
 @contextlib.contextmanager
-def sandbox_server(port: int = SANDBOX_PORT):
+def sandbox_server(port: int):
     """Start a sandbox server, point this process's own config and the app's guards at the same scratch folders (so
     checks that touch folders directly stay inside it too), and stop and remove everything afterwards."""
     import os
@@ -3141,11 +3173,8 @@ def sandbox_server(port: int = SANDBOX_PORT):
     import tempfile
     from undercover.core import config, storage
     global BASE
-    try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=2)
-        sys.exit(f"Something already answers on port {port}. The sandbox server must be smoke's own: stop that one first.")
-    except OSError:
-        pass
+    if _port_taken(port):   # taken since it was picked (another run started in between)
+        sys.exit(f"Something already answers on port {port}. The sandbox server must be smoke's own: try again.")
     real = real_dirs()
     root = Path(tempfile.mkdtemp(prefix="uc-sandbox-")).resolve()
     assert root.name.startswith("uc-sandbox-") and storage._inside(root, Path(tempfile.gettempdir()).resolve()) and not storage._inside(root, ROOT)
@@ -3235,7 +3264,7 @@ def main():
         sys.exit("Refusing to run against the user's server (7860).")
     if a.port and a.full:
         sys.exit("--full makes and deletes covers, speech and voices: it only runs on the sandbox server smoke starts itself "
-                 f"(port {SANDBOX_PORT}). Leave --port out.")
+                 f"(ports {SANDBOX_PORTS.start}-{SANDBOX_PORTS.stop - 1}). Leave --port out.")
     t0 = time.time()
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
@@ -3253,9 +3282,10 @@ def main():
             for fn in (a_status, a_page, a_lists, a_library, a_train):
                 fn()
         else:
-            print(f"API checks (a sandbox server on port {SANDBOX_PORT}: scratch folders, the real models read-only)")
+            port = sandbox_port()
+            print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
-                with sandbox_server():
+                with sandbox_server(port):
                     for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes):
                         fn()
                     if not a.no_cover:

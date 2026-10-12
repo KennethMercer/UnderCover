@@ -176,7 +176,7 @@ function renderList() {
       side = (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono" data-deep>${gb(x.size + x.stems_size)}</span>`;
     } else if (L.cat === "voices") {
       const [cls, word] = quality(x);
-      title = voiceDisplay(x.name); sub = [x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
+      title = voiceDisplay(x.name); sub = [x.demo ? "demo voice · not a real person" : x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
       side = (x.cadence ? `<span class="tag ok" title="Has a cadence for SpeakEasy">cadence ✓</span>` : "") + (x.trained ? `<span class="tag ok">trained here</span>` : "") + `<span class="tag ${cls}" data-deep>${word}</span><span class="mono" data-deep>${gb(x.size)}</span>`;
     } else {
       title = x.person || x.name; const st = x.train || {};
@@ -367,7 +367,7 @@ function voiceDetail(d, v) {
   const [cls, word] = quality(v);
   const src = v.trained ? `trained in UnderCover${v.project ? ` · <button class="linkbtn" id="lib-open-proj">open project</button>` : ""}`
     : esc(v.source.replace(/^https?:\/\//, "").slice(0, 90));
-  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span> · RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"}</p><p class="meta">${v.trained ? "trained in UnderCover" : "downloaded"} · added ${esc(when(v.installed))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span> · RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"}</p><p class="meta">${v.demo ? "demo voice · made for UnderCover's first assignment, not a real person" : v.trained ? "trained in UnderCover" : "downloaded"} · added ${esc(when(v.installed))}</p></div></div>
     ${"display" in v ? `<div class="vname-edit"><label class="meta" for="lib-vname-edit">Shown as</label><div class="row"><input id="lib-vname-edit" type="text" autocomplete="off" value="${esc(v.display || "")}" placeholder="${esc(v.name)}"><button class="btn" id="lib-vname-save" type="button">Save</button></div></div>` : ""}
     ${v.sample ? `${playerHtml()}<p class="meta">A held-out phrase rebuilt by this voice</p>` : ""}
     <dl class="kv"><dt data-deep>Likeness</dt><dd data-deep><span class="tag ${cls}">${word}</span>${v.score != null ? ` <span class="meta">${v.score.toFixed(2)} (pass 0.45)</span>` : ""}</dd>

@@ -27,7 +27,7 @@ function renderVoiceCards(cands) {
   const kept = $("#cad-ab", box);   // the open A/B survives a redraw (a reading playing, the why text)
   box.innerHTML = shown.map(c => {
     const busy = running.has(c.target);
-    const facts = c.trained ? [c.singing ? "singing" : c.singing === false ? "speech" : "", c.minutes ? `${Math.round(c.minutes)} min` : ""].filter(Boolean).join(" · ")
+    const facts = c.demo ? "demo voice · not a real person" : c.trained ? [c.singing ? "singing" : c.singing === false ? "speech" : "", c.minutes ? `${Math.round(c.minutes)} min` : ""].filter(Boolean).join(" · ")
                             : c.can ? `downloaded · ${esc(c.person || "")}` : "downloaded";
     const likeness = c.likeness != null ? `<small data-deep>likeness ${(+c.likeness).toFixed(2)}</small>` : "";
     const improve = !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}">Train my own</button>`
