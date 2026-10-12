@@ -471,6 +471,16 @@ svg.chart { width: 100%; height: 150px; display: block; }
 .os-opts summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .os-opts[open] summary { margin-bottom: 6px; }
 
+/* the one-shot's choice card ("Which Hello?"): a question, then one button per song (oneshot.js renderChoices) */
+#auto-choices { display: grid; gap: 8px; }
+.choice-q { font-size: 14px; }
+.choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.choice { display: grid; gap: 2px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 9px 14px; min-width: 150px; }
+.choice b { font-weight: 600; }
+.choice small { color: var(--muted); font: 12.5px var(--mono); }
+.choice[aria-pressed="true"] { border-color: var(--accent); }
+@media (max-width: 520px) { .choices { flex-direction: column; } .choice { min-width: 0; } }
+
 /* manual octave/key while "Fit pitch to the voice" is on */
 .field.off { opacity: .45; }
 
