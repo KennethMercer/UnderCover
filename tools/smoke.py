@@ -2304,6 +2304,53 @@ def u_ytdlp_heal():
             for v in ("eeeeeeeeeee", "fffffffffff", "ggggggggggg", "hhhhhhhhhhh"):
                 ytdlp.note(v, True)
             assert ytdlp.breakage() is None, "successes outweigh the failures"
+            assert ytdlp.status()["broken"] is None and ytdlp.FLAG["broken"] is None, "the flag outlived the breakage"
+            # one video counted once, however often yt-dlp re-enters extract_info for it
+            ytdlp._EVENTS.clear()
+            for v in ("ccccccccccc", "ddddddddddd", "iiiiiiiiiii"):
+                ytdlp.note(v, False, "nsig extraction failed")
+            for _ in range(5):
+                ytdlp.note("jjjjjjjjjjj", True)
+            assert ytdlp.breakage() and ytdlp.breakage()["ok"] == 1, ytdlp.breakage()
+            # recording never waits for a heal (which holds LOCK for minutes)
+            import threading as _th
+            held, release = _th.Event(), _th.Event()
+
+            def hold():
+                with ytdlp.LOCK:
+                    held.set()
+                    release.wait(10)
+            th = _th.Thread(target=hold)
+            th.start()
+            held.wait(5)
+            t0 = time.time()
+            ytdlp.note("kkkkkkkkkkk", True)
+            release.set()
+            th.join()
+            assert time.time() - t0 < 1, "note() waited for the heal's lock"
+            ytdlp._EVENTS.clear()
+            # prune keeps the pair this process has loaded, whatever the state says
+            ytdlp.ACTIVE["dir"] = str(ytdlp.home() / new_name)
+            st = ytdlp.load()
+            st["active"], st["last_good"] = None, None
+            ytdlp.save(st)
+            ytdlp.prune(st)
+            assert (ytdlp.home() / new_name).exists(), "prune removed the loaded pair"
+            ytdlp.ACTIVE["dir"] = None
+            # leftovers of an interrupted check are swept
+            old_dry = ytdlp.home() / ".dry-deadbeef"
+            old_dry.mkdir()
+            os.utime(old_dry, (time.time() - 7200, time.time() - 7200))
+            ytdlp._sweep()
+            assert not old_dry.exists()
+            # the command line won't heal while UnderCover runs (one heal at a time)
+            from undercover import ytdlp as cli
+            real_running = cli._server_running
+            cli._server_running = lambda: True
+            try:
+                assert cli.main(["install"]) == 0 and cli.main(["update"]) == 1
+            finally:
+                cli._server_running = real_running
             # 10b. the System room's button: the same heal as a job
             from undercover.safehouse import api as shapi
             h = _FakeHandler()
