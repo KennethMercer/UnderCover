@@ -653,7 +653,10 @@ def u_rolloff_covers():
                 if not text.splitlines()[line - 1].lstrip().startswith(("def ", "#", '"""')):
                     calls.setdefault(name, []).append(f"{f.relative_to(ROOT / 'undercover').as_posix()}:{line}")
     assert sorted(c.split(":")[0] for c in calls["roll_off("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
+    # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
+    # MasterPlan); a new caller must be added here on purpose
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["core/doctor.py", "frontman/history.py",
+                                                                        "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
@@ -1382,6 +1385,49 @@ def u_doctor_models():
         finally:
             setup_models.PINNED.pop(local, None)
     return "cut-off and same-size damage found; wrong source refused; good copy swapped in"
+
+
+@check("doctor: startup healing: a cut-off model is fetched again in the background, a new good one is recorded, a failed fetch waits a day")
+def u_doctor_startup():
+    import threading
+    from undercover.core import doctor, manifest, setup_models
+    from undercover.core.config import path
+
+    def settle():
+        for t in [t for t in threading.enumerate() if t.name == "doctor"]:
+            t.join(60)
+    with isolated_data() as t:
+        good = t / "good.bin"
+        good.write_bytes(b"pinned model " * 40000)
+        sha = setup_models.sha256_of(good)
+        cut, new = "_test/cut.bin", "_test/new.bin"
+        for local in (cut, new):
+            setup_models.PINNED[local] = {"urls": [good.as_uri()], "sha256": sha, "part": "test", "about": ""}
+        try:
+            m = path("models_dir")
+            (m / "_test").mkdir(parents=True)
+            (m / cut).write_bytes(good.read_bytes()[:500])
+            (m / new).write_bytes(good.read_bytes())
+            manifest.save({"v": 1, "kind": "observed", "packages": {}, "models": {cut: {"size": good.stat().st_size, "sha256": sha}}})
+            hb = path("logs_dir") / "heartbeat-7899.jsonl"
+            doctor.heal_at_startup(hb, None)
+            settle()
+            assert (m / cut).read_bytes() == good.read_bytes(), "the cut-off file wasn't fetched again"
+            assert manifest.load()["models"][new]["sha256"] == sha, "the new good file wasn't recorded"
+            # the source is gone: the fetch fails, is remembered, and the next start doesn't try again (no download loop)
+            (m / cut).write_bytes(b"x")
+            setup_models.PINNED[cut]["urls"] = [(t / "missing.bin").as_uri()]
+            doctor.heal_at_startup(hb, None)
+            settle()
+            assert cut in (doctor._state().get("refetch_failed") or {}), doctor._state()
+            doctor.heal_at_startup(hb, None)
+            settle()
+            log = (path("logs_dir") / "doctor.log").read_text(encoding="utf-8")
+            assert log.count(f"re-downloading {cut}") == 2 and "less than a day ago" in log, log
+        finally:
+            for local in (cut, new):
+                setup_models.PINNED.pop(local, None)
+    return "fetched in the background, recorded, then held after a failure"
 
 
 @check("doctor: downloads resume from a .part (HTTP Range) and still pass their checksum")
@@ -2202,7 +2248,7 @@ def main():
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard,
-               u_doctor_fast, u_doctor_models, u_doctor_resume, u_doctor_stale, u_doctor_packages,
+               u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle):
         fn()
     if not a.unit_only:

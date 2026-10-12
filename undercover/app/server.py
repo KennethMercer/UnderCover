@@ -252,6 +252,7 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path).path
         self._read = None
         before = set(JOBS)
+        jobs.ORIGIN.h = self   # jobs made while answering this request remember it (a concurrent request's don't)
         try:
             m = re.fullmatch(r"/api/jobs/(\w+)/retry", p)
             if m:
@@ -262,6 +263,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._error(friendly(e), 500)
         finally:
+            jobs.ORIGIN.h = None
             self._remember_request(p, before)
 
     def _route_post(self, p: str):
@@ -295,7 +297,7 @@ class Handler(BaseHTTPRequestHandler):
     def _remember_request(self, p: str, before: set):
         for jid in set(JOBS) - before:
             j = JOBS.get(jid)
-            if j is not None and j.kind in self.RETRY_KINDS and isinstance(self._read, dict):
+            if j is not None and j.origin is self and j.kind in self.RETRY_KINDS and isinstance(self._read, dict):
                 j.retry_req = (p, dict(self._read))
 
     def _retry(self, job_id: str):
@@ -307,11 +309,14 @@ class Handler(BaseHTTPRequestHandler):
         p, body = job.retry_req
         r = _Replay(p, body)
         before = set(JOBS)
+        jobs.ORIGIN.h = r
         try:
             r._route_post(p)
         except LookupError as e:
             return self._error(str(e), 404)
-        new = [JOBS[j] for j in set(JOBS) - before if j in JOBS]
+        finally:
+            jobs.ORIGIN.h = self
+        new = [JOBS[j] for j in set(JOBS) - before if j in JOBS and JOBS[j].origin is r]
         if r.status >= 400 or not new:
             return self._error((r.out or {}).get("error") or "It couldn't be started again.", r.status if r.status >= 400 else 409)
         for j in new:

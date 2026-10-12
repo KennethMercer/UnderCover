@@ -246,6 +246,8 @@ def c_models(ctx) -> list:
         bad = None
         if size == 0:
             bad = "is empty"
+        elif pin.get("size") and pin["size"] != size:
+            bad = f"is {size:,} bytes, not {pin['size']:,} (cut off or damaged)"
         elif seen and seen.get("size") and seen["size"] != size and (not seen.get("sha256") or seen["sha256"] == pin["sha256"]):
             bad = f"is {size:,} bytes, not {seen['size']:,} (cut off or damaged)"
         elif ctx["full"]:
@@ -792,6 +794,11 @@ def heal_at_startup(heartbeat: Path, status: dict | None = None, hash_new_manife
     rep = run(False, status)
     m = manifest.load()
     todo = [r["id"][6:] for r in rep["results"] if r["id"].startswith("model:") and r["state"] == "bad"]
+    failed = _state().get("refetch_failed") or {}
+    held = [f for f in todo if time.time() - failed.get(f, 0) < 86400]   # tried in the last day: offered, not looped
+    if held:
+        log(f"not fetching again at startup (it failed less than a day ago; the System room offers it): {', '.join(held)}")
+    todo = [f for f in todo if f not in held]
     background = []
     if m is None:
         background.append(("manifest", None))
@@ -822,16 +829,14 @@ def _background(todo: list, hash_files: bool):
                 for local in arg:
                     p = path("models_dir") / local
                     want = setup_models.PINNED[local]["sha256"]
-                    if setup_models.sha256_of(p) == want:
+                    got = setup_models.sha256_of(p)
+                    if got == want:
                         manifest.note_model(local, p.stat().st_size, want)
                         log(f"{local}: new since the install record, checksum ok, recorded")
-                    else:
-                        log(f"{local}: new since the install record and damaged; fetching a good copy")
-                        try:
-                            setup_models.refetch(local)
-                            log(f"re-downloaded {local}: checksum ok")
-                        except Exception as e:   # noqa: BLE001 - offered in the System room (the full check finds it)
-                            log(f"couldn't re-download {local}: {e}")
+                    else:   # recorded as found; the full check shows it with its Fix (no download by itself)
+                        manifest.note_model(local, p.stat().st_size, got)
+                        log(f"{local}: new since the install record and it doesn't match its checksum; "
+                            "the full check in SafeHouse → System offers a good copy")
             elif what == "models":
                 for local in arg:
                     try:
@@ -840,5 +845,8 @@ def _background(todo: list, hash_files: bool):
                         log(f"re-downloaded {local}: checksum ok")
                     except Exception as e:   # noqa: BLE001 - offline, source gone: offered in the System room instead
                         log(f"couldn't re-download {local}: {e}")
+                        st = _state()
+                        st.setdefault("refetch_failed", {})[local] = time.time()
+                        _save_state(st)
         except Exception as e:   # noqa: BLE001
             log(f"{what} in the background: {type(e).__name__}: {e}")

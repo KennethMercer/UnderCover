@@ -124,10 +124,14 @@ def _eta_learn(job: "Job"):
 
 # ---------------------------------------------------------------- jobs
 
+ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
+
+
 class Job:
     def __init__(self, kind: str, title: str | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.kind = kind
+        self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
         self.state = "queued"
         self.events: list[dict] = []
