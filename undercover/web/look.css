@@ -159,6 +159,10 @@ html:not([data-skin="winamp"]) {
   & .play { box-shadow: 0 0 36px -8px color-mix(in srgb, var(--deep) 75%, transparent); transition: transform var(--t-fast); }
   & .play:hover { transform: scale(1.04); }
 
+  /* ------------------------------------------------------------------ basic pages (Deep Cover off): what remains lays out cleanly */
+  & body:not(.deep) .stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  & body:not(.deep) .lib-tools input { flex: 1 1 100%; }
+
   /* ------------------------------------------------------------------ advanced settings, alerts */
   & .adv-h { text-transform: none; letter-spacing: -.005em; font-size: 14.5px; color: var(--fg); }
   & .adv-h span { color: var(--muted); font-size: 13px; }
