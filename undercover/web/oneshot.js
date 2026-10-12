@@ -5,15 +5,53 @@
 const OS = { es: null, job: null, timer: null, t0: 0, planSeq: 0, planTimer: null, last: null };
 
 // ------------------------------------------------------------ plan preview (no downloads)
+// Phase 15: the voice's quality gate. A weak voice (it doesn't sound like them, too little clean audio, or a character
+// trained on talk about them instead of their scenes) is said plainly before the cover starts and again with it, with
+// the way out: find better clips and train it again (DoubleAgent's Improve, now), or for a quick cover made with a
+// voice that only sounds somewhat like them, "Train a proper voice for X tonight" (a new-voice item in the overnight
+// queue). Plain hooks: .os-quality, button[data-os-act] with data-kind / data-now.
+function qualityHtml(v) {
+  const q = v && v.quality;
+  if (!q || (q.ok && !q.kept)) return "";
+  const a = q.action || { kind: "improve", target: v.name, now: true };
+  const text = [q.ok ? "" : (q.summary || "").replace(/^Quick: /, ""), q.kept || ""].filter(Boolean).join(" ");
+  return `<div class="os-quality" role="alert"><b>${q.quick ? "Quick:" : q.ok ? "Note:" : "Heads-up:"}</b> ${esc(text)}
+    <button class="linkbtn" type="button" data-os-act="${esc(a.target || v.name || "")}" data-kind="${esc(a.kind)}" data-now="${a.now === false ? 0 : 1}">${esc(q.advice || "Find better clips and train it again")}</button></div>`;
+}
+function bindQuality() {
+  $$("#os-plan [data-os-act]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const now = b.dataset.now === "1";
+    try {
+      await api("/api/work/add", { json: { kind: b.dataset.kind, target: b.dataset.osAct, now } });
+      b.textContent = now ? "On it: finding better clips and training again (see Running)" : "Queued for tonight (see Running)";
+      refreshJobs(true);
+    } catch (e) { b.disabled = false; showError(e.message, "Couldn't queue it"); }
+  });
+}
+// Phase 15: what the request names (a real person, a singer, a character, a band, or a name several people share), in
+// plain words, with a correction ("SpongeBob is a real person") or, when it can't tell, the question ("Which Chris
+// Evans?"). The pick goes with the plan request and the one-shot. Plain hooks: #os-subject, button[data-os-subject].
+function subjectHtml(p) {
+  const sj = p.subject;
+  if (!sj || !sj.label) return "";
+  const ask = sj.ask && !OS.subject;
+  const opts = ask ? sj.ask.choices : sj.choices || [];
+  return `<div id="os-subject" class="meta"${ask ? ' role="alert"' : ""}>${ask ? `<b>${esc(sj.ask.question)}</b> ${esc(sj.label)}` : esc(sj.label)}
+    ${opts.map(c => `<button class="linkbtn" type="button" data-os-subject="${esc(c.id)}">${esc(ask ? c.label : `Not right? ${c.label}`)}</button>`).join(" ")}</div>`;
+}
+function bindSubject() {
+  $$("#os-plan [data-os-subject]").forEach(b => b.onclick = () => { OS.subject = b.dataset.osSubject; resetGo(); previewPlan(); });
+}
 function voiceLine(v) {
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
-  if (v.how === "check") return `<b>${v.candidates.map(esc).join("</b> or <b>")}</b> <span class="meta">checked against real clips first (~2 min); if neither sounds like them, it trains one (~45 min, ~2 GB while training)</span>`;
-  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~45 min, ~2 GB while training)</span>`;
+  if (v.how === "check") return `<b>${v.candidates.map(esc).join("</b> or <b>")}</b> <span class="meta">checked against real clips first (~2 min); one that sounds even somewhat like them makes a quick cover, said so; none: it trains one (~1 hour, ~2 GB while training)</span>`;
+  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~1 hour, ~2 GB while training)</span>`;
 }
 function planTime(p) {
   const v = p.voice?.how;
-  return v === "train" ? "about 45–50 min" : v === "check" ? "about 3–5 min (45+ if it has to train)" : "about 1–3 min";
+  return v === "train" ? "about 1 hour" : v === "check" ? "about 3–5 min (an hour if it has to train)" : "about 1–3 min";
 }
 // An ambiguous song title ("Hello"): the plan lists the songs it could be as a choice card (#auto-choices: a question, then one
 // button[data-choice] per song with artist, year and title); the one picked goes with the request. While an earlier answer is
@@ -40,7 +78,7 @@ function renderChoices(p) {
     $(".choice-q", box).innerHTML = going({ artist: b.dataset.name });
   });
 }
-function planKey() { return $("#os-text").value.trim() + "|" + $("#os-train").checked; }
+function planKey() { return $("#os-text").value.trim() + "|" + $("#os-train").checked + "|" + (OS.subject || ""); }
 function resetGo() { OS.confirmFor = null; $("#os-go").textContent = "Make it"; }
 async function previewPlan() {
   const text = $("#os-text").value.trim();
@@ -48,20 +86,21 @@ async function previewPlan() {
   const key = planKey();
   if (!text) { $("#os-plan").innerHTML = "Name a song and a voice. UnderCover gets the album version of the song from YouTube, finds (or trains) the voice, and makes the cover with the best settings."; return; }
   try {
-    const p = await api(`/api/auto/plan?text=${encodeURIComponent(text)}&train=${$("#os-train").checked ? 1 : 0}`);
+    const p = await api(`/api/auto/plan?text=${encodeURIComponent(text)}&train=${$("#os-train").checked ? 1 : 0}${OS.subject ? "&subject=" + encodeURIComponent(OS.subject) : ""}`);
     if (seq !== OS.planSeq) return;
     OS.last = { key, plan: p };
     const songLine = p.style ? `${/^[aeiou]/i.test(p.style) ? "an" : "a"} <b>${esc(p.style)}</b> version of “${esc(p.song_query)}” (a cover from YouTube that has singing in it)`
                              : `“${esc(p.song_query)}” (album version from YouTube)`;
     const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
-    $("#os-plan").innerHTML = `<div class="os-plan-grid"><span>🎵 <b>Song</b><br>${songLine}</span><span>🎤 <b>Voice</b><br>${voiceLine(p.voice)}</span><span>⏱ <b>Time</b><br>${planTime(p)}</span></div>${hint}`;
+    $("#os-plan").innerHTML = `<div class="os-plan-grid"><span>🎵 <b>Song</b><br>${songLine}</span><span>🎤 <b>Voice</b><br>${voiceLine(p.voice)}</span><span>⏱ <b>Time</b><br>${planTime(p)}</span></div>${hint}${subjectHtml(p)}${qualityHtml(p.voice)}`;
+    bindQuality(); bindSubject();
     renderChoices(p);
   } catch (e) {
     if (seq === OS.planSeq) { $("#os-plan").textContent = e.message; OS.last = { key, error: e.message }; }
   }
   return OS.last && OS.last.key === key ? OS.last : null;
 }
-$("#os-text").addEventListener("input", () => { resetGo(); OS.choice = null; $("#auto-choices").hidden = true; clearTimeout(OS.planTimer); OS.planTimer = setTimeout(previewPlan, 500); });
+$("#os-text").addEventListener("input", () => { resetGo(); OS.choice = null; OS.subject = null; $("#auto-choices").hidden = true; clearTimeout(OS.planTimer); OS.planTimer = setTimeout(previewPlan, 500); });
 $("#os-text").addEventListener("keydown", e => { if (e.key === "Enter") $("#os-go").click(); });
 $("#os-train").onchange = () => { resetGo(); previewPlan(); };
 $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan(); $("#os-text").focus(); });
@@ -77,15 +116,16 @@ $("#os-go").onclick = async () => {
     const last = OS.last && OS.last.key === key ? OS.last : await previewPlan();
     if (!last || last.error) return;
     if (last.plan.ask && !OS.choice) { $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Pick which song first.</b>`); return; }
+    if (last.plan.subject?.ask && !OS.subject) { $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Pick which one first.</b>`); return; }
     const how = last.plan.voice?.how;
     if ((how === "train" || how === "check") && OS.confirmFor !== key) {
       OS.confirmFor = key;
-      btn.textContent = how === "train" ? "Train a voice + make it (~45 min)" : "Make it (~3 min; ~45 only if no good voice exists)";
+      btn.textContent = how === "train" ? "Train a voice + make it (~1 hour)" : "Make it (~3 min; ~1 hour only if no voice comes close)";
       $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Press the button again to go ahead.</b>`);
       return;
     }
     resetGo();
-    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined } });
+    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined, subject: OS.subject || undefined } });
     osFollow(r.job, text);
   } catch (e) { showError(e.message, "Can't make that cover"); }
   finally { btn.disabled = false; }
@@ -171,6 +211,8 @@ function osFollow(id, title) {
         }
       } catch (e) {}
       if (ev.result) showResult(ev.result, ev.seconds);
+      $("#os-plan").insertAdjacentHTML("beforeend", qualityHtml(plan.voice));   // a weak voice is said with the cover too
+      bindQuality();
       const others = (plan.song?.compared || []).filter(x => !x.chosen && x.id);
       if (others.length) {   // the versions it compared: one click to hear the same voice on another
         $("#os-plan").insertAdjacentHTML("beforeend", `<div class="os-versions"><span class="meta">Other versions it compared:</span>` +

@@ -22,7 +22,8 @@ from ..core.config import path
 from ..core.voices import ModelError
 from . import ambiguity
 from .fit import pick_fit, pick_octave
-from ..doubleagent.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0
+from ..doubleagent.service import (_prefetch_voice_sources, installed_for, resolve_voice, subject_of, voice_f0,
+                                   voice_quality)
 
 PATTERNS = [
     # "cover of X by Y" / "X cover by Y" / "make X sung by Y" (the LAST "by" wins: "X by Miley Cyrus by Y")
@@ -245,7 +246,8 @@ MIN_SUNG = 0.12   # under ~12% of the song with a voiced melody = basically inst
 
 # ---------------------------------------------------------------- the job
 
-def run(job, text: str, prefer_train: bool = False, song_url: str | None = None, choice: str | None = None):
+def run(job, text: str, prefer_train: bool = False, song_url: str | None = None, choice: str | None = None,
+        subject: str | None = None):
     from . import songs
     from .pipeline import ENGINE, CoverOptions, history_items
     from ..core.separate import separate
@@ -282,9 +284,18 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     # Network work for the voice starts now, alongside the song's download and separation (review C6): if there's no
     # voice trained here for this person, find their clips and pre-download the first sources (no GPU involved).
     early = None
+    trained_ok = [v for v in installed_for(person) if v.extra.get("trained") and voice_quality(v)["ok"]]
+    if not trained_ok or subject:
+        # what the request names (a person, a singer, a character, a band...), said in the plan line, or the user's
+        # correction or answer from it (phase 15): it decides how the voice's clips are found
+        try:
+            plan["subject"] = subject_of(person, subject)
+        except Exception:
+            plan["subject"] = None
     if not [v for v in installed_for(person) if v.extra.get("trained")]:
         import threading
-        early = threading.Thread(target=_prefetch_voice_sources, args=(person,), daemon=True, name="voice-prefetch")
+        early = threading.Thread(target=_prefetch_voice_sources, args=(person, plan.get("subject")), daemon=True,
+                                 name="voice-prefetch")
         early.start()
 
     # 1. song (a version like "acoustic" means a cover by someone else, so candidates are tried until one
@@ -391,6 +402,16 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             spec["prefer_train"] = True
         raise
 
+    # the gate (phase 15): a weak voice is said plainly, here and with the cover, never handed over silently
+    q = voice_quality(v)
+    pv = plan.get("voice")
+    if pv is not None:
+        if q["ok"] and pv.get("quality"):   # a quick cover's honest label, or Train a new voice's note (resolve_voice)
+            q = pv["quality"]
+        pv["quality"] = q
+    if not q["ok"] and not q.get("quick"):   # (a quick cover's label was said already)
+        push("voice", 1.0, f"Heads-up: {q['summary']}")
+
     # 3. settings + cover
     vhz, speech = voice_f0(v)
     rng = (v.extra or {}).get("f0_range")
@@ -418,6 +439,10 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
         why = (f"{fit['outside']:.0%} of the melody outside the voice's range "
                f"({rng[0]:.0f}-{rng[2]:.0f} Hz{', from speech' if speech else ''})")
         plan["settings_fit"] = fit
+        if fit["outside"] > 0.25:   # a very high or very low voice (a child's, a cartoon's) against a wide melody
+            plan["fit_note"] = (f"{fit['outside']:.0%} of the melody is still outside this voice's range after moving it "
+                                f"{'up' if fit['octave'] + fit['key'] / 12 > 0 else 'down'}: those notes will strain or thin out.")
+            push("cover", 0.0, plan["fit_note"])
     else:
         if not vhz and plan.get("person_hz"):   # community voice: use the real person's measured speaking pitch
             vhz, speech = plan["person_hz"], plan.get("person_speech", True)
@@ -441,8 +466,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     push("cover", 0.0, f"Making the cover with “{v.name}”")
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
     item = next((h for h in history_items() if h["id"] == res.id), None)
-    job.finish("done", message="Finished", result=item, plan=plan, seconds=res.seconds, notes=res.notes,
-               elapsed=round(time.perf_counter() - t0, 1))
+    job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
+               plan=plan, seconds=res.seconds, notes=res.notes, elapsed=round(time.perf_counter() - t0, 1), quality=q)
 
 
 def start_oneshot(body: dict):
@@ -451,6 +476,7 @@ def start_oneshot(body: dict):
     text = (body.get("text") or "").strip()
     req = ambiguity.settle(parse_request(text))   # friendly error now rather than inside the job
     choice = (body.get("choice") or "").strip() or None
+    subject = (body.get("subject") or "").strip() or None   # the user's pick from the plan line (phase 15)
     key = ambiguity.song_key(req["song"], req["artist"])
     if req["artist"] is None and choice:
         ambiguity.remember(key, choice, ambiguity.cached_choices(req["song"]))   # until a different song is requested
@@ -464,9 +490,11 @@ def start_oneshot(body: dict):
     job = jobs.Job("auto")
     jobs.JOBS[job.id] = job
     job.resume_spec = {"kind": "oneshot", "text": text, "prefer_train": bool(body.get("prefer_train")),
-                       "song_url": body.get("song_url") or None, "choice": choice, "label": f"One-shot: {text}"}
+                       "song_url": body.get("song_url") or None, "choice": choice, "subject": subject,
+                       "label": f"One-shot: {text}"}
     job.push(stage="queued", frac=0, message="Waiting for the GPU", plan={"request": text})
-    jobs.GPU_QUEUE.put((job, lambda job: run(job, text, bool(body.get("prefer_train")), body.get("song_url") or None, choice)))
+    jobs.GPU_QUEUE.put((job, lambda job: run(job, text, bool(body.get("prefer_train")), body.get("song_url") or None, choice,
+                                             subject)))
     return job
 
 
@@ -474,4 +502,5 @@ def start_oneshot(body: dict):
 # training aside; Resume starts a paused one-shot again
 worklist.register_pausable("auto", partly=True)
 worklist.register_resume("oneshot", lambda spec: start_oneshot({"text": spec["text"], "prefer_train": spec.get("prefer_train"),
-                                                                 "song_url": spec.get("song_url"), "choice": spec.get("choice")}))
+                                                                 "song_url": spec.get("song_url"), "choice": spec.get("choice"),
+                                                                 "subject": spec.get("subject")}))
