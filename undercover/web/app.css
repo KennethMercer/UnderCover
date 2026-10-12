@@ -415,6 +415,56 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .tab:hover:not(:disabled) { color: var(--fg); }
 .tab[aria-pressed="true"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
 .tab:disabled { opacity: .45; }
+
+/* the System room's sweep (phase 10's Doctor): a row per problem, the fine ones (Deep Cover) quieter under them */
+.sys .acts { display: flex; gap: 12px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+#sys-doctor > [data-deep] .sys { padding: 9px 0; }
+#sys-doctor > [data-deep] .sys b { font-weight: 500; }
+#sys-doctor > .sys + [data-deep] > .sys:first-child { border-top: 1px solid var(--line); }
+/* a Fix that installs names what it installs before the second button does it */
+.fix-ask { grid-column: 1 / -1; display: grid; gap: 10px; background: var(--panel); border-radius: var(--r); padding: 14px 16px; border-left: 3px solid var(--warn); }
+.fix-ask p { margin: 0; }
+.fix-pkgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-width: 460px; }
+.fix-pkgs li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: baseline; }
+.fix-pkgs .mono { font-size: 13px; }
+/* the diagnostics file: what goes in it, before it's saved */
+.sys-bundle { display: grid; gap: 10px; background: var(--panel); border-radius: var(--r); padding: 14px 16px; }
+.sys-bundle p { margin: 0; }
+.sys-bundle-list { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13.5px; }
+/* a problem the Doctor found: a dot on the SafeHouse tab (bad) and the System room's tab (bad, or a warning) */
+body[data-doctor="warn"]:not([data-gpu="bad"]) .room[data-room="system"]::after {   /* a GPU problem's red wins */ content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--err); }
+/* Recent: Retry is the thing to press; Open stays quiet */
+.rn-li [data-retry] { font-weight: 600; }
+.rn-li .linkbtn[data-goto] { color: var(--muted); }
+.rn-li .linkbtn[data-goto]:hover { color: var(--fg); }
+
+/* the voice lab's A/B ("Listen and choose", phase 9): the card opens across the row; two readings, A and B */
+.vc:has(#cad-ab) { grid-column: 1 / -1; }
+#cad-ab { display: grid; gap: 12px; padding-top: 4px; }
+.ab-q { display: grid; gap: 2px; }
+.ab-q b { font-size: 15px; }
+.ab-sides { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.ab-side { display: grid; gap: 10px; align-content: start; background: var(--panel); border-radius: var(--r); padding: 14px; }
+.ab-head { display: flex; align-items: baseline; gap: 10px; }
+.ab-letter { font: 800 26px/1 var(--display); letter-spacing: -.02em; }
+.ab-name { color: var(--muted); font-size: 13px; }
+.ab-player { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; align-items: center; }
+.ab-play { width: 38px; height: 38px; border-radius: 50%; border: 0; padding: 0; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); }
+.ab-play .ico { width: 16px; height: 16px; }
+.ab-play .i-pause, .ab-side.playing .ab-play .i-play { display: none; }
+.ab-side.playing .ab-play .i-pause { display: block; }
+.ab-bar { height: 3px; background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 2px; overflow: hidden; }
+.ab-bar i { display: block; height: 100%; width: 0; background: var(--accent); }
+.ab-side .btn { justify-self: start; }
+#cad-ab-why { width: 100%; box-sizing: border-box; resize: vertical; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+.ab-foot { display: flex; gap: 6px 16px; align-items: baseline; flex-wrap: wrap; }
+@media (max-width: 680px) {
+  .ab-sides { grid-template-columns: minmax(0, 1fr); }
+  .sys .acts { justify-content: flex-start; }
+  .fix-pkgs li { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; }
+  .fix-pkgs li small { grid-column: 1 / -1; }
+}
 @media (max-width: 680px) {
   .roomhead p { display: none; }   /* the room's name is enough on a phone */
   .rn-li .acts { grid-column: 1 / -1; }   /* the state words stay visible, under the name */

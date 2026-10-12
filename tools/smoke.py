@@ -1542,6 +1542,9 @@ def u_doctor_packages():
             assert row["state"] == "warn" and name in row["detail"] and row["fix"]["id"] == "packages", row
             lines, refused = doctor.package_fix_lines()
             assert lines == [pins[name]["line"]] and not refused, (lines, refused)
+            pv = doctor.fix_preview("packages")   # what the page names before the user's click installs anything
+            assert pv == {"packages": [{"name": name, "version": pins[name]["version"], "now": "0.0.1"}], "refused": []}, pv
+            assert doctor.fix_preview("models") == {}
             r = doctor.fix_packages(dry_run=True)
             args, req = calls[-1]
             assert "--dry-run" in args and "--no-deps" in args and "--require-hashes" in args and "--hash=sha256:" in req, args
@@ -1649,6 +1652,8 @@ def a_doctor():
     r = api("/api/doctor")
     assert r["about"]["version"] and r["results"] and r["mode"] == "fast" and r["seconds"] < 2, r.get("seconds")
     assert all(x["state"] in ("ok", "info", "warn", "bad") for x in r["results"])
+    pv = api("/api/doctor/fix/packages")   # read only: installs nothing
+    assert isinstance(pv.get("packages"), list) and isinstance(pv.get("refused"), list), pv
     c = api("/api/doctor/bundle")
     assert c["files"] and c["never"], c
     z = zipfile.ZipFile(io.BytesIO(api("/api/doctor/bundle.zip")))
