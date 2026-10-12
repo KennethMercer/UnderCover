@@ -16,9 +16,11 @@ const store = {
 function setDeep(on) {
   document.body.classList.toggle("deep", on); store.set("uc-deep", on);
   $("#deep-toggle")?.setAttribute("aria-pressed", on);
+  $("#set-deep")?.setAttribute("aria-checked", on);   // the switch in SafeHouse's Settings room
 }
 setDeep(!!store.get("uc-deep", false));
 $("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
+$("#set-deep")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
 let deepTyped = "";
 
 // Voice display names (ARCHITECTURE "UI backlog": voice display names). Wherever a voice is listed it shows the person's
@@ -90,11 +92,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && do
 async function pollStatus() {
   try {
     const s = await api("/api/status");
-    const gpu = $("#chip-gpu");
-    document.body.dataset.gpu = s.gpu ? "ok" : s.cpu_mode ? "cpu" : "wait";
-    gpu.innerHTML = s.gpu ? `<i class="dot"></i><span>${esc(s.gpu.replace("AMD Radeon ", ""))} · ${s.vram_gb} GB</span>`
-                  : s.cpu_mode ? `<i class="dot wait"></i><span title="No supported graphics card: covers are slow and training is off">Processor only (slow)</span>`
-                          : `<i class="dot wait"></i><span>Checking GPU…</span>`;
+    document.body.dataset.gpu = s.gpu_problem ? "bad" : s.gpu ? "ok" : s.cpu_mode ? "cpu" : "wait";
+    sysStatus(s);
     if (s.stale) restartNeeded();
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident
       store.set("uc-abrupt-seen", s.last_abrupt.at);
@@ -105,19 +104,37 @@ async function pollStatus() {
     tr.hidden = !t;
     if (t) tr.innerHTML = `<i class="dot wait"></i><span>Training ${esc(t.project)}${t.eta ? ` · ${fmtSecs(t.eta)} left` : t.epoch ? ` · ${t.epoch}/${t.epochs}` : ""}</span>`;
     if (typeof renderWorkBar === "function") renderWorkBar(s.work);   // work.js: Pause / Resume bar (the tab title: jobs.js)
-    const m = $("#chip-models");
-    m.hidden = s.models === "ready" && !s.queue;   // only worth a chip while loading, failing or with covers waiting
-    if (s.models === "ready") m.textContent = s.queue ? `${s.queue} queued` : "models warm";
-    else if (s.models.startsWith("error")) { m.textContent = s.gpu_problem ? "no GPU" : "model error"; showError(s.models.replace(/^error: /, ""), s.gpu_problem ? "GPU not available" : "Models failed to load"); return; }
-    else m.textContent = s.first_run ? "first start: downloading voice tools (~600 MB, once)…" : "loading models…";
+    if (s.models.startsWith("error")) { showError(s.models.replace(/^error: /, ""), s.gpu_problem ? "GPU not available" : "Models failed to load"); return; }
     S.modelsReady = s.models === "ready"; S.firstRun = !!s.first_run;
     setTimeout(pollStatus, s.models === "ready" ? 5000 : 1000);
   } catch (e) {
     document.body.dataset.gpu = "bad";
-    $("#chip-gpu").innerHTML = `<i class="dot bad"></i><span>Not connected</span>`;
+    sysStatus(null);
     setTimeout(pollStatus, 3000);
   }
 }
+// SafeHouse's System room: the graphics card and the models in words, a GPU problem as an alert at the top of the room
+function sysStatus(s) {
+  const row = (id, text, st, word) => {
+    $(`#sys-${id}`).textContent = text;
+    $(`#sys-${id}-st`).className = `dotw ${st}`; $(`#sys-${id}-st`).textContent = word;
+  };
+  if (!s) { row("gpu", "UnderCover isn't answering", "bad", "not connected"); row("models", "", "bad", "not connected"); return; }
+  if (s.gpu) row("gpu", `${s.gpu} · ${s.vram_gb} GB`, "ok", "ready");
+  else if (s.cpu_mode || s.gpu_problem) row("gpu", "Not found · processor only", "bad", "problem");
+  else row("gpu", "Checking…", "now", "checking");
+  if (s.models === "ready") row("models", s.queue ? `${s.queue} cover${s.queue > 1 ? "s" : ""} waiting their turn` : s.gpu ? "Separation, voice engine and speech are warm" : "Loaded on the processor",
+                               s.gpu ? "ok" : "warn", s.gpu ? "warm" : "slow");
+  else if (s.models.startsWith("error")) row("models", s.models.replace(/^error: /, ""), "bad", "problem");
+  else row("models", s.first_run ? "First start: downloading the voice tools (~600 MB, once)" : "Loading…", "now", "loading");
+  const bad = !!(s.gpu_problem || s.cpu_mode);
+  $("#sys-alert").hidden = !bad;
+  if (bad) $("#sys-alert-p").textContent = s.gpu_problem ||
+    "UnderCover is using the processor, so covers are slow and training is off. If this PC has an AMD card, restarting usually fixes it; if not, the driver needs a look.";
+}
+// Restart (System room, its GPU alert): the dialog says what happens and holds the button that does it
+$$("[data-restart]").forEach(b => b.onclick = () => showError("Restarting takes about 10 seconds; your songs, voices and history are kept. Voice work pauses and carries on after.",
+  "Restart UnderCover?", { label: "Restart now", run: restartServer }, true));
 let restartShown = false;
 function restartNeeded() {
   if (restartShown) return;
@@ -157,14 +174,20 @@ async function restartServer() {
   showError("UnderCover didn't come back after restarting. Start it again with UnderCover.bat or the desktop shortcut. " +
             "If that fails, logs/server.log has the details.", "Restart failed");
 }
-function applyTheme() { $("#theme").textContent = document.documentElement.dataset.theme === "light" ? "Dark" : "Light"; redrawAll(); }
+// Look (SafeHouse's Settings room): follow Windows (the default), or always dark / light. uc-theme = "system" | "dark" | "light",
+// read before first paint by the script in index.html's head
+const lightQ = matchMedia("(prefers-color-scheme: light)");
+function themePref() { try { return localStorage.getItem("uc-theme") || "system"; } catch (e) { return "system"; } }
+function applyTheme() {
+  const t = themePref();
+  if (t === "light" || (t === "system" && lightQ.matches)) document.documentElement.dataset.theme = "light";
+  else delete document.documentElement.dataset.theme;
+  $$("#set-look button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === t));
+  redrawAll();
+}
+lightQ.addEventListener("change", () => { if (themePref() === "system") applyTheme(); });
+$$("#set-look button").forEach(b => b.onclick = () => { try { localStorage.setItem("uc-theme", b.dataset.v); } catch (e) {} applyTheme(); });
 $("#chip-train").onclick = () => { if (window.showTab) showTab("doubleagent"); };
-$("#theme").onclick = () => {
-  const light = document.documentElement.dataset.theme !== "light";
-  if (light) document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme;
-  try { localStorage.setItem("uc-theme", light ? "light" : "dark"); } catch (e) {}
-  applyTheme();
-};
 
 // ------------------------------------------------------------ waveforms
 function drawWave(canvas, peaks, played = 0, colorVar = "--wave-on") {

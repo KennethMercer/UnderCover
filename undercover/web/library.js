@@ -41,30 +41,28 @@ async function loadSummary() {
   $("#lib-legend").innerHTML = order.map(k => `<span><i class="sw" style="background:var(--c-${k})"></i>${CAT_LABELS[k]} <b>${gb(s.categories[k])}</b></span>`).join("");
   $("#lib-total").textContent = gb(s.total);
   $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
-  // YouTube changes often; when downloads start failing, a newer yt-dlp usually fixes it
-  $("#lib-ytdlp").innerHTML = s.ytdlp ? `YouTube downloader ${esc(s.ytdlp)} · <button class="linkbtn" id="lib-ytdlp-go" type="button">Update</button>` : "";
-  const go = $("#lib-ytdlp-go");
-  if (go) go.onclick = async () => {
-    go.disabled = true; go.textContent = "Updating…";
-    try {
-      const r = await api("/api/library/tools/ytdlp-update", { json: {} });
-      if (r.changed) { showError(`Updated from ${r.before} to ${r.after}. Restart UnderCover to use it.`, "YouTube downloader updated", { label: "Restart now", run: restartServer }, true); }
-      else showError(`Already the newest version (${r.after}).`, "YouTube downloader", null, true);
-    } catch (e) { showError(e.message, "Couldn't update"); }
-    loadSummary();
-  };
-  const quit = $("#lib-quit");
-  if (quit && !quit.dataset.wired) {
-    quit.dataset.wired = "1";
-    confirmClick(quit, "Quit UnderCover?", async () => {
-      try {
-        const r = await api("/api/quit", { json: {} });
-        document.body.innerHTML = `<div class="lib-empty" style="margin:20vh auto;max-width:420px;text-align:center"><b>UnderCover has stopped</b>${r.pausing ? "Voice work was paused; Resume continues it next time. " : ""}Start it again with UnderCover.bat, then reload this page.</div>`;
-      } catch (e) { showError(e.message, "Couldn't quit"); }
-    });
-  }
+  $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp}` : "yt-dlp isn't installed";   // System room, Deep Cover
+  $("#lib-ytdlp-go").hidden = !s.ytdlp;   // updating a missing yt-dlp would install it, and installs need an OK
   renderCats();
 }
+// System room: YouTube changes often; when downloads start failing, a newer yt-dlp usually fixes it
+$("#lib-ytdlp-go").onclick = async () => {
+  const go = $("#lib-ytdlp-go");
+  go.disabled = true; go.textContent = "Updating…";
+  try {
+    const r = await api("/api/library/tools/ytdlp-update", { json: {} });
+    if (r.changed) { showError(`Updated from ${r.before} to ${r.after}. Restart UnderCover to use it.`, "YouTube downloader updated", { label: "Restart now", run: restartServer }, true); }
+    else showError(`Already the newest version (${r.after}).`, "YouTube downloader", null, true);
+  } catch (e) { showError(e.message, "Couldn't update"); }
+  go.disabled = false; go.textContent = "Update";
+  loadSummary();
+};
+confirmClick($("#lib-quit"), "Quit UnderCover?", async () => {
+  try {
+    const r = await api("/api/quit", { json: {} });
+    document.body.innerHTML = `<div class="lib-empty" style="margin:20vh auto;max-width:420px;text-align:center"><b>UnderCover has stopped</b>${r.pausing ? "Voice work was paused; Resume continues it next time. " : ""}Start it again with UnderCover.bat, then reload this page.</div>`;
+  } catch (e) { showError(e.message, "Couldn't quit"); }
+});
 async function loadCat(keepSel) {
   try { L.data[L.cat] = await api(`/api/library/${L.cat}`); if (L.cat === "voices") noteVoices(L.data.voices); }
   catch (e) { return showError(e.message, "Couldn't read the library"); }
@@ -90,12 +88,23 @@ function renderTools() {
     const keep = f.value;
     f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option${v === keep ? " selected" : ""}>${esc(v)}</option>`).join("");
   } else f.hidden = true;
-  $("#lib-kfilter").hidden = L.cat !== "covers" && L.cat !== "speech";   // Kept / Recent (phase 6)
+  renderKf();
 }
+// Kept / Recent (phase 6): two tabs over the library. Only covers and speech have a recent tray; songs, voices and training
+// are always kept, so for them Recent is off and Kept counts everything.
+L.kf = store.get("uc-lib-kf", "kept");
+const hasTray = () => L.cat === "covers" || L.cat === "speech";
+function renderKf() {
+  const tray = hasTray(), all = L.data[L.cat] || [];
+  $$("#lib-kfilter .tab").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === (tray ? L.kf : "kept")));
+  $("#lib-kfilter [data-v=recent]").disabled = !tray;
+  $("#lib-n-kept").textContent = tray ? all.filter(x => x.kept).length : all.length;
+  $("#lib-n-recent").textContent = tray ? all.filter(x => x.recent).length : "";
+}
+$$("#lib-kfilter .tab").forEach(b => b.onclick = () => { L.kf = b.dataset.v; store.set("uc-lib-kf", L.kf); L.sel = null; renderKf(); renderList(); renderDetail(); });
 $("#lib-q").addEventListener("input", () => renderList());
 $("#lib-sort").onchange = () => { store.set(`uc-lib-sort-${L.cat}`, $("#lib-sort").value); renderList(); };
 $("#lib-filter").onchange = () => renderList();
-$("#lib-kfilter").onchange = () => renderList();
 
 function rows() {
   const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
@@ -104,7 +113,7 @@ function rows() {
     : L.cat === "voices" ? `${x.name} ${voiceDisplay(x.name)} ${x.source}` : `${x.person} ${x.name}`;
   if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
   if (voice) list = list.filter(x => x.voice === voice);
-  const kf = $("#lib-kfilter").hidden ? "" : $("#lib-kfilter").value;
+  const kf = hasTray() ? L.kf : "";
   if (kf === "kept") list = list.filter(x => x.kept);
   else if (kf === "recent") list = list.filter(x => x.recent);
   const key = { new: x => -(L.cat === "covers" || L.cat === "speech" ? Date.parse((x.created || "").replace(" ", "T")) || 0 : (x.updated || Date.parse((x.installed || "").replace(" ", "T")) / 1000 || 0)),
@@ -120,11 +129,21 @@ const keepLine = x => x.kept ? `Kept in SafeHouse${x.kept_at ? ` since ${when(x.
 const idOf = x => String(L.cat === "covers" || L.cat === "speech" || L.cat === "songs" ? x.id : x.name);
 
 // ------------------------------------------------------------ list
+// on a phone the detail opens under the tapped row, not below the whole list
+const narrowQ = matchMedia("(max-width: 680px)");
+function placeDetail() {
+  const d = $("#lib-detail"), row = narrowQ.matches && L.sel != null ? $('#lib-list .litem[aria-selected="true"]') : null;
+  if (row) row.after(d); else if (d.parentNode === $("#lib-list")) $("#lib-list").after(d);
+  d.hidden = narrowQ.matches && !row;
+}
+narrowQ.addEventListener("change", placeDetail);
 function renderList() {
   const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
+  if (box.contains($("#lib-detail"))) box.after($("#lib-detail"));   // the list is redrawn below; the detail lives on
   if (!all.length) {
     box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", speech: "Speech you make in SpeakEasy collects here.", songs: "Songs you drop in or get from YouTube collect here.",
       voices: "Install a voice in FrontMan, or train one in DoubleAgent.", training: "Voices you train get a project here." }[L.cat]}</div>`;
+    placeDetail();
     return;
   }
   const bulk = L.cat === "covers" && L.checked.size ? `<div class="bulk"><span><b>${L.checked.size} selected</b> · ${gb(all.filter(c => L.checked.has(String(c.id))).reduce((a, c) => a + c.size, 0))}</span>
@@ -153,9 +172,10 @@ function renderList() {
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
       <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
-  }).join("") : `<div class="lib-empty">Nothing matches “${esc($("#lib-q").value)}”.</div>`);
+  }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
+      : hasTray() && L.kf === "kept" ? "Nothing kept yet. Send to SafeHouse keeps one for good; until then it's under Recent." : "Nothing here."}</div>`);
   $$(".litem", box).forEach(el => {
-    const pick = () => { L.sel = el.dataset.id; $$(".litem", box).forEach(x => x.setAttribute("aria-selected", x === el)); renderDetail(); };
+    const pick = () => { L.sel = el.dataset.id; $$(".litem", box).forEach(x => x.setAttribute("aria-selected", x === el)); renderDetail(); placeDetail(); };
     el.addEventListener("click", e => { if (e.target.matches("input")) return; pick(); });
     el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
     const cb = $("input", el);
@@ -169,6 +189,7 @@ function renderList() {
   });
   const bc = $("#lib-bulk-clear"); if (bc) bc.onclick = () => { L.checked.clear(); renderList(); };
   if (!L.sel && list.length && innerWidth > 860) { L.sel = idOf(list[0]); box.querySelector(".litem")?.setAttribute("aria-selected", "true"); renderDetail(); }
+  placeDetail();
 }
 
 // two clicks to do anything destructive
