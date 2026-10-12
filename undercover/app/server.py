@@ -7,6 +7,7 @@ standard library only.
 JSON API + Server-Sent Events for live progress; audio served with HTTP Range support so the
 player can seek. All GPU work runs on one worker thread, so the models stay loaded and jobs queue.
 """
+import ipaddress
 import json
 import mimetypes
 import os
@@ -22,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from ..core import gpu, jobs
+from ..core import gpu, jobs, phone
 from ..core.config import CONFIG, ROOT, path
 from ..core.files import roots as _roots
 from ..core.jobs import GPU_QUEUE, JOBS, STATUS, Cancelled, Job, friendly, gpu_worker
@@ -34,13 +35,14 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
-from . import doctor_api
+from . import doctor_api, phone_api
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
 WEB = PKG / "web"
 for ext, mt in ((".flac", "audio/flac"), (".mp3", "audio/mpeg"), (".wav", "audio/wav"), (".m4a", "audio/mp4"),
-                (".opus", "audio/ogg"), (".js", "text/javascript"), (".css", "text/css"), (".woff2", "font/woff2")):
+                (".opus", "audio/ogg"), (".js", "text/javascript"), (".css", "text/css"), (".woff2", "font/woff2"),
+                (".webmanifest", "application/manifest+json")):
     mimetypes.add_type(mt, ext)
 
 
@@ -142,6 +144,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if getattr(self, "set_cookie", None):
+            self.send_header("Set-Cookie", self.set_cookie)
         self.end_headers()
         self.wfile.write(body)
 
@@ -178,10 +182,65 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    # Phone access (phase 11)
+    remote = False   # the request came from the network (a paired phone), not from this PC
+    device = None    # that phone ({id, name, hash, ...})
+
+    def _gate(self, method: str) -> bool:
+        """Who's asking, and may they? From this PC (the loopback listener, a loopback address): exactly the checks from
+        before phase 11. From the network: Phone access on, this server's own address in Host (DNS rebinding), a
+        same-origin Origin on anything but GET, then app/phone_api.ROUTES: "open" routes (pairing) need nothing more,
+        the rest a paired device's token, and "pc" routes are refused for phones."""
+        self._read, self.set_cookie, self.device = None, None, None
+        self.remote = getattr(self.server, "phone", False) or not _loopback(self.client_address[0])
+        if not self.remote:
+            return self._guard_host() and (method == "GET" or self._guard_origin())
+        if not phone.enabled():
+            return self._deny(401)
+        port = self.server.server_address[1]
+        host = (self.headers.get("Host") or "").lower()
+        if host not in {f"{a}:{port}" for a in (self.server.server_address[0], phone.lan_address()) if a}:
+            return self._deny(403)
+        if method != "GET":
+            o = urlparse(self.headers.get("Origin") or "")
+            if o.scheme != "http" or o.netloc.lower() != host:
+                return self._deny(403)
+        pol, what = phone_api.policy(method, urlparse(self.path).path)
+        if pol == "open":
+            return True
+        self.device = phone.device_for(self._cookie(phone.COOKIE), self.client_address[0])
+        if self.device is None:
+            return self._deny(401)
+        if pol == "pc":
+            self.close_connection = True   # its body is never read
+            self._error(f"That needs the PC ({what}): it can't be done from a phone.", 403)
+            return False
+        return True
+
+    def _deny(self, status: int) -> bool:
+        """401 / 403 and nothing else: no page, no data, the connection closed (the body is never read)."""
+        body = (b"This phone isn't paired with UnderCover. On the PC: SafeHouse, Settings, Phone access."
+                if status == 401 else b"Forbidden")
+        self.close_connection = True
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
+    def _cookie(self, name: str) -> str | None:
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == name:
+                return v
+        return None
+
     # routing
     def do_GET(self):
-        self._read = None   # a keep-alive connection reuses this handler: never hand on the last request's body
-        if not self._guard_host():
+        if not self._gate("GET"):   # also resets the last request's body: a keep-alive connection reuses this handler
             return
         u = urlparse(self.path)
         p, q = u.path, parse_qs(u.query)
@@ -191,10 +250,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(worklist.status())
             if (train_api.handle(self, "GET", p) or safehouse_api.handle(self, "GET", p)
                     or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)
-                    or doctor_api.handle(self, "GET", p)):
+                    or doctor_api.handle(self, "GET", p) or phone_api.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
+            if p == "/pair":
+                return self._static(WEB / "pair.html")
             if p.startswith("/static/"):
                 return self._static(WEB / p.removeprefix("/static/"))
             if p.startswith("/files/"):
@@ -216,7 +277,8 @@ class Handler(BaseHTTPRequestHandler):
                 from ..core import addons
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
-                                   "ytdlp_updated": addons.updated("ytdlp")})
+                                   "ytdlp_updated": addons.updated("ytdlp"),
+                                   "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"]})
             if p == "/api/voices":
                 return self._json(voices_json())
             if p == "/api/search":
@@ -248,10 +310,9 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
-        if not self._guard_host() or not self._guard_origin():
+        if not self._gate("POST"):
             return
         p = urlparse(self.path).path
-        self._read = None
         before = set(JOBS)
         jobs.ORIGIN.h = self   # jobs made while answering this request remember it (a concurrent request's don't)
         try:
@@ -272,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._work(p[len("/api/work/"):], self._body())
         if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
                 or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)
-                or doctor_api.handle(self, "POST", p)):
+                or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)):
             return
         if p == "/api/voices/install":
             return self._start_install(self._body())
@@ -327,8 +388,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "job": new[0].id, "was": job_id})
 
     def do_DELETE(self):
-        self._read = None
-        if not self._guard_host() or not self._guard_origin():
+        if not self._gate("DELETE"):
             return
         from ..core.voices import ModelError, remove_voice
         p = urlparse(self.path).path
@@ -427,6 +487,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         i = 0
         while True:
+            if self.remote and not phone.still_valid(self.device["hash"]):   # revoked, or Phone access switched off
+                self.close_connection = True
+                return
             with job.cond:
                 if i >= len(job.events) and not job.finished:
                     job.cond.wait(timeout=15)
@@ -622,6 +685,20 @@ class ExclusiveServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+class PhoneServer(ExclusiveServer):
+    """The second listener, on the home-network address, only while Phone access is on (app/phone_api.py)."""
+    phone = True   # every request it answers comes from the network
+    daemon_threads = True
+
+
+def _loopback(addr: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return ip.is_loopback or bool(getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback)
+
+
 def _clean_old_previews(max_age_h: float = 24):
     d = path("cache_dir") / "previews"
     if d.exists():
@@ -689,8 +766,14 @@ def main():
     from ..core import worklist
     worklist.start()
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
+    try:   # Phone access (phase 11): the second listener, if it's switched on
+        phone_api.setup(lambda a, p: PhoneServer((a, p), Handler), port)
+    except Exception as e:   # noqa: BLE001 - never block startup
+        print(f"Phone access couldn't start: {e}", flush=True)
     url = f"http://{host}:{port}/"
     print(f"UnderCover is running at {url}\nKeep this window open while you use it. Press Ctrl+C to stop.")
+    if phone_api.url():
+        print(f"Phone access is on: {phone_api.url()}/ (paired phones only)", flush=True)
     if UCFG["open_browser"] and "--no-browser" not in sys.argv:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
