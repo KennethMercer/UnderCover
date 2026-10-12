@@ -54,7 +54,11 @@ def log(msg: str):
             f.write(line + "\n")
     except OSError:
         pass
-    print(f"doctor: {msg}", flush=True)
+    try:
+        print(f"doctor: {msg}", flush=True)
+    except (UnicodeEncodeError, OSError):   # a console or log file in the Windows code page (an arrow, a name's accent)
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(f"doctor: {msg}".encode(enc, "replace").decode(enc), flush=True)
 
 
 def _r(id, group, state, title, say, detail="", fix=None) -> dict:
@@ -179,7 +183,7 @@ def c_packages(ctx) -> list:
         got = have.get(name)
         if got is None:
             missing.append(name)
-        elif got != ver:
+        elif got != ver and got != (pins.get(name) or {}).get("version"):   # the version pinned now is fine too
             wrong.append(f"{name} {got} (expected {ver})")
     for name, rec in pins.items():
         if name not in manifest.NEVER_FROM_APP and have.get(name) and rec.get("version") and have[name] != rec["version"]:
@@ -668,9 +672,11 @@ def package_fix_lines() -> tuple[list, list]:
             refused.append(name)
             continue
         rec = pins.get(name)
-        if not rec or rec.get("version") != ver or "--hash" not in rec["line"]:
-            refused.append(name)   # no hashed pin for the version expected: setup -Repair's job
+        if not rec or "--hash" not in rec["line"]:
+            refused.append(name)   # no hashed pin to install: setup -Repair's job
             continue
+        if have.get(name) == rec.get("version"):
+            continue   # already the version pinned now (the record is older than an update): nothing to install
         lines.append(rec["line"])
     return lines, refused
 
