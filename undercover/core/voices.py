@@ -618,15 +618,15 @@ def backfill_person() -> list[str]:
         person = person_in_source(d.get("source") or "")
         if not ex.get("trained") or str(ex.get("person") or "").strip() or not person:
             continue
-        bak = meta.with_name("meta.json.before-person")
-        if not bak.exists():
-            shutil.copyfile(meta, bak)
         new = {**d, "extra": {**ex, "person": person}}
         text = json.dumps(new, indent=2)
         back = json.loads(text)
         back["extra"].pop("person")
         if back != d:   # never write anything but the one new key
             continue
+        bak = meta.with_name("meta.json.before-person")
+        if not bak.exists():
+            shutil.copyfile(meta, bak)
         fsutil.write_text(meta, text)
         done.append(meta.parent.name)
     return done

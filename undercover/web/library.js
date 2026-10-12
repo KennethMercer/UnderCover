@@ -43,7 +43,8 @@ async function loadSummary() {
   $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
   // System room: Update only installs the version UnderCover has pinned (and checked), so it shows when that's newer
   $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} · pinned ${s.ytdlp_pinned}${s.ytdlp_updated ? ` · updated ${s.ytdlp_updated.replace("T", " ").slice(0, 16)}` : ""}` : "yt-dlp isn't installed";   // Deep Cover
-  $("#lib-ytdlp-st").textContent = !s.ytdlp ? "Not installed." : s.ytdlp_update ? `Version ${s.ytdlp} is installed; ${s.ytdlp_pinned} is available.` : `Up to date (${s.ytdlp}).`;
+  $("#lib-ytdlp-st").textContent = !s.ytdlp ? "Not installed." : s.ytdlp_update ? `Version ${s.ytdlp} is installed; ${s.ytdlp_pinned} is available.`
+    : L.ytdlpRestart ? `Updated to ${s.ytdlp}. Restart UnderCover to use it.` : `Up to date (${s.ytdlp}).`;
   $("#lib-ytdlp-go").textContent = s.ytdlp_update ? `Update to ${s.ytdlp_pinned}` : "Update";
   $("#lib-ytdlp-go").hidden = !s.ytdlp_update;   // nothing newer is pinned; and a missing yt-dlp would be an install, which needs an OK
   renderCats();
@@ -54,7 +55,7 @@ $("#lib-ytdlp-go").onclick = async () => {
   go.disabled = true; go.textContent = "Updating…";
   try {
     const r = await api("/api/library/tools/ytdlp-update", { json: {} });
-    if (r.changed) { showError(`Updated from ${r.before} to ${r.after}. Restart UnderCover to use it.`, "YouTube downloader updated", { label: "Restart now", run: restartServer }, true); }
+    if (r.changed) { L.ytdlpRestart = true; showError(`Updated from ${r.before} to ${r.after}. Restart UnderCover to use it.`, "YouTube downloader updated", { label: "Restart now", run: restartServer }, true); }
     else showError(`Already at the version UnderCover has checked (${r.after}).`, "YouTube downloader", null, true);
   } catch (e) { showError(e.message, "Couldn't update"); }
   go.disabled = false;

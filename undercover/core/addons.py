@@ -251,7 +251,8 @@ def update_pinned(addon_id: str) -> dict:
     _need_pin(addon_id)
     st = pin_state(addon_id)
     if not st["installed"]:
-        raise ModelError(f"{get(addon_id).name} isn't installed, and installing needs your OK (use Add-ons).")
+        raise ModelError(f"{get(addon_id).name} isn't installed, and it comes with UnderCover, so this install is "
+                         "damaged. Run UnderCover's setup again to repair it.")
     if not st["update"]:
         return {"before": st["installed"], "after": st["installed"], "pinned": st["pinned"], "changed": False}
     with tempfile.TemporaryDirectory() as d:
