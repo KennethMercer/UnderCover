@@ -44,13 +44,13 @@ CHARACTER_HINT = re.compile(r"\bcast\b|voice actors?|\bvoices? of\b|\bepisodes?\
 CHAR_QUERIES = ["{name} scenes", "{name} best moments", "{name} voice lines", "{name} quotes"]
 CHAR_GOOD = re.compile(r"\bscenes?\b|\bmoments\b|\bclips?\b|\bepisodes?\b|\bquotes?\b|voice lines|\blines\b|"
                        r"compilation|\bofficial\b|full episode|\bmovie\b|\bspeech\b|\bsong\b", re.I)
-CHAR_TALK = re.compile(r"podcast|interview|\bcast\b|voice actors?|\bvoices of\b|\breacts?\b|reaction|\breview|explained|"
+CHAR_TALK = re.compile(r"podcast|interview|\bcast\b|voice actors?|\bvoices? of\b|\birl\b|in real life|\breacts?\b|reaction|\breview|explained|"
                        r"theor(y|ies)|behind the scenes|out of character|true crime|trivia|reunion|reunit|\blies\b|\bsins\b|"
                        r"analysis|\bai\b|politics|commentary|documentary|ranking|tier list|everything wrong|\bfacts\b|"
                        r"\bdiaries\b|\bthe zone\b|co-?star test|guest", re.I)
 # Talk that stays talk even with the show's name in the title: an interview, the voice actor, the cast, a reaction
 STRONG_TALK = re.compile(r"interview|voice actors?|\bcast\b|\breacts?\b|reaction|\breview|behind the scenes|out of character|"
-                         r"\bvoices of\b|trivia|reunion|reunit", re.I)
+                         r"\bvoices? of\b|\birl\b|in real life|trivia|reunion|reunit", re.I)
 GENERIC = set("the a an of and to in on with for at by from is full live new best top his her their my your interview "
               "speech podcast talks talk video official hd 4k part episode clip clips scene scenes movie show".split())
 STUDIOS = re.compile(r"nickelodeon|nicktoons|disney|pixar|dreamworks|cartoon network|warner|adult swim|netflix|"

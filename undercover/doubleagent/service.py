@@ -493,7 +493,10 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
             if proj.reference.get("clip") and enough(proj):
                 break   # enough clean voice already (e.g. from the quality check's clips)
             # a few sources at a time, re-checking the total in between, instead of everything that's ticked
-            todo = [s.id for s in sorted(proj.sources, key=sung_first)
+            # a channel whose videos turned out unavailable here (region-locked: SpongeBob's official channel) goes
+            # last, so the next tries are other uploads of the same scenes
+            locked = {s.channel for s in proj.sources if s.status == "failed" and "not available" in (s.error or "")}
+            todo = [s.id for s in sorted(proj.sources, key=lambda s: (sung_first(s), s.channel in locked))
                     if s.selected and s.status not in ("ready", "failed")]
             if singer and not songs_exhausted(proj):
                 todo = [i for i in todo if srcmod.is_sung(proj.source(i))]
@@ -533,8 +536,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                     proj.sources += new
                     proj.save()
                 more = new + more
-            if not more:
-                break
+            if not more and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]:
+                break   # nothing ticked left to try, and nothing more to tick
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
                 for s in proj.sources:
