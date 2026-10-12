@@ -439,8 +439,12 @@ def _music_limits(proj: Project) -> dict:
 
 def find_speakers(proj: Project):
     """Cluster all phrase embeddings into speakers; the reference is the voice heard most, weighted toward
-    voices present in several sources. Fills proj.speakers and (unless confirmed) proj.reference."""
+    voices present in several sources. For a fictional character (phase 15) it's the voice heard most in the scenes:
+    a podcast about SpongeBob is mostly its host, and the cast interviews are the actors' own voices. Fills
+    proj.speakers and (unless confirmed) proj.reference."""
     from sklearn.cluster import AgglomerativeClustering
+    from .sources import kinds
+    scene = {sid for sid, k in kinds(proj).items() if k == "scene"}
     emb = proj.load_embeddings()
     # Cluster numbers are re-assigned on every run, so a confirmed reference is followed by its voice (centroid),
     # not its number: adding sources once switched Elliott Smith's project to another Elliot's speech.
@@ -460,6 +464,7 @@ def find_speakers(proj: Project):
                                      distance_threshold=1 - TCFG["cluster_threshold"]).fit_predict(X)
     total = sum(p.dur for p in usable)
     n_sources = max(1, len({p.source for p in usable}))
+    scene = scene & {p.source for p in usable}   # the scenes that gave usable speech (none: the voice heard most)
     clusters = []
     for k in set(labels):
         members = [p for p, l in zip(usable, labels) if l == k]
@@ -469,10 +474,26 @@ def find_speakers(proj: Project):
         srcs = len({p.source for p in members})
         best = max((p for p in members if 3.0 <= p.dur <= 12.0), key=lambda p: float(emb[p.id] @ c), default=None) \
             or max(members, key=lambda p: float(emb[p.id] @ c))
+        ssecs = sum(p.dur for p in members if p.source in scene)
+        weight = (ssecs * (1 + len({p.source for p in members if p.source in scene}) / len(scene)) if scene
+                  else secs * (1 + srcs / n_sources))
         clusters.append({"cluster": int(k), "clip": best.id, "share": round(secs / total, 3), "sources": srcs,
-                         "minutes": round(secs / 60, 1), "weight": secs * (1 + srcs / n_sources), "centroid": c})
+                         "minutes": round(secs / 60, 1), "weight": weight, "centroid": c,
+                         **({"scene_minutes": round(ssecs / 60, 1)} if scene else {})})
     clusters.sort(key=lambda c: -c["weight"])
-    clusters = [c for c in clusters if c["share"] >= 0.02][:5] or clusters[:1]
+    clusters = [c for c in clusters if c["share"] >= 0.02 or c.get("scene_minutes", 0) >= 0.3][:5] or clusters[:1]
+    also = None
+    if scene and len(clusters) > 1 and clusters[0].get("scene_minutes"):
+        # A character with two voices in the scenes, each in its own uploads (a recast, another era, a dub that got
+        # through): the co-stars share their scenes' uploads, a second actor doesn't. Use the one heard most, and say so.
+        a, b = clusters[0], clusters[1]
+        src_a = {p.source for p, l in zip(usable, labels) if l == a["cluster"] and p.source in scene}
+        src_b = {p.source for p, l in zip(usable, labels) if l == b["cluster"] and p.source in scene}
+        if b.get("scene_minutes", 0) >= 0.5 * a["scene_minutes"] and len(src_b) >= 2 and len(src_a & src_b) <= 0.3 * len(src_b):
+            also = {"cluster": b["cluster"], "scene_minutes": b["scene_minutes"],
+                    "note": f"Two different voices play {proj.person} in these clips, each in its own uploads (a recast or "
+                            f"another era): using the one heard most ({a['scene_minutes']} min against {b['scene_minutes']}). "
+                            f"Pick the other in DoubleAgent if that's the one you mean."}
     for c in clusters:
         emb[f"speaker:{c['cluster']}"] = c.pop("centroid")
         c.pop("weight")
@@ -491,7 +512,7 @@ def find_speakers(proj: Project):
         emb["speaker:-1"] = old_ref
     elif (not proj.reference.get("confirmed") or proj.reference.get("auto")
           or proj.reference.get("cluster") not in {c["cluster"] for c in clusters}):
-        proj.reference = {**clusters[0], "confirmed": False}
+        proj.reference = {**clusters[0], "confirmed": False, **({"also": also} if also else {})}
     proj.save_embeddings(emb)
 
 

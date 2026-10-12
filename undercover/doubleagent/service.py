@@ -183,29 +183,43 @@ def project_for(person: str):
     return proj
 
 
-def reference_clips(job, person: str, control, push):
+def reference_clips(job, person: str, control, push, subject: dict | None = None):
     """Make sure the person's project has the real voice identified and some phrases by other people (the
-    test material): prepares one source at a time, at most two. These are training clips too."""
+    test material): prepares one source at a time, at most three. These are training clips too. For a character
+    the reference must be the voice heard in its scenes (phase 15: community SpongeBob voices were judged against
+    a podcast host), so scenes are prepared first and a reference without scene minutes isn't trusted."""
     from . import project as P
     from . import sources as srcmod
+    from .subject import search_kind
     from ..core.speaker import SpeakerEmbedder
     proj = project_for(person)
     if not proj.sources:
         push("voice", 0.02, f"Finding clips of {person} to check voices against")
-        proj.sources = srcmod.search(person, proj.mode)
-        proj.save()
+        force, words = search_kind(subject)
+        found = srcmod.search(person, proj.mode, force=force, words=words)
+        with P.lock(proj.name):
+            proj = P.Project.load(proj.name)
+            if not proj.sources:
+                proj.sources = found
+                proj.save()
 
-    def ready(pr):
+    def ready(pr, k):
         # The voice heard most could be an interviewer when only one source is in. Like the training page,
         # trust it once it's in 2+ sources, and only when there's other people's speech to test with.
-        return (pr.reference.get("clip") and pr.reference.get("sources", 0) >= 2
+        ref = pr.reference
+        if k and not ref.get("scene_minutes") and not (ref.get("confirmed") and not ref.get("auto")):
+            return False   # a character's voice comes from its scenes, unless the user picked the voice themselves
+        return (ref.get("clip") and ref.get("sources", 0) >= 2
                 and any(x.reason == "other speaker" for x in pr.phrases))
     emb = SpeakerEmbedder()
     for _ in range(3):
         proj = P.Project.load(proj.name)
-        if ready(proj):
+        k = srcmod.kinds(proj)
+        if ready(proj, k):
             break
-        todo = [s.id for s in proj.sources if s.selected and s.status not in ("ready", "failed")][:1]
+        todo = sorted((s for s in proj.sources if s.selected and s.status not in ("ready", "failed")),
+                      key=lambda s: k.get(s.id) != "scene")[:1]   # scenes first (stable: the search's order otherwise)
+        todo = [s.id for s in todo]
         if not todo:
             break
         push("voice", 0.04, f"Getting real clips of {person} to check voices against")
@@ -225,14 +239,22 @@ def reference_clips(job, person: str, control, push):
     return P.Project.load(proj.name)
 
 
-def _prefetch_voice_sources(person: str):
+def subject_of(person: str, pick: str | None = None) -> dict:
+    """What a voice request names, read from a quick search (subject.py), with the user's correction or answer."""
+    from .subject import apply_pick, classify
+    return apply_pick(person, {} if pick else classify(person), pick)
+
+
+def _prefetch_voice_sources(person: str, subject: dict | None = None):
     """Create/find the person's project, search their sources and download the first two (network only)."""
     from . import sources as srcmod
+    from .subject import search_kind
     try:
         proj = project_for(person)
         if not proj.sources:
             from . import project as P
-            found = srcmod.search(person, proj.mode)
+            force, words = search_kind(subject)
+            found = srcmod.search(person, proj.mode, force=force, words=words)
             with P.lock(proj.name):
                 cur = P.Project.load(proj.name)
                 if not cur.sources:
@@ -261,16 +283,26 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         push("voice", 1.0, f"Using the demo voice “{display_name(demo)}”")
         return demo
     trained = [v for v in cands if v.extra.get("trained")]
+    weak_trained = None
     if trained:
-        plan["voice"] = {"name": trained[0].name, "display": display_name(trained[0]), "how": "installed",
-                         "checked": "trained in UnderCover"}
-        push("voice", 1.0, f"Using your voice “{display_name(trained[0])}” (trained in UnderCover)")
-        return trained[0]
+        tq = voice_quality(trained[0])
+        if prefer_train:
+            tq = train_note(trained[0], tq)
+        if tq["ok"] or prefer_train:
+            plan["voice"] = {"name": trained[0].name, "display": display_name(trained[0]), "how": "installed",
+                             "checked": "trained in UnderCover", "quality": tq}
+            push("voice", 1.0, f"Using your voice “{display_name(trained[0])}” (trained in UnderCover)")
+            return trained[0]
+        # a voice trained here that the gate calls weak (phase 15: the old SpongeBob voice learned a podcast host)
+        # doesn't end the search: a community voice that checks better is used instead; it's the fallback
+        weak_trained = trained[0]
+        push("voice", 0.05, f"Your voice “{display_name(weak_trained)}” is weak ({tq['problems'][0]}); checking others first")
+        cands = [v for v in cands if v.name != weak_trained.name]
     community = [] if prefer_train else cands
     online = [] if prefer_train else online_for(person, 2)
     checked = []
     if community or online:
-        proj = reference_clips(job, person, control, push)
+        proj = reference_clips(job, person, control, push, plan.get("subject"))
         conv, emb = gpu.MODELS.converter, SpeakerEmbedder()
 
         def test(v, ident):
@@ -320,6 +352,12 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             checked.append({"name": "-", "verdict": "unknown", "note": "couldn't test (clips had only one speaker)"})
         plan["checked"] = checked
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
+        quick = False
+        if not good and not prefer_train:
+            # quick first (phase 15): a voice that sounds somewhat like them makes a cover in minutes; training one
+            # takes about an hour. Said plainly, with the way to a closer voice (tick Train a new voice).
+            good = sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"])[:1]
+            quick = bool(good)
         drop_downloads(keep=good[0]["name"] if good else None)
         if good:
             # the person's pitch from their kept clips: singing for singers (no speech headroom then)
@@ -332,12 +370,30 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                 _remember_range(v, rng, plan["person_speech"], person)
             plan["voice"] = {"name": v.name, "display": display_name(v), "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
                              "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ''})"}
+            if quick:
+                plan["voice"].update(quick=True, checked=f"sounds somewhat like {person}: {good[0]['score']:.2f} "
+                                                         f"(a close match is {voicecheck.GOOD})")
+                plan["voice"]["quality"] = {
+                    "ok": False, "quick": True,
+                    "summary": f"Quick: using “{display_name(v)}”, which sounds somewhat like {person} ({good[0]['score']:.2f}). "
+                               f"For a closer voice, tick Train a new voice (about 1 hour).",
+                    "advice": f"Train a proper voice for {person} tonight",
+                    "action": {"kind": "new", "target": person, "now": False}}
+                push("voice", 1.0, plan["voice"]["quality"]["summary"])
+                return v
             push("voice", 1.0, f"Using “{display_name(v)}”: it sounds like {person} ({good[0]['score']:.2f})")
             return v
         push("voice", 0.2, "None of the existing voices sounded enough like " + person + ", so UnderCover will train one")
+    if weak_trained is not None:   # nothing better: the weak voice makes a quick cover, said plainly (the gate)
+        tq = voice_quality(weak_trained)
+        plan["voice"] = {"name": weak_trained.name, "display": display_name(weak_trained), "how": "installed",
+                         "checked": "trained in UnderCover", "quality": tq}
+        push("voice", 1.0, f"Using your voice “{display_name(weak_trained)}”, though it's weak")
+        return weak_trained
     plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
-    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 45 minutes)")
-    name = train_new_voice(job, person, control, push)
+    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 1 hour)"
+         + (f". {plan['subject']['label']}" if (plan.get("subject") or {}).get("label") else ""))
+    name = train_new_voice(job, person, control, push, subject=plan.get("subject"))
     v = get_voice(name)
     plan["voice"]["name"] = v.name
     gpu.forget_voice(v.name)
@@ -402,13 +458,72 @@ def _remember_range(v, rng: list, from_speech: bool, person: str):
         pass
 
 
+# ---------------------------------------------------------------- how far to trust a voice (phase 15)
+
+WEAK_LIKENESS = 0.65   # below: it doesn't sound like them yet (Obama's approved voice 0.70; Peter Griffin's 3.5-min 0.50)
+WEAK_MINUTES = 5.0     # below: too little clean audio to learn the voice from
+SCENE_SHARE = 0.5      # a character's voice: at least half of what it learned from should be the character in scenes
+
+
+def voice_quality(v) -> dict:
+    """How far to trust a voice trained here before a cover is made with it (the one-shot's gate, phase 15: "Toxic as
+    SpongeBob" came from a voice trained on a podcast about SpongeBob, and nothing said so). Measures only what's on
+    disk: the likeness at export, the minutes it learned from, and for a fictional character the share of those
+    minutes that came from scenes (not from talk about the character). Voices from elsewhere aren't judged here
+    (the one-shot checks them against the person already).
+    -> {ok, problems: [plain sentences], summary, advice, action: {kind, target}, scene_share?}"""
+    ex = v.extra or {}
+    out = {"ok": True, "problems": []}
+    if not ex.get("trained"):
+        return out
+    who = ex.get("person") or display_name(v)
+    lk, mins = ex.get("likeness"), ex.get("train_minutes")
+    if lk is not None and lk < WEAK_LIKENESS:
+        out["problems"].append(f"it doesn't sound much like {who} yet (likeness {lk:.2f})")
+    if mins is not None and mins < WEAK_MINUTES:
+        out["problems"].append(f"it learned from only {mins:.1f} min of {who}")
+    try:
+        from . import project as P
+        from .sources import kinds
+        proj = P.Project.load(ex["project"]) if ex.get("project") else None
+    except (ModelError, KeyError):
+        proj = None
+    k = kinds(proj) if proj else {}
+    if k:
+        kept = [p for p in proj.phrases if p.kept and not p.sung]
+        total = sum(p.dur for p in kept)
+        if total:
+            share = sum(p.dur for p in kept if k.get(p.source) == "scene") / total
+            out["scene_share"] = round(share, 2)
+            if share < SCENE_SHARE:
+                talk = sorted({s.title for s in proj.sources if k.get(s.id) == "talk" and any(p.source == s.id for p in kept)})
+                out["problems"].append(f"{1 - share:.0%} of what it learned from isn't {who} in scenes but talk about "
+                                       f"{who} (podcasts, interviews, cast videos" + (f": “{talk[0][:60]}”" if talk else "") + ")")
+    if out["problems"]:
+        out.update(ok=False, summary=f"This {who} voice is weak: " + "; ".join(out["problems"]) + ". A cover will sound like that.",
+                   advice=f"Find better clips of {who} and train it again", action={"kind": "improve", "target": v.name})
+    return out
+
+
+def train_note(v, q: dict) -> dict:
+    """Train a new voice ticked while a voice trained here exists: it's used, not trained over (that's Improve's job,
+    which keeps the project's clips and choices). Said plainly in the plan instead of silently ignoring the box."""
+    who = (v.extra or {}).get("person") or display_name(v)
+    return {**q, "kept": f"You already have “{display_name(v)}”, trained here: Train a new voice uses it and doesn't "
+                         f"train over it. To train it again on better clips, use Improve.",
+            "advice": q.get("advice") or f"Find better clips of {who} and train it again",
+            "action": q.get("action") or {"kind": "improve", "target": v.name}}
+
+
 # ---------------------------------------------------------------- training a new voice
 
-NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably")   # source notes that mean someone else
+NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably", "talk about")   # source notes that mean someone else
+# ("may be in Spanish (a dub...)" starts with "may be" too)
 
 
 def train_new_voice(job, person: str, control, push, project: str | None = None,
-                    target_minutes: float | None = None, prepare_only: bool = False, speaking: bool = False) -> str:
+                    target_minutes: float | None = None, prepare_only: bool = False, speaking: bool = False,
+                    subject: dict | None = None) -> str:
     """Find clips -> prepare (topping up sources until the target) -> auto-confirm -> train -> add. Returns voice name.
     project: continue that Train-tab project (its ticked sources, choices and reference are kept).
     prepare_only: stop once the clips are ready and return the PROJECT name (a cadence for a downloaded voice);
@@ -436,13 +551,19 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
     try:
         if not proj.sources:
             push("voice", 0.01, f"Searching YouTube for {person}")
-            proj.sources = srcmod.search(person, proj.mode)
+            from .subject import search_kind
+            force, words = search_kind(subject)   # the one-shot plan's reading of the request, or the user's correction
+            proj.sources = srcmod.search(person, proj.mode, force=force, words=words)
             proj.save()
         emb = SpeakerEmbedder()
         # Singers: the voice will sing, so gather singing first; interviews only top up when songs run out.
         singer = proj.mode != "speaking"
         sung_first = (lambda s: not srcmod.is_sung(s)) if singer else (lambda s: False)
         searched_more = False
+        searched_again = False
+        # a character's scenes yield little clean voice (SpongeBob: about 0.3 min per upload, music, SFX and the
+        # other characters), so it gets as many rounds as a singer
+        rounds = 12 if singer or srcmod.is_character_project(proj) else 8
 
         def enough(pr):
             return (pr.sung_seconds() if singer and not songs_exhausted(pr) else pr.kept_seconds()) / 60 >= TC["target_minutes"]
@@ -450,12 +571,15 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         def songs_exhausted(pr):
             return not [s for s in pr.sources if srcmod.is_sung(s) and s.status == "found"
                         and not s.note.startswith(NOT_USABLE)]
-        for rnd in range(12 if singer else 8):
+        for rnd in range(rounds):
             proj = P.Project.load(proj.name)
             if proj.reference.get("clip") and enough(proj):
                 break   # enough clean voice already (e.g. from the quality check's clips)
             # a few sources at a time, re-checking the total in between, instead of everything that's ticked
-            todo = [s.id for s in sorted(proj.sources, key=sung_first)
+            # a channel whose videos turned out unavailable here (whatever yt-dlp's reason: why_unavailable) goes
+            # last, so the next tries are other uploads of the same scenes
+            locked = {s.channel for s in proj.sources if s.status == "failed" and srcmod.why_unavailable(s.error or "")}
+            todo = [s.id for s in sorted(proj.sources, key=lambda s: (sung_first(s), s.channel in locked))
                     if s.selected and s.status not in ("ready", "failed")]
             if singer and not songs_exhausted(proj):
                 todo = [i for i in todo if srcmod.is_sung(proj.source(i))]
@@ -475,6 +599,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                 if proj.speakers and not proj.reference.get("confirmed"):
                     P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)   # the dominant voice
                     proj.save()
+            if proj.reference.get("also"):   # a recast or another era: said, not decided silently
+                push("voice", 0.1, proj.reference["also"]["note"])
             mins = proj.kept_seconds() / 60
             if enough(proj):
                 break
@@ -495,8 +621,32 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                     proj.sources += new
                     proj.save()
                 more = new + more
-            if not more:
-                break
+            blocked, tried = srcmod.blocked_share(proj.sources)
+            if not more and not searched_again and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]:
+                # everything found is used and it's still short (most of it couldn't be had here, or it yielded
+                # little clean voice): other uploads, other words, other sites, once
+                searched_again = True
+                character = srcmod.is_character_project(proj)
+                have = {s.id for s in proj.sources}
+                try:
+                    extra = srcmod.search_more(person, have, character)
+                except ModelError:
+                    extra = []
+                try:   # not one site: what other sites yt-dlp searches have of them too
+                    extra += srcmod.search_other_sites(person, character, have | {s.id for s in extra})
+                except Exception:
+                    pass
+                if extra:
+                    with P.lock(proj.name):
+                        proj = P.Project.load(proj.name)
+                        proj.sources += [s for s in extra if s.id not in {x.id for x in proj.sources}]
+                        proj.save()
+                    push("voice", 0.1, (f"{srcmod.unavailable_note(person, proj.sources)}; trying other uploads and other sites"
+                                        if tried >= 3 and blocked >= tried / 2 else
+                                        f"{mins:.1f} min of clean voice from everything found so far; looking for more of {person}"))
+                    continue
+            if not more and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]:
+                break   # nothing ticked left to try, and nothing more to tick
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
                 for s in proj.sources:
@@ -508,6 +658,11 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         proj = P.Project.load(proj.name)
         mins = proj.kept_seconds() / 60
         if mins < 3:
+            blocked, tried = srcmod.blocked_share(proj.sources)
+            if tried >= 3 and blocked >= tried / 2:
+                raise ModelError(f"{srcmod.unavailable_note(person, proj.sources)}, so only {mins:.1f} minutes of {person} "
+                                 f"came through (3+ needed). Other uploads and other sites were tried too. If you have clips "
+                                 f"of {person}, add them in DoubleAgent (links or recordings), then try again.")
             raise ModelError(f"Only {mins:.1f} minutes of {person}'s voice could be found online (3+ needed). "
                              "Open DoubleAgent to add links or recordings, then try again.")
         if prepare_only:
