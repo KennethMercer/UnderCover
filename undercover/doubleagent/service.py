@@ -588,16 +588,22 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                     and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]):
                 # most of what was found can't be had here (blocked in this region): other uploads, other words
                 searched_blocked = True
+                character = srcmod.is_character_project(proj)
+                have = {s.id for s in proj.sources}
                 try:
-                    extra = srcmod.search_more(person, {s.id for s in proj.sources}, srcmod.is_character_project(proj))
+                    extra = srcmod.search_more(person, have, character)
                 except ModelError:
                     extra = []
+                try:   # not one site: what other sites yt-dlp searches have of them too
+                    extra += srcmod.search_other_sites(person, character, have | {s.id for s in extra})
+                except Exception:
+                    pass
                 if extra:
                     with P.lock(proj.name):
                         proj = P.Project.load(proj.name)
                         proj.sources += [s for s in extra if s.id not in {x.id for x in proj.sources}]
                         proj.save()
-                    push("voice", 0.1, f"{blocked} of {tried} videos of {person} can't be downloaded here; trying other uploads")
+                    push("voice", 0.1, f"{srcmod.unavailable_note(person, proj.sources)}; trying other uploads and other sites")
                     continue
             if not more and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]:
                 break   # nothing ticked left to try, and nothing more to tick
@@ -614,10 +620,9 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         if mins < 3:
             blocked, tried = srcmod.blocked_share(proj.sources)
             if tried >= 3 and blocked >= tried / 2:
-                raise ModelError(f"{blocked} of the {tried} videos of {person} UnderCover found can't be downloaded here "
-                                 f"(YouTube says they're not available, usually because they're blocked in this region), "
-                                 f"so only {mins:.1f} minutes of {person} came through (3+ needed). Add your own clips of "
-                                 f"{person} in DoubleAgent (links that play here, or recordings), then try again.")
+                raise ModelError(f"{srcmod.unavailable_note(person, proj.sources)}, so only {mins:.1f} minutes of {person} "
+                                 f"came through (3+ needed). Other uploads and other sites were tried too. If you have clips "
+                                 f"of {person}, add them in DoubleAgent (links or recordings), then try again.")
             raise ModelError(f"Only {mins:.1f} minutes of {person}'s voice could be found online (3+ needed). "
                              "Open DoubleAgent to add links or recordings, then try again.")
         if prepare_only:
