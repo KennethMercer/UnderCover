@@ -42,7 +42,7 @@ async function loadSummary() {
   $("#lib-total").textContent = gb(s.total);
   $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
   // System room (phase 16): the YouTube downloader heals itself; "Check for a fix" runs the same check by hand
-  $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} + solver ${s.ytdlp_ejs || "missing"} · ${s.ytdlp_source === "side" ? "a checked update" : "pinned"} (pinned ${s.ytdlp_pinned})` +
+  $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} + solver ${s.ytdlp_ejs || "missing"} · ${s.ytdlp_source === "side" ? `a checked update (pinned ${s.ytdlp_pinned})` : "the pinned pair"}` +
     (s.ytdlp_checked ? ` · last check ${s.ytdlp_checked.replace("T", " ").slice(0, 16)}: ${s.ytdlp_last}` : "") : "yt-dlp isn't installed";   // Deep Cover
   $("#lib-ytdlp-st").textContent = !s.ytdlp ? "Not installed." : s.ytdlp_job ? "Looking for a working version…"
     : s.ytdlp_broken ? "YouTube is refusing videos: a newer version usually fixes it." : !s.ytdlp_ejs ? "Its puzzle solver is missing: most videos will be refused."
