@@ -35,7 +35,7 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
-from . import doctor_api, phone_api
+from . import doctor_api, phone_api, themes_api
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -272,7 +272,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(worklist.status())
             if (train_api.handle(self, "GET", p) or safehouse_api.handle(self, "GET", p)
                     or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)
-                    or doctor_api.handle(self, "GET", p) or phone_api.handle(self, "GET", p)):
+                    or doctor_api.handle(self, "GET", p) or phone_api.handle(self, "GET", p)
+                    or themes_api.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -355,7 +356,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._work(p[len("/api/work/"):], self._body())
         if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
                 or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)
-                or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)):
+                or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)
+                or themes_api.handle(self, "POST", p)):
             return
         if p == "/api/voices/install":
             return self._start_install(self._body())
@@ -416,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path).path
         try:
             if (train_api.handle(self, "DELETE", p) or safehouse_api.handle(self, "DELETE", p)
-                    or speakeasy_api.handle(self, "DELETE", p)):
+                    or speakeasy_api.handle(self, "DELETE", p) or themes_api.handle(self, "DELETE", p)):
                 return
             m = re.fullmatch(r"/api/voices/([a-z0-9-]+)", p)
             if not m:
@@ -445,6 +447,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", (mimetypes.guess_type(f.name)[0] or "application/octet-stream") + "; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        if f.suffix == ".html":
+            self.send_header("Content-Security-Policy", csp(body))
         self.end_headers()
         self.wfile.write(body)
 
@@ -682,6 +686,21 @@ class Handler(BaseHTTPRequestHandler):
         else:
             os.startfile(path("output_dir"))
         self._json({"ok": True})
+
+
+def csp(html: bytes) -> str:
+    """The pages' Content-Security-Policy (phase 14, for themes): scripts, styles, fonts and everything else from this
+    origin only. Inline scripts are allowed by their hash (the head's theme script, the pairing page), inline styles
+    because the pages use style attributes and the theme maker previews through a <style>; data: images for the favicon
+    and the CSS masks. A theme's css can't fetch anything from elsewhere, even if a check missed a url()."""
+    import base64
+    import hashlib
+    page = html.replace(b"\r\n", b"\n").replace(b"\r", b"\n")   # the HTML parser turns CRLF into LF before hashing
+    hashes = " ".join(f"'sha256-{base64.b64encode(hashlib.sha256(m.group(1)).digest()).decode()}'"
+                      for m in re.finditer(rb"<script>(.*?)</script>", page, re.S))
+    return ("default-src 'self'; script-src 'self'" + (f" {hashes}" if hashes else "") + "; style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
 
 class _Replay(Handler):

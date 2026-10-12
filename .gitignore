@@ -9,6 +9,8 @@ logs/
 manifest.json
 # Phone access (phase 11): the switch and the paired phones' token hashes.
 phone.json
+# Themes the user made or imported (phase 14; the shipped ones are in undercover/web/themes/).
+/themes/
 test/
 .claude/
 __pycache__/
