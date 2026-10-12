@@ -482,6 +482,18 @@ def find_speakers(proj: Project):
                          **({"scene_minutes": round(ssecs / 60, 1)} if scene else {})})
     clusters.sort(key=lambda c: -c["weight"])
     clusters = [c for c in clusters if c["share"] >= 0.02 or c.get("scene_minutes", 0) >= 0.3][:5] or clusters[:1]
+    also = None
+    if scene and len(clusters) > 1 and clusters[0].get("scene_minutes"):
+        # A character with two voices in the scenes, each in its own uploads (a recast, another era, a dub that got
+        # through): the co-stars share their scenes' uploads, a second actor doesn't. Use the one heard most, and say so.
+        a, b = clusters[0], clusters[1]
+        src_a = {p.source for p, l in zip(usable, labels) if l == a["cluster"] and p.source in scene}
+        src_b = {p.source for p, l in zip(usable, labels) if l == b["cluster"] and p.source in scene}
+        if b.get("scene_minutes", 0) >= 0.5 * a["scene_minutes"] and len(src_b) >= 2 and len(src_a & src_b) <= 0.3 * len(src_b):
+            also = {"cluster": b["cluster"], "scene_minutes": b["scene_minutes"],
+                    "note": f"Two different voices play {proj.person} in these clips, each in its own uploads (a recast or "
+                            f"another era): using the one heard most ({a['scene_minutes']} min against {b['scene_minutes']}). "
+                            f"Pick the other in DoubleAgent if that's the one you mean."}
     for c in clusters:
         emb[f"speaker:{c['cluster']}"] = c.pop("centroid")
         c.pop("weight")
@@ -500,7 +512,7 @@ def find_speakers(proj: Project):
         emb["speaker:-1"] = old_ref
     elif (not proj.reference.get("confirmed") or proj.reference.get("auto")
           or proj.reference.get("cluster") not in {c["cluster"] for c in clusters}):
-        proj.reference = {**clusters[0], "confirmed": False}
+        proj.reference = {**clusters[0], "confirmed": False, **({"also": also} if also else {})}
     proj.save_embeddings(emb)
 
 

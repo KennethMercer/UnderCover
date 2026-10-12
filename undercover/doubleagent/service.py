@@ -483,6 +483,7 @@ def voice_quality(v) -> dict:
 # ---------------------------------------------------------------- training a new voice
 
 NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably", "talk about")   # source notes that mean someone else
+# ("may be in Spanish (a dub...)" starts with "may be" too)
 
 
 def train_new_voice(job, person: str, control, push, project: str | None = None,
@@ -560,6 +561,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                 if proj.speakers and not proj.reference.get("confirmed"):
                     P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)   # the dominant voice
                     proj.save()
+            if proj.reference.get("also"):   # a recast or another era: said, not decided silently
+                push("voice", 0.1, proj.reference["also"]["note"])
             mins = proj.kept_seconds() / 60
             if enough(proj):
                 break

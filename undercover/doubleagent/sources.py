@@ -21,7 +21,8 @@ QUERIES["both"] = ["{name} isolated vocals", "{name} acapella", "{name} vocals o
 # Titles that usually mean someone else's voice, a fake, or a mash-up. Shown unticked with the reason.
 SUSPECT = [
     (re.compile(r"\bimpressions?\b|\bimpersonat|\bdoes an? .*voice|\bparody\b|\bsnl\b|\brap battles?\b", re.I), "may be an impersonator"),
-    (re.compile(r"\bai\b|\bdeepfake|\bvoice ?clon|\brvc\b|\bai cover\b|\bsynthesi[sz]ed\b", re.I), "may be an AI voice"),
+    (re.compile(r"\bai\b|\bdeepfake|\bvoice ?clon|\brvc\b|\bai cover\b|\bsynthesi[sz]ed\b|\btts\b|text.to.speech|"
+                r"voice changer|soundboard|\bso-?vits\b|\bvocaloid\b", re.I), "may be an AI voice"),
     (re.compile(r"\breacts?\b|\breaction\b|\breacting\b", re.I), "a reaction video (mostly someone else)"),
     (re.compile(r"\bcompilation\b|\bmashup\b|\bmeme\b|\bremix\b|\bnightcore\b|\bsped up\b|\bslowed\b", re.I),
      "edited or mixed audio"),
@@ -32,6 +33,24 @@ COMMENTARY = re.compile(r"destroys|obliterates|slams|owns|claps back|shuts down|
                         r"breaks down|explained|analysis|tier list|ranking|top \d+", re.I)
 GOOD = {"speaking": re.compile(r"interview|podcast|speech|address|conversation|talk|keynote|q&a|lecture", re.I),
         "singing": re.compile(r"acapella|a cappella|isolated|vocals? only|live|unplugged|session", re.I)}
+
+
+# Dubs and other languages (phase 15: "SpongeBob en español" is another actor): unticked unless the request names
+# the language. The words are the titles' own; the request's language is English unless it says otherwise.
+LANGUAGES = {"spanish": r"spanish|espa[nñ]ol|latino|latinoam[eé]rica|castellano|doblaje|doblado",
+             "portuguese": r"portugu[eê]s|brasil|dublado|dublagem", "german": r"deutsch|german|synchron",
+             "french": r"fran[cç]ais|french|doublage|vf\b", "italian": r"italiano|italian|doppiaggio",
+             "russian": r"russian|русск", "polish": r"polski|polish", "turkish": r"t[uü]rk[cç]e|turkish",
+             "hindi": r"hindi", "japanese": r"japanese|日本語", "korean": r"korean|한국어"}
+DUB_RX = {k: re.compile(r"\b(" + v + r")\b|\b(" + v + r") dub|\bdub(bed)? (in )?(" + v + r")", re.I) for k, v in LANGUAGES.items()}
+
+
+def other_language(title: str, request: str) -> str | None:
+    """The language a title is in or dubbed into, when it isn't English and the request didn't ask for it."""
+    for lang, rx in DUB_RX.items():
+        if rx.search(title) and not rx.search(request):
+            return lang
+    return None
 
 
 # Fictional characters (phase 15: "Toxic as SpongeBob" trained on a podcast host talking ABOUT SpongeBob). A character
@@ -244,6 +263,8 @@ def search_more(name: str, have: set, character: bool) -> list:
                 break
         if character and src.selected and src.extra["kind"] == "talk":
             src.selected, src.note = False, TALK_NOTE
+        if src.selected and other_language(src.title, name):
+            continue   # a dub or another language
         if src.selected and src.duration >= 60:
             out.append(src)
     rank = (lambda s: -_rank_character(s, name)) if character else (lambda s: -_rank(s, name, "speaking"))
@@ -296,6 +317,9 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None, forc
                 break
         if character and src.selected and src.extra["kind"] == "talk":
             src.selected, src.note = False, TALK_NOTE
+        lang = other_language(src.title, f"{name} {words}")
+        if lang and src.selected:
+            src.selected, src.note = False, f"may be in {lang.title()} (a dub or another language)"
     albums = album_tracks(name) if mode != "speaking" else []
     if not found and not albums:
         raise ModelError(f"No videos found for '{name}'. Check the spelling, or paste links / add recordings.")
