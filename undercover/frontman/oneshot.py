@@ -439,6 +439,10 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
         why = (f"{fit['outside']:.0%} of the melody outside the voice's range "
                f"({rng[0]:.0f}-{rng[2]:.0f} Hz{', from speech' if speech else ''})")
         plan["settings_fit"] = fit
+        if fit["outside"] > 0.25:   # a very high or very low voice (a child's, a cartoon's) against a wide melody
+            plan["fit_note"] = (f"{fit['outside']:.0%} of the melody is still outside this voice's range after moving it "
+                                f"{'up' if fit['octave'] + fit['key'] / 12 > 0 else 'down'}: those notes will strain or thin out.")
+            push("cover", 0.0, plan["fit_note"])
     else:
         if not vhz and plan.get("person_hz"):   # community voice: use the real person's measured speaking pitch
             vhz, speech = plan["person_hz"], plan.get("person_speech", True)

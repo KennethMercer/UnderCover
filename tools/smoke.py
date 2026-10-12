@@ -988,7 +988,51 @@ def u_characters():
         q = service.voice_quality(get_voice(w.name))
         assert not q["ok"] and len(q["problems"]) == 2, q
         assert service.voice_quality(get_voice(_fake_voice("zz-dl", "https://x/y").name))["ok"]   # not trained here: not judged
-    return "SpongeBob / Peter Griffin characters, Obama a person; search: talk unticked, scenes first; target = the scenes' voice; gate"
+    # the subject, in plain words, from what the search finds (subject.py), and the user's picks over it
+    from undercover.doubleagent import subject as SJ
+    sb = SJ.classify("SpongeBob", sponge, musician=False)
+    assert sb["kind"] == "character" and "cartoon character" in sb["label"] and "not interviews" in sb["label"] and sb["voiced"], sb
+    pg = SJ.classify("Peter Griffin", peter, musician=False)
+    assert pg["kind"] == "character" and "Family Guy" in pg["label"], pg
+    assert SJ.classify("Barack Obama", obama, musician=False)["kind"] == "person"
+    assert SJ.classify("Adele", [mk(i, t) for i, t in enumerate(["Adele interview", "Adele live"])], musician=True)["kind"] == "singer"
+    queen = [mk(i, t) for i, t in enumerate(["Queen - the band's best live moments", "Queen band members reunite",
+                                             "Queen lead singer Freddie Mercury interview", "Queen reunion tour 2024", "Queen live at Wembley"])]
+    assert SJ.classify("Queen", queen, musician=True)["kind"] == "group"
+    evans = [mk(i, t) for i, t in enumerate(["Chris Evans actor interview Captain America", "Chris Evans the actor on his dog",
+                                             "Chris Evans radio breakfast show", "Chris Evans radio presenter TFI Friday",
+                                             "Chris Evans actor Knives Out"])]
+    ce = SJ.classify("Chris Evans", evans, musician=False)
+    assert ce["kind"] == "ambiguous" and ce["ask"]["question"] == "Which Chris Evans?" and {c["id"] for c in ce["ask"]["choices"]} >= {"role:actor", "role:radio"}, ce
+    assert SJ.search_kind(SJ.apply_pick("Chris Evans", ce, "role:actor")) == ("person", "actor")
+    assert SJ.search_kind(SJ.apply_pick("SpongeBob", sb, "person")) == ("person", "")
+    assert SJ.search_kind(sb) == ("character", "") and SJ.search_kind(None) == (None, "")
+    # pitfalls in the titles: AI / TTS voices and dubs are left out (the request's own language is kept)
+    for t in ("AI SpongeBob sings Toxic", "SpongeBob TTS voice", "SpongeBob soundboard", "SpongeBob RVC model"):
+        assert any(rx.search(t) and why == "may be an AI voice" for rx, why in S.SUSPECT), t
+    assert S.other_language("Bob Esponja en español latino | escenas", "SpongeBob") == "spanish"
+    assert S.other_language("Bob Esponja en español latino", "SpongeBob in Spanish") is None
+    assert S.other_language("SpongeBob best moments", "SpongeBob") is None
+    # a recast: two voices in the scenes, each in its own uploads, is said (and the one heard most is used)
+    with isolated_data():
+        proj = P.Project.create("Zed", "speaking", name="zz-recast")
+        proj.sources = [S.Source(id=f"s{i}", url="", title=f"Zed scenes {i}", duration=600, extra={"kind": "scene"}) for i in range(4)]
+        rng = np.random.default_rng(7)
+        old, new = rng.standard_normal(64), rng.standard_normal(64)
+        emb, phrases = {}, []
+        for src, voice, n in (("s0", old, 14), ("s1", old, 12), ("s2", new, 10), ("s3", new, 9)):
+            for i in range(n):
+                pid = f"{src}_{len(phrases):04d}"
+                e = voice + 0.15 * rng.standard_normal(64)
+                emb[pid] = (e / np.linalg.norm(e)).astype(np.float32)
+                phrases.append(P.Phrase(id=pid, source=src, start=i * 5.0, dur=4.0, noise=0.1))
+        proj.phrases = phrases
+        proj.save_embeddings(emb)
+        P.find_speakers(proj)
+        also = proj.reference.get("also")
+        assert also and "Two different voices play Zed" in also["note"] and proj.reference["clip"][:2] in ("s0", "s1"), proj.reference
+    return ("SpongeBob / Peter Griffin characters, Obama a person, Adele a singer, Queen a band, Chris Evans asks; search: talk "
+            "unticked, scenes first; target = the scenes' voice; AI/TTS and dubs out; a recast said; gate")
 
 
 @check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
