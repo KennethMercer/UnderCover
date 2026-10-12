@@ -628,7 +628,8 @@ def u_rolloff_covers():
                 except storage.ModelError:
                     pass
             try:
-                storage.remove_files([], within=[t], dirs=[ROOT / "output"])
+                # (a folder that exists: a fresh checkout or worktree has no output/, and what isn't there isn't refused)
+                storage.remove_files([], within=[t], dirs=[ROOT / "output" if (ROOT / "output").is_dir() else ROOT / "docs"])
                 raise AssertionError("a real folder wasn't refused in test mode")
             except storage.ModelError:
                 pass
