@@ -253,3 +253,112 @@ def name_from_agent(ua: str) -> str:
     if m and m.group(1).strip() not in ("K", "wv"):
         return clean_name(m.group(1))
     return "Android phone" if "Android" in ua else "Phone"
+
+
+# ---------------------------------------------------------------- Windows: the network type and the firewall (phase 11b)
+# Read-only. The Doctor shows the result while Phone access is on; nothing here changes a Windows setting.
+
+CATEGORY = {0: "Public", 1: "Private", 2: "Domain"}
+_WIN: dict = {}   # address -> (when, result): the queries take ~0.5 s, so they're kept a while
+WIN_KEEP = 90   # the phone listener reads them again every minute (app/phone_api.warm)
+
+
+def _run(cmd: list, timeout: float = 10) -> str:
+    import subprocess
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return r.stdout
+
+
+def parse_rules(text: str) -> list[dict]:
+    """`netsh advfirewall firewall show rule ... verbose` -> one {key: value} per rule (keys lower-case)."""
+    rules, cur = [], None
+    for line in text.splitlines():
+        if line.startswith("Rule Name:"):
+            cur = {"rule name": line.split(":", 1)[1].strip()}
+            rules.append(cur)
+        elif cur is not None and ":" in line and not line.startswith("-"):
+            k, v = line.split(":", 1)
+            cur.setdefault(k.strip().lower(), v.strip())
+    return rules
+
+
+def parse_states(text: str) -> dict:
+    """`netsh advfirewall show allprofiles state` -> {"Domain": True, "Private": True, "Public": False} (True = on)."""
+    out, prof = {}, None
+    for line in text.splitlines():
+        m = re.match(r"(Domain|Private|Public) Profile Settings", line.strip())
+        if m:
+            prof = m.group(1)
+        elif prof and line.strip().startswith("State"):
+            out[prof] = line.split()[-1].upper() == "ON"
+            prof = None
+    return out
+
+
+def _port_in(spec: str, port: int) -> bool:
+    if not spec or spec.lower() == "any":
+        return True
+    for part in spec.split(","):
+        a, _, b = part.strip().partition("-")
+        if a.isdigit() and (int(a) <= port <= int(b or a)):
+            return True
+    return False
+
+
+def firewall_verdict(rules: list[dict], programs: set, profile: str, on: bool | None, port: int) -> tuple[str, str]:
+    """-> (state, plain words) for "may phones reach this program on a `profile` network?". Block rules win in Windows."""
+    if on is False:
+        return "info", (f"Windows Firewall is off for {profile.lower()} networks, so nothing stops a phone reaching UnderCover "
+                        "(the pairing code and the phone's key still do).")
+    progs = {os.path.normcase(os.path.normpath(p)) for p in programs}
+
+    def applies(r):
+        prog = r.get("program", "Any")
+        profs = r.get("profiles", "Any")
+        return (r.get("enabled", "").lower() == "yes" and r.get("direction", "").lower() == "in"
+                and (prog.lower() == "any" or os.path.normcase(os.path.normpath(prog)) in progs)
+                and r.get("protocol", "Any").upper() in ("TCP", "ANY") and _port_in(r.get("localport", "Any"), port)
+                and (profs.lower() == "any" or profile.lower() in profs.lower()))
+    mine = [r for r in rules if applies(r)]
+    how = ("Windows Security, Firewall & network protection, Allow an app through firewall, find Python, "
+           f"and tick {profile} (not Public, unless you mean it).")
+    if any(r.get("action", "").lower() == "block" for r in mine):
+        return "bad", f"Windows Firewall blocks UnderCover (Python) on {profile.lower()} networks, so phones can't connect. {how}"
+    if any(r.get("action", "").lower() == "allow" for r in mine):
+        return "ok", f"Windows Firewall lets UnderCover (Python) in on {profile.lower()} networks."
+    return "warn", (f"Windows Firewall has no rule letting UnderCover (Python) in on {profile.lower()} networks, so phones "
+                    f"can't connect. Windows usually asks the first time; if it didn't (or the answer was Cancel): {how}")
+
+
+def windows_check(addr: str, port: int, programs: set) -> dict:
+    """The network type of the connection holding `addr` and the firewall's verdict for it:
+    {"network": {name, alias, category} | None, "firewall": (state, words), "error": str | None}. Cached WIN_KEEP s."""
+    import concurrent.futures
+    import time as _t
+    hit = _WIN.get((addr, port))
+    if hit and _t.time() - hit[0] < WIN_KEEP:
+        return hit[1]
+    ipaddress.ip_address(addr)   # only a real address goes into the PowerShell line
+    ps = (f"$i = (Get-NetIPAddress -IPAddress '{addr}' -ErrorAction SilentlyContinue | Select-Object -First 1).InterfaceIndex; "
+          "if ($i) { Get-NetConnectionProfile -InterfaceIndex $i | Select-Object Name,InterfaceAlias,NetworkCategory | "
+          "ConvertTo-Json -Compress }")
+    out = {"network": None, "firewall": None, "error": None}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(3) as ex:
+            f_net = ex.submit(_run, ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps])
+            f_state = ex.submit(_run, ["netsh", "advfirewall", "show", "allprofiles", "state"])
+            f_rules = ex.submit(_run, ["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"])
+            raw = f_net.result().strip()
+            states, rules = parse_states(f_state.result()), parse_rules(f_rules.result())
+        if raw:
+            n = json.loads(raw)
+            n = n[0] if isinstance(n, list) else n
+            out["network"] = {"name": n.get("Name"), "alias": n.get("InterfaceAlias"),
+                              "category": CATEGORY.get(n.get("NetworkCategory"), str(n.get("NetworkCategory")))}
+        profile = out["network"]["category"] if out["network"] else "Private"
+        out["firewall"] = firewall_verdict(rules, programs, profile, states.get(profile), port)
+    except Exception as e:   # noqa: BLE001 - say we couldn't tell, never fail the Doctor
+        out["error"] = f"{type(e).__name__}: {e}"[:200]
+    _WIN[(addr, port)] = (_t.time(), out)
+    return out
