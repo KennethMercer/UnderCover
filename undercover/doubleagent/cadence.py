@@ -47,7 +47,7 @@ TEST = [
     "So let us remember what brought us together, and let us finish the work we started.",
 ]
 SEED = 1234
-CANDIDATES = 3          # reference clips tried per voice
+CANDIDATES = 5          # reference clips tried per voice (3 until phase 9b: more room for the clip-sound term)
 STRETCHES = 40          # stretches of real talk measured (phase 3 used 35-60)
 MIN_MINUTES = 2.0       # transcribed speech needed for a cadence
 # score = likeness - W_GAP * cadence gap - W_WER * WER: likeness decides between similar deliveries, a clearly
