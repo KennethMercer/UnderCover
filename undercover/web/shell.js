@@ -1,7 +1,8 @@
 "use strict";
 // The suite shell: the four module tabs (top bar; a bottom tab bar on a phone), deep links (#frontman, ...), the
-// remembered tab, and the overnight queue drawer. Each module page announces itself with a "uc:module" event, which
-// train.js, library.js and work.js listen to. Uses helpers from app.js ($, $$, store) and work.js (loadQueue, renderDrawer).
+// remembered tab, and the queue drawer (the running strip's "+N more"). Each module page announces itself with a
+// "uc:module" event, which train.js, library.js and work.js listen to. Uses helpers from app.js ($, $$, store) and
+// work.js (loadQueue, renderDrawer).
 
 // module -> its view; the old tab names (deep links, localStorage "uc-tab") still work
 const MODULES = { frontman: "covers", doubleagent: "train", speakeasy: "speakeasy", safehouse: "library" };
@@ -34,16 +35,17 @@ document.addEventListener("click", e => {
   queueDrawer(false); showTab(b.dataset.goto); window.scrollTo({ top: 0 });
 });
 
-// ------------------------------------------------------------ the overnight queue drawer
+// ------------------------------------------------------------ the queue drawer: running now + the overnight queue
 function queueDrawer(open) {
   const was = !$("#q-drawer").hidden;
   $("#q-drawer").hidden = $("#q-scrim").hidden = !open;
   document.body.classList.toggle("drawer-open", open);
   if (open && !was) { renderDrawer(); loadQueue(); $("#qd-close").focus(); }
-  if (!open && was) $("#chip-queue").focus({ preventScroll: true });
+  if (!open && was && !$("#wb-more").hidden) $("#wb-more").focus({ preventScroll: true });
 }
-$("#chip-queue").onclick = () => queueDrawer(true);
-$("#wb-open").onclick = $("#wb-more").onclick = () => queueDrawer(true);
+$("#wb-more").onclick = () => queueDrawer(true);
+// the strip's "Running" link: SafeHouse's Running room (now, tonight's queue, recent)
+$("#wb-open").onclick = () => { queueDrawer(false); location.hash = "#safehouse/running"; window.scrollTo({ top: 0 }); };
 $("#qd-close").onclick = $("#q-scrim").onclick = () => queueDrawer(false);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#q-drawer").hidden) queueDrawer(false); });
 $$("[data-qadd]").forEach(b => b.onclick = () => {
@@ -52,10 +54,11 @@ $$("[data-qadd]").forEach(b => b.onclick = () => {
   $("#q-panel").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-// the count on the Queue button and the DoubleAgent tab: jobs waiting or running
-function queueCount(n) {
-  $("#q-count").textContent = n ? `Queue · ${n}` : "Queue";
+// the count on the DoubleAgent tab and SafeHouse's Running room: queue jobs waiting or running; a pip while the queue is set to run
+function queueCount(n, armed) {
   $("#da-badge").hidden = !n; $("#da-badge").textContent = n || "";
+  $("#room-n-running").textContent = n ? `${n} queued` : "";
+  $("#room-pip-running").hidden = !(armed && n);
 }
 
 // the top bar's height, for the running bar that sticks under it

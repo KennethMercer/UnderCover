@@ -1,6 +1,6 @@
 "use strict";
 // Suite-level work: the running bar under the top bar on every module (any running job, live, with Pause / Resume), the
-// overnight queue (its editor on DoubleAgent's page, and the drawer from the Queue button). Server side:
+// overnight queue (its editor on DoubleAgent's page), SafeHouse's Running room, and the drawer from the strip. Server side:
 // undercover/core/worklist.py. Running jobs come from jobs.js; Pause / Resume and the queue state from /api/status
 // (polled by app.js); the queue from /api/work.
 
@@ -29,7 +29,7 @@ function jobProgress(j) {   // 0..1 over the whole job (a cover's events count e
   if (j.kind === "speech" && j.of) return ((j.index ?? -1) + 1) / j.of;
   return p;
 }
-function jobLine(j) {
+function jobLine(j, withLeft = true) {
   const bits = [];
   if (j.pausing) bits.push("pausing…");
   else if (j.epoch && j.epochs) bits.push(`epoch ${j.epoch} of ${j.epochs}`);
@@ -37,22 +37,22 @@ function jobLine(j) {
   else if (j.message) bits.push(j.message);
   else if (j.state === "queued") bits.push("waiting for the GPU");
   const left = j.total_left ?? j.eta;
-  if (left != null && !j.pausing) bits.push(leftText(left));
+  if (withLeft && left != null && !j.pausing) bits.push(leftText(left));
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
+const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
+const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9) - ((WAIT_ORDER.indexOf(b.kind) + 1) || 9));
 
 // ------------------------------------------------------------ the bar: any running job, live (jobs.js), plus Pause / Resume
 W.work = null; W.watch = {};
-function renderWorkBar(w) { W.work = w; renderBar(); }   // called from app.js pollStatus with /api/status's "work"
+function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); }   // called from app.js pollStatus with /api/status's "work"
 function renderBar() {
   const bar = $("#workbar"), w = W.work || {};
   if (typeof queueCount !== "function") return;   // shell.js (loaded last) isn't there yet: the job feed answered early
   queueCount(W.last ? W.last.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length
-                    : (w.queued || 0) + (w.armed ? (w.running || []).length : 0));
-  const run = runningJobs();
-  const ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
-  run.sort((a, b) => ((ORDER.indexOf(a.kind) + 1) || 9) - ((ORDER.indexOf(b.kind) + 1) || 9));
+                    : (w.queued || 0) + (w.armed ? (w.running || []).length : 0), W.last ? W.last.armed : w.armed);
+  const run = byWait(runningJobs());
   const main = run[0];
   let text = "", state = "";
   if (main) {
@@ -89,46 +89,32 @@ function renderBar() {
   $("#chip-train").hidden = true;   // the bar says it all
   document.documentElement.style.setProperty("--wb-h", $(".workbar-wrap").offsetHeight + "px");   // now its text is in
 }
-// every running job is watched, so its events move the bar as they come; the drawer and SafeHouse redraw too
+// every running job is watched, so its events move the bar as they come; the drawer and the Running room redraw too
 onJobs(list => {
   for (const j of runningJobs()) if (!W.watch[j.id]) W.watch[j.id] = watchJob(j.id, ev => { if (ev.final) { W.watch[j.id]?.(); delete W.watch[j.id]; } });
   renderBar();
   if (!$("#q-drawer").hidden) renderRunning($("#qd-run"), { heading: "Running now" });
-  if (!$("#view-library").hidden) renderRunning($("#lib-jobs"), { recent: true, always: true });
+  if (runRoomOpen()) renderRunRoom();
 });
-document.addEventListener("uc:module", e => { if (e.detail === "safehouse") { renderRunning($("#lib-jobs"), { recent: true, always: true }); refreshJobs(true); } });
-// running jobs as rows (the drawer's "Running now"; SafeHouse uses the same with finished ones too)
+// running jobs as rows (the drawer's "Running now")
 function renderRunning(box, opts = {}) {
   if (!box) return;
-  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);   // the newest few that finished
-  const list = opts.recent ? [...runningJobs(), ...ended] : runningJobs();
-  box.hidden = !list.length && !opts.always;
-  if (!list.length) { box.innerHTML = opts.always ? `<p class="meta">Nothing running. Covers, speech, training and queue jobs show here while they run, and for an hour after.</p>` : ""; return; }
-  box.innerHTML = (opts.heading ? `<h3 class="qd-h">${opts.heading}</h3>` : "") + list.map(j => {
-    const live = isRunning(j), owner = ownerOf(j.kind), f = live ? jobProgress(j) : null;
-    const st = j.final?.state || j.state;
-    const note = live ? jobLine(j) : `${{ done: "done", error: "failed", cancelled: "cancelled", paused: "paused", lost: "stopped" }[st] || st}` +
-      (j.ended ? ` · ${new Date(j.ended * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "") +
-      (st !== "done" && j.final?.message ? ` · ${j.final.message}` : "");
-    return `<div class="qd-job ${live ? "running" : "done"}" data-owner="${owner}">
+  const list = byWait(runningJobs());
+  box.hidden = !list.length;
+  box.innerHTML = !list.length ? "" : (opts.heading ? `<h3 class="qd-h">${opts.heading}</h3>` : "") + list.map(j => {
+    const owner = ownerOf(j.kind), f = jobProgress(j), note = jobLine(j);
+    return `<div class="qd-job running" data-owner="${owner}">
       <div><span class="kind">${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}</span><b>${esc(jobName(j))}</b>${note ? `<small>${esc(note)}</small>` : ""}
-        ${live ? `<div class="bar"><i style="width:${Math.round((f || 0) * 100)}%"></i></div>` : ""}</div>
-      <div class="qside">${live && !opts.recent ? "" : live ? `<button class="linkbtn" type="button" data-jcancel="${j.id}">Cancel</button>` : ""}
-        <button class="linkbtn" type="button" data-goto="${owner}">Open</button></div></div>`;
+        <div class="bar"><i style="width:${Math.round((f || 0) * 100)}%"></i></div></div>
+      <div class="qside"><button class="linkbtn" type="button" data-goto="${owner}">Open</button></div></div>`;
   }).join("");
-  $$("[data-jcancel]", box).forEach(b => b.onclick = async () => {
-    b.disabled = true; b.textContent = "Cancelling…";
-    try { await api(`/api/jobs/${b.dataset.jcancel}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't cancel that"); }
-    refreshJobs(true);
-  });
 }
-$("#wb-pause").onclick = async () => {
-  $("#wb-pause").disabled = true;
+async function pauseWork() {
   try { await api("/api/work/pause", { json: {} }); $("#wb-text").textContent = "Pausing… (training saves its place first)"; }
   catch (e) { showError(e.message, "Couldn't pause"); }
-  $("#wb-pause").disabled = false;
   if (W.open) loadQueue();
-};
+}
+$("#wb-pause").onclick = async () => { $("#wb-pause").disabled = true; await pauseWork(); $("#wb-pause").disabled = false; };
 $("#wb-forget").onclick = async () => {
   const b = $("#wb-forget");
   if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Forget it?"; setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Dismiss"; }, 4000); return; }
@@ -137,16 +123,107 @@ $("#wb-forget").onclick = async () => {
   catch (e) { showError(e.message, "Couldn't dismiss it"); }
   if (W.open) loadQueue();
 };
-$("#wb-resume").onclick = async () => {
-  $("#wb-resume").disabled = true;
+async function resumeWork() {
   try {
     const r = await api("/api/work/resume", { json: {} });
     if (r.problems?.length) showError(r.problems.join("\n"), "Some work couldn't resume");
     renderWorkBar({ ...r, queued: r.queue.filter(i => ["queued", "paused"].includes(i.state)).length });
   } catch (e) { showError(e.message, "Couldn't resume"); }
-  $("#wb-resume").disabled = false;
   if (W.open) loadQueue();
+}
+$("#wb-resume").onclick = async () => { $("#wb-resume").disabled = true; await resumeWork(); $("#wb-resume").disabled = false; };
+
+// ------------------------------------------------------------ SafeHouse's Running room: now, tonight's queue, recent
+const runRoomOpen = () => !$("#view-library").hidden && !$("#room-running").hidden;
+function loadRunRoom() { renderRunRoom(); refreshJobs(true); loadQueue(); }   // rooms.js, when the room opens
+const ENDED = { done: ["ok", "done"], error: ["bad", "failed"], cancelled: ["warn", "cancelled"], paused: ["warn", "paused"], lost: ["bad", "stopped"] };
+const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+// the room redraws on every job event: a part is rewritten only when its HTML changed, so focus and clicks survive
+const shown = new WeakMap();
+const put = (el, html) => { if (shown.get(el) === html) return false; el.innerHTML = html; shown.set(el, html); return true; };
+function renderRunRoom() {
+  const w = W.last, work = W.work || {};
+  // now: the job the user waits for first is the lit one; any others are rows under it
+  const [main, ...rest] = byWait(runningJobs());
+  let now = `<p class="meta rn-idle">Nothing running right now. Covers, speech and voice work show here while they run.</p>`;
+  if (main) {
+    const owner = ownerOf(main.kind), f = jobProgress(main), left = main.total_left ?? main.eta, line = jobLine(main, false);
+    now = `<div class="rn-now" data-owner="${owner}"><div class="who">${MOD_NAME[owner]} · ${esc(JOB_KIND[main.kind] || main.kind)}</div>
+      <div class="rn-pl"><span><b>${esc(jobName(main))}</b>${line ? ` · ${esc(line)}` : ""}</span>${left != null && !main.pausing ? `<span class="meta">${esc(leftText(left))}</span>` : ""}</div>
+      ${f != null ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ""}
+      <div class="row">${PAUSABLE_KINDS.has(main.kind) ? `<button class="btn" type="button" data-rn-pause>Pause</button>`
+        : W.cancelAsk === main.id ? `<button class="btn confirm" type="button" data-jcancel="${esc(main.id)}">Cancel it?</button>` : `<button class="btn" type="button" data-jcancel="${esc(main.id)}">Cancel</button>`}
+        <button class="linkbtn" type="button" data-goto="${owner}">Open in ${MOD_NAME[owner]}</button>
+        <span class="meta mono" data-deep>job ${esc(main.id)} · started ${hhmm(main.created)}</span></div></div>` +
+      (rest.length ? `<div class="rn-list">${rest.map(j => {
+        const o = ownerOf(j.kind);
+        return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[o]} · ${esc(jobLine(j) || JOB_KIND[j.kind] || j.kind)}</small></span>
+          <span class="acts"><button class="linkbtn" type="button" data-goto="${o}">Open</button></span></div>`; }).join("")}</div>` : "");
+  } else if (work.held) {
+    const res = work.resume || [];
+    now = `<div class="rn-now held" data-owner="doubleagent"><div class="who">Paused</div>
+      <p>Voice work is paused${res.length ? `: ${esc(res.slice(0, 3).join(", "))}${res.length > 3 ? ` and ${res.length - 3} more` : ""}` : ""}. It carries on where it stopped.</p>
+      <div class="row"><button class="btn primary" type="button" data-rn-resume>Resume</button></div></div>`;
+  }
+  if (put($("#rn-now"), now)) {
+    $$("[data-rn-pause]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await pauseWork(); b.disabled = false; });
+    $$("[data-rn-resume]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
+    $$("[data-jcancel]", $("#rn-now")).forEach(b => b.onclick = async () => {   // two clicks; the first is remembered across redraws
+      const id = b.dataset.jcancel;
+      clearTimeout(W.cancelTimer);
+      if (W.cancelAsk !== id) {
+        W.cancelAsk = id; W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000);
+        return renderRunRoom();
+      }
+      W.cancelAsk = null; b.disabled = true; b.textContent = "Cancelling…";
+      try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't cancel that"); }
+      refreshJobs(true);
+    });
+  }
+
+  // tonight: the overnight queue (its full editor stays on DoubleAgent's page)
+  const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
+  const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
+  $("#rn-total").textContent = left.length ? `About ${fmtMin(w.total_min)} · done by about ${clock(w.done_by)}` : "";
+  $("#rn-when").hidden = $("#rn-opts").hidden = !left.length;
+  $("#rn-at").textContent = at ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock($("#q-at-time").value || "23:00")}`;
+  $("#rn-at").setAttribute("aria-pressed", at);
+  $("#rn-go").setAttribute("aria-pressed", going);
+  $("#rn-stop").hidden = !w?.armed;
+  const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
+    const run = i.state === "running";
+    const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
+    return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobKind(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
+      <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
+  }).join("") : `<p class="meta">Nothing queued for tonight. Add a voice to improve, or train a new one, and it runs while you sleep.</p>`;
+  if (put($("#rn-list"), list)) $$("#rn-list [data-rn-rm]").forEach(b => b.onclick = async () => {
+    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.rnRm } }); renderQueue(); }
+    catch (e) { showError(e.message, "Couldn't remove that"); }
+  });
+  if (w) { $("#rn-finish").checked = !!w.settings.finish_by; $("#rn-awake").checked = w.settings.keep_awake !== false; }
+
+  // recent: the last five finished, and how they ended (from each job's final event)
+  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);
+  put($("#rn-recent"), ended.length ? ended.map(j => {
+    const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = ENDED[st] || ["warn", st];
+    const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : j.final?.message || "";
+    return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}${how ? ` · ${esc(how)}` : ""}</small></span>
+      <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span><button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
+  }).join("") : `<p class="meta">Nothing has finished in the last hour.</p>`);
+}
+const startWork = async body => {
+  try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); }
+  catch (e) { showError(e.message, "Couldn't change the start"); }
 };
+$("#rn-at").onclick = () => startWork({ at: $("#q-at-time").value || "23:00" });
+$("#rn-go").onclick = () => startWork({});
+$("#rn-stop").onclick = () => startWork({ stop: true });
+const workSettings = async body => {
+  try { W.last = await api("/api/work/settings", { json: body }); } catch (e) { showError(e.message, "Couldn't change that"); }
+  renderQueue();
+};
+$("#rn-finish").onchange = e => workSettings({ finish_by: e.target.checked ? "07:00" : null });
+$("#rn-awake").onchange = e => workSettings({ keep_awake: e.target.checked });
 
 // ------------------------------------------------------------ the overnight queue (DoubleAgent's page + the drawer)
 async function loadQueue() {
@@ -185,7 +262,8 @@ function renderDrawer() {
 function renderQueue() {
   const w = W.last; if (!w) return;
   if (!$("#q-drawer").hidden) renderDrawer();
-  queueCount(w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length);
+  if (runRoomOpen()) renderRunRoom();
+  queueCount(w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length, w.armed);
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
   $("#q-total").innerHTML = left.length
     ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> <span class="meta">· done by about <span class="mono">${clock(w.done_by)}</span>${w.armed && w.settings.start_at ? ` if it starts at ${clock(w.settings.start_at)}` : ""}</span>`
@@ -355,8 +433,8 @@ $("#q-awake").onchange = async e => { W.last = await api("/api/work/settings", {
 $("#q-dismiss").onclick = async () => { W.last = await api("/api/work/dismiss", { json: {} }); renderQueue(); };
 function pollStatusSoon() { setTimeout(() => api("/api/status").then(s => renderWorkBar(s.work)).catch(() => {}), 300); }
 
-// refresh the queue while DoubleAgent's page or the drawer is open
-setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden; if (W.open) loadQueue(); }, 5000);
+// refresh the queue while DoubleAgent's page, the drawer or the Running room is open
+setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden || runRoomOpen(); if (W.open) loadQueue(); }, 5000);
 document.addEventListener("uc:module", e => { if (e.detail === "doubleagent") { loadQueue(); loadCandidates(); } });
 
 // a job finished somewhere (this page, another tab, the queue, the API): refresh what it may have changed
