@@ -1838,12 +1838,17 @@ def u_phone_doctor():
     v = lambda text, profile="Private", on=True: phone.firewall_verdict(phone.parse_rules(text), {py.upper()}, profile, on, 7860)  # noqa: E731
     assert v(rule())[0] == "ok"
     assert v(rule() + "\n" + rule(action="Block"))[0] == "bad", "a block rule must win"
-    assert v(rule(profiles="Public"))[0] == "warn" and v("")[0] == "warn"
+    assert v(rule(profiles="Public"))[0] == "warn"
     assert v(rule(proto="UDP"))[0] == "warn" and v(rule(enabled="No"))[0] == "warn"
     assert v(rule(port="7000-7900"))[0] == "ok" and v(rule(port="80,443"))[0] == "warn"
     assert v(rule(program="Any", port="7860"))[0] == "ok"
     assert v(rule(profiles="Domain,Private,Public"))[0] == "ok"
-    assert v("", on=False)[0] == "info"
+    assert v(rule(), on=False)[0] == "info"
+    assert v("")[0] == "warn" and "Couldn't read" in v("")[1], "no rules read at all (another language) must say so"
+    pub = v(rule(profiles="Private"), profile="Public")
+    assert pub[0] == "warn" and "tick Public" not in pub[1] and "Private" in pub[1], pub
+    progs = doctor.phone_programs()
+    assert len(progs) == 1 and ".venv" not in next(iter(progs)).lower(), f"the listening program is the base python: {progs}"
     with isolated_data():
         saved = (phone._FILE[0], phone.windows_check, phone.lan_address)
         phone._FILE[0] = None
@@ -1852,7 +1857,8 @@ def u_phone_doctor():
             phone.set_enabled(True)
             fake = {"network": {"name": "Home", "alias": "Wi-Fi", "category": "Private"}, "firewall": ("ok", "fine"), "error": None}
             phone.lan_address = lambda: "192.168.1.5"
-            phone.windows_check = lambda a, p, progs: fake
+            calls = []
+            phone.windows_check = lambda a, p, progs, wait=True, fresh=False: calls.append((wait, fresh)) or fake
             rows = {r["id"]: r for r in doctor.c_phone({})}
             assert rows["phone-network"]["state"] == "ok" and rows["phone-firewall"]["state"] == "ok", rows
             fake["network"]["category"] = "Public"
@@ -1860,6 +1866,15 @@ def u_phone_doctor():
             rows = {r["id"]: r for r in doctor.c_phone({})}
             assert rows["phone-network"]["state"] == "bad" and "Private" in rows["phone-network"]["say"], rows
             assert all(r["fix"] is None for r in rows.values()), "a Fix that would change Windows"
+            doctor.c_phone({"status": {}})
+            doctor.c_phone({"full": True})
+            assert calls[-2:] == [(False, False), (True, True)], calls   # the server never waits; a full check reads fresh
+            fake["network"], fake["firewall"] = None, None   # what windows_check gives for an unknown network
+            assert [r["id"] for r in doctor.c_phone({})] == ["phone-network"], "a firewall verdict for an unknown network"
+            phone.windows_check = lambda *a, **kw: None
+            assert doctor.c_phone({"status": {}})[0]["state"] == "info"   # still reading in the background
+            phone.windows_check = lambda *a, **kw: fake
+            fake["network"], fake["firewall"] = {"name": "Home", "alias": "Wi-Fi", "category": "Public"}, ("bad", "blocked")
             fake["error"] = "TimeoutExpired"
             assert doctor.c_phone({})[0]["state"] == "warn"
             phone.lan_address = lambda: None
@@ -1874,7 +1889,7 @@ def u_phone_doctor():
         raise AssertionError("a non-address went into the PowerShell line")
     except ValueError:
         pass
-    return "allow, block wins, no rule, other profile, UDP only, disabled, port ranges, any program, firewall off; rows"
+    return "allow, block wins, no rule, unreadable, other profile, UDP only, disabled, ports, any program, firewall off; rows"
 
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them

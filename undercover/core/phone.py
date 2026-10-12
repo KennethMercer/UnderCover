@@ -259,8 +259,9 @@ def name_from_agent(ua: str) -> str:
 # Read-only. The Doctor shows the result while Phone access is on; nothing here changes a Windows setting.
 
 CATEGORY = {0: "Public", 1: "Private", 2: "Domain"}
-_WIN: dict = {}   # address -> (when, result): the queries take ~0.5 s, so they're kept a while
-WIN_KEEP = 90   # the phone listener reads them again every minute (app/phone_api.warm)
+_WIN: dict = {}   # (address, port) -> (when, result): the queries take ~1 s, so they're kept a while
+WIN_KEEP = 600    # the phone listener reads them again when they're older (app/phone_api.warm); "Check everything" now
+_WIN_BUSY: set = set()
 
 
 def _run(cmd: list, timeout: float = 10) -> str:
@@ -308,6 +309,9 @@ def _port_in(spec: str, port: int) -> bool:
 
 def firewall_verdict(rules: list[dict], programs: set, profile: str, on: bool | None, port: int) -> tuple[str, str]:
     """-> (state, plain words) for "may phones reach this program on a `profile` network?". Block rules win in Windows."""
+    if not rules:   # every Windows has dozens of inbound rules: none read means netsh spoke another language
+        return "warn", ("Couldn't read Windows Firewall's rules (a Windows in another language?), so the Doctor can't tell "
+                        "whether phones get through.")
     if on is False:
         return "info", (f"Windows Firewall is off for {profile.lower()} networks, so nothing stops a phone reaching UnderCover "
                         "(the pairing code and the phone's key still do).")
@@ -321,8 +325,10 @@ def firewall_verdict(rules: list[dict], programs: set, profile: str, on: bool | 
                 and r.get("protocol", "Any").upper() in ("TCP", "ANY") and _port_in(r.get("localport", "Any"), port)
                 and (profs.lower() == "any" or profile.lower() in profs.lower()))
     mine = [r for r in rules if applies(r)]
-    how = ("Windows Security, Firewall & network protection, Allow an app through firewall, find Python, "
-           f"and tick {profile} (not Public, unless you mean it).")
+    how = ("Windows Security, Firewall & network protection, Allow an app through firewall, find Python, and tick "
+           "Private (not Public).")
+    if profile == "Public":
+        how = "Make the home network Private first (see Home network), then: " + how
     if any(r.get("action", "").lower() == "block" for r in mine):
         return "bad", f"Windows Firewall blocks UnderCover (Python) on {profile.lower()} networks, so phones can't connect. {how}"
     if any(r.get("action", "").lower() == "allow" for r in mine):
@@ -331,15 +337,27 @@ def firewall_verdict(rules: list[dict], programs: set, profile: str, on: bool | 
                     f"can't connect. Windows usually asks the first time; if it didn't (or the answer was Cancel): {how}")
 
 
-def windows_check(addr: str, port: int, programs: set) -> dict:
+def windows_check(addr: str, port: int, programs: set, wait: bool = True, fresh: bool = False) -> dict | None:
     """The network type of the connection holding `addr` and the firewall's verdict for it:
-    {"network": {name, alias, category} | None, "firewall": (state, words), "error": str | None}. Cached WIN_KEEP s."""
+    {"network": {name, alias, category} | None, "firewall": (state, words) | None, "error": str | None}. Cached WIN_KEEP s
+    (fresh: read again now). wait=False (the server's fast check, startup): never blocks; with nothing cached it starts
+    the reading in the background and returns None."""
+    import time as _t
+    ipaddress.ip_address(addr)   # only a real address goes into the PowerShell line
+    hit = _WIN.get((addr, port))
+    if hit and not fresh and _t.time() - hit[0] < WIN_KEEP:
+        return hit[1]
+    if not wait:
+        if (addr, port) not in _WIN_BUSY:
+            _WIN_BUSY.add((addr, port))
+            threading.Thread(target=_read_windows, args=(addr, port, programs), daemon=True, name="phone-windows").start()
+        return hit[1] if hit else None
+    return _read_windows(addr, port, programs)
+
+
+def _read_windows(addr: str, port: int, programs: set) -> dict:
     import concurrent.futures
     import time as _t
-    hit = _WIN.get((addr, port))
-    if hit and _t.time() - hit[0] < WIN_KEEP:
-        return hit[1]
-    ipaddress.ip_address(addr)   # only a real address goes into the PowerShell line
     ps = (f"$i = (Get-NetIPAddress -IPAddress '{addr}' -ErrorAction SilentlyContinue | Select-Object -First 1).InterfaceIndex; "
           "if ($i) { Get-NetConnectionProfile -InterfaceIndex $i | Select-Object Name,InterfaceAlias,NetworkCategory | "
           "ConvertTo-Json -Compress }")
@@ -356,9 +374,11 @@ def windows_check(addr: str, port: int, programs: set) -> dict:
             n = n[0] if isinstance(n, list) else n
             out["network"] = {"name": n.get("Name"), "alias": n.get("InterfaceAlias"),
                               "category": CATEGORY.get(n.get("NetworkCategory"), str(n.get("NetworkCategory")))}
-        profile = out["network"]["category"] if out["network"] else "Private"
-        out["firewall"] = firewall_verdict(rules, programs, profile, states.get(profile), port)
+        if out["network"]:   # unknown network: no verdict for a profile it may not have
+            profile = out["network"]["category"]
+            out["firewall"] = firewall_verdict(rules, programs, profile, states.get(profile), port)
     except Exception as e:   # noqa: BLE001 - say we couldn't tell, never fail the Doctor
         out["error"] = f"{type(e).__name__}: {e}"[:200]
     _WIN[(addr, port)] = (_t.time(), out)
+    _WIN_BUSY.discard((addr, port))
     return out
