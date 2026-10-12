@@ -35,6 +35,45 @@ def song_key(song: str, artist: str | None = None) -> str:
     return f"{norm_title(song)}|{norm_artist(artist or '')}"
 
 
+def _tokens(s: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", re.sub(r"[.'’`]", "", (s or "").lower())))
+
+
+def artist_matches(artist: str, r) -> bool:
+    """Is `artist` the artist (or channel) of this search result? Every word of it must be in the result's words."""
+    want = _tokens(artist)
+    return bool(want) and want <= _tokens(f"{getattr(r, 'artist', '')} {r.channel} {r.title}")
+
+
+_SETTLED: dict[str, tuple[float, bool]] = {}
+
+
+def settle(req: dict, search=None) -> dict:
+    """A " by " in a request is the song's artist only when the search for that split form puts a result by that artist
+    on top; otherwise the whole phrase is the title ("Close By Night", "Killed By Death"). Titles with an obvious
+    "by Me / by You ..." never get here (the grammar keeps them whole). No artist named: nothing to check. A search that
+    fails (offline, blocked) keeps the split as typed and is not remembered."""
+    artist = req.get("artist")
+    if not artist:
+        return req
+    key, now = song_key(req["song"], artist), time.time()
+    with _LOCK:
+        hit = _SETTLED.get(key)
+    if hit and now - hit[0] < CACHE_SECONDS:
+        ok = hit[1]
+    else:
+        try:
+            if search is None:
+                from .songs import search
+            found = search(f"{req['song']} {artist}", limit=8)
+        except Exception:   # noqa: BLE001
+            return req
+        ok = bool(found) and artist_matches(artist, found[0])
+        with _LOCK:
+            _SETTLED[key] = (now, ok)
+    return req if ok else {**req, "song": req.get("whole") or f"{req['song']} by {artist}", "artist": None}
+
+
 def _choice(r) -> dict:
     return {"artist": r.artist, "year": r.year or None, "title": r.song or r.raw_title, "song_url": r.url}
 
@@ -140,6 +179,7 @@ def reset():
     with _LOCK:
         _MEM.update(key=None, chosen=None, choices=[])
         _LOOKUPS.clear()
+        _SETTLED.clear()
 
 
 def went_with(choice: dict) -> str:
