@@ -22,6 +22,7 @@ result asserted to point only into the scratch folder, apart from the read-only 
 import argparse
 import contextlib
 import json
+import os
 import shutil
 import sys
 import time
@@ -1392,8 +1393,9 @@ def a_cover():
     _tray_room("/api/history")
     song, voice = _cover_target()
     added = None
-    if not song and (ROOT / "test" / "smoke.wav").exists():   # an empty library: bring the test song, remove it after
-        data = (ROOT / "test" / "smoke.wav").read_bytes()
+    test_song = Path(os.environ.get("UNDERCOVER_DATA_ROOT") or ROOT) / "test" / "smoke.wav"   # test/ isn't in git
+    if not song and test_song.exists():   # an empty library: bring the test song, remove it after
+        data = test_song.read_bytes()
         req = urllib.request.Request(BASE + "/api/upload", data=data, method="POST",
                                      headers={"X-Filename": "smoke-test-song.wav", "Origin": BASE,
                                               "Content-Type": "application/octet-stream"})
@@ -1703,10 +1705,15 @@ WATCHED = ("uploads_dir", "output_dir", "models_dir", "cache_dir", "voices_dir")
 
 
 def real_dirs() -> dict:
-    """The user's folders, read straight from the real config.toml (never through a config a test may have repointed)."""
+    """The user's folders, read straight from the real config.toml (never through a config a test may have repointed).
+    From a git worktree, UNDERCOVER_DATA_ROOT=<the main checkout> names the app folder whose data the sandbox copies
+    from and whose folders are checked unchanged (the worktree's own config points at its empty folders); the sandbox
+    server still runs the worktree's code."""
+    import os
     import tomllib
-    cfg = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))["paths"]
-    out = {k: (Path(v) if Path(v).is_absolute() else ROOT / v) for k, v in cfg.items()}
+    base = Path(os.environ.get("UNDERCOVER_DATA_ROOT") or ROOT)
+    cfg = tomllib.loads((base / "config.toml").read_text(encoding="utf-8"))["paths"]
+    out = {k: (Path(v) if Path(v).is_absolute() else base / v) for k, v in cfg.items()}
     out.setdefault("voices_dir", out["models_dir"] / "voices")
     return out
 
