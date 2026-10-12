@@ -308,7 +308,7 @@ async function loadDoctor() {
   try { D.rep = await api("/api/doctor"); }
   catch (e) { $("#sys-doctor").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
   renderDoctor();
-  if (D.rep.full_job) watchFix(D.rep.full_job, $("#sys-doctor-full"), "Check everything");
+  if (D.rep.full_job) watchFix(D.rep.full_job, "#sys-doctor-full", "Check everything");
 }
 function doctorRow(r) {
   const [cls, word] = DSTATE[r.state] || DSTATE.info, f = r.fix;
@@ -333,17 +333,19 @@ function renderDoctor() {
   $("#sys-doctor-when").textContent = `Quick check ${r.seconds} s` + (lf ? ` · last full check ${lf.made.replace("T", " ").slice(0, 16)}, ${lf.counts.bad + lf.counts.warn} problem(s)` : " · no full check yet");
   document.body.dataset.doctor = r.counts.bad ? "bad" : r.counts.warn ? "warn" : "ok";   // hook: a dot on SafeHouse / System
 }
-function watchFix(jobId, btn, label) {
+// sel: the button's selector, looked up at every event (the Sweep list is redrawn while a fix runs)
+function watchFix(jobId, sel, label) {
+  const btn = () => $(sel);
+  if (btn()) btn().disabled = true;
   if (D.watching[jobId]) return;
   D.watching[jobId] = true;
-  if (btn) { btn.disabled = true; }
   const off = watchJob(jobId, ev => {
-    const f = ev.frac ?? ev.fraction ?? ev.progress;
-    if (btn && !ev.final) btn.textContent = f != null ? `${Math.round(f * 100)}%` : "Working…";
+    const f = ev.frac ?? ev.fraction ?? ev.progress, b = btn();
+    if (b && !ev.final) { b.disabled = true; b.textContent = f != null ? `${Math.round(f * 100)}%` : "Working…"; }
     if (ev.final) {
       off();
       delete D.watching[jobId];
-      if (btn) { btn.disabled = false; btn.textContent = label; }
+      if (b) { b.disabled = false; b.textContent = label; }
       if (ev.state === "error") showError(ev.message, "That didn't work");
       else if (ev.state === "done") showError(ev.message, "Done", null, true);
       loadDoctor();
@@ -356,14 +358,13 @@ $("#sys-doctor").addEventListener("click", async e => {
   b.disabled = true;
   try {
     const r = await api(`/api/doctor/fix/${encodeURIComponent(b.dataset.fix)}`, { method: "POST" });
-    if (r.job) return watchFix(r.job, b, label);
+    if (r.job) return watchFix(r.job, `[data-fix="${CSS.escape(b.dataset.fix)}"]`, label);
     if (r.message) showError(r.message, r.ok === false ? "Not now" : "Done", null, r.ok !== false);
     loadDoctor();
   } catch (err) { showError(err.message, "That didn't work"); b.disabled = false; }
 });
 $("#sys-doctor-full").onclick = async () => {
-  const b = $("#sys-doctor-full");
-  try { watchFix((await api("/api/doctor/full", { method: "POST" })).job, b, "Check everything"); }
+  try { watchFix((await api("/api/doctor/full", { method: "POST" })).job, "#sys-doctor-full", "Check everything"); }
   catch (err) { showError(err.message, "Couldn't start the check"); }
 };
 $("#sys-logs").onclick = async () => {

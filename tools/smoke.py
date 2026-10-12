@@ -1436,8 +1436,8 @@ def u_doctor_resume():
     import threading
     from undercover.core import setup_models
     with isolated_data() as t:
-        data = bytes(range(256)) * 4096   # 1 MB
-        seen = []
+        data = bytes(range(256)) * 16384   # 4 MB
+        seen, drop = [], {"once": False}
 
         class H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -1450,6 +1450,12 @@ def u_doctor_resume():
                 self.send_response(206 if rng else 200)
                 self.send_header("Content-Length", str(len(data) - start))
                 self.end_headers()
+                if drop["once"]:   # the connection dies 2.5 MB in (the download keeps whole 1 MB pieces: 2 MB)
+                    drop["once"] = False
+                    self.wfile.write(data[start:start + 2621440])
+                    self.wfile.flush()
+                    self.connection.shutdown(2)
+                    return
                 self.wfile.write(data[start:])
         srv = http.server.HTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -1460,9 +1466,15 @@ def u_doctor_resume():
             sha = __import__("hashlib").sha256(data).hexdigest()
             setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/r.bin", dest, sha, "_test/r.bin")
             assert dest.read_bytes() == data and seen == ["bytes=300000-"], seen
+            # a connection that dies mid-file: the next try carries on from the .part
+            dest.unlink()
+            seen.clear()
+            drop["once"] = True
+            setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/r.bin", dest, sha, "_test/r.bin")
+            assert dest.read_bytes() == data and seen == [None, "bytes=2097152-"], seen
         finally:
             srv.shutdown()
-    return "asked for bytes=300000-, file complete and checked"
+    return "resumed from an old .part and after a dropped connection; complete and checked"
 
 
 @check("doctor: stale leftovers are cleared through the guarded delete; young ones, projects, owned folders and the library are left alone")
@@ -1590,6 +1602,11 @@ def u_doctor_interrupted():
             # a clean stop: nothing to do
             hb.write_text(_json.dumps({"t": "2026-10-12 03:00:00", "event": "stop"}) + "\n", encoding="utf-8")
             assert doctor.restore_interrupted(hb) is None
+            st = doctor._state()
+            st["autoresumed"] = {"at": "x", "specs": [train]}
+            doctor._save_state(st)
+            assert doctor.restore_interrupted(hb) is None
+            assert doctor._state().get("autoresumed") is None, "a clean session didn't clear the crash-loop guard"
         finally:
             worklist._STATE = saved[0]
             worklist.RESUMERS.clear()

@@ -42,6 +42,7 @@ STALE_HOURS = 6
 AUTO_RESUME = {"train", "transcribe"}   # resume specs that continue from a saved point (MasterPlan, 2026-10-12)
 LAST: dict = {"fast": None, "full": None, "startup": None}   # the latest reports (the System room shows them)
 _LOCK = threading.Lock()
+OBSERVING = threading.Event()   # the install record is being written (startup's background thread or the Fix)
 
 
 # ---------------------------------------------------------------- the log
@@ -368,6 +369,10 @@ def c_work(ctx) -> list:
 
 def c_manifest(ctx) -> list:
     m = ctx["manifest"]
+    if not m and OBSERVING.is_set():
+        return [_r("manifest", "install", "info", "Install record",
+                   "Writing the record of this install now (it reads every model file once, in the background).",
+                   str(manifest.file()))]
     if not m:
         return [_r("manifest", "install", "info", "Install record",
                    "There's no record of this install yet; UnderCover writes one from what it finds.", str(manifest.file()),
@@ -399,7 +404,7 @@ def run(full: bool = False, status: dict | None = None, progress=None, cancel=No
 
     ctx = {"full": full, "status": status, "manifest": manifest.load(), "installed": manifest.installed(),
            "pins": manifest.pins(), "hash": hash_one}
-    ctx["expected"] = manifest.expected_packages()
+    ctx["expected"] = manifest.expected_packages(ctx["manifest"], ctx["pins"])
     results = []
     for c in CHECKS:
         try:
@@ -475,22 +480,11 @@ def _last_line(f: Path) -> dict | None:
 
 
 def owned_dirs() -> list:
-    """Folders that running or paused work owns (MasterPlan: a paused training can sit for days): training projects of
-    the work on every resume list and queue, and the preview folders of running jobs."""
-    out = [path("cache_dir") / "training"]   # projects are never cleaned by the Doctor at all
-    from . import jobs
-    for wl in path("cache_dir").glob("worklist*.json"):
-        try:
-            st = json.loads(wl.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        for spec in st.get("resume") or []:
-            if spec.get("project"):
-                out.append(path("cache_dir") / "training" / spec["project"])
-    for j in list(jobs.JOBS.values()):
-        if not j.finished:
-            out += list((path("cache_dir") / "previews").glob(f"*{j.id}*"))
-    return out
+    """Folders that running or paused work owns (MasterPlan: a paused training can sit for days). Paused and queued work
+    lives in training projects (cache/training: never swept at all); running work's sentence parts in cache/previews
+    (never swept); anything else a running job writes is covered by _busy_elsewhere (no sweep while work runs on any
+    server sharing these folders)."""
+    return [path("cache_dir") / "training", path("cache_dir") / "previews"]
 
 
 def stale_files(now: float | None = None) -> tuple[list, list, str | None]:
@@ -501,7 +495,7 @@ def stale_files(now: float | None = None) -> tuple[list, list, str | None]:
     old = now - STALE_HOURS * 3600
     why = _busy_elsewhere()
     owned = owned_dirs()
-    skip = owned + [path("voices_dir"), path("cache_dir") / "previews", path("cache_dir") / "uv"]
+    skip = owned + [path("voices_dir"), path("cache_dir") / "uv"]
 
     def ok(p: Path) -> bool:
         try:
@@ -579,6 +573,8 @@ def fix(fix_id: str, status: dict | None = None, dry_run: bool = False) -> dict:
     if fix_id == "packages":
         return _job("packages", "Reinstalling the pinned packages", lambda job: fix_packages(dry_run=dry_run))
     if fix_id == "manifest":
+        if OBSERVING.is_set():
+            return {"ok": True, "message": "The install record is being written already."}
         return _job("manifest", "Writing the install record", lambda job: _observe_job(job))
     if fix_id == "models":
         rep = run(False, status)
@@ -648,7 +644,11 @@ def _observe_job(job) -> dict:
         if time.time() - last[0] > 0.5:
             last[0] = time.time()
             job.push(stage="checking", frac=round(d / t, 3), message=f"Recording model files: {d / 1e9:.1f} of {t / 1e9:.1f} GB")
-    m = manifest.observe(progress=prog, cancel=lambda: job.cancel)
+    OBSERVING.set()
+    try:
+        m = manifest.observe(progress=prog, cancel=lambda: job.cancel)
+    finally:
+        OBSERVING.clear()
     log(f"wrote the install record ({len(m['models'])} model files, {len(m['packages'])} packages)")
     return {"message": "The install record is written."}
 
@@ -740,6 +740,10 @@ def restore_interrupted(heartbeat: Path) -> dict | None:
     from . import worklist
     info = interrupted(heartbeat)
     if not info:
+        st = _state()
+        if st.get("autoresumed"):   # the last session ended cleanly: the crash-loop guard has done its job
+            st["autoresumed"] = None
+            _save_state(st)
         return None
     specs = [j["spec"] for j in info["jobs"] if isinstance(j.get("spec"), dict) and j["spec"].get("kind") != "night"]
     during = ", ".join((j.get("message") or j.get("kind") or "?") for j in info["jobs"])[:200]
@@ -810,6 +814,8 @@ def heal_at_startup(heartbeat: Path, status: dict | None = None, hash_new_manife
     if todo:
         background.append(("models", todo))
     if background:
+        if any(k == "manifest" for k, _ in background):
+            OBSERVING.set()   # before the thread starts, so a page asking right away doesn't offer to write it again
         threading.Thread(target=_background, args=(background, hash_new_manifest), daemon=True, name="doctor").start()
     bad = rep["counts"]["bad"] + rep["counts"]["warn"]
     log(f"startup check: {bad} problem(s) in {time.time() - t0:.1f} s" + (f"; {'; '.join(did)}" if did else "")
@@ -823,7 +829,11 @@ def _background(todo: list, hash_files: bool):
         try:
             if what == "manifest":
                 log("no install record yet: writing one from what's here (observed)" + ("" if hash_files else ", sizes only"))
-                m = manifest.observe(hash_files=hash_files)
+                OBSERVING.set()
+                try:
+                    m = manifest.observe(hash_files=hash_files)
+                finally:
+                    OBSERVING.clear()
                 log(f"install record written: {len(m['models'])} model files, {len(m['packages'])} packages")
             elif what == "verify":
                 for local in arg:

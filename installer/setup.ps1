@@ -117,12 +117,16 @@ function Fetch([string]$url, [string]$dest, [string]$sha256) {
             if ($have -gt 0) { $req.AddRange([long]$have); Log "    resuming at $have bytes" }
             $resp = $req.GetResponse()
             $mode = if ($have -gt 0 -and [int]$resp.StatusCode -eq 206) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+            $expect = if ($resp.ContentLength -ge 0) { $resp.ContentLength + $(if ($mode -eq [IO.FileMode]::Append) { $have } else { 0 }) } else { -1 }
             $in = $resp.GetResponseStream(); $out = [IO.File]::Open($part, $mode)
             try { $in.CopyTo($out) } finally { $out.Close(); $in.Close(); $resp.Close() }
+            # a connection closed by the other end can end the copy without an error: a short file is an interruption
+            if ($expect -ge 0 -and (Get-Item $part).Length -lt $expect) { throw "the connection closed after $((Get-Item $part).Length) of $expect bytes" }
             Move-Item -Force $part $dest
             break
-        } catch [Net.WebException] {
-            $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        } catch {   # a WebException, or an IOException when the connection drops in the middle of the copy
+            $resp0 = if ($_.Exception -is [Net.WebException]) { $_.Exception.Response } else { $null }
+            $code = if ($resp0) { [int]$resp0.StatusCode } else { 0 }
             if ($code -eq 416 -and $have -gt 0) { Move-Item -Force $part $dest; break }   # the .part was already complete
             if ($i -eq 4) { Fail "couldn't download $url ($($_.Exception.Message)); run setup again to carry on from where it stopped" }
             Info "download interrupted ($($_.Exception.Message)); trying again from where it stopped"
@@ -147,6 +151,9 @@ function Unzip([string]$zip, [string]$dest) {
 Write-Host "UnderCover setup" -ForegroundColor White
 Write-Host "Install folder: $InstallDir"
 if ($DryRun) { Write-Host "DRY RUN: nothing will be downloaded or installed." -ForegroundColor Yellow }
+if ($Repair -and ($LibraryDir -or $WorkDir -or $ModelsDir)) {
+    Fail "-Repair keeps your files where they are. To move them, use SafeHouse > Storage in UnderCover."
+}
 if (-not (Test-Path (Join-Path $InstallDir 'undercover\server.py'))) {
     if ($DryRun) { Write-Host "    (note: app code not found in $InstallDir; a real run needs it)" -ForegroundColor Yellow }
     else { Fail "the app code isn't in $InstallDir (expected undercover\server.py)" }
