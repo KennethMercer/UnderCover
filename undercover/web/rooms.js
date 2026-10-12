@@ -1,6 +1,6 @@
 "use strict";
 // SafeHouse rooms (phase 4b, rooms build): the room strip (Library · Running · Storage · Add-ons · System · Settings, deep links
-// #safehouse/<room>), the Add-ons room (every part UnderCover is built from; optional add-ons are accepted and installed here)
+// #safehouse/<room>), Phone access in Settings (phase 11, at the end), the Add-ons room (every part UnderCover is built from; optional add-ons are accepted and installed here)
 // and the Storage room (where the three groups of files live, and moving them). The Library room is library.js, Running is
 // work.js (renderRunRoom), System's rows come from app.js (sysStatus) and library.js (yt-dlp, Quit), Settings from app.js.
 // Uses helpers from app.js ($, $$, esc, api, showError, store, leftText), jobs.js (watchJob, runningJobs, onJobs) and
@@ -26,6 +26,7 @@ function showRoom(room) {
   if (room === "addons") loadAddons();
   if (room === "storage") loadStorage();
   if (room === "system") loadDoctor();
+  if (room === "settings") loadPhone();
 }
 // on a phone the row scrolls: keep the open room in sight, again whenever a tab changes width (the font arriving, a count)
 function roomInSight() {
@@ -88,12 +89,12 @@ function addonSide(a) {
   if (!a.installable) return `<span class="astate">Not available yet</span><a class="linkbtn" href="${esc(a.licence_url)}" target="_blank" rel="noopener">Read licence</a>`;
   if (job) return `<span class="astate">Installing…</span>`;
   if (a.installed && a.accepted) {
-    const use = a.engine ? `<label class="check" style="font-size:13.5px" data-deep><input type="checkbox" data-use="${a.id}" ${a.in_use ? "checked" : ""}><span>Use for cadence speech</span></label>` : "";
+    const use = a.engine ? `<label class="check" style="font-size:13.5px" data-deep data-pc><input type="checkbox" data-use="${a.id}" ${a.in_use ? "checked" : ""}><span>Use for cadence speech</span></label>` : "";
     return `<span class="astate ok">Installed ✓</span><span class="meta">added ${day(a.installed_on) || "earlier"} · licence accepted ${day(a.accepted)}</span>${use}
-            <button class="btn danger" type="button" data-rm="${a.id}">Remove · frees ${gb(a.disk || a.size_mb * 1e6)}</button>`;
+            <button class="btn danger" type="button" data-rm="${a.id}" data-pc>Remove · frees ${gb(a.disk || a.size_mb * 1e6)}</button>`;
   }
   if (R.open === a.id) return `<span class="astate">Not added</span>`;
-  return `<span class="astate">Not added</span><button class="btn primary" type="button" data-add="${a.id}">Accept &amp; install…</button>
+  return `<span class="astate">Not added</span><button class="btn primary" type="button" data-add="${a.id}" data-pc>Accept &amp; install…</button>
           <a class="linkbtn" href="${esc(a.licence_url)}" target="_blank" rel="noopener">Read licence</a>`;
 }
 
@@ -197,7 +198,7 @@ function renderPlaces() {
       <div style="display:grid;gap:2px;min-width:0"><b>${esc(x.label)}</b><span class="meta">${esc(x.about)}</span></div>
       <span class="size">${gb(x.size)}</span>
       <div class="full row spread"><span class="folder">${esc(x.folder)}</span>
-        ${R.move?.group === k || R.moving ? "" : `<button class="btn" type="button" data-change="${k}">Change…</button>`}</div>
+        ${R.move?.group === k || R.moving ? "" : `<button class="btn" type="button" data-change="${k}" data-pc>Change…</button>`}</div>
       <div class="full meta mono" data-deep>${Object.entries(x.keys).map(([kk, v]) => `[paths] ${esc(kk)} = ${esc(v)}`).join(" · ")} · ${x.files} files</div>
       ${R.move?.group === k ? movePanel(k, x) : ""}
       ${R.moving?.group === k ? `<div class="full inprog"><div class="row spread"><span class="meta" id="mv-msg">${esc(R.moving.msg || "Starting")}</span>
@@ -315,7 +316,7 @@ function doctorRow(r) {
   const [cls, word] = DSTATE[r.state] || DSTATE.info, f = r.fix;
   const asking = f && D.ask?.id === f.id;
   const act = !f ? "" : f.how === "offer" ? `<small class="meta">${esc(f.label)}</small>`
-    : asking ? "" : `<button class="btn" type="button" data-fix="${esc(f.id)}">${esc(f.label)}</button>`;
+    : asking ? "" : `<button class="btn" type="button" data-fix="${esc(f.id)}" data-pc>${esc(f.label)}</button>`;
   return `<div class="sys" data-check="${esc(r.id)}"><span><b>${esc(r.title)}</b><small>${esc(r.say)}</small>${r.detail ? `<span class="kv2" data-deep>${esc(r.detail)}</span>` : ""}</span>
     <span class="acts"><span class="dotw ${cls}">${esc(word)}</span>${act}</span>${asking ? fixAsk(D.ask) : ""}</div>`;
 }
@@ -408,3 +409,58 @@ $("#sys-bundle").onclick = async () => {
 $("#sys-bundle-cancel").onclick = () => { $("#sys-bundle-box").hidden = true; };
 $("#sys-bundle-save").addEventListener("click", () => setTimeout(() => { $("#sys-bundle-box").hidden = true; }, 500));
 setTimeout(loadDoctor, 4000);   // once after the page opens, so a problem shows on the tab before the room is opened
+
+// ------------------------------------------------------------ Settings: Phone access (phase 11)
+// /api/phone (PC only): the switch, where it listens, the code being shown (a QR code of <url>/pair#<code>), the paired
+// phones with Revoke. While a code is shown the room checks every few seconds for the phone that used it.
+const PH = { st: null, tick: null, poll: null, seen: null };
+async function loadPhone(after) {
+  if (document.body.dataset.client === "phone") return;
+  try { PH.st = after || await api("/api/phone"); } catch (e) { $("#phone-where").textContent = e.message; return; }
+  renderPhone();
+}
+function renderPhone() {
+  const s = PH.st, p = s.pairing;
+  $("#set-phone").setAttribute("aria-checked", s.enabled);
+  $("#phone-box").hidden = !s.enabled;
+  $("#phone-where").textContent = !s.enabled ? "" : s.problem ? s.problem
+    : `Listening at ${s.url} on your home network. Only paired phones get in. The first time, Windows may ask whether Python may use the network: allow it on private networks only.`;
+  $("#phone-pair").disabled = !s.listening;
+  $("#phone-pairing").hidden = !p;
+  if (p) {
+    $("#phone-qr").innerHTML = p.qr;   // an SVG made by the server (core/qr.py)
+    $("#phone-url").textContent = p.url;
+    $("#phone-code").textContent = p.code;
+  }
+  clearInterval(PH.tick); clearInterval(PH.poll);
+  if (p) {
+    const left = () => {
+      const t = Math.round(p.until - Date.now() / 1000);
+      if (t <= 0) { $("#phone-left").textContent = "That code has run out."; clearInterval(PH.tick); return loadPhone(); }
+      $("#phone-left").textContent = `Works once, for another ${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+    };
+    left(); PH.tick = setInterval(left, 1000);
+    PH.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadPhone(); }, 3000);
+  }
+  const was = PH.seen; PH.seen = new Set(s.devices.map(d => d.id));
+  const fresh = was ? s.devices.find(d => !was.has(d.id)) : null;
+  if (fresh) showError(`${fresh.name} is paired. It can use UnderCover while this PC is on and Phone access stays on.`, "Phone paired", null, true);
+  $("#phone-devices").innerHTML = s.devices.length ? s.devices.map(d => `
+    <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b><small>paired ${esc(d.paired)} · last seen ${esc(d.seen)}</small>
+      <span class="kv2" data-deep>${esc(d.ip || "")}</span></span>
+      <span class="acts"><button class="btn" type="button" data-revoke="${esc(d.id)}">Revoke</button></span></div>`).join("")
+    : `<p class="meta">No phones paired yet.</p>`;
+  $$("#phone-devices [data-revoke]").forEach(b => confirmClick(b, "Revoke? Click again", async () => {
+    PH.st = await api("/api/phone/revoke", { json: { id: b.dataset.revoke } }); renderPhone();
+  }));
+}
+$("#set-phone").onclick = async () => {
+  const on = $("#set-phone").getAttribute("aria-checked") !== "true";
+  try { PH.st = await api("/api/phone", { json: { on } }); renderPhone(); } catch (e) { showError(e.message, "Couldn't change Phone access"); }
+};
+$("#phone-pair").onclick = async () => {
+  try { PH.st = await api("/api/phone/pair", { json: {} }); renderPhone(); } catch (e) { showError(e.message, "Couldn't make a code"); }
+};
+$("#phone-pair-x").onclick = async () => {
+  try { PH.st = await api("/api/phone/pair/cancel", { json: {} }); renderPhone(); } catch (e) { showError(e.message); }
+};

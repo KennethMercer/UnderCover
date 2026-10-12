@@ -365,11 +365,11 @@ function voiceDetail(d, v) {
       ${v.trained ? `<dt data-deep>Training</dt><dd data-deep>${v.train_minutes ? `${v.train_minutes} min of ${v.from_speech ? "speech" : "audio"}` : ""}${v.epoch ? ` · epoch ${v.epoch}` : ""}${v.f0_range ? ` · range ${Math.round(v.f0_range[0])}–${Math.round(v.f0_range[2])} Hz` : ""}</dd>` : ""}
       <dt>Used in</dt><dd>${v.covers ? v.cover_titles.map(esc).join("<br>") : "no covers yet"}</dd>
       <dt>Cadence</dt><dd>${v.cadence ? `yes, for SpeakEasy · ${gb(v.cadence.size)} <span class="meta" data-deep>· ${esc(v.cadence.engine || "")} · from ${v.cadence.data_minutes ?? "?"} min · made ${esc(when(v.cadence.made))}</span>
-        <button class="linkbtn" id="lib-del-cad" type="button" data-deep>Delete cadence</button>` : "none"}</dd>
+        <button class="linkbtn" id="lib-del-cad" type="button" data-deep data-pc>Delete cadence</button>` : "none"}</dd>
       <dt data-deep>Size</dt><dd data-deep>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
-    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep>Rename folder…</button>
-      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep>Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
+    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep data-pc>Rename folder…</button>
+      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep data-pc>Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");
   if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("doubleagent"); try { await openProject(v.project); } catch (e) {} };

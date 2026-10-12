@@ -7,6 +7,8 @@ uploads/
 logs/
 # The install record (phase 10): what this PC has; written by setup or the app.
 manifest.json
+# Phone access (phase 11): the switch and the paired phones' token hashes.
+phone.json
 test/
 .claude/
 __pycache__/

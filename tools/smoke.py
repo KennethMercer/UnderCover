@@ -1645,6 +1645,159 @@ def u_doctor_bundle():
     return f"{len(allnames)} files, paths shortened, no audio"
 
 
+# ---------------------------------------------------------------- Phone access (phase 11)
+
+@check("phone: QR code (Reed-Solomon, format and version bits against the standard's worked examples; sizes)")
+def u_qr():
+    from undercover.core import qr
+    # thonky.com's "HELLO WORLD" 1-M worked example; the format bits for M / mask 0 and version 7's bits from the standard's tables
+    assert qr.rs_ecc([32, 91, 11, 120, 209, 114, 220, 77, 67, 64, 236, 17, 236, 17, 236, 17], 10) == [196, 35, 39, 119, 235, 215, 231, 226, 93, 23]
+    assert format(qr.format_bits(0), "015b") == "101010000010010"
+    assert format(qr.version_bits(7), "018b") == "000111110010010100"
+    m = qr.matrix("http://192.168.1.23:7860/pair#K7P4QX")
+    n = len(m)
+    assert n == 29 and all(len(r) == n for r in m), n   # version 3
+    for r0, c0 in ((0, 0), (0, n - 7), (n - 7, 0)):   # the three finder patterns
+        ring = [m[r0][c0 + i] for i in range(7)] + [m[r0 + 6][c0 + i] for i in range(7)]
+        assert all(ring) and m[r0 + 3][c0 + 3] and not m[r0 + 1][c0 + 1], (r0, c0)
+    assert len(qr.matrix("x" * 200)) == 57   # version 10, the largest here
+    assert qr.svg("abc").startswith("<svg") and 'viewBox="0 0 29 29"' in qr.svg("abc")
+    return "Reed-Solomon, format, version bits; versions 3 and 10"
+
+
+@check("phone: pairing (single use, expiry, wrong codes, rate limit), tokens stored hashed, Revoke, the switch")
+def u_phone_pairing():
+    from undercover.core import phone
+    with isolated_data() as t:
+        saved = (None, phone.PAIRING, list(phone._TRIES))
+        phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, None, []
+        try:
+            assert phone.state_file().parent == t, phone.state_file()
+            assert not phone.enabled() and phone.device_for("anything") is None
+            try:
+                phone.new_pairing()
+                raise AssertionError("a code was made with Phone access off")
+            except phone.PhoneError:
+                pass
+            phone.set_enabled(True)
+            p = phone.new_pairing()
+            assert len(p["code"]) == 6 and set(p["code"]) <= set(phone.ALPHABET) and 290 < p["until"] - time.time() <= 300
+
+            def refused(code, addr="10.0.0.9", want=403):
+                try:
+                    phone.claim(code, "x", addr)
+                except phone.PhoneError as e:
+                    assert e.status == want, (e.status, str(e))
+                    return str(e)
+                raise AssertionError(f"{code!r} was accepted")
+            wrong = "".join(c for c in phone.ALPHABET if c not in p["code"])[:6]
+            refused(wrong)
+            token, dev = phone.claim(" " + p["code"].lower()[:3] + "-" + p["code"][3:], "Pixel 8", "10.0.0.9")   # typed loosely
+            assert dev["name"] == "Pixel 8" and len(token) >= 40
+            refused(p["code"])   # once only
+            text = phone.state_file().read_text(encoding="utf-8")
+            assert token not in text and phone.hash_token(token) in text, "the token isn't stored as its hash"
+            assert phone.device_for(token)["id"] == dev["id"] and phone.device_for(token + "x") is None
+            p2 = phone.new_pairing()   # expiry
+            phone.PAIRING["until"] = time.time() - 1
+            assert "run out" in refused(p2["code"])
+            p3 = phone.new_pairing()   # five wrong codes cancel it
+            for _ in range(phone.MAX_TRIES):
+                refused(wrong, addr="10.0.0.8")
+            assert phone.pairing() is None and "run out" in refused(p3["code"], addr="10.0.0.7")
+            phone._TRIES[:] = []   # the rate limit: 10 tries per address in 10 minutes, then 429 even with the right code
+            p4 = phone.new_pairing()
+            for _ in range(phone.RATE[1]):
+                try:
+                    phone.claim(wrong, "x", "10.0.0.6")
+                except phone.PhoneError:
+                    pass
+                phone.PAIRING = p4 if phone.PAIRING is None else phone.PAIRING
+            refused(p4["code"], addr="10.0.0.6", want=429)
+            phone._TRIES[:] = []
+            phone._FILE[0] = None   # read back from the file
+            assert phone.device_for(token)["name"] == "Pixel 8"
+            phone.revoke(dev["id"])
+            assert phone.device_for(token) is None and phone.devices() == []
+            token2, dev2 = phone.claim(phone.new_pairing()["code"], "<b>Tab</b>\n", "10.0.0.5")
+            assert dev2["name"] == "bTab/b", dev2["name"]
+            phone.set_enabled(False)
+            assert phone.device_for(token2) is None and phone.pairing() is None
+            phone.set_enabled(True)
+            assert phone.device_for(token2)["id"] == dev2["id"]
+            assert phone.name_from_agent("Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A) AppleWebKit") == "Pixel 8"
+            assert phone.name_from_agent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit") == "Android phone"
+            assert phone.name_from_agent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)") == "iPhone"
+            assert phone.usable("192.168.1.5") and phone.usable("10.1.2.3") and not phone.usable("8.8.8.8")
+            assert not phone.usable("127.0.0.1") and not phone.usable("169.254.1.1")
+        finally:   # forget the test's state: the next use reads its own file again
+            phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, saved[1], saved[2]
+            phone._STATE.clear()
+            phone._SEEN_AT.clear()
+    return "6-character codes, hashed tokens, 5 wrong codes, 10 tries per address"
+
+
+# every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
+PHONE_SAMPLES = [
+    ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
+    ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
+    ("POST", "/api/phone/claim"), ("GET", "/api/status"), ("GET", "/api/voices"), ("GET", "/api/search"), ("GET", "/api/jobs"),
+    ("GET", "/api/work"), ("GET", "/api/jobs/abc123/events"), ("POST", "/api/jobs/abc123/cancel"), ("POST", "/api/jobs/abc123/retry"),
+    *[("POST", f"/api/work/{a}") for a in ("pause", "resume", "forget", "add", "remove", "order", "start", "settings", "dismiss")],
+    ("POST", "/api/voices/install"), ("POST", "/api/voices/upload"), ("DELETE", "/api/voices/some-voice"),
+    ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
+    ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
+    ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
+    *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
+                            "/api/songs/0123456789abcdef/presep")],
+    ("GET", "/api/work/candidates"), ("GET", "/api/work/lookup"), ("GET", "/api/train/projects"), ("POST", "/api/train/projects"),
+    ("GET", "/api/train/projects/someone"), ("DELETE", "/api/train/projects/someone"),
+    *[("POST", f"/api/train/projects/someone/{a}") for a in ("search", "sources", "upload", "prepare", "reference", "phrases",
+                                                             "train", "pause", "stop", "export", "auto", "transcribe")],
+    ("GET", "/api/train/voices/v-uc/cadence"), ("GET", "/api/train/voices/v-uc/cadence/sample/current"),
+    ("GET", "/api/train/voices/v-uc/cadence/sample/pending"), ("POST", "/api/train/voices/v-uc/cadence/ab"),
+    ("POST", "/api/train/voices/v-uc/cadence/verdict"),
+    *[("GET", f"/api/speak/{a}") for a in ("voices", "readers", "recent", "plan")],
+    ("POST", "/api/speak"), ("POST", "/api/speak/cadence"), ("POST", "/api/speak/newvoice"),
+    *[("POST", f"/api/speak/0123456789/{a}") for a in ("rename", "keep", "unkeep")], ("DELETE", "/api/speak/0123456789"),
+    *[("GET", f"/api/library/{a}") for a in ("summary", "covers", "speech", "songs", "voices", "training")],
+    ("GET", "/api/library/covers/zip"),
+    *[("POST", f"/api/library/{k}/0123456789/{a}") for k in ("covers", "speech") for a in ("rename", "keep", "unkeep")],
+    ("DELETE", "/api/library/covers/0123456789"), ("DELETE", "/api/library/speech/0123456789"),
+    ("DELETE", "/api/library/songs/0123456789abcdef"), ("POST", "/api/library/voices/v-uc/display"),
+    ("POST", "/api/library/voices/v-uc/rename"), ("GET", "/api/library/voices/v-uc/export"),
+    ("DELETE", "/api/library/voices/v-uc/cadence"), ("GET", "/api/library/cleanup"), ("POST", "/api/library/cleanup"),
+    ("POST", "/api/library/tools/ytdlp-update"), ("GET", "/api/addons"), ("GET", "/api/storage"),
+    *[("POST", f"/api/addons/f5-tts/{a}") for a in ("install", "remove", "use")],
+    ("POST", "/api/storage/check"), ("POST", "/api/storage/move"),
+    ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
+    ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
+    ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
+    ("POST", "/api/phone/revoke"),
+]
+
+
+@check("phone: the route table covers every route (each /api path in the code and the pages has a row and an example)")
+def u_phone_routes():
+    import re
+    from undercover.app import phone_api
+    unlisted = [f"{m} {p}" for m, p in PHONE_SAMPLES if phone_api.policy(m, p)[1] == "not in the phone's list"]
+    assert not unlisted, f"examples the table doesn't list: {unlisted}"
+    unused = [f"{m} {rx}" for m, rx, _, _ in phone_api.ROUTES
+              if not any(mm in m.split("|") and re.fullmatch(rx, p) for mm, p in PHONE_SAMPLES)]
+    assert not unused, f"table rows with no example here: {unused}"
+    # every literal /api/... path in the server code and the pages starts at least one example (a new route needs a row)
+    lits = set()
+    for f in [*(ROOT / "undercover").rglob("*.py"), *(ROOT / "undercover" / "web").glob("*.js"), *(ROOT / "undercover" / "web").glob("*.html")]:
+        for lit in re.findall(r"""["'`](/api/[A-Za-z0-9_./-]*)""", f.read_text(encoding="utf-8")):
+            lits.add(lit.rstrip("/."))
+    paths = [p for _, p in PHONE_SAMPLES]
+    missing = sorted(lit for lit in lits if not any(p.startswith(lit) for p in paths))
+    assert not missing, f"/api paths in the code with no example (add a row to app/phone_api.ROUTES and PHONE_SAMPLES): {missing}"
+    pc = sum(phone_api.policy(m, p)[0] == "pc" for m, p in PHONE_SAMPLES)
+    return f"{len(phone_api.ROUTES)} rows, {len(PHONE_SAMPLES)} examples ({pc} PC-only), {len(lits)} paths in the code"
+
+
 @check("api: the Doctor (fast report, the UnderCover row, the diagnostics file's contents and the file itself)")
 def a_doctor():
     import io
@@ -1683,6 +1836,129 @@ def a_retry():
     return "failed, retried as a new job, failed again; nothing installed"
 
 
+PHONE_ADDR = "127.0.0.2"   # the sandbox's "home network" address: loopback, so nothing reaches the network and Windows asks nothing
+
+
+def _lan(method, path, token=None, body=None, origin=True, host=None):
+    """A request as a phone would send it, to the sandbox's phone listener: -> (status, headers, body)."""
+    import http.client
+    port = int(BASE.rsplit(":", 1)[1])
+    c = http.client.HTTPConnection(PHONE_ADDR, port, timeout=30)
+    h = {"Host": host or f"{PHONE_ADDR}:{port}"}
+    if origin and method != "GET":
+        h["Origin"] = origin if isinstance(origin, str) else f"http://{PHONE_ADDR}:{port}"
+    if token:
+        h["Cookie"] = f"other=1; uc_device={token}"
+    data = None if body is None else json.dumps(body).encode()
+    if data is not None:
+        h["Content-Type"] = "application/json"
+    try:
+        c.request(method, path, body=data, headers=h)
+        r = c.getresponse()
+        return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+    finally:
+        c.close()
+
+
+@check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
+       "phone; Revoke; switching off closes it; this PC's own requests unchanged)")
+def a_phone():
+    from undercover.app import phone_api
+    from undercover.core import phone
+    unpaired = b"This phone isn't paired with UnderCover. On the PC: SafeHouse, Settings, Phone access."
+    try:
+        _lan("GET", "/")
+        raise AssertionError("something answers on the phone address while Phone access is off")
+    except ConnectionRefusedError:
+        pass
+    st = api("/api/phone", {"on": True})
+    port = int(BASE.rsplit(":", 1)[1])
+    assert st["enabled"] and st["listening"] and st["url"] == f"http://{PHONE_ADDR}:{port}", st
+    # 1. the walk: every route, no token
+    opened = 0
+    for m, p in PHONE_SAMPLES + [("GET", "/nope"), ("POST", "/api/nope"), ("DELETE", "/api/nope")]:
+        status, hd, body = _lan(m, p, body={} if m == "POST" else None)
+        pol = phone_api.policy(m, p)[0]
+        if pol == "open":
+            opened += 1
+            assert status == (403 if p == "/api/phone/claim" else 200), (m, p, status, body[:200])
+        else:
+            assert status == 401 and body == unpaired and hd.get("connection") == "close", (m, p, status, body[:200])
+    # 2. the guards before the token: another Host (DNS rebinding), a missing or foreign Origin
+    assert _lan("GET", "/", host="evil.example:7862")[0] == 403
+    for m in ("HEAD", "PUT", "OPTIONS"):   # any other method: the same 401
+        status, _, body = _lan(m, "/api/status")
+        assert status == 401, (m, status)
+    assert _lan("POST", "/api/phone/claim", body={}, origin=False)[0] == 403
+    assert _lan("POST", "/api/phone/claim", body={}, origin="http://evil.example")[0] == 403
+    # 3. pairing: the code from the PC, wrong then right, then never again
+    pr = api("/api/phone/pair", {})["pairing"]
+    assert pr["link"] == f"http://{PHONE_ADDR}:{port}/pair#{pr['code']}" and pr["qr"].startswith("<svg"), pr
+    wrong = "".join(c for c in phone.ALPHABET if c not in pr["code"])[:6]
+    assert _lan("POST", "/api/phone/claim", body={"code": wrong, "name": "Smoke phone"})[0] == 403
+    status, hd, body = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Smoke phone"})
+    assert status == 200, (status, body)
+    cookie = hd.get("set-cookie", "")
+    assert all(x in cookie for x in ("uc_device=", "HttpOnly", "SameSite=Strict", "Path=/")), cookie
+    token = cookie.split("uc_device=", 1)[1].split(";", 1)[0]
+    assert _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Again"})[0] == 403, "a code worked twice"
+    devs = api("/api/phone")["devices"]
+    assert [d["name"] for d in devs] == ["Smoke phone"] and "hash" not in devs[0], devs
+    # 4. with the token: the basic pages work, the PC-only routes are refused with a plain message
+    s = json.loads(_lan("GET", "/api/status", token)[2])
+    assert s["client"] == "phone" and s["device"] == "Smoke phone", s
+    for p in ("/", "/static/app.js", "/api/jobs", "/api/work", "/api/voices", "/api/library/covers", "/api/speak/voices",
+              "/api/doctor", "/api/addons", "/api/storage", "/api/history", "/api/config", "/api/train/projects"):
+        status = _lan("GET", p, token)[0]
+        assert status == 200, (p, status)
+    assert _lan("POST", "/api/work/settings", token, {})[0] == 200
+    from undercover.core.config import path   # the sandbox's own folders (sandbox_server points this process at them)
+    proj = next(p for p in (path("cache_dir") / "training").iterdir() if (p / "project.json").exists())
+    clip = next((proj / "clips").glob("*.wav"))
+    assert _lan("GET", f"/files/training/{proj.name}/clips/{clip.name}", token)[0] == 200, "a phone can't play a clip"
+    assert _lan("GET", f"/files/training/{proj.name}/project.json", token)[0] == 404, "a phone read a project file"
+    assert api(f"/files/training/{proj.name}/project.json"), "this PC can't read the project file any more"
+    assert _lan("DELETE", "/api/voices/no-such-voice", token)[0] not in (401, 403)   # reaches the route (the page asks twice)
+    refused = 0
+    for m, p in PHONE_SAMPLES:
+        if phone_api.policy(m, p)[0] == "pc":
+            status, hd, body = _lan(m, p, token, {} if m == "POST" else None)
+            assert status == 403 and b"needs the PC" in body and hd.get("connection") == "close", (m, p, status, body[:200])
+            refused += 1
+    assert api("/api/status")["client"] == "pc", "the sandbox server stopped (Quit or Restart went through from the phone?)"
+    # 5. this PC's own requests: exactly as before (a phone's cookie means nothing here; Host and Origin checks as they were)
+    req = urllib.request.Request(BASE + "/api/status", headers={"Cookie": f"uc_device={token}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        assert json.loads(r.read())["client"] == "pc"
+    for hdrs, method in (({"Host": "evil.example"}, "GET"), ({"Origin": "http://evil.example"}, "POST")):
+        req = urllib.request.Request(BASE + "/api/work/settings", data=b"{}" if method == "POST" else None, method=method,
+                                     headers={"Content-Type": "application/json", **hdrs})
+        try:
+            urllib.request.urlopen(req, timeout=30)
+            raise AssertionError(f"this PC's {method} with {hdrs} went through")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403 and json.loads(e.read()) == {"error": "Forbidden"}, e.code
+    # 6. Revoke: the token stops working at its next request
+    api("/api/phone/revoke", {"id": devs[0]["id"]})
+    assert _lan("GET", "/api/status", token)[0] == 401
+    # 7. switching off closes the listener at once; a paired phone works again when it's switched back on
+    pr = api("/api/phone/pair", {})["pairing"]
+    hd = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Second"})[1]
+    token2 = hd["set-cookie"].split("uc_device=", 1)[1].split(";", 1)[0]
+    assert _lan("GET", "/api/status", token2)[0] == 200
+    st = api("/api/phone", {"on": False})
+    assert not st["enabled"] and not st["listening"], st
+    try:
+        _lan("GET", "/api/status", token2)
+        raise AssertionError("the phone listener still answers after switching off")
+    except ConnectionRefusedError:
+        pass
+    api("/api/phone", {"on": True})
+    assert _lan("GET", "/api/status", token2)[0] == 200
+    api("/api/phone", {"on": False})
+    return f"{len(PHONE_SAMPLES)} routes walked ({opened} open), {refused} PC-only refused, revoke, switch off"
+
+
 @check("api: status ready")
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
@@ -1704,7 +1980,8 @@ def a_page():
         assert part in html, f"missing {part}"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
-        assert len(api(f)) > 100, f"{f} is empty"
+        body = api(f)   # the home-screen manifest (phase 11) comes back parsed
+        assert (body.get("name") == "UnderCover") if isinstance(body, dict) else len(body) > 100, f"{f} is empty"
     return f"4 modules, {len(files)} static files"
 
 
@@ -2181,7 +2458,7 @@ def sandbox_server(port: int = SANDBOX_PORT):
     try:
         cfg, mine = _sandbox_config(root, real)
         _sandbox_fixtures(root, real, mine)
-        env = {**os.environ, "UNDERCOVER_CONFIG": str(cfg), "UNDERCOVER_TEST_ROOTS": str(root)}
+        env = {**os.environ, "UNDERCOVER_CONFIG": str(cfg), "UNDERCOVER_TEST_ROOTS": str(root), "UNDERCOVER_PHONE_ADDR": PHONE_ADDR}
         env.pop("UNDERCOVER_TEST_ADDON", None)
         log = open(root / "server.log", "w", encoding="utf-8")
         proc = subprocess.Popen([sys.executable, "-m", "undercover.server", "--no-browser", "--port", str(port)], cwd=ROOT, env=env,
@@ -2271,7 +2548,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -2283,7 +2560,7 @@ def main():
             print(f"API checks (a sandbox server on port {SANDBOX_PORT}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server():
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone):
                         fn()
                     if not a.no_cover:
                         a_cover()

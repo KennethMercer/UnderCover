@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>UnderCover</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='%230a0908'/><path d='M3 7.5a1.5 1.5 0 0 1 1.5-1.5H9l1.8 1.8h8.7A1.5 1.5 0 0 1 21 9.3V18a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z' fill='%23ece7de'/><g stroke-width='2.2' stroke-linecap='round'><path d='M7.5 16.5v-2.5' stroke='%237a4f1a'/><path d='M10.5 16.5v-5' stroke='%2366293a'/><path d='M13.5 16.5v-3.5' stroke='%231f3b54'/><path d='M16.5 16.5v-4' stroke='%2335383b'/></g></svg>">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#0a0908">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/shell.css">
 <link rel="stylesheet" href="/static/speakeasy.css">
@@ -313,7 +316,7 @@
       <div class="times" id="times" data-deep></div>
       <div class="btns">
         <button class="btn" id="keep" type="button" aria-pressed="false" data-kept="false">Send to SafeHouse</button>
-        <button class="btn" id="open-folder" data-deep>Show in folder</button>
+        <button class="btn" id="open-folder" data-deep data-pc>Show in folder</button>
         <a class="btn" id="dl-vocal" href="#" data-deep>Download vocal only</a>
         <a class="btn primary" id="dl-cover" href="#">Download</a>
       </div>
@@ -323,7 +326,7 @@
   </section>
 
   <section class="panel">
-    <div class="hist-head"><h2>History</h2><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output" data-deep>Open output folder</button></span></div>
+    <div class="hist-head"><h2>History</h2><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output" data-deep data-pc>Open output folder</button></span></div>
     <div class="hist" id="hist"><p class="meta">Your covers will appear here.</p></div>
     <p class="meta" id="hist-note">The latest 15 covers stay here. Older ones you haven't sent to SafeHouse roll off (are deleted); sent ones stay in SafeHouse.</p>
   </section>
@@ -528,7 +531,7 @@
           <div data-deep><div class="stack thin" id="lib-stack" role="img" aria-label="Storage by type"></div>
             <div class="legend" id="lib-legend"></div></div>
         </div>
-        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn">Clean up…</button></div>
+        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn" data-pc>Clean up…</button></div>
       </div>
     </section>
     <section class="panel" id="lib-clean" hidden>
@@ -567,20 +570,20 @@
     <div class="sh-room" id="room-system" hidden>
     <div class="roomhead"><h3>System</h3><p>The machine UnderCover runs on, and the parts it loaded.</p></div>
     <div class="alert" id="sys-alert" hidden><div><b>No graphics card available</b><p id="sys-alert-p"></p></div>
-      <div class="alert-btns"><button class="btn" type="button" data-restart>Restart UnderCover</button></div></div>
+      <div class="alert-btns"><button class="btn" type="button" data-restart data-pc>Restart UnderCover</button></div></div>
     <div class="rn-list">
       <div class="sys"><span><b>Graphics card</b><small id="sys-gpu">Checking…</small></span><span class="dotw now" id="sys-gpu-st">checking</span></div>
       <div class="sys"><span><b>Models</b><small id="sys-models">Loading…</small></span><span class="dotw now" id="sys-models-st">loading</span></div>
       <div class="sys"><span><b>YouTube downloader</b><small>Finds songs and clips. YouTube changes often; an update usually fixes downloads that start failing.</small>
-        <small id="lib-ytdlp-st"></small><span class="kv2" id="lib-ytdlp" data-deep></span></span><button class="btn" id="lib-ytdlp-go" type="button" hidden>Update</button></div>
+        <small id="lib-ytdlp-st"></small><span class="kv2" id="lib-ytdlp" data-deep></span></span><button class="btn" id="lib-ytdlp-go" type="button" hidden data-pc>Update</button></div>
       <div class="sys" id="sys-about"><span><b>UnderCover</b><small id="sys-version">…</small><span class="kv2" id="sys-about-deep" data-deep></span></span>
-        <button class="linkbtn" id="sys-logs" type="button" data-deep>Open logs</button></div>
+        <button class="linkbtn" id="sys-logs" type="button" data-deep data-pc>Open logs</button></div>
     </div>
     <section class="rn-sec" id="sys-sweep">
       <div class="rn-lbl"><b>Sweep</b><small id="sys-doctor-sum">The Doctor checks UnderCover's own parts and fixes the safe things. It never touches your songs, voices, covers or speech.</small></div>
       <div class="rn-list" id="sys-doctor"></div>
       <div class="row"><button class="btn" id="sys-doctor-full" type="button">Check everything</button>
-        <button class="linkbtn" id="sys-bundle" type="button">Save a diagnostics file…</button><span class="meta" id="sys-doctor-when" data-deep></span></div>
+        <button class="linkbtn" id="sys-bundle" type="button" data-pc>Save a diagnostics file…</button><span class="meta" id="sys-doctor-when" data-deep></span></div>
       <div class="sys-bundle" id="sys-bundle-box" hidden>
         <p><b>What goes in the file</b> <span class="meta" id="sys-bundle-size"></span></p>
         <ul class="sys-bundle-list" id="sys-bundle-list"></ul>
@@ -589,7 +592,7 @@
           <button class="linkbtn" id="sys-bundle-cancel" type="button">Cancel</button></div>
       </div>
     </section>
-    <div class="row sys-btns"><button class="btn" type="button" data-restart>Restart UnderCover</button>
+    <div class="row sys-btns" data-pc><button class="btn" type="button" data-restart>Restart UnderCover</button>
       <button class="btn danger" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button>
       <span class="meta">Quit stops it on this PC; start it again with UnderCover.bat.</span></div>
     </div>
@@ -602,7 +605,19 @@
       <div class="setting"><span><b>Deep Cover</b><small>Shows every number, score, setting and log. The glasses in the top bar switch it too.</small></span>
         <button class="switch" id="set-deep" type="button" role="switch" aria-checked="false" aria-label="Deep Cover"></button></div>
       <div class="setting later"><span><b>First assignment</b><small>The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small></span><span class="meta">later</span></div>
-      <div class="setting later"><span><b>Phone access</b><small>Use UnderCover from your phone, at home or away. Off, and not ready yet.</small></span><span class="meta">later</span></div>
+      <div class="setting" id="set-phone-row" data-pc><span><b>Phone access</b><small id="set-phone-say">Use UnderCover from your phone on your home Wi-Fi. Off until you switch it on; each phone pairs once with a code from here.</small></span>
+        <button class="switch" id="set-phone" type="button" role="switch" aria-checked="false" aria-label="Phone access"></button></div>
+      <div class="phone-box" id="phone-box" hidden data-pc>
+        <p class="meta" id="phone-where"></p>
+        <div class="row"><button class="btn" id="phone-pair" type="button">Pair a phone</button></div>
+        <div class="phone-pairing" id="phone-pairing" hidden>
+          <div class="phone-qr" id="phone-qr"></div>
+          <p>Scan it with the phone's camera, or open <b class="mono" id="phone-url"></b> on the phone and type <b class="mono" id="phone-code"></b>.</p>
+          <p class="meta"><span id="phone-left"></span> · <button class="linkbtn" id="phone-pair-x" type="button">Cancel</button></p>
+        </div>
+        <div class="rn-list" id="phone-devices"></div>
+      </div>
+      <div class="setting" data-phone><span><b>Phone access</b><small id="set-phone-me">This phone is paired. Phone access is managed on the PC.</small></span></div>
     </div>
     </div>
 

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0a0908">
+<title>Pair this phone · UnderCover</title>
+<!-- Phone access (phase 11): the one page a phone can open before it's paired. Self-contained (no /static/: everything
+     else needs the token). Hooks for the look chat: #pair-form, #pair-code, #pair-name, #pair-go, #pair-msg, #pair-done. -->
+<style>
+  :root { color-scheme: dark; --bg: #0a0908; --ink: #ece7de; --dim: #a39d93; --line: #2b2723; --gold: #c9a45c; --bad: #d8735f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         display: grid; place-items: center; padding: 24px 16px; }
+  main { width: 100%; max-width: 380px; }
+  .mark { font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+  h1 { font-size: 26px; margin: 6px 0 4px; font-weight: 600; }
+  p { color: var(--dim); margin: 0 0 20px; }
+  label { display: block; font-size: 14px; color: var(--dim); margin: 14px 0 6px; }
+  input { width: 100%; padding: 12px 14px; font: inherit; color: var(--ink); background: #15130f; border: 1px solid var(--line); border-radius: 8px; }
+  input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
+  #pair-code { font: 600 24px/1.2 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .3em; text-transform: uppercase; }
+  button { width: 100%; margin-top: 22px; padding: 13px; font: inherit; font-weight: 600; color: #0a0908; background: var(--gold); border: 0; border-radius: 8px; }
+  button:disabled { opacity: .6; }
+  #pair-msg { min-height: 1.5em; margin-top: 14px; color: var(--bad); }
+  #pair-done { color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">UnderCover</div>
+  <h1>Pair this phone</h1>
+  <p>Type the code the PC shows (SafeHouse, Settings, Phone access) and give this phone a name. It works once, for a few minutes.</p>
+  <form id="pair-form" autocomplete="off">
+    <label for="pair-code">Code</label>
+    <input id="pair-code" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="9" required>
+    <label for="pair-name">This phone's name</label>
+    <input id="pair-name" maxlength="40" placeholder="Pixel 8">
+    <button id="pair-go" type="submit">Pair this phone</button>
+    <div id="pair-msg" role="status"></div>
+  </form>
+  <p id="pair-done" hidden>Paired. Opening UnderCover…</p>
+</main>
+<script>
+"use strict";
+const code = document.getElementById("pair-code"), msg = document.getElementById("pair-msg"), go = document.getElementById("pair-go");
+// the QR code carries the code after # (never sent to the server, never in a log); take it out of the address bar
+if (location.hash.length > 1) { code.value = decodeURIComponent(location.hash.slice(1)); history.replaceState(null, "", "/pair"); }
+(code.value ? document.getElementById("pair-name") : code).focus();
+document.getElementById("pair-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  go.disabled = true; msg.textContent = "";
+  try {
+    const r = await fetch("/api/phone/claim", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code.value, name: document.getElementById("pair-name").value }) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || (r.status === 401 ? "Phone access is off on the PC." : `That didn't work (${r.status}).`));
+    document.getElementById("pair-form").hidden = true;
+    document.getElementById("pair-done").hidden = false;
+    location.replace("/");
+  } catch (err) {
+    msg.textContent = err.message === "Failed to fetch" ? "Can't reach the PC. Is it on, with UnderCover running and Phone access on?" : err.message;
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
