@@ -3,6 +3,10 @@
 Voices, the cover history, training projects and song metadata store absolute paths. At startup the server compares
 the folder it runs from with the one recorded in `cache/root.txt`; if they differ it rewrites the old folder to the new
 one in those files (crash-safe writes), then records the new folder. Paths elsewhere on disk are left alone.
+
+Not when the recorded folder still exists and holds an UnderCover checkout (phase 9, 2026-10-12): that's a second
+checkout (a git worktree, a copy) started on the same data, not a move, and rewriting would point the user's voices,
+history and projects at it. Nothing is rewritten and root.txt keeps the original folder.
 """
 import json
 import re
@@ -64,6 +68,14 @@ def _guess_old_root() -> str | None:
     return None
 
 
+def is_checkout(folder: Path) -> bool:
+    """An UnderCover app folder (what the installer checks for too)."""
+    try:
+        return (folder / "undercover" / "server.py").is_file()
+    except OSError:
+        return False
+
+
 def check_and_fix() -> dict:
     """Called at startup. Returns what was rewritten (empty when the folder hasn't moved)."""
     from . import fsutil
@@ -74,6 +86,10 @@ def check_and_fix() -> dict:
     except OSError:
         old = None
     changed = {}
+    if old and Path(old) != Path(here) and is_checkout(Path(old)):
+        print(f"Not rewriting stored paths: {old} still holds an UnderCover checkout, so this one ({here}) is a second "
+              "checkout on the same data, not a move.", flush=True)
+        return changed
     if old and Path(old) != Path(here):
         changed = rewrite(old, here)
         if changed:
