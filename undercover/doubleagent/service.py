@@ -551,7 +551,10 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         singer = proj.mode != "speaking"
         sung_first = (lambda s: not srcmod.is_sung(s)) if singer else (lambda s: False)
         searched_more = False
-        searched_blocked = False
+        searched_again = False
+        # a character's scenes yield little clean voice (SpongeBob: about 0.3 min per upload, music, SFX and the
+        # other characters), so it gets as many rounds as a singer
+        rounds = 12 if singer or srcmod.is_character_project(proj) else 8
 
         def enough(pr):
             return (pr.sung_seconds() if singer and not songs_exhausted(pr) else pr.kept_seconds()) / 60 >= TC["target_minutes"]
@@ -559,7 +562,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         def songs_exhausted(pr):
             return not [s for s in pr.sources if srcmod.is_sung(s) and s.status == "found"
                         and not s.note.startswith(NOT_USABLE)]
-        for rnd in range(12 if singer else 8):
+        for rnd in range(rounds):
             proj = P.Project.load(proj.name)
             if proj.reference.get("clip") and enough(proj):
                 break   # enough clean voice already (e.g. from the quality check's clips)
@@ -610,10 +613,10 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                     proj.save()
                 more = new + more
             blocked, tried = srcmod.blocked_share(proj.sources)
-            if (not more and not searched_blocked and tried >= 3 and blocked >= tried / 2
-                    and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]):
-                # most of what was found can't be had here (blocked in this region): other uploads, other words
-                searched_blocked = True
+            if not more and not searched_again and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]:
+                # everything found is used and it's still short (most of it couldn't be had here, or it yielded
+                # little clean voice): other uploads, other words, other sites, once
+                searched_again = True
                 character = srcmod.is_character_project(proj)
                 have = {s.id for s in proj.sources}
                 try:
@@ -629,7 +632,9 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                         proj = P.Project.load(proj.name)
                         proj.sources += [s for s in extra if s.id not in {x.id for x in proj.sources}]
                         proj.save()
-                    push("voice", 0.1, f"{srcmod.unavailable_note(person, proj.sources)}; trying other uploads and other sites")
+                    push("voice", 0.1, (f"{srcmod.unavailable_note(person, proj.sources)}; trying other uploads and other sites"
+                                        if tried >= 3 and blocked >= tried / 2 else
+                                        f"{mins:.1f} min of clean voice from everything found so far; looking for more of {person}"))
                     continue
             if not more and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]:
                 break   # nothing ticked left to try, and nothing more to tick
