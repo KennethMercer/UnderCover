@@ -151,10 +151,21 @@ async function addFiles(files) {
 }
 window.trainDrop = addFiles;
 
+// the list stays short: the first SOURCES_SHOWN, and any source that's prepared, failed, under way or added by hand;
+// "Show all" opens the rest (it says how many of them are ticked, since ticked sources get prepared shown or not)
+const SOURCES_SHOWN = 10;
 function renderSources() {
-  const p = T.proj, box = $("#tr-sources");
-  if (!p || !p.sources.length) { box.innerHTML = ""; return; }
-  box.innerHTML = p.sources.map(s => {
+  const p = T.proj, box = $("#tr-sources"), more = $("#tr-sources-more");
+  if (!p || !p.sources.length) { box.innerHTML = ""; more.hidden = true; return; }
+  if (T.allFor !== p.name) { T.allFor = p.name; T.allSources = false; }   // another project starts short again
+  const keep = (s, i) => T.allSources || i < SOURCES_SHOWN || s.status !== "found" || s.user;
+  const shown = p.sources.filter(keep), hidden = p.sources.filter((s, i) => !keep(s, i));
+  more.hidden = !hidden.length && !(T.allSources && p.sources.length > SOURCES_SHOWN);
+  if (hidden.length) {
+    const ticked = hidden.filter(s => s.selected).length;
+    more.textContent = `Show all ${p.sources.length} (${hidden.length} more${ticked ? `, ${ticked} of them ticked` : ""})`;
+  } else more.textContent = "Show fewer";
+  box.innerHTML = shown.map(s => {
     const mins = s.duration ? fmtTime(s.duration) : "";
     let side = `<span class="mono meta">${mins}</span>`;
     if (s.status === "ready") side = `<span class="tag ok">ready · ${s.extra?.phrases ?? 0} phrases</span>` + side;
@@ -183,6 +194,7 @@ function renderSources() {
   });
 }
 
+$("#tr-sources-more").onclick = () => { T.allSources = !T.allSources; renderSources(); };
 $("#tr-prepare").onclick = async () => {
   try { const r = await P("prepare"); follow(r.job, "prepare"); }
   catch (e) { showError(e.message, "Can't prepare yet"); }
