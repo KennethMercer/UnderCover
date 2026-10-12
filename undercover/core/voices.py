@@ -582,12 +582,54 @@ def _titled(s: str) -> str:
     return s if any(c.isupper() for c in s) else s.title()
 
 
+_TRAINED_SOURCE = re.compile(r"^trained in UnderCover: (?P<person>.+), [\d.]+ min, epoch \d+$")
+
+
+def person_in_source(source: str) -> str:
+    """The person named by the `source` of a voice trained here ("trained in UnderCover: Earth, Wind & Fire, 9.0 min,
+    epoch 30"): everything before the minutes and epoch, commas included. "" when the text isn't in that form."""
+    m = _TRAINED_SOURCE.match((source or "").strip())
+    return m.group("person").strip() if m else ""
+
+
 def trained_person(v: Voice) -> str:
-    """The person a voice trained here was made for (its training project's person, kept in `source`)."""
+    """The person a voice trained here was made for: `extra.person`, stored at export (phase 8), else read from
+    `source` for voices exported before that."""
+    stored = str((v.extra or {}).get("person") or "").strip()
+    if stored:
+        return stored
     src = v.source or ""
-    if src.startswith("trained in UnderCover: "):
-        return src.split(": ", 1)[1].split(",")[0].strip()
-    return ""
+    return person_in_source(src) or (src.split(": ", 1)[1].split(",")[0].strip() if src.startswith("trained in UnderCover: ") else "")
+
+
+def backfill_person() -> list[str]:
+    """One time per voice: add `extra.person` to voices trained here before export stored it. Only that key is written
+    into meta.json (nothing renamed or moved), after a byte-for-byte copy of the file next to it
+    (`meta.json.before-person`, kept); the rewrite is checked to equal the old content plus the one key. Voices whose
+    `source` doesn't name the person in the known form are left as they are. -> the voices changed."""
+    from . import fsutil
+    done = []
+    for meta in sorted(voices_dir().glob("*/meta.json")):
+        try:
+            d = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        ex = d.get("extra") or {}
+        person = person_in_source(d.get("source") or "")
+        if not ex.get("trained") or str(ex.get("person") or "").strip() or not person:
+            continue
+        bak = meta.with_name("meta.json.before-person")
+        if not bak.exists():
+            shutil.copyfile(meta, bak)
+        new = {**d, "extra": {**ex, "person": person}}
+        text = json.dumps(new, indent=2)
+        back = json.loads(text)
+        back["extra"].pop("person")
+        if back != d:   # never write anything but the one new key
+            continue
+        fsutil.write_text(meta, text)
+        done.append(meta.parent.name)
+    return done
 
 
 def default_display(v: Voice) -> str:

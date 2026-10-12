@@ -848,6 +848,62 @@ def u_display_names():
     return "5 defaults, set / clear round-trip, library + app APIs carry display and trained"
 
 
+@check("voice person (phase 8): stored at export, a name with commas survives, the one-time backfill (backup first, one key)")
+def u_person():
+    from undercover.core import voices as V
+    from undercover.doubleagent import night, service, trainer, project as P
+    from undercover.core.engine.rvc import index as rvc_index
+    comma = "Earth, Wind & Fire"
+    with isolated_data():
+        # 1. export stores the person it was made for (the heavy parts stubbed: no torch data, no real RVC model)
+        proj = P.Project.create(comma, "speaking")
+        tdir = proj.dir / "train"
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "e5.pth").write_bytes(b"x")
+        proj.train = {"best": 5, "train_minutes": 9.0, "saves": [{"epoch": 5, "identity": 0.8}]}
+        proj.save()
+        real = (trainer.torch.load, trainer.index_feats, trainer.f0_median, trainer.f0_range, V.install, rvc_index.write_ivf_flat)
+        trainer.torch.load = lambda *a, **k: {}
+        trainer.index_feats = lambda data: trainer.torch.zeros(4, 4)
+        trainer.f0_median, trainer.f0_range = (lambda d: 110.0), (lambda d: [90.0, 110.0, 150.0])
+        rvc_index.write_ivf_flat = lambda dest, feats: Path(dest).write_bytes(b"i")
+        V.install = lambda files, name, source="", overwrite=False: _fake_voice(name, source)
+        try:
+            trainer.export_voice(proj, 5, "earth-wind-fire-uc")
+        finally:
+            trainer.torch.load, trainer.index_feats, trainer.f0_median, trainer.f0_range, V.install, rvc_index.write_ivf_flat = real
+        v = V.get_voice("earth-wind-fire-uc")
+        assert v.extra["person"] == comma and v.extra["trained"] and v.extra["project"] == proj.name, v.extra
+        assert V.trained_person(v) == comma and V.display_name(v) == comma and night._person_from_voice(v) == comma
+        # 2. voices exported before it: the person is read from `source` (whole, commas included); backfill adds the key
+        old = {"hello-uc": ("trained in UnderCover: Hello, Goodbye, 12.0 min, epoch 7", {"trained": True, "project": "p1"}),
+               "plain-uc": ("trained in UnderCover: barack obama, 12.0 min, epoch 5", {"trained": True}),
+               "odd-uc": ("trained in UnderCover: Somebody", {"trained": True}),
+               "mixed-uc": ("trained in UnderCover: Old Name, 3.0 min, epoch 2", {"trained": True, "person": "Kept Name"}),
+               "down-uc": ("https://huggingface.co/x/y", {"person": "Michael Jackson"})}
+        for n, (src, ex) in old.items():
+            _fake_voice(n, src, ex)
+        meta = lambda n: V.voices_dir() / n / "meta.json"
+        before = {n: meta(n).read_bytes() for n in old}
+        assert V.trained_person(V.get_voice("hello-uc")) == "Hello, Goodbye" and V.trained_person(V.get_voice("odd-uc")) == "Somebody"
+        assert service.installed_for(comma) and service.installed_for(comma)[0].name == "earth-wind-fire-uc"
+        names = V.backfill_person()
+        assert sorted(names) == ["hello-uc", "plain-uc"], names
+        for n in old:
+            bak = meta(n).with_name("meta.json.before-person")
+            if n in names:   # the old file kept byte for byte; the new one is the old content plus the one key
+                assert bak.exists() and bak.read_bytes() == before[n], f"{n}: no exact backup"
+                new, was = json.loads(meta(n).read_text(encoding="utf-8")), json.loads(before[n])
+                assert new["extra"].pop("person") and new == was, f"{n}: more than the one key changed"
+            else:
+                assert meta(n).read_bytes() == before[n] and not bak.exists(), f"{n} was touched"
+        assert V.get_voice("hello-uc").extra["person"] == "Hello, Goodbye" and V.get_voice("plain-uc").extra["person"] == "barack obama"
+        assert V.display_name(V.get_voice("plain-uc")) == "Barack Obama"
+        assert V.backfill_person() == [] and (V.voices_dir() / "hello-uc" / "meta.json.before-person").read_bytes() == before["hello-uc"]
+        assert [v.name for v in V.list_voices()].count("hello-uc") == 1, "a backup folder or file became a voice"
+    return "export stores it, \"Hello, Goodbye\" read whole, 2 of 5 old voices backfilled (exact backups), the others untouched"
+
+
 @check("one-shot grammar: '<song> by <artist> as <person>', '<song> as <person>', and today's forms")
 def u_grammar():
     from undercover.frontman.oneshot import parse_request as pr
@@ -1599,7 +1655,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_grammar, u_ambiguity, u_ask_flow):
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
