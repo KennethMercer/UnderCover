@@ -2400,6 +2400,10 @@ def _fake_demo_voice(d: Path):
                                              "extra": {"demo": True, "trained": False, "person": "Agent Smoke",
                                                        "note": "demo voice, made for UnderCover, not a real person"}}),
                                  encoding="utf-8")
+    import hashlib
+    pth = (d / "model.pth").read_bytes()
+    (d / "manifest.json").write_text(json.dumps({"files": {"model.pth": {"size": len(pth), "sha256": hashlib.sha256(pth).hexdigest()}}}),
+                                     encoding="utf-8")
 
 
 @check("First assignment: state once per install, the seeds (sample song, demo voice), done, reset; the demo voice is nobody to search for")
@@ -2463,6 +2467,14 @@ def u_tutorial():
             assert tutorial.reset()["seeded"] == {"song": tutorial.sample_song_id(), "voice": "agent-smoke"}   # nothing doubled
             assert len([m for m in config_path("uploads_dir").glob("*.json")
                         if json.loads(m.read_text(encoding="utf-8")).get("sample")]) == 1
+            # the shipped files must match their manifest (they aren't in git): a changed or missing one isn't seeded
+            voices.remove_voice("agent-smoke")
+            (tutorial.DEMO / "model.pth").write_bytes(b"something else entirely")
+            assert "manifest" in (tutorial.demo_files() or "") and tutorial.seed_voice() is None
+            (tutorial.DEMO / "model.pth").unlink()
+            assert "make_demo_voice" in (tutorial.demo_files() or "") and tutorial.seed_voice() is None
+            (tutorial.DEMO / "model.pth").write_bytes(b"not really a model")
+            assert tutorial.demo_files() is None and tutorial.seed_voice() == "agent-smoke"
             # a folder of that name that isn't the demo is never touched
             voices.remove_voice("agent-smoke")
             other = voices.voices_dir() / "agent-smoke"
@@ -2478,7 +2490,9 @@ def u_tutorial():
     import inspect
     from undercover.doubleagent import api as da_api   # "Do it all" called a local function named like the module it uses
     assert "def service(" not in inspect.getsource(da_api.start_auto), "start_auto shadows the service module again"
-    return "fresh: done null + both seeds; existing install; done; reset re-seeds once; the demo voice never searched for"
+    why = tutorial.demo_files()   # the real shipped demo voice: its files are made by tools/make_demo_voice.py, not kept in git
+    return ("fresh: done null + both seeds; existing install; done; reset re-seeds once; manifest checked; never searched for; "
+            + ("the shipped demo voice matches its manifest" if why is None else f"NOTE: {why}"))
 
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
