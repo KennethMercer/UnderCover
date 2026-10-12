@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from ..core import gpu, jobs, phone
 from ..core.config import CONFIG, ROOT, path
-from ..core.files import roots as _roots
+from ..core.files import AUDIO_EXT, roots as _roots
 from ..core.jobs import GPU_QUEUE, JOBS, STATUS, Cancelled, Job, friendly, gpu_worker
 from ..safehouse import api as safehouse_api
 from ..frontman import api as frontman_api
@@ -435,6 +435,8 @@ class Handler(BaseHTTPRequestHandler):
         f = (root / unquote(parts[3])).resolve()
         if root not in f.parents or not f.is_file():
             return self._error("That file no longer exists.", 404)
+        if self.remote and f.suffix.lower() not in AUDIO_EXT:   # a phone plays and downloads audio, nothing else (phase 11)
+            return self._error("That file no longer exists.", 404)
         size = f.stat().st_size
         start, end = 0, size - 1
         rng = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
@@ -689,6 +691,16 @@ class PhoneServer(ExclusiveServer):
     """The second listener, on the home-network address, only while Phone access is on (app/phone_api.py)."""
     phone = True   # every request it answers comes from the network
     daemon_threads = True
+
+    def server_bind(self):
+        """As ExclusiveServer, without HTTPServer's reverse DNS lookup of the address (getfqdn: ~5 s for an address
+        with no name, so switching Phone access on hung that long)."""
+        import socket
+        import socketserver
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def _loopback(addr: str) -> bool:
