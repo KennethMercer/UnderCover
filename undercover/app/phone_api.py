@@ -80,6 +80,11 @@ ROUTES = [
     ("POST", r"/api/doctor/fix/.+", "pc", "the Doctor's Fixes"),
     ("GET", r"/api/doctor/bundle|/api/doctor/bundle\.zip", "pc", "the diagnostics file"),
     ("POST", r"/api/doctor/open-logs", "pc", "opens the logs folder on the PC"),
+    # Themes (phase 14): a phone may read and use them; making, importing and deleting are done on the PC
+    ("GET", r"/api/themes", "phone", "the theme list"),
+    ("GET", rf"/api/themes/{_ID}/(export|theme\.css|preview\.png|fonts/[^/]+)", "phone", "a theme's css, fonts, preview, file"),
+    ("POST", r"/api/themes|/api/themes/import", "pc", "saving or importing a theme"),
+    ("DELETE", rf"/api/themes/{_ID}", "pc", "deleting a theme"),
     # Phone access itself
     ("GET|POST", r"/api/phone", "pc", "Phone access settings"),
     ("POST", r"/api/phone/(pair|pair/cancel|revoke)", "pc", "pairing and Revoke"),

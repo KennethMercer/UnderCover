@@ -46,11 +46,13 @@ def set_values(section: str, values: dict, config_file: Path | None = None):
 
 
 def path(key: str) -> Path:
-    """Absolute path for a [paths] entry, created if missing. voices_dir (phase 4b) defaults to <models_dir>/voices,
-    so config files from before it existed keep working."""
+    """Absolute path for a [paths] entry, created if missing. voices_dir (phase 4b) defaults to <models_dir>/voices and
+    themes_dir (phase 14) to <the library's folder>/themes, so config files from before them keep working."""
     v = CONFIG["paths"].get(key)
     if v is None and key == "voices_dir":
         p = path("models_dir") / "voices"
+    elif v is None and key == "themes_dir":
+        p = path("uploads_dir").parent / "themes"
     else:
         p = Path(CONFIG["paths"][key])
         if not p.is_absolute():

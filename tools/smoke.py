@@ -1892,6 +1892,158 @@ def u_phone_doctor():
     return "allow, block wins, no rule, unreadable, other profile, UDP only, disabled, ports, any program, firewall off; rows"
 
 
+# ---------------------------------------------------------------- themes (phase 14)
+
+def _theme_css(tid, extra_dark="", extra=""):
+    return (f':root[data-uc-theme="{tid}"] {{ --base: #0b0a09; --fg: oklch(0.95 0.01 80); --c-frontman: #c9a45c; '
+            f'--display: "Manrope", system-ui, sans-serif; --r: 8px; --lit: 22%; {extra_dark} }}\n'
+            f":root[data-uc-theme='{tid}'][data-theme='light'] {{ --base: #f2efe9; --fg: #1a1714; }}\n"
+            '@font-face { font-family: "Manrope"; src: url("fonts/Manrope.woff2") format("woff2"); font-weight: 200 800; }\n'
+            + extra)
+
+
+def _theme_zip(tid="smoke-noir", css=None, files=None, top=None, raw=None):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:   # compressed: a bomb is small on the outside
+        if raw:
+            for zi, data in raw:
+                z.writestr(zi, data)
+        else:
+            t = top or tid
+            z.writestr(f"{t}/theme.json", json.dumps({"id": tid, "name": "Smoke Noir", "author": "smoke", "modes": ["dark", "light"]}))
+            z.writestr(f"{t}/theme.css", css if css is not None else _theme_css(tid))
+            z.writestr(f"{t}/fonts/Manrope.woff2", b"wOF2" + b"\0" * 64)
+            z.writestr(f"{t}/fonts/OFL-Manrope.txt", "SIL Open Font License")
+            for name, data in (files or {}).items():
+                z.writestr(f"{t}/{name}", data)
+    return buf.getvalue()
+
+
+@check("themes: the css contract, hostile .uctheme files refused, round trip, load-time check, shipped ones untouchable")
+def u_themes():
+    import zipfile
+    from undercover.core import themes
+    ok = themes.check_css(_theme_css("x1"), "x1", {"Manrope.woff2"})
+    assert ok == [], ok
+    assert themes.check_css("/* Case File: the tokens are app.css's */", "casefile") == []
+    bad_css = {
+        "url(http)": _theme_css("x1", "--base: url(http://evil.example/a.png);"),
+        "url() in @font-face": _theme_css("x1", extra='@font-face { font-family: "A"; src: url("https://evil.example/a.woff2"); }'),
+        "@import": '@import url("x.css");\n' + _theme_css("x1"),
+        "expression": _theme_css("x1", "--fg: expression(alert(1));"),
+        "escape": _theme_css("x1", "--fg: \\75 rl(x);"),
+        "another selector": _theme_css("x1", extra="body { display: none; }"),
+        "another theme's block": _theme_css("x1").replace('"x1"', '"x2"', 1),
+        "a non-token property": _theme_css("x1", "display: none;"),
+        "!important": _theme_css("x1", "--fg: red !important;"),
+        "nesting": ':root[data-uc-theme="x1"] { --fg: red; @media (x) { --fg: blue; } }',
+        "a font it doesn't have": _theme_css("x1").replace("Manrope.woff2", "Other.woff2"),
+        "a climbing font url": _theme_css("x1").replace('fonts/Manrope.woff2', 'fonts/../../x.woff2'),
+        "<style> break-out": _theme_css("x1", "--fg: red;</style><script>"),
+    }
+    for why, css in bad_css.items():
+        assert themes.check_css(css, "x1", {"Manrope.woff2"}), f"{why} passed the css check"
+    with isolated_data() as t:
+        saved = themes.SHIPPED
+        shipped = t / "shipped"
+        (shipped / "midnight" / "fonts").mkdir(parents=True)
+        (shipped / "midnight" / "theme.json").write_text(json.dumps({"id": "midnight", "name": "Midnight"}), encoding="utf-8")
+        (shipped / "midnight" / "theme.css").write_text(_theme_css("midnight").split("@font-face")[0], encoding="utf-8")
+        themes.SHIPPED = shipped
+        try:
+            assert storage_inside(themes.library(), t), themes.library()
+            hostile = {
+                "a climbing path": _theme_zip(raw=[("smoke-x/../../evil.css", "x"), ("smoke-x/theme.json", "{}")]),
+                "an absolute path": _theme_zip(raw=[("/smoke-x/theme.css", "x")]),
+                "a backslash path": _theme_zip(raw=[("smoke-x\\..\\evil.css", "x")]),
+                "a script": _theme_zip(files={"evil.js": "alert(1)"}),
+                "an svg": _theme_zip(files={"preview.svg": "<svg/>"}),
+                "an exe in fonts": _theme_zip(files={"fonts/x.exe": "MZ"}),
+                "a png that isn't": _theme_zip(files={"preview.png": "not a png"}),
+                "url(http) in the css": _theme_zip(css=_theme_css("smoke-noir", "--base: url(http://evil.example/x);")),
+                "@import": _theme_zip(css='@import "x.css";'),
+                "two folders": _theme_zip(raw=[("a1/theme.css", "x"), ("b2/theme.css", "y")]),
+                "a bad id": _theme_zip(top="Bad_Id!"),
+                "not a zip": b"PK not really",
+                "over 4 MB": b"PK" + b"\0" * (themes.MAX_BYTES + 1),
+                "a zip bomb": _theme_zip(files={"OFL-big.txt": "a" * (themes.MAX_BYTES + 10)}),
+            }
+            link = zipfile.ZipInfo("smoke-x/theme.css")
+            link.external_attr = (0o120777 << 16)
+            hostile["a symlink"] = _theme_zip(raw=[(link, "../../../config.toml")])
+            for why, data in hostile.items():
+                try:
+                    themes.import_zip(data)
+                    raise AssertionError(f"a theme with {why} was imported")
+                except themes.ThemeError:
+                    pass
+            assert sorted(x.name for x in themes.library().iterdir()) == [], "something was left behind by a refused import"
+            row = themes.import_zip(_theme_zip())
+            assert row["ok"] and row["id"] == "smoke-noir" and row["name"] == "Smoke Noir" and not row["shipped"], row
+            assert row["css"] == "/api/themes/smoke-noir/theme.css" and row["why"] is None, row
+            try:
+                themes.import_zip(_theme_zip())
+                raise AssertionError("an existing theme was replaced without asking")
+            except FileExistsError:
+                pass
+            themes.import_zip(_theme_zip(), replace=True)
+            name, data = themes.export("smoke-noir")   # round trip: export, delete, import the file again
+            assert name == "Smoke Noir.uctheme", name
+            themes.delete("smoke-noir")
+            assert not (themes.library() / "smoke-noir").exists()
+            again = themes.import_zip(data)
+            assert again["ok"] and themes.css_of("smoke-noir") == _theme_css("smoke-noir")
+            assert themes.file_of("smoke-noir", "fonts/Manrope.woff2").read_bytes().startswith(b"wOF2")
+            (themes.library() / "smoke-noir" / "theme.css").write_text(_theme_css("smoke-noir", "--base: url(//evil.example/x);"),
+                                                                         encoding="utf-8")
+            try:
+                themes.css_of("smoke-noir")
+                raise AssertionError("a hand-edited css with url() was served")
+            except themes.ThemeError:
+                pass
+            assert not [x for x in themes.listing() if x["id"] == "smoke-noir"][0]["ok"]
+            try:
+                themes.delete("midnight")
+                raise AssertionError("a shipped theme was deleted")
+            except themes.ThemeError:
+                pass
+            assert (shipped / "midnight" / "theme.css").exists()
+            try:
+                themes.import_zip(_theme_zip(tid="midnight"))
+                raise AssertionError("an import took a shipped theme's name")
+            except FileExistsError:
+                pass
+            import base64
+            made = themes.save({"json": {"id": "smoke-made", "name": "Made"}, "css": _theme_css("smoke-made"),
+                                "fonts": [{"file": "Manrope.woff2", "data": base64.b64encode(b"wOF2xx").decode()}]})
+            assert made["ok"], made
+            themes.save({"json": {"id": "smoke-made", "name": "Made again"}, "css": _theme_css("smoke-made"),
+                         "fonts": [{"file": "Manrope.woff2", "data": base64.b64encode(b"wOF2xx").decode()}]})
+            assert [x["name"] for x in themes.listing() if x["id"] == "smoke-made"] == ["Made again"]
+            try:
+                themes.save({"json": {"id": "midnight", "name": "Mine"}, "css": ""})
+                raise AssertionError("the maker saved over a shipped theme")
+            except FileExistsError:
+                pass
+            ids = {x["id"]: x["shipped"] for x in themes.listing()}
+            assert ids == {"midnight": True, "smoke-noir": False, "smoke-made": False}, ids
+            assert themes.export("midnight")[0] == "Midnight.uctheme"   # a friend can start from a shipped one
+        finally:
+            themes.SHIPPED = saved
+    real = [d for d in (ROOT / "undercover" / "web" / "themes").glob("*") if d.is_dir()] if (ROOT / "undercover" / "web" / "themes").is_dir() else []
+    for d in real:   # the shipped themes (they arrive with the look chat's build): the same check as an import
+        problems = themes.check_folder(d)
+        assert not problems, f"shipped theme {d.name}: {problems}"
+    return f"{len(bad_css)} bad css and {len(hostile)} hostile files refused; round trip; {len(real)} shipped themes checked"
+
+
+def storage_inside(a, b):
+    from undercover.core import storage
+    return storage._inside(a, b)
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -1929,6 +2081,9 @@ PHONE_SAMPLES = [
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
     ("POST", "/api/phone/revoke"),
+    ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
+    ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
+    ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
 ]
 
 
@@ -2112,6 +2267,38 @@ def a_phone():
     assert _lan("GET", "/api/status", token2)[0] == 200
     api("/api/phone", {"on": False})
     return f"{len(PHONE_SAMPLES)} routes walked ({opened} open), {refused} PC-only refused, revoke, switch off"
+
+
+@check("api: themes (list, import, css at load, export, delete) and the pages' Content-Security-Policy")
+def a_themes():
+    import urllib.request
+    r = api("/api/themes")
+    assert isinstance(r.get("themes"), list), r
+    req = urllib.request.Request(BASE + "/api/themes/import", data=_theme_zip("smoke-api"), method="POST",
+                                 headers={"Content-Type": "application/zip", "Origin": BASE})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        row = json.loads(resp.read())
+    assert row["ok"] and row["id"] == "smoke-api", row
+    with urllib.request.urlopen(BASE + "/api/themes/smoke-api/theme.css", timeout=30) as resp:
+        assert resp.headers["Content-Type"].startswith("text/css") and b'data-uc-theme="smoke-api"' in resp.read()
+    with urllib.request.urlopen(BASE + "/api/themes/smoke-api/export", timeout=30) as resp:
+        assert ".uctheme" in resp.headers["Content-Disposition"] and resp.read()[:2] == b"PK"
+    req = urllib.request.Request(BASE + "/api/themes/import", data=_theme_zip(files={"evil.js": "x"}), method="POST",
+                                 headers={"Content-Type": "application/zip", "Origin": BASE})
+    try:
+        urllib.request.urlopen(req, timeout=30)
+        raise AssertionError("a hostile theme was imported over the API")
+    except urllib.error.HTTPError as e:
+        assert e.code == 422 and "error" in json.loads(e.read())
+    assert api("/api/themes/smoke-api", method="DELETE")["ok"]
+    assert "smoke-api" not in [x["id"] for x in api("/api/themes")["themes"]]
+    for page in ("/", "/pair"):
+        with urllib.request.urlopen(BASE + page, timeout=30) as resp:
+            pol = resp.headers.get("Content-Security-Policy") or ""
+        for part in ("default-src 'self'", "style-src 'self' 'unsafe-inline'", "font-src 'self'", "object-src 'none'",
+                     "frame-ancestors 'none'", "'sha256-"):
+            assert part in pol, (page, part, pol)
+    return f"{len(r['themes'])} themes listed; import, css, export, refusal, delete; CSP on both pages"
 
 
 @check("api: status ready")
@@ -2518,7 +2705,7 @@ def a_cadence():
 # outside the scratch folder. The real folders are listed before and after the whole run and any difference fails it.
 
 SANDBOX_PORT = 7862
-WATCHED = ("uploads_dir", "output_dir", "models_dir", "cache_dir", "voices_dir")
+WATCHED = ("uploads_dir", "output_dir", "models_dir", "cache_dir", "voices_dir", "themes_dir")
 
 
 def real_dirs() -> dict:
@@ -2532,6 +2719,7 @@ def real_dirs() -> dict:
     cfg = tomllib.loads((base / "config.toml").read_text(encoding="utf-8"))["paths"]
     out = {k: (Path(v) if Path(v).is_absolute() else base / v) for k, v in cfg.items()}
     out.setdefault("voices_dir", out["models_dir"] / "voices")
+    out.setdefault("themes_dir", out["uploads_dir"].parent / "themes")
     return out
 
 
@@ -2557,7 +2745,8 @@ def _sandbox_config(root: Path, real: dict) -> tuple[Path, dict]:
     import re
     import tomllib
     mine = {"uploads_dir": root / "uploads", "output_dir": root / "output", "cache_dir": root / "cache",
-            "logs_dir": root / "logs", "voices_dir": root / "voices", "models_dir": real["models_dir"]}
+            "logs_dir": root / "logs", "voices_dir": root / "voices", "themes_dir": root / "themes",
+            "models_dir": real["models_dir"]}
     block = "[paths]\n" + "".join(f"{k} = '{v}'\n" for k, v in mine.items()) + "\n"
     text = re.sub(r"(?ms)^\[paths\][ \t]*$.*?(?=^\[|\Z)", lambda _: block, (ROOT / "config.toml").read_text(encoding="utf-8"), count=1)
     cfg = root / "config.toml"
@@ -2709,7 +2898,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -2721,7 +2910,7 @@ def main():
             print(f"API checks (a sandbox server on port {SANDBOX_PORT}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server():
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes):
                         fn()
                     if not a.no_cover:
                         a_cover()
