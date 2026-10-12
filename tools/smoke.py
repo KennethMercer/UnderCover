@@ -904,6 +904,93 @@ def u_pace_pitch():
             f"+{fast['pitch_off_st']} past their registers -> nudge {K.nudge_for(m)}; a debate pitch and Obama's 235 Hz: no nudge")
 
 
+@check("characters: detected from the search, scenes ranked first and talk unticked, the scenes' voice is the target, the one-shot's gate")
+def u_characters():
+    import contextlib
+    import numpy as np
+    from undercover.doubleagent import project as P, service, sources as S
+    from undercover.core.voices import get_voice
+    mk = lambda i, t, ch="", d=600: S.Source(id=f"v{i:02d}", url="", title=t, channel=ch, duration=d)
+    sponge = [mk(1, "SpongeBob Diaries Wants to Be SpongeTruths so Bad!", "Jackson Fanelli Podcast", 3000),
+              mk(2, "SpongeBob Cast Reunites To Talk 25 Years of Krabby Patties", "Esquire", 900),
+              mk(3, '"SpongeBob" Cast Takes a SpongeBob Trivia Quiz', "BuzzFeed Celeb", 700),
+              mk(4, "The Voices Of SpongeBob And Patrick Take The Co-Star Test", "BuzzFeed Celeb", 600),
+              mk(5, "Inspirational speech + song (Movie clip) The SpongeBob Movie", "TristeClips", 300),
+              mk(6, "Spongebob - Out of Character #114", "Out of Character", 1500),
+              mk(7, "SpongeBob Quotes for Every Occasion", "SpongeBob SquarePants Official", 600),
+              mk(8, "Best of SpongeBob Season 1 Compilation", "Nickelodeon", 1800)]
+    peter = [mk(i, t) for i, t in enumerate(["Family Guy - Peter Starts a Podcast with his Friends", "Family Guy - Peter Makes A Podcast",
+                                             "Family Guy - Peter Griffin on TED Talk.", "Family Guy - Peter Griffin does public radio",
+                                             "1999 Seth MacFarlane Interview before Family Guy premiered!", "Family Guy- Peter Learns how to be Black",
+                                             "Peter Griffin government speech"])]
+    obama = [mk(i, t) for i, t in enumerate(["Barack Obama full speech at the DNC", "President Barack Obama interview with Steve Kroft",
+                                             "Obama in conversation with Bruce Springsteen", "President Barack Obama town hall",
+                                             "Barack Obama 2008 victory speech", "Obama talks basketball podcast"])]
+    assert S.looks_like_character("SpongeBob", sponge) and S.show_of("SpongeBob", sponge) is None
+    assert S.looks_like_character("Peter Griffin", peter) and S.show_of("Peter Griffin", peter) == "family guy"
+    assert not S.looks_like_character("Barack Obama", obama) and S.show_of("Barack Obama", obama) is None
+    kind = {x.id: S.char_kind(x) for x in sponge}
+    assert [i for i, k in kind.items() if k == "scene"] == ["v05", "v07", "v08"], kind
+    assert S.char_kind(peter[0], "family guy") == "scene" and S.char_kind(peter[4], "family guy") == "talk"
+    # search(): a speaking search that finds a character searches again for scenes; talk is unticked, scenes first
+    class FakeYdl:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, q, download=False):
+            pool = sponge if any(w in q for w in ("interview", "speech", "podcast", "talks")) else sponge[4:]
+            return {"entries": [{"id": x.id, "title": x.title, "channel": x.channel, "duration": x.duration} for x in pool]}
+    ydl, S._ydl = S._ydl, FakeYdl
+    try:
+        found = S.search("SpongeBob", "speaking")
+    finally:
+        S._ydl = ydl
+    assert all((x.extra or {}).get("kind") in ("scene", "talk") for x in found)
+    talk = [x for x in found if x.extra["kind"] == "talk"]
+    assert talk and all(not x.selected and x.note == S.TALK_NOTE for x in talk), [(x.title, x.selected, x.note) for x in talk]
+    assert all(x.extra["kind"] == "scene" for x in found[:3]) and any(x.selected for x in found[:3]), [x.title for x in found]
+    assert not [x for x in found if x.id == "v08" and x.note.startswith("edited")], "a scene compilation was unticked"
+    # the target speaker: the podcast host talks most overall, the character is who the scenes are
+    with isolated_data():
+        proj = P.Project.create("SpongeBob", "speaking", name="zz-char")
+        proj.sources = [S.Source(id="pod", url="", title="SpongeBob Diaries podcast", duration=3000, extra={"kind": "talk"}),
+                        S.Source(id="sc1", url="", title="SpongeBob scenes", duration=600, extra={"kind": "scene"}),
+                        S.Source(id="sc2", url="", title="SpongeBob quotes", duration=600, extra={"kind": "scene"})]
+        rng = np.random.default_rng(5)
+        host, char, pat = (rng.standard_normal(64) for _ in range(3))
+        emb, phrases = {}, []
+        for src, voice, n in (("pod", host, 60), ("sc1", char, 12), ("sc2", char, 10), ("sc1", pat, 4)):
+            for i in range(n):
+                pid = f"{src}_{len(phrases):04d}"
+                e = voice + 0.15 * rng.standard_normal(64)
+                emb[pid] = (e / np.linalg.norm(e)).astype(np.float32)
+                phrases.append(P.Phrase(id=pid, source=src, start=i * 5.0, dur=4.0, noise=0.1))
+        proj.phrases = phrases
+        proj.save_embeddings(emb)
+        P.find_speakers(proj)
+        P.score(proj)
+        ref = proj.reference
+        assert ref["clip"].startswith("sc") and ref.get("scene_minutes", 0) > 1, (ref, proj.speakers)
+        kept = [p for p in proj.phrases if p.kept]
+        assert kept and all(p.source != "pod" for p in kept), sum(p.source == "pod" for p in kept)
+        proj.save()
+        # the gate: the same project trained on the host would be "weak: talk about SpongeBob"; on the scenes it's fine
+        v = _fake_voice("zz-char-uc", "trained in UnderCover: SpongeBob, 9.0 min, epoch 50",
+                        {"trained": True, "project": "zz-char", "likeness": 0.8, "train_minutes": 9.0, "person": "SpongeBob"})
+        q = service.voice_quality(get_voice(v.name))
+        assert q["ok"] and q["scene_share"] == 1.0, q
+        for p in proj.phrases:
+            p.choice = p.source == "pod"
+        proj.save()
+        q = service.voice_quality(get_voice(v.name))
+        assert not q["ok"] and q["scene_share"] == 0.0 and "talk about SpongeBob" in q["summary"] and q["action"] == {"kind": "improve", "target": v.name}, q
+        w = _fake_voice("zz-weak-uc", "trained in UnderCover: Zed, 3.0 min, epoch 5", {"trained": True, "likeness": 0.5, "train_minutes": 3.0})
+        q = service.voice_quality(get_voice(w.name))
+        assert not q["ok"] and len(q["problems"]) == 2, q
+        assert service.voice_quality(get_voice(_fake_voice("zz-dl", "https://x/y").name))["ok"]   # not trained here: not judged
+    return "SpongeBob / Peter Griffin characters, Obama a person; search: talk unticked, scenes first; target = the scenes' voice; gate"
+
+
 @check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
 def u_clipsound():
     import numpy as np
@@ -3004,7 +3091,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped):
         fn()
