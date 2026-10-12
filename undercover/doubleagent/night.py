@@ -57,8 +57,10 @@ def _project_for_item(item: dict, create: bool):
     from . import project as P
     try:
         if item["kind"] == "improve":
-            from ..core.voices import get_voice
+            from ..core.voices import get_voice, is_demo
             v = get_voice(item["target"])
+            if is_demo(v):
+                raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
             name = (v.extra or {}).get("project")
             if name:
                 try:
@@ -127,6 +129,9 @@ def candidates() -> list:
         ex = v.extra or {}
         c = {"voice": v.name, **voice_info(v), "minutes": ex.get("train_minutes"),
              "singing": None if ex.get("from_speech") is None else not ex.get("from_speech"), "likeness": None}
+        if c["demo"]:   # Agent Smoke: never offered for improving (its "person" is nobody to search for)
+            out.append({**c, "can": False, "note": "a demo voice made for UnderCover, not a real person, so there's nobody to find clips of", "cadence": service.cadence_status(v)})
+            continue
         if ex.get("trained"):
             person = _person_from_voice(v)
             proj = _project_for_item({"kind": "improve", "target": v.name}, create=False)
@@ -314,8 +319,12 @@ def _improve(job, item) -> dict:
 
 
 def _improve_target(target: str) -> str:
-    from ..core.voices import get_voice
-    return get_voice(target).name   # friendly error if it doesn't exist
+    from ..core.voices import get_voice, is_demo
+    v = get_voice(target)   # friendly error if it doesn't exist
+    if is_demo(v):
+        raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
+                         "of to improve it.")
+    return v.name
 
 
 def shown_voice(item: dict) -> str:

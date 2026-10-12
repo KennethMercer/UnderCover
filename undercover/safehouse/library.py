@@ -233,6 +233,7 @@ def songs() -> list[dict]:
             "size": _size(f), "stems": stems, "stems_size": sum(s["size"] for s in stems), "stems_old_model": old_model,
             "covers": len(used), "cover_titles": [Path(h["output"]).stem for h in used][:5], "last_used": last,
             "url": file_url(f) if f.exists() else None,
+            "sample": bool(m.get("sample")), "artist": m.get("artist") or "",   # the First assignment's song (phase 17)
         })
     out.sort(key=lambda x: -x["last_used"])
     return out

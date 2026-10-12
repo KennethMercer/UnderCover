@@ -666,9 +666,14 @@ def label_of(name: str | None, labels: dict[str, str] | None = None) -> str:
     return (labels if labels is not None else voice_labels()).get(name, name)
 
 
+def is_demo(v: Voice) -> bool:
+    """The demo voice (phase 17, "Agent Smoke"): synthetic, not a real person. Nothing searches for its "person"."""
+    return bool((v.extra or {}).get("demo"))
+
+
 def voice_info(v: Voice) -> dict:
-    """The two keys every voice API carries: `display` (string, may equal the id) and `trained` (bool)."""
-    return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained"))}
+    """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool) and `demo` (bool)."""
+    return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v)}
 
 
 def set_display(name: str, text: str) -> Voice:

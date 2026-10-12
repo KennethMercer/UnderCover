@@ -35,7 +35,7 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
-from . import doctor_api, phone_api, themes_api
+from . import doctor_api, phone_api, themes_api, tutorial
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -310,7 +310,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
-                                   "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"]})
+                                   "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
+                                   "tutorial": tutorial.status()})
             if p == "/api/voices":
                 return self._json(voices_json())
             if p == "/api/search":
@@ -366,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
         if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
                 or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)
                 or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)
-                or themes_api.handle(self, "POST", p)):
+                or themes_api.handle(self, "POST", p) or tutorial.handle(self, "POST", p)):
             return
         if p == "/api/voices/install":
             return self._start_install(self._body())
@@ -799,6 +800,10 @@ def main():
         print(f"YouTube downloader: yt-dlp {p['yt']} + solver {p.get('ejs') or 'missing'} ({p['source']})", flush=True)
     except Exception as e:   # noqa: BLE001 - never block startup: the venv's pair is used
         print(f"Couldn't choose the YouTube downloader: {e}", flush=True)
+    try:   # the First assignment (phase 17): once per install, an existing one is marked, a fresh one gets the seeds
+        tutorial.first_run()
+    except Exception as e:   # noqa: BLE001 - never block startup
+        print(f"Couldn't set up the First assignment: {e}", flush=True)
     try:   # covers get permanent ids once (a copy of the old history file is kept next to it)
         from ..frontman import history as cover_history
         cover_history.migrate()

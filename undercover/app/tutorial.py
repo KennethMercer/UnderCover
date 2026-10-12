@@ -1,0 +1,198 @@
+"""The First assignment's backend (phase 17; the page side is tutorial.js, contract docs/handoffs/tutorial.md).
+
+    /api/status            tutorial: {done: "YYYY-MM-DD" | "existing install" | null}
+    POST /api/tutorial/done    marks it done today            -> {tutorial: {done}}
+    POST /api/tutorial/reset   seeds the sample song and the demo voice again if they're gone, done = null -> {tutorial}
+
+- **State:** `tutorial.json` next to the config file (git-ignored; a sandbox has its own).
+- **First run** (`first_run`, at startup): no state yet. An install that already has covers or trained voices is an
+  "existing install" (no brief, nothing seeded; Replay seeds). A fresh one gets done = null and both seeds.
+- **The sample song** (`undercover/assets/sample/`: sample.json {title, artist, file, seconds, licence, notice} + the
+  audio): registered as a normal song with `sample: true`. No audio file = no sample song (the first step then says
+  "pick any song"). The user may delete it; Replay brings it back.
+- **The demo voice** "Agent Smoke" (`undercover/assets/demo-voice/agent-smoke/`, made by tools/make_demo_voice.py):
+  copied into voices_dir when it isn't there. Its meta says demo: true, trained: false; nothing treats its "person" as
+  someone to search for (core/voices.is_demo). The user may delete it; Replay brings it back.
+Seeding only adds; it never replaces or deletes anything of the user's.
+"""
+import json
+import shutil
+import threading
+import time
+from pathlib import Path
+
+from ..core import config, fsutil, storage
+from ..core.config import path
+from ..core.voices import ModelError
+
+ASSETS = Path(__file__).resolve().parents[1] / "assets"
+SAMPLE = ASSETS / "sample"
+DEMO = ASSETS / "demo-voice" / "agent-smoke"
+_LOCK = threading.Lock()
+
+
+def state_file() -> Path:
+    return Path(config.CONFIG_FILE).with_name("tutorial.json")
+
+
+def load() -> dict | None:
+    try:
+        st = json.loads(state_file().read_text(encoding="utf-8"))
+        return st if isinstance(st, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save(st: dict):
+    f = state_file()
+    if storage.ALLOWED_ROOTS is not None and not any(storage._inside(f, r) for r in storage.ALLOWED_ROOTS):
+        raise ModelError(f"Test mode: {f} is outside the test's folders.")
+    fsutil.write_text(f, json.dumps(st, indent=1))
+
+
+def status() -> dict:
+    st = load() or {}
+    return {"done": st.get("done")}
+
+
+def _existing_install() -> bool:
+    """Covers made, or voices trained here, before the tutorial existed."""
+    try:
+        from ..frontman.pipeline import history
+        if history():
+            return True
+    except Exception:   # noqa: BLE001
+        pass
+    from ..core.voices import list_voices
+    return any((v.extra or {}).get("trained") for v in list_voices())
+
+
+def first_run() -> dict:
+    """Once per install, at startup."""
+    with _LOCK:
+        if load() is not None:
+            return status()
+        if _existing_install():
+            _save({"done": "existing install", "since": time.strftime("%Y-%m-%d")})
+        else:
+            _save({"done": None, "since": time.strftime("%Y-%m-%d")})
+            seed()
+        return status()
+
+
+def mark_done() -> dict:
+    with _LOCK:
+        st = load() or {}
+        st["done"] = time.strftime("%Y-%m-%d")
+        _save(st)
+        return {"tutorial": status()}
+
+
+def reset() -> dict:
+    """Replay: the seeds back if they're gone, and the brief shows again."""
+    with _LOCK:
+        seeded = seed()
+        st = load() or {}
+        st["done"] = None
+        _save(st)
+        return {"tutorial": status(), "seeded": seeded}
+
+
+# ---------------------------------------------------------------- the seeds
+
+def seed() -> dict:
+    """Add the sample song and the demo voice when they're missing. Never replaces or removes anything."""
+    out = {"song": None, "voice": None}
+    try:
+        out["song"] = seed_song()
+    except (OSError, ValueError, ModelError) as e:
+        print(f"The sample song couldn't be added: {e}", flush=True)
+    try:
+        out["voice"] = seed_voice()
+    except (OSError, ModelError) as e:
+        print(f"The demo voice couldn't be added: {e}", flush=True)
+    return out
+
+
+def sample_info() -> dict | None:
+    """sample.json, when its audio file is there too (else None: no sample song yet)."""
+    try:
+        info = json.loads((SAMPLE / "sample.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    f = SAMPLE / str(info.get("file") or "")
+    return info if info.get("file") and f.is_file() and f.parent == SAMPLE else None
+
+
+def sample_song_id() -> str | None:
+    """The sample song's id in this library, if it's there."""
+    for m in path("uploads_dir").glob("*.json"):
+        try:
+            if json.loads(m.read_text(encoding="utf-8")).get("sample"):
+                return m.stem
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def seed_song() -> str | None:
+    info = sample_info()
+    if info is None or sample_song_id():
+        return sample_song_id() if info else None
+    from ..frontman.songs import register_song
+    up = path("uploads_dir")
+    if storage.ALLOWED_ROOTS is not None and storage.refuse([up]):
+        raise ModelError(storage.refuse([up]))
+    src = SAMPLE / info["file"]
+    tmp = up / f"sample_{int(time.time())}{src.suffix.lower()}"
+    shutil.copyfile(src, tmp)   # register_song moves it into place, named by its content
+    meta = register_song(tmp, f"{info.get('title') or 'Sample'}{src.suffix.lower()}",
+                         extra={"sample": True, "title": info.get("title") or "Sample", "artist": info.get("artist") or "",
+                                "licence": info.get("licence") or "", "notice": info.get("notice") or ""})
+    return meta["id"]
+
+
+def seed_voice() -> str | None:
+    """Copy the demo voice into voices_dir when no demo voice is there."""
+    from ..core.voices import list_voices
+    if not (DEMO / "meta.json").is_file() or not (DEMO / "model.pth").is_file():
+        return None
+    have = next((v.name for v in list_voices() if (v.extra or {}).get("demo")), None)
+    if have:
+        return have
+    dest = path("voices_dir") / DEMO.name
+    if dest.exists():   # a folder of that name that isn't the demo: leave it alone
+        return None
+    if storage.ALLOWED_ROOTS is not None and storage.refuse([dest]):
+        raise ModelError(storage.refuse([dest]))
+    tmp = path("voices_dir") / f".{DEMO.name}-seeding"
+    if tmp.exists():
+        storage.remove_files([], [path("voices_dir")], dirs=[tmp])   # a seed an earlier start didn't finish
+    # meta.json goes in last: the voice list only sees folders that have one (a dot folder too)
+    shutil.copytree(DEMO, tmp, ignore=shutil.ignore_patterns("meta.json"))
+    meta = json.loads((DEMO / "meta.json").read_text(encoding="utf-8"))
+    meta.update(name=DEMO.name, dir=str(dest), pth=str(dest / "model.pth"),
+                index=str(dest / "model.index") if (tmp / "model.index").exists() else "")
+    (tmp / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    fsutil.retry(lambda: tmp.replace(dest))
+    from ..core import gpu
+    gpu.forget_voice(DEMO.name)
+    return DEMO.name
+
+
+# ---------------------------------------------------------------- routes
+
+def handle(h, method: str, p: str) -> bool:
+    if not p.startswith("/api/tutorial/"):
+        return False
+    if method != "POST":
+        h._error("Not found", 404)
+        return True
+    h._body()
+    if p == "/api/tutorial/done":
+        h._json(mark_done())
+    elif p == "/api/tutorial/reset":
+        h._json(reset())
+    else:
+        h._error("Not found", 404)
+    return True
