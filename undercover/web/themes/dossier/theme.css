@@ -1,0 +1,22 @@
+/* Dossier: The file on the desk: kraft and sepia, the warmest grading, corners a step squarer. A theme is tokens only (docs/design/themes.md). */
+:root[data-uc-theme="dossier"] {
+  --base: #0e0b08; --panel-base: #171310; --panel-2-base: #1f1a16; --panel-3-base: #29231d; --line-base: #2c2620;
+  --fg: #efe6d6; --muted: #9e9178; --accent-ink: #0e0b08;
+  --c-frontman: #c99c52; --c-doubleagent: #bd8275; --c-speakeasy: #8aa9a3; --c-safehouse: #aba593;
+  --c-frontman-deep: #7b5316; --c-doubleagent-deep: #6b3326; --c-speakeasy-deep: #214640; --c-safehouse-deep: #403a30;
+  --ok: #96b78f; --warn: #d1ae63; --err: #d2857a;
+  --wave: #38322d; --wave-on: #c99c52; --wave-alt: #8aa9a3;
+  --lit: 18%; --tint: 8%; --tint2: 9%; --lamp: 13%;
+  --display: "Figtree", "Segoe UI", system-ui, sans-serif; --body: "Figtree", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, ui-monospace, monospace;
+  --r: 8px;
+}
+:root[data-uc-theme="dossier"][data-theme="light"] {
+  --base: #ebe3d3; --panel-base: #f8f3e8; --panel-2-base: #ece4d4; --panel-3-base: #e0d6c2; --line-base: #d4c9b4;
+  --fg: #1a140c; --muted: #6a5f4d; --accent-ink: #fbf6ea;
+  --c-frontman: #75500f; --c-doubleagent: #7d3528; --c-speakeasy: #2b5a52; --c-safehouse: #524b3e;
+  --c-frontman-deep: #b07f3a; --c-doubleagent-deep: #ac6353; --c-speakeasy-deep: #5a8980; --c-safehouse-deep: #857c6b;
+  --ok: #357048; --warn: #7d5a12; --err: #a83f2f;
+  --wave: #cfc6b4; --wave-on: #75500f; --wave-alt: #2b5a52;
+  --lit: 11%; --tint: 5%; --tint2: 4%; --lamp: 9%;
+}

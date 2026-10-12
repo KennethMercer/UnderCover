@@ -5,8 +5,8 @@
 // loadVoices, VOL), work.js (W, renderQueue, loadCandidates, fmtMin) and shell.js (showTab).
 // "Keep this one" (phase 9): a voice with a new cadence waiting shows "Listen and choose" ([data-cad-ab]); it opens the
 // #cad-ab block in that card (one at a time): both readings of the same line, button[data-keep="current"|"pending"]
-// and a textarea for why. Blind by default (the ear decides): the readings are A and B, in an order fixed per pair;
-// "Which is which?" names them, and keeping one says which it was. AB_BLIND = false labels them plainly.
+// and a textarea for why. Always blind (the user's call: the ear decides): the readings are only A and B, in an order
+// fixed per pair; keeping one says which it was.
 
 const DA = { samples: {}, all: false, audio: new Audio(), playing: null, cands: [],
              ab: null };   // the open A/B: { voice, st (GET .../cadence), why, err, busy }
@@ -80,15 +80,6 @@ function renderVoiceCards(cands) {
       a.onpause = a.onended = () => sd.classList.remove("playing");
       a.ontimeupdate = () => { bar.style.width = `${Math.min(100, a.currentTime / (a.duration || 1) * 100)}%`; };
     });
-    const rv = $("[data-ab-reveal]", ab);
-    if (rv) rv.onclick = () => {   // in place: a reading that's playing keeps playing
-      DA.ab.reveal = !DA.ab.reveal;
-      $$(".ab-side", ab).forEach(sd => {
-        $(".ab-name", sd)?.remove();
-        if (DA.ab.reveal) $(".ab-head", sd).insertAdjacentHTML("beforeend", `<span class="ab-name">${sd.dataset.side === "current" ? "Current" : "New"}</span>`);
-      });
-      rv.textContent = DA.ab.reveal ? "Hide which is which" : "Which is which?";
-    };
     const why = $("#cad-ab-why", ab);
     if (why) why.oninput = () => { DA.ab.why = why.value; };
     $$("[data-keep]", ab).forEach(b => b.onclick = () => keepAb(b.dataset.keep));
@@ -99,18 +90,16 @@ function renderVoiceCards(cands) {
   });
 }
 const abUrl = (voice, rest = "") => `/api/train/voices/${encodeURIComponent(voice)}/cadence${rest}`;
-const AB_BLIND = true;
 // which reading is A: fixed per pair (from the new pack's id), so a redraw or a second look keeps the letters
 const abOrder = st => [...String(st.pending.id)].reduce((n, c) => n + c.charCodeAt(0), 0) % 2 ? ["pending", "current"] : ["current", "pending"];
 const abLetter = (st, w) => "AB"[abOrder(st).indexOf(w)];
 function abHtml() {
   const a = DA.ab, st = a.st;
   if (!st || !st.ready) return `<div id="cad-ab" data-voice="${esc(a.voice)}"><p class="meta">${esc(a.err || (st ? "Making a short reading with each cadence…" : "Loading…"))}</p></div>`;
-  const named = !AB_BLIND || a.reveal;
   const side = w => {
     const s = st[w], sc = s.scores || {}, L = abLetter(st, w);
     return `<div class="ab-side" data-side="${w}">
-      <div class="ab-head"><span class="ab-letter">${L}</span>${named ? `<span class="ab-name">${w === "current" ? "Current" : "New"}</span>` : ""}</div>
+      <div class="ab-head"><span class="ab-letter">${L}</span></div>
       <div class="ab-player"><button class="ab-play" type="button" aria-label="Play ${L}"><svg class="ico i-play" aria-hidden="true"><use href="#g-play"/></svg><svg class="ico i-pause" aria-hidden="true"><use href="#g-pause"/></svg></button>
         <div class="ab-bar"><i></i></div></div>
       <audio preload="none" src="${abUrl(st.voice, `/sample/${w}`)}?v=${encodeURIComponent(s.id)}"></audio>
@@ -121,8 +110,7 @@ function abHtml() {
     <div class="ab-q"><b>Which sounds more like them?</b><span class="meta">Both read the same line: “${esc(st.line)}”</span></div>
     <div class="ab-sides">${abOrder(st).map(side).join("")}</div>
     <textarea id="cad-ab-why" rows="2" placeholder="What did you hear? (optional)">${esc(a.why || "")}</textarea>
-    <div class="ab-foot">${AB_BLIND ? `<button class="linkbtn" type="button" data-ab-reveal>${named ? "Hide which is which" : "Which is which?"}</button>` : ""}
-      <span class="meta">The one you keep is the voice's cadence from then on; the other is set aside, not deleted.</span></div>
+    <p class="meta">The one you keep is the voice's cadence from then on; the other is set aside, not deleted.</p>
     ${a.err ? `<p class="meta">${esc(a.err)}</p>` : ""}</div>`;
 }
 async function openAb(voice) {

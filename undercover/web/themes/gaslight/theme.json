@@ -1,0 +1,17 @@
+{
+  "id": "gaslight",
+  "name": "Gaslight",
+  "author": "UnderCover",
+  "licence": "same as UnderCover",
+  "version": "1.0",
+  "modes": [
+    "dark",
+    "light"
+  ],
+  "based_on": "casefile",
+  "fonts": [
+    "Hanken Grotesk",
+    "Red Hat Mono"
+  ],
+  "about": "A lamp through fog: green-black air, brass and verdigris."
+}
