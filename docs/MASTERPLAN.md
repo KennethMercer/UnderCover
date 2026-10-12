@@ -45,6 +45,10 @@ These are the principles that have settled every argument so far. When the docs 
    one interface. If adding something means editing three modules, the seam is in the wrong place.
 8. **Honesty over polish.** A phase that finds a bug in its own work says so, with the cause. Handoffs record what was
    measured and what was skipped. A review that found nothing says "nothing", not "looks good".
+9. **Test like an arbitrary machine.** The app is judged on what any user could fetch, never on the maker's own
+   media. Offered the whole SpongeBob series from their drive, the user said: "I don't think we should cheat like
+   that, the app should have to work with what it would be able to access on an arbitrary machine." When something
+   can't be had (a region block), the app says so plainly and offers the user's own clips as a choice, not a shortcut.
 
 ## How the work is done
 
