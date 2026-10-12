@@ -91,6 +91,7 @@ async function pollStatus() {
   try {
     const s = await api("/api/status");
     const gpu = $("#chip-gpu");
+    document.body.dataset.gpu = s.gpu ? "ok" : s.cpu_mode ? "cpu" : "wait";
     gpu.innerHTML = s.gpu ? `<i class="dot"></i><span>${esc(s.gpu.replace("AMD Radeon ", ""))} · ${s.vram_gb} GB</span>`
                   : s.cpu_mode ? `<i class="dot wait"></i><span title="No supported graphics card: covers are slow and training is off">Processor only (slow)</span>`
                           : `<i class="dot wait"></i><span>Checking GPU…</span>`;
@@ -112,6 +113,7 @@ async function pollStatus() {
     S.modelsReady = s.models === "ready"; S.firstRun = !!s.first_run;
     setTimeout(pollStatus, s.models === "ready" ? 5000 : 1000);
   } catch (e) {
+    document.body.dataset.gpu = "bad";
     $("#chip-gpu").innerHTML = `<i class="dot bad"></i><span>Not connected</span>`;
     setTimeout(pollStatus, 3000);
   }
