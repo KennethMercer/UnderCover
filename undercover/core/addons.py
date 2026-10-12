@@ -264,6 +264,8 @@ def update_pinned(addon_id: str) -> dict:
     s = _state()
     s.setdefault(addon_id, {}).update({"updated": time.strftime("%Y-%m-%dT%H:%M:%S"), "from": st["installed"]})
     _save(s)
+    from . import manifest
+    manifest.note_package(st["package"], after)   # the install record follows, so the Doctor doesn't call it changed
     return {"before": st["installed"], "after": after, "pinned": st["pinned"], "changed": True}
 
 

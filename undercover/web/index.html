@@ -571,7 +571,22 @@
       <div class="sys"><span><b>Models</b><small id="sys-models">Loading…</small></span><span class="dotw now" id="sys-models-st">loading</span></div>
       <div class="sys"><span><b>YouTube downloader</b><small>Finds songs and clips. YouTube changes often; an update usually fixes downloads that start failing.</small>
         <small id="lib-ytdlp-st"></small><span class="kv2" id="lib-ytdlp" data-deep></span></span><button class="btn" id="lib-ytdlp-go" type="button" hidden>Update</button></div>
+      <div class="sys" id="sys-about"><span><b>UnderCover</b><small id="sys-version">…</small><span class="kv2" id="sys-about-deep" data-deep></span></span>
+        <button class="btn" id="sys-logs" type="button">Open logs</button></div>
     </div>
+    <section class="rn-sec" id="sys-sweep">
+      <div class="rn-lbl"><b>Sweep</b><small id="sys-doctor-sum">The Doctor checks UnderCover's own parts and fixes the safe things. It never touches your songs, voices, covers or speech.</small></div>
+      <div class="rn-list" id="sys-doctor"></div>
+      <div class="row"><button class="btn" id="sys-doctor-full" type="button">Check everything</button>
+        <button class="linkbtn" id="sys-bundle" type="button">Save a diagnostics file…</button><span class="meta" id="sys-doctor-when" data-deep></span></div>
+      <div class="sys-bundle" id="sys-bundle-box" hidden>
+        <p><b>What goes in the file</b> <span class="meta" id="sys-bundle-size"></span></p>
+        <ul class="sys-bundle-list" id="sys-bundle-list"></ul>
+        <p class="meta" id="sys-bundle-note"></p>
+        <div class="row"><a class="btn primary" id="sys-bundle-save" href="/api/doctor/bundle.zip" download>Save it</a>
+          <button class="linkbtn" id="sys-bundle-cancel" type="button">Cancel</button></div>
+      </div>
+    </section>
     <div class="row sys-btns"><button class="btn" type="button" data-restart>Restart UnderCover</button>
       <button class="btn danger" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button>
       <span class="meta">Quit stops it on this PC; start it again with UnderCover.bat.</span></div>
