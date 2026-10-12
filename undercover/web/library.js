@@ -247,10 +247,10 @@ function coverDetail(d, c) {
   d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3><p class="meta">sung by <b>${vname(c.voice)}</b>${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""} · ${esc(when(c.created))}</p></div></div>
     ${playerHtml()}
     <div class="row"><span class="meta">Listen to</span><span class="lactions" id="lib-src"><button class="btn" data-src="url" aria-pressed="true">Cover</button>${c.original ? `<button class="btn" data-src="original">Original</button>` : ""}${c.vocal ? `<button class="btn" data-src="vocal">Vocal only</button>` : ""}</span></div>
-    <dl class="kv"><div data-deep style="display:contents"><dt>Settings</dt><dd>${esc(settings)}</dd></div>
-      ${c.seconds?.total ? `<dt>Made in</dt><dd>${c.seconds.total.toFixed(1)} s</dd>` : ""}
+    <dl class="kv"><dt data-deep>Settings</dt><dd data-deep>${esc(settings)}</dd>
+      ${c.seconds?.total ? `<dt data-deep>Made in</dt><dd data-deep>${c.seconds.total.toFixed(1)} s</dd>` : ""}
       ${c.notes?.length ? `<dt>Notes</dt><dd>${esc(c.notes.join(" "))}</dd>` : ""}
-      <dt>File</dt><dd class="mono">${esc(c.file)} · ${gb(c.size)}</dd></dl>
+      <dt data-deep>File</dt><dd class="mono" data-deep>${esc(c.file)} · ${gb(c.size)}</dd></dl>
     <p class="meta" id="lib-keepline">${esc(keepLine(c))}</p>
     <div id="lib-rename-box"></div>
     <div class="lactions">${c.song_id ? `<button class="btn primary" id="lib-reuse">Use these settings</button>` : ""}<button class="btn" id="lib-keep" type="button" data-kept="${!!c.kept}">${c.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${c.url}?download">Download</a>
@@ -279,8 +279,8 @@ function speechDetail(d, x) {
     ${playerHtml()}
     <dl class="kv"><dt>Text</dt><dd class="lib-speech-text">${esc(x.text.length > 1200 ? x.text.slice(0, 1200) + "…" : x.text)}</dd>
       <dt data-deep>Settings</dt><dd data-deep>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
-      ${x.seconds?.total ? `<dt>Made in</dt><dd>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
-      <dt>Files</dt><dd class="mono">${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
+      ${x.seconds?.total ? `<dt data-deep>Made in</dt><dd data-deep>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
+      <dt data-deep>Files</dt><dd class="mono" data-deep>${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
     <p class="meta" id="lib-keepline">${esc(keepLine(x))}</p>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><button class="btn" id="lib-keep" type="button" data-kept="${!!x.kept}">${x.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${x.url}?download">Download WAV</a>
