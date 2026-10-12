@@ -432,7 +432,7 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .sys-bundle p { margin: 0; }
 .sys-bundle-list { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13.5px; }
 /* a problem the Doctor found: a dot on the SafeHouse tab (bad) and the System room's tab (bad, or a warning) */
-body[data-doctor="warn"] .room[data-room="system"]::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+body[data-doctor="warn"]:not([data-gpu="bad"]) .room[data-room="system"]::after {   /* a GPU problem's red wins */ content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--err); }
 /* Recent: Retry is the thing to press; Open stays quiet */
 .rn-li [data-retry] { font-weight: 600; }
