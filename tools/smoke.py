@@ -1619,7 +1619,13 @@ def sandbox_server(port: int = SANDBOX_PORT):
         if log:
             log.close()
         if stopped and storage._inside(root, Path(tempfile.gettempdir()).resolve()) and root.name.startswith("uc-sandbox-"):
-            shutil.rmtree(root, ignore_errors=True)
+            for _ in range(15):   # the cadence worker may still be closing its log when the server has gone
+                shutil.rmtree(root, ignore_errors=True)
+                if not root.exists():
+                    break
+                time.sleep(1)
+            else:
+                print(f"  (the sandbox's scratch folder couldn't be removed: {root})")
         else:
             print(f"  (the sandbox server is still running or its folder was left: {root})")
 
