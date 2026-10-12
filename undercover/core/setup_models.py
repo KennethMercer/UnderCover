@@ -4,8 +4,15 @@
 
 Every download is pinned (a fixed revision or release) and checked against its SHA-256 (SHA256 below; phase 4b,
 ARCHITECTURE.md "Resilience and self-healing"). A file that doesn't match is deleted and the download fails.
+
+PINNED (phase 10) is the one list of every model file UnderCover can fetch: path under models_dir -> its sources (the
+first that serves the right bytes wins), its SHA-256 and the part it belongs to. Core files register below; modules
+register theirs when imported (register_pinned), like the add-ons registry. The Doctor checks the files against it and
+re-fetches a broken one (refetch: the new copy is checked before it replaces the old, so nothing is deleted first).
+Downloads resume: an interrupted one leaves <file>.part, and the next try asks the server for the rest.
 """
 import hashlib
+import os
 
 from .config import CONFIG, path
 from .voices import ModelError
@@ -67,43 +74,98 @@ def ensure(progress=None, files: dict | None = None, sha256: dict | None = None)
     """Fetch any missing model files (default: the shared conversion models); returns the ones downloaded.
     `files` maps a path under models_dir to a full URL (file:// works too, for tests); `sha256` maps a path under
     models_dir (or the URL's file part) to its SHA-256, checked after the download."""
-    import requests
     got = []
     files = files or {local: f"{SOURCE}/{remote}" for local, remote in FILES.items()}
     for local, url in files.items():
         dest = path("models_dir") / local
         if dest.exists() and dest.stat().st_size > 0:
             continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + ".part")
-        if url.startswith("file://"):
-            import shutil
-            from urllib.request import url2pathname
-            shutil.copyfile(url2pathname(url[len("file:"):]), tmp)
-            _check(tmp, (sha256 or {}).get(local) or _expected(url, sha256), local)
-            tmp.replace(dest)
-            got.append(local)
-            continue
-        with requests.get(url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            total, done = int(r.headers.get("content-length") or 0), 0
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_content(1 << 20):
-                    f.write(chunk)
-                    done += len(chunk)
-                    if progress:
-                        progress(local, done, total)
-        _check(tmp, (sha256 or {}).get(local) or _expected(url, sha256), local)
-        tmp.replace(dest)
+        want = (sha256 or {}).get(local) or _expected(url, sha256) or (PINNED.get(local) or {}).get("sha256")
+        fetch(url, dest, want, local, progress)
         got.append(local)
     return got
 
 
-def _check(tmp, want: str | None, local: str):
+def fetch(url: str, dest, want: str | None, local: str = "", progress=None, tries: int = 3):
+    """Download url into dest through dest.part: resumed from where an earlier try stopped (an HTTP Range request),
+    checked against want (SHA-256) and only then swapped in, so dest is never a half-written or wrong file."""
+    import time
+    from pathlib import Path
+    dest = Path(dest)
+    local = local or dest.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    if url.startswith("file://"):
+        import shutil
+        from urllib.request import url2pathname
+        shutil.copyfile(url2pathname(url[len("file:"):]), tmp)
+    else:
+        import requests
+        for attempt in range(1, tries + 1):
+            have = tmp.stat().st_size if tmp.exists() else 0
+            try:
+                headers = {"Range": f"bytes={have}-"} if have else {}
+                with requests.get(url, stream=True, timeout=60, headers=headers) as r:
+                    if r.status_code == 416:   # the .part already holds the whole file
+                        break
+                    r.raise_for_status()
+                    resumed = have and r.status_code == 206
+                    done = have if resumed else 0
+                    total = done + int(r.headers.get("content-length") or 0)
+                    with open(tmp, "ab" if resumed else "wb") as f:
+                        for chunk in r.iter_content(1 << 20):
+                            f.write(chunk)
+                            done += len(chunk)
+                            if progress:
+                                progress(local, done, total)
+                break
+            except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError):
+                if attempt == tries:
+                    raise
+                time.sleep(2 * attempt)   # the .part stays: the next try carries on from it
     if want and sha256_of(tmp) != want:
         tmp.unlink(missing_ok=True)
         raise ModelError(f"The download of {local} came out different from the expected file (checksum mismatch), so it "
                          "wasn't used. Try again; if it keeps happening, the source may have changed.")
+    os.replace(tmp, dest)
+
+
+# ---------------------------------------------------------------- every pinned model file (phase 10)
+
+PINNED: dict = {}   # path under models_dir -> {"urls": [...], "sha256": ..., "part": ..., "about": ...}
+
+
+def register_pinned(files: dict, sha256: dict, part: str, about: str = "") -> None:
+    """Add model files to the pinned list. files: path under models_dir -> URL or a list of URLs (tried in order);
+    sha256: path -> SHA-256 (a file without one isn't registered: nothing could check it)."""
+    for local, urls in files.items():
+        want = sha256.get(local) or _expected(urls if isinstance(urls, str) else urls[0], sha256)
+        if want:
+            PINNED[local] = {"urls": [urls] if isinstance(urls, str) else list(urls), "sha256": want, "part": part,
+                             "about": about}
+
+
+def refetch(local: str, progress=None) -> None:
+    """Download a pinned file again (missing or broken), from its first source that serves the right bytes. The old copy
+    stays until the new one has passed its checksum, then is replaced (never deleted first)."""
+    rec = PINNED.get(local)
+    if not rec:
+        raise ModelError(f"{local} isn't a file UnderCover knows how to download again.")
+    dest = path("models_dir") / local
+    last = None
+    for url in rec["urls"]:
+        try:
+            fetch(url, dest, rec["sha256"], local, progress)
+            return
+        except Exception as e:   # noqa: BLE001 - try the next source; report the last problem
+            last = e
+    raise last if isinstance(last, ModelError) else ModelError(
+        f"Couldn't download {local} again ({type(last).__name__}). Check the internet connection and try again.")
+
+
+register_pinned({**{local: f"{SOURCE}/{remote}" for local, remote in FILES.items()},
+                 **{k: v for sr in (32000, 40000, 48000) for k, v in base_model_files(sr).items()}}, SHA256, "rvc")
+register_pinned({SPEAKER_MODEL: SPEAKER_URL}, SHA256, "speaker")
 
 
 if __name__ == "__main__":

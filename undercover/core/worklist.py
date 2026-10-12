@@ -173,6 +173,21 @@ def forget_paused() -> dict:
     return status()
 
 
+def restore(specs: list, start: bool) -> dict:
+    """Work a crash interrupted (the Doctor, at startup): put it back on the resume list. start=True: it carries on by
+    itself once the models are ready (unless the user's own Pause holds it); False: it waits, held, for Resume."""
+    with _LOCK:
+        st = _state()
+        for s in specs:
+            if s not in st["resume"]:
+                st["resume"].append(s)
+        if not start:
+            st["held"] = True
+        _save()
+        _log(f"restore {[x.get('label') for x in specs]} start={start}")
+    return status()
+
+
 def _start(spec: dict):
     k = spec["kind"]
     if k in RESUMERS:

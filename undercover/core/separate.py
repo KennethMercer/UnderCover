@@ -18,6 +18,33 @@ from .timing import timed
 SEP = CONFIG["separation"]
 _progress = None  # current per-step callback(fraction), set by StemSeparator.run
 
+# The separation models audio-separator fetches itself (it writes straight to the final name, so a cut-off download
+# leaves a broken file that looks present). Pinned for the Doctor (phase 10): the SHA-256 of the copies this app was
+# built and tested with, and the places audio-separator 0.47 takes them from (the first that serves those bytes wins).
+_UVR = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models"
+_AS = "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs"
+SEPARATOR_SHA256 = {
+    "separator/mel_band_roformer_kim_ft_unwa.ckpt": "e6bd8d333880191254a6ef6be3cb0ffa4dda9d3282e36b0cce2e88a660e00d39",
+    "separator/config_mel_band_roformer_kim_ft_unwa.yaml": "c910a0b1493fd3f9cee7a576a7498e44e660510dcaaf5d0d50d5363dde1d0010",
+    "separator/dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt": "9262877b87e9ebb0fb808a456b0a411fa677f5df31c8383c1254af531c078970",
+    "separator/dereverb_mel_band_roformer_anvuew.yaml": "1599d9ea717ea2b5b3bc55d936f752b8d0f67baaa3de95acd6d03259a2f37784",
+    "separator/mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": "1de20d459332fe8869aeb01327a31df0032262706e1365114e852dc271779813",
+    "separator/mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml": "b35077d94861f068097cce1a5e54633c055e7dcc2613eade4e4dc7c7c9c3f48b",
+}
+
+
+def _sources(name: str) -> list:
+    return [f"{_UVR}/{name}", f"{_UVR}/mdx_model_data/mdx_c_configs/{name}", f"{_AS}/{name}"]
+
+
+def _register_pins():
+    from . import setup_models
+    setup_models.register_pinned({k: _sources(k.split("/", 1)[1]) for k in SEPARATOR_SHA256}, SEPARATOR_SHA256,
+                                 "separation")
+
+
+_register_pins()
+
 
 def _quiet_tqdm(iterable, *args, **kwargs):
     """Stand-in for tqdm inside audio-separator: no console bar, reports chunk progress instead."""

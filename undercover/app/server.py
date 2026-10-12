@@ -85,7 +85,8 @@ def _hb_state() -> dict:
         if not j.finished:
             ev = j.events[-1] if j.events else {}
             jobs.append({"kind": j.kind, "stage": ev.get("stage"), "epoch": ev.get("epoch"),
-                         "message": (ev.get("message") or "")[:80]})
+                         "message": (ev.get("message") or "")[:80], "id": j.id,
+                         "spec": j.resume_spec})   # the Doctor resumes (or offers) it after a crash (phase 10)
     rec = {"jobs": jobs, "disk_free_gb": round(shutil.disk_usage(ROOT).free / 1e9, 1)}
     torch = sys.modules.get("torch")
     if torch is not None and STATUS.get("gpu"):

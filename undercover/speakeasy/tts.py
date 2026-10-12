@@ -20,6 +20,7 @@ FILES = {"tts/kokoro/kokoro-v1.0.onnx": f"{URL}/kokoro-v1.0.onnx",      # ~310 M
          "tts/kokoro/voices-v1.0.bin": f"{URL}/voices-v1.0.bin"}        # ~27 MB
 SHA256 = {"tts/kokoro/kokoro-v1.0.onnx": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
           "tts/kokoro/voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"}
+setup_models.register_pinned(FILES, SHA256, "kokoro")   # the Doctor checks and re-fetches them (phase 10)
 addons.register(addons.Addon(
     id="kokoro", name="Kokoro", included=True, modules=["speakeasy"],
     adds="The quick Reader: SpeakEasy's speech for voices without a cadence.",
