@@ -100,6 +100,7 @@ target_minutes = 10              # clean target-voice minutes to aim for (more t
 search_per_query = 8             # YouTube results per query variant
 search_results = 12              # sources listed
 max_minutes_per_source = 12      # long videos are trimmed (skips the first minute); several shorter sources beat one long one
+stretch_minutes = 2              # ...in stretches this long spread through the video (more scenes of a compilation); 0 = the first 12 min
 separation_quality = "high"      # music/noise removal before slicing: high = cleaner training data (vocal SNR 29.6 vs 26.3 dB fast), ~1.7x slower prep
 dereverb = true                  # dry voice trains cleaner
 min_phrase = 1.0                 # seconds; shorter phrases are left out
