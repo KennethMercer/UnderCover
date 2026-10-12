@@ -654,9 +654,10 @@ def u_rolloff_covers():
                     calls.setdefault(name, []).append(f"{f.relative_to(ROOT / 'undercover').as_posix()}:{line}")
     assert sorted(c.split(":")[0] for c in calls["roll_off("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
     # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
-    # MasterPlan); a new caller must be added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["core/doctor.py", "frontman/history.py",
-                                                                        "speakeasy/speak.py"], calls
+    # MasterPlan), and the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
+    # staging leftovers); a new caller must be added here on purpose
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["core/doctor.py", "core/themes.py",
+                                                                        "frontman/history.py", "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
