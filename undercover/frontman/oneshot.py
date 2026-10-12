@@ -393,9 +393,12 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
 
     # the gate (phase 15): a weak voice is said plainly, here and with the cover, never handed over silently
     q = voice_quality(v)
-    if plan.get("voice") is not None:
-        plan["voice"]["quality"] = q
-    if not q["ok"]:
+    pv = plan.get("voice")
+    if pv is not None:
+        if q["ok"] and pv.get("quality"):   # a quick cover's honest label from resolve_voice (a voice from elsewhere)
+            q = pv["quality"]
+        pv["quality"] = q
+    if not q["ok"] and not q.get("quick"):   # (a quick cover's label was said already)
         push("voice", 1.0, f"Heads-up: {q['summary']}")
 
     # 3. settings + cover
