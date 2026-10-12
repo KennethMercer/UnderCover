@@ -861,6 +861,27 @@ def u_ambiguity():
     assert pick["artist"] == "Adele" and went == "I went with Adele's Hello", (pick, went)
     pick, went = A.resolve("Hello", ch[1]["song_url"])
     assert pick["artist"] == "Lionel Richie" and went is None
+    # a " by " is the artist only when the search for the split form puts that artist on top (else the whole phrase)
+    from undercover.frontman.oneshot import parse_request as pr
+    searches = []
+
+    def by_search(q, limit=8):
+        searches.append(q)
+        return {"Hello Adele": [_track("Hello", "Adele", 9e8)], "Close Night": [_track("Closer", "Nine Inch Nails", 9e8)],
+                "Killed Death": []}.get(q, [])
+    r = A.settle(pr("Stand By Me as Barack Obama"), by_search)
+    assert (r["song"], r["artist"]) == ("Stand By Me", None) and not searches, (r, searches)   # whole, no search needed
+    r = A.settle(pr("Hello by Adele as Barack Obama"), by_search)
+    assert (r["song"], r["artist"], r["person"]) == ("Hello", "Adele", "Barack Obama"), r
+    r = A.settle(pr("Close By Night as Barack Obama"), by_search)
+    assert (r["song"], r["artist"], r["person"]) == ("Close By Night", None, "Barack Obama"), r
+    r = A.settle(pr("Killed By Death as Barack Obama"), by_search)   # nothing found: the whole phrase
+    assert (r["song"], r["artist"]) == ("Killed By Death", None), r
+    A.settle(pr("Hello by Adele as Barack Obama"), by_search)
+    assert searches.count("Hello Adele") == 1, "the same check was searched twice"
+    r = A.settle(pr("Hello by Adele as Barack Obama"), broken)   # offline: the split as typed
+    assert r["artist"] == "Adele"
+    assert A.settle(pr("Hello as Barack Obama"), broken)["artist"] is None
     # the answer lasts until a different song is requested
     k = A.song_key("Hello")
     assert A.recall(k) is None
@@ -890,6 +911,7 @@ def u_ask_flow():
     hello = [_track("Hello", "Adele", 1_500_000_000, year=2015), _track("Hello", "Lionel Richie", 300_000_000, year=1984)]
     A.reset()
     A.choices_for("Hello", lambda q, limit=8: hello)       # the lookup the plan step does, answered from the fixture
+    A.settle({"song": "Hello", "artist": "Adele"}, lambda q, limit=8: [hello[0]])   # "Hello by Adele" checks out
     keep = (service.installed_for, service.online_for)
     service.installed_for, service.online_for = (lambda p: []), (lambda p, n=2: [])   # no network, no voices
     made = []

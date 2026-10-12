@@ -93,7 +93,10 @@ def parse_request(text: str) -> dict:
     if m and not style and _clean_style(m.group("style")):   # "Plug In Baby (acoustic version) by ..."
         style = _clean_style(m.group("style"))
         song = song[:m.start()]
-    return {"song": song.strip(), "person": person, "style": style, "artist": artist, "by_only": by_only}
+    whole = None   # the title with its "by" as typed, for when the "artist" turns out to be part of it (ambiguity.settle)
+    if artist and (w := re.search(re.escape(song.strip()) + r"\s+by\s+" + re.escape(artist), text, re.I)):
+        whole = re.sub(r"\s+", " ", w.group(0))
+    return {"song": song.strip(), "person": person, "style": style, "artist": artist, "by_only": by_only, "whole": whole}
 
 
 def parse(text: str) -> tuple[str, str]:
@@ -256,7 +259,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
         job.push(stage=stage, frac=round(frac, 3), message=message, plan=plan,
                  elapsed=round(time.perf_counter() - t0, 1), **kw)
 
-    req = parse_request(text)
+    req = ambiguity.settle(parse_request(text))
     title_q, person, style, artist = req["song"], req["person"], req["style"], req["artist"]
     search_q = f"{title_q} {artist}" if artist else title_q
     # An ambiguous bare title ("Hello"): the answer the user gave, else the first choice, said out loud (never silent)
@@ -446,7 +449,7 @@ def start_oneshot(body: dict):
     """Queue a one-shot cover (from the page, or Resume after a pause)."""
     from .pipeline import cancel_presep
     text = (body.get("text") or "").strip()
-    req = parse_request(text)   # friendly error now rather than inside the job
+    req = ambiguity.settle(parse_request(text))   # friendly error now rather than inside the job
     choice = (body.get("choice") or "").strip() or None
     key = ambiguity.song_key(req["song"], req["artist"])
     if req["artist"] is None and choice:

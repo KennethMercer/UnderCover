@@ -210,7 +210,7 @@ def _auto_plan(h, text: str, prefer_train: bool):
     from . import ambiguity, oneshot
     from ..doubleagent import service
     try:
-        req = oneshot.parse_request(text)
+        req = ambiguity.settle(oneshot.parse_request(text))
     except ModelError as e:
         return h._error(str(e))
     song, person, artist = req["song"], req["person"], req["artist"]
