@@ -96,9 +96,11 @@ class Chatterbox:
 
     def __call__(self, text, ref, ref_text, seed, opts):
         exag = float(opts.get("exaggeration", 0.5))
-        if self.ref != (ref, exag):   # the person's conditioning, computed once per reference clip
+        st = os.stat(ref)   # a new pack puts a new clip at the same path (tts/ref.wav): its date and size tell
+        key = (ref, st.st_mtime_ns, st.st_size, exag)
+        if self.ref != key:   # the person's conditioning, computed once per reference clip
             self.m.prepare_conditionals(ref, exaggeration=exag)
-            self.ref = (ref, exag)
+            self.ref = key
         torch.manual_seed(seed)
         wav = self.m.generate(text, exaggeration=exag, cfg_weight=float(opts.get("cfg_weight", 0.3)),
                               temperature=float(opts.get("temperature", 0.8)))

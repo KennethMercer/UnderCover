@@ -555,7 +555,7 @@ def cadence_ref(v) -> Path:
 def cadence_status(v) -> dict:
     """For a voice row: has a cadence? can one be made (and how)? queued or running in the queue?"""
     from ..core import worklist
-    from .cadence import can_train
+    from .cadence import can_train, pending_of
     pack = cadence_pack(v)
     can, why = can_train(v)
     q = next((i for i in worklist._state()["queue"] if i["kind"] in ("cadence", "newcad") and i["state"] in ("queued", "paused", "running")
@@ -563,7 +563,8 @@ def cadence_status(v) -> dict:
     out = {"has": bool(pack), "can": can, "why": why, "queue": q and q["state"]}
     if pack:
         out.update(engine=pack.get("engine"), made=pack.get("made"), data_minutes=pack.get("data_minutes"),
-                   scores=pack.get("scores"), gap_s=pack.get("gap_s"), tempo=pack.get("tempo"))
+                   scores=pack.get("scores"), gap_s=pack.get("gap_s"), tempo=pack.get("tempo"),
+                   pending=pending_of(v) is not None)   # a new one waits for the user's ear (phase 9, "Keep this one")
     return out
 
 

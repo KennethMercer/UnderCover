@@ -73,6 +73,21 @@ def octave_shift(x16: np.ndarray, rmvpe, target_hz: float | None) -> float:
     return float(12 * round(math.log2(target_hz / float(np.median(f0)))))
 
 
+def level(y: np.ndarray, rms_db: float = -20.0, peak: float = 0.89) -> np.ndarray:
+    """The same loudness for every sentence (so playback doesn't jump between them), peaks under -1 dBFS, 5 ms fades.
+    SpeakEasy levels every sentence with this; DoubleAgent's A/B readings too, so they sound as they would there."""
+    if not len(y):
+        return y
+    r = float(np.sqrt(np.mean(y ** 2))) or 1e-9
+    y = y * min(10 ** (rms_db / 20) / r, peak / max(1e-9, float(np.abs(y).max())))
+    f = min(len(y) // 2, 240)   # 5-10 ms fades: no clicks at the joins
+    if f:
+        ramp = np.linspace(0, 1, f, dtype=np.float32)
+        y[:f] *= ramp
+        y[-f:] *= ramp[::-1]
+    return y.astype(np.float32)
+
+
 def finish(wav: Path, lv, conv, target_hz: float | None, tempo: float = 1.0, nudge: float = 0.0,
            keep_wav: bool = False) -> tuple[np.ndarray, int]:
     """The engine's WAV -> RVC in the voice -> float32 audio at the voice's rate (not levelled)."""
