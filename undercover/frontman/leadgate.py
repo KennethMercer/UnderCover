@@ -19,7 +19,13 @@ import numpy as np
 
 SR = 16000
 WIN, HOP = 2.0, 0.5
-FLAT_INSTRUMENT = 0.05   # Toxic's hook 0.001-0.03; singing 0.09-0.42 (lowest seen: 0.092, a held note)
+# Calibrated on all 19 cached separations (2026-10-12): Toxic's string hook is 0.001-0.004, but a deep sustained real
+# vocal goes down to ~0.006-0.013 (Whisper heard lyrics there), and one song's whole lead sits under 0.05. So only a
+# near-pure tone counts, and only in a song that sings normally elsewhere: leaving a hook to be "sung" is the lesser
+# harm than muting a real line.
+FLAT_INSTRUMENT = 0.005
+SONG_SINGS = 0.15        # a clearly sung window (Toxic's singing 0.2-0.4)
+SUNG_SHARE = 0.2         # the gate acts only when at least this share of the lead's active windows is clearly sung
 FLAT_SINGING = 0.10
 ACTIVE_DB = 30.0         # a frame counts as sound within 30 dB of the lead's loud level
 BACK_DB = 12.0           # a backing "chorus" peaks within 12 dB of the lead's loud level (Toxic's median: -4..+1 dB)
@@ -66,11 +72,15 @@ def plan(lead: np.ndarray, backing: np.ndarray | None = None) -> dict:
     bd = _db(backing[:n]) if backing is not None else None
     steps = max(0, int((n / SR - WIN) / HOP) + 1)
     inst, chorus = [], []
+    flats = []
     for k in range(steps):
         a, b = int(k * HOP * 100), int((k * HOP + WIN) * 100)
         s0, s1 = int(k * HOP * SR), int((k * HOP + WIN) * SR)
         lact = float(la[a:b].mean()) if b <= len(la) else 0.0
-        is_inst = lact > 0.3 and flatness(lead[s0:s1]) < FLAT_INSTRUMENT
+        fl = flatness(lead[s0:s1]) if lact > 0.3 else None
+        if fl is not None:
+            flats.append(fl)
+        is_inst = fl is not None and fl < FLAT_INSTRUMENT
         inst.append(is_inst)
         ch = False
         if bd is not None and (lact < 0.3 or is_inst) and b <= len(bd):
@@ -78,6 +88,8 @@ def plan(lead: np.ndarray, backing: np.ndarray | None = None) -> dict:
             if bact > 0.5 and float(np.percentile(bd[a:b], 90)) > ref - BACK_DB and flatness(backing[s0:s1]) >= FLAT_SINGING:
                 ch = True
         chorus.append(ch)
+    if not flats or float(np.mean(np.asarray(flats) >= SONG_SINGS)) < SUNG_SHARE:
+        inst = [False] * len(inst)   # a lead that's tonal throughout (heavy processing, a deep sustained voice): leave it be
     need = int(MIN_RUN / HOP)
     # a run of steps -> the middle of its windows (each window's edges overlap its neighbours, singing or not)
     to_s = lambda r: (round(r[0] * HOP + (WIN - HOP) / 2, 2), round((r[1] - 1) * HOP + (WIN + HOP) / 2, 2))
