@@ -667,9 +667,10 @@ def u_rolloff_covers():
     # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
     # MasterPlan), the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
-    # a new caller must be added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["core/doctor.py", "core/themes.py", "core/ytdlp.py",
-                                                                        "frontman/history.py", "speakeasy/speak.py"], calls
+    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); a new caller
+    # must be added here on purpose
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/themes.py",
+                                                                        "core/ytdlp.py", "frontman/history.py", "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
