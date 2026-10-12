@@ -1799,6 +1799,84 @@ def u_phone_pairing():
     return "6-character codes, hashed tokens, 5 wrong codes, 10 tries per address"
 
 
+NETSH_RULE = """Rule Name:                            {name}
+----------------------------------------------------------------------
+Enabled:                              {enabled}
+Direction:                            In
+Profiles:                             {profiles}
+LocalIP:                              Any
+Protocol:                             {proto}
+LocalPort:                            {port}
+Program:                              {program}
+Action:                               {action}
+"""
+NETSH_STATES = """Domain Profile Settings:
+----------------------------------------------------------------------
+State                                 ON
+
+Private Profile Settings:
+----------------------------------------------------------------------
+State                                 {private}
+
+Public Profile Settings:
+----------------------------------------------------------------------
+State                                 ON
+Ok.
+"""
+
+
+@check("phone: the Doctor's network and firewall check (netsh parsing, every verdict, the rows; read only)")
+def u_phone_doctor():
+    from undercover.core import doctor, phone
+    py = r"C:\Users\x\AppData\Local\Programs\Python\Python312\python.exe"
+
+    def rule(action="Allow", profiles="Private", program=py, proto="TCP", port="Any", enabled="Yes", name="python.exe"):
+        return NETSH_RULE.format(**locals())
+    assert phone.parse_states(NETSH_STATES.format(private="OFF")) == {"Domain": True, "Private": False, "Public": True}
+    rules = phone.parse_rules(rule() + "\n" + rule(proto="UDP") + "\n" + rule(name="Other", program=r"C:\other.exe"))
+    assert len(rules) == 3 and rules[0]["program"] == py and rules[0]["action"] == "Allow", rules[0]
+    v = lambda text, profile="Private", on=True: phone.firewall_verdict(phone.parse_rules(text), {py.upper()}, profile, on, 7860)  # noqa: E731
+    assert v(rule())[0] == "ok"
+    assert v(rule() + "\n" + rule(action="Block"))[0] == "bad", "a block rule must win"
+    assert v(rule(profiles="Public"))[0] == "warn" and v("")[0] == "warn"
+    assert v(rule(proto="UDP"))[0] == "warn" and v(rule(enabled="No"))[0] == "warn"
+    assert v(rule(port="7000-7900"))[0] == "ok" and v(rule(port="80,443"))[0] == "warn"
+    assert v(rule(program="Any", port="7860"))[0] == "ok"
+    assert v(rule(profiles="Domain,Private,Public"))[0] == "ok"
+    assert v("", on=False)[0] == "info"
+    with isolated_data():
+        saved = (phone._FILE[0], phone.windows_check, phone.lan_address)
+        phone._FILE[0] = None
+        try:
+            assert doctor.c_phone({}) == [], "the check ran with Phone access off"
+            phone.set_enabled(True)
+            fake = {"network": {"name": "Home", "alias": "Wi-Fi", "category": "Private"}, "firewall": ("ok", "fine"), "error": None}
+            phone.lan_address = lambda: "192.168.1.5"
+            phone.windows_check = lambda a, p, progs: fake
+            rows = {r["id"]: r for r in doctor.c_phone({})}
+            assert rows["phone-network"]["state"] == "ok" and rows["phone-firewall"]["state"] == "ok", rows
+            fake["network"]["category"] = "Public"
+            fake["firewall"] = ("bad", "blocked")
+            rows = {r["id"]: r for r in doctor.c_phone({})}
+            assert rows["phone-network"]["state"] == "bad" and "Private" in rows["phone-network"]["say"], rows
+            assert all(r["fix"] is None for r in rows.values()), "a Fix that would change Windows"
+            fake["error"] = "TimeoutExpired"
+            assert doctor.c_phone({})[0]["state"] == "warn"
+            phone.lan_address = lambda: None
+            assert doctor.c_phone({})[0]["state"] == "warn"
+            phone.lan_address = lambda: "127.0.0.2"
+            assert doctor.c_phone({})[0]["state"] == "info"
+        finally:
+            phone._FILE[0], phone.windows_check, phone.lan_address = None, saved[1], saved[2]
+            phone._STATE.clear()
+    try:
+        phone.windows_check("1.2.3.4'; Remove-Item x; '", 7860, {py})
+        raise AssertionError("a non-address went into the PowerShell line")
+    except ValueError:
+        pass
+    return "allow, block wins, no rule, other profile, UDP only, disabled, port ranges, any program, firewall off; rows"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -2026,6 +2104,7 @@ def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
     assert s.get("gpu"), "no GPU reported"
     assert "ytdlp_updated" in s, "/api/status doesn't carry ytdlp_updated"
+    assert s.get("build") and s["build"] == api("/api/status")["build"], "/api/status doesn't carry a steady build stamp"
     return s.get("gpu")
 
 
@@ -2038,7 +2117,7 @@ def a_page():
     for mod, view in views.items():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
-    for part in ('id="suite-logo"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"'):
+    for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"'):
         assert part in html, f"missing {part}"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
@@ -2615,7 +2694,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

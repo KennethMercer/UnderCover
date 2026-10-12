@@ -112,13 +112,21 @@ def setup(make_server, port: int):
 
     def keep():
         while True:
-            time.sleep(60)
             try:
                 if phone.enabled():
                     listen()
+                    warm()
             except Exception:   # noqa: BLE001 - try again next minute
                 pass
+            time.sleep(60)
     threading.Thread(target=keep, daemon=True, name="phone-keep").start()
+
+
+def warm():
+    """Read the network type and the firewall now (~1 s, cached), so the Doctor's fast check finds them ready."""
+    from ..core import doctor
+    if _L["addr"] and phone.usable(_L["addr"]):
+        phone.windows_check(_L["addr"], _L["port"], doctor.phone_programs())
 
 
 def listen() -> bool:
@@ -203,6 +211,7 @@ def _route(h, method, p):
         phone.set_enabled(bool(b.get("on")))
         if b.get("on"):
             listen()
+            threading.Thread(target=warm, daemon=True, name="phone-warm").start()
         else:
             close()
         return h._json(state())

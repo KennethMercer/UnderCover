@@ -6,7 +6,7 @@ ARCHITECTURE.md "Resilience and self-healing").
 
 Fast checks (startup, < 2 s, no GPU, no torch import): Python and the venv, the PyTorch build, every pinned package,
 ffmpeg and Deno, the model files (present, size), disk space, the [paths] folders, the port, stale files, interrupted
-work. Full checks add every model file's SHA-256, the graphics card and its driver.
+work, and (phase 11b, only while Phone access is on) the network type and Windows Firewall for phones. Full checks add every model file's SHA-256, the graphics card and its driver.
 
 Each result: {"id", "group", "state": ok | info | warn | bad, "title", "say" (plain words), "detail" (Deep Cover),
 "fix": {"id", "label", "how": now | job | offer} or None}. "offer" fixes are words only (a step for the user, like
@@ -386,7 +386,55 @@ def c_manifest(ctx) -> list:
                str(manifest.file()))]
 
 
-CHECKS = [c_manifest, c_python, c_torch, c_gpu, c_packages, c_tools, c_models, c_disk, c_paths, c_port, c_stale, c_work]
+def phone_programs() -> set:
+    """The programs Windows Firewall has to let in: the venv's python.exe only starts the base one, which listens."""
+    return {p for p in (sys.executable, getattr(sys, "_base_executable", None)) if p}
+
+
+def c_phone(ctx) -> list:
+    """Phone access (phase 11b): can a phone reach this PC? The connection's network type (Private / Public) and Windows
+    Firewall's rules for Python, read only (core/phone.windows_check); advice in words, never a Fix that changes Windows."""
+    from . import jobs, phone
+    if not phone.enabled():
+        return []
+    addr = phone.lan_address()
+    if not addr:
+        return [_r("phone-network", "network", "warn", "Phone access",
+                   "Phone access is on, but this PC has no home-network address right now (Wi-Fi off or not connected), so "
+                   "phones can't reach it. UnderCover tries again every minute.", "")]
+    if not phone.usable(addr):
+        return [_r("phone-network", "network", "info", "Phone access",
+                   f"Phone access is on, on a test address ({addr}): there's no network or firewall to check.", "")]
+    port = jobs.PORT or CONFIG["ui"]["port"]
+    w = phone.windows_check(addr, port, phone_programs())
+    if w["error"]:
+        return [_r("phone-network", "network", "warn", "Phone access",
+                   "Couldn't read the network type and the firewall's rules, so the Doctor can't tell whether phones get "
+                   "through.", w["error"])]
+    out, n = [], w["network"]
+    if n is None:
+        out.append(_r("phone-network", "network", "warn", "Home network",
+                      f"Couldn't tell which network {addr} belongs to.", f"{addr}:{port}"))
+    elif n["category"] == "Public":
+        out.append(_r("phone-network", "network", "bad", "Home network",
+                      f"Windows treats {n['name']} as a public network, so it keeps phones out. If it's your own home "
+                      f"network: Settings, Network & internet, {n['alias']}, Network profile type: Private.",
+                      f"{n['alias']} · {addr}:{port}"))
+    elif n["category"] == "Domain":
+        out.append(_r("phone-network", "network", "info", "Home network",
+                      f"{n['name']} is a work (domain) network: its firewall rules come from the organisation.",
+                      f"{n['alias']} · {addr}:{port}"))
+    else:
+        out.append(_r("phone-network", "network", "ok", "Home network",
+                      f"{n['name']} is a private network in Windows, so phones on it can reach this PC.",
+                      f"{n['alias']} · {addr}:{port}"))
+    state, say = w["firewall"]
+    out.append(_r("phone-firewall", "network", state, "Windows Firewall", say, " · ".join(sorted(phone_programs()))))
+    return out
+
+
+CHECKS = [c_manifest, c_python, c_torch, c_gpu, c_packages, c_tools, c_models, c_disk, c_paths, c_port, c_stale, c_work,
+          c_phone]
 
 
 def run(full: bool = False, status: dict | None = None, progress=None, cancel=None) -> dict:

@@ -90,10 +90,16 @@ function tabTitle(text) {
 document.addEventListener("visibilitychange", () => { if (!document.hidden && document.title.startsWith("✓")) setTimeout(() => tabTitle(null), 4000); });
 
 // ------------------------------------------------------------ status + theme
+let pageBuild = null;
+$("#uc-updated-go").onclick = () => location.reload();
 async function pollStatus() {
   try {
     const s = await api("/api/status");
     document.body.dataset.gpu = s.gpu_problem ? "bad" : s.gpu ? "ok" : s.cpu_mode ? "cpu" : "wait";
+    // phase 11b: this tab remembers the server build it loaded with; a different one means the page is older than the
+    // server (an update and a restart while the tab stayed open): one quiet line offers a reload (#uc-updated)
+    if (s.build && !pageBuild) pageBuild = s.build;
+    else if (s.build && s.build !== pageBuild) $("#uc-updated").hidden = false;
     document.body.dataset.client = s.client || "pc";   // "phone": a paired phone (phase 11); [data-pc] controls hide
     if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
     sysStatus(s);

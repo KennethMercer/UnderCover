@@ -56,6 +56,19 @@ def code_stamp() -> float:
 STARTUP_STAMP = code_stamp()
 
 
+def build_stamp() -> str:
+    """What this server runs and serves, fixed at startup: version, commit, and the newest code or page file. A page
+    remembers the one it loaded with; when /api/status says another, the tab is older than the server and offers a
+    reload (phase 11b: a tab left open across an update ran the old page against the new server)."""
+    from ..core import about
+    files = [f for f in PKG.rglob("*") if f.suffix in (".py", ".js", ".css", ".html") and "__pycache__" not in f.parts]
+    newest = max((f.stat().st_mtime for f in files), default=0.0)
+    return f"{about.VERSION}-{(about.git_commit() or {}).get('commit') or 'copy'}-{int(newest)}"
+
+
+BUILD = build_stamp()
+
+
 SERVER = None          # the running ThreadingHTTPServer
 RESTART = threading.Event()
 
@@ -286,7 +299,7 @@ class Handler(BaseHTTPRequestHandler):
                 from ..core import addons
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
-                                   "ytdlp_updated": addons.updated("ytdlp"),
+                                   "ytdlp_updated": addons.updated("ytdlp"), "build": BUILD,
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"]})
             if p == "/api/voices":
                 return self._json(voices_json())
