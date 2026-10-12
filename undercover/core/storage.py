@@ -119,27 +119,11 @@ def where() -> dict:
 
 
 def drives() -> list[dict]:
-    """Drives to offer as targets: letter, free and total bytes, whether the app is on it."""
-    out = []
-    if os.name == "nt":
-        import ctypes
-        mask = ctypes.windll.kernel32.GetLogicalDrives()
-        for i in range(26):
-            if not mask & (1 << i):
-                continue
-            root = f"{chr(65 + i)}:\\"
-            kind = ctypes.windll.kernel32.GetDriveTypeW(root)
-            if kind not in (2, 3):   # removable, fixed (not network, CD, RAM disk)
-                continue
-            try:
-                du = shutil.disk_usage(root)
-            except OSError:
-                continue
-            out.append({"drive": root[:2], "free": du.free, "total": du.total, "removable": kind == 2,
-                        "app": ROOT.anchor.upper().startswith(root[:2].upper())})
-    else:
-        du = shutil.disk_usage("/")
-        out.append({"drive": "/", "free": du.free, "total": du.total, "removable": False, "app": True})
+    """Drives to offer as targets: letter, free and total bytes, whether the app is on it (the OS part: core/platform)."""
+    from . import platform
+    out = platform.drives()
+    for d in out:
+        d["app"] = d["drive"] == "/" or ROOT.anchor.upper().startswith(d["drive"].upper())
     return out
 
 

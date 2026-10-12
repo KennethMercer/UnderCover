@@ -16,32 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def wait_for_exit(pid: int, timeout: float = 60.0) -> bool:
-    if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.OpenProcess.restype = wintypes.HANDLE
-        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        k32.WaitForSingleObject.restype = wintypes.DWORD
-        k32.CloseHandle.argtypes = [wintypes.HANDLE]
-        SYNCHRONIZE = 0x00100000
-        h = k32.OpenProcess(SYNCHRONIZE, False, pid)
-        if not h:
-            return True  # already gone
-        try:
-            return k32.WaitForSingleObject(h, int(timeout * 1000)) == 0  # WAIT_OBJECT_0
-        finally:
-            k32.CloseHandle(h)
-    import os
-    end = time.time() + timeout
-    while time.time() < end:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return True
-        time.sleep(0.2)
-    return False
+    from .platform import wait_for_exit as wait   # the OS part (phase 18: every OS-specific call in core/platform)
+    return wait(pid, timeout)
 
 
 def main():

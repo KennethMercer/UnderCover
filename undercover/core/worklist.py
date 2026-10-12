@@ -405,13 +405,9 @@ def _before(i: dict, item: dict, q: list) -> bool:
 
 
 def _keep_awake(on: bool):
-    """Windows: don't sleep while voice work runs (per-thread request; released when it ends)."""
-    try:
-        import ctypes
-        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
-        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0))
-    except Exception:   # noqa: BLE001 - not Windows
-        pass
+    """Don't sleep while voice work runs (core/platform: a per-thread request on Windows; elsewhere nothing yet)."""
+    from . import platform
+    platform.keep_awake(on)
 
 
 def _run_item(item: dict):

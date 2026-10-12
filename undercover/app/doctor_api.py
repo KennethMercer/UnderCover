@@ -13,7 +13,7 @@ import threading
 import time
 from urllib.parse import unquote
 
-from ..core import diagnostics, doctor, jobs
+from ..core import diagnostics, doctor, jobs, platform
 from ..core.config import path
 from ..core.jobs import JOBS, STATUS, Job
 from ..core.voices import ModelError
@@ -65,7 +65,7 @@ def handle(h, method: str, p: str) -> bool:
             doctor.log(f"diagnostics file saved ({len(data) / 1e6:.1f} MB)")
         elif method == "POST" and p == "/api/doctor/open-logs":
             h._body()
-            os.startfile(path("logs_dir"))
+            platform.open_folder(path("logs_dir"))
             h._json({"ok": True})
         else:
             raise LookupError("Not found")
