@@ -139,13 +139,21 @@ def main():
         meta.setdefault("extra", {}).update(demo=True, trained=False, person="Agent Smoke", note=NOTE, reader=a.reader,
                                             made=time.strftime("%Y-%m-%d"))
         meta["extra"].pop("project", None)
-        if OUT.exists():
-            shutil.rmtree(OUT)
-        OUT.mkdir(parents=True)
+        # the model files aren't in git: build the new folder beside the old one and swap, so a failed copy loses nothing
+        new, old = OUT.with_name(".agent-smoke-new"), OUT.with_name(".agent-smoke-old")
+        for d in (new, old):
+            if d.exists():
+                shutil.rmtree(d)
+        new.mkdir(parents=True)
         for f in ("model.pth", "model.index"):
             if (src / f).exists():
-                shutil.copyfile(src / f, OUT / f)
-        (OUT / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+                shutil.copyfile(src / f, new / f)
+        (new / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+        if OUT.exists():
+            OUT.replace(old)
+        new.replace(OUT)
+        if old.exists():
+            shutil.rmtree(old)
     write_manifest(a.reader)
     size = sum(f.stat().st_size for f in OUT.iterdir())
     print(f"done: {OUT} ({size / 1e6:.0f} MB: " + ", ".join(f"{f.name} {f.stat().st_size / 1e6:.0f} MB" for f in OUT.iterdir()) + ")")

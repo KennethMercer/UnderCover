@@ -50,9 +50,18 @@ def _save(st: dict):
     fsutil.write_text(f, json.dumps(st, indent=1))
 
 
+_CACHE: dict = {}   # (file, mtime) -> the state: /api/status asks on every poll
+
+
 def status() -> dict:
-    st = load() or {}
-    return {"done": st.get("done")}
+    f = state_file()
+    try:
+        key = (str(f), f.stat().st_mtime_ns)
+    except OSError:
+        key = (str(f), None)
+    if _CACHE.get("key") != key:
+        _CACHE.update(key=key, done=(load() or {}).get("done"))
+    return {"done": _CACHE["done"]}
 
 
 def _existing_install() -> bool:
@@ -139,12 +148,24 @@ def seed_song() -> str | None:
     info = sample_info()
     if info is None or sample_song_id():
         return sample_song_id() if info else None
+    import hashlib
     from ..frontman.songs import register_song
     up = path("uploads_dir")
     if storage.ALLOWED_ROOTS is not None and storage.refuse([up]):
         raise ModelError(storage.refuse([up]))
     src = SAMPLE / info["file"]
-    tmp = up / f"sample_{int(time.time())}{src.suffix.lower()}"
+    h = hashlib.sha256()
+    with open(src, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    have = up / f"{h.hexdigest()[:16]}.json"
+    if have.is_file():   # the user has this very recording already: mark it, keep their title and everything else
+        meta = json.loads(have.read_text(encoding="utf-8"))
+        meta["sample"] = True
+        fsutil.write_text(have, json.dumps(meta))
+        return have.stem
+    # named like an upload in progress, so the Doctor's leftovers Fix covers a copy that fails halfway
+    tmp = up / f"upload_sample_{int(time.time())}.part"
     shutil.copyfile(src, tmp)   # register_song moves it into place, named by its content
     meta = register_song(tmp, f"{info.get('title') or 'Sample'}{src.suffix.lower()}",
                          extra={"sample": True, "title": info.get("title") or "Sample", "artist": info.get("artist") or "",

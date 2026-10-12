@@ -250,9 +250,13 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     from . import voicecheck
     from ..core.voices import download_and_install, get_voice, remove_voice
     from ..core.speaker import SpeakerEmbedder
-    cands = installed_for(person)
-    demo = next((v for v in cands if (v.extra or {}).get("demo")), None)
-    if demo is not None:   # "... as Agent Smoke": the demo voice as it is, never checked against clips of nobody
+    cands = installed_for(person) or []
+    # the demo voice only when asked for by its own name ("... as Agent Smoke"): installed_for matches name endings, and a
+    # real artist called "Smoke" must never get it; asked for, it's used as it is (there are no clips of nobody to check)
+    demo = next((v for v in cands if (v.extra or {}).get("demo")
+                 and slug(person) in (v.name, slug(display_name(v)))), None)
+    cands = [v for v in cands if not (v.extra or {}).get("demo")]
+    if demo is not None:
         plan["voice"] = {"name": demo.name, "display": display_name(demo), "how": "installed", "checked": "the demo voice"}
         push("voice", 1.0, f"Using the demo voice “{display_name(demo)}”")
         return demo
