@@ -28,8 +28,6 @@ Cython==3.3.0 \
     --hash=sha256:9b24b5c8cd536946b62086fcafee6d5509d3f549f72d553d2336af87ffbe0da1
 decorator==5.3.1 \
     --hash=sha256:f47fe6fdbd2edd623ecfe36875d37aba411624e2670dd395dddae1358689bb3c
-diffq-fixed==0.2.4 \
-    --hash=sha256:81087279979db570723ca0911265635d7c3132cc8b74bc52bdea94881440ce96
 dlinfo==2.0.0 \
     --hash=sha256:b32cc18e3ea67c0ca9ca409e5b41eed863bd1363dbc9dd3de90fedf11b61e7bc
 einops==0.8.2 \
