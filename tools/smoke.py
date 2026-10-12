@@ -864,8 +864,22 @@ def u_pace_pitch():
     assert K.pack_id(pk) == "chatterbox:c1:cfg0.3:t1.0" and K.pack_id({**pk, "pitch_nudge": -4.4}) == "chatterbox:c1:cfg0.3:t1.0:p-4.4"
     assert K.approved_by_user({**pk, "pitch_nudge": -4.4, "verdicts": [{"compared": ["chatterbox:c1:cfg0.3:t1.0", "chatterbox:c1:cfg0.3:t1.0:p-4.4"],
                                                                         "winner": "chatterbox:c1:cfg0.3:t1.0:p-4.4"}]})
-    # SpeakEasy reads a cadence pack with its nudge under the user's own
-    assert "nudge=p[\"nudge\"] + p.get(\"pack_nudge\", 0.0)" in (ROOT / "undercover" / "speakeasy" / "speak.py").read_text(encoding="utf-8")
+    # SpeakEasy's plan for a cadence voice carries the pack's nudge next to the user's own
+    m2 = {"pitch_st": 4.47}
+    K.as_heard(m2, -4.5)
+    assert m2 == {"pitch_st": -0.03, "pitch_raw_st": 4.47}, m2
+    with isolated_data():
+        v = _fake_voice("zz-nudge-uc", "trained in UnderCover: Zed, 9.0 min, epoch 5", {"trained": True})
+        _fake_pack(v.dir / "tts", "c1", 0.7)
+        meta = json.loads((v.dir / "meta.json").read_text(encoding="utf-8"))
+        meta["extra"]["tts"] = {**json.loads((v.dir / "tts" / "cadence.json").read_text(encoding="utf-8")), "pitch_nudge": -4.5}
+        (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        ready, speak.engine_ready = speak.engine_ready, lambda e: True
+        try:
+            p = speak.plan("zz-nudge-uc", nudge=1.0)
+        finally:
+            speak.engine_ready = ready
+        assert p["mode"] == "cadence" and p["pack_nudge"] == -4.5 and p["nudge"] == 1.0, p
     assert len(K.PACE_TEST) == 6 and K.PACE_TEST[0] == K.AB_LINE
     return f"target {K.pace_target(prof)} syl/s, fast x{fast['pace_ratio']}, +{fast['pitch_st']} st -> nudge {K.nudge_for(m)}"
 
@@ -2327,7 +2341,7 @@ def a_cadence():
         # phase 12: the readings' pace and pitch against the person, and the pack's nudge from it
         meta = json.loads((vdir / CAD_VOICE / "meta.json").read_text(encoding="utf-8"))["extra"]["tts"]
         assert sc.get("pace_ratio") and sc.get("pitch_st") is not None and sc.get("pace_heard") in ("fast", "slow", "ok"), sc
-        assert abs(float(meta.get("pitch_nudge") or 0) + (sc["pitch_st"] if abs(sc["pitch_st"]) > 0.5 else 0)) < 0.06, (meta.get("pitch_nudge"), sc)
+        assert abs(float(meta.get("pitch_nudge") or 0) + (sc["pitch_raw_st"] if abs(sc["pitch_raw_st"]) > 0.5 else 0)) < 0.06 and abs(sc["pitch_st"]) <= 0.55, (meta.get("pitch_nudge"), sc)
         # 3. SpeakEasy reads with it
         _tray_room("/api/speak/recent")
         r = api("/api/speak", {"text": "It was not easy. But we did it together, and we finished the work.", "voice": CAD_VOICE})
@@ -2363,7 +2377,7 @@ def a_cadence():
         v = next(x for x in api("/api/speak/voices") if x["name"] == CAD_VOICE)
         assert v["cadence"]["has"] and not v["cadence"].get("pending"), v["cadence"]
         return (f"{len(tr)} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}, "
-                f"clip sound -{sc.get('sound')}, pace x{sc.get('pace_ratio')} ({sc.get('pace_heard')}), pitch {sc.get('pitch_st'):+} st "
+                f"clip sound -{sc.get('sound')}, pace x{sc.get('pace_ratio')} ({sc.get('pace_heard')}), pitch {sc.get('pitch_raw_st'):+} st "
                 f"(nudge {meta.get('pitch_nudge')}); A/B readings {len(wav) // 1000} KB, new pack kept")
     finally:
         if item:

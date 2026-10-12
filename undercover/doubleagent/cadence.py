@@ -305,6 +305,14 @@ def heard(m: dict, nudge: float = 0.0) -> float:
     return round(m["score"] - pitch_pen(None if st is None else st + nudge), 4)
 
 
+def as_heard(m: dict, nudge: float):
+    """m measured readings without `nudge`: from now on its pitch_st is as heard (with the nudge) and pitch_raw_st the
+    engine's own offset, the same meanings as a live pack measured with its nudge."""
+    if m.get("pitch_st") is not None:
+        m["pitch_raw_st"] = m["pitch_st"]
+        m["pitch_st"] = round(m["pitch_st"] + nudge, 2)
+
+
 def cadence_gap(s: dict, person: dict) -> float | None:
     ds = [abs(s[k] - person[k]) / person[k + "_sd"] for k in KEYS if k in s and k in person and person.get(k + "_sd", 0) > 1e-3]
     return round(float(np.mean(ds)), 3) if ds else None
@@ -613,6 +621,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
                 m = tester.measure(wavs, 1.0, ref=ref)
                 m["pitch_nudge"] = nudge_for(m)
                 m["heard"] = heard(m, m["pitch_nudge"])
+                as_heard(m, m["pitch_nudge"])
                 best = m
             finally:
                 _cleanup(wavs)
@@ -630,6 +639,8 @@ def train(job, voice_name: str, push, control=None) -> dict:
                     before = tester.measure(wavs, float(old.get("tempo", 1.0)), ref=v.dir / "tts" / old.get("ref", "ref.wav"),
                                             nudge=float(old.get("pitch_nudge") or 0))
                     before["heard"] = heard(before)   # as it sounds today, with its own nudge
+                    before["pitch_raw_st"] = None if before.get("pitch_st") is None else round(
+                        before["pitch_st"] - float(old.get("pitch_nudge") or 0), 2)
                 finally:
                     _cleanup(wavs)
             except (ModelError, C.WorkerError):
@@ -657,10 +668,12 @@ def train(job, voice_name: str, push, control=None) -> dict:
                 "data_minutes": mins,
                 "pitch_nudge": win["pitch_nudge"],
                 "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score", "score_voice", "sound",
-                                                    "heard", "pace", "pace_target", "pace_ratio", "pace_heard", "f0_hz", "pitch_st")},
+                                                    "heard", "pace", "pace_target", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
+                                                    "pitch_raw_st")},
                 "person": {k: person.get(k) for k in ("rate", "pauses", "pause_ms", "range_st", "sentences", "sentence_gap_s")},
                 "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score", "score_voice", "sound",
-                                                                 "heard", "pace", "pace_ratio", "pace_heard", "f0_hz", "pitch_st")},
+                                                                 "heard", "pace", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
+                                                                 "pitch_raw_st")},
                 "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": []}
         new = work / "pack"
         new.mkdir(exist_ok=True)
