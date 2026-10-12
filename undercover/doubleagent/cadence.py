@@ -20,6 +20,7 @@ articulation rate, pauses, pause length, pitch range / spread / movement / decli
 the person's own sentences in units of their spread (0 = theirs).
 """
 import json
+import math
 import re
 import shutil
 import threading
@@ -38,13 +39,23 @@ from ..core.voices import ModelError, get_voice, label_of
 from . import clipsound
 from . import project as P
 
-VERSION = 1
+VERSION = 2   # 2 (phase 12): the person's pace per source and their median pitch
 # The test sentences every candidate reads (from phase 3's ten: long, question, commas, long; no numbers)
 TEST = [
     "When I was young, my grandmother used to tell me that hard work was never wasted.",
     "Is that the kind of country we want to leave to our children?",
     "Now, I know some of you are skeptical, and frankly, I understand why.",
     "So let us remember what brought us together, and let us finish the work we started.",
+]
+# Phase 12: everyday lines (what SpeakEasy mostly reads) for the pace and pitch of a pack's readings. The test sentences
+# above are oratory and read slower; the user judges pace on lines like these (the A/B line is the first).
+PACE_TEST = [
+    "I have always believed that the best stories are the ones we tell each other at the end of a long day.",
+    "Well, that is not what I expected, but it might just work.",
+    "Come in, sit down, and tell me everything from the beginning.",
+    "I called my brother last night, and we talked for hours about nothing in particular.",
+    "You know, the funny thing is that nobody ever asked me what I thought.",
+    "If you have a minute, I would love to show you what we have been working on.",
 ]
 SEED = 1234
 CANDIDATES = 5          # reference clips tried per voice (3 until phase 9b: more room for the clip-sound term)
@@ -65,6 +76,13 @@ W_SOUND = 1.0
 # A new pack is offered only when it beats the live one by more than the test's own noise: the same clip scores 0.02-0.03
 # apart between runs (phase 9b: 0.668 and 0.694), and the best of five noisy scores is biased upward (was 0.005 with three)
 KEEP_MARGIN = 0.02
+# Phase 12: pace and pitch of a pack's readings against the person (calibrated in docs/research/pace-pitch.md)
+PACE_MIN_N = 3       # a source counts toward the target pace once this many of its sentences were measured
+PACE_DEAD = 0.06     # within 6% of their pace: no penalty (about the smallest tempo change people notice in speech)
+W_PACE = 0.5         # score units per unit of log ratio past the dead zone (10% past it ~ 0.05)
+PITCH_DEAD = 0.5     # semitones
+W_PITCH = 0.05       # score units per semitone past the dead zone
+CAP_PP = 0.15
 
 
 # ---------------------------------------------------------------- text helpers (same rules as phase 3)
@@ -192,7 +210,7 @@ def features(x16: np.ndarray, text: str, rmvpe) -> dict:
     if v.sum() > 30:
         st = 12 * np.log2(f0[v] / np.median(f0[v]))
         out.update(range_st=float(np.percentile(st, 95) - np.percentile(st, 5)), sd_st=float(np.std(st)),
-                   slope=float(np.polyfit(t[v], st, 1)[0]))
+                   slope=float(np.polyfit(t[v], st, 1)[0]), f0_med=float(np.median(f0[v])))
         f5 = f0[: len(f0) // 5 * 5].reshape(-1, 5)
         vv = (f5 > 0).all(1)
         s5 = 12 * np.log2(np.where(vv, f5.mean(1), 1.0))
@@ -217,6 +235,55 @@ def summarize(rows: list[dict]) -> dict:
         s.pop("pause_ms", None)
         s.pop("pause_ms_sd", None)
     return s
+
+
+def _pace(rows: list[dict]) -> float | None:
+    """Syllables per second over whole sentences (their pauses included): total syllables / total time."""
+    dur = sum(r["dur"] for r in rows if r.get("dur"))
+    return round(sum(r["syl"] for r in rows if r.get("dur")) / dur, 3) if dur > 0 else None
+
+
+def voice_profile(rows: list[dict]) -> dict:
+    """The person's pace per source (a speech, a debate, an interview: each its own register) and their median
+    pitch, from their measured sentences (phase 12). `sents` keeps [source, syllables, seconds, f0 Hz] per sentence."""
+    by = {}
+    for r in rows:
+        by.setdefault(r.get("src") or "?", []).append(r)
+    f0 = [r["f0_med"] for r in rows if r.get("f0_med")]
+    out = {"by_source": {src: {"n": len(rs), "pace": _pace(rs),
+                               "f0_hz": round(float(np.median([r["f0_med"] for r in rs if r.get("f0_med")])), 1)
+                               if any(r.get("f0_med") for r in rs) else None}
+                         for src, rs in by.items()},
+           "pace": _pace(rows),
+           "sents": [[r.get("src") or "?", r["syl"], r["dur"], round(r.get("f0_med") or 0, 1)] for r in rows]}
+    if f0:
+        med = float(np.median(f0))
+        out["f0_hz"] = round(med, 1)
+        out["f0_sd_st"] = round(float(np.std(12 * np.log2(np.asarray(f0) / med))), 2)
+    return out
+
+
+def pace_target(person: dict) -> float | None:
+    """The pace a pack's everyday lines should have: the median of the person's sources' paces (each source once, so
+    one long slow speech doesn't decide), from sources with at least PACE_MIN_N measured sentences."""
+    srcs = [b["pace"] for b in (person.get("by_source") or {}).values() if b.get("pace") and b.get("n", 0) >= PACE_MIN_N]
+    return round(float(np.median(srcs)), 3) if srcs else person.get("pace") or person.get("rate")
+
+
+def pace_pitch(pace: float | None, f0_hz: float | None, person: dict) -> dict:
+    """A pack's readings against the person: pace as a ratio to their target pace, pitch in semitones from their
+    median (positive = faster / higher), each with its penalty past a dead zone (phase 12)."""
+    out = {"pace": pace, "f0_hz": f0_hz and round(f0_hz, 1)}
+    target = pace_target(person)
+    if pace and target:
+        out["pace_target"] = target
+        out["pace_ratio"] = round(pace / target, 3)
+        out["pace_pen"] = round(min(CAP_PP, W_PACE * max(0.0, abs(math.log(pace / target)) - math.log(1 + PACE_DEAD))), 4)
+    if f0_hz and person.get("f0_hz"):
+        st = 12 * math.log2(f0_hz / person["f0_hz"])
+        out["pitch_st"] = round(st, 2)
+        out["pitch_pen"] = round(min(CAP_PP, W_PITCH * max(0.0, abs(st) - PITCH_DEAD)), 4)
+    return out
 
 
 def cadence_gap(s: dict, person: dict) -> float | None:
@@ -277,7 +344,7 @@ def person_cadence(proj_name: str, rmvpe, push, check) -> dict:
     push(0.2, f"Listening to {len(files)} stretches of {proj.person} talking")
     words = C.transcribe(files, words=True, progress=lambda m, dn=0, t=0: push(0.2 + 0.6 * dn / max(1, t or 1), "Listening to how they talk"))
     rows, gaps = [], []
-    for f, w in zip(files, words):
+    for run, f, w in zip(runs, files, words):
         check()
         x = render.load16(f)
         sents, cur = [], []
@@ -294,14 +361,14 @@ def person_cadence(proj_name: str, rmvpe, push, check) -> dict:
                 continue
             r = features(x[max(0, int((snt[0][1] - 0.1) * 16000)): int((snt[-1][2] + 0.15) * 16000)], text, rmvpe)
             if r:
-                rows.append(r)
+                rows.append({**r, "src": run[0].source})
     if len(rows) < 8:
         raise ModelError(f"Only {len(rows)} whole sentences of {proj.person} could be measured (8+ needed). "
                          "Add more interviews or speeches in DoubleAgent.")
     gaps = [g for g in gaps if 0.05 <= g <= 3.0]
     out = {"v": VERSION, "runs": key, "sentences": len(rows), **summarize(rows),
            "sentence_gap_s": [round(float(np.percentile(gaps, q)), 3) for q in (25, 50, 75)] if len(gaps) >= 5 else None,
-           "made": time.strftime("%Y-%m-%d %H:%M")}
+           **voice_profile(rows), "made": time.strftime("%Y-%m-%d %H:%M")}
     fsutil.write_text(d / "person.json", json.dumps(out, indent=1))
     return out
 
@@ -368,28 +435,36 @@ class Tester:
         self.ref_vec = e / (np.linalg.norm(e) + 1e-9)
 
     def read(self, pack: dict, ref: Path) -> list[Path]:
-        """The engine's readings of the test sentences (kept, so tempo variants reuse them)."""
-        futs = [render.request(s, pack, ref, seed=SEED) for s in TEST]
+        """The engine's readings of the test sentences and the everyday lines (kept, so variants reuse them)."""
+        futs = [render.request(s, pack, ref, seed=SEED) for s in TEST + PACE_TEST]
         out = []
         for fut, wav in futs:
             render.client.wait(fut, cancel=lambda: (self.check(), False)[1])
             out.append(wav)
         return out
 
-    def measure(self, wavs: list[Path], tempo: float = 1.0, ref: Path | None = None) -> dict:
-        """The readings' numbers and score; with ref, the reference clip's sound counts too (phase 9)."""
+    def measure(self, wavs: list[Path], tempo: float = 1.0, ref: Path | None = None, nudge: float = 0.0) -> dict:
+        """The readings' numbers and score; with ref, the reference clip's sound counts too (phase 9). Likeness, WER
+        and the cadence gap come from the test sentences as before; pace from the everyday lines and pitch from all
+        (phase 12). nudge: semitones the voice's RVC adds (a pack's pitch nudge)."""
         from scipy.signal import resample_poly
-        rows, sims, outs = [], [], []
-        for s, w in zip(TEST, wavs):
+        rows, sims, outs, everyday, f0s = [], [], [], [], []
+        for i, (s, w) in enumerate(zip(TEST + PACE_TEST, wavs)):
             self.check()
-            y, sr = render.finish(w, self.lv, self.conv, self.hz, tempo=tempo, keep_wav=True)
+            y, sr = render.finish(w, self.lv, self.conv, self.hz, tempo=tempo, nudge=nudge, keep_wav=True)
             g = np.gcd(sr, 16000)
             y16 = resample_poly(y, 16000 // g, sr // g).astype(np.float32)
-            sims.append(float(self.emb.embed(y16) @ self.ref_vec))
             r = features(y16, s, self.conv.rmvpe)
+            if r and r.get("f0_med"):
+                f0s.append(r["f0_med"])
+            if i >= len(TEST):
+                if r:
+                    everyday.append(r)
+                continue
+            sims.append(float(self.emb.embed(y16) @ self.ref_vec))
             if r:
                 rows.append(r)
-            f = render.scratch() / f"{w.stem}_t{int(tempo * 100)}.wav"
+            f = render.scratch() / f"{w.stem}_t{int(tempo * 100)}_n{int(round(nudge * 10))}.wav"
             sf.write(str(f), y16, 16000, subtype="PCM_16")
             outs.append(f)
         heard = C.transcribe(outs)
@@ -400,6 +475,9 @@ class Tester:
              "cadence_gap": cadence_gap(s, self.person), "tempo": round(tempo, 3),
              **{k: s[k] for k in ("rate", "pauses", "range_st") if k in s}}
         m["score"] = round(m["likeness"] - W_GAP * (m["cadence_gap"] or 1.0) - W_WER * m["wer"], 4)
+        m.update(pace_pitch(_pace(everyday), float(np.median(f0s)) if f0s else None, self.person))
+        if nudge:
+            m["nudge"] = round(nudge, 2)
         if ref is not None:
             snd = clip_sound(ref)
             m["sound"] = snd["penalty"]
