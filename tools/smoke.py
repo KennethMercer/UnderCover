@@ -1095,8 +1095,8 @@ def u_display_names():
         got = {v.name: V.display_name(v) for v in V.list_voices()}
         assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
                        "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
-        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True}
-        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False}
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False}
         # the route: set, read back through the APIs, clear
         h = _FakeHandler(body={"display": "  Barry   O  "})
         assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
@@ -2390,6 +2390,94 @@ def config_path(key):
     return path(key)
 
 
+# ---------------------------------------------------------------- the First assignment (phase 17)
+
+def _fake_demo_voice(d: Path):
+    d.mkdir(parents=True)
+    (d / "model.pth").write_bytes(b"not really a model")
+    (d / "meta.json").write_text(json.dumps({"name": "agent-smoke", "version": "v2", "sr": 40000, "f0": True, "source": "demo",
+                                             "dir": "", "pth": "model.pth", "index": "", "installed": "2026-10-12",
+                                             "extra": {"demo": True, "trained": False, "person": "Agent Smoke",
+                                                       "note": "demo voice, made for UnderCover, not a real person"}}),
+                                 encoding="utf-8")
+
+
+@check("First assignment: state once per install, the seeds (sample song, demo voice), done, reset; the demo voice is nobody to search for")
+def u_tutorial():
+    import numpy as np
+    import soundfile as sf
+    from undercover.app import tutorial
+    from undercover.core import voices
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import cadence, night, service
+    saved = (tutorial.SAMPLE, tutorial.DEMO)
+    with isolated_data() as t:
+        try:
+            # no audio in the shipped folder: no sample song, nothing breaks
+            empty = t / "assets" / "sample-none"
+            empty.mkdir(parents=True)
+            (empty / "sample.json").write_text(json.dumps({"title": "x", "file": "sample.flac"}), encoding="utf-8")
+            tutorial.SAMPLE, tutorial.DEMO = empty, t / "assets" / "no-voice"
+            assert tutorial.sample_info() is None and tutorial.seed() == {"song": None, "voice": None}
+            # a fresh install: done = null, both seeds
+            sample = t / "assets" / "sample"
+            sample.mkdir(parents=True)
+            sf.write(sample / "sample.wav", (0.1 * np.sin(np.linspace(0, 880 * np.pi, 44100 * 3))).astype(np.float32), 44100)
+            (sample / "sample.json").write_text(json.dumps({"title": "The Drop", "artist": "UnderCover", "file": "sample.wav",
+                                                            "seconds": 3, "licence": "ours", "notice": "n"}), encoding="utf-8")
+            _fake_demo_voice(t / "assets" / "demo-voice" / "agent-smoke")
+            tutorial.SAMPLE, tutorial.DEMO = sample, t / "assets" / "demo-voice" / "agent-smoke"
+            assert tutorial.state_file().parent == t and tutorial.load() is None
+            assert tutorial.first_run() == {"done": None}
+            sid = tutorial.sample_song_id()
+            assert sid, "the sample song wasn't added"
+            meta = json.loads((config_path("uploads_dir") / f"{sid}.json").read_text(encoding="utf-8"))
+            assert meta["sample"] is True and meta["title"] == "The Drop", meta
+            assert (sample / "sample.wav").exists(), "the shipped audio was moved"
+            v = voices.get_voice("agent-smoke")
+            info = voices.voice_info(v)
+            assert info["demo"] is True and info["trained"] is False, info
+            assert not [d for d in voices.voices_dir().iterdir() if d.name.startswith(".")], "a seeding folder was left"
+            assert tutorial.first_run() == {"done": None}   # once
+            # the demo voice is nobody to search for
+            c = next(x for x in night.candidates() if x["voice"] == "agent-smoke")
+            assert c["can"] is False and c["demo"] is True and "not a real person" in c["note"], c
+            assert cadence.can_train(v)[0] is False
+            assert night._project_for_item({"kind": "improve", "target": "agent-smoke"}, create=True) is None
+            from undercover.core import worklist
+            try:
+                worklist.add("improve", "agent-smoke")
+                raise AssertionError("an improve of the demo voice was queued")
+            except ModelError as e:
+                assert "not a real person" in str(e), e
+            plan = {}
+            got = service.resolve_voice(None, "Agent Smoke", False, None, lambda *a, **k: None, plan)
+            assert got.name == "agent-smoke" and plan["voice"]["checked"] == "the demo voice", plan
+            # done, then Replay after the user deleted both: they come back, the brief shows again
+            assert tutorial.mark_done()["tutorial"]["done"] == time.strftime("%Y-%m-%d")
+            for f in config_path("uploads_dir").glob(f"{sid}.*"):
+                f.unlink()
+            voices.remove_voice("agent-smoke")
+            r = tutorial.reset()
+            assert r["tutorial"] == {"done": None} and r["seeded"]["song"] and r["seeded"]["voice"] == "agent-smoke", r
+            assert tutorial.reset()["seeded"] == {"song": tutorial.sample_song_id(), "voice": "agent-smoke"}   # nothing doubled
+            assert len([m for m in config_path("uploads_dir").glob("*.json")
+                        if json.loads(m.read_text(encoding="utf-8")).get("sample")]) == 1
+            # a folder of that name that isn't the demo is never touched
+            voices.remove_voice("agent-smoke")
+            other = voices.voices_dir() / "agent-smoke"
+            other.mkdir()
+            (other / "mine.txt").write_text("the user's", encoding="utf-8")
+            assert tutorial.seed_voice() is None and (other / "mine.txt").exists()
+        finally:
+            tutorial.SAMPLE, tutorial.DEMO = saved
+    with isolated_data():   # an install that already made covers / trained voices: marked, nothing seeded
+        _fake_voice("someone-uc", extra={"trained": True, "person": "Someone"})
+        assert tutorial.first_run() == {"done": "existing install"} and tutorial.sample_song_id() is None
+        assert not voices.voices_dir().joinpath("agent-smoke").exists()
+    return "fresh: done null + both seeds; existing install; done; reset re-seeds once; the demo voice never searched for"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -3273,7 +3361,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

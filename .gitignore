@@ -11,6 +11,8 @@ manifest.json
 phone.json
 # Themes the user made or imported (phase 14; the shipped ones are in undercover/web/themes/).
 /themes/
+# The First assignment's state (phase 17).
+tutorial.json
 test/
 .claude/
 __pycache__/

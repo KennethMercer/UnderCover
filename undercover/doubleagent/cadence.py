@@ -564,6 +564,8 @@ def project_for_voice(v, create_person: bool = False):
 def can_train(v) -> tuple[bool, str]:
     """(possible?, why not / what it will do) for "Train cadence" on a voice."""
     ex = v.extra or {}
+    if ex.get("demo"):
+        return False, "The demo voice is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of."
     if not C.engine_ready(C.default_engine()):
         return False, "The cadence engine isn't installed."
     proj = project_for_voice(v)
@@ -599,6 +601,8 @@ def train(job, voice_name: str, push, control=None) -> dict:
     if not C.engine_ready(engine):
         raise ModelError("The cadence engine (Chatterbox) isn't installed in this UnderCover. Run setup again to add it.")
     proj = project_for_voice(v)
+    if proj is None and (v.extra or {}).get("demo"):
+        raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
     if proj is None:
         person = None if (v.extra or {}).get("trained") else (v.extra or {}).get("person")
         if not person:

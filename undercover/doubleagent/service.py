@@ -251,6 +251,11 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     from ..core.voices import download_and_install, get_voice, remove_voice
     from ..core.speaker import SpeakerEmbedder
     cands = installed_for(person)
+    demo = next((v for v in cands if (v.extra or {}).get("demo")), None)
+    if demo is not None:   # "... as Agent Smoke": the demo voice as it is, never checked against clips of nobody
+        plan["voice"] = {"name": demo.name, "display": display_name(demo), "how": "installed", "checked": "the demo voice"}
+        push("voice", 1.0, f"Using the demo voice “{display_name(demo)}”")
+        return demo
     trained = [v for v in cands if v.extra.get("trained")]
     if trained:
         plan["voice"] = {"name": trained[0].name, "display": display_name(trained[0]), "how": "installed",
