@@ -39,6 +39,14 @@ class Control:
 USER_ERRORS: list = []   # exception classes whose message is already meant for the user (modules add theirs)
 
 
+def _platform_errors():   # core/platform's "not on this OS" is written for the user (phase 18)
+    from .platform import NotOnThisOS
+    USER_ERRORS.append(NotOnThisOS)
+
+
+_platform_errors()
+
+
 def register_user_error(cls):
     if cls not in USER_ERRORS:
         USER_ERRORS.append(cls)

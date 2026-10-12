@@ -2750,6 +2750,20 @@ def u_platform():
             except platform.NotOnThisOS as e:
                 assert "Windows only" in str(e), e
         assert platform.own_executable() == sys.executable
+        try:   # no file manager opener: said plainly (and the job system passes it on as written)
+            platform.open_folder(ROOT)
+            raise AssertionError("open_folder ran without a way to open folders")
+        except platform.NotOnThisOS as e:
+            from undercover.core import jobs as _jobs
+            assert _jobs.friendly(e) == str(e) and "xdg-open" in str(e), e
+        from undercover.core import doctor, phone
+        real = (phone.enabled, phone.lan_address)
+        phone.enabled, phone.lan_address = (lambda: True), (lambda: "192.168.1.5")
+        try:
+            rows = doctor.c_phone({})
+            assert [r["state"] for r in rows] == ["info"] and "Windows only" in rows[0]["say"], rows
+        finally:
+            phone.enabled, phone.lan_address = real
     finally:
         platform.WINDOWS = saved
     return "no Windows-only calls elsewhere; one instance; the startup shortcut in a temp folder; the other-OS answers"
@@ -2784,6 +2798,9 @@ def u_tray():
     assert tray.icon_state(idle, [], doctor_bad=True)[0] == "problem"
     finished = {**cover, "state": "done", "final": {"state": "done"}}
     assert tray.icon_state(idle, [finished]) == ("idle", None)
+    # the icon leaves with UnderCover after any stop on purpose, stays through a restart or a crash
+    assert [tray.leaves_with_server(r) for r in ("quit", "window closed", "", "log off", "restart", None)] == \
+        [True, True, True, True, False, False]
     imgs = [tray.draw_icon(st, mod).tobytes() for st, mod in (("idle", None), ("working", "frontman"), ("problem", None),
                                                               ("stopped", None))]
     assert len(set(imgs)) == 4 and tray.draw_icon("idle", size=16).size == (16, 16)
