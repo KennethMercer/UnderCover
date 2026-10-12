@@ -438,6 +438,28 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .tab[aria-pressed="true"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
 .tab:disabled { opacity: .45; }
 
+/* the update notice (phase 11b): one quiet line under the top bar's band, both themes, phones too */
+.uc-updated { display: flex; gap: 6px 10px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 14px;
+  font-size: 13.5px; color: var(--muted); background: var(--panel); border-radius: var(--r); }
+.uc-updated[hidden] { display: none; }
+/* the one-shot's plan: the subject in plain words, a weak voice said plainly with its way out (phase 15) */
+#os-subject.meta { margin-top: 8px; }
+#os-subject .linkbtn { margin-left: 4px; }
+.os-subject-ask { display: grid; gap: 8px; margin-top: 10px; }
+.os-quality { display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: baseline; margin-top: 10px; padding: 9px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel-2)); border-left: 3px solid var(--warn); font-size: 13.5px; }
+.os-quality b { color: var(--warn); }
+/* the train box in the basic view: a quiet toggle beside the examples */
+#os-train-row { font-size: 13.5px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+#os-train-row input:checked + span { color: var(--fg); }
+/* yt-dlp's "Update by itself" (System room, Deep Cover) under the row's words */
+.sys .check { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.sys .check input { width: 15px; height: 15px; margin-top: 2px; }
+#lib-ytdlp-go { min-width: 9.5em; }   /* "Check for a fix" and its progress text keep the button's width */
+/* Settings: the Doctor's network rows under Phone access */
+#phone-checks:empty { display: none; }
+#phone-checks .sys { padding: 10px 0; }
+
 /* the First assignment (tutorial.js): a strip under the top bar naming one action; the thing to press is the page's lit edge */
 .assign { --accent: var(--c-safehouse); position: relative; background: var(--panel); border-radius: var(--r); margin-bottom: 8px; }
 .assign-in { display: flex; align-items: center; gap: 16px; padding: 10px 14px 12px; font-size: 14px; }

@@ -313,11 +313,11 @@ function renderSong() {
   const s = S.song;
   $("#song-name").textContent = s.name;
   const base = `${fmtTime(s.duration)} · ${(s.sample_rate / 1000).toFixed(s.sample_rate % 1000 ? 1 : 0)} kHz · ${s.channels === 1 ? "mono" : s.channels === 2 ? "stereo" : s.channels + " ch"} · ${s.lufs} LUFS`;
-  $("#song-meta").textContent = base;
+  $("#song-meta").textContent = (s.sample ? "sample song · " : "") + base;
   S.songKey = null;
   api(`/api/songs/${s.id}/key`).then(k => {
     if (S.song?.id !== s.id) return;
-    S.songKey = k; $("#song-meta").textContent = `${base} · key ${k.name}`;
+    S.songKey = k; $("#song-meta").textContent = `${s.sample ? "sample song · " : ""}${base} · key ${k.name}`;
     $("#key-o").textContent = keyLabel(S.opts.key || 0);
   }).catch(() => {});
   drawWave($("#wave-song"), s.peaks, 0);
