@@ -125,17 +125,10 @@ def readers() -> list[dict]:
 # ---------------------------------------------------------------- making speech
 
 def _level(y: np.ndarray, rms_db: float = -20.0, peak: float = 0.89) -> np.ndarray:
-    """The same loudness for every sentence (so playback doesn't jump between them), peaks under -1 dBFS."""
-    if not len(y):
-        return y
-    r = float(np.sqrt(np.mean(y ** 2))) or 1e-9
-    y = y * min(10 ** (rms_db / 20) / r, peak / max(1e-9, float(np.abs(y).max())))
-    f = min(len(y) // 2, 240)   # 5-10 ms fades: no clicks at the joins
-    if f:
-        ramp = np.linspace(0, 1, f, dtype=np.float32)
-        y[:f] *= ramp
-        y[-f:] *= ramp[::-1]
-    return y.astype(np.float32)
+    """The same loudness for every sentence, peaks under -1 dBFS (core.cadence.render.level: DoubleAgent's A/B
+    readings are levelled the same way, so they sound as they would here)."""
+    from ..core.cadence import render
+    return render.level(y, rms_db, peak)
 
 
 def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0,

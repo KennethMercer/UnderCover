@@ -536,15 +536,16 @@ def train(job, voice_name: str, push, control=None) -> dict:
         if before is not None and win["score"] <= before["score"] + 0.005:
             result.update(replaced=False, note=f"Tried {len(tried)} reference clips; none beat the current cadence, so it stays.")
             return result
-        if before is not None and win["clip"] == old.get("clip") and all(base[k] == old.get(k) for k in base):
+        if old is not None and win["clip"] == old.get("clip") and all(base[k] == old.get(k) for k in base):
             result.update(replaced=False, note="The best reference clip is the one it already speaks with, so the cadence stays.")
             return result
         # 5. save the pack with the voice. A voice that already speaks with a cadence keeps it: the new one waits in
-        # tts/pending/ for the user's ear ("Keep this one", phase 9). Only an unusable current one (its engine gone)
+        # tts/pending/ for the user's ear ("Keep this one", phase 9), also when measuring the current one failed this
+        # time (a worker hiccup must not replace a pack the user approved). Only a current one whose engine is gone
         # is replaced at once, and even then it's moved aside (tts/previous/), never deleted.
         gaps = person.get("sentence_gap_s") or [0.3, 0.45, 0.8]
         gap = float(np.clip(gaps[1], 0.25, 1.0))
-        waits = old is not None and before is not None
+        waits = old is not None and C.engine_ready(old.get("engine") or engine)
         pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins,
@@ -557,10 +558,11 @@ def train(job, voice_name: str, push, control=None) -> dict:
         shutil.copyfile(work / f"{win['clip']}.wav", new / "ref.wav")
         fsutil.write_text(new / "cadence.json", json.dumps({**pack, "tried": tried}, indent=1))
         if save_pack(v.name, new, pack, waits) == "pending":
+            how = (f"that measures better ({before['score']:.3f} -> {win['score']:.3f})" if before is not None else
+                   "(the current one couldn't be measured this time)")
             result.update(replaced=False, pending=True,
-                          note=f"Found a cadence for {label_of(v.name)} that measures better ({before['score']:.3f} -> "
-                               f"{win['score']:.3f}). Listen to both and keep the one you like: the current one "
-                               "stays until you choose.")
+                          note=f"Found a cadence for {label_of(v.name)} {how}. Listen to both and keep the one you like: "
+                               "the current one stays until you choose.")
             return result
         result.update(replaced=True, note=(f"{v.name} now speaks with {proj.person}'s cadence" if old is None else
                                            f"New cadence for {v.name} (the old one couldn't be read; it's kept in tts/previous)")
@@ -577,10 +579,11 @@ def pack_id(pack: dict) -> str:
 
 def approved_by_user(pack: dict) -> bool:
     """The user picked this pack by ear (its latest verdict where it was compared says it won)."""
-    me = pack_id(pack)
+    me = {pack_id(pack), f"{pack_id(pack)}@{pack.get('made')}"}   # the dated form: two packs with the same id (_ids)
     for vd in reversed(pack.get("verdicts") or []):
-        if me in vd.get("compared", []):
-            return vd.get("winner") == me
+        hit = me.intersection(vd.get("compared", []))
+        if hit:
+            return vd.get("winner") in hit
     return False
 
 
@@ -608,10 +611,7 @@ def _move(v, src: Path, dst: Path):
     """Every file of the pack in src into dst (inside the voice's tts/ folder only; nothing overwritten)."""
     storage.move_within([(f, dst / f.name) for f in _pack_files(src)], v.dir / "tts")
     if src != v.dir / "tts":
-        try:
-            src.rmdir()   # only when empty
-        except OSError:
-            pass
+        storage.remove_empty(src, v.dir / "tts")
 
 
 def _set_aside(v, d: Path, why: str) -> Path:
@@ -649,6 +649,7 @@ def save_pack(voice_name: str, src: Path, pack: dict, waits: bool) -> str:
     with _LOCK:
         v = get_voice(voice_name)   # fresh meta (an export or a verdict may have happened meanwhile)
         tts = v.dir / "tts"
+        waits = waits and pack_of(v) is not None   # its cadence may have been deleted while this one was made
         if waits:
             if _pack_files(tts / "pending"):
                 _set_aside(v, tts / "pending", "unheard")
@@ -677,8 +678,9 @@ def pending_of(v) -> dict | None:
 
 
 def _ids(cur: dict, pen: dict) -> tuple[str, str]:
+    """The two packs' ids in a verdict; the same clip and settings are told apart by when each was made."""
     a, b = pack_id(cur), pack_id(pen)
-    return (a, b) if a != b else (a, f"{b}@{pen.get('made', 'pending')}")
+    return (a, b) if a != b else (f"{a}@{cur.get('made')}", f"{b}@{pen.get('made')}")
 
 
 def _sample_ok(d: Path, pid: str) -> bool:
@@ -737,11 +739,11 @@ def make_samples(job, voice_name: str) -> dict:
         fut, wav = render.request(AB_LINE, pack, d / pack.get("ref", "ref.wav"), seed=AB_SEED)
         render.client.wait(fut, cancel=lambda: job.cancel)
         y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)))
-        r = float(np.sqrt(np.mean(y ** 2))) if len(y) else 0.0
-        if r > 0:   # the same loudness for both, peaks under -1 dBFS (as SpeakEasy levels its sentences)
-            y = y * min(0.1 / r, 0.89 / float(np.abs(y).max()))
+        y = render.level(y)   # SpeakEasy's loudness, so both sound as they would there
         with _LOCK:
-            if not (d / pack.get("ref", "ref.wav")).exists():   # a verdict moved it meanwhile
+            fresh = get_voice(v.name)
+            now = (pack_of(fresh), pending_of(fresh))
+            if not all(now) or _ids(*now)[0 if d == tts else 1] != pid:   # a verdict moved it meanwhile
                 continue
             sf.write(str(d / "sample.wav"), y, sr, subtype="PCM_16")
             fsutil.write_text(d / "sample.json", json.dumps({"line": AB_LINE, "pack": pid, "made": time.strftime("%Y-%m-%d %H:%M")}))
@@ -769,10 +771,10 @@ def verdict(voice_name: str, keep: str, why: str = "", by: str = "user") -> dict
                  "scores": {ci: pen.get("before") or (cur or {}).get("scores"), pi: pen.get("scores")}}
         tts = v.dir / "tts"
         if keep == "current":
+            aside = _set_aside(v, tts / "pending", "turned-down")   # first: a refused move records nothing
+            fsutil.write_text(aside / "verdict.json", json.dumps(entry, indent=1))
             cur.setdefault("verdicts", []).append(entry)
             fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
-            aside = _set_aside(v, tts / "pending", "turned-down")
-            fsutil.write_text(aside / "verdict.json", json.dumps(entry, indent=1))
             return {"kept": "current", "verdict": entry, "state": ab_state(v.name)}
         new = dict(pen)
         new["verdicts"] = list((cur or {}).get("verdicts", [])) + [entry]

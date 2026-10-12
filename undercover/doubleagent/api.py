@@ -130,7 +130,7 @@ def _route(h, method, p):
                 return h._json({**project_json(proj), "warning": str(e)})
             proj.save()
             return h._json(project_json(proj))
-    m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9_.-]+)/cadence(?:/(ab|verdict|sample/current|sample/pending))?", p)
+    m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9][A-Za-z0-9_-]*)/cadence(?:/(ab|verdict|sample/current|sample/pending))?", p)
     if m:
         return _cadence_ab(h, method, unquote(m.group(1)), m.group(2))
     m = re.fullmatch(r"/api/train/projects/([a-z0-9-]+)(?:/(\w+))?", p)

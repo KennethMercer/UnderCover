@@ -343,6 +343,19 @@ def move_within(moves, within: Path):
         fsutil.retry(lambda s=s, d=d: os.replace(s, d))
 
 
+def remove_empty(d: Path, within: Path):
+    """Remove the folder d if it is empty (what move_within left behind); same checks as move_within, never a file."""
+    d = Path(d)
+    if ALLOWED_ROOTS is not None:
+        why = refuse([d])
+        if why:
+            raise ModelError(why)
+    if not _inside(d, within) or _same(d, within):
+        raise ModelError(f"{d} isn't inside {within}; nothing was removed.")
+    if d.is_dir() and not any(d.iterdir()):
+        fsutil.retry(d.rmdir)
+
+
 def _release(group: str):
     """Let go of what's loaded from the folders that move, so it's loaded again from the new place."""
     from . import gpu

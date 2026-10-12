@@ -23,6 +23,7 @@ function renderVoiceCards(cands) {
   // voices trained here first (they can be improved), then the downloaded ones
   const list = [...DA.cands].sort((a, b) => (b.can - a.can) || (b.trained - a.trained) || a.voice.localeCompare(b.voice));
   const shown = DA.all ? list : list.slice(0, 6);
+  const kept = $("#cad-ab", box);   // the open A/B survives a redraw (a reading playing, the why text)
   box.innerHTML = shown.map(c => {
     const busy = running.has(c.target);
     const facts = c.trained ? [c.singing ? "singing" : c.singing === false ? "speech" : "", c.minutes ? `${Math.round(c.minutes)} min` : ""].filter(Boolean).join(" · ")
@@ -62,6 +63,8 @@ function renderVoiceCards(cands) {
     catch (e) { b.disabled = false; showError(e.message, "Couldn't start the cadence"); }
   });
   $$("[data-cad-ab]", box).forEach(b => b.onclick = () => openAb(b.dataset.cadAb));
+  const fresh = $("#cad-ab", box);
+  if (fresh && kept && kept.dataset.key && fresh.dataset.key === kept.dataset.key) fresh.replaceWith(kept);
   const ab = $("#cad-ab", box);
   if (ab) {
     $$("audio", ab).forEach(a => a.onplay = () => {   // one at a time, at the page's volume (muted stays silent)
@@ -89,7 +92,7 @@ function abHtml() {
       <small class="meta" data-deep>${esc(s.clip || "")} · score ${sc.score ?? "?"} · likeness ${sc.likeness ?? "?"} · gap ${sc.cadence_gap ?? "?"}${sc.sound != null ? ` · clip sound −${sc.sound}` : ""}</small>
       <button class="mini" type="button" data-keep="${w}" ${a.busy ? "disabled" : ""}>Keep this one</button></div>`;
   };
-  return `<div id="cad-ab" data-voice="${esc(st.voice)}">
+  return `<div id="cad-ab" data-voice="${esc(st.voice)}" data-key="${esc([st.current.id, st.pending.id, a.busy ? 1 : 0, a.err || ""].join("|"))}">
     <p class="meta">Both read the same line: “${esc(st.line)}”</p>
     ${side("current", "Current")}${side("pending", "New")}
     <textarea id="cad-ab-why" rows="2" placeholder="Why? (optional)">${esc(a.why || "")}</textarea>
