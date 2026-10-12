@@ -10,7 +10,8 @@
 <link rel="stylesheet" href="/static/speakeasy.css">
 <link rel="stylesheet" href="/static/look.css">
 <link rel="stylesheet" href="/static/winamp.css">
-<script>try { if (localStorage.getItem("uc-theme") === "light") document.documentElement.dataset.theme = "light";
+<script>try { const t = localStorage.getItem("uc-theme") || "system";
+  if (t === "light" || (t === "system" && matchMedia("(prefers-color-scheme: light)").matches)) document.documentElement.dataset.theme = "light";
   if (JSON.parse(localStorage.getItem("uc-skin")) === "winamp") document.documentElement.dataset.skin = "winamp"; } catch (e) {}</script>
 </head>
 <body data-module="frontman">
@@ -24,7 +25,9 @@
   <symbol id="r-library" viewBox="0 0 24 24"><path d="M5 4v16M10 4v16M14 5l5 14"/></symbol>
   <symbol id="r-storage" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="13" width="18" height="6" rx="1.5"/><path d="M7 8h.01M7 16h.01"/></symbol>
   <symbol id="r-addons" viewBox="0 0 24 24"><path d="M9 4v3H5v4h3a2 2 0 0 1 0 4H5v4h4v-3a2 2 0 0 1 4 0v3h4v-4h3V11h-3V7h-4V4z"/></symbol>
-  <symbol id="g-queue" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="r-running" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></symbol>
+  <symbol id="r-system" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
+  <symbol id="r-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
 </svg>
 
 <header class="top">
@@ -40,12 +43,8 @@
       <a class="mod" role="tab" href="#safehouse" id="tab-safehouse" data-tab="safehouse" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#g-safehouse"/></svg><span>SafeHouse</span></a>
     </nav>
     <div class="chips">
-      <button class="chip chip-btn" id="chip-queue" type="button" data-deep aria-haspopup="dialog" aria-label="Open the overnight queue"><svg class="ico" aria-hidden="true"><use href="#g-queue"/></svg><span id="q-count">Queue</span></button>
-      <span class="chip gpu" id="chip-gpu" data-deep><i class="dot wait"></i><span>Starting…</span></span>
-      <span class="chip models" id="chip-models" data-deep>loading models</span>
       <button class="chip chip-btn train" id="chip-train" hidden aria-label="Training progress: open DoubleAgent"></button>
       <button class="chip chip-btn deep-btn" id="deep-toggle" type="button" aria-pressed="false" title="Deep Cover: show every number, score and setting"><svg class="ico" aria-hidden="true"><use href="#g-deep"/></svg><span>Deep Cover</span></button>
-      <button class="chip chip-btn theme" id="theme" aria-label="Switch light or dark theme">Light</button>
     </div>
   </div>
 </header>
@@ -54,7 +53,7 @@
   <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
     <span class="who" id="wb-who"></span>
     <div class="wb-main" id="wb-main"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
-    <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-forget" type="button" hidden title="Forget the paused work instead of resuming it">Dismiss</button><button class="linkbtn" id="wb-open" type="button">Queue</button></div>
+    <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-forget" type="button" hidden title="Forget the paused work instead of resuming it">Dismiss</button><button class="linkbtn" id="wb-open" type="button" title="Open SafeHouse's Running room">Running</button></div>
   </div>
 </div>
 
@@ -495,17 +494,21 @@
       <div><h1>SafeHouse</h1><p>Everything the suite keeps on disk, and what can go.</p></div></div>
     <div class="rooms" role="tablist" aria-label="Rooms">
       <button class="room" role="tab" type="button" data-room="library" aria-selected="true"><svg class="ico" aria-hidden="true"><use href="#r-library"/></svg>Library</button>
+      <button class="room" role="tab" type="button" data-room="running" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#r-running"/></svg>Running <small id="room-n-running"></small><i class="pip" id="room-pip-running" hidden title="The overnight queue is set to run"></i></button>
       <button class="room" role="tab" type="button" data-room="storage" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#r-storage"/></svg>Storage <small id="room-n-storage"></small></button>
       <button class="room" role="tab" type="button" data-room="addons" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#r-addons"/></svg>Add-ons <small id="room-n-addons"></small></button>
+      <button class="room" role="tab" type="button" data-room="system" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#r-system"/></svg>System</button>
+      <button class="room" role="tab" type="button" data-room="settings" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#r-settings"/></svg>Settings</button>
     </div>
     <div class="sh-room" id="room-library">
-    <section class="panel lib-jobs"><h2>Running and recent</h2><div class="qd-jobs" id="lib-jobs"></div></section>
+    <div class="tabs small" id="lib-kfilter" role="group" aria-label="Kept or recent">
+      <button class="tab" type="button" data-v="kept" aria-pressed="true">Kept <b id="lib-n-kept"></b></button>
+      <button class="tab" type="button" data-v="recent" aria-pressed="false">Recent <b id="lib-n-recent"></b></button></div>
     <div class="cats" id="lib-cats" role="group" aria-label="Show"></div>
     <div class="lib-tools">
       <input type="search" id="lib-q" autocomplete="off" aria-label="Search the library">
       <select id="lib-sort" aria-label="Sort" data-deep></select>
       <select id="lib-filter" aria-label="Filter" hidden data-deep></select>
-      <select id="lib-kfilter" aria-label="Kept or recent" hidden><option value="">Kept and recent</option><option value="kept">Kept</option><option value="recent">Recent</option></select>
     </div>
     <section class="lib">
       <div class="panel items" id="lib-list" aria-label="Items"></div>
@@ -523,8 +526,7 @@
           <div data-deep><div class="stack thin" id="lib-stack" role="img" aria-label="Storage by type"></div>
             <div class="legend" id="lib-legend"></div></div>
         </div>
-        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn">Clean up…</button>
-          <span class="meta" id="lib-ytdlp" data-deep></span></div>
+        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn">Clean up…</button></div>
       </div>
     </section>
     <section class="panel" id="lib-clean" hidden>
@@ -536,9 +538,55 @@
     <section class="panel">
       <div class="row spread"><h2>Where your files live</h2><span class="meta">Keep UnderCover on C: and its files somewhere roomier</span></div>
       <div class="places" id="st-places"></div>
-      <div class="row spread"><span class="meta">Logs and settings stay with the app.</span>
-        <button class="linkbtn" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button></div>
+      <p class="meta">Logs and settings stay with the app.</p>
     </section>
+    </div>
+
+    <div class="sh-room" id="room-running" hidden>
+    <div class="roomhead"><h3>Running</h3><p>What's working now, what's queued for tonight, and what finished recently.</p></div>
+    <div class="rn-now-box" id="rn-now"></div>
+    <section class="rn-sec">
+      <div class="rn-lbl"><b>Tonight</b><small id="rn-total"></small>
+        <span class="end" id="rn-when"><span class="seg" role="group" aria-label="When the queue starts"><button type="button" id="rn-at" aria-pressed="false">Start at 11:00 pm</button><button type="button" id="rn-go" aria-pressed="false">Start now</button></span>
+          <button class="linkbtn" id="rn-stop" type="button" hidden>Don't start more</button></span></div>
+      <div class="rn-list" id="rn-list"></div>
+      <div class="rn-opts" id="rn-opts">
+        <label class="toggle"><input type="checkbox" id="rn-finish"><span>Finish by 7:00 am<br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="rn-awake"><span>Keep the PC awake<br><span class="meta">Only while voice work runs.</span></span></label>
+      </div>
+      <div class="rn-more"><button class="linkbtn" type="button" data-qadd="improve">Add a voice to improve</button><button class="linkbtn" type="button" data-qadd="new">Train a new voice tonight</button><span class="meta">· both open DoubleAgent</span></div>
+    </section>
+    <section class="rn-sec">
+      <div class="rn-lbl"><b>Recent</b><small>The last five finished, and how they ended.</small></div>
+      <div class="rn-list" id="rn-recent"></div>
+    </section>
+    </div>
+
+    <div class="sh-room" id="room-system" hidden>
+    <div class="roomhead"><h3>System</h3><p>The machine UnderCover runs on, and the parts it loaded.</p></div>
+    <div class="alert" id="sys-alert" hidden><div><b>No graphics card available</b><p id="sys-alert-p"></p></div>
+      <div class="alert-btns"><button class="btn" type="button" data-restart>Restart UnderCover</button></div></div>
+    <div class="rn-list">
+      <div class="sys"><span><b>Graphics card</b><small id="sys-gpu">Checking…</small></span><span class="dotw now" id="sys-gpu-st">checking</span></div>
+      <div class="sys"><span><b>Models</b><small id="sys-models">Loading…</small></span><span class="dotw now" id="sys-models-st">loading</span></div>
+      <div class="sys"><span><b>YouTube downloader</b><small>Finds songs and clips. YouTube changes often; an update usually fixes downloads that start failing.</small>
+        <span class="kv2" id="lib-ytdlp" data-deep></span></span><button class="btn" id="lib-ytdlp-go" type="button">Update</button></div>
+    </div>
+    <div class="row sys-btns"><button class="btn" type="button" data-restart>Restart UnderCover</button>
+      <button class="btn danger" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button>
+      <span class="meta">Quit stops it on this PC; start it again with UnderCover.bat.</span></div>
+    </div>
+
+    <div class="sh-room" id="room-settings" hidden>
+    <div class="roomhead"><h3>Settings</h3><p>The few things UnderCover lets you change about itself.</p></div>
+    <div class="rn-list">
+      <div class="setting"><span><b>Look</b><small>Follow Windows, or pick one.</small></span>
+        <span class="seg" id="set-look" role="group" aria-label="Look"><button type="button" data-v="system" aria-pressed="true">Follow Windows</button><button type="button" data-v="dark" aria-pressed="false">Dark</button><button type="button" data-v="light" aria-pressed="false">Light</button></span></div>
+      <div class="setting"><span><b>Deep Cover</b><small>Shows every number, score, setting and log. The glasses in the top bar switch it too.</small></span>
+        <button class="switch" id="set-deep" type="button" role="switch" aria-checked="false" aria-label="Deep Cover"></button></div>
+      <div class="setting later"><span><b>First assignment</b><small>The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small></span><span class="meta">later</span></div>
+      <div class="setting later"><span><b>Phone access</b><small>Use UnderCover from your phone, at home or away. Off, and not ready yet.</small></span><span class="meta">later</span></div>
+    </div>
     </div>
 
     <div class="sh-room" id="room-addons" hidden>
