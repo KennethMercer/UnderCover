@@ -481,6 +481,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         singer = proj.mode != "speaking"
         sung_first = (lambda s: not srcmod.is_sung(s)) if singer else (lambda s: False)
         searched_more = False
+        searched_blocked = False
 
         def enough(pr):
             return (pr.sung_seconds() if singer and not songs_exhausted(pr) else pr.kept_seconds()) / 60 >= TC["target_minutes"]
@@ -536,6 +537,22 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                     proj.sources += new
                     proj.save()
                 more = new + more
+            blocked, tried = srcmod.blocked_share(proj.sources)
+            if (not more and not searched_blocked and tried >= 3 and blocked >= tried / 2
+                    and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]):
+                # most of what was found can't be had here (blocked in this region): other uploads, other words
+                searched_blocked = True
+                try:
+                    extra = srcmod.search_more(person, {s.id for s in proj.sources}, srcmod.is_character_project(proj))
+                except ModelError:
+                    extra = []
+                if extra:
+                    with P.lock(proj.name):
+                        proj = P.Project.load(proj.name)
+                        proj.sources += [s for s in extra if s.id not in {x.id for x in proj.sources}]
+                        proj.save()
+                    push("voice", 0.1, f"{blocked} of {tried} videos of {person} can't be downloaded here; trying other uploads")
+                    continue
             if not more and not [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]:
                 break   # nothing ticked left to try, and nothing more to tick
             with P.lock(proj.name):
@@ -549,6 +566,12 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         proj = P.Project.load(proj.name)
         mins = proj.kept_seconds() / 60
         if mins < 3:
+            blocked, tried = srcmod.blocked_share(proj.sources)
+            if tried >= 3 and blocked >= tried / 2:
+                raise ModelError(f"{blocked} of the {tried} videos of {person} UnderCover found can't be downloaded here "
+                                 f"(YouTube says they're not available, usually because they're blocked in this region), "
+                                 f"so only {mins:.1f} minutes of {person} came through (3+ needed). Add your own clips of "
+                                 f"{person} in DoubleAgent (links that play here, or recordings), then try again.")
             raise ModelError(f"Only {mins:.1f} minutes of {person}'s voice could be found online (3+ needed). "
                              "Open DoubleAgent to add links or recordings, then try again.")
         if prepare_only:
