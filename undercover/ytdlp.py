@@ -25,6 +25,10 @@ def main(argv=None) -> int:
             print(f"yt-dlp {s['yt']} + solver {s['ejs'] or 'missing'} ({'a checked update' if s['source'] == 'side' else 'the pinned pair'})")
             print(f"auto-update: {'on' if s['auto'] else 'off'}; last check: {s.get('last_check') or 'never'} {s.get('last_result') or ''}")
         return 0
+    if cmd in ("update", "install") and "--dry-run" not in argv and _server_running():
+        print("UnderCover is running: use SafeHouse > System > Check for a fix there (two checks at once could remove each "
+              "other's files). Nothing changed here.")
+        return 0 if cmd == "install" else 1
     if cmd in ("update", "install"):
         try:
             r = ytdlp.heal(reason="setup" if cmd == "install" else "by hand", dry_run="--dry-run" in argv,
@@ -44,6 +48,17 @@ def main(argv=None) -> int:
         return 0
     print(__doc__)
     return 2
+
+
+def _server_running() -> bool:
+    """Is this install's UnderCover answering on its port? (One heal at a time: the server's lock is in its process.)"""
+    import urllib.request
+    from .core.config import CONFIG
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{CONFIG['ui']['port']}/api/status", timeout=2) as r:
+            return r.status == 200
+    except OSError:
+        return False
 
 
 if __name__ == "__main__":

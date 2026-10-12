@@ -53,7 +53,9 @@ NOT_BROKEN = ("not a bot", "Sign in to confirm", "Private video", "has been remo
               "members-only", "Premieres in", "live event", "This video is unavailable", "Video unavailable",
               "is not available in your country", "HTTP Error 429")
 
-LOCK = threading.RLock()
+LOCK = threading.RLock()       # one heal at a time (held for its whole run: self-tests take minutes)
+_EV_LOCK = threading.Lock()    # the events only: YouTube work never waits for a heal
+_JOB_LOCK = threading.Lock()
 _EVENTS: list = []          # (time, video id, "ok" | "broken")
 _HEAL = {"job": None}
 
@@ -76,9 +78,21 @@ def _guard(p: Path):
             raise HealError(why)
 
 
+_LOADED: dict = {}   # state.json's (path, mtime) -> its contents: /api/status asks on every poll
+
+
 def load() -> dict:
+    f = home() / "state.json"
     try:
-        st = json.loads((home() / "state.json").read_text(encoding="utf-8"))
+        key = (str(f), f.stat().st_mtime_ns)
+    except OSError:
+        key = None
+    if key is not None and _LOADED.get("key") == key:
+        return json.loads(_LOADED["text"])
+    try:
+        text = f.read_text(encoding="utf-8")
+        st = json.loads(text)
+        _LOADED.update(key=key, text=text)
     except (OSError, ValueError):
         st = {}
     st.setdefault("auto", True)
@@ -114,8 +128,13 @@ def side(name: str | None) -> Path | None:
     return d if _pair_of(d) else None
 
 
+_VENV: dict = {}
+
+
 def venv_pair() -> dict:
-    """The pair installed in the venv (its own site-packages only, never a side folder)."""
+    """The pair installed in the venv (its own site-packages only, never a side folder). Kept a minute."""
+    if _VENV.get("at", 0) > time.time() - 60:
+        return dict(_VENV["pair"])
     from importlib.metadata import distributions
     import sysconfig
     where = [sysconfig.get_paths()["purelib"], sysconfig.get_paths()["platlib"]]
@@ -125,7 +144,8 @@ def venv_pair() -> dict:
             got[dist.metadata["Name"].lower().replace("_", "-")] = dist.version
         except Exception:   # noqa: BLE001
             pass
-    return {"yt": got.get(PKG), "ejs": got.get(EJS), "dir": None, "source": "venv"}
+    _VENV.update(at=time.time(), pair={"yt": got.get(PKG), "ejs": got.get(EJS), "dir": None, "source": "venv"})
+    return dict(_VENV["pair"])
 
 
 def vkey(v: str | None) -> tuple:
@@ -212,7 +232,7 @@ def note(video: str, ok: bool, err: str = ""):
     if kind is None or not video:
         return
     now = time.time()
-    with LOCK:
+    with _EV_LOCK:
         _EVENTS.append((now, video, kind))
         _EVENTS[:] = [e for e in _EVENTS if now - e[0] < WINDOW][-200:]
         b = breakage()
@@ -223,11 +243,11 @@ def note(video: str, ok: bool, err: str = ""):
 def breakage() -> dict | None:
     """{"videos": n, "ok": n, "since": t} when several videos broke the same way lately, else None."""
     now = time.time()
-    recent = [e for e in _EVENTS if now - e[0] < WINDOW]
+    recent = [e for e in list(_EVENTS) if now - e[0] < WINDOW]
     broken = {v for _, v, k in recent if k == "broken"}
-    ok = sum(k == "ok" for _, _, k in recent)
-    if len(broken) >= BROKEN_VIDEOS and len(broken) > ok:
-        return {"videos": len(broken), "ok": ok, "since": min(t for t, _, k in recent if k == "broken")}
+    ok = {v for _, v, k in recent if k == "ok"} - broken   # per video: yt-dlp re-enters extract_info for redirects
+    if len(broken) >= BROKEN_VIDEOS and len(broken) > len(ok):
+        return {"videos": len(broken), "ok": len(ok), "since": min(t for t, _, k in recent if k == "broken")}
     return None
 
 
@@ -424,7 +444,11 @@ def heal(job=None, reason: str = "", dry_run: bool = False, offline: bool = Fals
             + (f" ({reason})" if reason else ""), 0.05)
         score = {"current": RESOLVE(Path(cur["dir"]) if cur["dir"] else None)}
         say(f"current pair resolves {score['current']['ok']} of {score['current']['of']} known videos", 0.3)
-        tmp = tempfile.mkdtemp(prefix="ytdlp-dry-", dir=path("cache_dir")) if dry_run else None   # removed below
+        _sweep()
+        if dry_run:
+            _guard(home())
+            home().mkdir(parents=True, exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix=".dry-", dir=home()) if dry_run else None   # removed below (or swept later)
         new_dir, new, note_ = None, None, ""
         try:
             if not offline:
@@ -517,10 +541,22 @@ def _drop(d: Path):
     storage.remove_files([], [home()], dirs=[d])
 
 
+def _sweep(older: float = 3600):
+    """Staging and dry-run folders an interrupted check left behind."""
+    for d in home().glob(".*") if home().exists() else []:
+        if d.is_dir() and d.name.startswith((".stage-", ".dry-")) and time.time() - d.stat().st_mtime > older:
+            try:
+                _drop(d)
+            except (OSError, ModelError):
+                pass
+
+
 def prune(st: dict | None = None):
     """Keep the active and the last known good pair; remove other pair folders and leftover staging."""
     st = st or load()
     keep = {st["active"], st["last_good"]}
+    if ACTIVE["dir"]:
+        keep.add(Path(ACTIVE["dir"]).name)   # the pair this process has loaded stays until it restarts
     for d in home().iterdir() if home().exists() else []:
         if d.is_dir() and d.name not in keep:
             try:
@@ -538,6 +574,8 @@ def set_auto(on: bool) -> dict:
 
 
 def status() -> dict:
+    if FLAG["broken"] and breakage() is None:   # the failures aged out (YouTube recovered, or a heal fixed it)
+        FLAG["broken"] = None
     st, cur = load(), current()
     return {"yt": cur["yt"], "ejs": cur.get("ejs"), "source": cur["source"], "auto": st["auto"],
             "last_good": st["last_good"], "last_check": st.get("last_check"), "last_result": st.get("last_result"),
@@ -549,7 +587,7 @@ def status() -> dict:
 def start_heal(reason: str = "", dry_run: bool = False):
     """A heal as a job (kind "ytdlp"); one at a time."""
     from . import jobs
-    with LOCK:
+    with _JOB_LOCK:
         j = _HEAL["job"]
         if j is not None and not j.finished:
             return j
