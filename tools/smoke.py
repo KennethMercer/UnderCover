@@ -407,6 +407,64 @@ def u_addons():
     return f"{len(rows)} parts, {sum(not r['included'] for r in rows.values())} optional"
 
 
+@check("yt-dlp Update (phase 8): a pinned, hashed install; no pin or nothing newer = no install; the date is recorded")
+def u_ytdlp():
+    from undercover.core import addons
+    from undercover.safehouse import api as shapi, library
+    name, ver, sha = addons.pin_of("ytdlp")
+    common = [ln.strip() for ln in (ROOT / "installer" / "requirements" / "common.txt").read_text(encoding="utf-8").splitlines()]
+    i = common.index(f"yt-dlp=={ver} \\")   # the installer carries the same pin as the registry
+    assert common[i + 1] == f"--hash=sha256:{sha}", "installer/requirements/common.txt and core/addons.py pin different yt-dlp wheels"
+    calls, state = [], {"v": "2026.1.1", "installs": True}
+    real_pip, real_ver = addons._pip, addons.package_version
+
+    def fake_pip(*args, what=""):   # never a real install: record the arguments and the requirements file it was given
+        calls.append((args, Path(args[args.index("-r") + 1]).read_text(encoding="utf-8")))
+        if state["installs"]:
+            state["v"] = ver
+
+    def post():
+        h = _FakeHandler()
+        assert shapi.handle(h, "POST", "/api/library/tools/ytdlp-update")
+        return h
+    addons._pip, addons.package_version = fake_pip, lambda n: state["v"]
+    try:
+        with isolated_data():
+            assert addons.updated("ytdlp") is None and library.ytdlp_info()["ytdlp_update"] is True
+            h = post()
+            assert not h.err and h.out == {"before": "2026.1.1", "after": ver, "pinned": ver, "changed": True}, (h.out, h.err)
+            args, req = calls[-1]
+            assert len(calls) == 1 and req == f"yt-dlp=={ver} --hash=sha256:{sha}\n", (calls, req)
+            assert "--require-hashes" in args and "--no-deps" in args and "--upgrade" not in args, args
+            assert args[args.index("-c") + 1] == str(ROOT / "constraints.txt") and "yt-dlp" not in args, args
+            import re
+            assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", addons.updated("ytdlp") or ""), addons.updated("ytdlp")
+            info = library.ytdlp_info()
+            assert info["ytdlp"] == info["ytdlp_pinned"] == ver and info["ytdlp_update"] is False and info["ytdlp_updated"], info
+            h = post()   # equal: nothing to do
+            assert h.out["changed"] is False and len(calls) == 1, (h.out, calls)
+            state["v"] = "2099.1.1"   # newer than the pin: left alone
+            h = post()
+            assert h.out["changed"] is False and len(calls) == 1 and library.ytdlp_info()["ytdlp_update"] is False
+            state["v"] = None   # not installed: that would be an install, which needs an OK
+            h = post()
+            assert h.err and len(calls) == 1 and library.ytdlp_info()["ytdlp_update"] is False, (h.err, calls)
+            state.update(v="2026.1.1", installs=False)   # pip "succeeds" but the version didn't move: reported, not recorded
+            addons.forget("ytdlp")
+            h = post()
+            assert h.err and len(calls) == 2 and addons.updated("ytdlp") is None, (h.err, calls)
+            hashes = dict(addons.ADDONS["ytdlp"].hashes)
+            addons.ADDONS["ytdlp"].hashes.clear()   # no pin: refused before pip is reached
+            try:
+                h = post()
+                assert h.err and "pinned" in h.err and len(calls) == 2, (h.err, calls)
+            finally:
+                addons.ADDONS["ytdlp"].hashes.update(hashes)
+    finally:
+        addons._pip, addons.package_version = real_pip, real_ver
+    return f"pin {ver}, hash checked against the installer's list; 5 cases, no real install"
+
+
 @check("data locations: guards, then a scratch move of model files and the library (voices stay the library's)")
 def u_storage():
     from undercover.core import config, storage
@@ -1362,7 +1420,7 @@ def main():
     BASE = f"http://127.0.0.1:{a.port}"
     t0 = time.time()
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_grammar, u_ambiguity, u_ask_flow):
         fn()
