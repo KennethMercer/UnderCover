@@ -213,6 +213,7 @@ html:not([data-skin="winamp"]) {
     & .litem .lside { grid-column: 3 / -1; justify-content: flex-start; flex-wrap: wrap; gap: 6px 10px; }
     & .litem.nocheck .lside { grid-column: 2 / -1; }
     & .litem .lside .mono { min-width: 0; text-align: left; }
+    & .addon .side { grid-auto-flow: row; justify-items: start; align-items: start; gap: 8px; }
     & .drawer { border-top: 0; }
   }
 
