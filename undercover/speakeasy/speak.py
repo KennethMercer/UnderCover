@@ -100,7 +100,7 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
 
 def voices() -> list[dict]:
     """Every voice with what SpeakEasy needs to list it (group, likeness, kind, auto Reader, cadence status)."""
-    from ..core.voices import list_voices
+    from ..core.voices import list_voices, voice_info
     out = []
     for v in list_voices():
         ex = v.extra or {}
@@ -108,7 +108,7 @@ def voices() -> list[dict]:
             p = plan(v.name)
         except Exception:
             continue
-        out.append({"name": v.name, "trained": bool(ex.get("trained")), "likeness": ex.get("likeness"),
+        out.append({"name": v.name, **voice_info(v), "likeness": ex.get("likeness"),
                     "person": ex.get("person"), "kind": ("speech" if ex.get("from_speech") else "singing") if ex.get("trained")
                     else ("singing" if ex.get("person_range") and not ex.get("person_range_speech") else None),
                     "undertrained": service.undertrained(v), "cadence": service.cadence_status(v),

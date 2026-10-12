@@ -79,6 +79,11 @@ def project_json(proj: P.Project) -> dict:
     }
 
 
+def _voice_label(name):
+    from ..core.voices import label_of
+    return label_of(name) if name else name
+
+
 def _lengths() -> dict:
     from .trainer import LENGTHS
     return LENGTHS
@@ -363,7 +368,7 @@ def start_train(name: str, b: dict):
         job.finish("done", message=f"Training {st['state']}.", train_state=st["state"], epoch=st.get("epoch"),
                    best=st.get("best"), outcome=st.get("outcome"))
 
-    job.resume_spec = {"kind": "train", "project": proj.name, "label": f"Training {proj.train.get('voice_name') or proj.name}"}
+    job.resume_spec = {"kind": "train", "project": proj.name, "label": f"Training {_voice_label(proj.train.get('voice_name')) or proj.name}"}
     job.control = control
     jobs.GPU_QUEUE.put((job, run))
     return job
@@ -416,7 +421,7 @@ def start_auto(name: str, b: dict):
         finally:
             ACTIVE.pop(proj.name, None)
         gpu.forget_voice(name)
-        job.finish("done", message=f"'{name}' is ready in your voices.", voice=name)
+        job.finish("done", message=f"{_voice_label(name)} is ready in your voices.", voice=name)
 
     job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}
     job.control = control
@@ -463,7 +468,7 @@ def _export(h, proj, b):
                 pr = P.Project.load(proj.name)
             v = export_voice(pr, epoch=b.get("epoch"), name=b.get("name"), overwrite=bool(b.get("overwrite")))
             gpu.forget_voice(v.name)   # reload if an older version was cached
-            job.finish("done", message=f"'{v.name}' is ready in your voices.", voice=v.name)
+            job.finish("done", message=f"{_voice_label(v.name)} is ready in your voices.", voice=v.name)
         except Exception as e:
             job.finish("error", message=jobs.friendly(e, "adding the voice"))
 

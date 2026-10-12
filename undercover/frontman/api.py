@@ -10,7 +10,7 @@ POST   /api/upload                          raw body + X-Filename: a song droppe
 POST   /api/songs/youtube                   {url} or a search result -> fetched into uploads/
 POST   /api/songs/<id>/presep               separate in the background while the GPU is idle
 POST   /api/estimate | /api/covers | /api/preview
-POST   /api/auto                            {text, prefer_train, song_url} -> one-shot job
+POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
 """
 import hashlib
 import re
@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ..core.config import CONFIG, path
 from ..core.files import AUDIO_EXT, file_url
+from ..core.voices import label_of
 from ..core.jobs import GPU_QUEUE, JOBS, Cancelled, Job
 from .pipeline import ENGINE, cancel_presep as _cancel_presep, history_items
 from .songs import register_song, song_meta
@@ -124,7 +125,7 @@ def _start_cover(h, body: dict):
         get_voice(opts.backing_voice)
     song = path("uploads_dir") / meta["file"]
     _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice)))
-    job = Job("cover", title=f"{meta['title']} · {opts.voice}")
+    job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}")
     JOBS[job.id] = job
 
     def run(job: Job):
@@ -202,25 +203,42 @@ def _song_from_youtube(h, body: dict):
 
 
 def _auto_plan(h, text: str, prefer_train: bool):
-    """What a one-shot request would do, without downloading anything (shown before it starts)."""
-    from ..core.voices import ModelError, slug
-    from . import oneshot
+    """What a one-shot request would do, without downloading anything (shown before it starts). An ambiguous bare
+    title answers `ask: true` with 2-3 `choices` ({artist, year, title, song_url}) instead of silently picking; while
+    an earlier answer is in effect (until a different song is requested) it comes back as `chosen` + `others`."""
+    from ..core.voices import ModelError, display_name, slug
+    from . import ambiguity, oneshot
     from ..doubleagent import service
     try:
         req = oneshot.parse_request(text)
     except ModelError as e:
         return h._error(str(e))
-    song, person = req["song"], req["person"]
+    song, person, artist = req["song"], req["person"], req["artist"]
     inst = service.installed_for(person)
     trained = [v for v in inst if v.extra.get("trained")]
     if trained:
-        voice = {"how": "installed", "name": trained[0].name, "trained": True}
+        voice = {"how": "installed", "name": trained[0].name, "display": display_name(trained[0]), "trained": True}
     else:
         online = [] if prefer_train else service.online_for(person, 2)
-        community = [] if prefer_train else [v.name for v in inst]
-        voice = ({"how": "check", "candidates": community + [r.name for r in online], "name": f"{slug(person)}-uc"}
-                 if community or online else {"how": "train", "name": f"{slug(person)}-uc"})
-    h._json({"song_query": song, "person": person, "style": req["style"], "voice": voice})
+        community = [] if prefer_train else inst
+        voice = ({"how": "check", "candidates": [display_name(v) for v in community] + [r.name for r in online],
+                  "candidate_ids": [v.name for v in community] + [r.name for r in online], "name": f"{slug(person)}-uc",
+                  "display": person}
+                 if community or online else {"how": "train", "name": f"{slug(person)}-uc", "display": person})
+    out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
+           "style": req["style"], "voice": voice, "ask": False}
+    if req["by_only"]:   # "<song> by <name>": the name is the voice, said out loud because it could be the artist
+        out["note"] = (f"I read “by {person}” as the voice. If {person} is the song's artist, say "
+                       f"“{song} by {person} as <voice>”.")
+    if not artist:
+        known = ambiguity.recall(ambiguity.song_key(song))
+        if known:
+            out.update(chosen=known["chosen"], others=known["others"], choices=known["choices"])
+        else:
+            choices = ambiguity.choices_for(song)
+            if len(choices) >= 2:
+                out.update(ask=True, choices=choices)
+    h._json(out)
 
 
 def _start_auto(h, body: dict):
@@ -242,7 +260,7 @@ def _start_preview(h, body: dict):
     if not 1 <= len(variants) <= 6:
         return h._error("Pick between 1 and 6 versions to preview.")
     song = path("uploads_dir") / meta["file"]
-    job = Job("cover", title=f"Preview: {meta['title']} · {opts.voice}")  # same GPU queue as covers
+    job = Job("cover", title=f"Preview: {meta['title']} · {label_of(opts.voice)}")  # same GPU queue as covers
     JOBS[job.id] = job
 
     def run(job: Job):

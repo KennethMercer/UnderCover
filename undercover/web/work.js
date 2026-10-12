@@ -153,7 +153,7 @@ async function loadQueue() {
   try { W.last = await api("/api/work"); } catch (e) { return; }
   renderQueue();
 }
-const jobWhat = i => ({ improve: `Improve ${esc(i.target)}`, cadence: `Cadence for ${esc(i.target)}`,
+const jobWhat = i => ({ improve: `Improve ${esc(i.display || i.target)}`, cadence: `Cadence for ${esc(i.display || i.target)}`,
                         newcad: `New voice with cadence: ${esc(i.target)}` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
 const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence" })[i.kind] || esc(i.kind);
 // the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
@@ -233,7 +233,7 @@ function renderReport(r) {
     const cad = x.kind === "cadence" ? x : x.cadence;   // cadence numbers: Deep Cover only
     const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: likeness ${cad.likeness} · gap ${cad.cadence_gap} · WER ${cad.wer} · from ${cad.data_minutes} min</p>` : "";
     const up = x.replaced || (["new", "newcad"].includes(x.kind) && x.state === "done");
-    return `<div class="qres"><div><b>${esc(x.voice || x.target)}</b> ${what}<p class="meta">${esc(x.note || "")}</p>${deep}</div>
+    return `<div class="qres"><div><b>${esc(x.voice ? voiceDisplay(x.voice) : x.display || x.target)}</b> ${what}<p class="meta">${esc(x.note || "")}</p>${deep}</div>
       <div class="mono ${up ? "up" : "same"}" ${x.kind === "cadence" ? "data-deep" : ""}>${esc(score)}</div></div>`;
   }).join("");
 }

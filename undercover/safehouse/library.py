@@ -242,7 +242,7 @@ def songs() -> list[dict]:
 def voices() -> list[dict]:
     from ..doubleagent.service import undertrained
     from ..doubleagent.cadence import pack_of, pack_size
-    from ..core.voices import list_voices
+    from ..core.voices import list_voices, voice_info
     from ..frontman.pipeline import history
     hist = history()
     q = _quality()
@@ -263,7 +263,7 @@ def voices() -> list[dict]:
                "data_minutes": pack.get("data_minutes")} if pack else None
         out.append({
             "name": v.name, "version": v.version, "sr": v.sr, "index": bool(v.index), "installed": v.installed,
-            "source": v.source, "trained": bool(ex.get("trained")), "project": ex.get("project"),
+            "source": v.source, **voice_info(v), "project": ex.get("project"),
             "epoch": ex.get("epoch"), "train_minutes": ex.get("train_minutes"), "from_speech": ex.get("from_speech"),
             "f0_range": ex.get("f0_range"), "undertrained": undertrained(v), "score": score, "verdict": verdict,
             "size": _size(v.dir), "covers": len(used), "cover_titles": [h.get("title") or Path(h["output"]).stem for h in used][:5],

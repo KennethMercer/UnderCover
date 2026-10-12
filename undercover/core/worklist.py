@@ -30,11 +30,13 @@ PARTLY_PAUSABLE: set = set()   # job kinds that keep running when held, but set 
 CONTROL_LOOKUPS: list = []    # job -> trainer Control (for jobs that don't carry their own job.control)
 
 
-def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda item: item["target"], follows=None):
+def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda item: item["target"], follows=None,
+                  shown=lambda item: item["target"]):
     """A kind of queue item. run(job, item) -> result dict; estimate(item) -> minutes per step and "total";
     target(text) -> the normalised target (raise ModelError if it's not valid); label(item) -> what the job shows;
-    follows(item, other) -> True when item must run after other (a voice's cadence after that voice's training)."""
-    KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label, "follows": follows}
+    follows(item, other) -> True when item must run after other (a voice's cadence after that voice's training);
+    shown(item) -> the target as people read it (a voice's display name; the stored target stays the id)."""
+    KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label, "follows": follows, "shown": shown}
 
 
 def register_resume(kind: str, start):
@@ -286,9 +288,16 @@ def status() -> dict:
     if st["armed"] and st["settings"].get("start_at"):
         start = _next_time(st["settings"]["start_at"], now)
     return {"held": st["held"], "resume": [s.get("label", s["kind"]) for s in st["resume"]], "running": running,
-            "queue": st["queue"], "armed": st["armed"], "settings": st["settings"], "report": st["report"],
+            "queue": [{**i, "display": _shown(i)} for i in st["queue"]], "armed": st["armed"], "settings": st["settings"], "report": st["report"],
             "total_min": total, "start": start.strftime("%H:%M") if left else None,
             "done_by": (start + timedelta(minutes=total)).strftime("%H:%M") if left else None}
+
+
+def _shown(item: dict) -> str:
+    try:
+        return KINDS[item["kind"]]["shown"](item)
+    except Exception:   # noqa: BLE001 - a label must never break the status
+        return item.get("target", "")
 
 
 def _next_time(hhmm: str, now: datetime) -> datetime:
@@ -429,7 +438,7 @@ def _run_item(item: dict):
             item.update(state=state, finished=time.strftime("%H:%M"), result=res, minutes=mins)
             rep = _state()["report"]
             if rep is not None:
-                rep["results"].append({"kind": item["kind"], "target": item["target"], "state": state, "minutes": mins, **res})
+                rep["results"].append({"kind": item["kind"], "target": item["target"], "display": _shown(item), "state": state, "minutes": mins, **res})
                 rep["finished"] = time.strftime("%Y-%m-%d %H:%M")
             _save()
         job.finish("done" if state == "done" else "error", message=res.get("note") or "Done.", result=res)

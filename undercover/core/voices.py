@@ -406,6 +406,7 @@ class Voice:
     source: str = ""
     installed: str = ""
     extra: dict = field(default_factory=dict)
+    display: str = ""   # what the pages show instead of the folder name; "" = the default (see display_name)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -499,15 +500,17 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         index = _pick_index(indexes)
 
         # a voice's cadence (tts/ + extra.tts, made from the person's clips) outlives a new model of the same voice
-        keep_tts, old_tts = None, None
+        keep_tts, old_tts, old_display = None, None, ""
         if target.exists():
+            try:   # the name the user gave it outlives a new model of the same voice, like its cadence
+                old_meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+                old_display = old_meta.get("display") or ""
+            except (OSError, ValueError):
+                old_meta = {}
             if (target / "tts").is_dir():
                 keep_tts = work / "_kept_tts"
                 shutil.move(str(target / "tts"), keep_tts)
-                try:
-                    old_tts = json.loads((target / "meta.json").read_text(encoding="utf-8")).get("extra", {}).get("tts")
-                except (OSError, ValueError):
-                    old_tts = None
+                old_tts = (old_meta.get("extra") or {}).get("tts")
             shutil.rmtree(target)
         target.mkdir(parents=True)
         if keep_tts is not None:
@@ -523,7 +526,7 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         voice = Voice(name=name, dir=target, pth=target / "model.pth",
                       index=(target / "model.index") if index else None,
                       version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
-                      installed=time.strftime("%Y-%m-%d %H:%M"),
+                      installed=time.strftime("%Y-%m-%d %H:%M"), display=old_display,
                       extra={"original_pth": pth.name, "original_index": index.name if index else None,
                              **({"tts": old_tts} if keep_tts is not None and old_tts else {})})
         from . import fsutil
@@ -571,6 +574,64 @@ def get_voice(name: str) -> Voice:
     names = ", ".join(v.name for v in list_voices()) or "none yet"
     raise ModelError(f"No voice called '{name}' is installed (installed: {names}). "
                      f"Search for one with: python -m undercover.core.voices search {name}")
+
+
+def _titled(s: str) -> str:
+    """Title-case a name typed in lower case ("barack obama" -> "Barack Obama"); a name with capitals is kept."""
+    s = re.sub(r"\s+", " ", s).strip()
+    return s if any(c.isupper() for c in s) else s.title()
+
+
+def trained_person(v: Voice) -> str:
+    """The person a voice trained here was made for (its training project's person, kept in `source`)."""
+    src = v.source or ""
+    if src.startswith("trained in UnderCover: "):
+        return src.split(": ", 1)[1].split(",")[0].strip()
+    return ""
+
+
+def default_display(v: Voice) -> str:
+    """Display name when none was set: the person for a voice trained here; for a downloaded one extra.person if
+    known, else the folder name cleaned up ("michael-jackson-botdf-era" -> "Michael Jackson Botdf Era")."""
+    ex = v.extra or {}
+    person = trained_person(v) if ex.get("trained") else str(ex.get("person") or "").strip()
+    if person:
+        return _titled(person)
+    folder = v.name.removesuffix("-uc") if ex.get("trained") else v.name
+    return _titled(re.sub(r"[-_\s]+", " ", folder)) or v.name
+
+
+def display_name(v: Voice) -> str:
+    return (v.display or "").strip() or default_display(v)
+
+
+def voice_labels() -> dict[str, str]:
+    """{voice id: display name} for every installed voice (server-side strings show these; ids stay in the data)."""
+    return {v.name: display_name(v) for v in list_voices()}
+
+
+def label_of(name: str | None, labels: dict[str, str] | None = None) -> str:
+    """One voice id as shown to people; an unknown id (a removed voice) shows as it is."""
+    if not name:
+        return name or ""
+    return (labels if labels is not None else voice_labels()).get(name, name)
+
+
+def voice_info(v: Voice) -> dict:
+    """The two keys every voice API carries: `display` (string, may equal the id) and `trained` (bool)."""
+    return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained"))}
+
+
+def set_display(name: str, text: str) -> Voice:
+    """Set a voice's display name; empty clears it (back to the default). The folder never changes."""
+    from . import fsutil
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if len(text) > 80:
+        raise ModelError("That name is too long. Keep it under 80 characters.")
+    v = get_voice(name)
+    v.display = text
+    fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    return v
 
 
 def remove_voice(name: str):

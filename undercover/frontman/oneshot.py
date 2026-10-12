@@ -20,17 +20,30 @@ import numpy as np
 from ..core import gpu, jobs, worklist
 from ..core.config import path
 from ..core.voices import ModelError
+from . import ambiguity
 from .fit import pick_fit, pick_octave
 from ..doubleagent.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0
 
 PATTERNS = [
     # "cover of X by Y" / "X cover by Y" / "make X sung by Y" (the LAST "by" wins: "X by Miley Cyrus by Y")
-    r"^(?:please\s+)?(?:make|do|create|give me|generate)?\s*(?:me\s+)?(?:an?\s+)?(?:ai\s+)?cover\s+of\s+(?P<song>.+)\s+(?:by|in the voice of|as sung by|sung by|with the voice of|with|using|as)\s+(?P<person>[^,;]+?)$",
+    r"^(?:please\s+)?(?:make|do|create|give me|generate)?\s*(?:me\s+)?(?:an?\s+)?(?:ai\s+)?cover\s+of\s+(?P<song>.+)\s+(?P<sep>by|in the voice of|as sung by|sung by|with the voice of|with|using|as)\s+(?P<person>[^,;]+?)$",
     r"^(?P<song>.+?)\s+cover\s+(?:by|in the voice of|with|using|as)\s+(?P<person>[^,;]+?)$",
     r"^(?P<person>.+?)\s+(?:sings|singing|covers|covering|performs|doing)\s+(?P<song>.+)$",
     r"^(?:make|do|have)?\s*(?P<person>.+?)\s+(?:sing|cover)\s+(?P<song>.+)$",
     r"^(?P<song>.+?)\s+(?:sung by|as sung by|in the voice of|but (?:it's|its|it is|sung by))\s+(?P<person>[^,;]+?)$",
-    r"^(?P<song>.+)\s+by\s+(?P<person>[^,;]+?)$",
+    r"^(?P<song>.+)\s+(?P<sep>by)\s+(?P<person>[^,;]+?)$",
+]
+
+# The forms that name the song's artist and/or mark the voice with "as" (checked before PATTERNS):
+#   "Hello by Adele as Peter Griffin"   "cover of Hello by Adele as Peter Griffin"   "Hello as Peter Griffin"
+_COVER_OF = r"(?:(?:please\s+)?(?:(?:make|do|create|give me|generate)\s+)?(?:me\s+)?(?:an?\s+)?(?:ai\s+)?cover\s+of\s+)?"
+_NOT_SINGING = r"(?!.*\b(?:sings|singing|covers|covering|performs|doing)\b)"   # "Obama sings Hello as ..." is another form
+# "Stand By Me as Peter Griffin": "by Me" is part of the title, not an artist called Me
+_PRONOUNS = r"(?:me|you|your|him|her|us|them|my|our|it|this|that|the|a|an)"
+_NAME = rf"(?!{_PRONOUNS}\b)"
+AS_PATTERNS = [
+    rf"^{_COVER_OF}{_NOT_SINGING}(?P<song>.+?)\s+by\s+{_NAME}(?P<artist>.+?)\s+as\s+(?P<person>[^,;]+?)$",
+    rf"^{_COVER_OF}{_NOT_SINGING}(?P<song>.+?)\s+as\s+(?P<person>[^,;]+?)$",
 ]
 
 
@@ -71,33 +84,55 @@ def parse_request(text: str) -> dict:
         style = _clean_style(m.group("style"))
         t = "cover of " + t[m.end():]
     else:
-        m = re.search(rf"\s+(?:but|in an?|as an?|in)\s+(?P<style>{_STYLE_WORDS})(?:\s+(?:version|style|cover))?$", t, re.I)
+        m = re.search(rf"\s+(?:but|in an?|(?-i:as an?)|in)\s+(?P<style>{_STYLE_WORDS})(?:\s+(?:version|style|cover))?$", t, re.I)
         if m and not re.search(r"\b(?:sung|sings|sing|by|voice)\b", m.group("style"), re.I) and _clean_style(m.group("style")):
             style = _clean_style(m.group("style"))   # "X sung by Y but bluegrass"
             t = t[:m.start()]
-    song, person = parse(t)
+    song, person, artist, by_only = parse_full(t)
     m = re.search(rf"\s*[\(\[]\s*(?P<style>{_STYLE_WORDS})\s+(?:version|cover)\s*[\)\]]$", song, re.I)
     if m and not style and _clean_style(m.group("style")):   # "Plug In Baby (acoustic version) by ..."
         style = _clean_style(m.group("style"))
         song = song[:m.start()]
-    return {"song": song.strip(), "person": person, "style": style}
+    return {"song": song.strip(), "person": person, "style": style, "artist": artist, "by_only": by_only}
 
 
 def parse(text: str) -> tuple[str, str]:
     """-> (song query, person). Raises ModelError with an example when it can't tell them apart."""
+    song, person, _artist, _by_only = parse_full(text)
+    return song, person
+
+
+def _split_artist(song: str) -> tuple[str, str | None]:
+    """The artist written into the song's words: "Hello (by Adele)", "Hello by Adele" -> ("Hello", "Adele")."""
+    m = re.search(r"\s*[\(\[]\s*by\s+([^\)\]]+)[\)\]]", song, re.I)
+    if m:
+        return (song[:m.start()] + song[m.end():]).strip(), m.group(1).strip()
+    m = re.match(rf"^(.+?)\s+by\s+{_NAME}(.+)$", song, re.I)   # "Stand By Me" keeps its "by"
+    return (m.group(1).strip(), m.group(2).strip()) if m else (song.strip(), None)
+
+
+def parse_full(text: str) -> tuple[str, str, str | None, bool]:
+    """-> (song, person, artist, by_only). `artist` is named only by "<song> by <artist> as <person>". `by_only` is
+    True for "<song> by <name>" with no "as": the name is read as the voice (as it always was) but it could be the
+    song's artist, which the plan step says out loud. Raises ModelError with an example when it can't tell the song
+    and the voice apart."""
     t = re.sub(r"\s+", " ", text.strip().strip(".!?")).strip()
-    for pat in PATTERNS:
+    for pat in AS_PATTERNS + PATTERNS:
         m = re.match(pat, t, re.I)
         if m:
+            g = m.groupdict()
+            artist = (g.get("artist") or "").strip(" \"'“”‘’") or None
             song = m.group("song").strip(" \"'“”‘’")
             person = re.sub(r"^(?:the voice of|voice of)\s+", "", m.group("person").strip(" \"'“”‘’"), flags=re.I)
             person = re.sub(r"'s voice$|\s+voice$", "", person, flags=re.I)
             person = re.sub(r"^(?:sung by|as sung by|by)\s+", "", person, flags=re.I).strip()
             song = re.sub(r"\s+(?:as\s+sung|sung|as|but|in the voice of)$", "", song, flags=re.I)   # "X as sung by Y"
-            song = re.sub(r"[\(\[]\s*by\s+([^\)\]]+)[\)\]]", r"\1", song, flags=re.I).strip()   # "X (by Muse)" -> "X Muse"
+            if not artist:
+                song, artist = _split_artist(song)
             if song and person:
-                return song, person
-    raise ModelError('Say the song and the voice, for example: "cover of Party In The USA by Morgan Freeman".')
+                return song, person, artist, bool(not artist and (g.get("sep") or "").lower() == "by")
+    raise ModelError('Say the song and the voice, for example: "Hello by Adele as Peter Griffin" or '
+                     '"cover of Party In The USA by Morgan Freeman".')
 
 
 # ---------------------------------------------------------------- voice resolution
@@ -205,7 +240,7 @@ MIN_SUNG = 0.12   # under ~12% of the song with a voiced melody = basically inst
 
 # ---------------------------------------------------------------- the job
 
-def run(job, text: str, prefer_train: bool = False, song_url: str | None = None):
+def run(job, text: str, prefer_train: bool = False, song_url: str | None = None, choice: str | None = None):
     from . import songs
     from .pipeline import ENGINE, CoverOptions, history_items
     from ..core.separate import separate
@@ -220,8 +255,24 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None)
                  elapsed=round(time.perf_counter() - t0, 1), **kw)
 
     req = parse_request(text)
-    song_q, person, style = req["song"], req["person"], req["style"]
-    plan.update(song_query=song_q, person=person, style=style)
+    title_q, person, style, artist = req["song"], req["person"], req["style"], req["artist"]
+    search_q = f"{title_q} {artist}" if artist else title_q
+    # An ambiguous bare title ("Hello"): the answer the user gave, else the first choice, said out loud (never silent)
+    if not song_url and not artist:
+        pick, went = ambiguity.resolve(title_q, choice)
+        if pick and pick["artist"] and pick["title"]:
+            title_q, artist = pick["title"], pick["artist"]
+            if style:   # a version of that song: search for it by its artist (a pinned link would skip the versions)
+                search_q = f"{title_q} {artist}"
+            else:
+                song_url = pick["song_url"]
+        elif pick:
+            song_url = pick["song_url"]
+        if went:
+            plan["went_with"] = went
+            job.title = f"One-shot: {text} · {went}"
+    song_q = f"{title_q} by {artist}" if artist else title_q   # what people read; the search uses search_q
+    plan.update(song_query=song_q, person=person, style=style, artist=artist)
 
     # Network work for the voice starts now, alongside the song's download and separation (review C6): if there's no
     # voice trained here for this person, find their clips and pre-download the first sources (no GPU involved).
@@ -234,8 +285,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None)
     # 1. song (a version like "acoustic" means a cover by someone else, so candidates are tried until one
     #    actually has singing in it)
     what = f"{style} version of “{song_q}”" if style else f"“{song_q}”"
-    push("song", 0.0, f"Finding the {what} on YouTube" if style else f"Finding {what} on YouTube")
-    cands = [songs.from_link(song_url)] if song_url else songs.search(song_q, style=style, words=style_words(style))[:VERSIONS + 2]
+    push("song", 0.0, (plan["went_with"] + ". " if plan.get("went_with") else "") +
+         (f"Finding the {what} on YouTube" if style else f"Finding {what} on YouTube"))
+    cands = [songs.from_link(song_url)] if song_url else songs.search(search_q, style=style, words=style_words(style))[:VERSIONS + 2]
     # A version ("acoustic") is someone's cover, and they differ a lot: compare up to VERSIONS that have singing
     # and pick the one that suits the voice once it's known (melody range, clean separation). The album track
     # (no style) or a pasted link: the first one with singing.
@@ -392,16 +444,24 @@ def start_oneshot(body: dict):
     """Queue a one-shot cover (from the page, or Resume after a pause)."""
     from .pipeline import cancel_presep
     text = (body.get("text") or "").strip()
-    parse(text)   # friendly error now rather than inside the job
+    req = parse_request(text)   # friendly error now rather than inside the job
+    choice = (body.get("choice") or "").strip() or None
+    key = ambiguity.song_key(req["song"], req["artist"])
+    if req["artist"] is None and choice:
+        ambiguity.remember(key, choice, ambiguity.cached_choices(req["song"]))   # until a different song is requested
+    elif req["artist"] is None and (known := ambiguity.recall(key)):
+        choice = known["chosen"]["song_url"]   # the same song again: the answer given stays in effect
+    else:
+        ambiguity.requested(key)
     if any(j.kind == "auto" and not j.finished for j in jobs.JOBS.values()):
         raise ModelError("A one-shot cover is already running. Wait for it, or cancel it.")
     cancel_presep()
     job = jobs.Job("auto")
     jobs.JOBS[job.id] = job
     job.resume_spec = {"kind": "oneshot", "text": text, "prefer_train": bool(body.get("prefer_train")),
-                       "song_url": body.get("song_url") or None, "label": f"One-shot: {text}"}
+                       "song_url": body.get("song_url") or None, "choice": choice, "label": f"One-shot: {text}"}
     job.push(stage="queued", frac=0, message="Waiting for the GPU", plan={"request": text})
-    jobs.GPU_QUEUE.put((job, lambda job: run(job, text, bool(body.get("prefer_train")), body.get("song_url") or None)))
+    jobs.GPU_QUEUE.put((job, lambda job: run(job, text, bool(body.get("prefer_train")), body.get("song_url") or None, choice)))
     return job
 
 
@@ -409,4 +469,4 @@ def start_oneshot(body: dict):
 # training aside; Resume starts a paused one-shot again
 worklist.register_pausable("auto", partly=True)
 worklist.register_resume("oneshot", lambda spec: start_oneshot({"text": spec["text"], "prefer_train": spec.get("prefer_train"),
-                                                                 "song_url": spec.get("song_url")}))
+                                                                 "song_url": spec.get("song_url"), "choice": spec.get("choice")}))

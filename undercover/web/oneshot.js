@@ -9,11 +9,27 @@ function voiceLine(v) {
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
   if (v.how === "check") return `<b>${v.candidates.map(esc).join("</b> or <b>")}</b> <span class="meta">checked against real clips first (~2 min); if neither sounds like them, it trains one (~45 min, ~2 GB while training)</span>`;
-  return `<span class="warn">none yet: trains <b>${esc(v.name)}</b> first (~45 min, ~2 GB while training)</span>`;
+  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~45 min, ~2 GB while training)</span>`;
 }
 function planTime(p) {
   const v = p.voice?.how;
   return v === "train" ? "about 45–50 min" : v === "check" ? "about 3–5 min (45+ if it has to train)" : "about 1–3 min";
+}
+// An ambiguous song title ("Hello"): the plan lists the songs it could be as plain buttons (#auto-choices, button[data-choice]);
+// the one picked goes with the request. While an earlier answer is in effect the plan returns it as `chosen`, the rest as `others`.
+function choiceLabel(c) { return `${c.artist || "this one"}${c.year ? " (" + c.year + ")" : ""}${c.title ? " · " + c.title : ""}`; }
+function renderChoices(p) {
+  const box = $("#auto-choices");
+  OS.choice = p.chosen?.song_url || null;
+  const list = p.ask ? p.choices : p.chosen ? p.others : [];
+  box.hidden = !list?.length;
+  box.innerHTML = (p.ask ? `<span class="meta">Which one?</span> ` : `<span class="meta">Using ${esc(choiceLabel(p.chosen))}. The other one:</span> `) +
+    (list || []).map(c => `<button class="btn" type="button" data-choice="${esc(c.song_url)}">${esc(choiceLabel(c))}</button>`).join(" ");
+  $$("button[data-choice]", box).forEach(b => b.onclick = () => {
+    OS.choice = b.dataset.choice; resetGo();
+    $$("button[data-choice]", box).forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    $("#os-plan").insertAdjacentHTML("beforeend", ` <span class="meta">Picked: ${esc(b.textContent)}.</span>`);
+  });
 }
 function planKey() { return $("#os-text").value.trim() + "|" + $("#os-train").checked; }
 function resetGo() { OS.confirmFor = null; $("#os-go").textContent = "Make it"; }
@@ -28,16 +44,15 @@ async function previewPlan() {
     OS.last = { key, plan: p };
     const songLine = p.style ? `${/^[aeiou]/i.test(p.style) ? "an" : "a"} <b>${esc(p.style)}</b> version of “${esc(p.song_query)}” (a cover from YouTube that has singing in it)`
                              : `“${esc(p.song_query)}” (album version from YouTube)`;
-    // "Hello by Adele": the last "by" is the voice, so a request naming the song's own artist would train them by mistake
-    const hint = p.voice?.how !== "installed" && /\bby\b/i.test(text) && !/cover|version|rendition|sung by|voice of|sings|sing\b/i.test(text)
-      ? `<p class="meta">Not what you meant? The name after the last “by” is the voice. Try “${esc(p.song_query)} sung by …”.</p>` : "";
+    const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
     $("#os-plan").innerHTML = `<div class="os-plan-grid"><span>🎵 <b>Song</b><br>${songLine}</span><span>🎤 <b>Voice</b><br>${voiceLine(p.voice)}</span><span>⏱ <b>Time</b><br>${planTime(p)}</span></div>${hint}`;
+    renderChoices(p);
   } catch (e) {
     if (seq === OS.planSeq) { $("#os-plan").textContent = e.message; OS.last = { key, error: e.message }; }
   }
   return OS.last && OS.last.key === key ? OS.last : null;
 }
-$("#os-text").addEventListener("input", () => { resetGo(); clearTimeout(OS.planTimer); OS.planTimer = setTimeout(previewPlan, 500); });
+$("#os-text").addEventListener("input", () => { resetGo(); OS.choice = null; $("#auto-choices").hidden = true; clearTimeout(OS.planTimer); OS.planTimer = setTimeout(previewPlan, 500); });
 $("#os-text").addEventListener("keydown", e => { if (e.key === "Enter") $("#os-go").click(); });
 $("#os-train").onchange = () => { resetGo(); previewPlan(); };
 $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan(); $("#os-text").focus(); });
@@ -52,6 +67,7 @@ $("#os-go").onclick = async () => {
     const key = planKey();
     const last = OS.last && OS.last.key === key ? OS.last : await previewPlan();
     if (!last || last.error) return;
+    if (last.plan.ask && !OS.choice) { $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Pick which song first.</b>`); return; }
     const how = last.plan.voice?.how;
     if ((how === "train" || how === "check") && OS.confirmFor !== key) {
       OS.confirmFor = key;
@@ -60,7 +76,7 @@ $("#os-go").onclick = async () => {
       return;
     }
     resetGo();
-    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked } });
+    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined } });
     osFollow(r.job, text);
   } catch (e) { showError(e.message, "Can't make that cover"); }
   finally { btn.disabled = false; }
@@ -103,10 +119,10 @@ function renderOS(ev) {
     ? `best of ${song.compared.length} versions for this voice` + (song.compared.find(x => x.chosen)?.outside != null
         ? ` (${Math.round(song.compared.find(x => x.chosen).outside * 100)}% of the melody outside its range)` : "")
     : (song?.compared ? "" : null);
-  $("small", sc).textContent = ev.stage === "song" ? ev.message : song ? [song.channel, song.note, cmp].filter(Boolean).join(" · ") : "";
+  $("small", sc).textContent = ev.stage === "song" ? ev.message : song ? [plan.went_with, song.channel, song.note, cmp].filter(Boolean).join(" · ") : (plan.went_with || "");
   sc.title = song?.compared?.length > 1 ? song.compared.map(x => `${x.chosen ? "✓" : "·"} ${x.title}` +
     (x.outside != null ? ` · ${Math.round(x.outside * 100)}% out of range` : "") + ` · bleed ${Math.round(x.bleed)} dB`).join("\n") : "";
-  $("b", vc).textContent = voice ? (voice.how === "train" && ev.stage === "voice" ? `Training ${voice.name}` : voice.name) : (plan.person || "Waiting");
+  $("b", vc).textContent = voice ? (voice.how === "train" && ev.stage === "voice" ? `Training ${voice.display || voice.name}` : voice.display || voiceDisplay(voice.name)) : (plan.person || "Waiting");
   $("small", vc).textContent = ev.stage === "voice" ? ev.message
     : voice ? (voice.checked || { installed: "your installed voice", online: `community voice${voice.repo ? " · " + voice.repo : ""}`, train: "trained in UnderCover" }[voice.how]) : "";
   $("b", cc).textContent = ev.stage === "cover" ? "Making the cover" : (ev.final && ev.state === "done" ? "Done" : "Waiting");
@@ -131,7 +147,7 @@ function osFollow(id, title) {
     const plan = ev.plan || OS.plan || {};
     setRunning(false);
     if (ev.state === "done") {
-      $("#os-plan").innerHTML = `Done in ${fmtSecs(ev.elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with <b>${esc(plan.voice?.name || "")}</b>` +
+      $("#os-plan").innerHTML = `Done in ${fmtSecs(ev.elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with <b>${esc(plan.voice ? plan.voice.display || voiceDisplay(plan.voice.name) : "")}</b>` +
         (plan.settings ? ` · ${esc(fitWords(plan.settings))} (${esc(plan.settings.why)})` : "") + ". Change anything below and press Convert to try a variation.";
       try {
         if (plan.song?.id) { S.song = await api(`/api/songs/${plan.song.id}`); store.set("uc-song", S.song.id); renderSong(); }

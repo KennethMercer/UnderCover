@@ -623,7 +623,8 @@ def _run_new(job, item) -> dict:
     """A new voice, then its cadence from the same clips (one item: the cadence follows its voice)."""
     from .night import _new
     r = _new(job, item)
-    job.push(stage="cadence", frac=0.0, message=f"Now {r['voice']}'s cadence")
+    from ..core.voices import label_of
+    job.push(stage="cadence", frac=0.0, message=f"Now {label_of(r['voice'])}'s cadence")
     c = train(job, r["voice"], worklist.pusher(job), worklist.control_for(job))
     return {**r, "cadence": {k: c.get(k) for k in ("after", "likeness", "cadence_gap", "wer", "replaced", "data_minutes")},
             "note": r["note"] + " " + c.get("note", "")}
@@ -639,7 +640,12 @@ def _follows(item: dict, other: dict) -> bool:
     return False
 
 
-worklist.register_kind("cadence", run=_run, estimate=estimate, target=_target, follows=_follows,
-                       label=lambda item: f"Cadence for {item['target']}")
+def _shown_voice(item: dict) -> str:
+    from ..core.voices import label_of
+    return label_of(item["target"])
+
+
+worklist.register_kind("cadence", run=_run, estimate=estimate, target=_target, follows=_follows, shown=_shown_voice,
+                       label=lambda item: f"Cadence for {_shown_voice(item)}")
 worklist.register_kind("newcad", run=_run_new, estimate=estimate,
                        label=lambda item: f"New voice with cadence: {item['target']}")
