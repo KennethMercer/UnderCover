@@ -135,6 +135,15 @@ def heartbeat_loop():
         time.sleep(30 if busy else 300)
 
 
+def ytdlp_swapped() -> str | None:
+    """When the YouTube downloader last changed (a self-heal swap, phase 16; or the old pinned Update)."""
+    from ..core import addons, ytdlp
+    try:
+        return ytdlp.load().get("swapped") or addons.updated("ytdlp")
+    except Exception:   # noqa: BLE001
+        return addons.updated("ytdlp")
+
+
 def voices_json() -> list[dict]:
     from ..core.voices import list_voices, voice_info
     return [{"name": v.name, "version": v.version, "sr": v.sr, "index": bool(v.index), "f0": v.f0,
@@ -300,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
                 from ..core import addons
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
-                                   "ytdlp_updated": addons.updated("ytdlp"), "build": BUILD,
+                                   "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"]})
             if p == "/api/voices":
                 return self._json(voices_json())
@@ -784,6 +793,12 @@ def main():
         voices_mod.backfill_person()
     except Exception as e:   # noqa: BLE001
         print(f"Couldn't add the person to the trained voices: {e}", flush=True)
+    try:   # the yt-dlp pair to use (phase 16): a side pair goes first on sys.path before anything imports yt_dlp
+        from ..core import ytdlp
+        p = ytdlp.activate()
+        print(f"YouTube downloader: yt-dlp {p['yt']} + solver {p.get('ejs') or 'missing'} ({p['source']})", flush=True)
+    except Exception as e:   # noqa: BLE001 - never block startup: the venv's pair is used
+        print(f"Couldn't choose the YouTube downloader: {e}", flush=True)
     try:   # covers get permanent ids once (a copy of the old history file is kept next to it)
         from ..frontman import history as cover_history
         cover_history.migrate()

@@ -34,6 +34,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 RESULTS: list = []
+try:   # a check's note with a non-Windows character (≥) must not fail the check when output goes to a file or pipe
+    sys.stdout.reconfigure(errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 
 def check(name):
@@ -414,7 +418,7 @@ def u_addons():
     return f"{len(rows)} parts, {sum(not r['included'] for r in rows.values())} optional"
 
 
-@check("yt-dlp Update (phase 8): a pinned, hashed install; no pin or nothing newer = no install; the date is recorded")
+@check("yt-dlp pinned install (phase 8; since phase 16 the Update button is the self-heal): hashed, no pin or nothing newer = no install")
 def u_ytdlp():
     from undercover.core import addons
     from undercover.safehouse import api as shapi, library
@@ -430,14 +434,20 @@ def u_ytdlp():
         if state["installs"]:
             state["v"] = ver
 
-    def post():
-        h = _FakeHandler()
-        assert shapi.handle(h, "POST", "/api/library/tools/ytdlp-update")
-        return h
+    class _R:
+        def __init__(self):
+            self.out = self.err = None
+            try:
+                self.out = addons.update_pinned("ytdlp")
+            except Exception as e:   # noqa: BLE001
+                self.err = str(e)
+
+    def post():   # the pinned install itself (the System room's button runs core/ytdlp's heal since phase 16)
+        return _R()
     addons._pip, addons.package_version = fake_pip, lambda n: state["v"]
     try:
         with isolated_data():
-            assert addons.updated("ytdlp") is None and library.ytdlp_info()["ytdlp_update"] is True
+            assert addons.updated("ytdlp") is None and addons.pin_state("ytdlp")["update"] is True
             h = post()
             assert not h.err and h.out == {"before": "2026.1.1", "after": ver, "pinned": ver, "changed": True}, (h.out, h.err)
             args, req = calls[-1]
@@ -446,16 +456,16 @@ def u_ytdlp():
             assert args[args.index("-c") + 1] == str(ROOT / "constraints.txt") and "yt-dlp" not in args, args
             import re
             assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", addons.updated("ytdlp") or ""), addons.updated("ytdlp")
-            info = library.ytdlp_info()
-            assert info["ytdlp"] == info["ytdlp_pinned"] == ver and info["ytdlp_update"] is False and info["ytdlp_updated"], info
+            info = addons.pin_state("ytdlp")
+            assert info["installed"] == info["pinned"] == ver and info["update"] is False and addons.updated("ytdlp"), info
             h = post()   # equal: nothing to do
             assert h.out["changed"] is False and len(calls) == 1, (h.out, calls)
             state["v"] = "2099.1.1"   # newer than the pin: left alone
             h = post()
-            assert h.out["changed"] is False and len(calls) == 1 and library.ytdlp_info()["ytdlp_update"] is False
+            assert h.out["changed"] is False and len(calls) == 1 and addons.pin_state("ytdlp")["update"] is False
             state["v"] = None   # not installed: that would be an install, which needs an OK
             h = post()
-            assert h.err and len(calls) == 1 and library.ytdlp_info()["ytdlp_update"] is False, (h.err, calls)
+            assert h.err and len(calls) == 1 and addons.pin_state("ytdlp")["update"] is False, (h.err, calls)
             state.update(v="2026.1.1", installs=False)   # pip "succeeds" but the version didn't move: reported, not recorded
             addons.forget("ytdlp")
             h = post()
@@ -654,9 +664,10 @@ def u_rolloff_covers():
                     calls.setdefault(name, []).append(f"{f.relative_to(ROOT / 'undercover').as_posix()}:{line}")
     assert sorted(c.split(":")[0] for c in calls["roll_off("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
     # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
-    # MasterPlan), and the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
-    # staging leftovers); a new caller must be added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["core/doctor.py", "core/themes.py",
+    # MasterPlan), the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
+    # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
+    # a new caller must be added here on purpose
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["core/doctor.py", "core/themes.py", "core/ytdlp.py",
                                                                         "frontman/history.py", "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
@@ -2152,6 +2163,232 @@ def set_storage_roots(v):
     storage.ALLOWED_ROOTS = v
 
 
+# ---------------------------------------------------------------- self-healing yt-dlp (phase 16)
+
+def _fake_wheel(folder: Path, pkg: str, mod: str, ver: str, requires=(), extra_files=None) -> dict:
+    """A tiny pure-Python wheel on disk (a fake yt_dlp or yt_dlp_ejs) -> PyPI's {"url" (file://), "sha", "file"}."""
+    import hashlib
+    import zipfile
+    f = folder / f"{mod}-{ver}-py3-none-any.whl"
+    with zipfile.ZipFile(f, "w") as z:
+        z.writestr(f"{mod}/__init__.py", f"__version__ = '{ver}'\n")
+        z.writestr(f"{mod}/version.py", f"__version__ = '{ver}'\n")
+        z.writestr(f"{mod}-{ver}.dist-info/METADATA", f"Metadata-Version: 2.1\nName: {pkg}\nVersion: {ver}\n"
+                   + "".join(f"Requires-Dist: {r}\n" for r in requires))
+        z.writestr(f"{mod}-{ver}.data/data/share/x.txt", "skipped")
+        for n, data in (extra_files or {}).items():
+            z.writestr(n, data)
+    return {"url": f.as_uri(), "sha": hashlib.sha256(f.read_bytes()).hexdigest(), "file": f.name, "size": f.stat().st_size}
+
+
+@check("yt-dlp self-heal: fake PyPI + fake resolvers: swap, bad hash, failed test, rollback, offline, detection, dry run")
+def u_ytdlp_heal():
+    import sys as _sys
+    from undercover.core import doctor, manifest, ytdlp
+    saved = (ytdlp.fetch_json, ytdlp.RESOLVE, dict(ytdlp.ACTIVE), list(_sys.path), dict(ytdlp.FLAG))
+
+    def purge():
+        for m in [m for m in _sys.modules if m == "yt_dlp" or m.startswith(("yt_dlp.", "yt_dlp_ejs"))]:
+            del _sys.modules[m]
+    assert ytdlp.ejs_pin(['yt-dlp-ejs==0.8.0; extra == "default"', 'certifi==1; extra == "pin"', 'yt-dlp-ejs==0.8.0; extra == "pin"']) == "0.8.0"
+    assert ytdlp.ejs_pin(['certifi==1; extra == "pin"']) is None
+    assert ytdlp.classify("ERROR: [youtube] x: Requested format is not available") == "broken"
+    assert ytdlp.classify("n challenge solving failed: Some formats may be missing") == "broken"
+    assert ytdlp.classify("Sign in to confirm you're not a bot") is None and ytdlp.classify("Private video") is None
+    pinned = ytdlp.pinned_pair()
+    assert set(pinned) == {"yt-dlp", "yt-dlp-ejs"} and all(len(h) == 64 for _, h in pinned.values()), pinned
+    with isolated_data() as t:
+        pypi = t / "pypi"
+        pypi.mkdir()
+        venv_yt = ytdlp.venv_pair()["yt"]
+        newer = "2099.1.2"
+        wheels = {("yt-dlp", newer): _fake_wheel(pypi, "yt-dlp", "yt_dlp", newer, ['yt-dlp-ejs==9.9.0; extra == "pin"']),
+                  ("yt-dlp-ejs", "9.9.0"): _fake_wheel(pypi, "yt-dlp-ejs", "yt_dlp_ejs", "9.9.0")}
+        state = {"latest": newer, "offline": False}
+
+        def fake_json(name, version=None):
+            if state["offline"]:
+                raise OSError("no network")
+            ver = version or state["latest"]
+            w = wheels[(name, ver)]
+            req = ['yt-dlp-ejs==9.9.0; extra == "pin"'] if name == "yt-dlp" else []
+            return {"info": {"name": name, "version": ver, "requires_dist": req},
+                    "urls": [{"packagetype": "bdist_wheel", "filename": w["file"], "url": w["url"],
+                              "digests": {"sha256": w["sha"]}, "yanked": False}]}
+        scores = {}
+
+        def fake_resolve(d):
+            key = Path(d).name if d else "venv"
+            return {"ok": scores.get(key, scores.get("*", 0)), "of": 3, "errors": [], "version": key}
+        ytdlp.fetch_json, ytdlp.RESOLVE = fake_json, fake_resolve
+        new_name = f"{newer}+ejs9.9.0"
+        try:
+            assert ytdlp.home().parent == Path(config_path("cache_dir")) and storage_inside(ytdlp.home(), t)
+            # 1. a newer pair that resolves as many: used, the venv's pair is the way back
+            scores.update({"venv": 3, "*": 3})
+            r = ytdlp.heal(reason="test")
+            assert r["changed"] and r["chose"] == "new" and r["after"]["yt"] == newer, r
+            st = ytdlp.load()
+            assert st["active"] == new_name and st["last_good"] is None, st
+            assert _sys.path[0] == str(ytdlp.home() / new_name) and ytdlp.current()["yt"] == newer
+            import yt_dlp as fake_mod   # the swap took effect now: the side pair is what imports
+            assert fake_mod.__version__ == newer, fake_mod.__file__
+            assert manifest.installed().get("yt-dlp") == venv_yt, "the record's package scan saw the side pair"
+            assert not [d for d in ytdlp.home().iterdir() if d.name.startswith(".")], "staging left behind"
+            # 2. PyPI's checksum doesn't match: refused, nothing changes
+            newest = "2099.2.3"
+            wheels[("yt-dlp", newest)] = dict(_fake_wheel(pypi, "yt-dlp", "yt_dlp", newest), sha="0" * 64)
+            state["latest"] = newest
+            r = ytdlp.heal()
+            assert not r["changed"] and "checksum" in r["note"] and ytdlp.load()["active"] == new_name, r
+            # 3. a newer pair that resolves fewer: kept the current one, its folder removed
+            wheels[("yt-dlp", newest)] = _fake_wheel(pypi, "yt-dlp", "yt_dlp", newest, ['yt-dlp-ejs==9.9.0; extra == "pin"'])
+            scores.update({f"{newest}+ejs9.9.0": 1, ".stage": 1})
+            scores["*"] = 1   # staging folders have random names: the new one resolves 1
+            scores[new_name] = 3
+            r = ytdlp.heal()
+            assert not r["changed"] and r["scores"]["new"]["ok"] == 1, r
+            assert sorted(d.name for d in ytdlp.home().iterdir() if d.is_dir()) == [new_name], list(ytdlp.home().iterdir())
+            # 4. the current pair breaks; nothing newer; the last known good comes back (here: the venv's)
+            state["latest"] = newer
+            scores.update({new_name: 0, "venv": 3, "*": 0})
+            r = ytdlp.heal(reason="breakage")
+            assert r["changed"] and r["chose"] == "venv" and ytdlp.load()["active"] is None, r
+            assert str(ytdlp.home() / new_name) not in _sys.path
+            # 5. offline: PyPI unreachable, the current pair kept, said so
+            state["offline"] = True
+            r = ytdlp.heal()
+            assert not r["changed"] and "PyPI" in r["note"], r
+            r = ytdlp.heal(offline=True)
+            assert not r["changed"] and "new" not in r["scores"]
+            state["offline"] = False
+            # 6. dry run: tests everything, changes nothing
+            scores.update({"*": 3, "venv": 3})
+            before = (json.dumps(ytdlp.load(), sort_keys=True), sorted(x.name for x in ytdlp.home().iterdir()))
+            r = ytdlp.heal(dry_run=True)
+            assert r["dry_run"] and not r["changed"] and r["chose"] == "new", r
+            assert (json.dumps(ytdlp.load(), sort_keys=True), sorted(x.name for x in ytdlp.home().iterdir())) == before
+            # 7. activation: the active folder gone -> the last known good -> the venv's pair
+            ytdlp.heal()
+            assert ytdlp.load()["active"] == new_name
+            st = ytdlp.load()
+            st["last_good"], st["active"] = new_name, "2001.1.1+ejs0.1"
+            ytdlp.save(st)
+            assert ytdlp.activate()["yt"] == newer and ytdlp.load()["active"] == new_name
+            st["active"], st["last_good"] = "gone+ejs1", None
+            ytdlp.save(st)
+            assert ytdlp.activate()["source"] == "venv"
+            # 8. a wheel that climbs out is refused
+            evil = _fake_wheel(pypi, "yt-dlp", "yt_dlp", "2099.3.4", extra_files={"../../evil.py": "x"})
+            try:
+                ytdlp.unpack(Path(evil["url"].replace("file:///", "")), t / "unpacked")
+                raise AssertionError("a wheel with a climbing path was unpacked")
+            except ytdlp.HealError:
+                pass
+            # 9. detection: three different videos breaking the same way; the bot check and one bad link don't count
+            ytdlp._EVENTS.clear()
+            st = ytdlp.load()
+            st["auto"] = False
+            ytdlp.save(st)
+            ytdlp.FLAG["broken"] = None
+            ytdlp.note("aaaaaaaaaaa", False, "Sign in to confirm you're not a bot")
+            ytdlp.note("bbbbbbbbbbb", False, "Requested format is not available")
+            ytdlp.note("bbbbbbbbbbb", False, "Requested format is not available")
+            assert ytdlp.breakage() is None
+            ytdlp.note("ccccccccccc", False, "nsig extraction failed")
+            ytdlp.note("ddddddddddd", False, "This video is unplayable")
+            assert ytdlp.breakage()["videos"] == 3 and ytdlp.FLAG["broken"], ytdlp._EVENTS
+            assert ytdlp._HEAL["job"] is None or ytdlp._HEAL["job"].finished, "auto is off: no heal by itself"
+            rows = {r["id"]: r for r in doctor.c_ytdlp({})}
+            assert rows["ytdlp-broken"]["state"] == "warn" and rows["ytdlp-broken"]["fix"]["id"] == "ytdlp", rows
+            for v in ("eeeeeeeeeee", "fffffffffff", "ggggggggggg", "hhhhhhhhhhh"):
+                ytdlp.note(v, True)
+            assert ytdlp.breakage() is None, "successes outweigh the failures"
+            assert ytdlp.status()["broken"] is None and ytdlp.FLAG["broken"] is None, "the flag outlived the breakage"
+            # one video counted once, however often yt-dlp re-enters extract_info for it
+            ytdlp._EVENTS.clear()
+            for v in ("ccccccccccc", "ddddddddddd", "iiiiiiiiiii"):
+                ytdlp.note(v, False, "nsig extraction failed")
+            for _ in range(5):
+                ytdlp.note("jjjjjjjjjjj", True)
+            assert ytdlp.breakage() and ytdlp.breakage()["ok"] == 1, ytdlp.breakage()
+            # recording never waits for a heal (which holds LOCK for minutes)
+            import threading as _th
+            held, release = _th.Event(), _th.Event()
+
+            def hold():
+                with ytdlp.LOCK:
+                    held.set()
+                    release.wait(10)
+            th = _th.Thread(target=hold)
+            th.start()
+            held.wait(5)
+            t0 = time.time()
+            ytdlp.note("kkkkkkkkkkk", True)
+            release.set()
+            th.join()
+            assert time.time() - t0 < 1, "note() waited for the heal's lock"
+            ytdlp._EVENTS.clear()
+            # prune keeps the pair this process has loaded, whatever the state says
+            ytdlp.ACTIVE["dir"] = str(ytdlp.home() / new_name)
+            st = ytdlp.load()
+            st["active"], st["last_good"] = None, None
+            ytdlp.save(st)
+            ytdlp.prune(st)
+            assert (ytdlp.home() / new_name).exists(), "prune removed the loaded pair"
+            ytdlp.ACTIVE["dir"] = None
+            # leftovers of an interrupted check are swept
+            old_dry = ytdlp.home() / ".dry-deadbeef"
+            old_dry.mkdir()
+            os.utime(old_dry, (time.time() - 7200, time.time() - 7200))
+            ytdlp._sweep()
+            assert not old_dry.exists()
+            # the command line won't heal while UnderCover runs (one heal at a time)
+            from undercover import ytdlp as cli
+            real_running = cli._server_running
+            cli._server_running = lambda: True
+            try:
+                assert cli.main(["install"]) == 0 and cli.main(["update"]) == 1
+            finally:
+                cli._server_running = real_running
+            # 10b. the System room's button: the same heal as a job
+            from undercover.safehouse import api as shapi
+            h = _FakeHandler()
+            assert shapi.handle(h, "POST", "/api/library/tools/ytdlp-update") and not h.err, h.err
+            jid = h.out["job"]
+            from undercover.core import jobs as _jobs
+            wait_for(lambda: _jobs.JOBS[jid].finished, 30, every=0.2, what="the heal job")
+            assert _jobs.JOBS[jid].state == "done", _jobs.JOBS[jid].events[-1:]
+            h = _FakeHandler()
+            assert shapi.handle(h, "POST", "/api/library/tools/ytdlp-auto") and h.out["ytdlp_auto"] is False
+            # 10. the solver missing: the Doctor says so, with the Fix
+            real_status = ytdlp.status
+            ytdlp.status = lambda: {**real_status(), "ejs": None, "broken": None}
+            try:
+                row = next(r for r in doctor.c_ytdlp({}) if r["id"] == "ytdlp-ejs")
+                assert row["state"] == "bad" and row["title"] == "YouTube's puzzle solver is missing" and row["fix"]["id"] == "ytdlp"
+            finally:
+                ytdlp.status = real_status
+        finally:
+            ytdlp.fetch_json, ytdlp.RESOLVE = saved[0], saved[1]
+            ytdlp._use(None)
+            _sys.path[:] = saved[3]
+            ytdlp.ACTIVE.clear()
+            ytdlp.ACTIVE.update(saved[2])
+            ytdlp.FLAG.clear()
+            ytdlp.FLAG.update(saved[4])
+            ytdlp._EVENTS.clear()
+            purge()
+    import yt_dlp
+    assert "site-packages" in yt_dlp.__file__, f"the real yt_dlp isn't back: {yt_dlp.__file__}"
+    return "swap, bad hash, worse test kept, rollback to the pinned pair, offline, dry run, activation fallback, detection"
+
+
+def config_path(key):
+    from undercover.core.config import path
+    return path(key)
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -2182,7 +2419,8 @@ PHONE_SAMPLES = [
     ("DELETE", "/api/library/songs/0123456789abcdef"), ("POST", "/api/library/voices/v-uc/display"),
     ("POST", "/api/library/voices/v-uc/rename"), ("GET", "/api/library/voices/v-uc/export"),
     ("DELETE", "/api/library/voices/v-uc/cadence"), ("GET", "/api/library/cleanup"), ("POST", "/api/library/cleanup"),
-    ("POST", "/api/library/tools/ytdlp-update"), ("GET", "/api/addons"), ("GET", "/api/storage"),
+    ("POST", "/api/library/tools/ytdlp-update"), ("POST", "/api/library/tools/ytdlp-auto"), ("GET", "/api/addons"),
+    ("GET", "/api/storage"),
     *[("POST", f"/api/addons/f5-tts/{a}") for a in ("install", "remove", "use")],
     ("POST", "/api/storage/check"), ("POST", "/api/storage/move"),
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
@@ -3006,7 +3244,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

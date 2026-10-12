@@ -104,10 +104,12 @@ def pins(req_dir: Path = REQ) -> dict:
 
 
 def installed() -> dict:
-    """{name: version} of every package in this venv (one scan of the metadata: fast, imports nothing)."""
+    """{name: version} of every package in this venv (one scan of the metadata: fast, imports nothing). Only the venv's
+    own site-packages: a side yt-dlp pair (core/ytdlp, phase 16) is first on sys.path but isn't the venv's."""
+    import sysconfig
     from importlib.metadata import distributions
     out = {}
-    for d in distributions():
+    for d in distributions(path=list(dict.fromkeys([sysconfig.get_paths()["purelib"], sysconfig.get_paths()["platlib"]]))):
         try:
             out[norm(d.metadata["Name"])] = d.version
         except Exception:   # noqa: BLE001 - a broken dist-info: skip it (the packages check reports what's missing)

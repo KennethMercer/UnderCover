@@ -41,25 +41,35 @@ async function loadSummary() {
   $("#lib-legend").innerHTML = order.map(k => `<span><i class="sw" style="background:var(--c-${k})"></i>${CAT_LABELS[k]} <b>${gb(s.categories[k])}</b></span>`).join("");
   $("#lib-total").textContent = gb(s.total);
   $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
-  // System room: Update only installs the version UnderCover has pinned (and checked), so it shows when that's newer
-  $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} · pinned ${s.ytdlp_pinned}${s.ytdlp_updated ? ` · updated ${s.ytdlp_updated.replace("T", " ").slice(0, 16)}` : ""}` : "yt-dlp isn't installed";   // Deep Cover
-  $("#lib-ytdlp-st").textContent = !s.ytdlp ? "Not installed." : s.ytdlp_update ? `Version ${s.ytdlp} is installed; ${s.ytdlp_pinned} is available.`
-    : L.ytdlpRestart ? `Updated to ${s.ytdlp}. Restart UnderCover to use it.` : `Up to date (${s.ytdlp}).`;
-  $("#lib-ytdlp-go").textContent = s.ytdlp_update ? `Update to ${s.ytdlp_pinned}` : "Update";
-  $("#lib-ytdlp-go").hidden = !s.ytdlp_update;   // nothing newer is pinned; and a missing yt-dlp would be an install, which needs an OK
+  // System room (phase 16): the YouTube downloader heals itself; "Check for a fix" runs the same check by hand
+  $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} + solver ${s.ytdlp_ejs || "missing"} · ${s.ytdlp_source === "side" ? `a checked update (pinned ${s.ytdlp_pinned})` : "the pinned pair"}` +
+    (s.ytdlp_checked ? ` · last check ${s.ytdlp_checked.replace("T", " ").slice(0, 16)}: ${s.ytdlp_last}` : "") : "yt-dlp isn't installed";   // Deep Cover
+  $("#lib-ytdlp-st").textContent = !s.ytdlp ? "Not installed." : s.ytdlp_job ? "Looking for a working version…"
+    : s.ytdlp_broken ? "YouTube is refusing videos: a newer version usually fixes it." : !s.ytdlp_ejs ? "Its puzzle solver is missing: most videos will be refused."
+    : `Working (${s.ytdlp}).`;
+  $("#lib-ytdlp-auto").checked = !!s.ytdlp_auto;
+  if (s.ytdlp_job && !L.ytdlpWatch) ytdlpWatch(s.ytdlp_job);
   renderCats();
 }
-// System room: YouTube changes often; when downloads start failing, a newer yt-dlp usually fixes it
-$("#lib-ytdlp-go").onclick = async () => {
+// System room: YouTube changes often; the check fetches PyPI's newest yt-dlp + its solver, tests it, and uses it only if
+// it works at least as well (else keeps or goes back to the last known good). A job: progress on the button.
+function ytdlpWatch(id) {
   const go = $("#lib-ytdlp-go");
-  go.disabled = true; go.textContent = "Updating…";
-  try {
-    const r = await api("/api/library/tools/ytdlp-update", { json: {} });
-    if (r.changed) { L.ytdlpRestart = true; showError(`Updated from ${r.before} to ${r.after}. Restart UnderCover to use it.`, "YouTube downloader updated", { label: "Restart now", run: restartServer }, true); }
-    else showError(`Already at the version UnderCover has checked (${r.after}).`, "YouTube downloader", null, true);
-  } catch (e) { showError(e.message, "Couldn't update"); }
-  go.disabled = false;
-  loadSummary();
+  L.ytdlpWatch = id; go.disabled = true;
+  const off = watchJob(id, ev => {
+    if (!ev.final) { go.textContent = ev.frac != null ? `Checking… ${Math.round(ev.frac * 100)}%` : "Checking…"; return; }
+    off(); L.ytdlpWatch = null; go.disabled = false; go.textContent = "Check for a fix";
+    showError(ev.message, ev.state === "error" ? "Couldn't check" : "YouTube downloader", null, ev.state !== "error");
+    loadSummary();
+  });
+}
+$("#lib-ytdlp-go").onclick = async () => {
+  try { ytdlpWatch((await api("/api/library/tools/ytdlp-update", { json: {} })).job); }
+  catch (e) { showError(e.message, "Couldn't check"); }
+};
+$("#lib-ytdlp-auto").onchange = async e => {
+  try { await api("/api/library/tools/ytdlp-auto", { json: { on: e.target.checked } }); }
+  catch (err) { showError(err.message, "Couldn't change it"); e.target.checked = !e.target.checked; }
 };
 confirmClick($("#lib-quit"), "Quit UnderCover?", async () => {
   try {

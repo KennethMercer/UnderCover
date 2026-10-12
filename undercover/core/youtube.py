@@ -1,21 +1,73 @@
 """yt-dlp helpers shared by everything that fetches from YouTube: songs for covers, clips for voices.
 
 YouTube's bot check (YouTubeBlocked) clears by itself after a while; downloads retry transient errors (403s).
+Every YoutubeDL made here reports each YouTube video it resolved or failed on to core/ytdlp (self-healing, phase 16), and
+counts itself while open, so a new yt-dlp is only swapped in when nothing is using the old one.
 """
 import re
+import threading
 from dataclasses import asdict, dataclass
 
 from .voices import ModelError
 
+WATCHED: dict = {}        # the reporting YoutubeDL subclass, made once per loaded yt_dlp (a swap clears it)
+IN_USE = [0]              # YoutubeDLs open right now
+USE_LOCK = threading.Lock()
+_VIDEO = re.compile(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\.be/)([\w-]{11})")
+
+
+def _note(url: str, ok: bool, err: str = ""):
+    m = _VIDEO.search(url or "")
+    if not m:
+        return   # searches, playlists, other sites
+    try:
+        from . import ytdlp
+        ytdlp.note(m.group(1), ok, err)
+    except Exception:   # noqa: BLE001 - watching must never break a download
+        pass
+
+
+def _watched(yt_dlp):
+    if WATCHED.get("base") is yt_dlp.YoutubeDL:
+        return WATCHED["cls"]
+
+    class Watched(yt_dlp.YoutubeDL):
+        def __enter__(self):
+            with USE_LOCK:
+                IN_USE[0] += 1
+            self._uc_open = True
+            return super().__enter__()
+
+        def __exit__(self, *exc):
+            if getattr(self, "_uc_open", False):
+                self._uc_open = False
+                with USE_LOCK:
+                    IN_USE[0] -= 1
+            return super().__exit__(*exc)
+
+        def extract_info(self, url, download=True, *a, **kw):
+            try:
+                info = super().extract_info(url, download, *a, **kw)
+            except Exception as e:
+                _note(url, False, str(e))
+                raise
+            if kw.get("process", True):   # formats resolved: the part that breaks when YouTube changes
+                _note(url, True)
+            return info
+
+    WATCHED.update(base=yt_dlp.YoutubeDL, cls=Watched)
+    return Watched
+
 
 def open_ydl(missing: str, **opts):
-    """A quiet yt_dlp.YoutubeDL. `missing`: what to tell the user when yt-dlp isn't installed."""
+    """A quiet yt_dlp.YoutubeDL that reports how YouTube videos go (see the module's notes). `missing`: what to tell the
+    user when yt-dlp isn't installed."""
     try:
         import yt_dlp
     except ImportError:
         raise ModelError(missing)
     base = {"quiet": True, "no_warnings": True, "noprogress": True, "logger": _QuietLogger()}
-    return yt_dlp.YoutubeDL({**base, **opts})
+    return _watched(yt_dlp)({**base, **opts})
 
 
 SONGS_MISSING = "yt-dlp isn't installed in UnderCover's environment, so songs can't be fetched from YouTube."
