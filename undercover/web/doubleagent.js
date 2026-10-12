@@ -5,7 +5,8 @@
 // loadVoices, VOL), work.js (W, renderQueue, loadCandidates, fmtMin) and shell.js (showTab).
 // "Keep this one" (phase 9): a voice with a new cadence waiting shows "Listen and choose" ([data-cad-ab]); it opens the
 // #cad-ab block in that card (one at a time): both readings of the same line, button[data-keep="current"|"pending"]
-// and a textarea for why. Plain hooks for the look chat to design.
+// and a textarea for why. Blind by default (the ear decides): the readings are A and B, in an order fixed per pair;
+// "Which is which?" names them, and keeping one says which it was. AB_BLIND = false labels them plainly.
 
 const DA = { samples: {}, all: false, audio: new Audio(), playing: null, cands: [],
              ab: null };   // the open A/B: { voice, st (GET .../cadence), why, err, busy }
@@ -67,11 +68,20 @@ function renderVoiceCards(cands) {
   if (fresh && kept && kept.dataset.key && fresh.dataset.key === kept.dataset.key) fresh.replaceWith(kept);
   const ab = $("#cad-ab", box);
   if (ab) {
-    $$("audio", ab).forEach(a => a.onplay = () => {   // one at a time, at the page's volume (muted stays silent)
-      a.volume = VOL.muted ? 0 : VOL.level * VOL.level;
-      $$("audio", ab).forEach(o => { if (o !== a) o.pause(); });
-      if (DA.playing) { DA.audio.pause(); DA.playing = null; }
+    $$(".ab-side", ab).forEach(sd => {   // one at a time, at the page's volume (muted stays silent)
+      const a = $("audio", sd), bar = $(".ab-bar i", sd);
+      $(".ab-play", sd).onclick = () => { if (a.paused) a.play().catch(() => showError("The browser couldn't play this reading.", "Playback failed")); else a.pause(); };
+      a.onplay = () => {
+        a.volume = VOL.muted ? 0 : VOL.level * VOL.level;
+        $$("audio", ab).forEach(o => { if (o !== a) o.pause(); });
+        if (DA.playing) { DA.audio.pause(); DA.playing = null; }
+        sd.classList.add("playing");
+      };
+      a.onpause = a.onended = () => sd.classList.remove("playing");
+      a.ontimeupdate = () => { bar.style.width = `${Math.min(100, a.currentTime / (a.duration || 1) * 100)}%`; };
     });
+    const rv = $("[data-ab-reveal]", ab);
+    if (rv) rv.onclick = () => { DA.ab.reveal = !DA.ab.reveal; renderVoiceCards(DA.cands); };
     const why = $("#cad-ab-why", ab);
     if (why) why.oninput = () => { DA.ab.why = why.value; };
     $$("[data-keep]", ab).forEach(b => b.onclick = () => keepAb(b.dataset.keep));
@@ -82,20 +92,30 @@ function renderVoiceCards(cands) {
   });
 }
 const abUrl = (voice, rest = "") => `/api/train/voices/${encodeURIComponent(voice)}/cadence${rest}`;
+const AB_BLIND = true;
+// which reading is A: fixed per pair (from the new pack's id), so a redraw or a second look keeps the letters
+const abOrder = st => [...String(st.pending.id)].reduce((n, c) => n + c.charCodeAt(0), 0) % 2 ? ["pending", "current"] : ["current", "pending"];
+const abLetter = (st, w) => "AB"[abOrder(st).indexOf(w)];
 function abHtml() {
   const a = DA.ab, st = a.st;
   if (!st || !st.ready) return `<div id="cad-ab" data-voice="${esc(a.voice)}"><p class="meta">${esc(a.err || (st ? "Making a short reading with each cadence…" : "Loading…"))}</p></div>`;
-  const side = (w, name) => {
-    const s = st[w], sc = s.scores || {};
-    return `<div class="ab-side" data-side="${w}"><b>${name}</b>
-      <audio controls preload="none" src="${abUrl(st.voice, `/sample/${w}`)}?v=${encodeURIComponent(s.id)}"></audio>
+  const named = !AB_BLIND || a.reveal;
+  const side = w => {
+    const s = st[w], sc = s.scores || {}, L = abLetter(st, w);
+    return `<div class="ab-side" data-side="${w}">
+      <div class="ab-head"><span class="ab-letter">${L}</span>${named ? `<span class="ab-name">${w === "current" ? "Current" : "New"}</span>` : ""}</div>
+      <div class="ab-player"><button class="ab-play" type="button" aria-label="Play ${L}"><svg class="ico i-play" aria-hidden="true"><use href="#g-play"/></svg><svg class="ico i-pause" aria-hidden="true"><use href="#g-pause"/></svg></button>
+        <div class="ab-bar"><i></i></div></div>
+      <audio preload="none" src="${abUrl(st.voice, `/sample/${w}`)}?v=${encodeURIComponent(s.id)}"></audio>
       <small class="meta" data-deep>${esc(s.clip || "")} · score ${sc.score ?? "?"} · likeness ${sc.likeness ?? "?"} · gap ${sc.cadence_gap ?? "?"}${sc.sound != null ? ` · clip sound −${sc.sound}` : ""}</small>
-      <button class="mini" type="button" data-keep="${w}" ${a.busy ? "disabled" : ""}>Keep this one</button></div>`;
+      <button class="btn" type="button" data-keep="${w}" ${a.busy ? "disabled" : ""}>Keep ${L}</button></div>`;
   };
-  return `<div id="cad-ab" data-voice="${esc(st.voice)}" data-key="${esc([st.current.id, st.pending.id, a.busy ? 1 : 0, a.err || ""].join("|"))}">
-    <p class="meta">Both read the same line: “${esc(st.line)}”</p>
-    ${side("current", "Current")}${side("pending", "New")}
-    <textarea id="cad-ab-why" rows="2" placeholder="Why? (optional)">${esc(a.why || "")}</textarea>
+  return `<div id="cad-ab" data-voice="${esc(st.voice)}" data-key="${esc([st.current.id, st.pending.id, a.busy ? 1 : 0, a.err || "", named ? 1 : 0].join("|"))}">
+    <div class="ab-q"><b>Which sounds more like them?</b><span class="meta">Both read the same line: “${esc(st.line)}”</span></div>
+    <div class="ab-sides">${abOrder(st).map(side).join("")}</div>
+    <textarea id="cad-ab-why" rows="2" placeholder="What did you hear? (optional)">${esc(a.why || "")}</textarea>
+    <div class="ab-foot">${AB_BLIND ? `<button class="linkbtn" type="button" data-ab-reveal>${named ? "Hide which is which" : "Which is which?"}</button>` : ""}
+      <span class="meta">The one you keep is the voice's cadence from then on; the other is set aside, not deleted.</span></div>
     ${a.err ? `<p class="meta">${esc(a.err)}</p>` : ""}</div>`;
 }
 async function openAb(voice) {
@@ -129,6 +149,9 @@ async function keepAb(keep) {
     await api(abUrl(ab.voice, "/verdict"), { json: { keep, why: ab.why || "" } });
     DA.ab = null;
     loadCandidates();
+    const L = abLetter(ab.st, keep);   // blind until now: say which it was
+    showError(keep === "pending" ? `${L} was the new cadence. ${voiceDisplay(ab.voice)} speaks with it from now on; the old one is set aside.`
+                                 : `${L} was the current cadence, so nothing changes. The new one is set aside.`, `Kept ${L}`, null, true);
   } catch (e) { ab.busy = false; ab.err = e.message; renderVoiceCards(DA.cands); }
 }
 function listen(voice) {

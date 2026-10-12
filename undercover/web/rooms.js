@@ -302,7 +302,8 @@ function followMove(job, group) {
 // ------------------------------------------------------------ System: the UnderCover row and the Doctor's sweep (phase 10)
 // /api/doctor: fast checks (+ the last full run); a row per problem with button[data-fix]; long fixes and "Check everything"
 // are jobs (kind "doctor") on the shared feed. The diagnostics file: its contents are shown before it's saved.
-const D = { rep: null, watching: {} };
+const D = { rep: null, watching: {}, ask: null };   // ask: a Fix waiting for its second button ({ id, preview })
+const ASK_FIRST = new Set(["packages"]);   // Fixes that install something: named first, installed on the second click
 const DSTATE = { bad: ["bad", "problem"], warn: ["warn", "check"], info: ["now", "note"], ok: ["ok", "fine"] };
 async function loadDoctor() {
   try { D.rep = await api("/api/doctor"); }
@@ -312,10 +313,23 @@ async function loadDoctor() {
 }
 function doctorRow(r) {
   const [cls, word] = DSTATE[r.state] || DSTATE.info, f = r.fix;
+  const asking = f && D.ask?.id === f.id;
   const act = !f ? "" : f.how === "offer" ? `<small class="meta">${esc(f.label)}</small>`
-    : `<button class="btn" type="button" data-fix="${esc(f.id)}">${esc(f.label)}</button>`;
+    : asking ? "" : `<button class="btn" type="button" data-fix="${esc(f.id)}">${esc(f.label)}</button>`;
   return `<div class="sys" data-check="${esc(r.id)}"><span><b>${esc(r.title)}</b><small>${esc(r.say)}</small>${r.detail ? `<span class="kv2" data-deep>${esc(r.detail)}</span>` : ""}</span>
-    <span class="acts"><span class="dotw ${cls}">${esc(word)}</span>${act}</span></div>`;
+    <span class="acts"><span class="dotw ${cls}">${esc(word)}</span>${act}</span>${asking ? fixAsk(D.ask) : ""}</div>`;
+}
+// a Fix that installs says exactly what first (each package, the version it puts back, the version there now)
+function fixAsk(a) {
+  const pv = a.preview, list = pv?.packages || [], refused = pv?.refused || [];
+  if (!pv) return `<div class="fix-ask"><p class="meta">Checking what it would install…</p></div>`;
+  const rest = refused.length ? ` ${esc(refused.join(", "))} need${refused.length === 1 ? "s" : ""} the installer's repair instead.` : "";
+  return `<div class="fix-ask">${list.length ? `<p>This installs ${list.length === 1 ? "one package" : `${list.length} packages`} from UnderCover's pinned list, each checked against its checksum:</p>
+      <ul class="fix-pkgs">${list.map(x => `<li><b>${esc(x.name)}</b><span class="mono">${esc(x.version || "")}</span><small class="meta">${x.now ? `now ${esc(x.now)}` : "missing"}</small></li>`).join("")}</ul>
+      <p class="meta">Nothing else changes, and PyTorch never does here.${rest} Restart UnderCover afterwards.</p>`
+    : `<p class="meta">Nothing to reinstall right now.${rest}</p>`}
+    <div class="row">${list.length ? `<button class="btn primary" type="button" data-fix-go="${esc(a.id)}">Install ${list.length === 1 ? "it" : `these ${list.length}`}</button>` : ""}
+      <button class="linkbtn" type="button" data-fix-cancel>Cancel</button></div></div>`;
 }
 function renderDoctor() {
   const r = D.rep, a = r.about || {};
@@ -353,16 +367,28 @@ function watchFix(jobId, sel, label) {
   });
 }
 $("#sys-doctor").addEventListener("click", async e => {
+  if (e.target.closest("[data-fix-cancel]")) { D.ask = null; return renderDoctor(); }
+  const go = e.target.closest("[data-fix-go]");
+  if (go) { D.ask = null; renderDoctor(); return runFix(go.dataset.fixGo); }
   const b = e.target.closest("[data-fix]"); if (!b) return;
-  const label = b.textContent;
-  b.disabled = true;
+  const id = b.dataset.fix;
+  if (!ASK_FIRST.has(id)) return runFix(id);
+  const ask = D.ask = { id, preview: null };
+  renderDoctor();
+  try { ask.preview = await api(`/api/doctor/fix/${encodeURIComponent(id)}`); }
+  catch (err) { if (D.ask === ask) D.ask = null; showError(err.message, "Couldn't check what it installs"); }
+  renderDoctor();
+});
+async function runFix(id) {
+  const sel = `[data-fix="${CSS.escape(id)}"]`, label = D.rep?.results.find(r => r.fix?.id === id)?.fix.label || "Fix";
+  if ($(sel)) $(sel).disabled = true;
   try {
-    const r = await api(`/api/doctor/fix/${encodeURIComponent(b.dataset.fix)}`, { method: "POST" });
-    if (r.job) return watchFix(r.job, `[data-fix="${CSS.escape(b.dataset.fix)}"]`, label);
+    const r = await api(`/api/doctor/fix/${encodeURIComponent(id)}`, { method: "POST" });
+    if (r.job) return watchFix(r.job, sel, label);
     if (r.message) showError(r.message, r.ok === false ? "Not now" : "Done", null, r.ok !== false);
     loadDoctor();
-  } catch (err) { showError(err.message, "That didn't work"); b.disabled = false; }
-});
+  } catch (err) { showError(err.message, "That didn't work"); if ($(sel)) $(sel).disabled = false; }
+}
 $("#sys-doctor-full").onclick = async () => {
   try { watchFix((await api("/api/doctor/full", { method: "POST" })).job, "#sys-doctor-full", "Check everything"); }
   catch (err) { showError(err.message, "Couldn't start the check"); }
