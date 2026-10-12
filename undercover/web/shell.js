@@ -1,7 +1,8 @@
 "use strict";
 // The suite shell: the four module tabs (top bar; a bottom tab bar on a phone), deep links (#frontman, ...), the
-// remembered tab, and the drawer of running jobs (the running strip's "+N more"). Each module page announces itself with
-// a "uc:module" event, which train.js, library.js and work.js listen to. Uses helpers from app.js ($, $$, store) and work.js (loadQueue, renderDrawer).
+// remembered tab, and the queue drawer (the running strip's "+N more"). Each module page announces itself with a
+// "uc:module" event, which train.js, library.js and work.js listen to. Uses helpers from app.js ($, $$, store) and
+// work.js (loadQueue, renderDrawer).
 
 // module -> its view; the old tab names (deep links, localStorage "uc-tab") still work
 const MODULES = { frontman: "covers", doubleagent: "train", speakeasy: "speakeasy", safehouse: "library" };
@@ -34,7 +35,7 @@ document.addEventListener("click", e => {
   queueDrawer(false); showTab(b.dataset.goto); window.scrollTo({ top: 0 });
 });
 
-// ------------------------------------------------------------ the drawer of running jobs
+// ------------------------------------------------------------ the queue drawer: running now + the overnight queue
 function queueDrawer(open) {
   const was = !$("#q-drawer").hidden;
   $("#q-drawer").hidden = $("#q-scrim").hidden = !open;

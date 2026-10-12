@@ -42,6 +42,7 @@ async function loadSummary() {
   $("#lib-total").textContent = gb(s.total);
   $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
   $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp}` : "yt-dlp isn't installed";   // System room, Deep Cover
+  $("#lib-ytdlp-go").hidden = !s.ytdlp;   // updating a missing yt-dlp would install it, and installs need an OK
   renderCats();
 }
 // System room: YouTube changes often; when downloads start failing, a newer yt-dlp usually fixes it
@@ -142,6 +143,7 @@ function renderList() {
   if (!all.length) {
     box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", speech: "Speech you make in SpeakEasy collects here.", songs: "Songs you drop in or get from YouTube collect here.",
       voices: "Install a voice in FrontMan, or train one in DoubleAgent.", training: "Voices you train get a project here." }[L.cat]}</div>`;
+    placeDetail();
     return;
   }
   const bulk = L.cat === "covers" && L.checked.size ? `<div class="bulk"><span><b>${L.checked.size} selected</b> · ${gb(all.filter(c => L.checked.has(String(c.id))).reduce((a, c) => a + c.size, 0))}</span>
