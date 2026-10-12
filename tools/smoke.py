@@ -1423,7 +1423,7 @@ def u_doctor_startup():
             doctor.heal_at_startup(hb, None)
             settle()
             log = (path("logs_dir") / "doctor.log").read_text(encoding="utf-8")
-            assert log.count(f"re-downloading {cut}") == 2 and "less than a day ago" in log, log
+            assert "couldn't re-download" in log and log.count("less than a day ago") == 1, log   # tried, failed, then held
         finally:
             for local in (cut, new):
                 setup_models.PINNED.pop(local, None)
