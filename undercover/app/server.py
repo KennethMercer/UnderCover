@@ -205,8 +205,10 @@ class Handler(BaseHTTPRequestHandler):
                 work = {"held": w["held"], "resume": w["resume"], "running": w["running"][:1],
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
                         "start": w["start"], "start_at": w["settings"].get("start_at")}
+                from ..core import addons
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
-                                   "auto_job": auto, "cover_job": cover, "training": training, "work": work})
+                                   "auto_job": auto, "cover_job": cover, "training": training, "work": work,
+                                   "ytdlp_updated": addons.updated("ytdlp")})
             if p == "/api/voices":
                 return self._json(voices_json())
             if p == "/api/search":
