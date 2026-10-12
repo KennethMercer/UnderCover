@@ -37,6 +37,7 @@ class CoverOptions:
     backing_voice: str | None = None  # second voice for the backing vocals (needs the lead/backing split)
     backing_octave: int | None = None # backing voice only, whole octaves (on top of the song key)
     fit: bool | None = None           # set octave + key from the voice's range and the song's melody (overrides both)
+    lead_gate: bool | None = None     # only singing gets converted (phase 15; default on): see leadgate.py
 
 
 @dataclass
@@ -142,15 +143,26 @@ class CoverEngine:
             k = song_key(key_song or song)
             s.song_key = (k["tonic"], k["mode"])
         key, s.pitch = pitch_plan(opts)
+        # is the lead stem singing? (phase 15) an instrument left in it isn't turned into singing, and lines the
+        # karaoke split put in the backing are converted too; the stems themselves stay as they were
+        cstems = stems
+        if opts.lead_gate is not False:
+            from .leadgate import apply as gate_apply, note as gate_note, plan as gate_plan
+            g = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
+            if g["instrument"] or g["chorus"]:
+                gwork = path("cache_dir") / "converted"
+                gwork.mkdir(parents=True, exist_ok=True)
+                cstems = gate_apply(stems, g, gwork, stamp)
+                notes += gate_note(g)
         from .remix import lufs, prefetch
         # mix prep (stem loudness, key-shifted instrumental) runs on the CPU while the GPU converts
-        prefetch([stems["vocals"], stems.get("backing"), stems.get("reverb"), song], key=key,
-                 instrumental=stems["instrumental"], backing=None if bvoice else stems.get("backing"))
-        if bvoice and lufs(stems["backing"]) < -45:  # nothing worth converting
+        prefetch([cstems["vocals"], cstems.get("backing"), cstems.get("reverb"), song], key=key,
+                 instrumental=cstems["instrumental"], backing=None if bvoice else cstems.get("backing"))
+        if bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
         lead_share = 0.5 if bvoice else 1.0
-        audio, sr = self.converter.convert(load_16k(stems["vocals"]), voice.name, s,
+        audio, sr = self.converter.convert(load_16k(cstems["vocals"]), voice.name, s,
                                            progress=lambda f: report("converting", f * lead_share, f"Converting the lead vocal to {voice.name}"))
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
@@ -162,7 +174,7 @@ class CoverEngine:
             from dataclasses import replace
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
             bs = replace(s, pitch=key + 12 * boct)
-            baudio, bsr = self.converter.convert(load_16k(stems["backing"]), bvoice.name, bs,
+            baudio, bsr = self.converter.convert(load_16k(cstems["backing"]), bvoice.name, bs,
                                                  progress=lambda f: report("converting", 0.5 + 0.5 * f, f"Converting the backing vocals to {bvoice.name}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
@@ -177,10 +189,10 @@ class CoverEngine:
                 setattr(ms, k, getattr(opts, k))
         names = voice.name + (f" + {bvoice.name}" if bvoice and bvoice.name != voice.name else "")
         out = out or _unique(path("output_dir") / f"{_safe(title)} ({names})", ms.format)
-        final = remix(stems["instrumental"], conv_path, stems["vocals"], out, song=song,
-                      backing=conv_backing or stems.get("backing"), s=ms,
-                      backing_ref=stems.get("backing") if conv_backing else None,
-                      reverb_ref=stems.get("reverb"))
+        final = remix(cstems["instrumental"], conv_path, cstems["vocals"], out, song=song,
+                      backing=conv_backing or cstems.get("backing"), s=ms,
+                      backing_ref=cstems.get("backing") if conv_backing else None,
+                      reverb_ref=cstems.get("reverb"))
         secs["remix"] = round(time.perf_counter() - t, 2)
         secs["total"] = round(sum(secs.values()), 2)
         report("done", 1.0, "Finished")

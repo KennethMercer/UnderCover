@@ -833,7 +833,9 @@ def _speechlike(sr: int = 44100, secs: float = 8.0, seed: int = 3):
         y[t0:t0 + dur] += v.astype(np.float32)
         t0 += dur
         if rng.random() < 0.5:   # a fricative
-            d = int(sr * rng.uniform(0.05, 0.12))
+            d = min(int(sr * rng.uniform(0.05, 0.12)), n - t0)   # never past the end
+            if d <= 0:
+                break
             fr = sosfilt(butter(4, [4000, 12000], "band", fs=sr, output="sos"), rng.standard_normal(d)) * np.hanning(d)
             y[t0:t0 + d] += (0.3 * fr).astype(np.float32)
             t0 += d
@@ -1033,6 +1035,47 @@ def u_characters():
         assert also and "Two different voices play Zed" in also["note"] and proj.reference["clip"][:2] in ("s0", "s1"), proj.reference
     return ("SpongeBob / Peter Griffin characters, Obama a person, Adele a singer, Queen a band, Chris Evans asks; search: talk "
             "unticked, scenes first; target = the scenes' voice; AI/TTS and dubs out; a recast said; gate")
+
+
+@check("lead gate: an instrument in the lead stem isn't converted, lines left in the backing are; the stems stay as they were")
+def u_leadgate():
+    import numpy as np
+    import soundfile as sf
+    from undercover.frontman import leadgate as G
+    from scipy.signal import resample_poly
+    voice = resample_poly(_speechlike(sr=32000, secs=8.0, seed=11)[0], 1, 2).astype(np.float32)[:16000 * 8]
+    sr = 16000
+    t = np.arange(int(sr * 8)) / sr
+    tone = (0.5 * np.sin(2 * np.pi * 440 * t) + 0.2 * np.sin(2 * np.pi * 880 * t)).astype(np.float32)   # a string hook
+    z = np.zeros(int(sr * 8), np.float32)
+    # 0-8 s the lead sings; 8-16 s the "lead" is the hook; 16-24 s the lead is silent and the backing sings the chorus
+    lead = np.concatenate([voice, tone, z]) + (np.random.default_rng(1).standard_normal(sr * 24) * 1e-5).astype(np.float32)
+    back = np.concatenate([z, z, voice])
+    g = G.plan(lead, back)
+    inst = sum(b - a for a, b in g["instrument"])
+    ch = sum(b - a for a, b in g["chorus"])
+    assert g["instrument"] and all(7.5 <= a and b <= 16.5 for a, b in g["instrument"]) and inst >= 6, g
+    assert g["chorus"] and all(15.5 <= a for a, b in g["chorus"]) and ch >= 3, g   # (the synthetic voice pauses more than singing)
+    assert not [r for r in g["instrument"] if r[0] < 7.5], "singing was taken for an instrument"
+    with isolated_data() as tmp:
+        stems = {}
+        for k, x in (("vocals", lead), ("backing", back), ("instrumental", np.zeros_like(lead))):
+            stems[k] = tmp / f"{k}.wav"
+            sf.write(str(stems[k]), x, sr)
+        before = {k: Path(v).read_bytes() for k, v in stems.items()}
+        out = G.apply(stems, g, tmp, "t")
+        assert all(Path(v).read_bytes() == before[k] for k, v in stems.items()), "the original stems were changed"
+        l2, _ = sf.read(str(out["vocals"]), dtype="float32")
+        i2, _ = sf.read(str(out["instrumental"]), dtype="float32")
+        b2, _ = sf.read(str(out["backing"]), dtype="float32")
+        rms = lambda x, a, b: float(np.sqrt(np.mean(x[int(a * sr):int(b * sr)] ** 2)))
+        assert rms(l2, 9, 15) < 0.01 * rms(lead, 9, 15), "the hook is still in the lead to convert"
+        assert rms(i2, 9, 15) > 0.9 * rms(lead, 9, 15), "the hook didn't go back into the instrumental"
+        c0, c1 = g["chorus"][0][0] + 0.1, g["chorus"][-1][1] - 0.1
+        assert rms(l2, c0, c1) > 0.9 * rms(back, c0, c1) and rms(b2, c0, c1) < 0.01 * rms(back, c0, c1), "the chorus wasn't moved"
+        assert abs(rms(l2, 1, 7) - rms(lead, 1, 7)) < 1e-3, "the singing changed"
+    assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
+    return f"hook {inst:.1f} s left as it is, chorus {ch:.1f} s converted, singing untouched, stems unchanged"
 
 
 @check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
@@ -3142,7 +3185,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped):
         fn()
