@@ -29,7 +29,7 @@ ROUTES = [
     ("GET", r"/|/index\.html", "phone", "the page"),
     ("GET", r"/static/(manifest\.webmanifest|icon-192\.png|icon-512\.png)", "open", "home-screen manifest and icons"),
     ("GET", r"/static/.+", "phone", "the page's scripts, styles, fonts"),
-    ("GET", r"/files/.+", "phone", "playing and downloading results"),
+    ("GET", r"/files/.+", "phone", "playing and downloading results (audio files only for a phone)"),
     ("GET", r"/pair", "open", "the pairing page"),
     ("POST", r"/api/phone/claim", "open", "pair with the code from the PC (rate-limited)"),
     ("GET", r"/api/status|/api/voices|/api/search|/api/jobs|/api/work", "phone", "status, voices, jobs, the queue"),
