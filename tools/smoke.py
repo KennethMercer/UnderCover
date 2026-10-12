@@ -772,7 +772,7 @@ def _speechlike(sr: int = 44100, secs: float = 8.0, seed: int = 3):
     return (0.8 * y / np.abs(y).max()).astype(np.float32), sr
 
 
-@check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original; Freeman's judged pair")
+@check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
 def u_clipsound():
     import numpy as np
     from scipy.signal import butter, fftconvolve, sosfiltfilt
@@ -792,16 +792,8 @@ def u_clipsound():
     pens = {k: CS.penalty(CS.measure(np.asarray(y, np.float32), sr)) for k, y in degraded.items()}
     low = {k: p for k, p in pens.items() if p <= base + 0.02}
     assert not low, f"not heard: {low} (original {base})"
-    # the pair the user judged by ear (read only, when this PC has it): the approved clip sounds better than v2's
-    from undercover.core.config import path
-    v1 = path("voices_dir") / "morgan-freeman-uc" / "tts" / "ref.wav"
-    v2 = path("cache_dir") / "backups" / "phase4" / "morgan-freeman-uc" / "tts-v2" / "ref.wav"
-    judged = ""
-    if v1.exists() and v2.exists():
-        a, b = CS.penalty(CS.measure_file(v1)), CS.penalty(CS.measure_file(v2))
-        assert a + 0.03 < b, (a, b)
-        judged = f"; Freeman approved {a} < rejected v2 {b}"
-    return f"original {base}, degraded " + ", ".join(f"{k} {p}" for k, p in pens.items()) + judged
+    # (the clips the user judged by ear live in the real folders: tools/research/clipsound.py checks those, not smoke)
+    return f"original {base}, degraded " + ", ".join(f"{k} {p}" for k, p in pens.items())
 
 
 def _fake_pack(d, clip: str, score: float, before: float | None = None, verdicts=None) -> dict:
@@ -886,7 +878,19 @@ def u_keep_this_one():
         assert len(list((tts / "older").glob("*-previous"))) == 1
         refs = sorted(json.loads((f.parent / "cadence.json").read_text(encoding="utf-8"))["clip"] for f in tts.rglob("ref.wav"))
         assert refs == ["clipA", "clipB", "clipC", "clipD", "clipE"], f"a pack went missing: {refs}"
-        # 5. the move guard: a target outside the folder, or an occupied one, refuses the whole call
+        # 5. the same clip and settings again, made later: told apart by date, and the kept one counts as approved
+        pk = _fake_pack(work / "clipE2", "clipE", 0.71, before=0.7)
+        pk["made"] = "2026-10-12 11:00"
+        (work / "clipE2" / "cadence.json").write_text(json.dumps(pk), encoding="utf-8")
+        assert K.save_pack(v.name, work / "clipE2", pk, waits=True) == "pending"
+        K.verdict(v.name, "pending")
+        v = get_voice(v.name)
+        assert K.pack_of(v)["made"] == "2026-10-12 11:00" and K.approved_by_user(K.pack_of(v)), K.pack_of(v)["verdicts"][-1]
+        # 6. a voice whose cadence was deleted while a new one was made: the new one goes live, not to pending
+        w = _fake_voice("zz-ab2-uc", "trained in UnderCover: Zed, 9.0 min, epoch 5", {"trained": True})
+        pk = _fake_pack(work / "w1", "clipW", 0.6)
+        assert K.save_pack(w.name, work / "w1", pk, waits=True) == "live" and K.pack_of(get_voice(w.name))["clip"] == "clipW"
+        # 7. the move guard: a target outside the folder, or an occupied one, refuses the whole call
         outside = tmp / "elsewhere" / "ref.wav"
         for bad in ([(tts / "ref.wav", outside)], [(tts / "ref.wav", tts / "previous" / "ref.wav")],
                     [(tts / "ref.wav", tts / "x" / "a.wav"), (tts / "cadence.json", tts / "x" / "a.wav")]):
