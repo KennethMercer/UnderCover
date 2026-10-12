@@ -316,6 +316,46 @@ def remove_files(files, within, dirs=()):
         raise first
 
 
+def move_within(moves, within: Path):
+    """Rename files inside one folder (a voice's cadence packs, phase 9: live, pending, previous), deleting nothing.
+    Everything is checked before anything moves, and one bad path refuses the whole call:
+    - every source and target must be inside `within` and never `within` itself; sources must be plain files;
+    - a target must not exist (nothing is overwritten: the caller moves an occupied place aside first);
+    - test mode (ALLOWED_ROOTS): refuse() applies, as for every delete and move.
+    moves: [(src, dst)]. Target folders are created."""
+    todo = [(Path(s), Path(d)) for s, d in moves]
+    for s, d in todo:
+        for p in (s, d):
+            if ALLOWED_ROOTS is not None:
+                why = refuse([p])
+                if why:
+                    raise ModelError(why)
+            if not _inside(p, within) or _same(p, within):
+                raise ModelError(f"{p} isn't inside {within}; nothing was moved.")
+        if not s.is_file():
+            raise ModelError(f"{s} isn't a file; nothing was moved.")
+        if d.exists():
+            raise ModelError(f"{d} already exists; nothing was moved.")
+    if len({os.path.normcase(os.path.abspath(d)) for _, d in todo}) < len(todo):
+        raise ModelError("Two files would land in the same place; nothing was moved.")
+    for s, d in todo:
+        d.parent.mkdir(parents=True, exist_ok=True)
+        fsutil.retry(lambda s=s, d=d: os.replace(s, d))
+
+
+def remove_empty(d: Path, within: Path):
+    """Remove the folder d if it is empty (what move_within left behind); same checks as move_within, never a file."""
+    d = Path(d)
+    if ALLOWED_ROOTS is not None:
+        why = refuse([d])
+        if why:
+            raise ModelError(why)
+    if not _inside(d, within) or _same(d, within):
+        raise ModelError(f"{d} isn't inside {within}; nothing was removed.")
+    if d.is_dir() and not any(d.iterdir()):
+        fsutil.retry(d.rmdir)
+
+
 def _release(group: str):
     """Let go of what's loaded from the folders that move, so it's loaded again from the new place."""
     from . import gpu

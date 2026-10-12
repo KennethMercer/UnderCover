@@ -22,6 +22,7 @@ result asserted to point only into the scratch folder, apart from the read-only 
 import argparse
 import contextlib
 import json
+import os
 import shutil
 import sys
 import time
@@ -628,7 +629,8 @@ def u_rolloff_covers():
                 except storage.ModelError:
                     pass
             try:
-                storage.remove_files([], within=[t], dirs=[ROOT / "output"])
+                # (a folder that exists: a fresh checkout or worktree has no output/, and what isn't there isn't refused)
+                storage.remove_files([], within=[t], dirs=[ROOT / "output" if (ROOT / "output").is_dir() else ROOT / "docs"])
                 raise AssertionError("a real folder wasn't refused in test mode")
             except storage.ModelError:
                 pass
@@ -804,6 +806,202 @@ class _FakeHandler:
 
     def _error(self, msg, status=400):
         self.err = msg
+
+
+def _speechlike(sr: int = 44100, secs: float = 8.0, seed: int = 3):
+    """A synthetic stand-in for a clean clip of someone talking: voiced syllables (a gliding harmonic tone through two
+    formants) with fricatives (bright noise bursts) and short pauses. Full band, no hiss, no room."""
+    import numpy as np
+    from scipy.signal import butter, sosfilt
+    rng = np.random.default_rng(seed)
+    n = int(sr * secs)
+    y = np.zeros(n, np.float32)
+    t0 = 0
+    while t0 < n - sr // 4:
+        dur = int(sr * rng.uniform(0.12, 0.3))
+        t = np.arange(dur) / sr
+        f0 = rng.uniform(95, 140) * (1 + 0.15 * np.sin(2 * np.pi * rng.uniform(1, 3) * t))
+        ph = 2 * np.pi * np.cumsum(f0) / sr
+        v = sum(np.sin(k * ph) / k for k in range(1, 60) if k * f0.max() < sr / 2.2)
+        for lo, hi in ((rng.uniform(300, 800), 1200), (rng.uniform(1500, 2500), 3500)):
+            v = v + 0.5 * sosfilt(butter(2, [lo, hi], "band", fs=sr, output="sos"), v)
+        v *= np.hanning(dur)
+        y[t0:t0 + dur] += v.astype(np.float32)
+        t0 += dur
+        if rng.random() < 0.5:   # a fricative
+            d = int(sr * rng.uniform(0.05, 0.12))
+            fr = sosfilt(butter(4, [4000, 12000], "band", fs=sr, output="sos"), rng.standard_normal(d)) * np.hanning(d)
+            y[t0:t0 + d] += (0.3 * fr).astype(np.float32)
+            t0 += d
+        t0 += int(sr * (rng.uniform(0.25, 0.6) if rng.random() < 0.2 else rng.uniform(0.02, 0.06)))
+    y += (rng.standard_normal(n) * 1e-5).astype(np.float32)
+    return (0.8 * y / np.abs(y).max()).astype(np.float32), sr
+
+
+@check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
+def u_clipsound():
+    import numpy as np
+    from scipy.signal import butter, fftconvolve, sosfiltfilt
+    from undercover.doubleagent import clipsound as CS
+    x, sr = _speechlike()
+    base = CS.penalty(CS.measure(x, sr))
+    assert base < 0.01, (base, CS.measure(x, sr))
+    rng = np.random.default_rng(1)
+    t = np.arange(int(sr * 0.9)) / sr
+    ir = rng.standard_normal(len(t)) * np.exp(-6.91 * t / 0.9)
+    ir[0] = 1.0
+    pk = float(np.abs(x).max())
+    degraded = {"lowpass 3.5k": sosfiltfilt(butter(8, 3500, "low", fs=sr, output="sos"), x),
+                "noise 15 dB": x + rng.standard_normal(len(x)) * np.sqrt(np.mean(x ** 2) / 10 ** 1.5),
+                "clipped x8": np.clip(x * 8, -pk, pk),
+                "reverb 0.9 s": fftconvolve(x, ir)[:len(x)]}
+    pens = {k: CS.penalty(CS.measure(np.asarray(y, np.float32), sr)) for k, y in degraded.items()}
+    low = {k: p for k, p in pens.items() if p <= base + 0.02}
+    assert not low, f"not heard: {low} (original {base})"
+    # (the clips the user judged by ear live in the real folders: tools/research/clipsound.py checks those, not smoke)
+    return f"original {base}, degraded " + ", ".join(f"{k} {p}" for k, p in pens.items())
+
+
+def _fake_pack(d, clip: str, score: float, before: float | None = None, verdicts=None) -> dict:
+    """A cadence pack on disk (ref.wav + cadence.json) and its extra.tts dict."""
+    import numpy as np
+    import soundfile as sf
+    d.mkdir(parents=True, exist_ok=True)
+    sf.write(str(d / "ref.wav"), (np.random.default_rng(len(clip)).standard_normal(16000) * 0.1).astype(np.float32), 16000)
+    pack = {"engine": "chatterbox", "cfg_weight": 0.3, "exaggeration": 0.5, "v": 1, "ref": "ref.wav", "ref_text": "Hello.",
+            "clip": clip, "tempo": 1.0, "scores": {"likeness": 0.8, "score": score},
+            "before": before is not None and {"likeness": 0.8, "score": before} or None, "made": "2026-10-12 10:00",
+            "verdicts": list(verdicts or [])}
+    (d / "cadence.json").write_text(json.dumps({**pack, "tried": []}), encoding="utf-8")
+    return pack
+
+
+@check("keep this one: a new pack waits in tts/pending/, the A/B state, verdicts swap or set aside, nothing deleted")
+def u_keep_this_one():
+    from undercover.core import storage
+    from undercover.core.voices import get_voice
+    from undercover.doubleagent import api as daapi, cadence as K
+    with isolated_data() as tmp:
+        v = _fake_voice("zz-ab-uc", "trained in UnderCover: Zed, 9.0 min, epoch 5", {"trained": True})
+        work = tmp / "work"
+        tts = v.dir / "tts"
+        # 1. first pack: straight in (nothing to compare with); a second one waits; a third replaces the unheard second
+        _fake_pack(work / "a", "clipA", 0.60, verdicts=[{"compared": ["kokoro_rvc", "chatterbox:clipA:cfg0.3:t1.0"],
+                                                         "winner": "chatterbox:clipA:cfg0.3:t1.0"}])
+        pa = json.loads((work / "a" / "cadence.json").read_text(encoding="utf-8"))
+        assert K.save_pack(v.name, work / "a", pa, waits=False) == "live"
+        v = get_voice(v.name)
+        assert K.pack_of(v)["clip"] == "clipA" and K.pending_of(v) is None
+        assert not K.pack_of(v)["verdicts"], "a new live pack starts from the voice's verdicts (none yet)"
+        K.record_verdict(v.name, ["kokoro_rvc", K.pack_id(K.pack_of(v))], K.pack_id(K.pack_of(v)), "approved by ear")
+        assert K.approved_by_user(K.pack_of(get_voice(v.name)))
+        for clip, sc in (("clipB", 0.65), ("clipC", 0.66)):
+            pk = _fake_pack(work / clip, clip, sc, before=0.62)
+            assert K.save_pack(v.name, work / clip, pk, waits=True) == "pending"
+        v = get_voice(v.name)
+        assert K.pack_of(v)["clip"] == "clipA" and K.pending_of(v)["clip"] == "clipC", (K.pack_of(v), K.pending_of(v))
+        unheard = list((tts / "older").glob("*-unheard"))
+        assert len(unheard) == 1 and json.loads((unheard[0] / "cadence.json").read_text(encoding="utf-8"))["clip"] == "clipB"
+        st = K.ab_state(v.name)
+        assert st["current"]["approved"] and st["pending"]["clip"] == "clipC" and not st["ready"], st
+        # 2. the readings (made by the GPU job; written by hand here) make it ready
+        for d, pid in ((tts, st["current"]["id"]), (tts / "pending", st["pending"]["id"])):
+            (d / "sample.wav").write_bytes((d / "ref.wav").read_bytes())
+            (d / "sample.json").write_text(json.dumps({"line": K.AB_LINE, "pack": pid}), encoding="utf-8")
+        assert K.ab_state(v.name)["ready"] and K.sample_file(v.name, "pending").parent.name == "pending"
+        h = _FakeHandler()
+        assert daapi.handle(h, "GET", f"/api/train/voices/{v.name}/cadence") and h.out["ready"], (h.out, h.err)
+        h = _FakeHandler(body={"keep": "maybe"})
+        daapi.handle(h, "POST", f"/api/train/voices/{v.name}/cadence/verdict")
+        assert h.err and K.pending_of(get_voice(v.name)), "a verdict that isn't current/pending was taken"
+        # 3. keep the current one: the new one is set aside (not deleted), the verdict lands on the current pack
+        h = _FakeHandler(body={"keep": "current", "why": "the new one is muffled"})
+        daapi.handle(h, "POST", f"/api/train/voices/{v.name}/cadence/verdict")
+        assert h.out and h.out["kept"] == "current", (h.out, h.err)
+        v = get_voice(v.name)
+        cur = K.pack_of(v)
+        vd = cur["verdicts"][-1]
+        assert cur["clip"] == "clipA" and K.pending_of(v) is None and K.approved_by_user(cur), cur
+        assert vd["winner"] == vd["compared"][0] and vd["why"] == "the new one is muffled" and vd["kept"] == "current"
+        assert set(vd["scores"]) == set(vd["compared"]) and vd["scores"][vd["compared"][1]]["score"] == 0.66, vd
+        assert len(list((tts / "older").glob("*-turned-down"))) == 1
+        h = _FakeHandler(body={"keep": "pending"})
+        daapi.handle(h, "POST", f"/api/train/voices/{v.name}/cadence/verdict")
+        assert h.err, "a verdict with nothing waiting was taken"
+        # 4. a new one, kept: it goes live, the old live pack goes to previous/ with its verdicts; a third swap moves
+        # that previous to older/ first
+        for clip in ("clipD", "clipE"):
+            pk = _fake_pack(work / clip, clip, 0.7, before=0.6)
+            assert K.save_pack(v.name, work / clip, pk, waits=True) == "pending"
+            (tts / "sample.wav").write_bytes(b"RIFF")   # the live pack's reading moves with it
+            r = K.verdict(v.name, "pending", "warmer")
+            v = get_voice(v.name)
+            assert r["kept"] == "pending" and K.pack_of(v)["clip"] == clip and K.pending_of(v) is None, r
+            assert K.approved_by_user(K.pack_of(v)) and K.pack_of(v)["verdicts"][-1]["why"] == "warmer"
+            prev = json.loads((tts / "previous" / "pack.json").read_text(encoding="utf-8"))
+            assert prev["clip"] == {"clipD": "clipA", "clipE": "clipD"}[clip] and (tts / "previous" / "ref.wav").exists()
+            assert (tts / "previous" / "sample.wav").exists() and not (tts / "pending").exists()
+        assert len(list((tts / "older").glob("*-previous"))) == 1
+        refs = sorted(json.loads((f.parent / "cadence.json").read_text(encoding="utf-8"))["clip"] for f in tts.rglob("ref.wav"))
+        assert refs == ["clipA", "clipB", "clipC", "clipD", "clipE"], f"a pack went missing: {refs}"
+        # 5. the same clip and settings again, made later: told apart by date, and the kept one counts as approved
+        pk = _fake_pack(work / "clipE2", "clipE", 0.71, before=0.7)
+        pk["made"] = "2026-10-12 11:00"
+        (work / "clipE2" / "cadence.json").write_text(json.dumps(pk), encoding="utf-8")
+        assert K.save_pack(v.name, work / "clipE2", pk, waits=True) == "pending"
+        K.verdict(v.name, "pending")
+        v = get_voice(v.name)
+        assert K.pack_of(v)["made"] == "2026-10-12 11:00" and K.approved_by_user(K.pack_of(v)), K.pack_of(v)["verdicts"][-1]
+        # 6. a voice whose cadence was deleted while a new one was made: the new one goes live, not to pending
+        w = _fake_voice("zz-ab2-uc", "trained in UnderCover: Zed, 9.0 min, epoch 5", {"trained": True})
+        pk = _fake_pack(work / "w1", "clipW", 0.6)
+        assert K.save_pack(w.name, work / "w1", pk, waits=True) == "live" and K.pack_of(get_voice(w.name))["clip"] == "clipW"
+        # 7. the move guard: a target outside the folder, or an occupied one, refuses the whole call
+        outside = tmp / "elsewhere" / "ref.wav"
+        for bad in ([(tts / "ref.wav", outside)], [(tts / "ref.wav", tts / "previous" / "ref.wav")],
+                    [(tts / "ref.wav", tts / "x" / "a.wav"), (tts / "cadence.json", tts / "x" / "a.wav")]):
+            try:
+                storage.move_within(bad, tts)
+                raise AssertionError(f"moved: {bad}")
+            except storage.ModelError:
+                pass
+        assert (tts / "ref.wav").exists() and not outside.exists() and not (tts / "x").exists()
+    return "save live / pending / unheard set aside, A/B state + route, keep current and keep new (x2), 5 packs all kept, guard"
+
+
+@check("relocate: a second checkout on the same data rewrites nothing; a real move still rewrites stored paths")
+def u_relocate_guard():
+    import contextlib
+    import io
+    from undercover.core import relocate
+    from undercover.core.config import ROOT, path
+    with isolated_data() as t:
+        old = t / "OldCheckout"
+        (old / "undercover").mkdir(parents=True)
+        (old / "undercover" / "server.py").write_text("# an UnderCover checkout", encoding="utf-8")
+        v = _fake_voice("zz-reloc")
+        meta = v.dir / "meta.json"
+        d = json.loads(meta.read_text(encoding="utf-8"))
+        d["dir"] = str(old / "models" / "voices" / "zz-reloc")
+        meta.write_text(json.dumps(d), encoding="utf-8")
+        mark = path("cache_dir") / "root.txt"
+        mark.write_text(str(old), encoding="utf-8")
+        before = meta.read_text(encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            got = relocate.check_and_fix()
+        assert got == {} and meta.read_text(encoding="utf-8") == before, got
+        assert mark.read_text(encoding="utf-8").strip() == str(old), "root.txt took the second checkout's folder"
+        assert "Not rewriting stored paths" in out.getvalue(), out.getvalue()
+        # the old folder is gone: a real move, rewritten as before
+        (old / "undercover" / "server.py").unlink()
+        (old / "undercover").rmdir()
+        old.rmdir()
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = relocate.check_and_fix()
+        assert str(meta) in got and json.loads(meta.read_text(encoding="utf-8"))["dir"].startswith(str(ROOT)), got
+        assert mark.read_text(encoding="utf-8").strip() == str(ROOT)
+    return "second checkout: nothing rewritten, root.txt kept, one line logged; a move: rewritten"
 
 
 @check("voice display names: defaults (trained / downloaded / explicit), the /display route, every voice API")
@@ -1195,8 +1393,9 @@ def a_cover():
     _tray_room("/api/history")
     song, voice = _cover_target()
     added = None
-    if not song and (ROOT / "test" / "smoke.wav").exists():   # an empty library: bring the test song, remove it after
-        data = (ROOT / "test" / "smoke.wav").read_bytes()
+    test_song = Path(os.environ.get("UNDERCOVER_DATA_ROOT") or ROOT) / "test" / "smoke.wav"   # test/ isn't in git
+    if not song and test_song.exists():   # an empty library: bring the test song, remove it after
+        data = test_song.read_bytes()
         req = urllib.request.Request(BASE + "/api/upload", data=data, method="POST",
                                      headers={"X-Filename": "smoke-test-song.wav", "Origin": BASE,
                                               "Content-Type": "application/octet-stream"})
@@ -1451,7 +1650,31 @@ def a_cadence():
         assert sj["state"] == "done", sj.get("final")
         sid = next(x for x in api("/api/speak/recent") if x["voice"] == CAD_VOICE)["id"]
         api(f"/api/speak/{sid}", method="DELETE")
-        return f"{len(tr)} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}"
+        # 4. "Keep this one": a second pack waiting (the live one, copied as another clip), both read the A/B line on
+        # the GPU, the page's verdict route keeps the new one; the old one is in tts/previous/
+        tts = vdir / CAD_VOICE / "tts"
+        live = json.loads((tts / "cadence.json").read_text(encoding="utf-8"))
+        (tts / "pending").mkdir()
+        shutil.copyfile(tts / "ref.wav", tts / "pending" / "ref.wav")
+        (tts / "pending" / "cadence.json").write_text(json.dumps({**live, "clip": "smoke-other"}), encoding="utf-8")
+        ab = api(f"/api/train/voices/{CAD_VOICE}/cadence")
+        assert ab["pending"] and not ab["ready"], ab
+        j = api(f"/api/train/voices/{CAD_VOICE}/cadence/ab", {})["job"]
+        wait_for(lambda: next((x for x in api("/api/jobs") if x["id"] == j and x["state"] in ("done", "error")), None), 300, every=2,
+                 what="A/B readings")
+        assert next(x for x in api("/api/jobs") if x["id"] == j)["state"] == "done"
+        ab = api(f"/api/train/voices/{CAD_VOICE}/cadence")
+        assert ab["ready"], ab
+        with urllib.request.urlopen(f"{BASE}/api/train/voices/{CAD_VOICE}/cadence/sample/pending", timeout=30) as r:
+            wav = r.read()
+        assert wav[:4] == b"RIFF" and len(wav) > 20000, len(wav)
+        assert api(f"/api/train/voices/{CAD_VOICE}/cadence/ab", {}).get("ready"), "the readings were made again"
+        r = api(f"/api/train/voices/{CAD_VOICE}/cadence/verdict", {"keep": "pending", "why": "smoke"})
+        assert r["kept"] == "pending" and (tts / "previous" / "ref.wav").exists(), r
+        v = next(x for x in api("/api/speak/voices") if x["name"] == CAD_VOICE)
+        assert v["cadence"]["has"] and not v["cadence"].get("pending"), v["cadence"]
+        return (f"{len(tr)} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}, "
+                f"clip sound -{sc.get('sound')}; A/B readings {len(wav) // 1000} KB, new pack kept")
     finally:
         if item:
             try:
@@ -1482,10 +1705,15 @@ WATCHED = ("uploads_dir", "output_dir", "models_dir", "cache_dir", "voices_dir")
 
 
 def real_dirs() -> dict:
-    """The user's folders, read straight from the real config.toml (never through a config a test may have repointed)."""
+    """The user's folders, read straight from the real config.toml (never through a config a test may have repointed).
+    From a git worktree, UNDERCOVER_DATA_ROOT=<the main checkout> names the app folder whose data the sandbox copies
+    from and whose folders are checked unchanged (the worktree's own config points at its empty folders); the sandbox
+    server still runs the worktree's code."""
+    import os
     import tomllib
-    cfg = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))["paths"]
-    out = {k: (Path(v) if Path(v).is_absolute() else ROOT / v) for k, v in cfg.items()}
+    base = Path(os.environ.get("UNDERCOVER_DATA_ROOT") or ROOT)
+    cfg = tomllib.loads((base / "config.toml").read_text(encoding="utf-8"))["paths"]
+    out = {k: (Path(v) if Path(v).is_absolute() else base / v) for k, v in cfg.items()}
     out.setdefault("voices_dir", out["models_dir"] / "voices")
     return out
 
@@ -1662,7 +1890,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow):
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
