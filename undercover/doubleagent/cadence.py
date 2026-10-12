@@ -412,7 +412,7 @@ def can_train(v) -> tuple[bool, str]:
             return False, (f"{proj.person}'s clips are mostly singing: a cadence needs a few minutes of them talking "
                            "(add interviews in DoubleAgent).")
         return True, "from the voice's clips"
-    if ex.get("person"):
+    if ex.get("person") and not ex.get("trained"):   # a checked community voice; a trained voice with no clips left isn't searched for
         return True, f"finds clips of {ex['person']} first"
     return False, "Downloaded voice: UnderCover doesn't know whose voice it is."
 
@@ -440,7 +440,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
         raise ModelError("The cadence engine (Chatterbox) isn't installed in this UnderCover. Run setup again to add it.")
     proj = project_for_voice(v)
     if proj is None:
-        person = (v.extra or {}).get("person")
+        person = None if (v.extra or {}).get("trained") else (v.extra or {}).get("person")
         if not person:
             raise ModelError(f"UnderCover doesn't know whose voice '{v.name}' is, so it can't find their clips.")
         push("clips", 0.0, f"Finding clips of {person} talking")

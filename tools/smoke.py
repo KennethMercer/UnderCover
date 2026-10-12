@@ -1190,7 +1190,7 @@ def _cover_target():
     return song, voice
 
 
-@check("cover: end to end from cached stems (then deleted)")
+@check("cover: end to end, from a song with cached stems or the test song (then deleted)")
 def a_cover():
     _tray_room("/api/history")
     song, voice = _cover_target()
@@ -1599,7 +1599,7 @@ def sandbox_server(port: int = SANDBOX_PORT):
         config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = {k: str(v) for k, v in mine.items()}, cfg, [root]
         yield root
     finally:
-        config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS, BASE = saved
+        config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved[:3]
         stopped = proc is None
         if proc is not None:
             try:
@@ -1615,6 +1615,7 @@ def sandbox_server(port: int = SANDBOX_PORT):
                 except subprocess.TimeoutExpired:
                     pass
             stopped = proc.poll() is not None
+        BASE = saved[3]
         if log:
             log.close()
         if stopped and storage._inside(root, Path(tempfile.gettempdir()).resolve()) and root.name.startswith("uc-sandbox-"):
@@ -1660,8 +1661,8 @@ def main():
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
             BASE = f"http://127.0.0.1:{a.port}"
-            print(f"API checks ({BASE}, read-only: covers, speech and training run on the sandbox only)")
-            for fn in (a_status, a_page, a_lists, a_library, a_train, a_work):
+            print(f"API checks ({BASE}, reads only: anything that makes, deletes or pauses work runs on the sandbox only)")
+            for fn in (a_status, a_page, a_lists, a_library, a_train):
                 fn()
         else:
             print(f"API checks (a sandbox server on port {SANDBOX_PORT}: scratch folders, the real models read-only)")
