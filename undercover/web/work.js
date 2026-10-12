@@ -208,9 +208,16 @@ function renderRunRoom() {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : j.final?.message || "";
     return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}${how ? ` · ${esc(how)}` : ""}</small></span>
-      <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span><button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
+      <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span>${j.retry ? `<button class="linkbtn" type="button" data-retry="${esc(j.id)}">Retry</button>` : ""}<button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
   }).join("") : `<p class="meta">Nothing has finished in the last hour.</p>`);
 }
+// Retry a failed cover / speech / one-shot / voice install (phase 10): the server starts it again from the same request
+$("#rn-recent").addEventListener("click", async e => {
+  const b = e.target.closest("[data-retry]"); if (!b) return;
+  b.disabled = true;
+  try { await api(`/api/jobs/${b.dataset.retry}/retry`, { method: "POST" }); refreshJobs(); }
+  catch (err) { b.disabled = false; showError(err.message, "Couldn't start it again"); }
+});
 const startWork = async body => {
   try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); }
   catch (e) { showError(e.message, "Couldn't change the start"); }

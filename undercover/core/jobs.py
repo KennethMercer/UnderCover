@@ -124,10 +124,14 @@ def _eta_learn(job: "Job"):
 
 # ---------------------------------------------------------------- jobs
 
+ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
+
+
 class Job:
     def __init__(self, kind: str, title: str | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.kind = kind
+        self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
         self.state = "queued"
         self.events: list[dict] = []
@@ -137,6 +141,7 @@ class Job:
         self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
         self.resume_spec = None   # how to start this work again (worklist.resume)
         self.control = None       # trainer Control, for jobs that train
+        self.retry_req = None     # (route, body) that started it: Retry on a failed one (app/server.py, phase 10)
         self.created = time.time()
         self.ended = None
         self.started = None       # when it started running (time left is measured from here)
@@ -221,6 +226,7 @@ class Job:
         snap = {"id": self.id, "kind": self.kind, "state": self.state, "title": self.title or (self.resume_spec or {}).get("label"),
                 "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
+                "retry": self.state == "error" and self.retry_req is not None,
                 "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs)}
         # the newest value of each progress field within the current stage (some events carry only a note)
         for ev in reversed(evs[-40:]):

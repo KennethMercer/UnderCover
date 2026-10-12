@@ -653,7 +653,10 @@ def u_rolloff_covers():
                 if not text.splitlines()[line - 1].lstrip().startswith(("def ", "#", '"""')):
                     calls.setdefault(name, []).append(f"{f.relative_to(ROOT / 'undercover').as_posix()}:{line}")
     assert sorted(c.split(":")[0] for c in calls["roll_off("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["frontman/history.py", "speakeasy/speak.py"], calls
+    # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
+    # MasterPlan); a new caller must be added here on purpose
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["core/doctor.py", "frontman/history.py",
+                                                                        "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
@@ -1304,6 +1307,377 @@ def u_ask_flow():
     return "asks for Hello, remembers Lionel Richie, offers Adele, forgets on Toxic"
 
 
+def _old(p: Path, hours: float = 8):
+    import os
+    t = time.time() - hours * 3600
+    os.utime(p, (t, t))
+
+
+@check("doctor (phase 10): fast checks run in < 2 s with no GPU, every result well-formed, the CLI answers")
+def u_doctor_fast():
+    import subprocess
+    from undercover.core import doctor
+    with isolated_data():
+        t0 = time.time()
+        rep = doctor.run(False)
+        took = time.time() - t0
+        for r in rep["results"]:
+            assert set(r) >= {"id", "group", "state", "title", "say", "detail", "fix"} and r["state"] in ("ok", "info", "warn", "bad"), r
+        assert took < 2, f"fast checks took {took:.1f} s"
+    out = subprocess.run([sys.executable, "-c", "import sys, time; t=time.time(); from undercover import doctor as d; "
+                          "r=d.doctor.run(False); print(round(time.time()-t,2), 'torch' in sys.modules, r['counts']['bad'])"],
+                         cwd=ROOT, capture_output=True, text=True, timeout=120)
+    secs, torch_loaded, _ = out.stdout.split()
+    assert torch_loaded == "False", "the fast checks imported torch"
+    assert float(secs) < 2, f"the command line's fast check took {secs} s"
+    return f"{len(rep['results'])} checks in {took:.2f} s here, {secs} s from a cold start, no torch"
+
+
+@check("doctor: a damaged model file is found (size, then checksum) and fetched again: replaced only once the new copy checks out")
+def u_doctor_models():
+    from undercover.core import doctor, manifest, setup_models
+    from undercover.core.config import path
+    with isolated_data() as t:
+        good = t / "good.bin"
+        good.write_bytes(b"pinned model " * 50000)
+        bad_src = t / "bad.bin"
+        bad_src.write_bytes(b"something else" * 1000)
+        local = "_test/model.bin"
+        sha = setup_models.sha256_of(good)
+        setup_models.PINNED[local] = {"urls": [bad_src.as_uri(), good.as_uri()], "sha256": sha, "part": "test", "about": ""}
+        try:
+            dest = path("models_dir") / local
+            dest.parent.mkdir(parents=True)
+            dest.write_bytes(good.read_bytes()[:1000])   # cut off
+            manifest.save({"v": 1, "kind": "observed", "packages": {}, "models": {local: {"size": good.stat().st_size, "sha256": sha}}})
+            row = lambda rep: next(r for r in rep["results"] if r["id"] == f"model:{local}")   # noqa: E731
+            assert row(doctor.run(False))["state"] == "bad", "a cut-off file wasn't seen by the fast check"
+            # the same size but different bytes: only the full check (checksum) sees it
+            dest.write_bytes(bytes(b ^ 1 for b in good.read_bytes()))
+            assert not any(r["id"] == f"model:{local}" for r in doctor.run(False)["results"]), "fast check flagged a same-size file"
+            assert row(doctor.run(True))["state"] == "bad", "the checksum check missed a damaged file"
+            damaged = dest.read_bytes()
+            # the first source serves the wrong bytes: refused, the damaged copy untouched, no .part left; the second is right
+            setup_models.PINNED[local]["urls"] = [bad_src.as_uri()]
+            try:
+                setup_models.refetch(local)
+                raise AssertionError("a download with the wrong checksum replaced the file")
+            except setup_models.ModelError:
+                assert dest.read_bytes() == damaged and not dest.with_name(dest.name + ".part").exists()
+            setup_models.PINNED[local]["urls"] = [bad_src.as_uri(), good.as_uri()]
+            setup_models.refetch(local)
+            assert dest.read_bytes() == good.read_bytes(), "the good copy didn't replace the damaged one"
+            assert not any(r["id"] == f"model:{local}" for r in doctor.run(True)["results"]), "still flagged after the fix"
+            # a missing file the record knew about is offered (and fetched at startup); one it never saw waits for first use
+            dest.unlink()
+            assert row(doctor.run(False))["fix"]["id"] == f"model:{local}"
+            # test mode: a re-download into the app's real model folder is refused, whatever the list says
+            from undercover.core import config
+            saved = dict(config.CONFIG["paths"])
+            config.CONFIG["paths"]["models_dir"] = str(ROOT / "models")
+            try:
+                setup_models.refetch(local)
+                raise AssertionError("a test re-downloaded into the real models folder")
+            except setup_models.ModelError as e:
+                assert "Test mode" in str(e), e
+            finally:
+                config.CONFIG["paths"] = saved
+        finally:
+            setup_models.PINNED.pop(local, None)
+    return "cut-off and same-size damage found; wrong source refused; good copy swapped in"
+
+
+@check("doctor: startup healing: a cut-off model is fetched again in the background, a new good one is recorded, a failed fetch waits a day")
+def u_doctor_startup():
+    import threading
+    from undercover.core import doctor, manifest, setup_models
+    from undercover.core.config import path
+
+    def settle():
+        for t in [t for t in threading.enumerate() if t.name == "doctor"]:
+            t.join(60)
+    with isolated_data() as t:
+        good = t / "good.bin"
+        good.write_bytes(b"pinned model " * 40000)
+        sha = setup_models.sha256_of(good)
+        cut, new = "_test/cut.bin", "_test/new.bin"
+        for local in (cut, new):
+            setup_models.PINNED[local] = {"urls": [good.as_uri()], "sha256": sha, "part": "test", "about": ""}
+        try:
+            m = path("models_dir")
+            (m / "_test").mkdir(parents=True)
+            (m / cut).write_bytes(good.read_bytes()[:500])
+            (m / new).write_bytes(good.read_bytes())
+            manifest.save({"v": 1, "kind": "observed", "packages": {}, "models": {cut: {"size": good.stat().st_size, "sha256": sha}}})
+            hb = path("logs_dir") / "heartbeat-7899.jsonl"
+            doctor.heal_at_startup(hb, None)
+            settle()
+            assert (m / cut).read_bytes() == good.read_bytes(), "the cut-off file wasn't fetched again"
+            assert manifest.load()["models"][new]["sha256"] == sha, "the new good file wasn't recorded"
+            # the source is gone: the fetch fails, is remembered, and the next start doesn't try again (no download loop)
+            (m / cut).write_bytes(b"x")
+            setup_models.PINNED[cut]["urls"] = [(t / "missing.bin").as_uri()]
+            doctor.heal_at_startup(hb, None)
+            settle()
+            assert cut in (doctor._state().get("refetch_failed") or {}), doctor._state()
+            doctor.heal_at_startup(hb, None)
+            settle()
+            log = (path("logs_dir") / "doctor.log").read_text(encoding="utf-8")
+            assert "couldn't re-download" in log and log.count("less than a day ago") == 1, log   # tried, failed, then held
+        finally:
+            for local in (cut, new):
+                setup_models.PINNED.pop(local, None)
+    return "fetched in the background, recorded, then held after a failure"
+
+
+@check("doctor: downloads resume from a .part (HTTP Range) and still pass their checksum")
+def u_doctor_resume():
+    import http.server
+    import threading
+    from undercover.core import setup_models
+    with isolated_data() as t:
+        data = bytes(range(256)) * 16384   # 4 MB
+        seen, drop = [], {"once": False}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                seen.append(rng)
+                start = int(rng.split("=")[1].split("-")[0]) if rng else 0
+                self.send_response(206 if rng else 200)
+                self.send_header("Content-Length", str(len(data) - start))
+                self.end_headers()
+                if drop["once"]:   # the connection dies 2.5 MB in (the download keeps whole 1 MB pieces: 2 MB)
+                    drop["once"] = False
+                    self.wfile.write(data[start:start + 2621440])
+                    self.wfile.flush()
+                    self.connection.shutdown(2)
+                    return
+                self.wfile.write(data[start:])
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            dest = t / "app" / "models" / "_test" / "r.bin"
+            dest.parent.mkdir(parents=True)
+            dest.with_name("r.bin.part").write_bytes(data[:300000])   # an earlier try stopped here
+            sha = __import__("hashlib").sha256(data).hexdigest()
+            setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/r.bin", dest, sha, "_test/r.bin")
+            assert dest.read_bytes() == data and seen == ["bytes=300000-"], seen
+            # a connection that dies mid-file: the next try carries on from the .part
+            dest.unlink()
+            seen.clear()
+            drop["once"] = True
+            setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/r.bin", dest, sha, "_test/r.bin")
+            assert dest.read_bytes() == data and seen == [None, "bytes=2097152-"], seen
+        finally:
+            srv.shutdown()
+    return "resumed from an old .part and after a dropped connection; complete and checked"
+
+
+@check("doctor: stale leftovers are cleared through the guarded delete; young ones, projects, owned folders and the library are left alone")
+def u_doctor_stale():
+    import json as _json
+    from undercover.core import doctor
+    from undercover.core.config import path
+    with isolated_data():
+        m, c, up = path("models_dir"), path("cache_dir"), path("uploads_dir")
+        old_part = m / "rvc" / "x.pth.part"
+        old_tmp = c / "eta.json.0a1b2c3d.tmp"
+        vup = c / "vup_abc"
+        young = c / "stems" / "s.part.flac"
+        proj = c / "training" / "someone" / "embeddings.tmp.npz.part"
+        owned = c / "stems" / "owned.part"
+        upload = up / "upload_123.part"
+        song = up / "song.mp3"
+        for p in (old_part, old_tmp, young, proj, owned, upload, song):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"x" * 100)
+        vup.mkdir()
+        (vup / "voice.zip").write_bytes(b"z")
+        for p in (old_part, old_tmp, vup, proj, owned, upload, song):
+            _old(p)
+        auto, offer, why = doctor.stale_files()
+        assert why is None, why
+        assert set(auto) == {old_part, old_tmp, vup, owned} and set(offer) == {upload}, (auto, offer)
+        # a paused job's folder isn't swept (MasterPlan: a paused training can sit for days); here a preview folder of a
+        # running job id and a resume spec's project stand in for it
+        (c / "worklist.json").write_text(_json.dumps({"resume": [{"kind": "train", "project": "someone"}]}), encoding="utf-8")
+        assert proj not in doctor.stale_files()[0]
+        # another server with work running (its heartbeat): nothing is cleared
+        hb = path("logs_dir") / "heartbeat-7899.jsonl"
+        hb.write_text(_json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "event": "beat", "jobs": [{"kind": "cover"}]}) + "\n",
+                      encoding="utf-8")
+        r = doctor.clear_stale()
+        assert not r["removed"] and "another" in r["why"] and old_part.exists(), r
+        hb.unlink()
+        r = doctor.clear_stale(include_offered=False)   # what startup does: the library's leftovers are only offered
+        assert not old_part.exists() and not old_tmp.exists() and not vup.exists() and upload.exists(), r
+        assert young.exists() and proj.exists() and song.exists(), "something it shouldn't touch was removed"
+        r = doctor.clear_stale()   # the Fix (the user's click): the upload leftover goes too, never the song
+        assert not upload.exists() and song.exists(), r
+        log = (path("logs_dir") / "doctor.log").read_text(encoding="utf-8")
+        assert "cleared" in log, log
+    return "4 old leftovers cleared, the upload's only on the Fix; young, project, owned and the song kept"
+
+
+@check("doctor: a package version faked through the install record is reported; the Fix installs only its hashed pin (fake pip)")
+def u_doctor_packages():
+    from undercover.core import addons, doctor, manifest
+    with isolated_data():
+        pins = manifest.pins()
+        have = manifest.installed()
+        name = "soundfile" if "soundfile" in pins else next(n for n in pins if n not in manifest.NEVER_FROM_APP and n in have)
+        # the record (written by setup) says the pinned version; the venv now reports another one
+        manifest.save({"v": 1, "kind": "installed", "models": {}, "packages": {n: have[n] for n in pins if n in have}})
+        real = manifest.installed
+        calls, real_pip = [], addons._pip
+        addons._pip = lambda *a, what="": calls.append((a, Path(a[a.index("-r") + 1]).read_text(encoding="utf-8")))
+        try:
+            manifest.save({**manifest.load(), "packages": {**manifest.load()["packages"], name: pins[name]["version"]}})
+            manifest.installed = lambda: {**real(), name: "0.0.1"}
+            row = next(r for r in doctor.run(False)["results"] if r["id"] == "packages")
+            assert row["state"] == "warn" and name in row["detail"] and row["fix"]["id"] == "packages", row
+            lines, refused = doctor.package_fix_lines()
+            assert lines == [pins[name]["line"]] and not refused, (lines, refused)
+            r = doctor.fix_packages(dry_run=True)
+            args, req = calls[-1]
+            assert "--dry-run" in args and "--no-deps" in args and "--require-hashes" in args and "--hash=sha256:" in req, args
+            assert req.strip() == pins[name]["line"], req
+            # torch is never reinstalled by the app: it's offered as setup.ps1 -Repair
+            manifest.installed = lambda: {**real(), "torch": "9.9.9+rocm"}
+            assert "torch" in doctor.package_fix_lines()[1]
+            row = next(r for r in doctor.run(False)["results"] if r["id"] == "torch")
+            assert row["state"] in ("warn", "bad") and row["fix"]["how"] == "offer", row
+        finally:
+            manifest.installed, addons._pip = real, real_pip
+    return f"{name}: reported, one hashed line, --dry-run; torch offered only"
+
+
+@check("doctor: work a crash interrupted: training resumes once, a one-shot waits for Resume, a repeat crash waits too")
+def u_doctor_interrupted():
+    import json as _json
+    from undercover.core import doctor, worklist
+    from undercover.core.config import path
+    with isolated_data():
+        saved = (worklist._STATE, dict(worklist.RESUMERS))
+        worklist._STATE = None
+        worklist.RESUMERS.setdefault("train", lambda s: None)
+        worklist.RESUMERS.setdefault("oneshot", lambda s: None)
+        try:
+            hb = path("logs_dir") / "heartbeat-7899.jsonl"
+            (path("cache_dir") / "training" / "p1" / "train").mkdir(parents=True)
+            (path("cache_dir") / "training" / "p1" / "train" / "resume.pt").write_bytes(b"r")
+            train = {"kind": "train", "project": "p1", "label": "Training P1"}
+
+            def crash(*specs):
+                hb.write_text(_json.dumps({"t": "2026-10-12 03:00:00", "event": "start"}) + "\n" +
+                              _json.dumps({"t": "2026-10-12 03:10:00", "event": "beat",
+                                           "jobs": [{"kind": "x", "message": "m", "spec": s} for s in specs]}) + "\n", encoding="utf-8")
+            crash(train)
+            r = doctor.restore_interrupted(hb)
+            st = worklist._state()
+            assert r["resumed"] and st["resume"] == [train] and not st["held"], (r, st)
+            # it died again during the same work: held this time
+            worklist._STATE = None
+            (path("cache_dir") / "worklist.json").unlink(missing_ok=True)
+            r = doctor.restore_interrupted(hb)
+            assert not r["resumed"] and worklist._state()["held"], r
+            # a one-shot (it would make a new cover) is offered, never started
+            worklist._STATE = None
+            (path("cache_dir") / "worklist.json").unlink(missing_ok=True)
+            (path("logs_dir") / "doctor-state.json").unlink(missing_ok=True)
+            crash({"kind": "oneshot", "text": "Hello as X", "label": "One-shot"})
+            r = doctor.restore_interrupted(hb)
+            assert not r["resumed"] and worklist._state()["held"], r
+            # a training without a saved point (finished, or never saved one) isn't started afresh
+            worklist._STATE = None
+            (path("cache_dir") / "worklist.json").unlink(missing_ok=True)
+            (path("cache_dir") / "training" / "p1" / "train" / "resume.pt").unlink()
+            crash(train)
+            r = doctor.restore_interrupted(hb)
+            assert not r["specs"] and not worklist._state()["resume"], r
+            # a clean stop: nothing to do
+            hb.write_text(_json.dumps({"t": "2026-10-12 03:00:00", "event": "stop"}) + "\n", encoding="utf-8")
+            assert doctor.restore_interrupted(hb) is None
+            st = doctor._state()
+            st["autoresumed"] = {"at": "x", "specs": [train]}
+            doctor._save_state(st)
+            assert doctor.restore_interrupted(hb) is None
+            assert doctor._state().get("autoresumed") is None, "a clean session didn't clear the crash-loop guard"
+        finally:
+            worklist._STATE = saved[0]
+            worklist.RESUMERS.clear()
+            worklist.RESUMERS.update(saved[1])
+            doctor.LAST.pop("interrupted", None)
+    return "resumed once, then held; one-shot held; no saved point = nothing started"
+
+
+@check("doctor: the diagnostics file has the logs, the record and a report, no audio, and no full folder paths")
+def u_doctor_bundle():
+    import io
+    import zipfile
+    from undercover.core import diagnostics, doctor, manifest
+    from undercover.core.config import path
+    with isolated_data() as t:
+        logs = path("logs_dir")
+        (logs / "server.log").write_text(f"made a cover in {path('output_dir')}\\x.mp3 from {path('uploads_dir')}\n"
+                                         f"app at {ROOT}\nhome {Path.home()}\n", encoding="utf-8")
+        (logs / "errors.log").write_text(json.dumps({"p": str(path("cache_dir") / "stems")}), encoding="utf-8")
+        (path("output_dir") / "cover.mp3").write_bytes(b"ID3audio")
+        manifest.save({"v": 1, "kind": "observed", "venv": {"path": str(ROOT / ".venv")}, "packages": {}, "models": {}})
+        rep = doctor.run(False)
+        c = diagnostics.contents(rep)
+        names = [f["name"] for f in c["files"]]
+        assert "logs/server.log" in names and "manifest.json" in names and "doctor-report.json" in names, names
+        z = zipfile.ZipFile(io.BytesIO(diagnostics.build(rep)))
+        allnames = z.namelist()
+        assert not any(n.lower().endswith((".mp3", ".wav", ".flac")) for n in allnames), allnames
+        text = "\n".join(z.read(n).decode("utf-8") for n in allnames)
+        for real in (str(t), str(ROOT), str(Path.home()), str(t).replace("\\", "\\\\"), str(ROOT).replace("\\", "\\\\")):
+            assert real.lower() not in text.lower(), f"{real} is in the file"
+        assert "<library>" in text and "<UnderCover>" in text and "%USERPROFILE%" in text, text[:400]
+    return f"{len(allnames)} files, paths shortened, no audio"
+
+
+@check("api: the Doctor (fast report, the UnderCover row, the diagnostics file's contents and the file itself)")
+def a_doctor():
+    import io
+    import zipfile
+    r = api("/api/doctor")
+    assert r["about"]["version"] and r["results"] and r["mode"] == "fast" and r["seconds"] < 2, r.get("seconds")
+    assert all(x["state"] in ("ok", "info", "warn", "bad") for x in r["results"])
+    c = api("/api/doctor/bundle")
+    assert c["files"] and c["never"], c
+    z = zipfile.ZipFile(io.BytesIO(api("/api/doctor/bundle.zip")))
+    text = "\n".join(z.read(n).decode("utf-8") for n in z.namelist())
+    assert str(ROOT).lower() not in text.lower() and str(Path.home()).lower() not in text.lower(), "a full path is in the file"
+    return f"{len(r['results'])} checks in {r['seconds']} s, {r['counts']['bad']} bad; bundle {len(z.namelist())} files"
+
+
+@check("api: Retry starts a failed job again from the same request (a voice install from a dead address, twice)")
+def a_retry():
+    def final(jid):
+        return wait_for(lambda: next((j for j in api("/api/jobs") if j["id"] == jid and j.get("final")), None), 90,
+                        every=1, what="the job to end")
+    j1 = api("/api/voices/install", {"url": "http://127.0.0.1:9/smoke-retry.zip", "name": "smoke-retry"})["job"]
+    s1 = final(j1)
+    assert s1["state"] == "error" and s1["retry"] is True, s1
+    r = api(f"/api/jobs/{j1}/retry", {})
+    assert r["job"] != j1 and r["was"] == j1, r
+    s2 = final(r["job"])
+    assert s2["state"] == "error" and s2["retry"] is True, s2
+    assert "smoke-retry" not in [v["name"] for v in api("/api/voices")]
+    try:
+        api(f"/api/jobs/{api('/api/jobs')[0]['id']}x/retry", {})
+        raise AssertionError("an unknown job was retried")
+    except urllib.error.HTTPError as e:
+        assert e.code == 404
+    return "failed, retried as a new job, failed again; nothing installed"
+
+
 @check("api: status ready")
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
@@ -1890,7 +2264,9 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard):
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard,
+               u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
+               u_doctor_interrupted, u_doctor_bundle):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -1902,7 +2278,7 @@ def main():
             print(f"API checks (a sandbox server on port {SANDBOX_PORT}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server():
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry):
                         fn()
                     if not a.no_cover:
                         a_cover()

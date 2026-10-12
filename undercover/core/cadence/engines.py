@@ -8,7 +8,7 @@ build and the user's machine use the same default; engines whose weights aren't 
 Measured 2026-10-11 on the RX 7900 XTX (docs/research/cadence.md): Chatterbox 0.5-0.6x realtime at cfg 0.3 (3.6 GB),
 F5-TTS 2.9-3.5x (0.9 GB), XTTS-v2 0.84x (2.1 GB).
 """
-from .. import addons
+from .. import addons, setup_models
 from ..config import CONFIG, path
 
 HF = "https://huggingface.co"
@@ -36,6 +36,10 @@ MODEL_SHA256 = {
     "tts/f5/vocos/pytorch_model.bin": "97ec976ad1fd67a33ab2682d29c0ac7df85234fae875aefcc5fb215681a91b2a",
     "whisper/large-v3-turbo.pt": "aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a",
 }
+
+setup_models.register_pinned(CHATTERBOX_FILES, MODEL_SHA256, "chatterbox")   # the Doctor's list (phase 10)
+setup_models.register_pinned({"whisper/large-v3-turbo.pt": WHISPER_URL}, MODEL_SHA256, "whisper")
+setup_models.register_pinned(F5_FILES, MODEL_SHA256, "f5")
 
 ENGINES = {
     "chatterbox": {"name": "Chatterbox", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 1.0,   # with RVC, measured phase 4
