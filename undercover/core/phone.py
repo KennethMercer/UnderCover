@@ -264,13 +264,6 @@ WIN_KEEP = 600    # the phone listener reads them again when they're older (app/
 _WIN_BUSY: set = set()
 
 
-def _run(cmd: list, timeout: float = 10) -> str:
-    import subprocess
-    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return r.stdout
-
-
 def parse_rules(text: str) -> list[dict]:
     """`netsh advfirewall firewall show rule ... verbose` -> one {key: value} per rule (keys lower-case)."""
     rules, cur = [], None
@@ -356,19 +349,12 @@ def windows_check(addr: str, port: int, programs: set, wait: bool = True, fresh:
 
 
 def _read_windows(addr: str, port: int, programs: set) -> dict:
-    import concurrent.futures
     import time as _t
-    ps = (f"$i = (Get-NetIPAddress -IPAddress '{addr}' -ErrorAction SilentlyContinue | Select-Object -First 1).InterfaceIndex; "
-          "if ($i) { Get-NetConnectionProfile -InterfaceIndex $i | Select-Object Name,InterfaceAlias,NetworkCategory | "
-          "ConvertTo-Json -Compress }")
+    from . import platform
     out = {"network": None, "firewall": None, "error": None}
     try:
-        with concurrent.futures.ThreadPoolExecutor(3) as ex:
-            f_net = ex.submit(_run, ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps])
-            f_state = ex.submit(_run, ["netsh", "advfirewall", "show", "allprofiles", "state"])
-            f_rules = ex.submit(_run, ["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"])
-            raw = f_net.result().strip()
-            states, rules = parse_states(f_state.result()), parse_rules(f_rules.result())
+        raw, states_text, rules_text = platform.network_and_firewall(addr)   # the OS part (PowerShell + netsh)
+        states, rules = parse_states(states_text), parse_rules(rules_text)
         if raw:
             n = json.loads(raw)
             n = n[0] if isinstance(n, list) else n

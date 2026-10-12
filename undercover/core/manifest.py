@@ -216,19 +216,13 @@ def observe(kind: str = "observed", by: str = "", hash_files: bool = True, progr
 
 
 def gpu_driver() -> dict | None:
-    """The graphics driver Windows reports (name, version, date), or None. ~1 s (PowerShell): full checks only."""
-    if os.name != "nt":
-        return None
+    """The graphics driver the OS reports (name, version, date), or None. ~1 s (PowerShell, core/platform): full checks only."""
     import subprocess
+    from . import platform
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-Command",
-                            "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate | "
-                            "ConvertTo-Json -Compress"], capture_output=True, text=True, timeout=20,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        rows = json.loads(r.stdout or "null")
-    except (OSError, ValueError, subprocess.SubprocessError):
+        rows = platform.video_controllers()
+    except (OSError, ValueError, subprocess.SubprocessError, platform.NotOnThisOS):
         return None
-    rows = rows if isinstance(rows, list) else [rows] if rows else []
     want = (CONFIG["gpu"].get("device_name") or "").lower()
     row = next((x for x in rows if want and want in (x.get("Name") or "").lower()), rows[0] if rows else None)
     if not row:
