@@ -40,9 +40,9 @@
       <a class="mod" role="tab" href="#safehouse" id="tab-safehouse" data-tab="safehouse" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#g-safehouse"/></svg><span>SafeHouse</span></a>
     </nav>
     <div class="chips">
-      <button class="chip chip-btn" id="chip-queue" type="button" aria-haspopup="dialog" aria-label="Open the overnight queue"><svg class="ico" aria-hidden="true"><use href="#g-queue"/></svg><span id="q-count">Queue</span></button>
-      <span class="chip gpu" id="chip-gpu"><i class="dot wait"></i><span>Starting…</span></span>
-      <span class="chip models" id="chip-models">loading models</span>
+      <button class="chip chip-btn" id="chip-queue" type="button" data-deep aria-haspopup="dialog" aria-label="Open the overnight queue"><svg class="ico" aria-hidden="true"><use href="#g-queue"/></svg><span id="q-count">Queue</span></button>
+      <span class="chip gpu" id="chip-gpu" data-deep><i class="dot wait"></i><span>Starting…</span></span>
+      <span class="chip models" id="chip-models" data-deep>loading models</span>
       <button class="chip chip-btn train" id="chip-train" hidden aria-label="Training progress: open DoubleAgent"></button>
       <button class="chip chip-btn deep-btn" id="deep-toggle" type="button" aria-pressed="false" title="Deep Cover: show every number, score and setting"><svg class="ico" aria-hidden="true"><use href="#g-deep"/></svg><span>Deep Cover</span></button>
       <button class="chip chip-btn theme" id="theme" aria-label="Switch light or dark theme">Light</button>
@@ -145,7 +145,7 @@
     </div>
   </section>
 
-  <details class="adv" id="adv">
+  <details class="adv" id="adv" data-deep>
     <summary><span><b>Advanced settings</b></span><span id="adv-sum"></span></summary>
     <div class="adv-grid">
       <h3 class="adv-h">Pitch<span>where the new voice sings</span></h3>
@@ -249,12 +249,12 @@
   <div class="go">
     <div class="summary" id="summary">Drop a song and pick a voice.</div>
     <div class="go-btns">
-      <button class="btn" id="preview-btn" disabled>Preview</button>
+      <button class="btn" id="preview-btn" disabled data-deep>Preview</button>
       <button class="convert" id="convert" disabled>Convert</button>
     </div>
   </div>
 
-  <section class="panel" id="preview" hidden>
+  <section class="panel" id="preview" hidden data-deep>
     <div class="hist-head"><h2>Preview</h2><button class="linkbtn" id="preview-close">Close</button></div>
     <div class="prev-top">
       <span class="flabel">Compare</span>
@@ -308,11 +308,11 @@
       </div>
     </div>
     <div class="result-actions">
-      <div class="times" id="times"></div>
+      <div class="times" id="times" data-deep></div>
       <div class="btns">
         <button class="btn" id="keep" type="button" aria-pressed="false" data-kept="false">Send to SafeHouse</button>
-        <button class="btn" id="open-folder">Show in folder</button>
-        <a class="btn" id="dl-vocal" href="#">Download vocal only</a>
+        <button class="btn" id="open-folder" data-deep>Show in folder</button>
+        <a class="btn" id="dl-vocal" href="#" data-deep>Download vocal only</a>
         <a class="btn primary" id="dl-cover" href="#">Download</a>
       </div>
     </div>
@@ -321,7 +321,7 @@
   </section>
 
   <section class="panel">
-    <div class="hist-head"><h2>History</h2><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output">Open output folder</button></span></div>
+    <div class="hist-head"><h2>History</h2><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output" data-deep>Open output folder</button></span></div>
     <div class="hist" id="hist"><p class="meta">Your covers will appear here.</p></div>
     <p class="meta" id="hist-note">The latest 15 covers stay here. Older ones you haven't sent to SafeHouse roll off (are deleted); sent ones stay in SafeHouse.</p>
   </section>
@@ -359,7 +359,7 @@
           <p class="meta">More singing (their album tracks first) or more speech, every clip checked again, a fresh training. The new voice replaces the old only if it measures better.</p>
           <div class="vpick" id="q-cands"></div>
           <div class="row spread"><span class="meta" id="q-sel-sum">Tick the voices to improve.</span><button class="btn primary" id="q-add-sel" type="button" disabled>Add to the queue</button></div>
-          <details class="qother" id="q-other" hidden><summary class="meta">Voices that can't be improved</summary><p class="meta" id="q-cands-off"></p></details>
+          <details class="qother" id="q-other" hidden data-deep><summary class="meta">Voices that can't be improved</summary><p class="meta" id="q-cands-off"></p></details>
         </div>
         <div id="q-cadence" hidden>
           <p class="meta">Teaches a voice how the person talks (their pace and pauses), for SpeakEasy. It transcribes their clips, measures
@@ -406,7 +406,7 @@
       </div>
       <p class="meta" id="tr-find-hint">Searches YouTube for interviews, speeches and podcasts (or live and isolated vocals for singing). Untick anything that looks wrong.</p>
       <div class="sources" id="tr-sources"></div>
-      <div class="row" id="tr-add" hidden>
+      <div class="row" id="tr-add" hidden data-deep>
         <input type="text" id="tr-link" class="grow" placeholder="Paste a YouTube link (video or playlist) to add a source" aria-label="Link to add">
         <button class="btn" id="tr-link-add">Add</button>
         <button class="btn" id="tr-file-add">Add recordings…</button>
@@ -416,7 +416,7 @@
         <button class="btn primary" id="tr-auto">Do it all for me</button>
         <span class="meta">Prepares the ticked sources (and more if there isn't 10 min of voice yet), confirms the main voice, trains (~40 min) and adds it to your voices. You can still step in at any point.</span>
       </div>
-      <div class="row" id="tr-prepare-row" hidden>
+      <div class="row" id="tr-prepare-row" hidden data-deep>
         <button class="btn" id="tr-prepare">Download &amp; prepare</button>
         <span class="meta" id="tr-prepare-note"></span>
       </div>
@@ -435,7 +435,7 @@
 
     <section class="panel" id="tr-samples" hidden>
       <div class="row spread"><h2>3 · Training samples</h2>
-        <div class="seg" id="tr-filter" role="group" aria-label="Show">
+        <div class="seg" id="tr-filter" role="group" aria-label="Show" data-deep>
           <button type="button" data-v="kept">Kept</button><button type="button" data-v="out">Left out</button><button type="button" data-v="all">All</button>
         </div>
       </div>
@@ -444,9 +444,9 @@
           <div class="row spread"><b id="tr-minutes"></b><span class="meta" id="tr-target"></span></div>
           <div class="meter"><i id="tr-meter"></i><span class="target" id="tr-meter-target"></span></div>
         </div>
-        <p class="meta" id="tr-leftout"></p>
+        <p class="meta" id="tr-leftout" data-deep></p>
       </div>
-      <div class="samples" id="tr-list"></div>
+      <div class="samples" id="tr-list" data-deep></div>
       <p class="meta">Drop recordings anywhere on this page to add them as a source, then press Download &amp; prepare.</p>
     </section>
 
@@ -455,14 +455,14 @@
         <h2>4 · Train</h2>
         <div class="fields">
           <label class="field">Voice name<input type="text" id="tr-name" autocomplete="off"><small>"-uc" marks voices trained in UnderCover</small></label>
-          <label class="field">Training length<select id="tr-length">
+          <label class="field" data-deep>Training length<select id="tr-length">
             <option value="auto">Auto (~45 min with preparation; stops early when it stops improving)</option>
             <option value="quick">Quick test (~5 min)</option>
             <option value="long">Long (~80 min)</option></select></label>
-          <label class="field">Sample rate<select id="tr-sr">
+          <label class="field" data-deep>Sample rate<select id="tr-sr">
             <option value="40000">40 kHz (recommended)</option><option value="48000">48 kHz</option><option value="32000">32 kHz</option></select>
             <small>Matches the RVC v2 base models (downloaded once, ~215 MB)</small></label>
-          <div class="field"><span>Starting point</span><span class="meta">RVC v2 base (official)</span></div>
+          <div class="field" data-deep><span>Starting point</span><span class="meta">RVC v2 base (official)</span></div>
         </div>
         <p class="meta">Covers you start while a voice trains are made right away; training waits for them. Pause any time and resume later.</p>
         <div class="row"><button class="btn primary big" id="tr-start">Start training</button><span class="meta" id="tr-start-note"></span></div>
@@ -471,13 +471,13 @@
         <div class="row spread"><h2 id="tr-run-h">Training…</h2><div class="row"><button class="btn" id="tr-pause">Pause</button><button class="btn" id="tr-stop">Stop &amp; keep best</button></div></div>
         <div class="bar"><i id="tr-bar"></i></div>
         <div class="stats">
-          <div class="stat"><small>Epoch</small><b id="tr-epoch">0</b></div>
+          <div class="stat" data-deep><small>Epoch</small><b id="tr-epoch">0</b></div>
           <div class="stat"><small>Time left</small><b id="tr-eta">—</b></div>
-          <div class="stat"><small>Speed</small><b id="tr-speed">—</b></div>
-          <div class="stat"><small>Data</small><b id="tr-data">—</b></div>
+          <div class="stat" data-deep><small>Speed</small><b id="tr-speed">—</b></div>
+          <div class="stat" data-deep><small>Data</small><b id="tr-data">—</b></div>
         </div>
-        <svg class="chart" id="tr-chart" viewBox="0 0 400 150" preserveAspectRatio="none" role="img" aria-label="Loss chart"></svg>
-        <div class="legend"><span><i style="background:var(--accent)"></i>mel loss (training)</span><span><i style="background:var(--wave-alt)"></i>held-out samples</span><span>lower = closer to the real voice</span></div>
+        <svg class="chart" id="tr-chart" data-deep viewBox="0 0 400 150" preserveAspectRatio="none" role="img" aria-label="Loss chart"></svg>
+        <div class="legend" data-deep><span><i style="background:var(--accent)"></i>mel loss (training)</span><span><i style="background:var(--wave-alt)"></i>held-out samples</span><span>lower = closer to the real voice</span></div>
       </div>
     </section>
 
@@ -502,8 +502,8 @@
     <div class="cats" id="lib-cats" role="group" aria-label="Show"></div>
     <div class="lib-tools">
       <input type="search" id="lib-q" autocomplete="off" aria-label="Search the library">
-      <select id="lib-sort" aria-label="Sort"></select>
-      <select id="lib-filter" aria-label="Filter" hidden></select>
+      <select id="lib-sort" aria-label="Sort" data-deep></select>
+      <select id="lib-filter" aria-label="Filter" hidden data-deep></select>
       <select id="lib-kfilter" aria-label="Kept or recent" hidden><option value="">Kept and recent</option><option value="kept">Kept</option><option value="recent">Recent</option></select>
     </div>
     <section class="lib">
@@ -517,13 +517,13 @@
     <section class="panel">
       <div class="lib-storage">
         <div class="lib-storage-main">
-          <div class="stack" id="st-stack" role="img" aria-label="Storage by group"></div>
-          <div class="legend" id="st-legend"></div>
+          <div class="stack" id="st-stack" role="img" aria-label="Storage by group" data-deep></div>
+          <div class="legend" id="st-legend" data-deep></div>
           <div data-deep><div class="stack thin" id="lib-stack" role="img" aria-label="Storage by type"></div>
             <div class="legend" id="lib-legend"></div></div>
         </div>
         <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn">Clean up…</button>
-          <span class="meta" id="lib-ytdlp"></span></div>
+          <span class="meta" id="lib-ytdlp" data-deep></span></div>
       </div>
     </section>
     <section class="panel" id="lib-clean" hidden>
@@ -584,10 +584,10 @@
             <button type="button" data-p="faster" aria-pressed="false">Faster</button></div>
           <p id="se-pace-note">Natural is the person's own pace. Slower and Faster are read that way, not sped up afterwards.</p>
           <p class="meta" id="se-pace-deep" data-deep></p></div>
-        <div class="se-field" id="se-reader-field"><label for="se-reader">Reader <output id="se-reader-out">auto</output></label>
+        <div class="se-field" id="se-reader-field" data-deep><label for="se-reader">Reader <output id="se-reader-out">auto</output></label>
           <select class="se-search" id="se-reader"></select>
           <p>The built-in reader that speaks first; your voice model then makes it sound like the person. Auto picks the closest.</p></div>
-        <div class="se-field"><label for="se-nudge">Pitch <output id="se-nudge-out">auto</output></label>
+        <div class="se-field" data-deep><label for="se-nudge">Pitch <output id="se-nudge-out">auto</output></label>
           <input type="range" id="se-nudge" min="-6" max="6" step="0.5" value="0">
           <p id="se-pitch-note">Set from the voice's speaking pitch; nudge it if they sound too high or low.</p></div>
         <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad"><span>Speak with <span id="se-cad-name">their</span> own cadence</span></label>
@@ -612,7 +612,7 @@
         </div>
       </div>
       <div class="se-reading" id="se-reading"></div>
-      <div class="row"><a class="btn" id="se-wav" aria-disabled="true">Download WAV</a><a class="btn" id="se-mp3" aria-disabled="true">Download MP3</a><button class="btn" id="se-keep" type="button" aria-pressed="false" data-kept="false" hidden>Send to SafeHouse</button><span class="meta" id="se-dl-note">downloads unlock when the last sentence is made</span></div>
+      <div class="row"><a class="btn" id="se-wav" aria-disabled="true" data-deep>Download WAV</a><a class="btn" id="se-mp3" aria-disabled="true">Download MP3</a><button class="btn" id="se-keep" type="button" aria-pressed="false" data-kept="false" hidden>Send to SafeHouse</button><span class="meta" id="se-dl-note">downloads unlock when the last sentence is made</span></div>
     </section>
 
     <section class="panel">

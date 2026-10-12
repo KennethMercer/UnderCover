@@ -313,8 +313,8 @@ function renderVoices() {
   else box.innerHTML = list.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
-      <span class="vtext"><b>${vname(v.name)}</b><small>${esc(voiceDesc(v))}</small></span>
-      <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag">${v.index ? "index" : "no index"}</span></span>
+      <span class="vtext"><b>${vname(v.name)}</b><small>${voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
+      <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
     const pick = () => { S.voice = el.dataset.v; store.set("uc-voice", S.voice); renderVoices(); summary(); refreshEstimate(); };
@@ -458,7 +458,7 @@ function summary() {
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals` : "";
-    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta">· ${pitchText(o)}${est}</span>`;
+    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta" data-deep>· ${pitchText(o)}</span><span class="meta">${est}</span>`;
   }
 }
 function pitchText(o) {
@@ -778,7 +778,7 @@ function renderHistory() {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
-    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}</strong><small class="mono">${esc(bits)}</small></div>
+    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
       <small class="hdate">${esc((h.created || "").slice(0, 16))}</small>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("");

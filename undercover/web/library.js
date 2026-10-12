@@ -137,18 +137,18 @@ function renderList() {
       side = keepTag(x) + `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "speech") {
       title = x.title; sub = [x.voice, paceWord(x), when(x.created)].join(" · ");
-      side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag">${esc(x.format)}</span>`;
+      side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag" data-deep>${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
       title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
-      side = (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono">${gb(x.size + x.stems_size)}</span>`;
+      side = (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono" data-deep>${gb(x.size + x.stems_size)}</span>`;
     } else if (L.cat === "voices") {
       const [cls, word] = quality(x);
       title = voiceDisplay(x.name); sub = [x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
-      side = (x.cadence ? `<span class="tag ok" title="Has a cadence for SpeakEasy">cadence ✓</span>` : "") + `<span class="tag ${cls}">${word}</span><span class="mono">${gb(x.size)}</span>`;
+      side = (x.cadence ? `<span class="tag ok" title="Has a cadence for SpeakEasy">cadence ✓</span>` : "") + (x.trained ? `<span class="tag ok">trained here</span>` : "") + `<span class="tag ${cls}" data-deep>${word}</span><span class="mono" data-deep>${gb(x.size)}</span>`;
     } else {
       title = x.person || x.name; const st = x.train || {};
       sub = [`${x.kept_minutes} min kept`, st.state === "exported" ? `voice ${st.exported}` : st.state ? st.state : "not trained yet", `changed ${when(x.updated)}`].join(" · ");
-      side = `<span class="mono">${gb(x.size)}</span>`;
+      side = `<span class="mono" data-deep>${gb(x.size)}</span>`;
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
@@ -247,7 +247,7 @@ function coverDetail(d, c) {
   d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3><p class="meta">sung by <b>${vname(c.voice)}</b>${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""} · ${esc(when(c.created))}</p></div></div>
     ${playerHtml()}
     <div class="row"><span class="meta">Listen to</span><span class="lactions" id="lib-src"><button class="btn" data-src="url" aria-pressed="true">Cover</button>${c.original ? `<button class="btn" data-src="original">Original</button>` : ""}${c.vocal ? `<button class="btn" data-src="vocal">Vocal only</button>` : ""}</span></div>
-    <dl class="kv"><dt>Settings</dt><dd>${esc(settings)}</dd>
+    <dl class="kv"><div data-deep style="display:contents"><dt>Settings</dt><dd>${esc(settings)}</dd></div>
       ${c.seconds?.total ? `<dt>Made in</dt><dd>${c.seconds.total.toFixed(1)} s</dd>` : ""}
       ${c.notes?.length ? `<dt>Notes</dt><dd>${esc(c.notes.join(" "))}</dd>` : ""}
       <dt>File</dt><dd class="mono">${esc(c.file)} · ${gb(c.size)}</dd></dl>
@@ -278,7 +278,7 @@ function speechDetail(d, x) {
   d.innerHTML = `<div class="dhead">${art(x.title, true)}<div style="min-width:0"><h3>${esc(x.title)}</h3><p class="meta">spoken by <b>${vname(x.voice)}</b> · ${esc(when(x.created))}</p></div></div>
     ${playerHtml()}
     <dl class="kv"><dt>Text</dt><dd class="lib-speech-text">${esc(x.text.length > 1200 ? x.text.slice(0, 1200) + "…" : x.text)}</dd>
-      <dt>Settings</dt><dd>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
+      <dt data-deep>Settings</dt><dd data-deep>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
       ${x.seconds?.total ? `<dt>Made in</dt><dd>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
       <dt>Files</dt><dd class="mono">${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
     <p class="meta" id="lib-keepline">${esc(keepLine(x))}</p>
@@ -332,19 +332,19 @@ function voiceDetail(d, v) {
   const [cls, word] = quality(v);
   const src = v.trained ? `trained in UnderCover${v.project ? ` · <button class="linkbtn" id="lib-open-proj">open project</button>` : ""}`
     : esc(v.source.replace(/^https?:\/\//, "").slice(0, 90));
-  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span></p><p class="meta">RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"} · added ${esc(when(v.installed))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span> · RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"}</p><p class="meta">${v.trained ? "trained in UnderCover" : "downloaded"} · added ${esc(when(v.installed))}</p></div></div>
     ${"display" in v ? `<div class="vname-edit"><label class="meta" for="lib-vname-edit">Shown as</label><div class="row"><input id="lib-vname-edit" type="text" autocomplete="off" value="${esc(v.display || "")}" placeholder="${esc(v.name)}"><button class="btn" id="lib-vname-save" type="button">Save</button></div></div>` : ""}
     ${v.sample ? `${playerHtml()}<p class="meta">A held-out phrase rebuilt by this voice</p>` : ""}
-    <dl class="kv"><dt>Likeness</dt><dd><span class="tag ${cls}">${word}</span>${v.score != null ? ` <span class="meta">${v.score.toFixed(2)} (pass 0.45)</span>` : ""}</dd>
-      <dt>From</dt><dd>${src}</dd>
-      ${v.trained ? `<dt>Training</dt><dd>${v.train_minutes ? `${v.train_minutes} min of ${v.from_speech ? "speech" : "audio"}` : ""}${v.epoch ? ` · epoch ${v.epoch}` : ""}${v.f0_range ? ` · range ${Math.round(v.f0_range[0])}–${Math.round(v.f0_range[2])} Hz` : ""}</dd>` : ""}
+    <dl class="kv"><dt data-deep>Likeness</dt><dd data-deep><span class="tag ${cls}">${word}</span>${v.score != null ? ` <span class="meta">${v.score.toFixed(2)} (pass 0.45)</span>` : ""}</dd>
+      <dt data-deep>From</dt><dd data-deep>${src}</dd>
+      ${v.trained ? `<dt data-deep>Training</dt><dd data-deep>${v.train_minutes ? `${v.train_minutes} min of ${v.from_speech ? "speech" : "audio"}` : ""}${v.epoch ? ` · epoch ${v.epoch}` : ""}${v.f0_range ? ` · range ${Math.round(v.f0_range[0])}–${Math.round(v.f0_range[2])} Hz` : ""}</dd>` : ""}
       <dt>Used in</dt><dd>${v.covers ? v.cover_titles.map(esc).join("<br>") : "no covers yet"}</dd>
       <dt>Cadence</dt><dd>${v.cadence ? `yes, for SpeakEasy · ${gb(v.cadence.size)} <span class="meta" data-deep>· ${esc(v.cadence.engine || "")} · from ${v.cadence.data_minutes ?? "?"} min · made ${esc(when(v.cadence.made))}</span>
-        <button class="linkbtn" id="lib-del-cad" type="button">Delete cadence</button>` : "none"}</dd>
-      <dt>Size</dt><dd>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
+        <button class="linkbtn" id="lib-del-cad" type="button" data-deep>Delete cadence</button>` : "none"}</dd>
+      <dt data-deep>Size</dt><dd data-deep>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
-    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename">Rename…</button>
-      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export">Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
+    <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep>Rename folder…</button>
+      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep>Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");
   if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("doubleagent"); try { await openProject(v.project); } catch (e) {} };

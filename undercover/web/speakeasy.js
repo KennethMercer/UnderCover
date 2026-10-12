@@ -56,7 +56,7 @@ function seVoices() {
   const list = SE.voices.filter(v => !q || `${v.name} ${v.person || ""} ${voiceDisplay(v.name)}`.toLowerCase().includes(q));
   $("#se-vcount").textContent = `${SE.voices.length} voice${SE.voices.length === 1 ? "" : "s"}`;
   const row = v => {
-    const facts = v.trained ? [v.kind, v.likeness != null ? `likeness ${(+v.likeness).toFixed(2)}` : "", v.undertrained ? "under-trained" : ""]
+    const facts = v.trained ? [v.kind, v.likeness != null ? `<span data-deep>likeness ${(+v.likeness).toFixed(2)}</span>` : "", v.undertrained ? "under-trained" : ""]
                             : ["downloaded", v.person ? `checked: ${v.person}` : "", v.kind === "singing" ? "singing" : ""];
     const c = v.cadence || {};
     const cad = c.has ? `cadence <span class="y">✓</span>` : c.queue === "running" ? "cadence: making it now" : c.queue ? "cadence queued" : "cadence –";
@@ -64,7 +64,7 @@ function seVoices() {
       : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">${v.trained ? "Train cadence" : "Find clips + cadence"}</button>`;
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
-      <div class="vtext"><b>${vname(v.name)}</b><small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · ${cad}</span></small></div>
+      <div class="vtext"><b>${vname(v.name)}</b><small>${facts.filter(Boolean).map(f => f.startsWith("<span") ? f : esc(f)).join(" · ")} · <span class="se-cad">voice <span class="y">✓</span> · ${cad}</span></small></div>
       <div class="se-vact">${act}</div></div>`;
   };
   const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
