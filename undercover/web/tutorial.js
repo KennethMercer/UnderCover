@@ -47,6 +47,7 @@ function renderAssignSetting() {
 
 // ------------------------------------------------------------ starting: the sample song and the demo voice on the desk
 async function assignStart() {
+  if (S.job || S.osBusy) return showError("Wait for the cover that's being made to finish (or cancel it), then take the assignment.", "Busy");
   $("#assign-brief").hidden = true;
   let song, voice;
   const find = async () => {
@@ -70,6 +71,7 @@ async function assignStart() {
 // ------------------------------------------------------------ a step: the strip's line, the lit edge, the right page
 function assignGo(n, move = true) {
   AS.step = n; store.set("uc-assign-step", n);
+  if (n === 5) AS.before = new Set(runningJobs().map(j => j.id));   // voice work already running doesn't count
   const st = ASSIGN[n - 1];
   $("#assign").hidden = false; $("#assign").classList.remove("done");
   $("#assign-n").textContent = `${n} of ${ASSIGN.length}`;
@@ -97,23 +99,21 @@ function reaim() {
 new MutationObserver(() => { if (AS.step > 0 && !aimFrame) aimFrame = requestAnimationFrame(reaim); })
   .observe(document.body, { childList: true, subtree: true });
 
-function assignShowKept() {   // SafeHouse > Library > Covers > Kept, so the kept cover is in sight
+async function assignShowKept() {   // SafeHouse > Library > Covers > Kept, so the kept cover is in sight
   location.hash = "safehouse";
-  setTimeout(() => {
-    $('#lib-cats .cat[data-cat="covers"]')?.click();
-    $('#lib-kfilter .tab[data-v="kept"]')?.click();
-  }, 150);
+  const soon = async sel => { for (let i = 0; i < 40 && !$(sel); i++) await new Promise(r => setTimeout(r, 50)); return $(sel); };
+  (await soon('#lib-cats .cat[data-cat="covers"]'))?.click();
+  (await soon('#lib-kfilter .tab[data-v="kept"]'))?.click();
 }
 
 // ------------------------------------------------------------ what moves it on: the real actions
-new MutationObserver(() => { if (AS.step === 1 && !$("#result").hidden) assignGo(2); })
-  .observe($("#result"), { attributes: true, attributeFilter: ["hidden"] });
+document.addEventListener("uc:jobdone", e => { if (AS.step === 1 && e.detail.kind === "cover" && (e.detail.final?.state || e.detail.state) === "done") setTimeout(() => assignGo(2), 300); });
 $("#result").addEventListener("click", e => {
   if (AS.step === 2 && e.target.closest("[data-ab], .play, #res-play")) setTimeout(() => assignGo(3), 400);
 });
 new MutationObserver(() => { if (AS.step === 3 && $("#keep").dataset.kept === "true") assignGo(4); })
   .observe($("#keep"), { attributes: true, attributeFilter: ["data-kept", "aria-pressed"] });
-onJobs(() => { if (AS.step === 5 && runningJobs().some(j => VOICE_KINDS.has(j.kind))) assignComplete(); });
+onJobs(() => { if (AS.step === 5 && runningJobs().some(j => VOICE_KINDS.has(j.kind) && !AS.before?.has(j.id))) assignComplete(); });
 $("#assign-next").onclick = () => { if (AS.step < ASSIGN.length) assignGo(AS.step + 1); else assignComplete(); };
 
 // ------------------------------------------------------------ the end: complete, skip, not now, replay
