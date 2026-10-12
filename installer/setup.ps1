@@ -17,6 +17,12 @@
 .PARAMETER DryRun
   Print every step and command without downloading or installing anything.
 
+.PARAMETER Repair
+  Check an existing install against its record (manifest.json, written at the end of setup) with the Doctor
+  (python -m undercover.doctor --json) and fix only what's wrong: missing tools, PyTorch or packages that changed,
+  damaged or missing model files. Keeps your files and settings (config.toml is not rewritten). Combine with -DryRun
+  to see what it would do.
+
 .PARAMETER LibraryDir
   Where your library lives (songs, covers, speech, voices): a folder that gets uploads\, output\ and voices\.
   Default (or the install folder): inside the install folder, as before. Same for -WorkDir (cache\: stems, training
@@ -38,7 +44,8 @@ param(
     [string]$WorkDir = '',
     [string]$ModelsDir = '',
     [string]$Addons = '',
-    [switch]$Pause      # keep the window open at the end (the installer runs setup in its own window)
+    [switch]$Pause,     # keep the window open at the end (the installer runs setup in its own window)
+    [switch]$Repair     # check against the install record and fix only what's wrong (keeps files and settings)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,14 +101,33 @@ function Run([string]$exe, [string[]]$argv) {
     if ($LASTEXITCODE -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $LASTEXITCODE" }
 }
 
-# Download, then check the file's SHA-256: a file that doesn't match is deleted and setup stops.
+# Download into <dest>.part, resuming where an earlier try stopped (an HTTP Range request), then check the file's
+# SHA-256: a file that doesn't match is deleted and setup stops.
 function Fetch([string]$url, [string]$dest, [string]$sha256) {
-    if ($DryRun) { Write-Host "    [dry-run] download $url -> $dest (sha256 $($sha256.Substring(0, 12))...)" -ForegroundColor DarkGray; return }
+    if ($DryRun) { Write-Host "    [dry-run] download $url -> $dest (sha256 $($sha256.Substring(0, 12))..., resumable)" -ForegroundColor DarkGray; return }
     Log "GET $url"
     New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
-    for ($i = 1; $i -le 3; $i++) {
-        try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; break }
-        catch { if ($i -eq 3) { Fail "couldn't download $url ($($_.Exception.Message))" }; Start-Sleep -Seconds (2 * $i) }
+    $part = "$dest.part"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    for ($i = 1; $i -le 4; $i++) {
+        $have = if (Test-Path $part) { (Get-Item $part).Length } else { 0 }
+        try {
+            $req = [Net.HttpWebRequest]::Create($url)
+            $req.UserAgent = 'UnderCover-setup'
+            if ($have -gt 0) { $req.AddRange([long]$have); Log "    resuming at $have bytes" }
+            $resp = $req.GetResponse()
+            $mode = if ($have -gt 0 -and [int]$resp.StatusCode -eq 206) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+            $in = $resp.GetResponseStream(); $out = [IO.File]::Open($part, $mode)
+            try { $in.CopyTo($out) } finally { $out.Close(); $in.Close(); $resp.Close() }
+            Move-Item -Force $part $dest
+            break
+        } catch [Net.WebException] {
+            $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+            if ($code -eq 416 -and $have -gt 0) { Move-Item -Force $part $dest; break }   # the .part was already complete
+            if ($i -eq 4) { Fail "couldn't download $url ($($_.Exception.Message)); run setup again to carry on from where it stopped" }
+            Info "download interrupted ($($_.Exception.Message)); trying again from where it stopped"
+            Start-Sleep -Seconds (2 * $i)
+        }
     }
     $got = (Get-FileHash -Algorithm SHA256 -Path $dest).Hash.ToLower()
     if ($got -ne $sha256.ToLower()) {
@@ -132,6 +158,55 @@ if ((Test-Path $Venv) -and -not (Test-Path $Marker)) {
     else { Fail "$Venv already exists and wasn't made by this setup, so it won't be changed. Pick another -InstallDir." }
 }
 
+# Repair: what's wrong, from the Doctor (fast checks, read-only) -------------------------------
+$Fix = @{ torch = $true; packages = $true; models = $false; config = $true; launcher = $true; ffmpeg = $true; deno = $true }
+if ($Repair) {
+    Step "Checking this install against its record (repair)"
+    $Fix = @{ torch = $false; packages = $false; models = $false; config = $false; launcher = $false; ffmpeg = $false; deno = $false }
+    $manifestFile = Join-Path $InstallDir 'manifest.json'
+    if (Test-Path $manifestFile) {
+        $man = Get-Content $manifestFile -Raw | ConvertFrom-Json
+        Info "install record: $($man.kind), $($man.made)"
+        if ($man.torch_file -and $Backend -eq 'auto') { $Backend = ($man.torch_file -replace '^torch-', '' -replace '\.txt$', '') }
+    } else { Info "no install record (manifest.json): checking against the pinned versions instead" }
+    if ($Backend -eq 'auto') {   # an install from before the record: the backend it was set up with
+        $cfgPath = Join-Path $InstallDir 'config.toml'
+        $cfgText = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw } else { '' }
+        $m = [regex]::Match($cfgText, '(?m)^backend\s*=\s*"(\w+)"')
+        if ($m.Success) { $Backend = if ($m.Groups[1].Value -eq 'cuda') { 'cuda128' } else { $m.Groups[1].Value } }
+    }
+    if (Test-Path $Py) {
+        Push-Location $InstallDir
+        $env:PATH = "$(Join-Path $Tools 'ffmpeg\bin');$(Join-Path $Tools 'deno');$env:PATH"
+        $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $json = & $Py -m undercover.doctor --json 2>$null | Out-String
+        $ErrorActionPreference = $old
+        Pop-Location
+        try { $rep = $json | ConvertFrom-Json } catch { $rep = $null }
+        if ($rep) {
+            foreach ($r in $rep.results) {
+                if ($r.state -eq 'ok') { continue }
+                Info "$($r.state.ToUpper()): $($r.title): $($r.say)"
+                if ($r.id -eq 'torch') { $Fix.torch = $true }
+                if ($r.id -eq 'packages' -or $r.id -eq 'pins') { $Fix.packages = $true }
+                if ($r.id -like 'model:*') { $Fix.models = $true }
+                if ($r.id -eq 'python') { $Fix.torch = $true; $Fix.packages = $true }
+                if ($r.id -eq 'ffmpeg') { $Fix.ffmpeg = $true }
+                if ($r.id -eq 'deno') { $Fix.deno = $true }
+            }
+            if (-not ($Fix.torch -or $Fix.packages -or $Fix.models)) { Info "Python, PyTorch, packages and model files: nothing to fix" }
+        } else {
+            Info "the Doctor couldn't run in this install: PyTorch and every package will be checked"
+            $Fix.torch = $true; $Fix.packages = $true
+        }
+    } else {
+        Info "the Python environment is missing: it will be made again"
+        $Fix.torch = $true; $Fix.packages = $true; $Fix.ffmpeg = -not (Test-Path (Join-Path $Tools 'ffmpeg\bin\ffmpeg.exe'))
+        $Fix.deno = -not (Test-Path (Join-Path $Tools 'deno\deno.exe'))
+    }
+    if (-not (Test-Path (Join-Path $InstallDir 'UnderCover.cmd'))) { $Fix.launcher = $true }
+}
+
 # 1. GPU ----------------------------------------------------------------------------------------
 Step "Checking your graphics card"
 $gpu = $null
@@ -150,7 +225,8 @@ if ($Backend -eq 'cpu') {
 
 # 2. uv (Python + package manager, one exe) -----------------------------------------------------
 Step "Getting the Python installer (uv $UvVersion)"
-if ((Test-Path $Uv) -and -not $DryRun) { Info "already there" }
+if ($Repair -and -not ($Fix.torch -or $Fix.packages)) { Info "not needed for this repair" }
+elseif ((Test-Path $Uv) -and -not $DryRun) { Info "already there" }
 else {
     $zip = Join-Path $env:TEMP "uv-$UvVersion.zip"
     Fetch "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" $zip $UvSha256
@@ -163,15 +239,19 @@ $env:UV_NO_CONFIG          = '1'      # ignore any uv.toml the user may have els
 
 # 3. Python + venv -----------------------------------------------------------------------------
 Step "Installing Python $PythonVer"
+if ($Repair -and (Test-Path $Py)) { Info ".venv kept (repair never makes it again while it's there)" }
+else {
 Run $Uv @('python', 'install', $PythonVer)
 if ((Test-Path $Py) -and -not $Force -and -not $DryRun) { Info ".venv already exists" }
 else {
     Run $Uv @('venv', $Venv, '--python', $PythonVer, '--clear')
     if (-not $DryRun) { Set-Content -Path $Marker -Value "Made by UnderCover setup.ps1 on $(Get-Date -Format u)" -Encoding ascii }
 }
+}
 
 # 4. PyTorch for this GPU, then everything else pinned around it -------------------------------
 $torchReq = Join-Path $Req "torch-$Backend.txt"
+if (-not $Fix.torch) { Info "PyTorch: as recorded, left alone" } else {
 Step "Installing PyTorch for $Backend (about 2-3 GB, this is the slow part)"
 $torchArgs = @('pip', 'install', '--python', $Py, '-r', $torchReq)
 if ($Backend -ne 'rocm') {
@@ -180,7 +260,9 @@ if ($Backend -ne 'rocm') {
     $torchArgs += @('--index-url', "https://download.pytorch.org/whl/$tag")
 }
 Run $Uv $torchArgs
+}
 
+if (-not $Fix.packages) { Info "Python packages: as recorded, left alone" } else {
 Step "Installing the other packages"
 # Constrain to the torch that is now installed, so no package can swap it for a different build.
 $pins = Join-Path $InstallDir 'cache\torch-pins.txt'
@@ -199,11 +281,13 @@ Run $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-
 Step "Installing the cadence engine (Chatterbox + Whisper)"
 # --no-deps, like on the dev PC: their metadata asks for torch 2.6 / numpy < 2, which would replace the GPU's torch.
 Run $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'cadence.txt'))
+}
 
 # 5. ffmpeg + Deno (portable, inside tools\) ---------------------------------------------------
 Step "Getting ffmpeg $FfmpegVer"
 $ffBin = Join-Path $Tools 'ffmpeg\bin'
-if ((Test-Path (Join-Path $ffBin 'ffmpeg.exe')) -and -not $DryRun) { Info "already there" }
+if (-not $Fix.ffmpeg) { Info "found and working: left alone" }
+elseif ((Test-Path (Join-Path $ffBin 'ffmpeg.exe')) -and -not $DryRun) { Info "already there" }
 else {
     $zip = Join-Path $env:TEMP "ffmpeg-$FfmpegVer-essentials.zip"
     $tmp = Join-Path $env:TEMP 'ffmpeg-unzip'
@@ -220,7 +304,8 @@ else {
 
 Step "Getting Deno $DenoVersion (lets yt-dlp read YouTube)"
 $denoDir = Join-Path $Tools 'deno'
-if ((Test-Path (Join-Path $denoDir 'deno.exe')) -and -not $DryRun) { Info "already there" }
+if (-not $Fix.deno) { Info "found and working: left alone" }
+elseif ((Test-Path (Join-Path $denoDir 'deno.exe')) -and -not $DryRun) { Info "already there" }
 else {
     $zip = Join-Path $env:TEMP "deno-$DenoVersion.zip"
     Fetch "https://github.com/denoland/deno/releases/download/v$DenoVersion/deno-x86_64-pc-windows-msvc.zip" $zip $DenoSha256
@@ -228,6 +313,7 @@ else {
 }
 
 # 6. GPU settings in this install's config.toml ------------------------------------------------
+if (-not $Fix.config) { Info "Settings (config.toml): kept as they are" } else {
 Step "Writing GPU settings"
 $cfg = Join-Path $InstallDir 'config.toml'
 $deviceName = ''
@@ -282,6 +368,15 @@ if ($paths.Count) {
         [IO.File]::WriteAllText($cfg, $text, (New-Object Text.UTF8Encoding $false))
     }
 }
+}
+
+# 6c. Model files the record knew about that are missing or damaged (repair): fetched again from their pinned source,
+# each checked against its SHA-256 before it replaces the old copy.
+if ($Repair -and $Fix.models) {
+    Step "Downloading damaged or missing model files again"
+    if (-not $DryRun) { Push-Location $InstallDir }
+    try { Run $Py @('-m', 'undercover.doctor', 'fix', 'models') } finally { if (-not $DryRun) { Pop-Location } }
+}
 
 # 7. Self-test --------------------------------------------------------------------------------
 Step "Testing"
@@ -299,6 +394,7 @@ if ($addonIds.Count) {
 # Same behaviour as UnderCover.bat (dev): from the Start menu / a shortcut (started by Explorer) it runs in the
 # background with no window (quit it from SafeHouse); from a terminal it stays in that window. --console / --background
 # force either.
+if (-not $Fix.launcher) { Info "Launcher: already there" } else {
 Step "Making the launcher"
 $launcher = Join-Path $InstallDir 'UnderCover.cmd'
 $body = @'
@@ -328,6 +424,14 @@ if "%UC_MODE%"=="background" (
 if errorlevel 1 pause
 '@
 if ($DryRun) { Info "[dry-run] write $launcher" } else { Set-Content -Path $launcher -Value $body -Encoding ascii; Info $launcher }
+}
+
+# 9. The install record (manifest.json): what was installed, for the Doctor and the next -Repair ----------------
+if (-not $Repair -or $Fix.torch -or $Fix.packages -or $Fix.models -or -not (Test-Path (Join-Path $InstallDir 'manifest.json'))) {
+    Step "Writing the install record"
+    if (-not $DryRun) { Push-Location $InstallDir }   # python -m finds the app's package from here
+    try { Run $Py @('-m', 'undercover.doctor', 'manifest', '--installed', '--json') } finally { if (-not $DryRun) { Pop-Location } }
+}
 
 Write-Host ""
 Write-Host "Done. Start UnderCover from the Start menu or with UnderCover.cmd." -ForegroundColor Green

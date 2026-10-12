@@ -83,7 +83,17 @@ def ensure(progress=None, files: dict | None = None, sha256: dict | None = None)
         want = (sha256 or {}).get(local) or _expected(url, sha256) or (PINNED.get(local) or {}).get("sha256")
         fetch(url, dest, want, local, progress)
         got.append(local)
+        if want:
+            _record(local, dest, want)
     return got
+
+
+def _record(local: str, dest, want: str):
+    try:   # the install record learns the new file (the Doctor checks its size at every start)
+        from . import manifest
+        manifest.note_model(local, dest.stat().st_size, want)
+    except Exception:   # noqa: BLE001 - a download never fails over its record
+        pass
 
 
 def fetch(url: str, dest, want: str | None, local: str = "", progress=None, tries: int = 3):
@@ -163,6 +173,7 @@ def refetch(local: str, progress=None) -> None:
     for url in rec["urls"]:
         try:
             fetch(url, dest, rec["sha256"], local, progress)
+            _record(local, dest, rec["sha256"])
             return
         except Exception as e:   # noqa: BLE001 - try the next source; report the last problem
             last = e

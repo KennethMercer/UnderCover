@@ -633,20 +633,10 @@ def _refetch(job, todo: list) -> dict:
                 job.push(stage="downloading", frac=round(d / t, 3) if t else None,
                          message=f"Downloading {Path(f).name} ({i + 1} of {len(todo)}): {d / 1e6:.0f}" + (f" of {t / 1e6:.0f} MB" if t else " MB"))
         log(f"re-downloading {local}")
-        setup_models.refetch(local, prog)
-        _note_model(local)
+        setup_models.refetch(local, prog)   # the install record learns it too
         log(f"re-downloaded {local}: checksum ok")
         done.append(local)
     return {"message": f"Downloaded {len(done)} model file{'s' if len(done) != 1 else ''} again; checksums match.", "files": done}
-
-
-def _note_model(local: str):
-    """The manifest follows a re-downloaded file (its size and the pinned checksum)."""
-    m = manifest.load()
-    if m is not None:
-        p = path("models_dir") / local
-        m.setdefault("models", {})[local] = {"size": p.stat().st_size, "sha256": setup_models.PINNED[local]["sha256"], "pinned": True}
-        manifest.save(m)
 
 
 def _observe_job(job) -> dict:
@@ -805,6 +795,11 @@ def heal_at_startup(heartbeat: Path, status: dict | None = None, hash_new_manife
     background = []
     if m is None:
         background.append(("manifest", None))
+    else:
+        seen = m.get("models") or {}
+        new = [f for f in setup_models.PINNED if f not in seen and f not in todo and (path("models_dir") / f).is_file()]
+        if new and hash_new_manifest:
+            background.append(("verify", new))
     if todo:
         background.append(("models", todo))
     if background:
@@ -823,12 +818,25 @@ def _background(todo: list, hash_files: bool):
                 log("no install record yet: writing one from what's here (observed)" + ("" if hash_files else ", sizes only"))
                 m = manifest.observe(hash_files=hash_files)
                 log(f"install record written: {len(m['models'])} model files, {len(m['packages'])} packages")
+            elif what == "verify":
+                for local in arg:
+                    p = path("models_dir") / local
+                    want = setup_models.PINNED[local]["sha256"]
+                    if setup_models.sha256_of(p) == want:
+                        manifest.note_model(local, p.stat().st_size, want)
+                        log(f"{local}: new since the install record, checksum ok, recorded")
+                    else:
+                        log(f"{local}: new since the install record and damaged; fetching a good copy")
+                        try:
+                            setup_models.refetch(local)
+                            log(f"re-downloaded {local}: checksum ok")
+                        except Exception as e:   # noqa: BLE001 - offered in the System room (the full check finds it)
+                            log(f"couldn't re-download {local}: {e}")
             elif what == "models":
                 for local in arg:
                     try:
                         log(f"re-downloading {local} (missing or damaged at startup)")
                         setup_models.refetch(local)
-                        _note_model(local)
                         log(f"re-downloaded {local}: checksum ok")
                     except Exception as e:   # noqa: BLE001 - offline, source gone: offered in the System room instead
                         log(f"couldn't re-download {local}: {e}")

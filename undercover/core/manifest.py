@@ -136,6 +136,15 @@ def note_package(name: str, version: str):
         save(m)
 
 
+def note_model(local: str, size: int, sha256: str | None):
+    """A model file was downloaded (and checked) after the record was written: record it, so damage to it later is
+    found by its size at startup."""
+    m = load()
+    if m is not None:
+        m.setdefault("models", {})[local] = {"size": size, "sha256": sha256, "pinned": True}
+        save(m)
+
+
 # ---------------------------------------------------------------- tools and model files
 
 def tool(name: str) -> Path | None:
