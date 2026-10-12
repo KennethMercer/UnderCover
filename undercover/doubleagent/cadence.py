@@ -820,9 +820,10 @@ TR_RT = 13.0   # transcription runs ~13x realtime on the GPU (phase 3)
 
 
 def estimate(item: dict) -> dict:
-    """Minutes: [find clips] + transcribe + measure + test the reference clips (each ~4 sentences at ~0.55x realtime)."""
+    """Minutes: [find clips] + transcribe + measure + test the reference clips (each ~4 sentences at ~0.55x realtime;
+    measured in phase 9b at 16-18 s a clip on a free GPU, about a minute when another job shares it)."""
     from .night import estimate as voice_estimate
-    est = {"clips": 0, "transcribe": 0, "measure": 2, "test": 4}
+    est = {"clips": 0, "transcribe": 0, "measure": 2, "test": 5}
     if item["kind"] == "newcad":
         v = voice_estimate({"kind": "new", "target": item["target"]})
         est.update(prepare=v["prepare"], train=v["train"], transcribe=3)
