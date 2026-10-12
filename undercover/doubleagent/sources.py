@@ -65,7 +65,30 @@ CHAR_QUERIES = ["{name} scenes", "{name} best moments", "{name} voice lines", "{
 # video was): other uploads of the same material, under other words
 MORE_QUERIES = {"character": ["{name} full episode", "{name} episode clip", "{name} movie scene", "{name} funny moments"],
                 "speaking": ["{name} speech", "{name} conversation", "{name} on stage", "{name} keynote"]}
-BLOCKED = "not available"   # yt-dlp's words for a video this PC can't get (region, rights, removed)
+# Why a video couldn't be had, from yt-dlp's own words (the cause decides the advice; a region block is never got
+# around). On 2026-10-12 17 of 18 SpongeBob videos said "This video is not available": not a region block but a
+# missing piece of the downloader (yt-dlp-ejs), so "not available" alone points at the downloader, not the region.
+UNAVAILABLE = [
+    ("geo", re.compile(r"not made this video available in your country|available in your country|geo.?restrict|"
+                       r"blocked it in your country|not available in your (country|region)", re.I),
+     "blocked in this region (UnderCover doesn't get around that)"),
+    ("gone", re.compile(r"private video|has been removed|terminated|no longer available|account associated .* closed|"
+                        r"video unavailable\. this video has been removed", re.I), "removed or private"),
+    ("age", re.compile(r"confirm your age|age.?restricted|inappropriate for some users", re.I), "age-restricted"),
+    ("signin", re.compile(r"sign in to confirm you.re not a bot|confirm you.re not a bot|sign in to confirm", re.I),
+     "YouTube asked for a sign-in (a bot check)"),
+    ("player", re.compile(r"this video is not available|unplayable|nsig|signature|challenge|player", re.I),
+     "YouTube refused the downloader (usually fixed by updating it: SafeHouse, System room)"),
+]
+BLOCKED = "not available"   # kept for callers from before the diagnosis
+
+
+def why_unavailable(error: str) -> tuple[str, str] | None:
+    """(kind, plain words) for a failed download's error, or None when it isn't about availability."""
+    for kind, rx, words in UNAVAILABLE:
+        if rx.search(error or ""):
+            return kind, words
+    return None
 CHAR_GOOD = re.compile(r"\bscenes?\b|\bmoments\b|\bclips?\b|\bepisodes?\b|\bquotes?\b|voice lines|\blines\b|"
                        r"compilation|\bofficial\b|full episode|\bmovie\b|\bspeech\b|\bsong\b", re.I)
 CHAR_TALK = re.compile(r"podcast|interview|\bcast\b|voice actors?|\bvoices? of\b|\birl\b|in real life|\breacts?\b|reaction|\breview|explained|"
@@ -236,7 +259,53 @@ def _rank(src: Source, name: str, mode: str) -> float:
 def blocked_share(sources) -> tuple[int, int]:
     """(videos that couldn't be had here, videos tried)."""
     tried = [s for s in sources if s.status in ("ready", "failed") and not s.user]
-    return sum(s.status == "failed" and BLOCKED in (s.error or "") for s in tried), len(tried)
+    return sum(s.status == "failed" and why_unavailable(s.error) is not None for s in tried), len(tried)
+
+
+def unavailable_note(person: str, sources) -> str:
+    """One plain sentence: how many of the person's videos couldn't be had, and the likeliest cause."""
+    from collections import Counter
+    tried = [s for s in sources if s.status in ("ready", "failed") and not s.user]
+    why = Counter(w[1] for w in (why_unavailable(s.error) for s in tried if s.status == "failed") if w)
+    if not why:
+        return ""
+    words, n = why.most_common(1)[0]
+    return f"{sum(why.values())} of the {len(tried)} videos of {person} UnderCover tried couldn't be downloaded ({n}: {words})"
+
+
+# Other sites yt-dlp can search, for when YouTube can't supply enough (ARCHITECTURE "not one site"): a fallback only,
+# and a find must name the subject in its title (these searches are loose: SoundCloud returns any "voice lines")
+OTHER_SITES = [("scsearch", "SoundCloud"), ("nicosearch", "Niconico"), ("bilisearch", "Bilibili")]
+
+
+def search_other_sites(name: str, character: bool, have: set) -> list:
+    """Sources from other sites (each search best effort: an API that refuses is skipped)."""
+    tokens = [w for w in re.findall(r"\w+", name.lower()) if len(w) > 1]
+    queries = [f"{name} voice lines", f"{name} scenes"] if character else [f"{name} interview", f"{name} speech"]
+    out: dict = {}
+    with _ydl(extract_flat="in_playlist", skip_download=True) as ydl:
+        for key, site in OTHER_SITES:
+            for q in queries:
+                try:
+                    info = ydl.extract_info(f"{key}8:{q}", download=False)
+                except Exception:
+                    break   # the site refused (Bilibili's search answers 412 here): the next site
+                for e in info.get("entries") or []:
+                    url = e.get("webpage_url") or e.get("url")
+                    title = e.get("title") or ""
+                    sid = re.sub(r"[^\w-]", "_", f"{site[:2].lower()}_{e.get('id') or ''}")[:40]
+                    if (not url or sid in have or sid in out or not e.get("duration") or float(e["duration"]) < 60
+                            or not all(t in title.lower() for t in tokens)):
+                        continue
+                    src = Source(id=sid, url=url, title=title, channel=f"{site}: {e.get('uploader') or e.get('channel') or ''}",
+                                 duration=float(e["duration"]), extra={"site": site})
+                    if character:
+                        src.extra["kind"] = char_kind(src)
+                    if any(rx.search(title) for rx, why in SUSPECT if why != "edited or mixed audio") or other_language(title, name) \
+                            or (character and src.extra["kind"] == "talk"):
+                        continue
+                    out[sid] = src
+    return list(out.values())[:6]
 
 
 def search_more(name: str, have: set, character: bool) -> list:
