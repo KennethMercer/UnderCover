@@ -903,6 +903,41 @@ def u_keep_this_one():
     return "save live / pending / unheard set aside, A/B state + route, keep current and keep new (x2), 5 packs all kept, guard"
 
 
+@check("relocate: a second checkout on the same data rewrites nothing; a real move still rewrites stored paths")
+def u_relocate_guard():
+    import contextlib
+    import io
+    from undercover.core import relocate
+    from undercover.core.config import ROOT, path
+    with isolated_data() as t:
+        old = t / "OldCheckout"
+        (old / "undercover").mkdir(parents=True)
+        (old / "undercover" / "server.py").write_text("# an UnderCover checkout", encoding="utf-8")
+        v = _fake_voice("zz-reloc")
+        meta = v.dir / "meta.json"
+        d = json.loads(meta.read_text(encoding="utf-8"))
+        d["dir"] = str(old / "models" / "voices" / "zz-reloc")
+        meta.write_text(json.dumps(d), encoding="utf-8")
+        mark = path("cache_dir") / "root.txt"
+        mark.write_text(str(old), encoding="utf-8")
+        before = meta.read_text(encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            got = relocate.check_and_fix()
+        assert got == {} and meta.read_text(encoding="utf-8") == before, got
+        assert mark.read_text(encoding="utf-8").strip() == str(old), "root.txt took the second checkout's folder"
+        assert "Not rewriting stored paths" in out.getvalue(), out.getvalue()
+        # the old folder is gone: a real move, rewritten as before
+        (old / "undercover" / "server.py").unlink()
+        (old / "undercover").rmdir()
+        old.rmdir()
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = relocate.check_and_fix()
+        assert str(meta) in got and json.loads(meta.read_text(encoding="utf-8"))["dir"].startswith(str(ROOT)), got
+        assert mark.read_text(encoding="utf-8").strip() == str(ROOT)
+    return "second checkout: nothing rewritten, root.txt kept, one line logged; a move: rewritten"
+
+
 @check("voice display names: defaults (trained / downloaded / explicit), the /display route, every voice API")
 def u_display_names():
     from undercover.core import voices as V
@@ -1549,7 +1584,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one):
+               u_display_names, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard):
         fn()
     if not a.unit_only:
         print(f"API checks ({BASE})")
