@@ -99,9 +99,9 @@ def check_css(text: str, theme_id: str, fonts: set | None = None) -> list[str]:
         blocks = _blocks(text)
     except ThemeError as e:
         return [str(e)]
-    q = r"""["']"""
-    dark = re.compile(rf":root\[data-uc-theme={q}{re.escape(theme_id)}{q}\]")
-    light = re.compile(rf":root\[data-uc-theme={q}{re.escape(theme_id)}{q}\]\[data-theme={q}light{q}\]")
+    tid = re.escape(theme_id)
+    dark = re.compile(rf""":root\[data-uc-theme=(["']){tid}\1\]""")
+    light = re.compile(rf""":root\[data-uc-theme=(["']){tid}\1\]\[data-theme=(["'])light\2\]""")
     problems, seen = [], set()
     for prelude, body in blocks:
         sel = re.sub(r"\s+", "", prelude)
@@ -165,10 +165,16 @@ def allowed_name(rel: str) -> bool:
     return len(parts) == 2 and parts[0] == "fonts" and bool(FONT_FILE.fullmatch(parts[1]))
 
 
+PLAIN = re.compile(r"[^<>\x00-\x1f\x7f]*")   # theme.json texts: no markup, no control characters
+
+
 def check_meta(meta, theme_id: str | None = None) -> list[str]:
     if not isinstance(meta, dict):
         return ["theme.json isn't an object."]
     p = []
+    texts = [meta.get(k) for k in ("name", "author", "licence", "version", "based_on")] + list(meta.get("fonts") or [])
+    if any(isinstance(t, str) and not PLAIN.fullmatch(t) for t in texts):
+        p.append("theme.json texts may not hold < > or control characters.")
     if "id" in meta and theme_id and meta["id"] != theme_id:
         p.append(f"theme.json says id {meta['id']!r}, but the folder is {theme_id!r}.")
     if not isinstance(meta.get("name"), str) or not 1 <= len(meta["name"].strip()) <= 60:
@@ -230,6 +236,24 @@ def check_folder(d: Path, theme_id: str | None = None) -> list[str]:
     return problems
 
 
+_CHECKED: dict = {}   # folder -> (its files' names, sizes and times, problems)
+
+
+def checked(d: Path) -> list[str]:
+    """check_folder, kept until a file in the folder changes (served css and fonts ask on every request)."""
+    try:
+        sig = tuple(sorted((str(f.relative_to(d)), f.stat().st_size, f.stat().st_mtime_ns) for f in d.rglob("*")))
+    except OSError:
+        sig = None
+    hit = _CHECKED.get(str(d))
+    if sig is not None and hit and hit[0] == sig:
+        return hit[1]
+    problems = check_folder(d)
+    if sig is not None:
+        _CHECKED[str(d)] = (sig, problems)
+    return problems
+
+
 def _reparse(p: Path) -> bool:
     """A Windows junction or other reparse point (is_symlink misses junctions)."""
     try:
@@ -256,16 +280,22 @@ def find(theme_id: str) -> tuple[Path, bool]:
 
 
 def listing() -> list[dict]:
-    """Shipped + library themes: id, shipped, theme.json (what's readable), ok + problems, the urls the page uses."""
+    """Shipped + library themes: id, shipped, theme.json (what's readable), ok + problems, the urls the page uses. A library
+    theme whose id a shipped one took later (an update) is listed too, marked, so it can be deleted or shared."""
+    _sweep()
     out, seen = [], set()
     for root, shipped in ((SHIPPED, True), (library(), False)):
         if not root.is_dir():
             continue
         for d in sorted(root.iterdir()):
-            if not d.is_dir() or not ID.fullmatch(d.name) or d.name in seen:
+            if not d.is_dir() or not ID.fullmatch(d.name):
                 continue
+            shadowed = d.name in seen
             seen.add(d.name)
-            problems = check_folder(d)
+            problems = checked(d)
+            if shadowed:
+                problems = [f"A theme that comes with UnderCover is now called {d.name} too: this one can't be used. Delete "
+                            "it here, or export it and import it again under another name."] + problems
             try:
                 meta = json.loads((d / "theme.json").read_text(encoding="utf-8"))
                 meta = meta if isinstance(meta, dict) else {}
@@ -276,14 +306,15 @@ def listing() -> list[dict]:
                         "modes": meta.get("modes") or ["dark"], "fonts": meta.get("fonts") or [], "shipped": shipped,
                         "css": f"/static/themes/{d.name}/theme.css" if shipped else f"/api/themes/{d.name}/theme.css",
                         "preview": f"/api/themes/{d.name}/preview.png" if (d / "preview.png").is_file() else None,
-                        "ok": not problems, "why": problems[0] if problems else None, "problems": problems[:5]})
+                        "ok": not problems, "why": problems[0] if problems else None, "problems": problems[:5],
+                        **({"shadowed": True} if shadowed else {})})
     return out
 
 
 def css_of(theme_id: str) -> str:
     """The theme's css, checked again at load (a library folder can be edited by hand)."""
     d, _ = find(theme_id)
-    problems = check_folder(d)
+    problems = checked(d)
     if problems:
         raise ThemeError(f"The theme {theme_id} doesn't check out: {problems[0]}")
     return (d / "theme.css").read_text(encoding="utf-8")
@@ -292,7 +323,7 @@ def css_of(theme_id: str) -> str:
 def file_of(theme_id: str, rel: str) -> Path:
     """A font or the preview of a checked theme."""
     d, _ = find(theme_id)
-    if not allowed_name(rel) or rel.endswith((".css", ".json")) or check_folder(d):
+    if not allowed_name(rel) or rel.endswith((".css", ".json")) or checked(d):
         raise LookupError("No such file.")
     f = d / rel
     if not f.is_file() or not storage._inside(f, d):
@@ -302,7 +333,29 @@ def file_of(theme_id: str, rel: str) -> Path:
 
 # ---------------------------------------------------------------- import, save, export, delete
 
+def _guard():
+    """Test mode: themes are written only inside the test's folders (the storage guard covers the deletes)."""
+    if storage.ALLOWED_ROOTS is not None:
+        why = storage.refuse([library()])
+        if why:
+            raise ThemeError(why)
+
+
+def _sweep(older: float = 3600):
+    """Staging and set-aside folders an interrupted import or save left behind (.incoming-*, .old-*)."""
+    import time
+    root = library()
+    for d in root.glob(".*-*"):
+        if d.is_dir() and d.name.startswith((".incoming-", ".old-")) and time.time() - d.stat().st_mtime > older:
+            try:
+                _drop(d)
+            except (OSError, ModelError):
+                pass
+
+
 def _stage() -> Path:
+    _guard()
+    _sweep()
     s = library() / f".incoming-{secrets.token_hex(4)}"
     s.mkdir(parents=True)
     return s
@@ -321,11 +374,21 @@ def _place(staged: Path, theme_id: str, replace: bool) -> Path:
             raise ThemeError("That theme doesn't check out: " + "; ".join(problems[:3]))
         if (SHIPPED / theme_id).exists():
             raise FileExistsError(f"{theme_id} is the name of a theme that comes with UnderCover; give yours another name.")
+        _guard()
+        old = None
         if target.exists():
             if not replace:
                 raise FileExistsError(f"You already have a theme called {theme_id}.")
-            _drop(target)
-        fsutil.retry(lambda: os.replace(staged, target))
+            old = library() / f".old-{secrets.token_hex(4)}"   # aside first: if the new one can't go in, it comes back
+            fsutil.retry(lambda: os.replace(target, old))
+        try:
+            fsutil.retry(lambda: os.replace(staged, target))
+        except OSError:
+            if old is not None:
+                fsutil.retry(lambda: os.replace(old, target))
+            raise
+        if old is not None:
+            _drop(old)
     finally:
         if staged.exists():
             _drop(staged)
@@ -440,9 +503,13 @@ def export(theme_id: str) -> tuple[str, bytes]:
 
 
 def delete(theme_id: str) -> dict:
-    """Remove a library theme (never a shipped one), through the storage guard."""
-    d, shipped = find(theme_id)
-    if shipped:
+    """Remove a library theme (never a shipped one), through the storage guard. The library's copy goes even when a
+    shipped theme has the same id."""
+    if not ID.fullmatch(theme_id or ""):
+        raise LookupError("No such theme.")
+    d = library() / theme_id
+    if not d.is_dir() or d.is_symlink():
+        find(theme_id)   # LookupError if there's none at all
         raise ThemeError("Themes that come with UnderCover can't be deleted.")
     _drop(d)
     return {"ok": True, "id": theme_id}

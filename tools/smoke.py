@@ -1942,6 +1942,7 @@ def u_themes():
         "a font it doesn't have": _theme_css("x1").replace("Manrope.woff2", "Other.woff2"),
         "a climbing font url": _theme_css("x1").replace('fonts/Manrope.woff2', 'fonts/../../x.woff2'),
         "<style> break-out": _theme_css("x1", "--fg: red;</style><script>"),
+        "mismatched quotes": _theme_css("x1").replace(':root[data-uc-theme="x1"]', ':root[data-uc-theme="x1\']', 1),
     }
     for why, css in bad_css.items():
         assert themes.check_css(css, "x1", {"Manrope.woff2"}), f"{why} passed the css check"
@@ -2030,6 +2031,55 @@ def u_themes():
             ids = {x["id"]: x["shipped"] for x in themes.listing()}
             assert ids == {"midnight": True, "smoke-noir": False, "smoke-made": False}, ids
             assert themes.export("midnight")[0] == "Midnight.uctheme"   # a friend can start from a shipped one
+            try:   # markup in theme.json's texts
+                themes.save({"json": {"id": "smoke-xss", "name": "<img src=x onerror=alert(1)>"}, "css": ""})
+                raise AssertionError("markup in a theme's name was accepted")
+            except themes.ThemeError:
+                pass
+            # a replace that can't put the new folder in place keeps the old one
+            import types
+            real_fsutil, calls = themes.fsutil, []
+
+            def flaky(fn, tries=30):
+                calls.append(1)
+                if len(calls) == 2:   # 1: the old one aside, 2: the new one in place (fails), 3: the old one back
+                    raise PermissionError("locked")
+                return real_fsutil.retry(fn)
+            themes.fsutil = types.SimpleNamespace(retry=flaky)
+            try:
+                themes.import_zip(_theme_zip(), replace=True)
+                raise AssertionError("the failing replace reported success")
+            except PermissionError:
+                pass
+            finally:
+                themes.fsutil = real_fsutil
+            assert themes.listing() and (themes.library() / "smoke-noir" / "theme.css").exists(), "the old theme was lost"
+            assert not [x for x in themes.library().iterdir() if x.name.startswith(".")], "staging or set-aside folders left"
+            # leftovers of an interrupted import are swept after an hour
+            stale = themes.library() / ".incoming-deadbeef"
+            (stale / "fonts").mkdir(parents=True)
+            os.utime(stale, (time.time() - 7200, time.time() - 7200))
+            themes.listing()
+            assert not stale.exists(), "an old staging folder wasn't swept"
+            # a library theme whose id a shipped one took later: listed, marked, deletable
+            (shipped / "smoke-noir").mkdir()
+            (shipped / "smoke-noir" / "theme.json").write_text(json.dumps({"id": "smoke-noir", "name": "Shipped"}), encoding="utf-8")
+            (shipped / "smoke-noir" / "theme.css").write_text("", encoding="utf-8")
+            rows = [x for x in themes.listing() if x["id"] == "smoke-noir"]
+            assert [(x["shipped"], x.get("shadowed", False), x["ok"]) for x in rows] == [(True, False, True), (False, True, False)], rows
+            themes.delete("smoke-noir")
+            assert not (themes.library() / "smoke-noir").exists() and (shipped / "smoke-noir").exists()
+            shutil.rmtree(shipped / "smoke-noir")
+            # the write side refuses folders outside a test's own (the storage guard covers the deletes)
+            saved_roots = storage_roots()
+            try:
+                set_storage_roots([t / "elsewhere"])
+                themes.import_zip(_theme_zip(tid="smoke-guard"))
+                raise AssertionError("a theme was written outside the test's folders")
+            except themes.ThemeError:
+                pass
+            finally:
+                set_storage_roots(saved_roots)
         finally:
             themes.SHIPPED = saved
     real = [d for d in (ROOT / "undercover" / "web" / "themes").glob("*") if d.is_dir()] if (ROOT / "undercover" / "web" / "themes").is_dir() else []
@@ -2042,6 +2092,16 @@ def u_themes():
 def storage_inside(a, b):
     from undercover.core import storage
     return storage._inside(a, b)
+
+
+def storage_roots():
+    from undercover.core import storage
+    return storage.ALLOWED_ROOTS
+
+
+def set_storage_roots(v):
+    from undercover.core import storage
+    storage.ALLOWED_ROOTS = v
 
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
