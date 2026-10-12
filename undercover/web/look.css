@@ -199,11 +199,20 @@ html:not([data-skin="winamp"]) {
     & .mod .ico { width: 22px; height: 22px; }
     & .top .chips { gap: 12px; }
     & .workbar { padding: 9px 16px 11px; gap: 10px; }
+    & .workbar .who { font-size: 0; gap: 0; }   /* the owner's icon only; the words are in the line */
+    & .workbar .who .ico { width: 18px; height: 18px; }
     & h1 { font-size: 32px; }
     & .modmark .ico { width: 26px; height: 26px; }
     & .panel { padding: 16px; }
     & .oneshot .btn.go { flex: 1 1 100%; }
+    & .go-btns { width: 100%; } & .go-btns .btn, & .go-btns .convert { flex: 1 1 100%; width: auto; }
     & .rooms { gap: 18px; margin-inline: -16px; padding-inline: 16px; }
+    /* library rows: the name gets the width, the tags and size wrap under it */
+    & .litem { grid-template-columns: 22px 42px minmax(0, 1fr); row-gap: 4px; }
+    & .litem.nocheck { grid-template-columns: 42px minmax(0, 1fr); }
+    & .litem .lside { grid-column: 3 / -1; justify-content: flex-start; flex-wrap: wrap; gap: 6px 10px; }
+    & .litem.nocheck .lside { grid-column: 2 / -1; }
+    & .litem .lside .mono { min-width: 0; text-align: left; }
     & .drawer { border-top: 0; }
   }
 
