@@ -393,9 +393,56 @@ def _remember_range(v, rng: list, from_speech: bool, person: str):
         pass
 
 
+# ---------------------------------------------------------------- how far to trust a voice (phase 15)
+
+WEAK_LIKENESS = 0.65   # below: it doesn't sound like them yet (Obama's approved voice 0.70; Peter Griffin's 3.5-min 0.50)
+WEAK_MINUTES = 5.0     # below: too little clean audio to learn the voice from
+SCENE_SHARE = 0.5      # a character's voice: at least half of what it learned from should be the character in scenes
+
+
+def voice_quality(v) -> dict:
+    """How far to trust a voice trained here before a cover is made with it (the one-shot's gate, phase 15: "Toxic as
+    SpongeBob" came from a voice trained on a podcast about SpongeBob, and nothing said so). Measures only what's on
+    disk: the likeness at export, the minutes it learned from, and for a fictional character the share of those
+    minutes that came from scenes (not from talk about the character). Voices from elsewhere aren't judged here
+    (the one-shot checks them against the person already).
+    -> {ok, problems: [plain sentences], summary, advice, action: {kind, target}, scene_share?}"""
+    ex = v.extra or {}
+    out = {"ok": True, "problems": []}
+    if not ex.get("trained"):
+        return out
+    who = ex.get("person") or display_name(v)
+    lk, mins = ex.get("likeness"), ex.get("train_minutes")
+    if lk is not None and lk < WEAK_LIKENESS:
+        out["problems"].append(f"it doesn't sound much like {who} yet (likeness {lk:.2f})")
+    if mins is not None and mins < WEAK_MINUTES:
+        out["problems"].append(f"it learned from only {mins:.1f} min of {who}")
+    try:
+        from . import project as P
+        from .sources import kinds
+        proj = P.Project.load(ex["project"]) if ex.get("project") else None
+    except (ModelError, KeyError):
+        proj = None
+    k = kinds(proj) if proj else {}
+    if k:
+        kept = [p for p in proj.phrases if p.kept and not p.sung]
+        total = sum(p.dur for p in kept)
+        if total:
+            share = sum(p.dur for p in kept if k.get(p.source) == "scene") / total
+            out["scene_share"] = round(share, 2)
+            if share < SCENE_SHARE:
+                talk = sorted({s.title for s in proj.sources if k.get(s.id) == "talk" and any(p.source == s.id for p in kept)})
+                out["problems"].append(f"{1 - share:.0%} of what it learned from isn't {who} in scenes but talk about "
+                                       f"{who} (podcasts, interviews, cast videos" + (f": “{talk[0][:60]}”" if talk else "") + ")")
+    if out["problems"]:
+        out.update(ok=False, summary=f"This {who} voice is weak: " + "; ".join(out["problems"]) + ". A cover will sound like that.",
+                   advice=f"Find better clips of {who} and train it again", action={"kind": "improve", "target": v.name})
+    return out
+
+
 # ---------------------------------------------------------------- training a new voice
 
-NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably")   # source notes that mean someone else
+NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably", "talk about")   # source notes that mean someone else
 
 
 def train_new_voice(job, person: str, control, push, project: str | None = None,

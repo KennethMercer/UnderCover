@@ -34,6 +34,95 @@ GOOD = {"speaking": re.compile(r"interview|podcast|speech|address|conversation|t
         "singing": re.compile(r"acapella|a cappella|isolated|vocals? only|live|unplugged|session", re.I)}
 
 
+# Fictional characters (phase 15: "Toxic as SpongeBob" trained on a podcast host talking ABOUT SpongeBob). A character
+# is recognised from what the search finds (cast, voice actors, episodes, cartoons), then searched for in scenes and
+# voice lines; talk about the character (podcasts, cast interviews, reactions, reviews) is left unticked: for a voiced
+# character, even the voice actor's own interviews are the wrong voice.
+CHARACTER_HINT = re.compile(r"\bcast\b|voice actors?|\bvoices? of\b|\bepisodes?\b|\bscenes?\b|cartoon|\banimat|nickelodeon|"
+                            r"nicktoons|disney|pixar|dreamworks|cartoon network|\banime\b|movie clip|\bseason \d|"
+                            r"full episode|\bcharacters?\b|out of character", re.I)
+CHAR_QUERIES = ["{name} scenes", "{name} best moments", "{name} voice lines", "{name} quotes"]
+CHAR_GOOD = re.compile(r"\bscenes?\b|\bmoments\b|\bclips?\b|\bepisodes?\b|\bquotes?\b|voice lines|\blines\b|"
+                       r"compilation|\bofficial\b|full episode|\bmovie\b|\bspeech\b|\bsong\b", re.I)
+CHAR_TALK = re.compile(r"podcast|interview|\bcast\b|voice actors?|\bvoices of\b|\breacts?\b|reaction|\breview|explained|"
+                       r"theor(y|ies)|behind the scenes|out of character|true crime|trivia|reunion|reunit|\blies\b|\bsins\b|"
+                       r"analysis|\bai\b|politics|commentary|documentary|ranking|tier list|everything wrong|\bfacts\b|"
+                       r"\bdiaries\b|\bthe zone\b|co-?star test|guest", re.I)
+# Talk that stays talk even with the show's name in the title: an interview, the voice actor, the cast, a reaction
+STRONG_TALK = re.compile(r"interview|voice actors?|\bcast\b|\breacts?\b|reaction|\breview|behind the scenes|out of character|"
+                         r"\bvoices of\b|trivia|reunion|reunit", re.I)
+GENERIC = set("the a an of and to in on with for at by from is full live new best top his her their my your interview "
+              "speech podcast talks talk video official hd 4k part episode clip clips scene scenes movie show".split())
+STUDIOS = re.compile(r"nickelodeon|nicktoons|disney|pixar|dreamworks|cartoon network|warner|adult swim|netflix|"
+                     r"paramount|\bofficial\b", re.I)
+TALK_NOTE = "talk about the character"
+
+
+def show_of(name: str, found) -> str | None:
+    """A show the titles keep naming besides the person ("Family Guy - Peter Makes A Podcast": "family guy" in 10 of
+    Peter Griffin's 12 titles). Two words other than the name, in at least 4 titles and half of them. People don't
+    have one (the most for a real person here: "president barack", a third of the "obama" titles)."""
+    from collections import Counter
+    names = set(re.findall(r"\w+", name.lower()))
+    c = Counter()
+    for src in found:
+        w = re.findall(r"[a-z0-9]+", src.title.lower())
+        c.update({" ".join(w[i:i + 2]) for i in range(len(w) - 1)
+                  if not set(w[i:i + 2]) & names and not set(w[i:i + 2]) <= GENERIC and not any(t.isdigit() for t in w[i:i + 2])})
+    best = c.most_common(1)
+    return best[0][0] if best and best[0][1] >= 4 and best[0][1] >= len(found) / 2 else None
+
+
+def looks_like_character(name: str, found) -> bool:
+    """Does what a search for this name turned up look like a fictional character rather than a person? Titles
+    about a cast, voice actors, episodes, cartoons (three or more, and a quarter of them), or a show they keep naming."""
+    found = list(found)
+    hits = sum(bool(CHARACTER_HINT.search(f"{s.title} {s.channel}")) for s in found)
+    return hits >= max(3, len(found) // 4) or show_of(name, found) is not None
+
+
+def char_kind(src, show: str | None = None) -> str:
+    """For a character: "talk" (about the character: podcasts, cast interviews, reactions, reviews), else "scene"
+    (the character speaking: episodes, clips, quotes, a movie scene). A title naming the show is a scene unless it's
+    plainly an interview or the cast ("Family Guy - Peter Starts a Podcast" is a scene). Your own links and files
+    count as scenes."""
+    if getattr(src, "user", False):
+        return "scene"
+    t = f"{src.title} {src.channel}"
+    if show and show in src.title.lower():
+        return "talk" if STRONG_TALK.search(t) else "scene"
+    return "talk" if CHAR_TALK.search(t) else "scene"
+
+
+def is_character_project(proj) -> bool:
+    """A project whose sources were found as a character's (phase 15), or whose titles say so (projects from before)."""
+    return any((s.extra or {}).get("kind") for s in proj.sources) or (proj.mode == "speaking" and looks_like_character(proj.person, proj.sources))
+
+
+def kinds(proj) -> dict:
+    """{source id: "scene" | "talk"} for a character project ({} for a person): stored at search time, else read
+    from the titles (projects from before phase 15)."""
+    if not is_character_project(proj):
+        return {}
+    show = show_of(proj.person, proj.sources)
+    return {s.id: (s.extra or {}).get("kind") or char_kind(s, show) for s in proj.sources}
+
+
+def _rank_character(src, name: str, show: str | None = None) -> float:
+    t = f"{src.title} {src.channel}".lower()
+    tokens = [w for w in re.findall(r"\w+", name.lower()) if len(w) > 1]
+    score = 2.0 * sum(w in t for w in tokens) / max(1, len(tokens))
+    if char_kind(src, show) == "talk":
+        score -= 4.0
+    elif CHAR_GOOD.search(t):
+        score += 1.5
+    if STUDIOS.search(src.channel) or (tokens and all(w in src.channel.lower() for w in tokens)):
+        score += 1.0   # the show's own channel
+    mins = src.duration / 60
+    score += 1.0 if 1.5 <= mins <= 40 else (-1.0 if mins < 0.75 else 0.0)
+    return score
+
+
 # Spoken-word "album tracks": YouTube Music lists speeches, audiobooks and narration as music (Barack Obama:
 # "Obama DNC Speech", "Presidential Oath Of Office"; Morgan Freeman's narration albums). Not singing.
 SPOKEN = re.compile(r"speech|address|remarks|rally|debate|oath|interview|keynote|sermon|commencement|audiobook|"
@@ -121,33 +210,48 @@ def _rank(src: Source, name: str, mode: str) -> float:
 
 
 def search(name: str, mode: str = "speaking", per_query: int | None = None) -> list[Source]:
-    """Search YouTube with a few query variants, dedupe, flag suspicious titles, rank best first."""
+    """Search YouTube with a few query variants, dedupe, flag suspicious titles, rank best first. A speaking search
+    that turns out to be about a fictional character searches again for the character's scenes (phase 15)."""
     name = name.strip()
     if not name:
         raise ModelError("Type the name of the person whose voice you want.")
     per_query = per_query or TCFG["search_per_query"]
     found: dict[str, Source] = {}
+    character = False
     with _ydl(extract_flat="in_playlist", skip_download=True) as ydl:
-        for q in QUERIES.get(mode, QUERIES["speaking"]):
-            try:
-                info = ydl.extract_info(f"ytsearch{per_query}:{q.format(name=name)}", download=False)
-            except Exception:
-                continue
-            for e in info.get("entries") or []:
-                vid = e.get("id")
-                if not vid or vid in found or not e.get("duration"):
-                    continue  # live streams and shorts without a duration are skipped
-                src = Source(id=vid, url=f"https://www.youtube.com/watch?v={vid}", title=e.get("title") or vid,
-                             channel=e.get("channel") or e.get("uploader") or "", duration=float(e["duration"]))
-                for rx, why in SUSPECT:
-                    if rx.search(src.title) and not (why == "probably another singer" and mode == "speaking"):
-                        src.selected, src.note = False, why
-                        break
-                found[vid] = src
+        def run(queries):
+            for q in queries:
+                try:
+                    info = ydl.extract_info(f"ytsearch{per_query}:{q.format(name=name)}", download=False)
+                except Exception:
+                    continue
+                for e in info.get("entries") or []:
+                    vid = e.get("id")
+                    if not vid or vid in found or not e.get("duration"):
+                        continue  # live streams and shorts without a duration are skipped
+                    found[vid] = Source(id=vid, url=f"https://www.youtube.com/watch?v={vid}", title=e.get("title") or vid,
+                                        channel=e.get("channel") or e.get("uploader") or "", duration=float(e["duration"]))
+        run(QUERIES.get(mode, QUERIES["speaking"]))
+        if mode == "speaking" and looks_like_character(name, list(found.values())):
+            character = True
+            run(CHAR_QUERIES)
+    show = show_of(name, list(found.values())) if character else None
+    for src in found.values():
+        if character:
+            src.extra["kind"] = char_kind(src, show)
+        for rx, why in SUSPECT:
+            if character and why == "edited or mixed audio" and not rx.search(re.sub("compilation", "", src.title, flags=re.I)):
+                continue   # a compilation of a character's scenes is just what a character's voice needs
+            if rx.search(src.title) and not (why == "probably another singer" and mode == "speaking"):
+                src.selected, src.note = False, why
+                break
+        if character and src.selected and src.extra["kind"] == "talk":
+            src.selected, src.note = False, TALK_NOTE
     albums = album_tracks(name) if mode != "speaking" else []
     if not found and not albums:
         raise ModelError(f"No videos found for '{name}'. Check the spelling, or paste links / add recordings.")
-    ranked = albums + sorted([s for s in found.values() if s.id not in {a.id for a in albums}], key=lambda s: -_rank(s, name, mode))
+    rank = (lambda s: -_rank_character(s, name, show)) if character else (lambda s: -_rank(s, name, mode))
+    ranked = albums + sorted([s for s in found.values() if s.id not in {a.id for a in albums}], key=rank)
     # Tick the best sources until there is comfortably enough raw audio for the target.
     want = TCFG["target_minutes"] * 60 * 4   # assume ~1/4 of the used audio survives as clean target voice
     have = 0.0
@@ -159,7 +263,7 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None) -> l
             continue
         have += min(s.duration, TCFG["max_minutes_per_source"] * 60)
         if not s.note:
-            m = GOOD["singing"].search(s.title) or GOOD["speaking"].search(s.title)
+            m = (CHAR_GOOD.search(s.title) if character else None) or GOOD["singing"].search(s.title) or GOOD["speaking"].search(s.title)
             s.note = m.group(0).lower() if m else ""
     # sung sources are songs (2-4 min each), so singers need more of them listed to reach the target
     return ranked[:TCFG["search_results"] * (2 if mode == "both" else 1) + len(albums)]
