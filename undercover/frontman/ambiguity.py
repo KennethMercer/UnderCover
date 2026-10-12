@@ -16,6 +16,7 @@ import time
 MAX_CHOICES = 3
 WELL_KNOWN = 0.10      # a second artist's version counts when it has at least this share of the top one's views
 CACHE_SECONDS = 600    # a title's choices are looked up once per ten minutes (the plan step runs while typing)
+FAILED_SECONDS = 120   # a failed lookup (offline, YouTube's bot check) isn't retried at once: retrying prolongs a block
 
 
 def norm_title(s: str) -> str:
@@ -71,13 +72,15 @@ def choices_for(song: str, search=None) -> list[dict]:
     now = time.time()
     with _LOCK:
         hit = _LOOKUPS.get(key)
-        if hit and now - hit[0] < CACHE_SECONDS:
-            return hit[1]
+        if hit and now - hit[0] < (CACHE_SECONDS if hit[1] is not None else FAILED_SECONDS):
+            return hit[1] or []
     try:
         if search is None:
             from .songs import search
         found = detect(song, search(song, limit=8))
     except Exception:   # noqa: BLE001 - YouTube blocked / offline: no question, the run reports its own errors
+        with _LOCK:
+            _LOOKUPS[key] = (now, None)
         return []
     with _LOCK:
         _LOOKUPS[key] = (now, found)
@@ -88,7 +91,7 @@ def cached_choices(song: str) -> list[dict]:
     """The choices already looked up for this title (no network)."""
     with _LOCK:
         hit = _LOOKUPS.get(norm_title(song))
-    return list(hit[1]) if hit else []
+    return list(hit[1] or []) if hit else []
 
 
 def resolve(song: str, choice_url: str | None = None) -> tuple[dict | None, str | None]:

@@ -27,7 +27,7 @@ from urllib.parse import unquote
 
 from ..core import files, gpu, jobs, worklist
 from ..core.config import CONFIG, path
-from ..core.voices import ModelError, slug
+from ..core.voices import ModelError, label_of, slug
 from . import project as P
 from .sources import Source
 
@@ -77,11 +77,6 @@ def project_json(proj: P.Project) -> dict:
         "job": {"id": a["job"].id, "kind": a["kind"]} if a else None,
         "defaults": {"sr": TCFG["sample_rate"], "length": "auto", "steps": _lengths()},
     }
-
-
-def _voice_label(name):
-    from ..core.voices import label_of
-    return label_of(name) if name else name
 
 
 def _lengths() -> dict:
@@ -368,7 +363,7 @@ def start_train(name: str, b: dict):
         job.finish("done", message=f"Training {st['state']}.", train_state=st["state"], epoch=st.get("epoch"),
                    best=st.get("best"), outcome=st.get("outcome"))
 
-    job.resume_spec = {"kind": "train", "project": proj.name, "label": f"Training {_voice_label(proj.train.get('voice_name')) or proj.name}"}
+    job.resume_spec = {"kind": "train", "project": proj.name, "label": f"Training {label_of(proj.train.get('voice_name')) or proj.name}"}
     job.control = control
     jobs.GPU_QUEUE.put((job, run))
     return job
@@ -421,7 +416,7 @@ def start_auto(name: str, b: dict):
         finally:
             ACTIVE.pop(proj.name, None)
         gpu.forget_voice(name)
-        job.finish("done", message=f"{_voice_label(name)} is ready in your voices.", voice=name)
+        job.finish("done", message=f"{label_of(name)} is ready in your voices.", voice=name)
 
     job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}
     job.control = control
@@ -468,7 +463,7 @@ def _export(h, proj, b):
                 pr = P.Project.load(proj.name)
             v = export_voice(pr, epoch=b.get("epoch"), name=b.get("name"), overwrite=bool(b.get("overwrite")))
             gpu.forget_voice(v.name)   # reload if an older version was cached
-            job.finish("done", message=f"{_voice_label(v.name)} is ready in your voices.", voice=v.name)
+            job.finish("done", message=f"{label_of(v.name)} is ready in your voices.", voice=v.name)
         except Exception as e:
             job.finish("error", message=jobs.friendly(e, "adding the voice"))
 

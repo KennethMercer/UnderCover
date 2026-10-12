@@ -117,12 +117,14 @@ def parse_full(text: str) -> tuple[str, str, str | None, bool]:
     song's artist, which the plan step says out loud. Raises ModelError with an example when it can't tell the song
     and the voice apart."""
     t = re.sub(r"\s+", " ", text.strip().strip(".!?")).strip()
-    for pat in AS_PATTERNS + PATTERNS:
+    for n, pat in enumerate(AS_PATTERNS + PATTERNS):
         m = re.match(pat, t, re.I)
         if m:
             g = m.groupdict()
             artist = (g.get("artist") or "").strip(" \"'“”‘’") or None
             song = m.group("song").strip(" \"'“”‘’")
+            if n < len(AS_PATTERNS):   # "Hello cover as Peter Griffin" is still the song "Hello"
+                song = re.sub(r"\s+cover$", "", song, flags=re.I)
             person = re.sub(r"^(?:the voice of|voice of)\s+", "", m.group("person").strip(" \"'“”‘’"), flags=re.I)
             person = re.sub(r"'s voice$|\s+voice$", "", person, flags=re.I)
             person = re.sub(r"^(?:sung by|as sung by|by)\s+", "", person, flags=re.I).strip()

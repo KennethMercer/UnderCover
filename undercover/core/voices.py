@@ -605,9 +605,16 @@ def display_name(v: Voice) -> str:
     return (v.display or "").strip() or default_display(v)
 
 
+_LABELS: dict = {"dir": None, "at": 0.0, "map": {}}
+
+
 def voice_labels() -> dict[str, str]:
-    """{voice id: display name} for every installed voice (server-side strings show these; ids stay in the data)."""
-    return {v.name: display_name(v) for v in list_voices()}
+    """{voice id: display name} for every installed voice (server-side strings show these; ids stay in the data).
+    Kept for two seconds per voices folder: job lists and the queue status ask for it on every poll."""
+    d = str(voices_dir())
+    if _LABELS["dir"] != d or time.time() - _LABELS["at"] > 2.0:
+        _LABELS.update(dir=d, at=time.time(), map={v.name: display_name(v) for v in list_voices()})
+    return _LABELS["map"]
 
 
 def label_of(name: str | None, labels: dict[str, str] | None = None) -> str:
@@ -631,6 +638,7 @@ def set_display(name: str, text: str) -> Voice:
     v = get_voice(name)
     v.display = text
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    _LABELS["at"] = 0.0   # the next label lookup reads the new name
     return v
 
 

@@ -805,6 +805,7 @@ def u_grammar():
         "have SpongeBob sing Toxic": ("Toxic", "SpongeBob", None, False, None),
         "Obama sings Hello as a ballad": ("Hello", "Obama", None, False, "ballad"),
         "Hello cover by Peter Griffin": ("Hello", "Peter Griffin", None, False, None),
+        "Hello cover as Peter Griffin": ("Hello", "Peter Griffin", None, False, None),
         "Peter Griffin sings Hello by Adele": ("Hello", "Peter Griffin", "Adele", False, None),
     }
     for text, w in want.items():
@@ -853,7 +854,8 @@ def u_ambiguity():
 
     def broken(q, limit=8):
         raise RuntimeError("offline")
-    assert A.choices_for("Something", broken) == []
+    assert A.choices_for("Something", broken) == [] and A.choices_for("Something", fake_search) == [], "a failed lookup was retried at once"
+    assert A.choices_for("Hello", fake_search) == ch
     # never a silent guess: no choice -> the first, with the sentence; a choice -> that one, no sentence
     pick, went = A.resolve("Hello")
     assert pick["artist"] == "Adele" and went == "I went with Adele's Hello", (pick, went)
@@ -891,6 +893,8 @@ def u_ask_flow():
     keep = (service.installed_for, service.online_for)
     service.installed_for, service.online_for = (lambda p: []), (lambda p, n=2: [])   # no network, no voices
     made = []
+    iso = isolated_data()   # starting a job must never reach the real folders, whatever it writes
+    iso.__enter__()
 
     def plan(text):
         h = _FakeHandler()
@@ -933,6 +937,7 @@ def u_ask_flow():
         assert plan("Hello as Obama")["ask"] is True
     finally:
         service.installed_for, service.online_for = keep
+        iso.__exit__(None, None, None)
         while not jobs.GPU_QUEUE.empty():
             jobs.GPU_QUEUE.get_nowait()
         for j in made:
