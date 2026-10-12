@@ -1630,7 +1630,7 @@ def u_themes_shipped():
                 assert ratio(t["--accent-ink"], t[f"--c-{m}"]) >= 4.5, f"{d.name} {mode}: button text on --c-{m}"
         names.append(d.name)
     assert {"casefile", "midnight", "dossier", "gaslight", "carbon"} <= set(names), names
-    return f"{len(names)} themes ({', '.join(names)}): checked, fonts bundled, text ≥ 7:1 and colours ≥ 4.5:1 in both modes"
+    return f"{len(names)} themes ({', '.join(names)}): checked, fonts bundled, text >= 7:1 and colours >= 4.5:1 in both modes"
 
 
 @check("doctor: a package version faked through the install record is reported; the Fix installs only its hashed pin (fake pip)")
@@ -2192,6 +2192,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
+    ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/reset"),
 ]
 
 
