@@ -2458,6 +2458,16 @@ def u_tutorial():
             plan = {}
             got = service.resolve_voice(None, "Agent Smoke", False, None, lambda *a, **k: None, plan)
             assert got.name == "agent-smoke" and plan["voice"]["checked"] == "the demo voice", plan
+            assert [v.name for v in service.installed_for("Smoke")] == ["agent-smoke"]   # name endings match...
+            real_ref = service.online_for
+            service.online_for = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("looked for the real Smoke"))
+            try:   # ...but a real artist called "Smoke" never gets the demo voice: it looks for them instead
+                service.resolve_voice(None, "Smoke", False, None, lambda *a, **k: None, {})
+                raise AssertionError("resolve_voice returned without looking for the real Smoke")
+            except RuntimeError as e:
+                assert "real Smoke" in str(e), e
+            finally:
+                service.online_for = real_ref
             # done, then Replay after the user deleted both: they come back, the brief shows again
             assert tutorial.mark_done()["tutorial"]["done"] == time.strftime("%Y-%m-%d")
             for f in config_path("uploads_dir").glob(f"{sid}.*"):
@@ -2468,6 +2478,18 @@ def u_tutorial():
             assert tutorial.reset()["seeded"] == {"song": tutorial.sample_song_id(), "voice": "agent-smoke"}   # nothing doubled
             assert len([m for m in config_path("uploads_dir").glob("*.json")
                         if json.loads(m.read_text(encoding="utf-8")).get("sample")]) == 1
+            # the user already has the very recording: it's marked as the sample, their title kept, nothing doubled
+            for f in config_path("uploads_dir").glob(f"{tutorial.sample_song_id()}.*"):
+                if f.suffix == ".json":
+                    m = json.loads(f.read_text(encoding="utf-8"))
+                    m.pop("sample")
+                    m["title"] = "My take"
+                    f.write_text(json.dumps(m), encoding="utf-8")
+            assert tutorial.sample_song_id() is None
+            sid2 = tutorial.seed_song()
+            m = json.loads((config_path("uploads_dir") / f"{sid2}.json").read_text(encoding="utf-8"))
+            assert m["sample"] is True and m["title"] == "My take", m
+            assert not list(config_path("uploads_dir").glob("upload_sample_*")), "a temp copy was left"
             # the shipped files must match their manifest (they aren't in git): a changed or missing one isn't seeded
             voices.remove_voice("agent-smoke")
             (tutorial.DEMO / "model.pth").write_bytes(b"something else entirely")
