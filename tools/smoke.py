@@ -2475,6 +2475,9 @@ def u_tutorial():
         _fake_voice("someone-uc", extra={"trained": True, "person": "Someone"})
         assert tutorial.first_run() == {"done": "existing install"} and tutorial.sample_song_id() is None
         assert not voices.voices_dir().joinpath("agent-smoke").exists()
+    import inspect
+    from undercover.doubleagent import api as da_api   # "Do it all" called a local function named like the module it uses
+    assert "def service(" not in inspect.getsource(da_api.start_auto), "start_auto shadows the service module again"
     return "fresh: done null + both seeds; existing install; done; reset re-seeds once; the demo voice never searched for"
 
 
@@ -2735,6 +2738,28 @@ def a_themes():
                      "frame-ancestors 'none'", "'sha256-"):
             assert part in pol, (page, part, pol)
     return f"{len(r['themes'])} themes listed; import, css, export, refusal, delete; CSP on both pages"
+
+
+@check("api: the First assignment (status field, done, Replay's reset seeds the demo voice when it ships)")
+def a_tutorial():
+    from undercover.app import tutorial
+    t = api("/api/status").get("tutorial")
+    assert t is not None and "done" in t, t
+    assert t["done"] == "existing install", t   # the sandbox holds a trained voice: an install from before the tutorial
+    assert api("/api/tutorial/done", {})["tutorial"]["done"] == time.strftime("%Y-%m-%d")
+    r = api("/api/tutorial/reset", {})
+    assert r["tutorial"] == {"done": None}, r
+    assert api("/api/status")["tutorial"] == {"done": None}
+    shipped = (tutorial.DEMO / "model.pth").is_file()
+    if shipped:
+        assert r["seeded"]["voice"] == "agent-smoke", r
+        v = next(x for x in api("/api/voices") if x["name"] == "agent-smoke")
+        assert v["demo"] is True and v["trained"] is False and v["display"] == "Agent Smoke", v
+        c = next(x for x in api("/api/work/candidates") if x["voice"] == "agent-smoke")
+        assert c["can"] is False, c
+    songs = api("/api/library/songs")
+    assert all("sample" in x for x in songs)
+    return f"existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
 
 
 @check("api: status ready")
@@ -3374,7 +3399,7 @@ def main():
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes, a_tutorial):
                         fn()
                     if not a.no_cover:
                         a_cover()

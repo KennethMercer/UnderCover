@@ -64,16 +64,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=20)
     ap.add_argument("--reader", default="bm_george")
+    ap.add_argument("--audio-dir", help="keep the synthesized speech here and reuse it next time (it takes ~25 min)")
     a = ap.parse_args()
     import smoke
     print("the text: The Secret Agent (Conrad, 1907), Project Gutenberg #974")
     text = text_of_book()
     with smoke.sandbox_server(smoke.sandbox_port()) as root:
         from undercover.core.config import path
-        work = root / "demo-voice-src"
-        work.mkdir()
-        print(f"Kokoro {a.reader} reads {a.minutes:.0f} min into the sandbox ({work})")
-        files = synthesize(text, a.reader, a.minutes, work)
+        work = Path(a.audio_dir) if a.audio_dir else root / "demo-voice-src"
+        work.mkdir(parents=True, exist_ok=True)
+        files = sorted(work.glob("agent-smoke-*.wav"))
+        if files:
+            print(f"reusing {len(files)} recordings in {work}")
+        else:
+            print(f"Kokoro {a.reader} reads {a.minutes:.0f} min into {work}")
+            files = synthesize(text, a.reader, a.minutes, work)
         p = smoke.api("/api/train/projects", {"person": "Agent Smoke", "mode": "speaking", "no_search": True})
         name = p["name"]
         for f in files:
@@ -94,6 +99,9 @@ def main():
                 last = msg
             time.sleep(15)
         if j["final"]["state"] != "done":
+            log = path("logs_dir") / "errors.log"   # the sandbox goes when this block ends: show why first
+            if log.exists():
+                print(log.read_text(encoding="utf-8", errors="replace")[-3000:])
             sys.exit(f"training ended as {j['final']['state']}: {j['final'].get('message')}")
         src = path("voices_dir") / "agent-smoke"
         assert smoke.storage_inside(src, root), src   # the sandbox's voice, never a real one
