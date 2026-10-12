@@ -1,0 +1,21 @@
+/* Gaslight: A lamp through fog: green-black air, brass and verdigris. A theme is tokens only (docs/design/themes.md). */
+:root[data-uc-theme="gaslight"] {
+  --base: #080a09; --panel-base: #101312; --panel-2-base: #171b19; --panel-3-base: #202522; --line-base: #232927;
+  --fg: #e8ebe6; --muted: #91998f; --accent-ink: #080a09;
+  --c-frontman: #c4a65c; --c-doubleagent: #bf8f88; --c-speakeasy: #83b3a5; --c-safehouse: #a3a9a1;
+  --c-frontman-deep: #6e5a1f; --c-doubleagent-deep: #683a31; --c-speakeasy-deep: #1f4a40; --c-safehouse-deep: #333b35;
+  --ok: #8fbd9c; --warn: #cbb46a; --err: #cf857b;
+  --wave: #2d3230; --wave-on: #c4a65c; --wave-alt: #83b3a5;
+  --lit: 18%; --tint: 7%; --tint2: 8%; --lamp: 13%;
+  --display: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif; --body: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
+  --mono: "Red Hat Mono", Consolas, ui-monospace, monospace;
+}
+:root[data-uc-theme="gaslight"][data-theme="light"] {
+  --base: #e5e8e2; --panel-base: #f5f7f2; --panel-2-base: #e9ece6; --panel-3-base: #dce0d8; --line-base: #cfd4cb;
+  --fg: #121511; --muted: #5e665e; --accent-ink: #f8f9f4;
+  --c-frontman: #6d5412; --c-doubleagent: #7a3a31; --c-speakeasy: #1f5a4b; --c-safehouse: #4b534c;
+  --c-frontman-deep: #a9893c; --c-doubleagent-deep: #a9675e; --c-speakeasy-deep: #4d8a7a; --c-safehouse-deep: #7c857d;
+  --ok: #2f7049; --warn: #76590f; --err: #a4402f;
+  --wave: #c5c9c0; --wave-on: #6d5412; --wave-alt: #1f5a4b;
+  --lit: 10%; --tint: 4%; --tint2: 3%; --lamp: 8%;
+}

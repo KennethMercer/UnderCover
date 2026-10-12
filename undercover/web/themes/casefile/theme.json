@@ -1,0 +1,17 @@
+{
+  "id": "casefile",
+  "name": "Case File",
+  "author": "UnderCover",
+  "licence": "same as UnderCover",
+  "version": "1.0",
+  "modes": [
+    "dark",
+    "light"
+  ],
+  "based_on": "",
+  "fonts": [
+    "Schibsted Grotesk",
+    "JetBrains Mono"
+  ],
+  "about": "Warm near-blacks; tobacco, oxblood, ink and ash."
+}

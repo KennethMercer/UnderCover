@@ -12,10 +12,14 @@
 <link rel="stylesheet" href="/static/shell.css">
 <link rel="stylesheet" href="/static/speakeasy.css">
 <link rel="stylesheet" href="/static/look.css">
+<link rel="stylesheet" id="uc-theme-css"><!-- a theme's token sheet (themes.js; set before first paint below) -->
 <link rel="stylesheet" href="/static/winamp.css">
 <script>try { const t = localStorage.getItem("uc-theme") || "system";
   if (t === "light" || (t === "system" && matchMedia("(prefers-color-scheme: light)").matches)) document.documentElement.dataset.theme = "light";
-  if (JSON.parse(localStorage.getItem("uc-skin")) === "winamp") document.documentElement.dataset.skin = "winamp"; } catch (e) {}</script>
+  if (JSON.parse(localStorage.getItem("uc-skin")) === "winamp") document.documentElement.dataset.skin = "winamp";
+  const th = localStorage.getItem("uc-theme-id"), thCss = localStorage.getItem("uc-theme-css");   // the theme in use (themes.js)
+  if (th && th !== "casefile" && /^\/(static|api)\/themes\/[a-z0-9-]+\/theme\.css$/.test(thCss || "")) {
+    document.documentElement.dataset.ucTheme = th; document.getElementById("uc-theme-css").href = thCss; } } catch (e) {}</script>
 </head>
 <body data-module="frontman">
 <div class="drop-overlay" id="drop-overlay" hidden><div>Drop a song to load it, or a voice model (.zip / .pth) to install it</div></div>
@@ -605,6 +609,12 @@
         <span class="seg" id="set-look" role="group" aria-label="Look"><button type="button" data-v="system" aria-pressed="true">Follow Windows</button><button type="button" data-v="dark" aria-pressed="false">Dark</button><button type="button" data-v="light" aria-pressed="false">Light</button></span></div>
       <div class="setting"><span><b>Deep Cover</b><small>Shows every number, score, setting and log. The glasses in the top bar switch it too.</small></span>
         <button class="switch" id="set-deep" type="button" role="switch" aria-checked="false" aria-label="Deep Cover"></button></div>
+      <div class="setting" id="set-theme-row" data-deep><span><b>Theme</b><small>A grading of the look and its type. A theme is one file you can share: a friend's comes in through Import.</small></span>
+        <span class="row set-theme-btns"><button class="btn" id="set-theme-make" type="button">Make one…</button><button class="btn" id="set-theme-import" type="button">Import…</button>
+          <a class="linkbtn" id="set-theme-export" href="#" download hidden>Export</a><button class="linkbtn" id="set-theme-remove" type="button" hidden>Remove</button>
+          <input type="file" id="set-theme-file" accept=".uctheme,.zip" hidden></span>
+        <div class="theme-cards" id="set-themes"></div>
+        <div class="theme-maker" id="theme-maker" hidden></div></div>
       <div class="setting later"><span><b>First assignment</b><small>The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small></span><span class="meta">later</span></div>
       <div class="setting" id="set-phone-row" data-pc><span><b>Phone access</b><small id="set-phone-say">Use UnderCover from your phone on your home Wi-Fi. Off until you switch it on; each phone pairs once with a code from here.</small></span>
         <button class="switch" id="set-phone" type="button" role="switch" aria-checked="false" aria-label="Phone access"></button></div>
@@ -723,6 +733,7 @@
 <script src="/static/oneshot.js"></script>
 <script src="/static/library.js"></script>
 <script src="/static/rooms.js"></script>
+<script src="/static/themes.js"></script>
 <script src="/static/work.js"></script>
 <script src="/static/doubleagent.js"></script>
 <script src="/static/speakeasy.js"></script>

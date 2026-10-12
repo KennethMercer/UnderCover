@@ -193,6 +193,7 @@ function applyTheme() {
   else delete document.documentElement.dataset.theme;
   $$("#set-look button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === t));
   redrawAll();
+  document.dispatchEvent(new Event("uc:themechange"));   // themes.js redraws its swatch cards for the mode
 }
 lightQ.addEventListener("change", () => { if (themePref() === "system") applyTheme(); });
 $$("#set-look button").forEach(b => b.onclick = () => { try { localStorage.setItem("uc-theme", b.dataset.v); } catch (e) {} applyTheme(); });
