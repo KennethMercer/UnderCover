@@ -2,7 +2,7 @@
 
 Three groups, each one folder holding today's sub-folders, so every default is the app folder itself:
 
-    library   your library: songs (uploads), covers + speech (output), voices (+ their cadence packs)
+    library   your library: songs (uploads), covers + speech (output), voices (+ their cadence packs), themes (phase 14)
     working   working files: stems, training projects, caches (cache)
     models    model files: everything UnderCover downloads (models)
 
@@ -33,7 +33,7 @@ from .voices import ModelError
 # group -> [(paths key, sub-folder inside the group's folder, default value in config.toml)]
 GROUPS = {
     "library": [("uploads_dir", "uploads", "uploads"), ("output_dir", "output", "output"),
-                ("voices_dir", "voices", "models/voices")],
+                ("voices_dir", "voices", "models/voices"), ("themes_dir", "themes", "themes")],
     "working": [("cache_dir", "cache", "cache")],
     "models": [("models_dir", "models", "models")],
 }
