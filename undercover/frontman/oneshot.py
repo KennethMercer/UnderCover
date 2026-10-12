@@ -22,7 +22,7 @@ from ..core.config import path
 from ..core.voices import ModelError
 from . import ambiguity
 from .fit import pick_fit, pick_octave
-from ..doubleagent.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0
+from ..doubleagent.service import _prefetch_voice_sources, installed_for, resolve_voice, voice_f0, voice_quality
 
 PATTERNS = [
     # "cover of X by Y" / "X cover by Y" / "make X sung by Y" (the LAST "by" wins: "X by Miley Cyrus by Y")
@@ -391,6 +391,13 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             spec["prefer_train"] = True
         raise
 
+    # the gate (phase 15): a weak voice is said plainly, here and with the cover, never handed over silently
+    q = voice_quality(v)
+    if plan.get("voice") is not None:
+        plan["voice"]["quality"] = q
+    if not q["ok"]:
+        push("voice", 1.0, f"Heads-up: {q['summary']}")
+
     # 3. settings + cover
     vhz, speech = voice_f0(v)
     rng = (v.extra or {}).get("f0_range")
@@ -441,8 +448,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     push("cover", 0.0, f"Making the cover with “{v.name}”")
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
     item = next((h for h in history_items() if h["id"] == res.id), None)
-    job.finish("done", message="Finished", result=item, plan=plan, seconds=res.seconds, notes=res.notes,
-               elapsed=round(time.perf_counter() - t0, 1))
+    job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
+               plan=plan, seconds=res.seconds, notes=res.notes, elapsed=round(time.perf_counter() - t0, 1), quality=q)
 
 
 def start_oneshot(body: dict):

@@ -5,6 +5,26 @@
 const OS = { es: null, job: null, timer: null, t0: 0, planSeq: 0, planTimer: null, last: null };
 
 // ------------------------------------------------------------ plan preview (no downloads)
+// Phase 15: the voice's quality gate. A weak voice (it doesn't sound like them, too little clean audio, or a character
+// trained on talk about them instead of their scenes) is said plainly before the cover starts and again with it, with
+// the way out: find better clips and train it again (DoubleAgent's Improve, queued now). Plain hooks: .os-quality,
+// button[data-os-improve].
+function qualityHtml(v) {
+  const q = v && v.quality;
+  if (!q || q.ok) return "";
+  return `<div class="os-quality" role="alert"><b>Heads-up:</b> ${esc(q.summary || "")}
+    <button class="linkbtn" type="button" data-os-improve="${esc(q.action?.target || v.name || "")}">${esc(q.advice || "Find better clips and train it again")}</button></div>`;
+}
+function bindQuality() {
+  $$("#os-plan [data-os-improve]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      await api("/api/work/add", { json: { kind: "improve", target: b.dataset.osImprove, now: true } });
+      b.textContent = "On it: finding better clips and training again (see Running)";
+      refreshJobs(true);
+    } catch (e) { b.disabled = false; showError(e.message, "Couldn't start it"); }
+  });
+}
 function voiceLine(v) {
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
@@ -54,7 +74,8 @@ async function previewPlan() {
     const songLine = p.style ? `${/^[aeiou]/i.test(p.style) ? "an" : "a"} <b>${esc(p.style)}</b> version of “${esc(p.song_query)}” (a cover from YouTube that has singing in it)`
                              : `“${esc(p.song_query)}” (album version from YouTube)`;
     const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
-    $("#os-plan").innerHTML = `<div class="os-plan-grid"><span>🎵 <b>Song</b><br>${songLine}</span><span>🎤 <b>Voice</b><br>${voiceLine(p.voice)}</span><span>⏱ <b>Time</b><br>${planTime(p)}</span></div>${hint}`;
+    $("#os-plan").innerHTML = `<div class="os-plan-grid"><span>🎵 <b>Song</b><br>${songLine}</span><span>🎤 <b>Voice</b><br>${voiceLine(p.voice)}</span><span>⏱ <b>Time</b><br>${planTime(p)}</span></div>${hint}${qualityHtml(p.voice)}`;
+    bindQuality();
     renderChoices(p);
   } catch (e) {
     if (seq === OS.planSeq) { $("#os-plan").textContent = e.message; OS.last = { key, error: e.message }; }
@@ -171,6 +192,8 @@ function osFollow(id, title) {
         }
       } catch (e) {}
       if (ev.result) showResult(ev.result, ev.seconds);
+      $("#os-plan").insertAdjacentHTML("beforeend", qualityHtml(plan.voice));   // a weak voice is said with the cover too
+      bindQuality();
       const others = (plan.song?.compared || []).filter(x => !x.chosen && x.id);
       if (others.length) {   // the versions it compared: one click to hear the same voice on another
         $("#os-plan").insertAdjacentHTML("beforeend", `<div class="os-versions"><span class="meta">Other versions it compared:</span>` +
