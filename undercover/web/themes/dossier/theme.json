@@ -1,0 +1,17 @@
+{
+  "id": "dossier",
+  "name": "Dossier",
+  "author": "UnderCover",
+  "licence": "same as UnderCover",
+  "version": "1.0",
+  "modes": [
+    "dark",
+    "light"
+  ],
+  "based_on": "casefile",
+  "fonts": [
+    "Figtree",
+    "IBM Plex Mono"
+  ],
+  "about": "The file on the desk: kraft and sepia, the warmest grading, corners a step squarer."
+}

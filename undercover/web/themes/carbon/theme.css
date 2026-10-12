@@ -1,0 +1,22 @@
+/* Carbon: The darkroom: near-monochrome, each module a trace of its colour, the lamp dimmer. A theme is tokens only (docs/design/themes.md). */
+:root[data-uc-theme="carbon"] {
+  --base: #0b0b0b; --panel-base: #131313; --panel-2-base: #1a1a1a; --panel-3-base: #232323; --line-base: #262626;
+  --fg: #e9e9e7; --muted: #929290; --accent-ink: #0b0b0b;
+  --c-frontman: #bbb09a; --c-doubleagent: #b5a0a6; --c-speakeasy: #9eabb4; --c-safehouse: #a9a9a9;
+  --c-frontman-deep: #57503f; --c-doubleagent-deep: #4e3c42; --c-speakeasy-deep: #2f3a43; --c-safehouse-deep: #363636;
+  --ok: #9fb8a6; --warn: #c3b58b; --err: #c78e88;
+  --wave: #333330; --wave-on: #bbb09a; --wave-alt: #9eabb4;
+  --lit: 14%; --tint: 5%; --tint2: 6%; --lamp: 9%;
+  --display: "Geist", "Segoe UI", system-ui, sans-serif; --body: "Geist", "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono", Consolas, ui-monospace, monospace;
+  --r: 6px;
+}
+:root[data-uc-theme="carbon"][data-theme="light"] {
+  --base: #e6e6e4; --panel-base: #f6f6f4; --panel-2-base: #ebebe9; --panel-3-base: #dededc; --line-base: #d2d2d0;
+  --fg: #141414; --muted: #626262; --accent-ink: #f8f8f6;
+  --c-frontman: #5e5542; --c-doubleagent: #5c474d; --c-speakeasy: #3b4a55; --c-safehouse: #4e4e4e;
+  --c-frontman-deep: #8f866f; --c-doubleagent-deep: #8d7880; --c-speakeasy-deep: #6f7e8a; --c-safehouse-deep: #858585;
+  --ok: #3b6c4f; --warn: #6f5e2c; --err: #9d4a41;
+  --wave: #c8c8c3; --wave-on: #5e5542; --wave-alt: #3b4a55;
+  --lit: 8%; --tint: 3%; --tint2: 2%; --lamp: 6%;
+}

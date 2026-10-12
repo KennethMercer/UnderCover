@@ -1,0 +1,17 @@
+{
+  "id": "carbon",
+  "name": "Carbon",
+  "author": "UnderCover",
+  "licence": "same as UnderCover",
+  "version": "1.0",
+  "modes": [
+    "dark",
+    "light"
+  ],
+  "based_on": "casefile",
+  "fonts": [
+    "Geist",
+    "Geist Mono"
+  ],
+  "about": "The darkroom: near-monochrome, each module a trace of its colour, the lamp dimmer."
+}

@@ -1585,6 +1585,53 @@ def u_doctor_stale():
     return "4 old leftovers cleared, the upload's only on the Fix; young, project, owned and the song kept"
 
 
+@check("themes: every shipped theme checks out (tokens only), its fonts are bundled, and it reads well in dark and light")
+def u_themes_shipped():
+    import re
+    from undercover.core.themes import SHIPPED, check_folder
+
+    def lum(h):
+        c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        c = [x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+    def ratio(a, b):
+        x, y = lum(a), lum(b)
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+
+    def tokens(css, mode):   # a block's custom properties; light = the dark block, then the light one over it
+        out = {}
+        for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", re.sub(r"/\*.*?\*/", " ", css, flags=re.S)):
+            if "@font-face" in sel or (mode == "dark" and 'data-theme="light"' in sel):
+                continue
+            out.update(dict(re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", body)))
+        return {k: v.strip() for k, v in out.items()}
+
+    app = (ROOT / "undercover" / "web" / "app.css").read_text(encoding="utf-8")
+    root = re.search(r":root\s*\{[^}]*\}", app).group(0)
+    base = {"dark": tokens(root, "dark"), "light": {**tokens(root, "dark"), **tokens(re.search(r':root\[data-theme="light"\]\s*\{[^}]*\}', app).group(0), "light")}}
+    faces = set(re.findall(r'@font-face \{ font-family: "([^"]+)"', app))
+    need = [("--fg", 7)] + [(k, 4.5) for k in ("--muted", "--c-frontman", "--c-doubleagent", "--c-speakeasy", "--c-safehouse", "--ok", "--warn", "--err")]
+    names = []
+    for d in sorted(x for x in SHIPPED.iterdir() if x.is_dir()):
+        problems = check_folder(d, d.name)
+        assert not problems, (d.name, problems)
+        meta = json.loads((d / "theme.json").read_text(encoding="utf-8"))
+        missing = [f for f in meta.get("fonts", []) if f not in faces]
+        assert not missing, f"{d.name} uses {missing}, which app.css doesn't bundle"
+        css = (d / "theme.css").read_text(encoding="utf-8")
+        for mode in ("dark", "light"):
+            t = {**base[mode], **tokens(css, mode)}
+            for surface in ("--panel-base", "--panel-2-base"):
+                for k, least in need:
+                    assert ratio(t[k], t[surface]) >= least, f"{d.name} {mode}: {k} {ratio(t[k], t[surface]):.2f}:1 on {surface}, needs {least}"
+            for m in ("frontman", "doubleagent", "speakeasy", "safehouse"):
+                assert ratio(t["--accent-ink"], t[f"--c-{m}"]) >= 4.5, f"{d.name} {mode}: button text on --c-{m}"
+        names.append(d.name)
+    assert {"casefile", "midnight", "dossier", "gaslight", "carbon"} <= set(names), names
+    return f"{len(names)} themes ({', '.join(names)}): checked, fonts bundled, text ≥ 7:1 and colours ≥ 4.5:1 in both modes"
+
+
 @check("doctor: a package version faked through the install record is reported; the Fix installs only its hashed pin (fake pip)")
 def u_doctor_packages():
     from undercover.core import addons, doctor, manifest
