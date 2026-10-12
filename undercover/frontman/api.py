@@ -217,8 +217,9 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     inst = service.installed_for(person)
     trained = [v for v in inst if v.extra.get("trained")]
     if trained:
+        q = service.voice_quality(trained[0])
         voice = {"how": "installed", "name": trained[0].name, "display": display_name(trained[0]), "trained": True,
-                 "quality": service.voice_quality(trained[0])}   # said before anything starts (phase 15)
+                 "quality": service.train_note(trained[0], q) if prefer_train else q}   # said before anything starts (phase 15)
     else:
         online = [] if prefer_train else service.online_for(person, 2)
         community = [] if prefer_train else inst

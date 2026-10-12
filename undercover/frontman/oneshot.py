@@ -406,7 +406,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     q = voice_quality(v)
     pv = plan.get("voice")
     if pv is not None:
-        if q["ok"] and pv.get("quality"):   # a quick cover's honest label from resolve_voice (a voice from elsewhere)
+        if q["ok"] and pv.get("quality"):   # a quick cover's honest label, or Train a new voice's note (resolve_voice)
             q = pv["quality"]
         pv["quality"] = q
     if not q["ok"] and not q.get("quick"):   # (a quick cover's label was said already)
@@ -502,4 +502,5 @@ def start_oneshot(body: dict):
 # training aside; Resume starts a paused one-shot again
 worklist.register_pausable("auto", partly=True)
 worklist.register_resume("oneshot", lambda spec: start_oneshot({"text": spec["text"], "prefer_train": spec.get("prefer_train"),
-                                                                 "song_url": spec.get("song_url"), "choice": spec.get("choice")}))
+                                                                 "song_url": spec.get("song_url"), "choice": spec.get("choice"),
+                                                                 "subject": spec.get("subject")}))
