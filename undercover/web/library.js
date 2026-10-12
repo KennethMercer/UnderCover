@@ -17,7 +17,7 @@ const SORTS = {
 };
 const gb = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : `${Math.max(1, Math.round(b / 1e3))} kB`;
 const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
-const art = (name, big) => `<span class="art" style="background:linear-gradient(135deg,hsl(${hue(name)} 55% 45%),hsl(${(hue(name) + 70) % 360} 50% 35%))"${big ? "" : ' aria-hidden="true"'}>${esc((name || "?").replace(/^[^a-z0-9]+/i, "")[0]?.toUpperCase() || "?")}</span>`;
+const art = (name, big) => `<span class="art" style="background:linear-gradient(135deg,hsl(${hue(name)} 55% 45%),hsl(${(hue(name) + 70) % 360} 50% 35%))"${big ? "" : ' aria-hidden="true"'}>${esc(initialOf(name))}</span>`;
 const when = s => { if (!s) return ""; const d = new Date(typeof s === "number" ? s * 1000 : s.replace(" ", "T")); if (isNaN(d)) return s;
   const days = Math.floor((Date.now() - d) / 864e5); return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : days < 30 ? `${days} days ago` : d.toLocaleDateString(); };
 const quality = v => v.trained ? (v.undertrained ? ["warn", "under-trained"] : ["ok", "trained here"])
@@ -100,8 +100,8 @@ $("#lib-kfilter").onchange = () => renderList();
 function rows() {
   const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
   let list = (L.data[L.cat] || []).slice();
-  const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${x.backing_voice || ""}` : L.cat === "speech" ? `${x.title} ${x.text} ${x.voice}` : L.cat === "songs" ? `${x.title} ${x.source}`
-    : L.cat === "voices" ? `${x.name} ${x.source}` : `${x.person} ${x.name}`;
+  const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${voiceDisplay(x.voice)} ${x.backing_voice || ""} ${voiceDisplay(x.backing_voice)}` : L.cat === "speech" ? `${x.title} ${x.text} ${x.voice} ${voiceDisplay(x.voice)}` : L.cat === "songs" ? `${x.title} ${x.source}`
+    : L.cat === "voices" ? `${x.name} ${voiceDisplay(x.name)} ${x.source}` : `${x.person} ${x.name}`;
   if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
   if (voice) list = list.filter(x => x.voice === voice);
   const kf = $("#lib-kfilter").hidden ? "" : $("#lib-kfilter").value;
@@ -355,6 +355,8 @@ function voiceDetail(d, v) {
       try { await api(`/api/library/voices/${encodeURIComponent(v.name)}/display`, { json: { display: nameIn.value.trim() } }); }
       catch (e) { showError(e.message, "Couldn't rename the voice"); return; }
       afterChange(); loadVoices();
+      if (SE.loaded) seLoad();   // SpeakEasy's picker; DoubleAgent's cards and the queue pickers come from the candidates
+      loadCandidates();
     };
     $("#lib-vname-save").onclick = save;
     nameIn.onkeydown = e => { if (e.key === "Enter") save(); };

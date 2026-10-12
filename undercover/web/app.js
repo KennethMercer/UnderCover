@@ -35,8 +35,9 @@ function noteVoices(list) {
 }
 const voiceDisplay = id => VOICES.get(id)?.display || id || "";
 const voiceTrained = id => { const t = VOICES.get(id)?.trained; return t != null ? !!t : /-uc$/.test(id || ""); };
-const vname = id => id ? `<span class="vname" data-voice="${esc(id)}"${voiceTrained(id) ? ' data-trained="1" title="Trained in UnderCover"' : ""}>${esc(voiceDisplay(id))}</span>` : "";
-const vinitial = id => esc((voiceDisplay(id).replace(/^[^a-z0-9]+/i, "")[0] || "?").toUpperCase());
+const vname = id => id ? `<span class="vname" data-voice="${esc(id)}"${voiceTrained(id) ? ' data-trained="1" title="Trained in UnderCover"' : ""}>${esc(voiceDisplay(id))}${voiceTrained(id) ? '<span class="sr-only"> (trained in UnderCover)</span>' : ""}</span>` : "";
+const initialOf = s => (String(s || "").replace(/^[^a-z0-9]+/i, "")[0] || "?").toUpperCase();
+const vinitial = id => esc(initialOf(voiceDisplay(id)));
 document.addEventListener("keydown", e => {
   if (e.target.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
   deepTyped = (deepTyped + e.key.toLowerCase()).slice(-9);
