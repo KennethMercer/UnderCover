@@ -12,6 +12,7 @@ Where things live:
                                               predate it still read project.json)
   cache/training/<project>/cadence/           stretches r000.wav ... + words.json + person.json (their measured cadence)
   models/voices/<voice>/tts/ref.wav + cadence.json, and meta extra.tts (the pack; ARCHITECTURE "Data contracts")
+  models/voices/<voice>/tts/pending/ previous/ older/   packs waiting for the user's ear, and set aside (phase 9, below)
 
 Measures as phase 3 did (tools/research/measure.py): likeness = WeSpeaker cosine to the person's reference
 embedding; WER = Whisper's transcript of the result vs the sentence; cadence = per-sentence speaking rate,
@@ -21,6 +22,7 @@ the person's own sentences in units of their spread (0 = theirs).
 import json
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -28,11 +30,12 @@ import numpy as np
 import soundfile as sf
 
 from ..core import cadence as C
-from ..core import fsutil, gpu, jobs, worklist
+from ..core import fsutil, gpu, jobs, storage, worklist
 from ..core.cadence import render
 from ..core.config import CONFIG, path
 from ..core.jobs import Cancelled, Paused
-from ..core.voices import ModelError, get_voice
+from ..core.voices import ModelError, get_voice, label_of
+from . import clipsound
 from . import project as P
 
 VERSION = 1
@@ -54,6 +57,11 @@ W_GAP, W_WER = 0.25, 1.0
 # rate) as "terrible, he sounds drunk". A pack's tempo stays 1.0; SpeakEasy's speed slider still works by hand. This
 # selection (W_GAP 0.25, cfg 0.3 only, three clips) made the pack the user approved; later tuning (cadence weighed more,
 # a cfg 0.2 try, a clip-sound score) measured better but sounded worse, so it was reverted (PLAN Phase 18).
+# Phase 9: how the reference clip *sounds* (clipsound.py: muffled, bandlimited, noisy, roomy, clipped) costs its
+# penalty in full, in the clips tried first and in the score (calibrated in docs/research/clip-sound.md: the muffled
+# Freeman v2 clip loses to the approved one by it). Only new picks see it, and a new pick waits for the user's ear
+# (tts/pending/) whenever the voice already has a cadence.
+W_SOUND = 1.0
 
 
 # ---------------------------------------------------------------- text helpers (same rules as phase 3)
@@ -304,11 +312,28 @@ def _plain(t: str) -> bool:
                 and not re.search(r"[0-9]|\betc\b|\b[A-Z]{2,}\b|-", t))
 
 
-def ref_candidates(proj, tr: dict, n: int = CANDIDATES) -> list:
+def clip_sound(f: Path) -> dict:
+    """How a clip sounds (clipsound.py) with its penalty in score units (0 = clean)."""
+    m = clipsound.measure_file(f)
+    return {**m, "penalty": clipsound.penalty(m)}
+
+
+def ref_candidates(proj, tr: dict, n: int = CANDIDATES, sound: bool = True) -> list:
     """Kept speech clips of 7-11 s, clean, clearly the person, plain transcript; best first, from different
-    sources where possible (phase 3's pick_ref rule)."""
+    sources where possible (phase 3's pick_ref rule). sound: a clip that sounds muffled / noisy / roomy ranks lower
+    (phase 9; False = the rule before it, for comparisons)."""
+    pen = {}
+
     def quality(p):
-        return p.score - 2 * max(0.0, (p.noise if p.noise >= 0 else 0.1) - 0.05) - 0.01 * max(0.0, p.music_db + 30)
+        q = p.score - 2 * max(0.0, (p.noise if p.noise >= 0 else 0.1) - 0.05) - 0.01 * max(0.0, p.music_db + 30)
+        if sound:
+            if p.id not in pen:
+                try:
+                    pen[p.id] = clip_sound(proj.clip_path(p.id))["penalty"]
+                except (OSError, RuntimeError, ValueError):
+                    pen[p.id] = 0.0
+            q -= W_SOUND * pen[p.id]
+        return q
     cands = sorted([p for p in speech_clips(proj) if 7.0 <= p.dur <= 11.0 and _plain(tr.get(p.id, ""))], key=quality, reverse=True)
     if not cands:   # nothing ideal: the longest plain-ish clips of 5-12 s
         cands = sorted([p for p in speech_clips(proj) if 5.0 <= p.dur <= 12.0 and tr.get(p.id)], key=quality, reverse=True)
@@ -348,7 +373,8 @@ class Tester:
             out.append(wav)
         return out
 
-    def measure(self, wavs: list[Path], tempo: float = 1.0) -> dict:
+    def measure(self, wavs: list[Path], tempo: float = 1.0, ref: Path | None = None) -> dict:
+        """The readings' numbers and score; with ref, the reference clip's sound counts too (phase 9)."""
         from scipy.signal import resample_poly
         rows, sims, outs = [], [], []
         for s, w in zip(TEST, wavs):
@@ -371,6 +397,12 @@ class Tester:
              "cadence_gap": cadence_gap(s, self.person), "tempo": round(tempo, 3),
              **{k: s[k] for k in ("rate", "pauses", "range_st") if k in s}}
         m["score"] = round(m["likeness"] - W_GAP * (m["cadence_gap"] or 1.0) - W_WER * m["wer"], 4)
+        if ref is not None:
+            snd = clip_sound(ref)
+            m["sound"] = snd["penalty"]
+            m["sound_parts"] = {k: snd.get(k) for k in ("hf_db", "edge_hz", "floor_db", "decay_db_s", "clip_frac")}
+            m["score_voice"] = m["score"]   # the score before the clip's sound (as phase 4 scored)
+            m["score"] = round(m["score"] - W_SOUND * snd["penalty"], 4)
         return m
 
 
@@ -478,7 +510,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
             pack = {**base, "ref_text": tr.get(p.id, "")}
             wavs = tester.read(pack, ref)
             try:
-                m = tester.measure(wavs, 1.0)
+                m = tester.measure(wavs, 1.0, ref=ref)
                 best = m
             finally:
                 _cleanup(wavs)
@@ -493,7 +525,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
             try:
                 wavs = tester.read(old, v.dir / "tts" / old.get("ref", "ref.wav"))
                 try:
-                    before = tester.measure(wavs, float(old.get("tempo", 1.0)))
+                    before = tester.measure(wavs, float(old.get("tempo", 1.0)), ref=v.dir / "tts" / old.get("ref", "ref.wav"))
                 finally:
                     _cleanup(wavs)
             except (ModelError, C.WorkerError):
@@ -504,33 +536,34 @@ def train(job, voice_name: str, push, control=None) -> dict:
         if before is not None and win["score"] <= before["score"] + 0.005:
             result.update(replaced=False, note=f"Tried {len(tried)} reference clips; none beat the current cadence, so it stays.")
             return result
-        approved = old and approved_by_user(old)
-        # 5. save the pack with the voice
+        if before is not None and win["clip"] == old.get("clip") and all(base[k] == old.get(k) for k in base):
+            result.update(replaced=False, note="The best reference clip is the one it already speaks with, so the cadence stays.")
+            return result
+        # 5. save the pack with the voice. A voice that already speaks with a cadence keeps it: the new one waits in
+        # tts/pending/ for the user's ear ("Keep this one", phase 9). Only an unusable current one (its engine gone)
+        # is replaced at once, and even then it's moved aside (tts/previous/), never deleted.
         gaps = person.get("sentence_gap_s") or [0.3, 0.45, 0.8]
         gap = float(np.clip(gaps[1], 0.25, 1.0))
-        tdir = v.dir / "tts"
-        if approved:   # the user approved the current one by ear: the new one waits next to it (tts/pending/)
-            tdir = v.dir / "tts" / "pending"
-        tdir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(work / f"{win['clip']}.wav", tdir / "ref.wav")
+        waits = old is not None and before is not None
         pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
-                "data_minutes": mins, "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score")},
+                "data_minutes": mins,
+                "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score", "score_voice", "sound")},
                 "person": {k: person.get(k) for k in ("rate", "pauses", "pause_ms", "range_st", "sentences", "sentence_gap_s")},
-                "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score")},
-                "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": (old or {}).get("verdicts", [])}
-        fsutil.write_text(tdir / "cadence.json", json.dumps({**pack, "tried": tried}, indent=1))
-        if approved:
+                "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score", "score_voice", "sound")},
+                "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": []}
+        new = work / "pack"
+        new.mkdir(exist_ok=True)
+        shutil.copyfile(work / f"{win['clip']}.wav", new / "ref.wav")
+        fsutil.write_text(new / "cadence.json", json.dumps({**pack, "tried": tried}, indent=1))
+        if save_pack(v.name, new, pack, waits) == "pending":
             result.update(replaced=False, pending=True,
-                          note=f"Found a cadence for {v.name} that measures better ({before['score']:.3f} -> {win['score']:.3f}); "
-                               "the one you approved stays until you've listened to the new one.")
+                          note=f"Found a cadence for {label_of(v.name)} that measures better ({before['score']:.3f} -> "
+                               f"{win['score']:.3f}). Listen to both and keep the one you like: the current one "
+                               "stays until you choose.")
             return result
-        v = get_voice(v.name)   # fresh meta (an export may have happened meanwhile)
-        v.extra["tts"] = pack
-        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
-        gpu.forget_voice(v.name)
-        result.update(replaced=True, note=(f"{v.name} now speaks with {proj.person}'s cadence" if before is None else
-                                           f"Better cadence for {v.name} ({before['score']:.3f} -> {win['score']:.3f})")
+        result.update(replaced=True, note=(f"{v.name} now speaks with {proj.person}'s cadence" if old is None else
+                                           f"New cadence for {v.name} (the old one couldn't be read; it's kept in tts/previous)")
                       + f" (from {mins} min of their speech).")
         return result
     finally:
@@ -549,6 +582,207 @@ def approved_by_user(pack: dict) -> bool:
         if me in vd.get("compared", []):
             return vd.get("winner") == me
     return False
+
+
+# ---------------------------------------------------------------- "Keep this one" (phase 9): the ear steers
+#
+# tts/                       the live pack: ref.wav + cadence.json (+ sample.wav / sample.json: its A/B reading)
+# tts/pending/               a new pack waiting for the user's ear (Train cadence or a re-run, when the voice has one)
+# tts/previous/              the pack that "keep the new one" last replaced (pack.json = its extra.tts at that moment)
+# tts/older/<stamp>-<why>/   whatever would otherwise be overwritten: an earlier previous ("previous"), a pending pack
+#                            replaced by a newer one before anyone listened ("unheard"), one the user turned down
+#                            ("turned-down"). This code never deletes a pack; it only moves them (core.storage.move_within).
+#                            SafeHouse's "delete the cadence" still removes the whole tts/ folder, as before.
+
+_LOCK = threading.RLock()
+# The line both packs read for the A/B (short, plain, a comma and a full stop; not one of the test sentences)
+AB_LINE = "I have always believed that the best stories are the ones we tell each other at the end of a long day."
+AB_SEED = 4321
+
+
+def _pack_files(d: Path) -> list[Path]:
+    return sorted(f for f in d.iterdir() if f.is_file()) if d.is_dir() else []
+
+
+def _move(v, src: Path, dst: Path):
+    """Every file of the pack in src into dst (inside the voice's tts/ folder only; nothing overwritten)."""
+    storage.move_within([(f, dst / f.name) for f in _pack_files(src)], v.dir / "tts")
+    if src != v.dir / "tts":
+        try:
+            src.rmdir()   # only when empty
+        except OSError:
+            pass
+
+
+def _set_aside(v, d: Path, why: str) -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dst, k = v.dir / "tts" / "older" / f"{stamp}-{why}", 2
+    while dst.exists():
+        dst, k = v.dir / "tts" / "older" / f"{stamp}-{why}-{k}", k + 1
+    _move(v, d, dst)
+    return dst
+
+
+def _to_previous(v, pack: dict | None):
+    """The live pack -> tts/previous/ (a pack already there goes to older/ first)."""
+    tts = v.dir / "tts"
+    if _pack_files(tts / "previous"):
+        _set_aside(v, tts / "previous", "previous")
+    _move(v, tts, tts / "previous")
+    if pack:
+        fsutil.write_text(tts / "previous" / "pack.json", json.dumps(pack, indent=1))
+
+
+def _put_pack(v, src: Path, dst: Path):
+    """A newly made pack (scratch folder) into the voice: copied, into a place that holds no pack."""
+    if _pack_files(dst):
+        raise ModelError(f"{dst} already holds a cadence; nothing was written.")
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in _pack_files(src):
+        shutil.copyfile(f, dst / f.name)
+
+
+def save_pack(voice_name: str, src: Path, pack: dict, waits: bool) -> str:
+    """A newly made pack (src: ref.wav + cadence.json) into the voice. waits: the voice speaks with a cadence that
+    still works, so the new one goes to tts/pending/ (an earlier one nobody listened to is set aside, "unheard");
+    otherwise it goes live and whatever was live moves to tts/previous/. -> "pending" | "live". Deletes nothing."""
+    with _LOCK:
+        v = get_voice(voice_name)   # fresh meta (an export or a verdict may have happened meanwhile)
+        tts = v.dir / "tts"
+        if waits:
+            if _pack_files(tts / "pending"):
+                _set_aside(v, tts / "pending", "unheard")
+            _put_pack(v, src, tts / "pending")
+            return "pending"
+        old = (v.extra or {}).get("tts")
+        if _pack_files(tts):
+            _to_previous(v, old)
+        pack = {**pack, "verdicts": list((old or {}).get("verdicts", []))}
+        _put_pack(v, src, tts)
+        v.extra["tts"] = pack
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    gpu.forget_voice(v.name)
+    return "live"
+
+
+def pending_of(v) -> dict | None:
+    """The pack waiting in tts/pending/ for the user's ear, or None."""
+    d = v.dir / "tts" / "pending"
+    try:
+        pack = json.loads((d / "cadence.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pack.pop("tried", None)
+    return pack if (d / pack.get("ref", "ref.wav")).exists() else None
+
+
+def _ids(cur: dict, pen: dict) -> tuple[str, str]:
+    a, b = pack_id(cur), pack_id(pen)
+    return (a, b) if a != b else (a, f"{b}@{pen.get('made', 'pending')}")
+
+
+def _sample_ok(d: Path, pid: str) -> bool:
+    try:
+        meta = json.loads((d / "sample.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return meta.get("line") == AB_LINE and meta.get("pack") == pid and (d / "sample.wav").is_file()
+
+
+def ab_state(voice_name: str) -> dict:
+    """What the A/B card shows: the live pack and the one waiting, their numbers, and whether both readings exist."""
+    v = get_voice(voice_name)
+    cur, pen = pack_of(v), pending_of(v)
+    out = {"voice": v.name, "display": label_of(v.name), "line": AB_LINE, "current": None, "pending": None, "ready": False}
+    tts = v.dir / "tts"
+    ci, pi = _ids(cur, pen) if cur and pen else (cur and pack_id(cur), pen and pack_id(pen))
+    if cur:
+        out["current"] = {"id": ci, "clip": cur.get("clip"), "made": cur.get("made"), "scores": cur.get("scores"),
+                          "approved": approved_by_user(cur), "sample": _sample_ok(tts, ci)}
+    if pen:
+        out["pending"] = {"id": pi, "clip": pen.get("clip"), "made": pen.get("made"), "scores": pen.get("scores"),
+                          "current_same_test": pen.get("before"), "sample": _sample_ok(tts / "pending", pi)}
+    out["ready"] = bool(cur and pen and out["current"]["sample"] and out["pending"]["sample"])
+    return out
+
+
+def sample_file(voice_name: str, which: str) -> Path:
+    v = get_voice(voice_name)
+    if which not in ("current", "pending"):
+        raise LookupError("Not found")
+    f = v.dir / "tts" / ("pending" if which == "pending" else "") / "sample.wav"
+    if not f.is_file():
+        raise LookupError("That reading hasn't been made yet.")
+    return f
+
+
+def make_samples(job, voice_name: str) -> dict:
+    """Read AB_LINE once with the live pack and once with the pending one (engine + the voice's RVC), each saved with
+    its pack (sample.wav + sample.json), so the A/B costs GPU time once. Readings already there are kept."""
+    from . import service
+    v = get_voice(voice_name)
+    cur, pen = pack_of(v), pending_of(v)
+    if not (cur and pen):
+        raise ModelError(f"{label_of(v.name)} has no new cadence waiting to compare.")
+    ids = _ids(cur, pen)
+    tts = v.dir / "tts"
+    todo = [(d, pack, pid) for d, pack, pid in ((tts, cur, ids[0]), (tts / "pending", pen, ids[1])) if not _sample_ok(d, pid)]
+    conv = gpu.MODELS.converter
+    lv = conv.voice(v.name)
+    sp = service.speaking_pitch(v)
+    for i, (d, pack, pid) in enumerate(todo):
+        if job.cancel:
+            raise Cancelled()
+        job.push(stage="reading", frac=i / max(1, len(todo)), message=f"Reading the line with the {'new' if d != tts else 'current'} cadence")
+        fut, wav = render.request(AB_LINE, pack, d / pack.get("ref", "ref.wav"), seed=AB_SEED)
+        render.client.wait(fut, cancel=lambda: job.cancel)
+        y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)))
+        r = float(np.sqrt(np.mean(y ** 2))) if len(y) else 0.0
+        if r > 0:   # the same loudness for both, peaks under -1 dBFS (as SpeakEasy levels its sentences)
+            y = y * min(0.1 / r, 0.89 / float(np.abs(y).max()))
+        with _LOCK:
+            if not (d / pack.get("ref", "ref.wav")).exists():   # a verdict moved it meanwhile
+                continue
+            sf.write(str(d / "sample.wav"), y, sr, subtype="PCM_16")
+            fsutil.write_text(d / "sample.json", json.dumps({"line": AB_LINE, "pack": pid, "made": time.strftime("%Y-%m-%d %H:%M")}))
+    return ab_state(v.name)
+
+
+def verdict(voice_name: str, keep: str, why: str = "", by: str = "user") -> dict:
+    """The user's choice between the live pack and the pending one. keep: "current" | "pending".
+    Either way the verdict (both packs' ids and scores) is appended to the kept pack's extra.tts.verdicts.
+    "pending": the live pack moves to tts/previous/ (an older previous to tts/older/), the pending one goes live.
+    "current": the pending pack moves to tts/older/<stamp>-turned-down/. Nothing is deleted."""
+    if keep not in ("current", "pending"):
+        raise ModelError('Say which one to keep: "current" or "pending".')
+    with _LOCK:
+        v = get_voice(voice_name)
+        cur, pen = pack_of(v), pending_of(v)
+        if pen is None:
+            raise ModelError(f"There's no new cadence waiting for {label_of(v.name)}.")
+        if cur is None and keep == "current":
+            raise ModelError(f"{label_of(v.name)} has no current cadence to keep; keep the new one or leave it waiting.")
+        ci, pi = _ids(cur, pen) if cur else ("none", pack_id(pen))
+        entry = {"date": time.strftime("%Y-%m-%d %H:%M"), "compared": [ci, pi], "winner": ci if keep == "current" else pi,
+                 "why": (why or "").strip()[:1000], "by": by, "kept": keep,
+                 # the numbers both packs had in the same test run (the pending pack measured the live one alongside)
+                 "scores": {ci: pen.get("before") or (cur or {}).get("scores"), pi: pen.get("scores")}}
+        tts = v.dir / "tts"
+        if keep == "current":
+            cur.setdefault("verdicts", []).append(entry)
+            fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+            aside = _set_aside(v, tts / "pending", "turned-down")
+            fsutil.write_text(aside / "verdict.json", json.dumps(entry, indent=1))
+            return {"kept": "current", "verdict": entry, "state": ab_state(v.name)}
+        new = dict(pen)
+        new["verdicts"] = list((cur or {}).get("verdicts", [])) + [entry]
+        if _pack_files(tts):
+            _to_previous(v, cur and {**cur, "verdicts": new["verdicts"]})
+        _move(v, tts / "pending", tts)
+        v.extra["tts"] = new
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    gpu.forget_voice(v.name)
+    return {"kept": "pending", "verdict": entry, "state": ab_state(v.name)}
 
 
 def record_verdict(voice_name: str, compared: list, winner: str, why: str, by: str = "user") -> dict:
