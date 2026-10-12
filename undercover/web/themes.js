@@ -152,6 +152,7 @@ async function renderThemes() {
 }
 $("#set-themes").addEventListener("click", e => {
   const b = e.target.closest("[data-theme-id]"); if (!b) return;
+  if (TH.maker) closeMaker(false);   // picking a theme ends the one being made
   applyThemeEntry(TH.list.find(t => t.id === b.dataset.themeId));
   renderThemes();
 });
@@ -274,10 +275,12 @@ function wireMaker() {
   $("#mk-font").onchange = async e => {
     for (const f of e.target.files) {
       if (f.size > 1.5e6) { showError(`${f.name} is over 1.5 MB; a theme's fonts should be small web fonts (woff2).`, "Font too big"); continue; }
-      const buf = await f.arrayBuffer(), family = f.name.replace(/\.woff2$/i, "").replace(/[-_](wght|variable|regular|vf)$/i, "").replace(/[-_]+/g, " ").trim();
+      const buf = await f.arrayBuffer();
+      const family = f.name.replace(/\.woff2$/i, "").replace(/[-_](wght|variable|regular|vf)$/i, "").replace(/[-_]+/g, " ")
+        .normalize("NFKD").replace(/[^A-Za-z0-9 ]/g, "").trim().slice(0, 40) || `Font ${mk.fonts.length + 1}`;   // theme.css allows plain names only
       try { const face = new FontFace(family, buf); await face.load(); document.fonts.add(face); }
       catch (err) { showError(`${f.name} isn't a font this browser can read.`, "Couldn't add the font"); continue; }
-      mk.fonts.push({ family, file: f.name.replace(/[^\w.-]/g, "_"), data: buf });
+      mk.fonts.push({ family, file: `${family.replace(/ /g, "")}.woff2`, data: buf });   // starts with a letter or digit, as the folder rules want
     }
     e.target.value = ""; renderMaker();
   };
@@ -318,6 +321,10 @@ async function saveMaker(share) {
   const mk = TH.maker, name = mk.name.trim(), id = slug(name);
   if (!name || id.length < 2) { $("#mk-name").focus(); return showError("Give the theme a name first.", "Name it"); }
   if (TH.list.some(t => t.id === id && t.shipped)) return showError(`${name} is one of UnderCover's own themes; pick another name.`, "Name taken");
+  const mine = TH.list.find(t => t.id === id && !t.shipped);
+  if (mine && mk.replaceOk !== id)
+    return showError(`You already have a theme called ${mine.name}${mine.author ? ` (by ${mine.author})` : ""}. Replace it with this one?`, "Name taken",
+                     { label: "Replace it", run: () => { $("#err").hidden = true; mk.replaceOk = id; saveMaker(share); } });
   const sel = `:root[data-uc-theme="${id}"]`;
   const fontCss = mk.fonts.map(f => `@font-face { font-family: "${f.family}"; src: url("fonts/${f.file}") format("woff2"); font-weight: 100 900; font-display: swap; }\n`).join("");
   const said = s => s.replace(/\*\/|\/\*/g, "");   // a name can't end the comment early
@@ -338,6 +345,17 @@ async function saveMaker(share) {
   } catch (err) { btn.disabled = false; showError(err.message, "Couldn't save the theme"); }
 }
 
+// the WinAmp skin is its own thing: while it's on, the theme steps aside (its light block would outrank the skin's colours)
+let skinHeld = null;
+new MutationObserver(() => {
+  const root = document.documentElement, skin = root.dataset.skin === "winamp";
+  if (skin && root.dataset.ucTheme) { skinHeld = root.dataset.ucTheme; delete root.dataset.ucTheme; }
+  else if (!skin && skinHeld) { root.dataset.ucTheme = skinHeld; skinHeld = null; }
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-skin", "data-uc-theme"] });
+if (document.documentElement.dataset.skin === "winamp" && document.documentElement.dataset.ucTheme) { skinHeld = document.documentElement.dataset.ucTheme; delete document.documentElement.dataset.ucTheme; }
+// theming is Deep Cover: switching it off while a theme is being made puts the theme in use back
+new MutationObserver(() => { if (TH.maker && !document.body.classList.contains("deep")) closeMaker(true); })
+  .observe(document.body, { attributes: true, attributeFilter: ["class"] });
 // at load: the head script already applied the remembered theme; check it still exists and give a dark-only one its light mode
 setTimeout(async () => {
   const id = themeId(); if (id === "casefile") return;
