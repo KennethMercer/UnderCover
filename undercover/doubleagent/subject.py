@@ -115,6 +115,24 @@ def classify(name: str, found=None, musician: bool | None = None) -> dict:
             "how": "interviews and speeches", "evidence": [], "choices": [fix[1]]}
 
 
+def apply_pick(name: str, found: dict, pick: str | None) -> dict:
+    """The user's correction or answer in the plan ("person", "character", "role:actor") over the reading."""
+    if not pick:
+        return found
+    if pick == "person":
+        return {"kind": "person", "picked": True, "label": f"{name} as a real person (your pick): learning from interviews and speeches.",
+                "how": "interviews and speeches", "choices": [{"id": "character", "label": f"{name} is a character"}]}
+    if pick == "character":
+        return {"kind": "character", "picked": True, "label": f"{name} as a character (your pick): looking for scenes and voice "
+                                                             f"lines, not interviews about them.",
+                "how": "scenes and voice lines", "choices": [{"id": "person", "label": f"{name} is a real person"}]}
+    if pick.startswith("role:"):
+        role = pick[5:]
+        return {"kind": "role", "role": role, "picked": True, "label": f"{name}, the {role} (your pick): searching for “{name} {role}”.",
+                "how": f"{name} {role}", "choices": []}
+    return found
+
+
 def search_kind(subject: dict | None) -> tuple[str | None, str]:
     """(force: "character" / "person" / None, extra words for the searches) from a classification or a user's pick."""
     if not subject:

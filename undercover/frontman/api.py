@@ -45,7 +45,7 @@ def handle(h, method: str, p: str) -> bool:
             except ModelError as e:
                 h._error(str(e))
         elif p == "/api/auto/plan":
-            _auto_plan(h, (q.get("text") or [""])[0], (q.get("train") or ["0"])[0] == "1")
+            _auto_plan(h, (q.get("text") or [""])[0], (q.get("train") or ["0"])[0] == "1", (q.get("subject") or [""])[0] or None)
         elif m := re.fullmatch(r"/api/songs/([0-9a-f]{16})/key", p):
             from .pipeline import song_key
             h._json(song_key(path("uploads_dir") / song_meta(m.group(1))["file"]))
@@ -202,7 +202,7 @@ def _song_from_youtube(h, body: dict):
         h._error(str(e) if not isinstance(e, (KeyError, TypeError)) else "That song result is incomplete. Search again.")
 
 
-def _auto_plan(h, text: str, prefer_train: bool):
+def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     """What a one-shot request would do, without downloading anything (shown before it starts). An ambiguous bare
     title answers `ask: true` with 2-3 `choices` ({artist, year, title, song_url}) instead of silently picking; while
     an earlier answer is in effect (until a different song is requested) it comes back as `chosen` + `others`."""
@@ -228,6 +228,13 @@ def _auto_plan(h, text: str, prefer_train: bool):
                  if community or online else {"how": "train", "name": f"{slug(person)}-uc", "display": person})
     out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
            "style": req["style"], "voice": voice, "ask": False}
+    if voice["how"] != "installed" or not voice["quality"]["ok"] or subject:
+        # what the request names, in plain words (phase 15): a person, a singer, a character, a band; asked when it
+        # can't tell ("Which Chris Evans?"), correctable either way (subject=person / character / role:<role>)
+        try:
+            out["subject"] = service.subject_of(person, subject)
+        except Exception:
+            out["subject"] = None
     if req["by_only"]:   # "<song> by <name>": the name is the voice, said out loud because it could be the artist
         out["note"] = (f"I read “by {person}” as the voice. If {person} is the song's artist, say "
                        f"“{song} by {person} as <voice>”.")

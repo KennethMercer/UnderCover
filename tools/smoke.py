@@ -1401,8 +1401,10 @@ def u_ask_flow():
     A.choices_for("Hello", lambda q, limit=8: hello)       # the lookup the plan step does, answered from the fixture
     A.choices_for("Toxic", lambda q, limit=8: [_track("Toxic", "Britney Spears", 9e8)])   # no network: one artist
     A.settle({"song": "Hello", "artist": "Adele"}, lambda q, limit=8: [hello[0]])   # "Hello by Adele" checks out
-    keep = (service.installed_for, service.online_for)
+    from undercover.frontman import oneshot as os_mod
+    keep = (service.installed_for, service.online_for, service.subject_of, os_mod.subject_of)
     service.installed_for, service.online_for = (lambda p: []), (lambda p, n=2: [])   # no network, no voices
+    service.subject_of = os_mod.subject_of = lambda p, pick=None: {"kind": "person", "label": f"{p} is a real person.", "choices": []}
     made = []
     iso = isolated_data()   # starting a job must never reach the real folders, whatever it writes
     iso.__enter__()
@@ -1447,7 +1449,7 @@ def u_ask_flow():
         start({"text": "Toxic as Obama"})
         assert plan("Hello as Obama")["ask"] is True
     finally:
-        service.installed_for, service.online_for = keep
+        service.installed_for, service.online_for, service.subject_of, os_mod.subject_of = keep
         iso.__exit__(None, None, None)
         while not jobs.GPU_QUEUE.empty():
             jobs.GPU_QUEUE.get_nowait()

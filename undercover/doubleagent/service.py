@@ -225,14 +225,22 @@ def reference_clips(job, person: str, control, push):
     return P.Project.load(proj.name)
 
 
-def _prefetch_voice_sources(person: str):
+def subject_of(person: str, pick: str | None = None) -> dict:
+    """What a voice request names, read from a quick search (subject.py), with the user's correction or answer."""
+    from .subject import apply_pick, classify
+    return apply_pick(person, {} if pick else classify(person), pick)
+
+
+def _prefetch_voice_sources(person: str, subject: dict | None = None):
     """Create/find the person's project, search their sources and download the first two (network only)."""
     from . import sources as srcmod
+    from .subject import search_kind
     try:
         proj = project_for(person)
         if not proj.sources:
             from . import project as P
-            found = srcmod.search(person, proj.mode)
+            force, words = search_kind(subject)
+            found = srcmod.search(person, proj.mode, force=force, words=words)
             with P.lock(proj.name):
                 cur = P.Project.load(proj.name)
                 if not cur.sources:
