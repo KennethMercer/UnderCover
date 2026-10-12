@@ -126,7 +126,7 @@ def warm():
     """Read the network type and the firewall now (~1 s, cached), so the Doctor's fast check finds them ready."""
     from ..core import doctor
     if _L["addr"] and phone.usable(_L["addr"]):
-        phone.windows_check(_L["addr"], _L["port"], doctor.phone_programs())
+        phone.windows_check(_L["addr"], _L["port"], doctor.phone_programs())   # reads again only when older than WIN_KEEP
 
 
 def listen() -> bool:
