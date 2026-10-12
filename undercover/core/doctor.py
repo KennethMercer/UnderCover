@@ -390,12 +390,8 @@ def c_manifest(ctx) -> list:
 def phone_programs() -> set:
     """The program Windows Firewall has to let in: this process's own executable. In a venv, sys.executable is the venv's
     python.exe, which only starts the base interpreter; that one listens, so a rule for the venv path doesn't help."""
-    if os.name == "nt":
-        import ctypes
-        buf = ctypes.create_unicode_buffer(32768)
-        if ctypes.windll.kernel32.GetModuleFileNameW(None, buf, len(buf)):
-            return {buf.value}
-    return {sys.executable}
+    from . import platform
+    return {platform.own_executable()}
 
 
 def c_phone(ctx) -> list:

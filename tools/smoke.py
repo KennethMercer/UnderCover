@@ -2697,6 +2697,103 @@ def u_tutorial():
             + ("the shipped demo voice matches its manifest" if why is None else f"NOTE: {why}"))
 
 
+# ---------------------------------------------------------------- the platform helper and the tray (phase 18)
+
+WINDOWS_ONLY = ("ctypes.windll", "WinDLL(", "os.startfile", '"netsh"', '"powershell"', '"explorer"',
+                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(")
+
+
+@check("platform helper: every Windows-only call lives in core/platform.py; the helper works here and says 'not on this OS' elsewhere")
+def u_platform():
+    import subprocess as sp
+    import tempfile
+    from undercover.core import platform
+    bad = []
+    for f in (ROOT / "undercover").rglob("*.py"):
+        if f.name == "platform.py" and f.parent.name == "core":
+            continue
+        text = f.read_text(encoding="utf-8")
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in text]
+    assert not bad, f"Windows-only calls outside core/platform.py: {bad}"
+    if platform.WINDOWS:
+        assert platform.supports("startup") == (True, "") and platform.drives() and platform.own_executable().endswith(".exe")
+        assert platform.keep_awake(False) is True
+        assert any(r.get("Name") for r in platform.video_controllers())
+    # one per user: a second process can't claim the name while this one holds it
+    name = f"UnderCover-smoke-{os.getpid()}"
+    probe = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); from undercover.core import platform; "
+             f"print(platform.single_instance({name!r}))")
+    assert platform.single_instance(name)
+    out = sp.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60).stdout.strip()
+    assert out == "False", f"a second process claimed it: {out!r}"
+    platform.release_instance(name)
+    out = sp.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60).stdout.strip()
+    assert out == "True", f"released, but a second process still couldn't: {out!r}"
+    # Start with Windows: only ever in a folder of the test's own
+    if platform.WINDOWS:
+        with tempfile.TemporaryDirectory(prefix="uc-startup-") as d:
+            target = ROOT / "UnderCover.bat"
+            assert not platform.startup_entry_state(d)
+            assert platform.startup_entry(True, target, folder=d) and platform.startup_entry_state(d)
+            assert not platform.startup_entry(False, target, folder=d) and not platform.startup_entry_state(d)
+    # another OS: the plain answers
+    saved = platform.WINDOWS
+    platform.WINDOWS = False
+    try:
+        assert platform.supports("firewall")[0] is False and platform.supports("tray")[0] is False
+        assert platform.keep_awake(True) is False
+        for fn, args in ((platform.startup_folder, ()), (platform.network_and_firewall, ("192.168.1.5",)),
+                         (platform.video_controllers, ())):
+            try:
+                fn(*args)
+                raise AssertionError(f"{fn.__name__} ran as if on Windows")
+            except platform.NotOnThisOS as e:
+                assert "Windows only" in str(e), e
+        assert platform.own_executable() == sys.executable
+    finally:
+        platform.WINDOWS = saved
+    return "no Windows-only calls elsewhere; one instance; the startup shortcut in a temp folder; the other-OS answers"
+
+
+@check("tray: the menu and the icon from what the server says (stopped, idle, working, paused, a problem); no torch")
+def u_tray():
+    import subprocess as sp
+    from undercover.core import trayicon as tray
+    assert tray.icon_state(None) == ("stopped", None) and tray.tooltip(None) == "UnderCover isn't running"
+    assert [i["id"] for i in tray.menu_model(None) if i["id"] != "-"] == ["start", "close"]
+    idle = {"work": {"held": False, "resume": []}, "gpu_problem": None}
+    assert tray.icon_state(idle, []) == ("idle", None) and tray.tooltip(idle, []) == "UnderCover · ready"
+    m = tray.menu_model(idle, [], phone_on=False, startup_on=True)
+    ids = [i["id"] for i in m if i["id"] != "-"]
+    assert ids == ["open", "running", "phone", "restart", "quit", "startup"], ids
+    assert m[0]["default"] and next(i for i in m if i["id"] == "phone")["checked"] is False
+    assert next(i for i in m if i["id"] == "startup")["checked"] is True
+    cover = {"id": "c1", "kind": "cover", "state": "running", "title": "Cover: Hello as Agent Smoke", "total_left": 130}
+    train = {"id": "t1", "kind": "train", "state": "running", "title": "Training Morgan Freeman", "epoch": 120,
+             "epochs": 400, "total_left": 1800}
+    assert tray.icon_state(idle, [cover]) == ("working", "frontman")
+    assert tray.icon_state(idle, [train, cover]) == ("working", "doubleagent")
+    assert tray.job_line(train) == "Training Morgan Freeman · epoch 120 of 400 · about 30 min left"
+    assert tray.tooltip(idle, [cover, train]).startswith("UnderCover · Cover: Hello as Agent Smoke · about 2 min left (+1 more)")
+    m = tray.menu_model(idle, [train, cover])
+    assert [i["text"] for i in m if i["id"] == "running"] == [tray.job_line(train), tray.job_line(cover)]
+    assert any(i["id"] == "pause" for i in m) and not any(i["id"] == "resume" for i in m)
+    held = {"work": {"held": True, "resume": [{"kind": "train"}]}}
+    assert any(i["id"] == "resume" for i in tray.menu_model(held, []))
+    assert tray.icon_state({"gpu_problem": "no GPU"}, [cover]) == ("problem", None)
+    assert tray.icon_state(idle, [], doctor_bad=True)[0] == "problem"
+    finished = {**cover, "state": "done", "final": {"state": "done"}}
+    assert tray.icon_state(idle, [finished]) == ("idle", None)
+    imgs = [tray.draw_icon(st, mod).tobytes() for st, mod in (("idle", None), ("working", "frontman"), ("problem", None),
+                                                              ("stopped", None))]
+    assert len(set(imgs)) == 4 and tray.draw_icon("idle", size=16).size == (16, 16)
+    out = sp.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {str(ROOT)!r}); import undercover.core.trayicon; "
+                  "print('torch' in sys.modules, 'undercover.core.jobs' in sys.modules)"],
+                 capture_output=True, text=True, timeout=120).stdout.strip()
+    assert out == "False False", f"the tray loads heavy modules: {out}"
+    return "stopped / idle / working (the module's bar) / paused / problem; job lines; icons differ; light import"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -2976,6 +3073,25 @@ def a_tutorial():
     songs = api("/api/library/songs")
     assert all("sample" in x for x in songs)
     return f"existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
+
+
+@check("api: the tray's client against the sandbox (status, jobs, phone, pause / resume, a refusal in plain words)")
+def a_tray():
+    from undercover.core import trayicon as tray
+    port = int(BASE.rsplit(":", 1)[1])
+    srv = tray.Server(port)
+    st = srv.get("/api/status")
+    assert st and "work" in st, st
+    model = tray.menu_model(st, srv.get("/api/jobs"), (srv.get("/api/phone") or {}).get("enabled"))
+    assert model[0]["id"] == "open" and any(i["id"] == "phone" for i in model), model
+    ok, _ = srv.post("/api/work/pause")
+    assert ok
+    ok, _ = srv.post("/api/work/resume")
+    assert ok
+    ok, msg = srv.post("/api/phone/revoke", {"id": "nobody"})
+    assert not ok and "paired" in msg, msg   # the server's own words come back for the notification
+    assert tray.Server(1).get("/api/status") is None and tray.icon_state(None)[0] == "stopped"
+    return "status → menu; pause, resume; a refusal's words; a server that's down reads as stopped"
 
 
 @check("api: status ready")
@@ -3607,7 +3723,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -3620,7 +3736,7 @@ def main():
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes, a_tutorial):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()

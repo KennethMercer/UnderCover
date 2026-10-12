@@ -13,7 +13,6 @@ import mimetypes
 import os
 import re
 import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -23,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from ..core import gpu, jobs, phone
+from ..core import gpu, jobs, phone, platform
 from ..core.config import CONFIG, ROOT, path
 from ..core.files import AUDIO_EXT, roots as _roots
 from ..core.jobs import GPU_QUEUE, JOBS, STATUS, Cancelled, Job, friendly, gpu_worker
@@ -684,17 +683,17 @@ class Handler(BaseHTTPRequestHandler):
             shutil.rmtree(work, ignore_errors=True)
 
     def _open_folder(self, body: dict):
-        """Show a cover in Explorer (by history id), or open the output folder."""
+        """Show a cover in the file manager (by history id), or open the output folder (core/platform)."""
         from ..frontman.pipeline import history
         hid = body.get("history_id")
         item = next((h for h in history() if h["id"] == hid), None) if isinstance(hid, str) else None
         vdir = path("voices_dir") / str(body.get("voice") or "")
         if body.get("voice") and re.fullmatch(r"[a-z0-9-]+", body["voice"]) and vdir.is_dir():
-            os.startfile(vdir)
+            platform.open_folder(vdir)
         elif item:
-            subprocess.Popen(["explorer", f"/select,{Path(item['output'])}"])
+            platform.show_in_folder(item["output"])
         else:
-            os.startfile(path("output_dir"))
+            platform.open_folder(path("output_dir"))
         self._json({"ok": True})
 
 
@@ -732,9 +731,7 @@ class ExclusiveServer(ThreadingHTTPServer):
     allow_reuse_address = False
 
     def _exclusive(self):
-        import socket
-        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        platform.exclusive_bind(self.socket)
 
     def server_bind(self):
         self._exclusive()
@@ -775,11 +772,8 @@ def _relaunch(extra_args: list[str]):
     """Hand off to undercover/core/relaunch.py, which waits for THIS process to exit before starting a fresh,
     windowless server (output in logs/server.log). Starting the new server while this one is still releasing
     the GPU leaves this process stuck in the driver."""
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen([sys.executable, "-m", "undercover.core.relaunch", str(os.getpid()),
-                      "--no-browser", "--restarted", *extra_args],
-                     cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     creationflags=flags, close_fds=True)
+    platform.start_detached([sys.executable, "-m", "undercover.core.relaunch", str(os.getpid()),
+                             "--no-browser", "--restarted", *extra_args], cwd=ROOT)
 
 
 def main():
@@ -844,6 +838,7 @@ def main():
         phone_api.setup(lambda a, p: PhoneServer((a, p), Handler), port)
     except Exception as e:   # noqa: BLE001 - never block startup
         print(f"Phone access couldn't start: {e}", flush=True)
+    _start_tray(port)
     url = f"http://{host}:{port}/"
     print(f"UnderCover is running at {url}\nKeep this window open while you use it. Press Ctrl+C to stop.")
     if phone_api.url():
@@ -867,44 +862,31 @@ def main():
     _hard_exit()
 
 
+def _start_tray(port: int):
+    """The tray icon (phase 18): its own light process, for the user's server only (never a sandbox or test server, not
+    with --no-tray or [ui] tray = false). A restart starts it again; a second one just exits (one per user)."""
+    from ..core import storage
+    if ("--no-tray" in sys.argv or not UCFG.get("tray", True) or port != UCFG["port"]
+            or storage.ALLOWED_ROOTS is not None or not platform.supports("tray")[0]):
+        return
+    try:
+        platform.start_detached([platform.windowless_python(), "-m", "undercover.tray"], cwd=ROOT)
+    except OSError as e:
+        print(f"The tray icon couldn't start: {e}", flush=True)
+
+
 def _install_console_handler():
     """Closing the UnderCover window (or logging off / shutting down) skips Python's Ctrl+C path: catch it, write the
-    heartbeat's clean "stop" and exit via TerminateProcess (a normal exit can hang in the GPU driver)."""
-    if os.name != "nt":
-        return
-    import ctypes
-    from ctypes import wintypes
-    HANDLER = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
-
-    def handler(event):
-        if event in (2, 5, 6):   # CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT
-            _hb_write({"event": "stop", "reason": {2: "window closed", 5: "log off", 6: "shutdown"}[event]})
-            _hard_exit()
-        return False             # Ctrl+C / Ctrl+Break: let Python raise KeyboardInterrupt as before
-    global _CONSOLE_HANDLER
-    _CONSOLE_HANDLER = HANDLER(handler)   # keep a reference, or it's garbage-collected
-    ctypes.windll.kernel32.SetConsoleCtrlHandler(_CONSOLE_HANDLER, True)
-
-
-_CONSOLE_HANDLER = None
+    heartbeat's clean "stop" and exit at once (a normal exit can hang in the GPU driver). core/platform does the OS part."""
+    def closing(reason: str):
+        _hb_write({"event": "stop", "reason": reason})
+        _hard_exit()
+    platform.on_console_close(closing)
 
 
 def _hard_exit():
-    """End this process immediately. A normal exit (even os._exit) can hang forever on Windows while the GPU
-    runtime's DLLs shut down, leaving a zombie holding RAM/VRAM. TerminateProcess skips that; the OS still frees
-    all memory, including VRAM."""
-    if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        # Declare types: without them the pseudo-handle (-1) is passed as a 32-bit int, becomes an invalid
-        # handle, TerminateProcess silently fails and we fall through to the exit that hangs.
-        k32.GetCurrentProcess.restype = wintypes.HANDLE
-        k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        k32.TerminateProcess.restype = wintypes.BOOL
-        if not k32.TerminateProcess(k32.GetCurrentProcess(), 0):
-            print(f"TerminateProcess failed (error {ctypes.get_last_error()})", flush=True)
-    os._exit(0)
+    """End this process immediately (core/platform.hard_exit: a normal exit can hang in the GPU runtime's teardown)."""
+    platform.hard_exit(0)
 
 
 if __name__ == "__main__":
