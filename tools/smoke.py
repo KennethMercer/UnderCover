@@ -1094,6 +1094,80 @@ def u_leadgate():
     return f"hook {inst:.1f} s left as it is, chorus {ch:.1f} s converted, singing untouched, stems unchanged"
 
 
+@check("yield: long videos in spread stretches, the hiss rule per voice (real hiss still out), the names check of a character's voice")
+def u_yield():
+    import numpy as np
+    from undercover.doubleagent import project as P, service, sources as S
+    # stretches: a 4 h compilation gives six 2 min stretches from its first minute to its last; short ones as before
+    st = S.stretches(4 * 3600, 720, 120)
+    assert len(st) == 6 and st[0][0] == 60 and abs(st[-1][0] + st[-1][1] - (4 * 3600 - 60)) < 1, st
+    assert S.stretches(600, 720, 120) == [] and S.stretches(780, 720, 120) == [(0.0, 720)] and S.stretches(3600, 720, 0) == [(60.0, 720)]
+    args = S.trim_args(4 * 3600)
+    assert args[0] == "-filter_complex" and "concat=n=6" in args[1] and f"apad=pad_dur={S.STRETCH_GAP}" in args[1], args
+    # the noise floor: a voice with gaps between its words is clean there; white noise at 20 dB SNR fills them
+    rng = np.random.default_rng(19)
+    x, sr = _speechlike(sr=32000, secs=4.0, seed=19)
+    hissy = x + rng.standard_normal(len(x)).astype(np.float32) * np.sqrt(float(np.mean(x ** 2)) / 100)
+    assert P.noise_floor(x, sr) < P.HISS_FLOOR_DB < P.noise_floor(hissy, sr), (P.noise_floor(x, sr), P.noise_floor(hissy, sr))
+    with isolated_data():
+        # a raspy voice (its own clean-gap phrases at 0.33) gets a higher limit (capped at 0.40); hiss over 0.30 with filled gaps stays out
+        proj = P.Project.create("Rasp", "speaking", name="zz-rasp")
+        proj.sources = [S.Source(id="a", url="", title="a", duration=600)]
+        emb, phrases = {}, []
+        v = rng.standard_normal(64)
+        v /= np.linalg.norm(v)
+        for i, (nz, fl) in enumerate([(0.33, -45.0)] * 30 + [(0.36, -44.0), (0.36, -28.0), (0.45, -50.0)]):
+            e = v + 0.1 * rng.standard_normal(64)
+            emb[f"a_{i:04d}"] = (e / np.linalg.norm(e)).astype(np.float32)
+            phrases.append(P.Phrase(id=f"a_{i:04d}", source="a", start=i * 5.0, dur=4.0, noise=nz, floor=fl))
+        proj.phrases = phrases
+        proj.save_embeddings(emb)
+        P.find_speakers(proj)
+        P.score(proj)
+        why = [p.reason for p in proj.phrases[-3:]]
+        assert proj.reference["hiss_limit"] == 0.40 and proj.phrases[0].kept and why == ["", "hiss or artifacts", "hiss or artifacts"], (proj.reference, why)
+        # a person's voice (0.20) keeps the fixed limit
+        for p in proj.phrases[:30]:
+            p.noise = 0.2
+        P.score(proj)
+        assert proj.reference["hiss_limit"] == 0.30 and proj.phrases[-3].reason == "hiss or artifacts", proj.reference
+        # the names check: the voice heard most keeps saying "SpongeBob", the other never does -> it's switched, and said
+        proj = P.Project.create("SpongeBob", "speaking", name="zz-names")
+        proj.sources = [S.Source(id=f"s{k}", url="", title=f"SpongeBob scenes {k}", duration=600, extra={"kind": "scene"}) for k in range(2)]
+        a, b = rng.standard_normal(64), rng.standard_normal(64)
+        emb, phrases = {}, []
+        for who, voice, n in (("pat", a, 30), ("sb", b, 20)):
+            for i in range(n):
+                pid = f"s{i % 2}_{who}{i:03d}"
+                e = voice + 0.1 * rng.standard_normal(64)
+                emb[pid] = (e / np.linalg.norm(e)).astype(np.float32)
+                phrases.append(P.Phrase(id=pid, source=f"s{i % 2}", start=i * 5.0, dur=4.0, noise=0.2, floor=-50.0))
+        proj.phrases = phrases
+        proj.save_embeddings(emb)
+        P.find_speakers(proj)
+        P.score(proj)
+        proj.save()
+        with P.lock(proj.name):   # the automatic pick, confirmed as the app does
+            P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)
+            proj.save()
+        picked = proj.reference["clip"]
+        assert "pat" in picked, proj.reference   # the voice heard most: the other character
+        for p in proj.phrases:
+            proj.clip_path(p.id).parent.mkdir(parents=True, exist_ok=True)
+            proj.clip_path(p.id).write_bytes(b"")
+        import undercover.core.cadence as C
+        real, notes = C.transcribe, []
+        C.transcribe = lambda files, **k: ["Hey SpongeBob, wait up!" if "pat" in str(f) else "I'm ready, I'm ready!" for f in files]
+        try:
+            proj = service.check_names(proj, "SpongeBob", lambda *a: notes.append(a[-1]))
+        finally:
+            C.transcribe = real
+        assert "sb" in proj.reference["clip"] and proj.reference.get("names_note") and any("never says it" in n for n in notes), (proj.reference, notes)
+        assert proj.phrases and all("sb" in p.id for p in proj.phrases if p.kept), [p.id for p in proj.phrases if p.kept][:5]
+    return (f"6 stretches over 4 h; floor {P.noise_floor(x, sr):.0f} dB clean, {P.noise_floor(hissy, sr):.0f} dB with hiss; "
+            f"a raspy voice's limit 0.40, a person's 0.30; the voice saying \"SpongeBob\" swapped for the one that doesn't")
+
+
 @check("clip sound: degraded copies (lowpassed, noise, clipped, reverb) rank below the original")
 def u_clipsound():
     import numpy as np
@@ -3605,7 +3679,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial):
         fn()

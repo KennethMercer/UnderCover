@@ -59,6 +59,7 @@ class Phrase:
     choice: bool | None = None   # operator override: True keep, False remove, None automatic
     sung: bool = False       # matched the person's singing voice better than their speaking voice
     noise: float = -1.0      # spectral flatness of the loud frames (hiss, artifacts); -1 = not measured yet
+    floor: float = 1.0       # dB of the quiet gaps against the loud frames (hiss fills them); 1.0 = not measured yet
 
     @property
     def kept(self) -> bool:
@@ -310,6 +311,7 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
                 r = rest[a:b]
                 ph.music_db = round(float(20 * np.log10(np.sqrt(np.mean(r ** 2)) + 1e-9) - v_db), 1)
             ph.noise = noisiness(seg, sr)
+            ph.floor = noise_floor(seg, sr)
             oa, ob = int(a / sr * osr), int(b / sr * osr)
             o = orig[oa:ob]
             ph.clipped = bool(len(o) and np.mean(np.abs(o) >= 0.999) > 0.001)
@@ -437,6 +439,41 @@ def _music_limits(proj: Project) -> dict:
     return {s.id: (TCFG.get("music_db_sung", 6.0) if singer and is_sung(s) else TCFG["music_db"]) for s in proj.sources}
 
 
+def name_words(person: str) -> list[str]:
+    """The words others call a character by: "Peter Griffin" -> peter, griffin; "Mr. Krabs" -> krabs."""
+    import re
+    return [w for w in re.findall(r"[a-z0-9]+", person.lower()) if len(w) >= 3 and w not in ("the", "mr", "mrs", "miss", "dr")]
+
+
+def names_said(proj: Project, words: list[str], clusters: list[dict], per: int = 24) -> dict:
+    """Whisper on each voice's closest phrases: {cluster: {phrases, words, said}}, where `said` counts the target's
+    name. Phase 19: a character rarely calls out its own name; the others call it all the time (in the SpongeBob
+    rebuild his voice said "SpongeBob" 0 times in 40 phrases, Squidward 3, Patrick 2)."""
+    import re
+    from ..core.cadence import transcribe
+    emb = proj.load_embeddings()
+    files, owner = [], []
+    for sp in clusters:
+        c = emb.get(f"speaker:{sp['cluster']}")
+        if c is None:
+            continue
+        near = sorted(((float(emb[p.id] @ c), p) for p in proj.phrases
+                       if p.id in emb and p.dur >= 1.5 and proj.clip_path(p.id).exists()), key=lambda x: -x[0])
+        for s, p in near[:per]:
+            if s >= 0.6:
+                files.append(proj.clip_path(p.id))
+                owner.append(sp["cluster"])
+    texts = transcribe(files) if files else []
+    rx = re.compile(r"\b(" + "|".join(map(re.escape, words)) + r")", re.I) if words else None
+    out = {}
+    for k, t in zip(owner, texts):
+        o = out.setdefault(k, {"phrases": 0, "words": 0, "said": 0})
+        o["phrases"] += 1
+        o["words"] += len(t.split())
+        o["said"] += len(rx.findall(t)) if rx else 0
+    return out
+
+
 def find_speakers(proj: Project):
     """Cluster all phrase embeddings into speakers; the reference is the voice heard most, weighted toward
     voices present in several sources. For a fictional character (phase 15) it's the voice heard most in the scenes:
@@ -548,16 +585,49 @@ def noisiness(x: np.ndarray, sr: int) -> float:
     return round(float(np.median(np.exp(np.log(s).mean(1)) / s.mean(1))), 3)
 
 
+def noise_floor(x: np.ndarray, sr: int) -> float:
+    """dB of a phrase's quietest 10% of 32 ms frames against its loudest 10%. Hiss fills the gaps between words; a
+    raspy voice doesn't (phase 19: SpongeBob's "hissy" phrases -45 dB, like his clean ones; white noise at 20 dB SNR
+    -29 dB)."""
+    x = _resample16(x, sr)
+    fr = x[: len(x) // 512 * 512].reshape(-1, 512)
+    if not len(fr):
+        return 0.0
+    e = np.sort((fr ** 2).mean(1)) + 1e-12
+    n = max(1, len(e) // 10)
+    return round(float(10 * np.log10(e[:n].mean() / e[-n:].mean())), 1)
+
+
+# The hiss rule per voice (phase 19). A raspy or cartoon voice is "flat" itself: SpongeBob's own phrases have a median
+# noise of 0.29, so the fixed 0.30 left out 45% of him (10 min). A voice's own level is the median noise of its phrases
+# whose quiet gaps are clean; its limit is that + HISS_MARGIN, between noise_max and HISS_CAP. Over noise_max a phrase
+# still needs clean gaps. Measured on the user's projects with white noise added to their cleaner phrases: at 25 dB SNR
+# or worse no more gets through than before; Obama, Freeman (own levels 0.20, 0.15) keep 0.30 exactly.
+HISS_FLOOR_DB = -38.0
+HISS_MARGIN, HISS_CAP = 0.08, 0.40
+
+
+def hiss_limit(proj: Project, music_limits: dict) -> float:
+    base = TCFG.get("noise_max", 0.30)
+    own = [p.noise for p in proj.phrases if not p.sung and p.noise >= 0 and p.floor <= HISS_FLOOR_DB
+           and p.dur >= TCFG["min_phrase"] and p.score >= TCFG["match_threshold"]
+           and p.music_db <= music_limits.get(p.source, TCFG["music_db"])]
+    if len(own) < 20:
+        return base
+    return round(min(HISS_CAP, max(base, float(np.median(own)) + HISS_MARGIN)), 3)
+
+
 def _measure_noise(proj: Project):
-    """Backfill the noise measure for phrases cut before it existed (reads each clip once)."""
+    """Backfill the noise measures for phrases cut before they existed (reads each clip once)."""
     import soundfile as sf
     for p in proj.phrases:
-        if p.noise < 0 and proj.clip_path(p.id).exists():
+        if (p.noise < 0 or p.floor > 0) and proj.clip_path(p.id).exists():
             try:
                 x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")
-                p.noise = noisiness(x if x.ndim == 1 else x.mean(1), sr)
+                x = x if x.ndim == 1 else x.mean(1)
+                p.noise, p.floor = noisiness(x, sr), noise_floor(x, sr)
             except (OSError, RuntimeError):
-                p.noise = 0.0
+                p.noise, p.floor = 0.0, 0.0
 
 
 def score(proj: Project):
@@ -598,14 +668,18 @@ def score(proj: Project):
             p.score = round(float(e @ r), 3)
             w = emb.get(p.id + ":w")
             p.mix = round(float((w @ r).min()), 3) if w is not None else p.score
+    hiss = hiss_limit(proj, lim)
+    proj.reference["hiss_limit"] = hiss
+    base = TCFG.get("noise_max", 0.30)
+    for p in proj.phrases:
         if p.dur < TCFG["min_phrase"]:
             p.reason = "too short"
         elif p.clipped:
             p.reason = "clipped"
         elif p.music_db > lim.get(p.source, TCFG["music_db"]):
             p.reason = "music or noise"
-        elif p.noise > TCFG.get("noise_max", 0.30):
-            p.reason = "hiss or artifacts"
+        elif p.noise > base and (p.sung or p.noise > hiss or p.floor > HISS_FLOOR_DB):
+            p.reason = "hiss or artifacts"   # (singing keeps the fixed limit: badly separated acapellas)
         elif p.score < TCFG["match_threshold"]:
             p.reason = "other speaker"
         elif p.mix < TCFG["mix_threshold"]:
