@@ -99,7 +99,7 @@
 
   <section class="panel assign-brief" id="assign-brief" hidden>
     <span class="mark"><svg class="ico" aria-hidden="true"><use href="#g-file"/></svg></span>
-    <div><h2>Your first assignment</h2><p>A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it,
+    <div><h2>Your first assignment</h2><p id="assign-brief-say">A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it,
       see where it lives, then get a voice of your own. The song is ours and the voice isn't anyone's, so nothing you make here is anyone else's.</p>
       <ol class="assign-steps"><li>Make the cover</li><li>Listen</li><li>Keep it</li><li>SafeHouse</li><li>A voice of your own</li></ol></div>
     <div class="row"><button class="btn primary" id="assign-take" type="button">Take the assignment</button><button class="linkbtn quiet" id="assign-later" type="button">Not now</button>
@@ -637,6 +637,7 @@
         <button class="switch" id="set-phone" type="button" role="switch" aria-checked="false" aria-label="Phone access"></button></div>
       <div class="phone-box" id="phone-box" hidden data-pc>
         <p class="meta" id="phone-where"></p>
+        <div class="rn-list" id="phone-checks"></div>
         <div class="row"><button class="btn" id="phone-pair" type="button">Pair a phone</button></div>
         <div class="phone-pairing" id="phone-pairing" hidden>
           <div class="phone-qr" id="phone-qr"></div>

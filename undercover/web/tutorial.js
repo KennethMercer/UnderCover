@@ -8,10 +8,16 @@
 // Uses app.js ($, $$, api, esc, showError, store, S, renderSong, refreshEstimate, loadVoices), shell.js (showTab),
 // jobs.js (onJobs, runningJobs).
 
-const AS = { known: false, done: null, step: store.get("uc-assign-step", 0), finished: false };
+const AS = { known: false, done: null, step: store.get("uc-assign-step", 0), finished: false,
+             desk: store.get("uc-assign-desk", { song: true, voice: true }) };   // what was on the desk when it started
+const DESK_SAY = { "11": "The song and the voice are already on your desk. Press Convert.",
+                   "01": "The voice is on your desk; bring a song: drop one in, or search for one. Then press Convert.",
+                   "10": "The song is on your desk; pick any voice in the list, or find one. Then press Convert.",
+                   "00": "Bring a song (drop one in, or search) and pick a voice below. Then press Convert." };
+const deskKey = () => `${AS.desk.song ? 1 : 0}${AS.desk.voice ? 1 : 0}`;
 const ASSIGN = [
-  { head: "Make the cover.", say: "The song and the voice are already on your desk. Press Convert.", tab: "frontman",
-    aim: () => [$("#convert")] },
+  { head: "Make the cover.", say: () => DESK_SAY[deskKey()], tab: "frontman",
+    aim: () => [$("#convert"), !AS.desk.song && $("#drop"), !AS.desk.voice && $("#voices")] },
   { head: "Listen.", say: "The same song in a different voice. Play it, then switch between the cover and the original.", tab: "frontman",
     aim: () => [$("#result .ab")] },
   { head: "Keep it.", say: "Send to SafeHouse keeps a cover for good; the rest roll off after fifteen.", tab: "frontman",
@@ -31,7 +37,18 @@ async function assignBoot() {
   AS.known = true; AS.done = s.tutorial.done || null;
   renderAssignSetting();
   if (AS.step > 0) return assignGo(AS.step, false);   // carry on where it was (a reload, a restart)
-  $("#assign-brief").hidden = !!AS.done;
+  if (AS.done) return;
+  const desk = await deskNow().catch(() => ({ song: null, voice: null }));
+  $("#assign-brief-say").textContent = desk.song && desk.voice
+    ? "A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own. The song is ours and the voice isn't anyone's, so nothing you make here is anyone else's."
+    : desk.voice ? "A voice is on your desk; bring a song you like. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own. The voice isn't anyone's."
+    : "Bring a song and a voice. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own.";
+  $("#assign-brief").hidden = false;
+}
+// the sample song (sample: true) and the demo voice (demo: true), if this copy has them
+async function deskNow() {
+  const songs = await api("/api/library/songs"), voices = await api("/api/voices");
+  return { song: (songs.songs || songs).find?.(x => x.sample) || null, voice: (voices.voices || voices).find?.(v => v.demo) || null };
 }
 async function assignMarkDone() {
   try { AS.done = (await api("/api/tutorial/done", { method: "POST" })).tutorial?.done || new Date().toISOString().slice(0, 10); } catch (e) {}
@@ -49,21 +66,17 @@ function renderAssignSetting() {
 async function assignStart() {
   if (S.job || S.osBusy) return showError("Wait for the cover that's being made to finish (or cancel it), then take the assignment.", "Busy");
   $("#assign-brief").hidden = true;
-  let song, voice;
-  const find = async () => {
-    const songs = await api("/api/library/songs"), voices = await api("/api/voices");
-    song = (songs.songs || songs).find?.(x => x.sample);
-    voice = (voices.voices || voices).find?.(v => v.demo);
-  };
+  let desk;
+  try { desk = await deskNow(); } catch (e) { return showError(e.message, "Couldn't start the assignment"); }
+  if (!desk.song || !desk.voice) {   // deleted since: seeded again; if that can't be done, it starts with what's there
+    try { await api("/api/tutorial/reset", { method: "POST" }); desk = await deskNow(); } catch (e) {}
+  }
+  // a copy without the sample song's audio (it comes later) or the demo voice's files: step 1 asks for what's missing
   try {
-    await find();
-    if (!song || !voice) { await api("/api/tutorial/reset", { method: "POST" }); await find(); }   // deleted since: seeded again
+    if (desk.song) { S.song = await api(`/api/songs/${desk.song.id}`); store.set("uc-song", S.song.id); renderSong(); refreshEstimate(); }
+    if (desk.voice) await loadVoices(desk.voice.name);
   } catch (e) { return showError(e.message, "Couldn't start the assignment"); }
-  if (!song || !voice) return showError("The sample song or the demo voice isn't there, and putting them back didn't work. Restart UnderCover and try again from Settings.", "Couldn't start the assignment");
-  try {
-    S.song = await api(`/api/songs/${song.id}`); store.set("uc-song", S.song.id); renderSong(); refreshEstimate();
-    await loadVoices(voice.name);
-  } catch (e) { return showError(e.message, "Couldn't start the assignment"); }
+  AS.desk = { song: !!desk.song, voice: !!desk.voice }; store.set("uc-assign-desk", AS.desk);
   AS.finished = false;
   assignGo(1, true);
 }
@@ -75,7 +88,7 @@ function assignGo(n, move = true) {
   const st = ASSIGN[n - 1];
   $("#assign").hidden = false; $("#assign").classList.remove("done");
   $("#assign-n").textContent = `${n} of ${ASSIGN.length}`;
-  $("#assign-say").innerHTML = `<b>${esc(st.head)}</b> ${esc(st.say)}`;
+  $("#assign-say").innerHTML = `<b>${esc(st.head)}</b> ${esc(typeof st.say === "function" ? st.say() : st.say)}`;
   $("#assign-line").style.width = `${n / ASSIGN.length * 100}%`;
   $("#assign-next").hidden = !st.next; $("#assign-next").textContent = st.next || "";
   $("#assign-skip").hidden = false; $("#assign-skip").textContent = "Skip the rest";
