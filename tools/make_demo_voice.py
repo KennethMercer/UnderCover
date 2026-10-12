@@ -78,8 +78,7 @@ def write_manifest(reader: str):
     (OUT / "manifest.json").write_text(json.dumps({
         "voice": "agent-smoke", "made": time.strftime("%Y-%m-%d"), "reader": f"Kokoro {reader} (Apache-2.0)",
         "text": "Joseph Conrad, The Secret Agent (1907), Project Gutenberg #974, public domain",
-        "recipe": "tools/make_demo_voice.py", "files": files}, indent=1) + "
-", encoding="utf-8")
+        "recipe": "tools/make_demo_voice.py", "files": files}, indent=1) + "\n", encoding="utf-8")
     return files
 
 
