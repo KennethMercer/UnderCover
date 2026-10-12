@@ -152,14 +152,43 @@ def seed_song() -> str | None:
     return meta["id"]
 
 
+def demo_files() -> str | None:
+    """Why the shipped demo voice can't be used (None: its files match manifest.json). The model files aren't in git:
+    tools/make_demo_voice.py makes them, the installer packs them."""
+    import hashlib
+    try:
+        man = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "the demo voice has no manifest.json: run tools/make_demo_voice.py"
+    if not (DEMO / "meta.json").is_file():
+        return "the demo voice's meta.json is missing: run tools/make_demo_voice.py"
+    for name, want in (man.get("files") or {}).items():
+        f = DEMO / name
+        if not f.is_file():
+            return f"the demo voice's {name} isn't here (it isn't kept in git): run tools/make_demo_voice.py"
+        if f.stat().st_size != want.get("size"):
+            return f"the demo voice's {name} isn't the one its manifest names: run tools/make_demo_voice.py"
+        h = hashlib.sha256()
+        with open(f, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        if h.hexdigest() != want.get("sha256"):
+            return f"the demo voice's {name} doesn't match its manifest's SHA-256: run tools/make_demo_voice.py"
+    if "model.pth" not in (man.get("files") or {}):
+        return "the demo voice's manifest names no model.pth: run tools/make_demo_voice.py"
+    return None
+
+
 def seed_voice() -> str | None:
-    """Copy the demo voice into voices_dir when no demo voice is there."""
+    """Copy the demo voice into voices_dir when no demo voice is there (its files checked against manifest.json)."""
     from ..core.voices import list_voices
-    if not (DEMO / "meta.json").is_file() or not (DEMO / "model.pth").is_file():
-        return None
     have = next((v.name for v in list_voices() if (v.extra or {}).get("demo")), None)
     if have:
         return have
+    why = demo_files()
+    if why:
+        print(f"The demo voice isn't available: {why}.", flush=True)
+        return None
     dest = path("voices_dir") / DEMO.name
     if dest.exists():   # a folder of that name that isn't the demo: leave it alone
         return None
@@ -169,7 +198,7 @@ def seed_voice() -> str | None:
     if tmp.exists():
         storage.remove_files([], [path("voices_dir")], dirs=[tmp])   # a seed an earlier start didn't finish
     # meta.json goes in last: the voice list only sees folders that have one (a dot folder too)
-    shutil.copytree(DEMO, tmp, ignore=shutil.ignore_patterns("meta.json"))
+    shutil.copytree(DEMO, tmp, ignore=shutil.ignore_patterns("meta.json", "manifest.json"))
     meta = json.loads((DEMO / "meta.json").read_text(encoding="utf-8"))
     meta.update(name=DEMO.name, dir=str(dest), pth=str(dest / "model.pth"),
                 index=str(dest / "model.index") if (tmp / "model.index").exists() else "")

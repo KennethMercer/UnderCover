@@ -8,8 +8,12 @@ user's folders:
   2. Kokoro (Apache-2.0) reads it sentence by sentence with one built-in reader (default bm_george) into ~2-minute files;
   3. DoubleAgent's normal pipeline in the sandbox: a project in speaking mode, the files uploaded as its sources (so it
      never searches YouTube), "Do it all" (prepare, confirm, train, add the voice);
-  4. the voice folder is copied to undercover/assets/demo-voice/agent-smoke/ with its meta marked as the demo
-     (core/demo.py seeds it into the user's voices on first run).
+  4. the voice folder is copied to undercover/assets/demo-voice/agent-smoke/ with its meta marked as the demo, and a
+     manifest.json (each file's size and SHA-256, the reader, the text) is written next to it.
+The model files are git-ignored (too large for the repository, MasterPlan 2026-10-12): meta.json and manifest.json are
+committed, the installer (built on this PC) packs the folder from disk, and a fresh clone runs this script once
+(--manifest-only rewrites the manifest for files already there). app/tutorial.py seeds it into the user's voices on a
+first run and on Replay, after checking the files against the manifest.
 """
 import argparse
 import json
@@ -60,12 +64,35 @@ def synthesize(text: str, reader: str, minutes: float, into: Path) -> list[Path]
     return files
 
 
+def write_manifest(reader: str):
+    import hashlib
+    files = {}
+    for name in ("model.pth", "model.index"):
+        f = OUT / name
+        if f.exists():
+            h = hashlib.sha256()
+            with open(f, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            files[name] = {"size": f.stat().st_size, "sha256": h.hexdigest()}
+    (OUT / "manifest.json").write_text(json.dumps({
+        "voice": "agent-smoke", "made": time.strftime("%Y-%m-%d"), "reader": f"Kokoro {reader} (Apache-2.0)",
+        "text": "Joseph Conrad, The Secret Agent (1907), Project Gutenberg #974, public domain",
+        "recipe": "tools/make_demo_voice.py", "files": files}, indent=1) + "
+", encoding="utf-8")
+    return files
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=20)
     ap.add_argument("--reader", default="bm_george")
     ap.add_argument("--audio-dir", help="keep the synthesized speech here and reuse it next time (it takes ~25 min)")
+    ap.add_argument("--manifest-only", action="store_true", help="only (re)write manifest.json for the files already there")
     a = ap.parse_args()
+    if a.manifest_only:
+        print(write_manifest(a.reader))
+        return
     import smoke
     print("the text: The Secret Agent (Conrad, 1907), Project Gutenberg #974")
     text = text_of_book()
@@ -119,6 +146,7 @@ def main():
             if (src / f).exists():
                 shutil.copyfile(src / f, OUT / f)
         (OUT / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+    write_manifest(a.reader)
     size = sum(f.stat().st_size for f in OUT.iterdir())
     print(f"done: {OUT} ({size / 1e6:.0f} MB: " + ", ".join(f"{f.name} {f.stat().st_size / 1e6:.0f} MB" for f in OUT.iterdir()) + ")")
 
