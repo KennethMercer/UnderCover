@@ -351,7 +351,9 @@ class Handler(BaseHTTPRequestHandler):
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
                                    "away_ready": self.remote and _away_ready(),
-                                   "tutorial": tutorial.status()})
+                                   "tutorial": tutorial.status(),
+                                   # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
+                                   "app_folder": None if self.remote else str(ROOT)})
             if p == "/api/voices":
                 return self._json(voices_json())
             if p == "/api/search":

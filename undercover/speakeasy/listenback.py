@@ -46,7 +46,7 @@ FADE_S = 0.015
 
 
 LOW_VRAM_GB = 12        # under this, the worker's own Whisper is freed before the listen-back loads one here
-_ASR = {"model": None, "failed": ""}
+_ASR = {"model": None, "failed": "", "fetching": None}
 _ASR_LOCK = threading.Lock()
 
 
@@ -69,12 +69,32 @@ def _asr():
                     except Exception:   # noqa: BLE001 - no worker yet, nothing to free
                         pass
                 f = path("models_dir") / "whisper" / "large-v3-turbo.pt"
-                if not f.is_file():
-                    raise FileNotFoundError("the speech recogniser isn't downloaded yet")
+                if not f.is_file():   # a fresh install (phase 25): fetched in the background, this speech goes on
+                    _fetch_in_background()
+                    _ASR["why"] = "the speech recogniser is downloading (once, about 1.6 GB): re-reads start after"
+                    return None
                 _ASR["model"] = whisper.load_model(str(f), device=dev)
-            except Exception as e:   # noqa: BLE001 - out of memory, not downloaded: reading goes on without re-reads
+            except Exception as e:   # noqa: BLE001 - out of memory, can't load: reading goes on without re-reads
                 _ASR["failed"] = f"{type(e).__name__}: {e}"[:200]
     return _ASR["model"]
+
+
+def _fetch_in_background():
+    """The pinned Whisper file (the same one the cadence worker uses, SHA-256 checked), once, without holding up the
+    speech that asked: listen-back is on by default, so a fresh install needs it without anyone training a cadence."""
+    t = _ASR["fetching"]
+    if t is not None and t.is_alive():
+        return
+
+    def go():
+        try:
+            from ..core import setup_models
+            from ..core.cadence.engines import MODEL_SHA256, WHISPER_URL
+            setup_models.ensure(files={"whisper/large-v3-turbo.pt": WHISPER_URL}, sha256=MODEL_SHA256)
+        except Exception as e:   # noqa: BLE001 - offline, disk full: tried again on the next speech
+            print(f"Listen-back: the speech recogniser couldn't be downloaded ({e}); trying again next time.", flush=True)
+    _ASR["fetching"] = threading.Thread(target=go, daemon=True, name="listenback-whisper")
+    _ASR["fetching"].start()
 
 
 def hear(files: list) -> list:
@@ -82,7 +102,7 @@ def hear(files: list) -> list:
     from ..core.cadence.engines import WHISPER_PROMPT
     m = _asr()
     if m is None:
-        raise RuntimeError(f"no speech recogniser for the listen-back ({_ASR['failed']})")
+        raise RuntimeError(f"no speech recogniser for the listen-back ({_ASR['failed'] or _ASR.get('why') or 'not loaded'})")
     out = []
     with _ASR_LOCK:
         for f in files:

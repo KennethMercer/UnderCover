@@ -4291,6 +4291,8 @@ def a_phone():
     # 4. with the token: the basic pages work, the PC-only routes are refused with a plain message
     s = json.loads(_lan("GET", "/api/status", token)[2])
     assert s["client"] == "phone" and s["device"] == "Smoke phone", s
+    assert s.get("app_folder") is None, "a phone was told the PC's app folder"
+    assert Path(api("/api/status")["app_folder"]).resolve() == ROOT.resolve(), "this PC's status doesn't name its app folder"
     for p in ("/", "/static/app.js", "/api/jobs", "/api/work", "/api/voices", "/api/library/covers", "/api/speak/voices",
               "/api/doctor", "/api/addons", "/api/storage", "/api/history", "/api/config", "/api/train/projects"):
         status = _lan("GET", p, token)[0]
@@ -4491,6 +4493,34 @@ def u_smaller():
         smaller.keep_voice("smaller-voice")
         assert not (vd / smaller.INDEX_ASIDE).exists() and len(ri.read_vectors(vd / "model.index")) == 50
     return "project: clips FLAC, data.pt aside, save linked, Undo, Keep; voice: index 300 -> 50, Undo, Keep"
+
+
+@check("listen-back on a fresh install (phase 25): no speech recogniser yet starts its pinned download in the background, the speech goes on, and the next one tries again (not a lasting failure)")
+def u_listenback_fetch():
+    from undercover.core import setup_models
+    from undercover.speakeasy import listenback as lb
+    with isolated_data():
+        saved = (dict(lb._ASR), setup_models.ensure)
+        asked = []
+        setup_models.ensure = lambda files=None, sha256=None, progress=None: asked.append((files, sha256)) or []
+        try:
+            lb._ASR.update(model=None, failed="", fetching=None)
+            assert lb._asr() is None and "downloading" in lb._ASR["why"] and not lb._ASR["failed"]
+            lb._ASR["fetching"].join(10)
+            (files, sha), = asked
+            assert list(files) == ["whisper/large-v3-turbo.pt"] and sha["whisper/large-v3-turbo.pt"], (files, sha)
+            assert lb._asr() is None and len(asked) == 2, "the next speech didn't try again"
+            lb._ASR["fetching"].join(10)
+            try:
+                lb.hear(["x.wav"])
+                raise AssertionError("heard without a recogniser")
+            except RuntimeError as e:
+                assert "downloading" in str(e), e
+        finally:
+            lb._ASR.clear()
+            lb._ASR.update(saved[0])
+            setup_models.ensure = saved[1]
+    return "missing -> a pinned, hashed fetch in the background; the speech goes on; tried again next time"
 
 
 @check("listen-back's drawn-out word (phase 24): in a short line (up to 4 words), a one-syllable word held over 0.30 s asks for a re-read; a marked pause after it, the last word, a longer word or a long sentence don't")
@@ -5310,7 +5340,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_lossless, u_smaller, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_listenback_fetch, u_lossless, u_smaller, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
