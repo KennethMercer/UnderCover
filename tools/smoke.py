@@ -4407,32 +4407,39 @@ def u_smaller():
         smaller.keep_project("smaller-test")
         assert not (d / smaller.ASIDE).exists() and all(proj.clip_path(p).suffix == ".flac" for p in clips)
         assert (vd / "model.pth").read_bytes() == pth and (d / "train" / "e5.pth").read_bytes() == pth
-        # a voice: its index shrunk (here 300 -> 50 on the CPU), the full one aside; Undo and Keep
+        # a voice: its index shrunk (here 300 -> 50 on the CPU), the full one aside; its readings to hear; Undo and Keep
         full = (vd / "model.index").read_bytes()
         r = smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
         assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and (vd / smaller.INDEX_ASIDE).read_bytes() == full
         assert len(ri.read_vectors(vd / "model.index")) == 50
+        heard = smaller._readings("smaller-voice")                # (the real job writes them; here stand-ins)
+        for f in heard.values():
+            f.parent.mkdir(parents=True, exist_ok=True)
+            sf.write(str(f), np.zeros(800, np.int16), 16000, subtype="PCM_16")
+        res = next(v for v in smaller.overview()["voices"] if v["name"] == "smaller-voice")["result"]
+        assert res["full_url"].startswith("/files/previews/") and res["small_url"].endswith("-small.flac"), res
         smaller.undo_voice("smaller-voice")
         assert (vd / "model.index").read_bytes() == full and not (vd / smaller.INDEX_ASIDE).exists()
+        assert not any(f.exists() for f in heard.values()), "Undo left the readings"
         smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
         smaller.keep_voice("smaller-voice")
         assert not (vd / smaller.INDEX_ASIDE).exists() and len(ri.read_vectors(vd / "model.index")) == 50
     return "project: clips FLAC, data.pt aside, save linked, Undo, Keep; voice: index 300 -> 50, Undo, Keep"
 
 
-@check("listen-back's drawn-out word (phase 24): a one-syllable word held over 0.30 s mid-phrase asks for a re-read; a marked pause after it, the last word or a longer word don't")
-def u_drawl():
-    from undercover.speakeasy import listenback as lb
-    w = lambda *t: [[a, s, e, 0.9] for a, s, e in t]
-    assert lb.problems("Good morning.", w(("Good", 0.0, 0.36), ("morning.", 0.36, 0.76))) == ["drawn-out 'good' (0.36 s)"]
-    assert lb.problems("Good morning.", w(("Good", 0.0, 0.16), ("morning.", 0.16, 0.44))) == []
-    assert lb.problems("Good, morning.", w(("Good,", 0.0, 0.40), ("morning.", 0.40, 0.76))) == [], "a comma's pause counted"
-    assert lb.problems("It was late.", w(("It", 0, 0.1), ("was", 0.1, 0.2), ("late.", 0.2, 0.8))) == [], "the last word counted"
-    assert lb.problems("An evening walk.", w(("An", 0, 0.1), ("evening", 0.1, 0.6), ("walk.", 0.6, 0.9))) == [], "a longer word counted"
-    assert [lb.syllables(x) for x in ("good", "you're", "late", "morning", "evening", "little")] == [1, 1, 1, 2, 3, 2]
-    return "drawn-out caught; comma, last word and longer words left alone"
-
-
+@check("listen-back's drawn-out word (phase 24): a one-syllable word held over 0.30 s mid-phrase asks for a re-read; a marked pause after it, the last word or a longer word don't")
+def u_drawl():
+    from undercover.speakeasy import listenback as lb
+    w = lambda *t: [[a, s, e, 0.9] for a, s, e in t]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.36), ("morning.", 0.36, 0.76))) == ["drawn-out 'good' (0.36 s)"]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.16), ("morning.", 0.16, 0.44))) == []
+    assert lb.problems("Good, morning.", w(("Good,", 0.0, 0.40), ("morning.", 0.40, 0.76))) == [], "a comma's pause counted"
+    assert lb.problems("It was late.", w(("It", 0, 0.1), ("was", 0.1, 0.2), ("late.", 0.2, 0.8))) == [], "the last word counted"
+    assert lb.problems("An evening walk.", w(("An", 0, 0.1), ("evening", 0.1, 0.6), ("walk.", 0.6, 0.9))) == [], "a longer word counted"
+    assert [lb.syllables(x) for x in ("good", "you're", "late", "morning", "evening", "little")] == [1, 1, 1, 2, 3, 2]
+    return "drawn-out caught; comma, last word and longer words left alone"
+
+
 @check("smaller, never worse (phase 24): training clips as FLAC (old WAV clips still read); key changes as 24-bit FLAC, float WAV kept over full scale; the exported save hard-linked to the voice, and each copy survives the other's delete, a move and a restore; speech as FLAC")
 def u_lossless():
     import numpy as np
