@@ -835,6 +835,9 @@ body:not([data-client="phone"]) [data-phone] { display: none !important; }
 /* Make it smaller (smaller.js): the Vault's rows */
 #smaller[hidden] { display: none; }
 #sm-all { justify-self: start; }
+.set-demo { display: block; margin-top: 4px; }
+.set-demo[hidden] { display: none; }
+.set-demo .linkbtn { font-size: inherit; }
 .sm-hear { display: inline-flex; gap: 8px; align-items: baseline; }
 @media (max-width: 620px) { .vt-row { grid-template-columns: minmax(0, 1fr); } .vt-row .row { justify-content: flex-start; } }
 
