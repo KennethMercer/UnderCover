@@ -198,6 +198,7 @@ function seStart(job, plan, estimate, resumed = false) {
   Object.assign(SE, { job, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: resumed, estimate, jobPlan: plan,
                       startAfter: 1 });
   $("#se-now").hidden = false;
+  if (typeof earShow === "function") earShow($("#se-ear"), "speech", null);   // a new reading: the last one's thumbs go
   $("#se-track").classList.remove("done");
   for (const id of ["#se-wav", "#se-mp3"]) { $(id).setAttribute("aria-disabled", "true"); $(id).removeAttribute("href"); }
   $("#se-dl-note").textContent = "downloads unlock when the last sentence is made";
@@ -338,7 +339,7 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”${typeof earMark === "function" ? earMark("speech", r.id) : ""}</b><small>${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
@@ -355,6 +356,7 @@ function seRecent() {
 function seKeepShow() {
   const b = $("#se-keep"), r = SE.result;
   b.hidden = !r;
+  if (typeof earShow === "function") earShow($("#se-ear"), "speech", r);   // How did it sound? (ear.js; a result exists once it's done)
   if (!r) return;
   b.setAttribute("aria-pressed", !!r.kept); b.dataset.kept = r.kept ? "true" : "false";
   b.textContent = r.kept ? "Kept in SafeHouse ✓" : "Send to SafeHouse";
