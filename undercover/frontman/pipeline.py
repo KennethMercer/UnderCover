@@ -131,6 +131,8 @@ class CoverEngine:
                          progress=lambda f, step: report("separating", f, {"main": "Separating vocals", "karaoke": "Splitting lead and backing vocals", "dereverb": "Removing reverb"}[step]))
         secs["separate"] = round(time.perf_counter() - t, 2)
         report("separating", 1.0, "Stems ready")
+        if karaoke and not stems.get("backing"):   # core.separate found no lead to split from the backing (a duet)
+            notes.append("Sung as one voice: two singers in harmony (the lead and backing couldn't be told apart).")
         if opts.fit:
             opts = self._fit(opts, voice, stems, notes, bvoice)
 
@@ -163,7 +165,9 @@ class CoverEngine:
         # mix prep (stem loudness, key-shifted instrumental) runs on the CPU while the GPU converts
         prefetch([cstems["vocals"], cstems.get("backing"), cstems.get("reverb"), song], key=key,
                  instrumental=cstems["instrumental"], backing=None if bvoice else cstems.get("backing"))
-        if bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
+        if bvoice and not cstems.get("backing"):   # sung as one voice (a duet): no backing stem to convert
+            bvoice = None
+        elif bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
         lead_share = 0.5 if bvoice else 1.0

@@ -1737,6 +1737,17 @@ def u_leadgate():
         assert rms(l2, c0, c1) > 0.9 * rms(back, c0, c1) and rms(b2, c0, c1) < 0.01 * rms(back, c0, c1), "the chorus wasn't moved"
         assert abs(rms(l2, 1, 7) - rms(lead, 1, 7)) < 1e-3, "the singing changed"
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
+    # a duet (phase 22): two voices in harmony all the way are "backing" to the karaoke model and its lead is silence;
+    # then there's no lead to split off and the whole vocal is converted as one voice
+    import tempfile
+    from undercover.core.separate import lead_missing
+    with tempfile.TemporaryDirectory() as td:
+        silent, lead_f, back_f, quiet = (Path(td) / n for n in ("silent.wav", "lead.wav", "back.wav", "quiet.wav"))
+        sf.write(str(silent), np.zeros(16000 * 4, np.float32), 16000)
+        sf.write(str(lead_f), voice[:16000 * 4], 16000)
+        sf.write(str(back_f), 0.3 * voice[16000:16000 * 5], 16000)
+        sf.write(str(quiet), 0.1 * voice[:16000 * 4], 16000)
+        assert lead_missing(silent, back_f) and not lead_missing(lead_f, back_f) and not lead_missing(quiet, back_f)
     return f"hook {inst:.1f} s left as it is, chorus {ch:.1f} s converted, singing untouched, stems unchanged"
 
 
