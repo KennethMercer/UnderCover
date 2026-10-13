@@ -34,7 +34,7 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
-from . import doctor_api, ear_api, phone_api, themes_api, tutorial
+from . import doctor_api, ear_api, gamepause_api, phone_api, themes_api, tutorial, vault_api
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -281,7 +281,8 @@ class Handler(BaseHTTPRequestHandler):
             if (train_api.handle(self, "GET", p) or safehouse_api.handle(self, "GET", p)
                     or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)
                     or doctor_api.handle(self, "GET", p) or phone_api.handle(self, "GET", p)
-                    or themes_api.handle(self, "GET", p) or ear_api.handle(self, "GET", p)):
+                    or themes_api.handle(self, "GET", p) or ear_api.handle(self, "GET", p)
+                    or vault_api.handle(self, "GET", p) or gamepause_api.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -305,7 +306,9 @@ class Handler(BaseHTTPRequestHandler):
                 work = {"held": w["held"], "resume": w["resume"], "running": w["running"][:1],
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
                         "start": w["start"], "start_at": w["settings"].get("start_at")}
-                from ..core import addons
+                from ..core import addons, gamepause
+                ga = gamepause.STATE.get("asking")   # the game pause's open question: every page and a paired phone show it
+                work["game_ask"] = {**ga, "reason": gamepause.STATE.get("reason") or ""} if ga else None
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
@@ -367,7 +370,8 @@ class Handler(BaseHTTPRequestHandler):
                 or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)
                 or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)
                 or themes_api.handle(self, "POST", p) or tutorial.handle(self, "POST", p)
-                or ear_api.handle(self, "POST", p)):
+                or ear_api.handle(self, "POST", p) or vault_api.handle(self, "POST", p)
+                or gamepause_api.handle(self, "POST", p)):
             return
         if p == "/api/voices/install":
             return self._start_install(self._body())
@@ -833,8 +837,11 @@ def main():
     _install_console_handler()
     _clean_old_previews()
     threading.Thread(target=gpu_worker, daemon=True, name="gpu").start()
-    from ..core import worklist
+    from ..core import vault, worklist
     worklist.start()
+    vault.start()   # Vaulting: quiet backups when the GPU queue is idle (off until a vault folder is picked)
+    from ..core import gamepause
+    gamepause.start()   # the game pause: asks before UnderCover's GPU work competes with a full-screen game
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
     try:   # Phone access (phase 11): the second listener, if it's switched on
         phone_api.setup(lambda a, p: PhoneServer((a, p), Handler), port)
