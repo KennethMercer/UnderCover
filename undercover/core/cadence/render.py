@@ -16,6 +16,35 @@ from ..config import path
 from . import client
 
 
+LEAD_S = 0.3        # silence put before a sentence for the voice conversion, cut off again after (see finish)
+SHORT_WORDS = 3     # a sentence with fewer words is read together with its neighbour (see join_short)
+
+
+def join_short(sents: list, min_words: int = SHORT_WORDS) -> list:
+    """[{"text", "pause"}] with each very short sentence read together with the next one in its paragraph (the
+    paragraph's last one with the one before). Chatterbox read alone "Listen carefully." as "E. Listen carefully." and
+    "Good morning." as "Duh, good morning." (2 of 24 short sentences, against 0 of 40 longer lines; measured
+    2026-10-13): a stray sound before a sentence too short to settle into. Never across a paragraph's end."""
+    out = [dict(s) for s in sents]
+    words = lambda s: len(s["text"].split())
+    i = 0
+    while i < len(out):
+        s = out[i]
+        if words(s) < min_words and len(out) > 1:
+            para_end = s["pause"] >= 0.5
+            if not para_end and i + 1 < len(out):   # with the next one: its pause after both
+                nxt = out.pop(i + 1)
+                out[i] = {**s, "text": f"{s['text']} {nxt['text']}", "pause": nxt["pause"]}
+                continue
+            if i > 0 and out[i - 1]["pause"] < 0.5:   # the paragraph's last: with the one before
+                prev = out.pop(i - 1)
+                out[i - 1] = {**s, "text": f"{prev['text']} {s['text']}", "pause": s["pause"]}
+                i -= 1
+                continue
+        i += 1
+    return out
+
+
 def scratch() -> Path:
     d = path("cache_dir") / "cadence"
     d.mkdir(parents=True, exist_ok=True)
@@ -101,5 +130,7 @@ def finish(wav: Path, lv, conv, target_hz: float | None, tempo: float = 1.0, nud
         return np.zeros(0, np.float32), lv.tgt_sr
     x = stretch(x, tempo)
     shift = octave_shift(x, conv.rmvpe, target_hz) + float(nudge or 0)
-    y, sr = conv.convert(x, lv, Settings(pitch=shift))
-    return np.nan_to_num(y).astype(np.float32), sr
+    # a lead-in of silence: converted straight from its first 50 ms, a sentence's opening came out garbled ("Good
+    # evening." heard as "Grieving.", measured 2026-10-13); with context before it, it comes out as read
+    y, sr = conv.convert(np.concatenate([np.zeros(int(16000 * LEAD_S), np.float32), x]), lv, Settings(pitch=shift))
+    return np.nan_to_num(y[int(sr * LEAD_S):]).astype(np.float32), sr

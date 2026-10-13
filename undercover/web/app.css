@@ -807,3 +807,23 @@ body:not(.deep) [data-deep] { display: none !important; }
 body[data-client="phone"] [data-pc] { display: none !important; }
 body:not([data-client="phone"]) [data-phone] { display: none !important; }
 .phone-qr svg { width: 220px; height: 220px; display: block; }
+
+/* ---------- Vaulting (vault.js): a section of the Storage room ---------- */
+.vt-body { display: grid; gap: 12px; }
+.vt-body > p { margin: 0; }
+.vt-lead { color: var(--muted); max-width: 72ch; }
+.vt-warn { color: var(--warn); }
+.vt-in { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.vt-in select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; color: var(--fg); font: 13px var(--mono); }
+.vt-kind { display: grid; gap: 2px; }
+.vt-kh { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 6px 0 2px; }
+.vt-kh b { font-weight: 600; }
+.vt-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.vt-row > span:first-child { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.vt-row .row { gap: 10px; justify-content: flex-end; }
+.vt-choice { grid-column: 1 / -1; display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); border-left: 3px solid var(--accent); }
+.vt-choice .meta { flex-basis: 100%; margin: 0; }
+.vt-size { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
+.vt-size .seg button { padding: 6px 12px; text-align: left; }
+#vt-all { justify-self: start; }
+@media (max-width: 620px) { .vt-row { grid-template-columns: minmax(0, 1fr); } .vt-row .row { justify-content: flex-start; } }
