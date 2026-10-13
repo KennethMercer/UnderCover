@@ -16,6 +16,8 @@ POST   /api/library/voices/<name>/rename    {name}   (the FOLDER; the page calls
 POST   /api/library/voices/<name>/display   {display}  what the pages show for the voice; empty = the default
 DELETE /api/library/voices/<name>/cadence   the voice's cadence only (the voice stays)
 GET    /api/library/voices/<name>/export    zip download
+GET    /api/library/smaller                 Make smaller (phase 24): each voice and project, what it would save
+POST   /api/library/smaller/start | keep | undo   {kind: voice|project, name} (safehouse/smaller.py)
 GET    /api/library/cleanup                 what can be freed, per group
 POST   /api/library/cleanup                 {groups: [...]}
 (voices and training projects are deleted through the existing /api/voices/<name> and /api/train/projects/<p>)
@@ -67,6 +69,11 @@ def handle(h, method: str, p: str) -> bool:
 def _route(h, method, p):
     q = parse_qs(urlparse(h.path).query)
     rest = p[len("/api/library/"):]
+    if rest.startswith("smaller"):
+        from . import smaller
+        if smaller.handle(h, method, rest):
+            return
+        raise LookupError("Not found")
     if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training"):
         return h._json(getattr(library, rest)())
     if rest == "tools/ytdlp-update" and method == "POST":

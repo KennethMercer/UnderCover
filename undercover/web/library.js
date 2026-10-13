@@ -335,7 +335,7 @@ function speechDetail(d, x) {
     <div class="ear" id="lib-ear" hidden></div>
     <p class="meta" id="lib-keepline">${esc(keepLine(x))}</p>
     <div id="lib-rename-box"></div>
-    <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><button class="btn" id="lib-keep" type="button" data-kept="${!!x.kept}">${x.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${x.url}?download">Download WAV</a>
+    <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><button class="btn" id="lib-keep" type="button" data-kept="${!!x.kept}">${x.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${x.url}?download">Download ${esc((x.file || "").split(".").pop().toUpperCase() || "FLAC")}</a>
       ${x.mp3_url ? `<a class="btn" href="${x.mp3_url}?download">Download MP3</a>` : ""}
       <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
   wirePlayer(x.url);

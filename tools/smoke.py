@@ -1424,12 +1424,14 @@ def u_rolloff_covers():
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
     # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); Vaulting's
     # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
-    # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); a new
-    # caller must be added here on purpose
+    # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
+    # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
+    # only what Make smaller itself set aside or made); a new caller must be added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py",
-                                                                        "frontman/history.py", "speakeasy/speak.py"], calls
+                                                                        "frontman/history.py", *["safehouse/smaller.py"] * 5,
+                                                                        "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
@@ -1444,7 +1446,7 @@ def u_rolloff_speech():
             items = []
             for i in range(15):
                 items.append(_fake_speech(i, speak))
-            wavs = lambda: sorted(p.name for p in speak.speech_dir().glob("*.wav"))
+            wavs = lambda: sorted(p.name for p in speak.speech_dir().iterdir() if p.suffix in (".flac", ".wav"))   # FLAC since phase 24
             assert len(wavs()) == 15 and len(speak.list_speech(everything=False)) == 15
             speak.set_kept(items[0]["id"], True)
             items.append(_fake_speech(15, speak))                 # the 16th: the kept oldest leaves the tray, nothing deleted
@@ -2375,6 +2377,7 @@ def u_person():
         tdir = proj.dir / "train"
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "e5.pth").write_bytes(b"x")
+        (tdir / "data.pt").write_bytes(b"")   # (torch.load is stubbed; export checks the file is there, phase 24)
         proj.train = {"best": 5, "train_minutes": 9.0, "saves": [{"epoch": 5, "identity": 0.8}]}
         proj.save()
         real = (trainer.torch.load, trainer.index_feats, trainer.f0_median, trainer.f0_range, V.install, rvc_index.write_ivf_flat)
@@ -3976,6 +3979,8 @@ PHONE_SAMPLES = [
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
     ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/reset"),
     ("GET", "/api/tutorial/greetings"), ("GET", "/api/tutorial/greetings/good-morning.mp3"),
+    ("GET", "/api/library/smaller"), ("POST", "/api/library/smaller/start"), ("POST", "/api/library/smaller/keep"),
+    ("POST", "/api/library/smaller/undo"),
 ]
 
 
@@ -4236,7 +4241,7 @@ def a_phone():
     assert _lan("POST", "/api/work/settings", token, {})[0] == 200
     from undercover.core.config import path   # the sandbox's own folders (sandbox_server points this process at them)
     proj = next(p for p in (path("cache_dir") / "training").iterdir() if (p / "project.json").exists())
-    clip = next((proj / "clips").glob("*.wav"))
+    clip = next(f for f in (proj / "clips").iterdir() if f.suffix in (".flac", ".wav"))
     assert _lan("GET", f"/files/training/{proj.name}/clips/{clip.name}", token)[0] == 200, "a phone can't play a clip"
     assert _lan("GET", f"/files/training/{proj.name}/project.json", token)[0] == 404, "a phone read a project file"
     assert api(f"/files/training/{proj.name}/project.json"), "this PC can't read the project file any more"
@@ -4345,6 +4350,169 @@ def a_tutorial():
         except urllib.error.HTTPError as e:
             assert e.code == 404, (bad, e.code)
     return f"greetings {len(g['greetings'])}; existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
+
+
+@check("Make smaller (phase 24): a project's WAV clips become FLAC (bit-identical) and its data.pt waits aside, Undo puts them back, Keep deletes only what was set aside; a voice's index shrinks with the full one aside; never automatic")
+def u_smaller():
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.engine.rvc import index as ri
+    from undercover.doubleagent.project import Project, projects_dir
+    from undercover.core.voices import voices_dir
+    import struct
+    from undercover.safehouse import smaller
+    with isolated_data():
+        proj = Project(name="smaller-test", person="Test")
+        proj.train = {"exported": "smaller-voice", "exported_epoch": 5, "state": "exported"}
+        proj.dir.mkdir(parents=True)
+        proj.save()
+        d = proj.dir
+        (d / "clips").mkdir(parents=True, exist_ok=True)
+        (d / "train").mkdir(parents=True, exist_ok=True)
+        rng = np.random.default_rng(1)
+        clips = {}
+        for i in range(3):
+            y = (rng.standard_normal(22050) * 2000).astype(np.int16)
+            sf.write(str(d / "clips" / f"c{i}.wav"), y, 44100, subtype="PCM_16")
+            clips[f"c{i}"] = y
+        (d / "train" / "data.pt").write_bytes(b"d" * 5000)
+        vd = voices_dir() / "smaller-voice"
+        vd.mkdir(parents=True)
+        pth = os.urandom(4000)
+        (vd / "model.pth").write_bytes(pth)
+        (d / "train" / "e5.pth").write_bytes(pth)
+        vecs = rng.standard_normal((300, 8)).astype(np.float16)
+        with open(vd / "model.index", "wb") as f:
+            f.write(ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
+        ov = smaller.overview()
+        row = next(p for p in ov["projects"] if p["name"] == "smaller-test")
+        assert row["clips_wav_bytes"] > 0 and row["data_bytes"] == 5000 and not row["pending"], row
+        assert next(v for v in ov["voices"] if v["name"] == "smaller-voice")["saving"] == 0   # 300 vectors: already small
+        # the project: clips FLAC, data.pt aside, the save linked; nothing deleted
+        r = smaller.shrink_project("smaller-test")
+        assert r["clips"] == 3 and r["clips_bytes_after"] < r["clips_bytes_before"] and r["data_bytes"] == 5000, r
+        for pid, y in clips.items():
+            assert proj.clip_path(pid).suffix == ".flac"
+            back, _ = sf.read(str(proj.clip_path(pid)), dtype="int16")
+            assert np.array_equal(back, y)
+            assert (d / smaller.ASIDE / "clips" / f"{pid}.wav").exists(), "an original WAV went"
+        assert not (d / "train" / "data.pt").exists() and (d / smaller.ASIDE / "train" / "data.pt").exists()
+        assert os.path.samefile(d / "train" / "e5.pth", vd / "model.pth") and r["linked_bytes"] == 4000
+        try:
+            smaller.shrink_project("smaller-test")
+            raise AssertionError("made smaller twice while waiting")
+        except Exception as e:
+            assert "waiting" in str(e)
+        smaller.undo_project("smaller-test")                       # Undo: the WAVs and data.pt back, the FLACs gone
+        assert all(proj.clip_path(p).suffix == ".wav" for p in clips) and not list((d / "clips").glob("*.flac"))
+        assert (d / "train" / "data.pt").read_bytes() == b"d" * 5000 and not (d / smaller.ASIDE).exists()
+        smaller.shrink_project("smaller-test")                     # again, then Keep: only what was set aside goes
+        from undercover.doubleagent.trainer import export_voice
+        smaller.keep_project("smaller-test")
+        try:                                                       # adding another save now says what to do
+            export_voice(Project.load("smaller-test"), epoch=5)
+            raise AssertionError("export ran without its prepared data")
+        except Exception as e:
+            assert "Train more" in str(e), e
+        assert not (d / smaller.ASIDE).exists() and all(proj.clip_path(p).suffix == ".flac" for p in clips)
+        assert (vd / "model.pth").read_bytes() == pth and (d / "train" / "e5.pth").read_bytes() == pth
+        # a voice: its index shrunk (here 300 -> 50 on the CPU), the full one aside; its readings to hear; Undo and Keep
+        full = (vd / "model.index").read_bytes()
+        r = smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
+        assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and (vd / smaller.INDEX_ASIDE).read_bytes() == full
+        assert len(ri.read_vectors(vd / "model.index")) == 50
+        heard = smaller._readings("smaller-voice")                # (the real job writes them; here stand-ins)
+        for f in heard.values():
+            f.parent.mkdir(parents=True, exist_ok=True)
+            sf.write(str(f), np.zeros(800, np.int16), 16000, subtype="PCM_16")
+        res = next(v for v in smaller.overview()["voices"] if v["name"] == "smaller-voice")["result"]
+        assert res["full_url"].startswith("/files/previews/") and res["small_url"].endswith("-small.flac"), res
+        smaller.undo_voice("smaller-voice")
+        assert (vd / "model.index").read_bytes() == full and not (vd / smaller.INDEX_ASIDE).exists()
+        assert not any(f.exists() for f in heard.values()), "Undo left the readings"
+        smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
+        smaller.keep_voice("smaller-voice")
+        assert not (vd / smaller.INDEX_ASIDE).exists() and len(ri.read_vectors(vd / "model.index")) == 50
+    return "project: clips FLAC, data.pt aside, save linked, Undo, Keep; voice: index 300 -> 50, Undo, Keep"
+
+
+@check("listen-back's drawn-out word (phase 24): in a short line (up to 4 words), a one-syllable word held over 0.30 s asks for a re-read; a marked pause after it, the last word, a longer word or a long sentence don't")
+def u_drawl():
+    from undercover.speakeasy import listenback as lb
+    w = lambda *t: [[a, s, e, 0.9] for a, s, e in t]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.36), ("morning.", 0.36, 0.76))) == ["drawn-out 'good' (0.36 s)"]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.16), ("morning.", 0.16, 0.44))) == []
+    assert lb.problems("Good, morning.", w(("Good,", 0.0, 0.40), ("morning.", 0.40, 0.76))) == [], "a comma's pause counted"
+    assert lb.problems("It was late.", w(("It", 0, 0.1), ("was", 0.1, 0.2), ("late.", 0.2, 0.8))) == [], "the last word counted"
+    assert lb.problems("An evening walk.", w(("An", 0, 0.1), ("evening", 0.1, 0.6), ("walk.", 0.6, 0.9))) == [], "a longer word counted"
+    long_line = "Ladies and gentlemen we have a lot to cover today."   # flowing speech: Whisper's edges can't tell
+    ws = [[t, 0.4 * i, 0.4 * i + 0.4, 0.9] for i, t in enumerate(long_line.split())]
+    assert lb.problems(long_line, ws) == [], "a long line flagged a drawn-out word"
+    assert [lb.syllables(x) for x in ("good", "you're", "late", "morning", "evening", "little")] == [1, 1, 1, 2, 3, 2]
+    return "drawn-out caught; comma, last word and longer words left alone"
+
+
+@check("smaller, never worse (phase 24): training clips as FLAC (old WAV clips still read); key changes as 24-bit FLAC, float WAV kept over full scale; the exported save hard-linked to the voice, and each copy survives the other's delete, a move and a restore; speech as FLAC")
+def u_lossless():
+    import numpy as np
+    import soundfile as sf
+    from undercover.core import fsutil, storage
+    from undercover.doubleagent.project import Project
+    from undercover.frontman import remix
+    with isolated_data() as box:
+        # clips: the project's clip path, FLAC first, an older WAV clip as it is
+        proj = Project(name="lossless-test")   # in the isolated cache
+        (proj.dir / "clips").mkdir(parents=True)
+        assert proj.clip_path("a").name == "a.flac"   # a new clip
+        y = (np.random.default_rng(0).standard_normal(44100) * 3000).astype(np.int16)
+        sf.write(str(proj.dir / "clips" / "b.wav"), y, 44100, subtype="PCM_16")
+        assert proj.clip_path("b").name == "b.wav"    # an older project's clip
+        sf.write(str(proj.clip_path("a")), y, 44100, subtype="PCM_16")
+        z, _ = sf.read(str(proj.clip_path("a")), dtype="int16")
+        assert np.array_equal(y, z), "a FLAC clip isn't bit-identical"
+        assert (proj.dir / "clips" / "a.flac").stat().st_size < (proj.dir / "clips" / "b.wav").stat().st_size
+        sf.write(str(proj.dir / "clips" / "b.flac"), y, 44100, subtype="PCM_16")
+        assert proj.clip_path("b").name == "b.flac"   # made smaller: the FLAC is the one read
+        # key changes: 24-bit FLAC within the 24-bit floor; over full scale stays float WAV (FLAC would clip)
+        t = np.linspace(0, 1, 44100, dtype=np.float32)
+        for peak, want in ((0.9, ".flac"), (1.3, ".wav")):
+            x = np.stack([np.sin(2 * np.pi * 220 * t), np.sin(2 * np.pi * 330 * t)], 1) * peak
+            tmp = box / f"k{peak}.part.wav"
+            sf.write(str(tmp), x, 44100, subtype="FLOAT")
+            out = remix._keep_small(tmp, box / f"k{peak}.flac", box / f"k{peak}.wav")
+            assert out.suffix == want and not tmp.exists(), (peak, out)
+            back, _ = sf.read(str(out), dtype="float32", always_2d=True)
+            err = float(np.abs(back - x).max())
+            assert err < (2 ** -23 if want == ".flac" else 1e-12), (peak, err)
+        # the exported save and the voice's model.pth: one copy on disk
+        a, b = box / "voices" / "v" / "model.pth", box / "train" / "e10.pth"
+        a.parent.mkdir(parents=True)
+        b.parent.mkdir(parents=True)
+        data = os.urandom(200_000)
+        a.write_bytes(data)
+        b.write_bytes(data)
+        assert fsutil.link_duplicate(a, b) and os.path.samefile(a, b)
+        c = box / "train" / "e11.pth"
+        c.write_bytes(os.urandom(200_000))
+        assert not fsutil.link_duplicate(a, c) and not os.path.samefile(a, c), "different files linked"
+        # a move or a Vault-style copy is two files; a restore (a new file swapped in) splits them; deleting one keeps the other
+        moved = box / "elsewhere"
+        storage.copy_tree(a.parent, moved)
+        assert (moved / "model.pth").read_bytes() == data and not os.path.samefile(moved / "model.pth", a)
+        part = a.with_name("model.pth.vault-part")
+        part.write_bytes(data)
+        os.replace(part, a)
+        assert not os.path.samefile(a, b) and b.read_bytes() == data, "a restore changed the other copy"
+        assert fsutil.link_duplicate(a, b)
+        storage.remove_files([], within=[box], dirs=[a.parent])   # the voice deleted
+        assert b.read_bytes() == data, "deleting the voice took the training save's data"
+        a.parent.mkdir(parents=True)
+        a.write_bytes(data)
+        assert fsutil.link_duplicate(a, b)
+        storage.remove_files([b], within=[box])                    # the save deleted
+        assert a.read_bytes() == data, "deleting the save took the voice's data"
+        fsutil.torch_save({"w": 1}, a)                             # a later save is a new file: no shared write
+    return "clips FLAC (bit-identical, WAV still read); key changes FLAC-24 / float over 1.0; save linked, each copy survives delete, move, restore"
 
 
 @check("the greetings (Agent Smoke's clips for the First assignment): greetings.json -> urls; a clip that isn't there is left out; only named clips are served, with Range")
@@ -4758,9 +4926,10 @@ def a_cadence():
         n += kept(p)
     (pdir / CAD_PROJ / "clips").mkdir(parents=True)
     for p in take:
-        f = pdir / src / "clips" / f"{p['id']}.wav"
-        if f.exists():
-            shutil.copyfile(f, pdir / CAD_PROJ / "clips" / f.name)
+        for f in (pdir / src / "clips" / f"{p['id']}{ext}" for ext in (".flac", ".wav")):   # FLAC since phase 24
+            if f.exists():
+                shutil.copyfile(f, pdir / CAD_PROJ / "clips" / f.name)
+                break
     shutil.copyfile(pdir / src / "embeddings.npz", pdir / CAD_PROJ / "embeddings.npz")
     pj.update(name=CAD_PROJ, phrases=take, train={})
     (pdir / CAD_PROJ / "project.json").write_text(json.dumps(pj), encoding="utf-8")
@@ -5084,7 +5253,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_lossless, u_smaller, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

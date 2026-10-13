@@ -164,6 +164,58 @@ def compact_in_place(path: Path) -> tuple[int, int]:
     return old, path.stat().st_size
 
 
+CENTRES = 10000   # phase 24: an index above this becomes this many k-means centres (RVC's own way to shrink a big set)
+
+
+def shrink(path: Path, k: int = CENTRES, dest: Path | None = None, device: str | None = None) -> tuple[int, int]:
+    """The index as k k-means centres, compact fp16, written to dest (default: in place, crash-safe). Agent Smoke's
+    166,906 vectors (256 MB) -> 10k (15 MB): likeness 0.928 -> 0.923, within run-to-run noise. On the GPU when there
+    is one (seconds; scikit-learn on the CPU takes hours). Deterministic (seed 0). -> (vectors before, after)"""
+    from ... import fsutil
+    path = Path(path)
+    dest = Path(dest or path)
+    x = read_vectors(path)
+    if len(x) <= k:
+        if dest != path:
+            import shutil
+            shutil.copyfile(path, dest)
+        return len(x), len(x)
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    X = torch.from_numpy(x).to(dev)
+    xx = (X * X).sum(1)
+    gen = torch.Generator(device=dev).manual_seed(0)
+    C = X[torch.randperm(len(X), device=dev, generator=gen)[:k]].clone()
+
+    def assign(C):
+        cc = (C * C).sum(1)
+        lab = torch.empty(len(X), dtype=torch.long, device=dev)
+        dist = torch.empty(len(X), device=dev)
+        for i in range(0, len(X), 8192):
+            dist[i:i + 8192], lab[i:i + 8192] = (xx[i:i + 8192, None] - 2 * X[i:i + 8192] @ C.T + cc[None]).min(1)
+        return lab, dist
+    for _ in range(25):
+        lab, dist = assign(C)
+        cnt = torch.bincount(lab, minlength=k).float()
+        C = torch.zeros_like(C).index_add_(0, lab, X) / cnt.clamp(min=1)[:, None]
+        empty = torch.nonzero(cnt == 0).flatten()
+        if len(empty):   # an empty centre restarts at one of the points farthest from their own centre
+            C[empty] = X[dist.topk(len(empty)).indices]
+    v = C.float().cpu().numpy().astype(np.float16)
+    del X, xx, C
+    if dev == "cuda":
+        torch.cuda.empty_cache()
+    if not np.isfinite(v).all():
+        raise IndexFormatError("the shrunk index has values out of fp16 range")
+    tmp = dest.with_name(f"{dest.name}.shrink.tmp")
+    with open(tmp, "wb") as f:
+        f.write(COMPACT_MAGIC + struct.pack("<qq", *v.shape))
+        f.write(v.tobytes())
+        f.flush()
+        os.fsync(f.fileno())
+    fsutil._replace(tmp, dest)
+    return len(x), len(v)
+
+
 def export_faiss(path: Path, dest: Path) -> Path:
     """A faiss IVF-Flat copy for other RVC tools (compact indexes are UnderCover-only)."""
     if not is_compact(path):

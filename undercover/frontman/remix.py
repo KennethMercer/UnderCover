@@ -78,16 +78,33 @@ def key_shifted(instrumental: Path, key: float, formant: bool = False) -> Path:
     tag = hashlib.sha1(f"{Path(instrumental).resolve()}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:16]
     d = path("cache_dir") / "keyshift"
     d.mkdir(parents=True, exist_ok=True)
-    out = d / f"{tag}_{key:+g}{'_f' if formant else ''}.wav"
-    with _KEY_LOCKS.setdefault(str(out), threading.Lock()):   # the mix waits for a render the prefetch started
-        if not out.exists():
-            tmp = out.with_suffix(f".{os.getpid()}.part.wav")
-            _run(["-y", "-i", str(instrumental), "-af",
-                  f"rubberband=pitch={2 ** (key / 12):.6f}:pitchq=quality:channels=together"
-                  + (":formant=preserved" if formant else ""),
-                  "-c:a", "pcm_f32le", str(tmp)])
-            tmp.replace(out)
-    return out
+    stem = f"{tag}_{key:+g}{'_f' if formant else ''}"
+    flac, wav = d / f"{stem}.flac", d / f"{stem}.wav"
+    with _KEY_LOCKS.setdefault(stem, threading.Lock()):   # the mix waits for a render the prefetch started
+        for out in (flac, wav):
+            if out.exists():
+                return out
+        tmp = d / f"{stem}.{os.getpid()}.part.wav"
+        _run(["-y", "-i", str(instrumental), "-af",
+              f"rubberband=pitch={2 ** (key / 12):.6f}:pitchq=quality:channels=together"
+              + (":formant=preserved" if formant else ""),
+              "-c:a", "pcm_f32le", str(tmp)])
+        return _keep_small(tmp, flac, wav)
+
+
+def _keep_small(tmp: Path, flac: Path, wav: Path) -> Path:
+    """24-bit FLAC (phase 24: 0.36 of the float WAV's size; the error sits at the 24-bit floor, -144 dBFS). FLAC is
+    integer: a render that peaks over full scale stays float WAV, so nothing is clipped."""
+    import soundfile as sf
+    y, sr = sf.read(str(tmp), dtype="float32", always_2d=True)
+    if len(y) and float(np.abs(y).max()) <= 1.0:
+        part = flac.with_name(flac.stem + f".{os.getpid()}.part.flac")
+        sf.write(str(part), y, sr, subtype="PCM_24")
+        part.replace(flac)
+        tmp.unlink(missing_ok=True)
+        return flac
+    tmp.replace(wav)
+    return wav
 
 
 def prefetch(files: list, key: float = 0.0, instrumental: Path | None = None, backing: Path | None = None):
