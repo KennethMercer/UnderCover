@@ -69,7 +69,7 @@ function earDraw(box) {
   if (thumb === "down") html += chips(earChips(kind, "down"));
   if (thumb === "up" && (EAR.open[k] === "why" || EAR.open[k] === "note" || said.size || t?.note)) html += chips(earChips(kind, "up"));
   const fix = thumb === "down" ? EAR.fix[k] : null;
-  if (fix?.do) html += `<div class="ear-fix"><span>${esc(fix.say || "One thing to try:")}</span><button class="btn" type="button" data-fix="do">${esc(fix.do.label)}</button>${fix.alt ? `<button class="linkbtn" type="button" data-fix="alt">${esc(fix.alt.label)}</button>` : ""}${fix.meta ? `<p class="meta">${esc(fix.meta)}</p>` : ""}</div>`;
+  if (fix?.do) html += `<div class="ear-fix"><span>${esc(fix.say || "One thing to try:")}</span><button class="btn primary" type="button" data-fix="do">${esc(fix.do.label)}</button>${fix.alt ? `<button class="linkbtn" type="button" data-fix="alt">${esc(fix.alt.label)}</button>` : ""}${fix.meta ? `<p class="meta">${esc(fix.meta)}</p>` : ""}</div>`;
   box.innerHTML = html;
   const rate = (th, reasons, note) => earRate(kind, id, th, reasons, note).catch(e => showError(e.message, "Couldn't save that"));
   $$("[data-thumb]", box).forEach(b => b.onclick = () => { EAR.open[k] = null; rate(thumb === b.dataset.thumb ? null : b.dataset.thumb, [], ""); });   // the same thumb again takes it back
@@ -141,6 +141,8 @@ const earHint = v => {
 };
 
 // ------------------------------------------------------------ Your ear, in SafeHouse's Settings
+// a setting in words: "pitch_cleanup: true" reads "pitch cleanup on", "pace: slower" reads "pace slower"
+const earSettingWords = x => `${String(x.setting || "").replace(/_/g, " ")}${x.value === true ? " on" : x.value === false ? " off" : x.value != null && x.value !== "" ? " " + x.value : ""}`;
 function renderEarSetting() {
   const row = $("#set-ear-row");
   if (!row) return;
@@ -155,7 +157,7 @@ function renderEarSetting() {
   $("#set-ear-deep").innerHTML = (voices.length ? `<div class="ear-tbl"><b>Voice</b><b class="n">good</b><b class="n">not</b><b class="w">most said</b>
       ${voices.map(v => `<span>${esc(voiceDisplay(v.voice))}</span><span class="n up">${v.up || 0}</span><span class="n down">${v.down || 0}</span><span class="w meta">${esc((v.said || []).join(" · ").toLowerCase())}</span>`).join("")}</div>` : "")
     + (settings.length ? `<div class="ear-tbl"><b>Setting</b><b class="n">good</b><b class="n">not</b><b class="w"></b>
-      ${settings.map(x => `<span>${esc(x.setting)}${x.value != null && x.value !== "" ? `: ${esc(String(x.value))}` : ""}</span><span class="n up">${x.up || 0}</span><span class="n down">${x.down || 0}</span><span class="w meta">${esc(x.kind || "")}</span>`).join("")}</div>` : "");
+      ${settings.map(x => `<span>${esc(earSettingWords(x))}</span><span class="n up">${x.up || 0}</span><span class="n down">${x.down || 0}</span><span class="w meta">${esc(x.kind || "")}</span>`).join("")}</div>` : "");
 }
 confirmClick($("#set-ear-forget"), "Forget them all?", async () => {
   try { await api("/api/ear/forget", { json: { all: true } }); EAR.fix = {}; await earLoad(); }

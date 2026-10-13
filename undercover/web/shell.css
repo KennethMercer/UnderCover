@@ -193,7 +193,7 @@ body.drawer-open { overflow: hidden; }
 .ear-chips .linkbtn { font-size: 13px; padding-inline: 4px; }
 .ear-note { display: inline-flex; gap: 8px; align-items: center; }
 .ear-note input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; color: var(--fg); font: inherit; font-size: 13px; width: min(260px, 60vw); }
-.ear-fix { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 8px; background: var(--panel-2); border-left: 3px solid var(--accent); }
+.ear-fix { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); border-left: 3px solid var(--accent); }
 .ear-fix .meta { flex-basis: 100%; margin: 0; }
 .ear-mk { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 2px; vertical-align: -3px; }
 .ear-mk .ico { width: 14px; height: 14px; }
