@@ -7,7 +7,8 @@ user's folders:
   1. the text: Joseph Conrad's "The Secret Agent" (1907; public domain everywhere), Project Gutenberg #974;
   2. Kokoro (Apache-2.0) reads it sentence by sentence with one built-in reader (default bm_george) into ~2-minute files;
   3. DoubleAgent's normal pipeline in the sandbox: a project in speaking mode, the files uploaded as its sources (so it
-     never searches YouTube), "Do it all" (prepare, confirm, train, add the voice);
+     never searches YouTube), every one of them prepared (Do it all alone stops at [training] target_minutes, 10, and
+     the demo voice wants all the speech: it needs the range), then "Do it all" (confirm, train, add the voice);
   4. the voice folder is copied to undercover/assets/demo-voice/agent-smoke/ with its meta marked as the demo, and a
      manifest.json (each file's size and SHA-256, the reader, the text) is written next to it.
 The model files are git-ignored (too large for the repository, MasterPlan 2026-10-12): meta.json and manifest.json are
@@ -112,23 +113,30 @@ def main():
                                          headers={"X-Filename": f.name, "Origin": smoke.BASE})
             with urllib.request.urlopen(req, timeout=300) as r:
                 r.read()
-        print(f"project {name}: {len(files)} recordings uploaded; Do it all (prepare, confirm, train, add)")
-        job = smoke.api(f"/api/train/projects/{name}/auto", {"voice_name": "agent-smoke"})["job"]
-        t0, last = time.time(), ""
-        while True:
-            j = next((x for x in smoke.api("/api/jobs") if x["id"] == job), None)
-            if j and j.get("final"):
-                break
-            msg = (j or {}).get("message") or ""
-            if msg != last:
-                print(f"  [{(time.time() - t0) / 60:5.1f} min] {msg}", flush=True)
-                last = msg
-            time.sleep(15)
-        if j["final"]["state"] != "done":
-            log = path("logs_dir") / "errors.log"   # the sandbox goes when this block ends: show why first
-            if log.exists():
-                print(log.read_text(encoding="utf-8", errors="replace")[-3000:])
-            sys.exit(f"training ended as {j['final']['state']}: {j['final'].get('message')}")
+        def follow(job: str, what: str):
+            t0, last = time.time(), ""
+            while True:
+                j = next((x for x in smoke.api("/api/jobs") if x["id"] == job), None)
+                if j and j.get("final"):
+                    break
+                msg = (j or {}).get("message") or (j or {}).get("label") or ""
+                if msg != last:
+                    print(f"  [{(time.time() - t0) / 60:5.1f} min] {msg}", flush=True)
+                    last = msg
+                time.sleep(15)
+            if j["final"]["state"] != "done":
+                log = path("logs_dir") / "errors.log"   # the sandbox goes when this block ends: show why first
+                if log.exists():
+                    print(log.read_text(encoding="utf-8", errors="replace")[-3000:])
+                sys.exit(f"{what} ended as {j['final']['state']}: {j['final'].get('message')}")
+
+        print(f"project {name}: {len(files)} recordings uploaded; preparing all of them")
+        follow(smoke.api(f"/api/train/projects/{name}/prepare", {})["job"], "preparing")
+        from undercover.doubleagent import project as P
+        pr = P.Project.load(name)
+        print(f"kept {pr.kept_seconds() / 60:.1f} min of {sum(s.duration for s in pr.sources) / 60:.1f}; "
+              "Do it all (confirm, train, add)")
+        follow(smoke.api(f"/api/train/projects/{name}/auto", {"voice_name": "agent-smoke"})["job"], "training")
         src = path("voices_dir") / "agent-smoke"
         assert smoke.storage_inside(src, root), src   # the sandbox's voice, never a real one
         meta = json.loads((src / "meta.json").read_text(encoding="utf-8"))
