@@ -11,10 +11,14 @@ MAX_KEY = 7          # whole-song transposition allowed (semitones each way): th
 KEY_COST = 0.002     # per semitone of key change (the band is transposed too): breaks ties toward the original key
 OCTAVE_COST = 0.001  # per octave the vocal alone moves (cheaper than moving the band: same pitch, the band moved less)
 LOW_WEIGHT = 1.5     # a note under the voice's range (mumbled, growly) is worse than one above it (airier)
-REGISTER_COST = 0.02  # per semitone the melody's median sits from where the voice is comfortable
-SPEECH_LIFT = 4.0    # a speech-trained voice sings comfortably ~4 st above its speaking median (phase 22, by ear:
-                     # Agent Smoke's "Hold On" wanted 4-6 st down from the original, between +10 (too high) and 0 (too
-                     # low) against his median; SpongeBob's "Pink Pony Club" between +8.7 (a tad high) and -3.3 (low))
+REGISTER_ABOVE = 0.02  # per semitone the melody's median sits above where the voice is comfortable (too high strains)
+REGISTER_BELOW = 0.006  # ...and below it (too low is milder)
+UP_COST = 0.006      # per semitone the voice ends up HIGHER than the original singer (octave + key): the ear dislikes a
+                     # song raised to reach a voice's register more than one lowered (SpongeBob's "Hold On" moved up 6
+                     # lost to 0; his "Pink Pony Club" moved down 5 to the same pitch won)
+SPEECH_LIFT = 5.0    # a speech-trained voice sings comfortably ~5 st above its speaking median (phase 22, by ear:
+                     # Agent Smoke's "Hold On" wanted 4-6 st down (+5.5-6.5 over his median), not 0 (+10) nor -10
+                     # (+0.3); SpongeBob's "Pink Pony Club" -5 (+3.7) over 0 (+8.7) and -12 (-3.3))
 CLOSE = 0.03         # two registers this close in cost: both are worth hearing
 ALT_APART = 5        # ...when they're at least this many semitones apart (not the same pitch reached another way)
 
@@ -43,8 +47,8 @@ def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: in
             g = f * 2.0 ** shift
             below, above = float(np.mean(g < lo)), float(np.mean(g > hi))
             reg = 12 * math.log2(med * 2.0 ** shift / comfy) if comfy else 0.0
-            cost = (LOW_WEIGHT * below + above + KEY_COST * abs(key) + OCTAVE_COST * abs(octave)
-                    + REGISTER_COST * abs(reg))
+            cost = (LOW_WEIGHT * below + above + KEY_COST * abs(key) + UP_COST * max(0, 12 * octave + key) + OCTAVE_COST * abs(octave)
+                    + (REGISTER_ABOVE * reg if reg > 0 else -REGISTER_BELOW * reg))
             if best is None or cost < best["cost"] - 1e-9:
                 best = {"octave": octave, "key": key, "outside": round(below + above, 3), "below": round(below, 3),
                         "above": round(above, 3), "cost": round(cost, 4), "register_st": round(reg, 1)}

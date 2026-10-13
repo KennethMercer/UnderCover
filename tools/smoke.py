@@ -186,6 +186,8 @@ def u_fit():
     deep = pick_fit([72.0, 104.6, 174.7], True, hold_on)       # Freeman: well under the original
     assert 12 * deep["octave"] + deep["key"] <= -6 and abs(deep["register_st"]) < 1.5, deep
     sung = pick_fit([140.0, 200.0, 300.0], False, hold_on)     # a singer at that pitch keeps the song as it is
+    sb = pick_fit([115.4, 229.7, 420.3], True, hold_on)       # SpongeBob: not raised to his register (by ear: 0 beat +6)
+    assert 12 * sb["octave"] + sb["key"] == 0, sb
     assert sung["octave"] == 0 and sung["key"] == 0, sung
     from undercover.frontman import fit as F
     assert "alt" not in deep or abs((12 * deep["alt"]["octave"] + deep["alt"]["key"]) - (12 * deep["octave"] + deep["key"])) >= F.ALT_APART
