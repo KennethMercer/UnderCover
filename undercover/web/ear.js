@@ -94,7 +94,9 @@ async function earDo(a, kind, item) {
     W.last = await api("/api/work/add", { json: a.body });
     if (typeof renderQueue === "function") renderQueue();
     refreshJobs(true);
-    return showError(a.body?.kind === "improve" ? `${voiceDisplay(a.body.target)} improves tonight. SafeHouse's Running room shows it.`
+    const who = voiceDisplay(a.body?.target || "") || "The voice";
+    return showError(a.body?.kind === "improve" ? `${who} improves tonight. SafeHouse's Running room shows it.`
+      : a.body?.kind === "cadence" ? `${who} learns their own cadence tonight. SpeakEasy reads with it once it's done.`
       : `${a.body?.target || "The voice"} is in tonight's work. SafeHouse's Running room shows it.`, "On it", null, true);
   }
   if (a.action === "pick_voice") {   // Try another voice: FrontMan's voice list
