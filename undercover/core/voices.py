@@ -677,24 +677,23 @@ def is_demo(v: Voice) -> bool:
 # weak from 0.30; the ones it called bad or broken sit near 0, so they're "poor", not unmeasured).
 TRAINED_WORDS = ((0.80, "great"), (0.65, "good"), (-9.0, "fair"))
 CHECKED_WORDS = ((0.55, "great"), (0.45, "good"), (0.30, "fair"), (-9.0, "poor"))
-_QCACHE: dict = {"mtime": None, "data": {}}
+_QCACHE: dict = {"key": None, "data": {}}
 
 
 def _checked_score(v: Voice) -> float | None:
     """The voice check's score for a downloaded voice (the DoubleAgent quality cache, read only): for its own person
-    when the voice knows it, else its best."""
+    when the voice knows it (None if never checked for them: another person's check says nothing), else its best."""
     f = path("cache_dir") / "voice_quality.json"
     try:
-        mt = f.stat().st_mtime
-        if _QCACHE["mtime"] != mt:
-            _QCACHE.update(mtime=mt, data=json.loads(f.read_text(encoding="utf-8")))
+        key = (str(f), f.stat().st_mtime_ns)
+        if _QCACHE["key"] != key:
+            _QCACHE.update(key=key, data=json.loads(f.read_text(encoding="utf-8")))
     except (OSError, ValueError):
         return None
     ex = v.extra or {}
     names = {v.name, ex.get("original_name")} - {None}
     hits = [(k, q) for k, q in _QCACHE["data"].items() if q.get("voice") in names and q.get("score") is not None]
-    own = [q for k, q in hits if ex.get("person") and k.split("|")[0] == slug(ex["person"])]
-    pick = own or [q for k, q in hits]
+    pick = [q for k, q in hits if k.split("|")[0] == slug(ex["person"])] if ex.get("person") else [q for k, q in hits]
     return max(float(q["score"]) for q in pick) if pick else None
 
 

@@ -464,7 +464,7 @@ def names_said(proj: Project, words: list[str], clusters: list[dict], per: int =
                 files.append(proj.clip_path(p.id))
                 owner.append(sp["cluster"])
     texts = transcribe(files) if files else []
-    rx = re.compile(r"\b(" + "|".join(map(re.escape, words)) + r")", re.I) if words else None
+    rx = re.compile(r"\b(" + "|".join(map(re.escape, words)) + r")s?\b", re.I) if words else None   # (Peter's, not Peterson)
     out = {}
     for k, t in zip(owner, texts):
         o = out.setdefault(k, {"phrases": 0, "words": 0, "said": 0})
@@ -621,7 +621,9 @@ def hiss_limit(proj: Project, music_limits: dict) -> float:
 # the separated phrases with music at -12..0 dB under them came out as clean as those under -12 (quiet gaps ~-53 dB,
 # the same flatness), yet the rule left out 39 of his 63 minutes. Speech with music up to MUSIC_CLEAN_DB is kept
 # when its clip shows it: clean gaps and under the voice's hiss limit. Singing keeps its own limit.
-MUSIC_CLEAN_DB = -3.0   # [training] music_db_clean overrides it (-12 or lower: off)
+# OFF by default until the ear rules: the one end-to-end test (SpongeBob, 25 min with it) voice-checked slightly below
+# the installed voice (-0.027 per clip). [training] music_db_clean = -3 turns it on.
+MUSIC_CLEAN_DB = -12.0
 
 
 def _music_survived(p: Phrase, hiss: float) -> bool:
