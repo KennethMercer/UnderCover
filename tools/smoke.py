@@ -346,30 +346,31 @@ def u_paused():
     from undercover.core import jobs, worklist
     from undercover.core.jobs import Job, Paused
     from undercover.core.config import path
-    old_port, old_state = jobs.PORT, worklist._STATE
-    jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
-    f = path("cache_dir") / "worklist-7999.json"
-    try:
-        worklist.PAUSABLE.add("zz-smoke")
-        job = Job("zz-smoke")
-        job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
+    with isolated_data():   # the scratch queue file goes in the test's own cache, never the user's
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
+        f = path("cache_dir") / "worklist-7999.json"
+        try:
+            worklist.PAUSABLE.add("zz-smoke")
+            job = Job("zz-smoke")
+            job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
 
-        def fn(job):
-            raise Paused()
-        jobs.run_job(job, fn)
-        assert job.state == "paused", job.state
-        assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
-        worklist.forget_paused()
-        assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
-        # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
-        import inspect
-        from undercover.frontman import oneshot
-        src = inspect.getsource(oneshot.run)
-        assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
-    finally:
-        worklist.PAUSABLE.discard("zz-smoke")
-        jobs.PORT, worklist._STATE = old_port, old_state
-        f.unlink(missing_ok=True)
+            def fn(job):
+                raise Paused()
+            jobs.run_job(job, fn)
+            assert job.state == "paused", job.state
+            assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
+            worklist.forget_paused()
+            assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
+            # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
+            import inspect
+            from undercover.frontman import oneshot
+            src = inspect.getsource(oneshot.run)
+            assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
+        finally:
+            worklist.PAUSABLE.discard("zz-smoke")
+            jobs.PORT, worklist._STATE = old_port, old_state
+            f.unlink(missing_ok=True)
 
 
 @check("time left: every progress event gets total_left (whole-job and per-stage kinds, learned stage times)")
