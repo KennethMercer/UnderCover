@@ -3,14 +3,17 @@ quality regression is caught before the user hears it. Numbers flag; the ear dec
 
     set UNDERCOVER_DATA_ROOT=D:\\UnderCover            (the app folder: its models, voices and projects are read, never written)
     python tools/golden.py make [--song NAME=FILE@START+SECONDS [--with VOICE,VOICE]] [--voice NAME ...]
-                                   freeze what isn't in the set yet (a section of each song; the voices), then run twice:
+                                   freeze what isn't in the set yet (a section of each song; the voices), then run 3 times:
                                    the new items' baseline and noise bands (items already in the set keep theirs).
                                    The first make freezes "Hold On" and the default voices; the set grows the same way.
     python tools/golden.py run [--force]                 the set again -> runs/<stamp>/scores.json + renders
     python tools/golden.py compare [RUN]                 what moved past twice its noise band, the bad way
-    python tools/golden.py pairs [RUN]                   blind pairs (every flag + one rotating item, at most 4) + key.json
-    python tools/golden.py verdict RUN ITEM new|old|same the ear's answer
+    python tools/golden.py pairs [RUN] [--items A,B]     blind pairs (every flag + one rotating item, or the items a phase
+                                                         changed on purpose; at most 4) + key.json
+    python tools/golden.py verdict RUN ITEM new|old|same|neither [--note ...]   the ear's answer ("neither": both off; it
+                                                         neither moves the baseline nor blocks: the phase tries again)
     python tools/golden.py accept RUN                    the items heard as new / same take the run's scores into the baseline
+    python tools/golden.py rebands                       run the set twice more and widen every band to the largest spread seen
     python tools/golden.py refreeze VOICE                after the user approved a newer version of a voice: a fresh copy, and
                                                          that voice's items start a new baseline on the next run (MasterPlan, q2)
 
@@ -52,6 +55,7 @@ SCORES = {
     "wer": ("down", 0.05), "pace": ("abs", 0.05), "f0_st": ("abs", 0.3),
 }
 MAX_PAIRS = 4
+MAKE_RUNS = 3   # runs at make: the baseline + its noise bands (the largest spread of the three)
 SEP = "__"   # between an item's song (or line) and its voice
 KEEP_RUNS = 2
 
@@ -80,14 +84,17 @@ def sha256(p: Path) -> str:
     return h.hexdigest()
 
 
-def bands(a: dict, b: dict) -> dict:
-    """Two runs of the same set -> {item: {score: band}}: their difference, never under the score's floor."""
+def bands(*runs: dict) -> dict:
+    """Runs of the same set -> {item: {score: band}}: the largest spread between them, never under the score's floor.
+    Three runs at make (phase 22): two that happened to agree once left Obama's likeness band at its floor, and the
+    next run's ordinary 0.06 wobble was flagged."""
     out = {}
-    for item in a.keys() & b.keys():
+    for item in set.intersection(*(set(r) for r in runs)):
         out[item] = {}
-        for k, v in a[item].items():
-            if k in SCORES and isinstance(v, (int, float)) and isinstance(b[item].get(k), (int, float)):
-                out[item][k] = round(max(abs(v - b[item][k]), SCORES[k][1]), 4)
+        for k in runs[0][item]:
+            vals = [r[item].get(k) for r in runs]
+            if k in SCORES and all(isinstance(v, (int, float)) for v in vals):
+                out[item][k] = round(max(max(vals) - min(vals), SCORES[k][1]), 4)
     return out
 
 
@@ -144,11 +151,11 @@ def parts(item: str) -> set:
     return {a, b}
 
 
-def merged_baseline(old: dict, run1: tuple, run2: dict, fresh: set) -> dict:
+def merged_baseline(old: dict, run1: tuple, others: list, fresh: set) -> dict:
     """make: items already in the baseline whose song and voice weren't (re)frozen keep their scores and bands; the
-    rest take the first run's scores and the two runs' bands."""
+    rest take the first run's scores and the runs' bands."""
     stamp, s1 = run1
-    nb = bands(s1, run2)
+    nb = bands(s1, *others)
     keep = lambda i: i in (old.get("scores") or {}) and not (parts(i) & fresh)
     return {"run": stamp if not old else old.get("run", stamp), "made": time.strftime("%Y-%m-%d %H:%M"),
             "scores": {i: (old["scores"][i] if keep(i) else sc) for i, sc in s1.items()},
@@ -340,6 +347,7 @@ def run_set(stamp: str, spec: dict) -> dict:
     import numpy as np
     import soundfile as sf
     from undercover.core import gpu, jobs
+    from undercover.core.config import CONFIG
     from undercover.core.cadence import transcribe
     from undercover.core.separate import separate
     from undercover.core.speaker import SpeakerEmbedder
@@ -364,14 +372,17 @@ def run_set(stamp: str, spec: dict) -> dict:
         song = GOLDEN / "work" / "uploads" / f"{s['name']}.flac"
         song.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(GOLDEN / "songs" / s["file"], song)
-        stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high")
+        stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high", one_voice_if_no_lead=True)
         song_hz = song_vocal_f0(stems["vocals"], rmvpe)
         melody = _LAST_F0.get(str(stems["vocals"]))
         back16 = _load16(stems["backing"]) if stems.get("backing") else None
         g = leadgate.plan(_load16(stems["vocals"]), back16)
         gate_s = round(sum(b - a for a, b in g["instrument"]) + sum(b - a for a, b in g["chorus"]), 1)
         # the reference for words and pitch: the lead as it went into the conversion (after the gate)
-        lead16 = _load16(leadgate.apply(stems, g, tmp, f"golden-{s['name']}")["vocals"])
+        mode = CONFIG["conversion"].get("chorus", "keep")   # the pipeline's own chorus mode (phase 22: keep)
+        top = (leadgate.split_top(stems["backing"], gpu.MODELS.separator, Path(stems["backing"]).parent)
+               if mode == "top" and g["chorus"] and stems.get("backing") else None)
+        lead16 = _load16(leadgate.apply(stems, g, tmp, f"golden-{s['name']}", chorus=mode, top=top)["vocals"])
         chordal = chordal_backing(stems.get("backing"), rmvpe)
         for vname in spec["covers"].get(s["name"], []):
             if vname not in refs:
@@ -501,13 +512,17 @@ def main():
     m.add_argument("--voice", action="append", default=[])
     r = sub.add_parser("run")
     r.add_argument("--force", action="store_true")
-    for c in ("compare", "pairs"):
-        sub.add_parser(c).add_argument("run", nargs="?")
+    sub.add_parser("compare").add_argument("run", nargs="?")
+    pp = sub.add_parser("pairs")
+    pp.add_argument("run", nargs="?")
+    pp.add_argument("--items", default="", help="these items (a phase's deliberate changes), comma separated, instead of flags + rotating")
     v = sub.add_parser("verdict")
     v.add_argument("run")
     v.add_argument("item")
-    v.add_argument("verdict", choices=("new", "old", "same"))
+    v.add_argument("verdict", choices=("new", "old", "same", "neither"))
+    v.add_argument("--note", default="")
     sub.add_parser("accept").add_argument("run")
+    sub.add_parser("rebands")
     rf = sub.add_parser("refreeze")
     rf.add_argument("voice")
     a = ap.parse_args()
@@ -540,11 +555,11 @@ def main():
             raise SystemExit("the user's UnderCover is busy on the GPU: run make again when it's idle")
         _check_frozen(spec)
         runs = []
-        for k in range(2):
+        for k in range(MAKE_RUNS):
             stamp = time.strftime("%Y%m%d-%H%M%S") + f"-make{k + 1}"
             print(f"run {stamp}")
             runs.append((stamp, run_set(stamp, spec)))
-        _write(GOLDEN / "baseline.json", merged_baseline(_read(GOLDEN / "baseline.json", {}), runs[0], runs[1][1], fresh))
+        _write(GOLDEN / "baseline.json", merged_baseline(_read(GOLDEN / "baseline.json", {}), runs[0], [r[1] for r in runs[1:]], fresh))
         print(f"baseline: {len(runs[0][1])} items run; new or refrozen: {', '.join(sorted(fresh)) or 'none'}")
     elif a.cmd == "run":
         if not _gpu_idle() and not a.force:
@@ -565,12 +580,14 @@ def main():
         sc = _read(GOLDEN / "runs" / run / "scores.json", {})["scores"]
         fl = flags(_read(GOLDEN / "baseline.json", {}), sc)
         n_runs = len(list((GOLDEN / "runs").glob("*")))
-        chosen = pick_pairs(fl, sorted(sc), n_runs)
+        chosen = ([i.strip() for i in a.items.split(",") if i.strip() in sc][:MAX_PAIRS] if a.items
+                  else pick_pairs(fl, sorted(sc), n_runs))
         out = make_pairs(run, chosen)
         print(f"{len(chosen)} pair(s) in {out} (key.json is for MasterPlan only)")
     elif a.cmd == "verdict":
         with open(GOLDEN / "verdicts.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"run": a.run, "item": a.item, "verdict": a.verdict, "at": time.strftime("%Y-%m-%d %H:%M")}) + "\n")
+            f.write(json.dumps({"run": a.run, "item": a.item, "verdict": a.verdict, "note": a.note,
+                                "at": time.strftime("%Y-%m-%d %H:%M")}) + "\n")
         print(f"{a.item}: {a.verdict}")
     elif a.cmd == "accept":
         base = _read(GOLDEN / "baseline.json", {})
@@ -581,6 +598,17 @@ def main():
             raise SystemExit(f"not accepted: {', '.join(hold)} (an 'old' verdict blocks; a flag not heard yet holds)")
         _write(GOLDEN / "baseline.json", accepted(base, a.run, sc, vd))
         print("baseline moved for: " + (", ".join(i for i in sc if vd.get(i) in ("new", "same")) or "nothing heard as new / same"))
+    elif a.cmd == "rebands":
+        if not _gpu_idle():
+            raise SystemExit("the user's UnderCover is busy on the GPU: run again when it's idle")
+        _check_frozen(spec)
+        base = _read(GOLDEN / "baseline.json", {})
+        extra = [run_set(time.strftime("%Y%m%d-%H%M%S") + f"-bands{k + 1}", spec) for k in range(MAKE_RUNS - 1)]
+        wide = bands(base["scores"], *extra)
+        base["bands"] = {i: {k: max(v, (base.get("bands") or {}).get(i, {}).get(k, 0)) for k, v in b.items()} for i, b in wide.items()}
+        _write(GOLDEN / "baseline.json", base)
+        _prune()
+        print("bands widened from the baseline and 2 more runs")
     elif a.cmd == "refreeze":
         _freeze_voice(spec, a.voice)
         _write(GOLDEN / "set.json", spec)

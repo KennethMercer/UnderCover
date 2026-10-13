@@ -176,11 +176,26 @@ class StemSeparator:
         return stems
 
 
+LEAD_MISSING_DB = 25.0   # a karaoke lead this far under its backing (RMS) is no lead: two singers in harmony
+
+
+def lead_missing(lead: Path, backing: Path) -> bool:
+    """The karaoke split found no lead: its lead stem is (nearly) silent while the backing sings. Two voices in
+    harmony all the way (a duet) look like backing vocals to it (phase 22: The Sound of Silence's lead stem was
+    digital silence, -164 dB, against -24 dB of backing)."""
+    import numpy as np
+    import soundfile as sf
+    rms = lambda p: 20 * np.log10(np.sqrt(np.mean(sf.read(str(p), dtype="float32")[0] ** 2)) + 1e-9)
+    return rms(lead) < rms(backing) - LEAD_MISSING_DB
+
+
 def separate(audio: Path, dereverb: bool | None = None, karaoke: bool | None = None,
              separator: StemSeparator | None = None, quality: str | None = None,
-             progress=None) -> dict[str, Path]:
+             progress=None, one_voice_if_no_lead: bool = False) -> dict[str, Path]:
     """Full separation stage. Returns paths for 'vocals' (the vocal to convert),
-    'instrumental', and optionally 'backing' (backing vocals, to mix back in)."""
+    'instrumental', and optionally 'backing' (backing vocals, to mix back in).
+    one_voice_if_no_lead (covers): when the karaoke split finds no lead (a duet, lead_missing), the whole vocal is the
+    lead and there's no backing. Training leaves it off: a duet's blended voices aren't one person's clips."""
     audio = Path(audio).resolve()
     if not audio.exists():
         raise FileNotFoundError(f"Song not found: {audio}")
@@ -213,7 +228,9 @@ def separate(audio: Path, dereverb: bool | None = None, karaoke: bool | None = N
             k = separator.run(result["vocals"], SEP["karaoke_model"],
                               root / (Path(SEP["vocal_model"]).stem + sfx) / ("karaoke_" + Path(SEP["karaoke_model"]).stem), ov,
                               step_cb("karaoke"))
-            result["vocals"], result["backing"] = k["vocals"], k["instrumental"]
+            if not (one_voice_if_no_lead and lead_missing(k["vocals"], k["instrumental"])):
+                result["vocals"], result["backing"] = k["vocals"], k["instrumental"]
+            # else: no lead to be found (a duet): the whole vocal is converted as one voice, with no backing stem
 
         if dereverb:  # dry lead vocal converts more cleanly
             parent = result["vocals"].parent

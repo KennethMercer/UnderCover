@@ -11,8 +11,11 @@ from pathlib import Path
 from typing import Callable
 
 from ..core import tray
-from ..core.config import path
+from ..core.config import CONFIG, path
 from . import history as hstore
+
+
+DUET_NOTE = "Two singers in harmony: UnderCover can't separate them yet, so they're sung as one voice."   # phase 22: said plainly (the user: both ways were bad)
 
 
 @dataclass
@@ -38,6 +41,7 @@ class CoverOptions:
     backing_octave: int | None = None # backing voice only, whole octaves (on top of the song key)
     fit: bool | None = None           # set octave + key from the voice's range and the song's melody (overrides both)
     lead_gate: bool | None = None     # only singing gets converted (phase 15; default on): see leadgate.py
+    chorus: str | None = None         # lines in the backing stem: convert | top | keep (leadgate.CHORUS_MODES; None: config)
 
 
 @dataclass
@@ -126,10 +130,12 @@ class CoverEngine:
 
         report("separating", 0.0, "Separating vocals from the instrumental")
         t = time.perf_counter()
-        stems = stems or separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality,
+        stems = stems or separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality, one_voice_if_no_lead=True,
                          progress=lambda f, step: report("separating", f, {"main": "Separating vocals", "karaoke": "Splitting lead and backing vocals", "dereverb": "Removing reverb"}[step]))
         secs["separate"] = round(time.perf_counter() - t, 2)
         report("separating", 1.0, "Stems ready")
+        if karaoke and not stems.get("backing"):   # core.separate found no lead to split from the backing (a duet)
+            notes.append(DUET_NOTE)
         if opts.fit:
             opts = self._fit(opts, voice, stems, notes, bvoice)
 
@@ -147,18 +153,24 @@ class CoverEngine:
         # karaoke split put in the backing are converted too; the stems themselves stay as they were
         cstems = stems
         if opts.lead_gate is not False:
-            from .leadgate import apply as gate_apply, note as gate_note, plan as gate_plan
+            from .leadgate import CHORUS_MODES, apply as gate_apply, note as gate_note, plan as gate_plan, split_top
             g = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
             if g["instrument"] or g["chorus"]:
                 gwork = path("cache_dir") / "converted"
                 gwork.mkdir(parents=True, exist_ok=True)
-                cstems = gate_apply(stems, g, gwork, stamp)
-                notes += gate_note(g)
+                mode = opts.chorus or CONFIG["conversion"].get("chorus", "keep")
+                mode = mode if mode in CHORUS_MODES else "keep"
+                top = (split_top(stems["backing"], self.separator, Path(stems["backing"]).parent)
+                       if mode == "top" and g["chorus"] and stems.get("backing") else None)
+                cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top)
+                notes += gate_note(g, mode)
         from .remix import lufs, prefetch
         # mix prep (stem loudness, key-shifted instrumental) runs on the CPU while the GPU converts
         prefetch([cstems["vocals"], cstems.get("backing"), cstems.get("reverb"), song], key=key,
                  instrumental=cstems["instrumental"], backing=None if bvoice else cstems.get("backing"))
-        if bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
+        if bvoice and not cstems.get("backing"):   # sung as one voice (a duet): no backing stem to convert
+            bvoice = None
+        elif bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
         lead_share = 0.5 if bvoice else 1.0
@@ -218,7 +230,7 @@ class CoverEngine:
         song = Path(song).resolve()
         karaoke = True if opts.backing_voice else opts.karaoke
         report("separating", 0.0, "Separating vocals (needed once; the full cover reuses it)")
-        stems = separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality,
+        stems = separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality, one_voice_if_no_lead=True,
                          progress=lambda f, step: report("separating", f, "Separating vocals"))
         start, dur = busiest_window(stems["vocals"], seconds)
         work = path("cache_dir") / "previews" / uuid.uuid4().hex[:10]

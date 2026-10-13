@@ -122,11 +122,30 @@ def _mask(ranges, n: int, sr: int) -> np.ndarray:
     return m
 
 
-def apply(stems: dict, gate: dict, work: Path, stamp: str) -> dict:
+CHORUS_MODES = ("convert", "top", "keep")
+# What happens to lines the karaoke split put in the backing stem while the lead is silent (phase 22): "convert" moves
+# all of it into the conversion (phase 15; on Toxic's stacked choruses the user heard it as "atrocious": RVC follows
+# one pitch), "top" splits the backing again with the karaoke model and converts only its top voice, the harmonies
+# under it staying as they were, "keep" leaves the choruses to the original singers. The default is keep: blind, on
+# Toxic, the user put keep first for SpongeBob (convert and top about equal) and for Freeman (keep > convert > top).
+
+
+def split_top(backing: Path, separator, cache: Path) -> dict:
+    """The backing stem split again by the karaoke model: {"top": its main voice, "rest": the layers under it}."""
+    from ..core.separate import QUALITY, SEP
+    k = separator.run(Path(backing), SEP["karaoke_model"], cache / ("top_" + Path(SEP["karaoke_model"]).stem), QUALITY["high"])
+    return {"top": k["vocals"], "rest": k["instrumental"]}
+
+
+def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "convert", top: dict | None = None) -> dict:
     """New stem files for the conversion and the mix: the lead without the instrument parts and with the choruses
-    from the backing; the backing without those choruses; the instrumental with the instrument parts back in.
+    from the backing (chorus "convert": all of it; "top": only `top["top"]`, the layers under it stay in the backing;
+    "keep": none); the backing without what moved; the instrumental with the instrument parts back in.
     Returns a copy of `stems` with the changed paths (the originals stay as they were)."""
     import soundfile as sf
+    if chorus == "keep" or (chorus == "top" and not top):
+        gate = {**gate, "chorus": [] if chorus == "keep" else gate["chorus"]}
+        chorus = "convert" if chorus == "top" else chorus
     if not gate["instrument"] and not gate["chorus"]:
         return stems
     lead, sr = sf.read(str(stems["vocals"]), dtype="float32", always_2d=True)
@@ -150,10 +169,20 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str) -> dict:
     if back is not None:
         m = min(len(back), n)
         mc = _mask(gate["chorus"], m, sr)[:, None]
-        b2 = back[:m] if back.shape[1] == lead.shape[1] else np.repeat(back[:m].mean(1, keepdims=True), lead.shape[1], 1)
-        new_lead[:m] += b2 * mc
+        fit = lambda x: x if x.shape[1] == lead.shape[1] else np.repeat(x.mean(1, keepdims=True), lead.shape[1], 1)
         back2 = back.copy()
-        back2[:m] *= (1 - mc)
+        if chorus == "top":
+            tv, sr_t = sf.read(str(top["top"]), dtype="float32", always_2d=True)
+            rest, sr_r = sf.read(str(top["rest"]), dtype="float32", always_2d=True)
+            assert sr_t == sr and sr_r == sr, (sr_t, sr_r, sr)
+            m = min(m, len(tv), len(rest))
+            mc = mc[:m]
+            new_lead[:m] += fit(tv[:m]) * mc
+            rest = rest if rest.shape[1] == back.shape[1] else np.repeat(rest.mean(1, keepdims=True), back.shape[1], 1)
+            back2[:m] = back[:m] * (1 - mc) + rest[:m] * mc   # the harmonies stay as they were
+        else:
+            new_lead[:m] += fit(back[:m]) * mc
+            back2[:m] *= (1 - mc)
         p = work / f"gate_backing_{stamp}.flac"
         sf.write(str(p), np.clip(back2, -1, 1), sr, subtype="PCM_24")
         out["backing"] = p
@@ -163,13 +192,19 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str) -> dict:
     return out
 
 
-def note(gate: dict) -> list[str]:
+def note(gate: dict, chorus: str = "convert") -> list[str]:
     """Plain sentences for the cover's notes."""
     out = []
     span = lambda rs: ", ".join(f"{int(a) // 60}:{int(a) % 60:02d}-{int(b) // 60}:{int(b) % 60:02d}" for a, b in rs[:4]) + (" ..." if len(rs) > 4 else "")
     if gate["instrument"]:
         out.append(f"Parts of the lead track were an instrument, not singing ({span(gate['instrument'])}): left as they are, "
                    "not turned into singing.")
-    if gate["chorus"]:
+    if gate["chorus"] and chorus == "top":
+        out.append(f"Some lines were in the backing track ({span(gate['chorus'])}): their top voice was converted too, "
+                   "the harmonies under it kept as they were.")
+    elif gate["chorus"] and chorus != "keep":
         out.append(f"Some lines were in the backing track ({span(gate['chorus'])}): converted with the voice too.")
+    elif gate["chorus"]:
+        out.append(f"Some lines are in the backing track ({span(gate['chorus'])}): left to the original singers, as the "
+                   "backing harmonies are.")
     return out
