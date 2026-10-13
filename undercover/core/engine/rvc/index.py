@@ -165,6 +165,8 @@ def compact_in_place(path: Path) -> tuple[int, int]:
 
 
 CENTRES = 10000   # phase 24: an index above this becomes this many k-means centres (RVC's own way to shrink a big set)
+ASIDE = "model.index.before-smaller"   # the full index, kept next to a shrunk one until Keep or Undo (Make smaller, export)
+SHRINK_RESULT = "smaller.json"         # what the shrink measured, beside it
 
 
 def shrink(path: Path, k: int = CENTRES, dest: Path | None = None, device: str | None = None) -> tuple[int, int]:
