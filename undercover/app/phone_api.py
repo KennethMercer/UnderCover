@@ -98,6 +98,7 @@ ROUTES = [
     ("DELETE", rf"/api/themes/{_ID}", "pc", "deleting a theme"),
     # the First assignment (the page side; its routes come with the tutorial backend): works at phone width too
     ("POST", r"/api/tutorial/(done|reset)", "phone", "the First assignment's done mark and Replay"),
+    ("GET", r"/api/tutorial/greetings(/[^/]+\.mp3)?", "phone", "Agent Smoke's greeting clips"),
     # Phone access itself
     ("GET|POST", r"/api/phone", "pc", "Phone access settings"),
     ("POST", r"/api/phone/(pair|pair/cancel|revoke)", "pc", "pairing and Revoke"),
