@@ -1093,6 +1093,106 @@ def u_characters():
             "unticked, scenes first; target = the scenes' voice; AI/TTS and dubs out; a recast said; gate")
 
 
+@check("the ear: thumbs on covers and speech, one fix for a reason that has one, forget, liked voices first (phone allowed)")
+def u_ear():
+    import time
+    from undercover.app import ear_api, phone_api
+    from undercover.core import config, ear
+    from undercover.core.config import path
+    from undercover.core.voices import get_voice, voice_info
+    from undercover.doubleagent import service
+    from undercover.frontman import history
+    from undercover.speakeasy import speak
+    with isolated_data():
+        assert ear.ear_file() == Path(config.CONFIG_FILE).with_name("ear.json")   # next to the (isolated) config
+        z = _fake_voice("zed-uc", "trained", {"trained": True, "person": "Zed", "likeness": 0.7})
+        z.installed = "2026-10-12 00:00"   # the newer one: first without thumbs
+        (z.dir / "meta.json").write_text(json.dumps(z.to_json(), indent=2), encoding="utf-8")
+        _fake_voice("zed-2-uc", "trained", {"trained": True, "person": "Zed", "likeness": 0.7})
+        _fake_voice("zed", "https://x/y", {"person": "Zed"})
+        out = path("output_dir") / "Song (zed-2-uc).mp3"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        cov = history.record({"output": str(out), "song": "", "voice": "zed-2-uc", "stems": {}, "title": "Song",
+                              "options": {"voice": "zed-2-uc", "octave": 0, "key": 1, "quality": "high", "karaoke": True}})
+        sid = "abcdef0123"
+        (speak.speech_dir() / "s.wav").write_bytes(b"x")
+        (speak.speech_dir() / f"{sid}.json").write_text(json.dumps({"id": sid, "file": "s.wav", "text": "hi", "voice": "zed-uc",
+                                                                    "pace": "natural", "mode": "cadence", "reader": "am_michael"}), encoding="utf-8")
+
+        def call(method, p, body=None):
+            h = _FakeHandler(p, body)
+            assert ear_api.handle(h, method, p)
+            return h
+        before = [v.name for v in service.installed_for("Zed")]
+        # a thumbs up: stored with the cover's own voice and settings (not the body's), marked in the items
+        h = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "up", "reasons": ["like"], "voice": "zed"})
+        assert h.err is None and h.out["fix"] is None and h.out["item"]["voice"] == "zed-2-uc", (h.err, h.out)
+        assert h.out["item"]["settings"] == {"octave": 0, "key": 1, "quality": "high", "karaoke": True}, h.out["item"]
+        g = call("GET", "/api/ear").out
+        assert g["items"][f"cover:{cov['id']}"]["thumb"] == "up" and g["summary"]["up"] == 1 and g["reasons"]["cover"]["down"][0]["id"] == "unlike"
+        # liked voices first: the voice APIs carry it, the one-shot's choice of a person's voices leans to it
+        assert voice_info(get_voice("zed-2-uc"))["ear"] == {"up": 1, "down": 0} and voice_info(get_voice("zed-uc"))["ear"] is None
+        after = [v.name for v in service.installed_for("Zed")]
+        assert after[0] == "zed-2-uc" and before[0] == "zed-uc", (before, after)
+        # ...and among equally good checked voices only (a clearly better score still wins)
+        c = [{"name": "zed", "score": 0.60}, {"name": "zed-2-uc", "score": 0.58}, {"name": "zed-uc", "score": 0.50}]
+        assert [x["name"] for x in ear.prefer(c, name=lambda x: x["name"], score=lambda x: x["score"])] == ["zed-2-uc", "zed", "zed-uc"]
+        c[0]["score"] = 0.70
+        assert ear.prefer(c, name=lambda x: x["name"], score=lambda x: x["score"])[0]["name"] == "zed"
+        # a thumbs down replaces it; "doesn't sound like them" on a trained voice offers Improve tonight
+        h = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["unlike", "key"], "note": " too   far "})
+        f = h.out["fix"]
+        assert f["reason"] == "unlike" and f["do"]["body"] == {"kind": "improve", "target": "zed-2-uc", "now": False} and f["alt"]["action"] == "pick_voice", f
+        assert h.out["item"]["note"] == "too far" and ear.taste("zed-2-uc") == {"up": 0, "down": 1}
+        # wrong key: make it again an octave lower (or higher); at the lowest only higher
+        f = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["key"]}).out["fix"]
+        assert f["do"]["action"] == "remake" and f["do"]["options"] == {"octave": -1} and f["alt"]["options"] == {"octave": 1}, f
+        # ...which FrontMan makes again with the cover's own song, voice and settings (the backing moves with the lead)
+        from undercover.frontman import api as fapi
+        got, real = {}, fapi._start_cover
+        fapi._start_cover = lambda h, body: got.update(body)
+        try:
+            h = _FakeHandler()
+            fapi._cover_again(h, cov["id"], {"options": {"octave": -1, "voice": "x"}})   # (a voice in options is ignored)
+        finally:
+            fapi._start_cover = real
+        assert got["voice"] == "zed-2-uc" and got["options"]["octave"] == -1 and got["options"]["key"] == 1 and "voice" not in got["options"], got
+        f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
+        assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
+        # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
+        f = ear.fix_for("cover", ["unlike"], {"name": "zed", "person": "Zed"}, {}, "x")
+        assert f["do"]["body"] == {"kind": "new", "target": "Zed", "now": False}, f
+        h = call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pace"]})
+        assert h.out["fix"]["do"]["options"] == {"pace": "slower"} and h.out["item"]["settings"] == {"pace": "natural", "mode": "cadence", "reader": "am_michael"}, h.out
+        assert call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pauses"]}).out["fix"] is None
+        # speech read by a stock Reader (no cadence): learning their cadence is the fix, not more training
+        f = ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "reader"}, sid)
+        assert f["do"]["body"] == {"kind": "cadence", "target": "zed-uc", "now": False}, f
+        assert ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "cadence"}, sid)["do"]["body"]["kind"] == "improve"
+        # superseded thumbs are written away once they dominate the file
+        for _ in range(260):
+            ear.rate("speech", sid, "up", "zed-uc", {}, [], "")
+        assert len(ear.ear_file().read_text(encoding="utf-8").splitlines()) < 260 and ear.thumb_of("speech", sid)["thumb"] == "up"
+        assert ear.taste("zed-uc") == {"up": 1, "down": 0}, ear.taste("zed-uc")
+        # refused: unknown reasons, a thumb that isn't up or down, a cover that's gone
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["meh"]}).err
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "sideways"}).err
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": "0000000000", "thumb": "up"}).err
+        # a half-written last line (a power cut) is skipped; forget one, then all
+        with open(ear.ear_file(), "a", encoding="utf-8") as fh:
+            fh.write('{"item": "cover:x", "thu')
+        time.sleep(0.01)
+        assert set(ear.items()) == {f"cover:{cov['id']}", f"speech:{sid}"}, ear.items()
+        assert call("POST", "/api/ear/forget", {"kind": "speech", "id": sid}).out == {"forgot": 1}
+        assert set(ear.items()) == {f"cover:{cov['id']}"}
+        assert call("POST", "/api/ear/forget", {}).err and call("POST", "/api/ear/forget", {"all": True}).out == {"forgot": 1}
+        assert ear.items() == {} and not ear.ear_file().exists()
+        for m, r in (("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget")):
+            assert phone_api.policy(m, r)[0] == "phone", (m, r, phone_api.policy(m, r))
+    return "up / down with reasons, the cover's own voice and settings; fixes: Improve tonight, a new voice, an octave, slower; forget one / all; liked first"
+
+
 @check("lead gate: an instrument in the lead stem isn't converted, lines left in the backing are; the stems stay as they were")
 def u_leadgate():
     import numpy as np
@@ -1313,8 +1413,8 @@ def u_display_names():
         got = {v.name: V.display_name(v) for v in V.list_voices()}
         assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
                        "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
-        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False}
-        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False}
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "ear": None}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "ear": None}
         # the route: set, read back through the APIs, clear
         h = _FakeHandler(body={"display": "  Barry   O  "})
         assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
@@ -2910,6 +3010,8 @@ PHONE_SAMPLES = [
     *[("POST", f"/api/work/{a}") for a in ("pause", "resume", "forget", "add", "remove", "order", "start", "settings", "dismiss")],
     ("POST", "/api/voices/install"), ("POST", "/api/voices/upload"), ("DELETE", "/api/voices/some-voice"),
     ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
+    ("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget"),
+    ("POST", "/api/history/0123456789/again"),
     ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
     ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
     *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
@@ -3690,7 +3792,7 @@ def snapshot_real(dirs: dict) -> dict:
     beside the config (config.toml, tutorial.json, phone.json, themes.json: a check once appended to the real config)."""
     import os
     snap = {}
-    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json"):
+    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json", "ear.json"):
         p = ROOT / name
         if p.is_file():
             st = p.stat()
@@ -3866,7 +3968,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_write_guard, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_ear,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_platform, u_tray):
         fn()
