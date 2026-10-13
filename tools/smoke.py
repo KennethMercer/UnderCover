@@ -1815,6 +1815,8 @@ def u_golden():
                            {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.21}, "cover:b__v1": {"likeness": 0.3}}], {"v2", "b"})
     assert m["scores"]["cover:a__v1"] == {"likeness": 0.7} and m["scores"]["cover:a__v2"] == {"likeness": 0.2}, m
     assert m["bands"]["cover:a__v2"] == {"likeness": 0.05} and G.render_run(m, "cover:b__v1") == "r5" and G.render_run(m, "cover:a__v1") == "r0"
+    old["retired"] = {"s": {"scores": {"cover:s__v1": {"likeness": 0.5}}}}   # a retired song's scores outlive a make
+    assert G.merged_baseline(old, ("r6", {"cover:a__v1": {"likeness": 0.1}}), [], set())["retired"] == old["retired"]
     spec = {"voices": [{"name": "v1"}, {"name": "morgan-freeman-uc"}], "covers": {"a": ["v1", "gone"]}}
     its = G.items_of(spec)
     assert its[0] == "cover:a__v1" and "cover:a__gone" not in its and "speech:rain__morgan-freeman-uc:reader" in its, its
