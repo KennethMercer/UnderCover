@@ -26,7 +26,20 @@
   "demo": true,
   "note": "demo voice, made for UnderCover, not a real person",
   "reader": "am_michael",
-  "made": "2026-10-13"
+  "made": "2026-10-13",
+  "tts": {
+   "engine": "chatterbox",
+   "cfg_weight": 0.3,
+   "exaggeration": 0.5,
+   "v": 1,
+   "ref": "ref.wav",
+   "ref_text": "The city was quiet that night, and the lamps along the river burned low. Nobody saw him cross the bridge, and nobody asked where he was going.",
+   "tempo": 1.0,
+   "gap_s": 0.5,
+   "para_gap_s": 0.8,
+   "made": "2026-10-13",
+   "source": "Kokoro am_michael (Apache-2.0), synthetic"
+  }
  },
  "display": "Agent Smoke"
 }

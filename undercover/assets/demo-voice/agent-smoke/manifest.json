@@ -12,6 +12,10 @@
   "model.index": {
    "size": 15360024,
    "sha256": "255877d2a027d6e6166629fe11f10ae178710fa6c06006e19dd5cb3984a2f50b"
+  },
+  "tts/ref.wav": {
+   "size": 444652,
+   "sha256": "ff72652e8ecc805f3405d00cf4c241d1d335e79b32bf01a60769a8e973f53698"
   }
  }
 }
