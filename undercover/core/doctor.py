@@ -476,8 +476,32 @@ def c_ytdlp(ctx) -> list:
     return out
 
 
+def c_vault(ctx) -> list:
+    """Vaulting: off (nothing to say), on and fine (when it last copied), the drive away, an error, or nothing for days."""
+    from . import vault
+    s = vault.status()
+    if not s["on"]:
+        return []
+    if not s["connected"]:
+        return [_r("vault", "files", "warn", "Vault",
+                   f"The vault's drive isn't connected ({s['folder']}), so new voices and covers aren't being backed up. "
+                   "Plug it in and the vault catches up by itself.", "")]
+    last = s["last"]
+    if s["error"]:
+        return [_r("vault", "files", "warn", "Vault", "The last vault run didn't finish.", s["error"][:300])]
+    if not last:
+        return [_r("vault", "files", "info", "Vault", "The vault is on; its first copy runs when UnderCover is idle.", s["folder"])]
+    made = time.mktime(time.strptime(last["made"], "%Y-%m-%dT%H-%M-%S"))
+    days = (time.time() - made) / 86400
+    when = f"{last['made'][:10]} {last['made'][11:16].replace('-', ':')}"
+    detail = f"{s['folder']} · {s['snapshots']} snapshots · {s['raw'] / 1e9:.2f} GB kept in {s['stored'] / 1e9:.2f} GB"
+    if days > 3:
+        return [_r("vault", "files", "warn", "Vault", f"The vault hasn't copied anything for {days:.0f} days (last {when}).", detail)]
+    return [_r("vault", "files", "ok", "Vault", f"Your voices, songs and covers are vaulted (last copy {when}).", detail)]
+
+
 CHECKS = [c_manifest, c_python, c_torch, c_gpu, c_packages, c_tools, c_models, c_disk, c_paths, c_port, c_stale, c_work,
-          c_phone, c_ytdlp]
+          c_phone, c_ytdlp, c_vault]
 
 
 def run(full: bool = False, status: dict | None = None, progress=None, cancel=None) -> dict:
