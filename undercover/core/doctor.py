@@ -479,7 +479,9 @@ def c_ytdlp(ctx) -> list:
 def c_vault(ctx) -> list:
     """Vaulting: off (nothing to say), on and fine (when it last copied), the drive away, an error, or nothing for days."""
     from . import vault
-    s = vault.status()
+    # the server: the copy the vault's watcher keeps (a sleeping USB disk or an offline share never slows the Doctor);
+    # the command line and a full check: read now
+    s = vault.status() if ctx.get("full") or ctx.get("status") is None else (vault.STATE.get("status") or {"on": False})
     if not s["on"]:
         return []
     if not s["connected"]:
