@@ -425,6 +425,8 @@ def run_set(stamp: str, spec: dict) -> dict:
             _render(wav, out_dir / "renders" / f"{item.replace(':', '_')}.flac")
             print(f"  {item}: {sc}", flush=True)
     _write(out_dir / "scores.json", {"run": stamp, "scores": scores, "code": _code_stamp()})
+    for d in ("cache", "output", "uploads", "tmp"):   # the renders are kept; the working files aren't (about 1 GB)
+        shutil.rmtree(GOLDEN / "work" / d, ignore_errors=True)
     return scores
 
 
