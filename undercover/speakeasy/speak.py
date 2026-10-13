@@ -233,6 +233,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
     from ..core import gpu
     from ..core.cadence import WorkerError, render
     t0 = time.perf_counter()
+    sents = render.join_short(sents)   # a sentence of a word or two is read with its neighbour (no stray sound before it)
     v = get_voice(p["voice"])
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
     ref = service.cadence_ref(v)

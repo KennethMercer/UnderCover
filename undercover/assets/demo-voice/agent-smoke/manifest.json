@@ -1,17 +1,17 @@
 {
  "voice": "agent-smoke",
- "made": "2026-10-12",
- "reader": "Kokoro bm_george (Apache-2.0)",
+ "made": "2026-10-13",
+ "reader": "Kokoro am_michael (Apache-2.0)",
  "text": "Joseph Conrad, The Secret Agent (1907), Project Gutenberg #974, public domain",
  "recipe": "tools/make_demo_voice.py",
  "files": {
   "model.pth": {
    "size": 55217261,
-   "sha256": "94aa3a8752a58dbddf4891bb10dc6119ee8eec68eba79a558edda8e820d12bcb"
+   "sha256": "73acf6511a0ef107f33c8d6b3c942cf85bd6b2d964f2ef4aa3e09601a55a4ef8"
   },
   "model.index": {
-   "size": 17789976,
-   "sha256": "af76a156d84966b584afacbabbecf555a30103a633d9efbf86154d40e5ac08bc"
+   "size": 15360024,
+   "sha256": "255877d2a027d6e6166629fe11f10ae178710fa6c06006e19dd5cb3984a2f50b"
   }
  }
 }
