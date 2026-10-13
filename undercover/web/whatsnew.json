@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-13-octaves",
+      "date": "2026-10-13",
+      "title": "Two octaves, your pick",
+      "lines": [
+        "When two octaves suit a voice about as well, a cover in one go offers both: hear A and B, blind, and pick the one that sounds more like them.",
+        "Picking the other makes the cover again at that octave; the first one stays in your covers."
+      ]
+    },
+    {
       "id": "2026-10-13-tonight-mode",
       "date": "2026-10-13",
       "title": "Train tonight remembers Singing",
