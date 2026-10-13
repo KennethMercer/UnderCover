@@ -234,6 +234,7 @@ function seStart(job, plan, estimate, resumed = false) {
         SE.result = ev.result;
         $("#se-progress").textContent = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"} · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s`;
         $("#se-wav").href = ev.result.url + "?download"; $("#se-wav").removeAttribute("aria-disabled");
+        $("#se-wav").textContent = `Download ${(ev.result.file || "").split(".").pop().toUpperCase() || "FLAC"}`;   // phase 24: lossless FLAC
         if (ev.result.mp3_url) { $("#se-mp3").href = ev.result.mp3_url + "?download"; $("#se-mp3").removeAttribute("aria-disabled"); }
         $("#se-dl-note").textContent = `saved as “${ev.result.file}” (SafeHouse → Speech)`;
         $("#se-track").classList.add("done");
