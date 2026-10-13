@@ -3976,6 +3976,8 @@ PHONE_SAMPLES = [
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
     ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/reset"),
     ("GET", "/api/tutorial/greetings"), ("GET", "/api/tutorial/greetings/good-morning.mp3"),
+    ("GET", "/api/library/smaller"), ("POST", "/api/library/smaller/start"), ("POST", "/api/library/smaller/keep"),
+    ("POST", "/api/library/smaller/undo"),
 ]
 
 
@@ -4347,6 +4349,90 @@ def a_tutorial():
     return f"greetings {len(g['greetings'])}; existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
 
 
+@check("Make smaller (phase 24): a project's WAV clips become FLAC (bit-identical) and its data.pt waits aside, Undo puts them back, Keep deletes only what was set aside; a voice's index shrinks with the full one aside; never automatic")
+def u_smaller():
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.engine.rvc import index as ri
+    from undercover.doubleagent.project import Project, projects_dir
+    from undercover.core.voices import voices_dir
+    import struct
+    from undercover.safehouse import smaller
+    with isolated_data():
+        proj = Project(name="smaller-test", person="Test")
+        proj.train = {"exported": "smaller-voice", "exported_epoch": 5, "state": "exported"}
+        proj.dir.mkdir(parents=True)
+        proj.save()
+        d = proj.dir
+        (d / "clips").mkdir(parents=True, exist_ok=True)
+        (d / "train").mkdir(parents=True, exist_ok=True)
+        rng = np.random.default_rng(1)
+        clips = {}
+        for i in range(3):
+            y = (rng.standard_normal(22050) * 2000).astype(np.int16)
+            sf.write(str(d / "clips" / f"c{i}.wav"), y, 44100, subtype="PCM_16")
+            clips[f"c{i}"] = y
+        (d / "train" / "data.pt").write_bytes(b"d" * 5000)
+        vd = voices_dir() / "smaller-voice"
+        vd.mkdir(parents=True)
+        pth = os.urandom(4000)
+        (vd / "model.pth").write_bytes(pth)
+        (d / "train" / "e5.pth").write_bytes(pth)
+        vecs = rng.standard_normal((300, 8)).astype(np.float16)
+        with open(vd / "model.index", "wb") as f:
+            f.write(ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
+        ov = smaller.overview()
+        row = next(p for p in ov["projects"] if p["name"] == "smaller-test")
+        assert row["clips_wav_bytes"] > 0 and row["data_bytes"] == 5000 and not row["pending"], row
+        assert next(v for v in ov["voices"] if v["name"] == "smaller-voice")["saving"] == 0   # 300 vectors: already small
+        # the project: clips FLAC, data.pt aside, the save linked; nothing deleted
+        r = smaller.shrink_project("smaller-test")
+        assert r["clips"] == 3 and r["clips_bytes_after"] < r["clips_bytes_before"] and r["data_bytes"] == 5000, r
+        for pid, y in clips.items():
+            assert proj.clip_path(pid).suffix == ".flac"
+            back, _ = sf.read(str(proj.clip_path(pid)), dtype="int16")
+            assert np.array_equal(back, y)
+            assert (d / smaller.ASIDE / "clips" / f"{pid}.wav").exists(), "an original WAV went"
+        assert not (d / "train" / "data.pt").exists() and (d / smaller.ASIDE / "train" / "data.pt").exists()
+        assert os.path.samefile(d / "train" / "e5.pth", vd / "model.pth") and r["linked_bytes"] == 4000
+        try:
+            smaller.shrink_project("smaller-test")
+            raise AssertionError("made smaller twice while waiting")
+        except Exception as e:
+            assert "waiting" in str(e)
+        smaller.undo_project("smaller-test")                       # Undo: the WAVs and data.pt back, the FLACs gone
+        assert all(proj.clip_path(p).suffix == ".wav" for p in clips) and not list((d / "clips").glob("*.flac"))
+        assert (d / "train" / "data.pt").read_bytes() == b"d" * 5000 and not (d / smaller.ASIDE).exists()
+        smaller.shrink_project("smaller-test")                     # again, then Keep: only what was set aside goes
+        smaller.keep_project("smaller-test")
+        assert not (d / smaller.ASIDE).exists() and all(proj.clip_path(p).suffix == ".flac" for p in clips)
+        assert (vd / "model.pth").read_bytes() == pth and (d / "train" / "e5.pth").read_bytes() == pth
+        # a voice: its index shrunk (here 300 -> 50 on the CPU), the full one aside; Undo and Keep
+        full = (vd / "model.index").read_bytes()
+        r = smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
+        assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and (vd / smaller.INDEX_ASIDE).read_bytes() == full
+        assert len(ri.read_vectors(vd / "model.index")) == 50
+        smaller.undo_voice("smaller-voice")
+        assert (vd / "model.index").read_bytes() == full and not (vd / smaller.INDEX_ASIDE).exists()
+        smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
+        smaller.keep_voice("smaller-voice")
+        assert not (vd / smaller.INDEX_ASIDE).exists() and len(ri.read_vectors(vd / "model.index")) == 50
+    return "project: clips FLAC, data.pt aside, save linked, Undo, Keep; voice: index 300 -> 50, Undo, Keep"
+
+
+@check("listen-back's drawn-out word (phase 24): a one-syllable word held over 0.30 s mid-phrase asks for a re-read; a marked pause after it, the last word or a longer word don't")
+def u_drawl():
+    from undercover.speakeasy import listenback as lb
+    w = lambda *t: [[a, s, e, 0.9] for a, s, e in t]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.36), ("morning.", 0.36, 0.76))) == ["drawn-out 'good' (0.36 s)"]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.16), ("morning.", 0.16, 0.44))) == []
+    assert lb.problems("Good, morning.", w(("Good,", 0.0, 0.40), ("morning.", 0.40, 0.76))) == [], "a comma's pause counted"
+    assert lb.problems("It was late.", w(("It", 0, 0.1), ("was", 0.1, 0.2), ("late.", 0.2, 0.8))) == [], "the last word counted"
+    assert lb.problems("An evening walk.", w(("An", 0, 0.1), ("evening", 0.1, 0.6), ("walk.", 0.6, 0.9))) == [], "a longer word counted"
+    assert [lb.syllables(x) for x in ("good", "you're", "late", "morning", "evening", "little")] == [1, 1, 1, 2, 3, 2]
+    return "drawn-out caught; comma, last word and longer words left alone"
+
+
 @check("smaller, never worse (phase 24): training clips as FLAC (old WAV clips still read); key changes as 24-bit FLAC, float WAV kept over full scale; the exported save hard-linked to the voice, and each copy survives the other's delete, a move and a restore; speech as FLAC")
 def u_lossless():
     import numpy as np
@@ -5148,7 +5234,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_lossless, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_lossless, u_smaller, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

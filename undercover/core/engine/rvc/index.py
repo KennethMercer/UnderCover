@@ -167,7 +167,7 @@ def compact_in_place(path: Path) -> tuple[int, int]:
 CENTRES = 10000   # phase 24: an index above this becomes this many k-means centres (RVC's own way to shrink a big set)
 
 
-def shrink(path: Path, k: int = CENTRES, dest: Path | None = None) -> tuple[int, int]:
+def shrink(path: Path, k: int = CENTRES, dest: Path | None = None, device: str | None = None) -> tuple[int, int]:
     """The index as k k-means centres, compact fp16, written to dest (default: in place, crash-safe). Agent Smoke's
     166,906 vectors (256 MB) -> 10k (15 MB): likeness 0.928 -> 0.923, within run-to-run noise. On the GPU when there
     is one (seconds; scikit-learn on the CPU takes hours). Deterministic (seed 0). -> (vectors before, after)"""
@@ -180,7 +180,7 @@ def shrink(path: Path, k: int = CENTRES, dest: Path | None = None) -> tuple[int,
             import shutil
             shutil.copyfile(path, dest)
         return len(x), len(x)
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
     X = torch.from_numpy(x).to(dev)
     xx = (X * X).sum(1)
     gen = torch.Generator(device=dev).manual_seed(0)
