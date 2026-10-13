@@ -214,8 +214,11 @@ class Handler(BaseHTTPRequestHandler):
         the rest a paired device's token, and "pc" routes are refused for phones."""
         self._read, self.set_cookie, self.device = None, None, None
         self.remote = getattr(self.server, "phone", False) or not _loopback(self.client_address[0])
+        self.away = getattr(self.server, "away", False)
         if not self.remote:
             return self._guard_host() and (method == "GET" or self._guard_origin())
+        if self.away:
+            return self._gate_away(method)
         if not phone.enabled():
             return self._deny(401, b"Phone access is off on the PC. Switch it on there: SafeHouse, Settings, Phone access.")
         own, port = self.server.server_address[:2]
@@ -234,6 +237,37 @@ class Handler(BaseHTTPRequestHandler):
         self.device = phone.device_for(self._cookie(phone.COOKIE), self.client_address[0])
         if self.device is None:
             return self._deny(401)
+        if pol == "pc":
+            return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
+                              "application/json")
+        return True
+
+    def _gate_away(self, method: str) -> bool:
+        """The away-from-home listener (phase 20): what Tailscale Funnel brings in from the whole internet. Its own
+        ts.net name in Host, https:// that name as Origin on anything but GET, never the pairing page or its claim
+        (pairing stays on the home Wi-Fi), the redeem route and the page around it open, everything else an away token
+        (cookie uc_away, a token of its own) and the phone policy (PC-only routes refused)."""
+        from ..core import tailnet
+        if not phone.enabled() or not phone.away_on() or not tailnet.STATE["host"]:
+            return self._deny(401, b"Away from home is off on the PC.")
+        host = (self.headers.get("Host") or "").lower()
+        if host != tailnet.STATE["host"].lower():
+            return self._deny(403)
+        if method != "GET":
+            o = urlparse(self.headers.get("Origin") or "")
+            if o.scheme != "https" or o.netloc.lower() != host:
+                return self._deny(403)
+        p = urlparse(self.path).path
+        if p in ("/pair", "/api/phone/claim"):
+            return self._deny(403, b"Pairing only happens on the home Wi-Fi.")
+        if (method, p) in (("GET", "/away"), ("POST", "/api/phone/away")):
+            return True
+        pol, what = phone_api.policy(method, p)
+        if pol == "open":
+            return True
+        self.device = phone.device_for(self._cookie(phone.AWAY_COOKIE), "", away=True)   # Funnel's loopback: no address to keep
+        if self.device is None:
+            return self._deny(401, b"This phone isn't set up for away from home. On the home Wi-Fi: Use this phone away from home.")
         if pol == "pc":
             return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
                               "application/json")
@@ -286,6 +320,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
+            if p == "/away":
+                return self._static(WEB / "away.html")
             if p == "/pair":
                 return self._static(WEB / "pair.html")
             if p.startswith("/static/"):
@@ -313,6 +349,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
+                                   "away_ready": self.remote and _away_ready(),
                                    "tutorial": tutorial.status()})
             if p == "/api/voices":
                 return self._json(voices_json())
@@ -758,6 +795,18 @@ class PhoneServer(ExclusiveServer):
         self.server_name, self.server_port = self.server_address[:2]
 
 
+def _away_ready() -> bool:
+    """For a phone: is away from home on and ready on the PC (its 'Use this phone away from home' shows only then)."""
+    from ..core import tailnet
+    return phone.away_on() and tailnet.STATE["phase"] == "ready"
+
+
+class AwayServer(PhoneServer):
+    """The third listener (phase 20): loopback only, the one target of Tailscale Funnel; every request comes from the
+    internet and passes _gate_away."""
+    away = True
+
+
 def _loopback(addr: str) -> bool:
     try:
         ip = ipaddress.ip_address(addr)
@@ -844,7 +893,7 @@ def main():
     gamepause.start()   # the game pause: asks before UnderCover's GPU work competes with a full-screen game
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
     try:   # Phone access (phase 11): the second listener, if it's switched on
-        phone_api.setup(lambda a, p: PhoneServer((a, p), Handler), port)
+        phone_api.setup(lambda a, p: PhoneServer((a, p), Handler), port, lambda a, p: AwayServer((a, p), Handler))
     except Exception as e:   # noqa: BLE001 - never block startup
         print(f"Phone access couldn't start: {e}", flush=True)
     _start_tray(port)
@@ -894,7 +943,13 @@ def _install_console_handler():
 
 
 def _hard_exit():
-    """End this process immediately (core/platform.hard_exit: a normal exit can hang in the GPU runtime's teardown)."""
+    """End this process immediately (core/platform.hard_exit: a normal exit can hang in the GPU runtime's teardown).
+    Away from home's Tailscale daemon is ours: it goes too (a restart starts it again)."""
+    try:
+        from ..core import tailnet
+        tailnet.at_exit()
+    except Exception:   # noqa: BLE001 - exiting regardless
+        pass
     platform.hard_exit(0)
 
 

@@ -687,8 +687,19 @@
           <p class="meta"><span id="phone-left"></span> · <button class="linkbtn" id="phone-pair-x" type="button">Cancel</button></p>
         </div>
         <div class="rn-list" id="phone-devices"></div>
+        <div class="setting" id="set-away-row" hidden><span><b>Away from home</b><small id="set-away-say">Reach UnderCover from anywhere through a private link (Tailscale: free, nothing to install on the phone). Phones still pair here, at home.</small></span>
+          <button class="switch" id="set-away" type="button" role="switch" aria-checked="false" aria-label="Away from home"></button></div>
+        <div class="phone-box" id="away-box" hidden>
+          <p class="meta" id="away-step"></p>
+          <div class="row"><a class="btn" id="away-signin" target="_blank" rel="noopener noreferrer" hidden>Sign in to Tailscale</a><a class="btn" id="away-approve" target="_blank" rel="noopener noreferrer" hidden>Approve the private link</a></div>
+          <p class="meta" id="away-ct" hidden>Approving lists this PC's link name (a random uc-… name, nothing about you) in the public certificate logs every HTTPS site appears in.</p>
+          <p id="away-link" hidden></p>
+          <p class="meta" data-deep><button class="linkbtn" id="away-forget" type="button">Forget this PC's Tailscale sign-in</button></p>
+        </div>
       </div>
       <div class="setting" data-phone><span><b>Phone access</b><small id="set-phone-me">This phone is paired. Phone access is managed on the PC.</small></span></div>
+      <div class="setting" data-phone id="set-away-me-row" hidden><span><b>Away from home</b><small>When the PC has it on: one tap here, on the home Wi-Fi, and this phone reaches UnderCover from anywhere.</small></span>
+        <button class="btn" id="away-me" type="button">Use this phone away from home</button></div>
     </div>
     </div>
 
