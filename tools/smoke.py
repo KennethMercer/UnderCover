@@ -250,6 +250,39 @@ def u_sources():
     assert not s.is_sung("Elliott Smith Interview 1998")
 
 
+@check("demo voice builder: a paused training leaves a folder that resumes (resume.pt and all, byte for byte)")
+def u_demo_pause():
+    """2026-10-12: a pause lost a training 10 epochs from the end (the builder's sandbox took resume.pt with it)."""
+    import hashlib
+    import inspect
+    import make_demo_voice as mdv
+    with isolated_data() as box:
+        proj = box / "sandbox" / "training" / "agent-smoke"
+        (proj / "train").mkdir(parents=True)
+        (proj / "clips").mkdir()
+        (proj / "project.json").write_text(json.dumps({"name": "agent-smoke", "train": {"state": "paused", "epoch": 88}}),
+                                           encoding="utf-8")
+        (proj / "train" / "resume.pt").write_bytes(os.urandom(1 << 16))
+        (proj / "train" / "e80.pth").write_bytes(os.urandom(4096))
+        (proj / "clips" / "p0001.wav").write_bytes(os.urandom(2048))
+        digest = lambda d: {str(f.relative_to(d)): hashlib.sha256(f.read_bytes()).hexdigest() for f in d.rglob("*") if f.is_file()}
+        before = digest(proj)
+        keep = box / "kept" / "agent-smoke-paused"
+        (keep / "stale").mkdir(parents=True)   # an older kept copy is replaced, not merged
+        mdv.keep_paused(proj, keep)
+        shutil.rmtree(box / "sandbox")   # the builder's sandbox goes
+        assert digest(keep) == before, "the kept folder isn't the project byte for byte"
+        projects = box / "new-sandbox" / "training"
+        projects.mkdir(parents=True)
+        assert mdv.restore_paused(keep, projects) == "agent-smoke"
+        assert digest(projects / "agent-smoke") == before, "the resumed project isn't the kept one"
+    src = inspect.getsource(mdv.main)
+    i = src.index('"paused" and what == "training"')
+    assert src.index("keep_paused(", i) < src.index("sys.exit(", i), "a paused training exits before it's kept"
+    assert "restore_paused(resume" in src and '"--resume"' in src
+    return "kept before the sandbox goes; restored byte for byte into a new one; --resume wired"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -3799,7 +3832,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_demo_pause, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

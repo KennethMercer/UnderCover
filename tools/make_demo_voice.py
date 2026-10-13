@@ -11,6 +11,9 @@ user's folders:
      the demo voice wants all the speech: it needs the range), then "Do it all" (confirm, train, add the voice);
   4. the voice folder is copied to undercover/assets/demo-voice/agent-smoke/ with its meta marked as the demo, and a
      manifest.json (each file's size and SHA-256, the reader, the text) is written next to it.
+A pause (the GPU wanted for something else) keeps the training: the project is copied out of the sandbox before it goes
+(to <audio-dir>/agent-smoke-paused, or the temp folder), and --resume <that folder> carries on from its last epoch in a
+new sandbox (a pause on 2026-10-12 lost a training 10 epochs from the end, because the sandbox took resume.pt with it).
 The model files are git-ignored (too large for the repository, MasterPlan 2026-10-12): meta.json and manifest.json are
 committed, the installer (built on this PC) packs the folder from disk, and a fresh clone runs this script once
 (--manifest-only rewrites the manifest for files already there). app/tutorial.py seeds it into the user's voices on a
@@ -83,36 +86,43 @@ def write_manifest(reader: str):
     return files
 
 
+def keep_paused(project: Path, keep: Path) -> Path:
+    """A paused training's whole project (resume.pt, the clips, its choices) copied to `keep`, which outlives the
+    sandbox. -> keep"""
+    if keep.exists():
+        shutil.rmtree(keep)
+    shutil.copytree(project, keep)
+    return keep
+
+
+def restore_paused(kept: Path, projects: Path) -> str:
+    """A kept project back into a (new) sandbox's training folder. -> the project's name"""
+    name = json.loads((kept / "project.json").read_text(encoding="utf-8"))["name"]
+    shutil.copytree(kept, projects / name)
+    return name
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=20)
     ap.add_argument("--reader", default="bm_george")
     ap.add_argument("--audio-dir", help="keep the synthesized speech here and reuse it next time (it takes ~25 min)")
     ap.add_argument("--manifest-only", action="store_true", help="only (re)write manifest.json for the files already there")
+    ap.add_argument("--resume", help="a paused training's project folder (printed when it paused): carry on from there")
     a = ap.parse_args()
     if a.manifest_only:
         print(write_manifest(a.reader))
         return
     import smoke
-    print("the text: The Secret Agent (Conrad, 1907), Project Gutenberg #974")
-    text = text_of_book()
+    import tempfile
+    keep = Path(a.audio_dir or tempfile.gettempdir()) / "agent-smoke-paused"
+    resume = Path(a.resume).resolve() if a.resume else None
+    if resume and not (resume / "project.json").is_file():
+        sys.exit(f"--resume: no project.json in {resume}")
     with smoke.sandbox_server(smoke.sandbox_port()) as root:
         from undercover.core.config import path
-        work = Path(a.audio_dir) if a.audio_dir else root / "demo-voice-src"
-        work.mkdir(parents=True, exist_ok=True)
-        files = sorted(work.glob("agent-smoke-*.wav"))
-        if files:
-            print(f"reusing {len(files)} recordings in {work}")
-        else:
-            print(f"Kokoro {a.reader} reads {a.minutes:.0f} min into {work}")
-            files = synthesize(text, a.reader, a.minutes, work)
-        p = smoke.api("/api/train/projects", {"person": "Agent Smoke", "mode": "speaking", "no_search": True})
-        name = p["name"]
-        for f in files:
-            req = urllib.request.Request(f"{smoke.BASE}/api/train/projects/{name}/upload", data=f.read_bytes(), method="POST",
-                                         headers={"X-Filename": f.name, "Origin": smoke.BASE})
-            with urllib.request.urlopen(req, timeout=300) as r:
-                r.read()
+        from undercover.doubleagent import project as P
+
         def follow(job: str, what: str):
             t0, last = time.time(), ""
             while True:
@@ -124,18 +134,42 @@ def main():
                     print(f"  [{(time.time() - t0) / 60:5.1f} min] {msg}", flush=True)
                     last = msg
                 time.sleep(15)
+            if j["final"]["state"] == "paused" and what == "training":
+                # the sandbox goes when this block ends: the project (resume.pt and all) goes somewhere that stays
+                keep_paused(P.projects_dir() / name, keep)
+                sys.exit(f"training paused; kept in {keep}. Carry on with: --resume \"{keep}\"")
             if j["final"]["state"] != "done":
                 log = path("logs_dir") / "errors.log"   # the sandbox goes when this block ends: show why first
                 if log.exists():
                     print(log.read_text(encoding="utf-8", errors="replace")[-3000:])
                 sys.exit(f"{what} ended as {j['final']['state']}: {j['final'].get('message')}")
 
-        print(f"project {name}: {len(files)} recordings uploaded; preparing all of them")
-        follow(smoke.api(f"/api/train/projects/{name}/prepare", {})["job"], "preparing")
-        from undercover.doubleagent import project as P
-        pr = P.Project.load(name)
-        print(f"kept {pr.kept_seconds() / 60:.1f} min of {sum(s.duration for s in pr.sources) / 60:.1f}; "
-              "Do it all (confirm, train, add)")
+        if resume:
+            assert smoke.storage_inside(P.projects_dir(), root), P.projects_dir()
+            name = restore_paused(resume, P.projects_dir())
+            st = P.Project.load(name).train
+            print(f"resuming {name} from epoch {st.get('epoch')} of its training (state {st.get('state')})")
+        else:
+            print("the text: The Secret Agent (Conrad, 1907), Project Gutenberg #974")
+            work = Path(a.audio_dir) if a.audio_dir else root / "demo-voice-src"
+            work.mkdir(parents=True, exist_ok=True)
+            files = sorted(work.glob("agent-smoke-*.wav"))
+            if files:
+                print(f"reusing {len(files)} recordings in {work}")
+            else:
+                print(f"Kokoro {a.reader} reads {a.minutes:.0f} min into {work}")
+                files = synthesize(text_of_book(), a.reader, a.minutes, work)
+            name = smoke.api("/api/train/projects", {"person": "Agent Smoke", "mode": "speaking", "no_search": True})["name"]
+            for f in files:
+                req = urllib.request.Request(f"{smoke.BASE}/api/train/projects/{name}/upload", data=f.read_bytes(), method="POST",
+                                             headers={"X-Filename": f.name, "Origin": smoke.BASE})
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    r.read()
+            print(f"project {name}: {len(files)} recordings uploaded; preparing all of them")
+            follow(smoke.api(f"/api/train/projects/{name}/prepare", {})["job"], "preparing")
+            pr = P.Project.load(name)
+            print(f"kept {pr.kept_seconds() / 60:.1f} min of {sum(s.duration for s in pr.sources) / 60:.1f}; "
+                  "Do it all (confirm, train, add)")
         follow(smoke.api(f"/api/train/projects/{name}/auto", {"voice_name": "agent-smoke"})["job"], "training")
         src = path("voices_dir") / "agent-smoke"
         assert smoke.storage_inside(src, root), src   # the sandbox's voice, never a real one
@@ -161,6 +195,8 @@ def main():
         new.replace(OUT)
         if old.exists():
             shutil.rmtree(old)
+    if resume and resume == keep.resolve():   # our own copy of a paused training (about 2 GB): done with it
+        shutil.rmtree(resume)
     write_manifest(a.reader)
     size = sum(f.stat().st_size for f in OUT.iterdir())
     print(f"done: {OUT} ({size / 1e6:.0f} MB: " + ", ".join(f"{f.name} {f.stat().st_size / 1e6:.0f} MB" for f in OUT.iterdir()) + ")")
