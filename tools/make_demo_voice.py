@@ -92,43 +92,9 @@ PACK_TEXT = ("The city was quiet that night, and the lamps along the river burne
 
 
 def shrink_index(folder: Path, k: int = INDEX_CENTRES) -> tuple[int, int]:
-    """The voice's index as k k-means centres (compact fp16): RVC's own way to shrink a big set, on the GPU when there
-    is one (seconds; scikit-learn on the CPU takes hours here). -> (vectors before, after)"""
-    import struct
-    import numpy as np
-    import torch
+    """The voice's index as k k-means centres (core/engine/rvc/index.shrink, shared with exports and Make smaller)."""
     from undercover.core.engine.rvc import index as rvcindex
-    f = folder / "model.index"
-    x = rvcindex.read_vectors(f)
-    if len(x) <= k:
-        return len(x), len(x)
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-    X = torch.from_numpy(x).to(dev)
-    xx = (X * X).sum(1)
-    C = X[torch.randperm(len(X), device=dev, generator=torch.Generator(device=dev).manual_seed(0))[:k]].clone()
-
-    def assign(C):
-        cc = (C * C).sum(1)
-        lab = torch.empty(len(X), dtype=torch.long, device=dev)
-        dist = torch.empty(len(X), device=dev)
-        for i in range(0, len(X), 8192):
-            dist[i:i + 8192], lab[i:i + 8192] = (xx[i:i + 8192, None] - 2 * X[i:i + 8192] @ C.T + cc[None]).min(1)
-        return lab, dist
-    for _ in range(25):
-        lab, dist = assign(C)
-        cnt = torch.bincount(lab, minlength=k).float()
-        C = torch.zeros_like(C).index_add_(0, lab, X) / cnt.clamp(min=1)[:, None]
-        empty = torch.nonzero(cnt == 0).flatten()
-        if len(empty):   # an empty centre restarts at one of the points farthest from their own centre
-            C[empty] = X[dist.topk(len(empty)).indices]
-    v = C.float().cpu().numpy().astype(np.float16)
-    assert np.isfinite(v).all()
-    tmp = f.with_name("model.index.tmp")
-    with open(tmp, "wb") as fh:
-        fh.write(rvcindex.COMPACT_MAGIC + struct.pack("<qq", *v.shape))
-        fh.write(v.tobytes())
-    tmp.replace(f)
-    return len(x), len(v)
+    return rvcindex.shrink(folder / "model.index", k)
 
 
 def add_cadence_pack(folder: Path, reader: str, meta: dict) -> dict:

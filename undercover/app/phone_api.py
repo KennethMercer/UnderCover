@@ -82,6 +82,8 @@ ROUTES = [
     ("GET", rf"/api/library/voices/{_ID}/export", "pc", "Export .zip (Deep Cover)"),
     ("DELETE", rf"/api/library/voices/{_ID}/cadence", "pc", "Delete cadence (Deep Cover)"),
     ("GET|POST", r"/api/library/cleanup", "pc", "Storage: Clean up"),
+    ("GET", r"/api/library/smaller", "pc", "Make smaller: what each voice and project would save"),
+    ("POST", r"/api/library/smaller/(start|keep|undo)", "pc", "Make smaller, Keep, Undo"),
     ("POST", r"/api/library/tools/ytdlp-(update|auto)", "pc", "the YouTube downloader's update and its switch"),
     ("GET", r"/api/addons|/api/storage", "phone", "the Add-ons and Storage rooms (reading)"),
     ("POST", rf"/api/addons/{_ID}/(install|remove|use)", "pc", "add-on installs"),
