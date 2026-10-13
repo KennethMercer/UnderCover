@@ -546,19 +546,64 @@ def prune(root: Path, now: datetime | None = None) -> int:
 
 # ---------------------------------------------------------------- restore
 
+def _records(root: Path, files: dict) -> tuple[dict, dict]:
+    """The songs' and the speeches' own records in this snapshot (read from the vault, re-hashed like any restore):
+    ({song id: title}, {speech file name: (speech id, title)}), so an item's files list as one row under its title."""
+    songs, speech = {}, {}
+    for key, (sha, size, *_rest) in files.items():
+        if not key.endswith(".json") or size > 1 << 20:
+            continue
+        top, _, rest = key.partition("/")
+        if not ((top == "songs" and "/" not in rest) or (top == "covers" and rest.startswith("speech/") and rest.count("/") == 1)):
+            continue
+        try:
+            rec = json.loads(get(root / "objects", sha))
+        except (ModelError, ValueError, OSError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if top == "songs":
+            songs[rest[:-5]] = str(rec.get("title") or rec.get("name") or rest[:-5])
+        elif rec.get("id"):
+            label = str(rec.get("title") or rec["id"]) + (f" ({rec['voice']})" if rec.get("voice") else "")
+            for name in (rec.get("file"), rec.get("mp3"), f"{rec['id']}.json"):
+                if name:
+                    speech[name] = (rec["id"], label)
+    return songs, speech
+
+
+def _item_of(key: str, songs: dict, speech: dict) -> tuple[str, str]:
+    """(item id, title) for a vault key: a voice / project is its folder, a song its id (audio and record together),
+    a speech its id (wav, mp3 and record together), anything else its own name."""
+    top, _, rest = key.partition("/")
+    if top in ("voices", "training"):
+        name = rest.split("/", 1)[0]
+        return name, name
+    if top == "songs" and "/" not in rest:
+        sid = rest.split(".", 1)[0]
+        return sid, songs.get(sid, rest)
+    if top == "covers" and rest.startswith("speech/"):
+        name = rest.split("/", 1)[1]
+        if name in speech:
+            return speech[name]
+    return rest, rest
+
+
 def contents(folder: str | None = None, stamp: str | None = None) -> dict:
-    """What a snapshot holds, by kind and item (a voice, a song, a project, settings): for SafeHouse's Vault room."""
+    """What a snapshot holds, by kind and item (a voice, a song, a speech, a project, settings), each item with its id,
+    its title (from its own record, for songs and speech) and every one of its files: for SafeHouse's Vault room."""
     root = root_of(folder or settings()["folder"])
     snap = load_snapshot(root, stamp)
+    songs, speech = _records(root, snap["files"])
     groups: dict = {}
     for key, (sha, size, _, kind) in snap["files"].items():
         try:
             target_of(key)
         except ModelError:   # a name this version won't restore (a damaged or foreign snapshot): leave it out
             continue
-        top, _, rest = key.partition("/")
-        item = rest.split("/", 1)[0] if top in ("voices", "training") else rest
-        g = groups.setdefault(kind, {}).setdefault(item, {"item": item, "kind": kind, "files": 0, "bytes": 0, "keys": []})
+        item, title = _item_of(key, songs, speech)
+        g = groups.setdefault(kind, {}).setdefault(item, {"item": item, "title": title, "kind": kind, "files": 0,
+                                                          "bytes": 0, "keys": []})
         g["files"] += 1
         g["bytes"] += size
         g["keys"].append(key)
@@ -568,7 +613,7 @@ def contents(folder: str | None = None, stamp: str | None = None) -> dict:
             here = [target_of(k) for k in it["keys"]]
             it["here"] = "same" if all(t.is_file() and t.stat().st_size == snap["files"][k][1] for t, k in zip(here, it["keys"])) \
                 else "missing" if not any(t.exists() for t in here) else "different"
-        out[kind] = sorted(its.values(), key=lambda x: x["item"].lower())
+        out[kind] = sorted(its.values(), key=lambda x: x["title"].lower())
     return {"snapshot": snap["made"], "snapshots": snapshots(root), "kinds": out}
 
 

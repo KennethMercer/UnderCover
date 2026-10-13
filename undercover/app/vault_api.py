@@ -4,7 +4,7 @@
     GET  /api/vault/check?folder=        would this folder do? {ok, why, warn, free, need} (nothing is switched)
     POST /api/vault/settings             {folder, size}: switch on (a checked folder), change the size, or off (folder "")
     POST /api/vault/run                  vault now, in the background
-    GET  /api/vault/contents?snapshot=   what a snapshot holds, by kind and item, and whether each is here / missing / different
+    GET  /api/vault/contents?snapshot=   what a snapshot holds, by kind and item ({item: id, title, files, bytes, keys, here: same|missing|different}; a song's or a speech's files are one item, titled from its record)
     POST /api/vault/restore              {keys, on_conflict: ask|both|replace|skip, snapshot}: bit-identical, never a silent overwrite;
                                          replace runs in the background ({"started": true}; the outcome in GET's "restore")
 """
