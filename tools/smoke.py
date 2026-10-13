@@ -250,6 +250,92 @@ def u_sources():
     assert not s.is_sung("Elliott Smith Interview 1998")
 
 
+@check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
+       "Checking it stage, the voice a finished training made in its job snapshot")
+def u_da_mode():
+    import inspect
+    from undercover.core import jobs, worklist
+    from undercover.core.jobs import Job
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import night, service
+    from undercover.doubleagent import project as P
+    with isolated_data() as box:
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file inside the test's folder
+        real_train = service.train_new_voice
+        try:
+            worklist.add("new", "Smoke Test Singer", mode="singing")
+            worklist.add("new", "Smoke Test Talker")
+            q = {i["target"]: i for i in worklist._state()["queue"]}
+            assert q["Smoke Test Singer"]["mode"] == "singing" and "mode" not in q["Smoke Test Talker"], q
+            for kind, mode, words in (("new", "humming", "Speaking or Singing"), ("improve", "singing", "no Speaking")):
+                try:
+                    worklist.add(kind, "Smoke Test Other", mode=mode)
+                    raise AssertionError(f"{kind} took mode {mode}")
+                except ModelError as e:
+                    assert words in str(e), e
+            # the queue's run passes the item's mode on to the training
+            got = {}
+
+            def fake(job, person, control, push, **kw):
+                got.update(kw, person=person)
+                return "smoke-test-singer-uc"
+            service.train_new_voice = fake
+            night._new(Job("zz-smoke"), q["Smoke Test Singer"])
+            assert got.get("mode") == "singing" and got["person"] == "Smoke Test Singer", got
+            # a new project starts in the chosen mode, and the choice is applied to an existing one (apply_mode)
+            proj = service.project_for("Smoke Test Singer", "singing")
+            assert proj.mode == "singing", proj.mode
+            talker = service.project_for("Smoke Test Talker", "speaking")
+            assert service.apply_mode(talker, "Smoke Test Talker", "both").mode == "both", "nothing searched: the mode follows"
+            from undercover.doubleagent import sources as srcmod
+            real_search = srcmod.search
+            sung = P.Source(id="sung1", title="Smoke Test Talker - A Song (Official Audio)", url="https://example.invalid/1",
+                            channel="x", duration=200.0)
+            srcmod.search = lambda person, mode, **kw: [sung] if mode == "singing" else []
+            try:
+                spoken = P.Project.load(talker.name)
+                spoken.mode, spoken.sources = "speaking", [P.Source(id="talk1", title="Interview", url="https://example.invalid/2",
+                                                                    channel="x", duration=600.0)]
+                spoken.save()
+                got = service.apply_mode(spoken, "Smoke Test Talker", "singing")   # speech so far: their songs are added
+                assert got.mode == "singing" and [s.id for s in got.sources] == ["talk1", "sung1"], (got.mode, got.sources)
+                assert service.apply_mode(got, "Smoke Test Talker", "speaking").sources == got.sources, "songs were dropped"
+                got.train["epoch"] = 40
+                got.save_train()
+                assert service.apply_mode(P.Project.load(got.name), "Smoke Test Talker", "speaking").mode == "singing", \
+                    "a project that has trained changed mode"
+            finally:
+                srcmod.search = real_search
+        finally:
+            service.train_new_voice = real_train
+            jobs.PORT, worklist._STATE = old_port, old_state
+        # Checking it: the last save (an early stop's) is measured like the others and can win
+        from undercover.doubleagent.trainer import Trainer
+        tr = Trainer.__new__(Trainer)
+        tr.tdir = box / "zz-train"
+        tr.tdir.mkdir(parents=True)
+        (tr.tdir / "e63.pth").write_bytes(b"x")
+        saved = []
+        tr.proj = type("Proj", (), {"save_train": lambda self: saved.append(1)})()
+        tr._probe = lambda epoch, sr: {"identity": 0.91, "low": 0.8, "cents": 20.0, "content": 0.95, "test": "speech"}
+        st = {"epoch": 63, "best": 50, "sr": 40000, "saves": [
+            {"epoch": 50, "val": 0.3, "identity": 0.85, "low": 0.8, "cents": 21.0, "content": 0.95, "test": "speech"},
+            {"epoch": 63, "val": 0.29}]}
+        tr.check_last(st)
+        assert st["best"] == 63 and st["saves"][1]["identity"] == 0.91 and saved, st
+        tr.check_last(st)
+        assert len(saved) == 1, "a measured save was measured again"
+    src = inspect.getsource(service.train_new_voice)
+    assert src.index("tr.check_last(st)") < src.index('push("voice", 0.98,'), "nothing checked before Adding"
+    assert src.index("ACTIVE[proj.name] = ") < src.index("apply_mode(proj, person, mode)"), "the mode changed before the busy check"
+    # the page's card after training reads the voice from the finished job
+    a, b, c = Job("train-auto"), Job("zz-work"), Job("train-prepare")
+    a.finish("done", message="ready", voice="v-auto")
+    b.finish("done", message="ready", result={"voice": "v-queue", "after": None})
+    c.finish("done", message="ready")
+    assert (a.snapshot().get("voice"), b.snapshot().get("voice"), c.snapshot().get("voice")) == ("v-auto", "v-queue", None)
+    return "mode kept and passed on, refused where it doesn't apply; Checking it at 0.975; voice in the snapshot"
 @check("test mode refuses writes outside the test's folders (the real config.toml, phone.json, anywhere in the app); no module binds the config's path at import")
 def u_write_guard():
     """2026-10-13: a vault check held the real config's path from an import made before its sandbox, and appended to the
@@ -298,30 +384,31 @@ def u_paused():
     from undercover.core import jobs, worklist
     from undercover.core.jobs import Job, Paused
     from undercover.core.config import path
-    old_port, old_state = jobs.PORT, worklist._STATE
-    jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
-    f = path("cache_dir") / "worklist-7999.json"
-    try:
-        worklist.PAUSABLE.add("zz-smoke")
-        job = Job("zz-smoke")
-        job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
+    with isolated_data():   # the scratch queue file goes in the test's own cache, never the user's
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
+        f = path("cache_dir") / "worklist-7999.json"
+        try:
+            worklist.PAUSABLE.add("zz-smoke")
+            job = Job("zz-smoke")
+            job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
 
-        def fn(job):
-            raise Paused()
-        jobs.run_job(job, fn)
-        assert job.state == "paused", job.state
-        assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
-        worklist.forget_paused()
-        assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
-        # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
-        import inspect
-        from undercover.frontman import oneshot
-        src = inspect.getsource(oneshot.run)
-        assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
-    finally:
-        worklist.PAUSABLE.discard("zz-smoke")
-        jobs.PORT, worklist._STATE = old_port, old_state
-        f.unlink(missing_ok=True)
+            def fn(job):
+                raise Paused()
+            jobs.run_job(job, fn)
+            assert job.state == "paused", job.state
+            assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
+            worklist.forget_paused()
+            assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
+            # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
+            import inspect
+            from undercover.frontman import oneshot
+            src = inspect.getsource(oneshot.run)
+            assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
+        finally:
+            worklist.PAUSABLE.discard("zz-smoke")
+            jobs.PORT, worklist._STATE = old_port, old_state
+            f.unlink(missing_ok=True)
 
 
 @check("time left: every progress event gets total_left (whole-job and per-stage kinds, learned stage times)")
@@ -3396,6 +3483,11 @@ def a_train():
 def a_work():
     w = api("/api/work")
     assert "queue" in w and "held" in w
+    try:   # Train tonight's Speaking / Singing reaches the queue (refused here, so nothing is queued)
+        api("/api/work/add", {"kind": "new", "target": "Smoke Test", "mode": "humming"})
+        raise AssertionError("a new voice was queued with mode humming")
+    except urllib.error.HTTPError as e:
+        assert "Speaking or Singing" in json.loads(e.read()).get("error", ""), e.code
     api("/api/work/candidates")
     p = api("/api/work/pause", {})
     assert p["held"] is True
@@ -3966,7 +4058,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_write_guard, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_write_guard, u_da_mode, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_ear,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
