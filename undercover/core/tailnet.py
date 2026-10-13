@@ -31,13 +31,13 @@ MSI = {"url": f"https://pkgs.tailscale.com/stable/tailscale-setup-{VERSION}-amd6
        "sha256": "6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4"}
 BINS = {"tailscaled.exe": "ae0195119cc8efbd88d11bff56394ff9f1c08dc9d51957a400d4cb35c74e4bb1",
         "tailscale.exe": "72a499c653da6c16a50908d6ceb244d12b5f4834ab8ac19a87f2ca3117e8c20a"}
-PIPE = r"\\.\pipe\undercover-tailscaled"
 CMD: dict = {}   # tests: {"tailscale": [...], "tailscaled": [...]} instead of the downloaded binaries
 URL_RX = re.compile(r"https://login\.tailscale\.com/\S+")
 STATE = {"want": False, "phase": "off", "auth_url": None, "approve_url": None, "host": None, "error": "",
          "progress": None, "port": None}
-_P = {"daemon": None, "up": None, "funnel": None, "driver": None, "out": []}
-_LOCK = threading.Lock()
+_P = {"daemon": None, "up": None, "funnel": None, "driver": None, "out": [], "fetch_failed": 0.0}
+_LOCK = threading.RLock()   # "still wanted?" and starting a process happen together, so Off can't be overtaken by a tick
+FETCH_RETRY_S = 600         # a failed download waits this long before the next try (39 MB each: never in a loop)
 
 
 def bin_dir() -> Path:
@@ -99,8 +99,12 @@ def node_name() -> str:
     return n
 
 
+def _socket() -> str:
+    return platform.tailscale_socket(state_dir())
+
+
 def _cli(*args, timeout: float = 20) -> str:
-    return platform.run_text(_cmd("tailscale") + [f"--socket={PIPE}", *args], timeout=timeout)
+    return platform.run_text(_cmd("tailscale") + [f"--socket={_socket()}", *args], timeout=timeout)
 
 
 def status() -> dict:
@@ -125,20 +129,24 @@ def _daemon_alive() -> bool:
 
 def _start_daemon():
     state_dir().mkdir(parents=True, exist_ok=True)
-    cmd = _cmd("tailscaled") + ["--tun=userspace-networking", f"--statedir={state_dir()}", f"--socket={PIPE}",
+    cmd = _cmd("tailscaled") + ["--tun=userspace-networking", f"--statedir={state_dir()}", f"--socket={_socket()}",
                                 "--port=0", "--no-logs-no-support", *platform.tailscaled_os_args()]
-    log = open(path("logs_dir") / "tailscaled.log", "a", encoding="utf-8")
-    _P["daemon"] = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                    creationflags=platform.NO_WINDOW)
+    with open(path("logs_dir") / "tailscaled.log", "a", encoding="utf-8") as log:   # the daemon keeps its own copy
+        _P["daemon"] = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                        creationflags=platform.NO_WINDOW)
 
 
 def _run_bg(key: str, args: list):
     """A long CLI command (up, funnel) in the background, its output kept for the login / approval URL."""
     def go():
         try:
-            p = subprocess.Popen(_cmd("tailscale") + [f"--socket={PIPE}", *args], stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, text=True, errors="replace", creationflags=platform.NO_WINDOW)
-            _P[key] = p
+            with _LOCK:
+                if not STATE["want"]:
+                    return
+                p = subprocess.Popen(_cmd("tailscale") + [f"--socket={_socket()}", *args], stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True, errors="replace",
+                                     creationflags=platform.NO_WINDOW)
+                _P[key] = p
             for line in p.stdout:
                 _P["out"].append(line)
                 m = URL_RX.search(line)
@@ -178,11 +186,22 @@ def tick():
         return STATE["phase"]
     if not have_binaries():
         STATE["phase"] = "fetching"
-        fetch_binaries(progress=lambda name, done, total: STATE.update(progress={"done": done, "total": total}))
-        STATE["progress"] = None
+        if time.time() - _P["fetch_failed"] < FETCH_RETRY_S:
+            return STATE["phase"]   # the last try failed (its error is shown): wait before downloading again
+        try:
+            fetch_binaries(progress=lambda name, done, total: STATE.update(progress={"done": done, "total": total}))
+        except Exception:
+            _P["fetch_failed"] = time.time()
+            raise
+        finally:
+            STATE["progress"] = None
+        STATE["error"] = ""
     if not _daemon_alive():
-        if _P["daemon"] is None or _P["daemon"].poll() is not None:
-            _start_daemon()
+        with _LOCK:
+            if not STATE["want"]:
+                return STATE["phase"]
+            if _P["daemon"] is None or _P["daemon"].poll() is not None:
+                _start_daemon()
         STATE["phase"] = "starting"
         return STATE["phase"]
     st = status()
@@ -213,6 +232,7 @@ def start(port: int):
     if not ok:
         raise ModelError(why)
     STATE.update(want=True, port=port, error="")
+    _P["fetch_failed"] = 0.0   # switched on by hand: try a failed download again now
     if _P["driver"] is not None and _P["driver"].is_alive():
         return
 
@@ -227,19 +247,30 @@ def start(port: int):
     _P["driver"].start()
 
 
+def _end_processes():
+    """Our tailscale processes, ended and waited for (the daemon's files are free after)."""
+    for key in ("up", "funnel", "daemon"):
+        p = _P.get(key)
+        if p is not None and p.poll() is None:
+            p.terminate()
+            try:
+                p.wait(10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        _P[key] = None
+
+
 def stop():
     """Switch off: nothing reaches this PC from outside any more (funnel reset, down); the sign-in is kept."""
-    STATE.update(want=False, phase="off", auth_url=None, approve_url=None)
+    with _LOCK:
+        STATE.update(want=False, phase="off", auth_url=None, approve_url=None)
     for args in (["funnel", "reset"], ["down"]):
         try:
             _cli(*args)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    for key in ("up", "funnel", "daemon"):
-        p = _P.get(key)
-        if p is not None and p.poll() is None:
-            p.terminate()
-        _P[key] = None
+    with _LOCK:
+        _end_processes()
 
 
 def at_exit():
@@ -256,11 +287,19 @@ def at_exit():
     for key in ("up", "funnel", "daemon"):
         q = _P.get(key)
         if q is not None and q.poll() is None:
-            q.terminate()
+            q.terminate()   # no wait: this process is about to end, and a closing console has seconds
 
 
 def forget():
-    """Switch off and sign this PC out of Tailscale; its keys (the state folder) are deleted."""
+    """Switch off and sign this PC out of Tailscale (the node leaves the tailnet); its keys (the state folder) are
+    deleted. With away from home off the daemon isn't running: it's started for the logout."""
+    if state_dir().exists() and have_binaries() and not _daemon_alive():
+        with _LOCK:
+            if _P["daemon"] is None or _P["daemon"].poll() is not None:
+                _start_daemon()
+        t0 = time.time()
+        while not _daemon_alive() and time.time() - t0 < 15:
+            time.sleep(0.3)
     if _daemon_alive():
         try:
             _cli("logout")

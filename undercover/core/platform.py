@@ -61,6 +61,12 @@ def tailscale_names() -> tuple[str, str]:
     return ("tailscaled.exe", "tailscale.exe") if WINDOWS else ("tailscaled", "tailscale")
 
 
+def tailscale_socket(state_dir) -> str:
+    """Where our tailscaled listens for its CLI: our own named pipe on Windows (never the system Tailscale's), a
+    socket in its state folder elsewhere."""
+    return r"\\.\pipe\undercover-tailscaled" if WINDOWS else str(Path(state_dir) / "tailscaled.sock")
+
+
 def tailscaled_os_args() -> list:
     """The daemon's OS-specific flags: on Windows, run as this user with our own pipe (dev mode: the pipe accepts only
     this user; measured in the phase 20 spike)."""

@@ -511,7 +511,7 @@ def c_away(ctx) -> list:
     if s["error"]:
         return [_r("away", "network", "warn", "Away from home", "Away from home hit a problem; it keeps trying.", s["error"][:300])]
     if s["phase"] == "ready":
-        return [_r("away", "network", "ok", "Away from home", f"Paired phones reach UnderCover from anywhere at {s['link']}.", "")]
+        return [_r("away", "network", "ok", "Away from home", "Paired phones reach UnderCover from anywhere (the link is in SafeHouse, Settings, Phone).", "")]
     step = {"fetching": "fetching its pieces", "starting": "starting", "sign-in": "waiting for the Tailscale sign-in",
             "approve": "waiting for the one-time approval"}.get(s["phase"], s["phase"])
     return [_r("away", "network", "info", "Away from home", f"Away from home is on and {step} (SafeHouse, Settings, Phone).", "")]

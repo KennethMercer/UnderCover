@@ -471,7 +471,7 @@ async function phoneChecks() {
 // /api/away (PC only): the switch, then one line for where it's got to (fetching the pieces, starting, Tailscale's
 // sign-in, the one approval, ready with the link). The room checks every few seconds until it's ready.
 const AW = { st: null, poll: null };
-const AWAY_SAY = { off: "", fetching: "Fetching the away-from-home pieces (about 44 MB, once)…", starting: "Starting…",
+const AWAY_SAY = { off: "", fetching: "Fetching the away-from-home pieces (about 39 MB, once)…", starting: "Starting…",
   "sign-in": "Sign in to Tailscale (a free account; Google, Microsoft, GitHub or Apple works). This page carries on by itself after.",
   approve: "One approval: Tailscale asks once to let this PC's private link through.", ready: "Ready." };
 async function loadAway() {
@@ -501,8 +501,8 @@ $("#set-away").onclick = async () => {
   try { AW.st = await api("/api/away", { json: { on } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
 };
 confirmClick($("#away-forget"), "Forget? Click again", async () => { AW.st = await api("/api/away/forget", { json: {} }); renderAway(); });
-// the phone: on the home Wi-Fi it asks for its single-use away link and opens it (on the away address it's there already)
-if (location.protocol === "https:") $("#set-away-me-row").hidden = true;
+// the phone: on the home Wi-Fi it asks for its single-use away link and opens it (app.js shows it only while the PC has
+// it ready, and never on the away address itself: it's there already)
 $("#away-me").onclick = async () => {
   try { location.href = (await api("/api/phone/away/link", { json: {} })).url; }
   catch (e) { showError(e.message, "Couldn't get the away link"); }

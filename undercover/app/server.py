@@ -265,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
         pol, what = phone_api.policy(method, p)
         if pol == "open":
             return True
-        self.device = phone.device_for(self._cookie(phone.AWAY_COOKIE), self.client_address[0], away=True)
+        self.device = phone.device_for(self._cookie(phone.AWAY_COOKIE), "", away=True)   # Funnel's loopback: no address to keep
         if self.device is None:
             return self._deny(401, b"This phone isn't set up for away from home. On the home Wi-Fi: Use this phone away from home.")
         if pol == "pc":
@@ -349,6 +349,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
+                                   "away_ready": self.remote and _away_ready(),
                                    "tutorial": tutorial.status()})
             if p == "/api/voices":
                 return self._json(voices_json())
@@ -792,6 +793,12 @@ class PhoneServer(ExclusiveServer):
         self._exclusive()
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
+
+
+def _away_ready() -> bool:
+    """For a phone: is away from home on and ready on the PC (its 'Use this phone away from home' shows only then)."""
+    from ..core import tailnet
+    return phone.away_on() and tailnet.STATE["phase"] == "ready"
 
 
 class AwayServer(PhoneServer):

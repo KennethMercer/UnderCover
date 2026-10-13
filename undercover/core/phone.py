@@ -276,7 +276,8 @@ def still_valid(token_hash: str) -> bool:
     with _LOCK:
         st = _load()
         return st["enabled"] and any(hmac.compare_digest(d["hash"], token_hash) or
-                                     hmac.compare_digest(d.get("away_hash") or "", token_hash) for d in st["devices"])
+                                     (st["away"] and hmac.compare_digest(d.get("away_hash") or "", token_hash))
+                                     for d in st["devices"])
 
 
 def revoke(device_id: str) -> dict:

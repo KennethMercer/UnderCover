@@ -843,6 +843,14 @@ def u_listenback():
     return "problems found; one word stretched, the rest untouched; clauses split; re-reads on, stretches off"
 
 
+def _fake_ts_set(state_file, **kw):
+    """Change the fake Tailscale's state (signed in, Funnel approved...) through the fake itself: its processes change
+    the same file at the same time, under its lock."""
+    import subprocess
+    subprocess.run([sys.executable, str(ROOT / "tools" / "fake_tailscale.py"), "set", json.dumps(kw)], check=True,
+                   env={**os.environ, "FAKE_TS_STATE": str(state_file)}, timeout=30)
+
+
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
@@ -852,13 +860,10 @@ def u_tailnet():
     with isolated_data() as box:
         st = box / "fake-ts.json"
         os.environ["FAKE_TS_STATE"] = str(st)
-        saved = (dict(tailnet.CMD), dict(tailnet.STATE))
+        saved = (dict(tailnet.CMD), dict(tailnet.STATE), tailnet.bin_dir)
         tailnet.CMD.update(tailscale=[sys.executable, str(fake), "cli"], tailscaled=[sys.executable, str(fake), "daemon"])
         read = lambda: json.loads(st.read_text(encoding="utf-8")) if st.exists() else {}
-        def write(**kw):   # atomically: the fake's own processes read this file at the same time
-            tmp = st.with_name(st.name + ".smoke.tmp")
-            tmp.write_text(json.dumps({**read(), **kw}), encoding="utf-8")
-            os.replace(tmp, st)
+        write = lambda **kw: _fake_ts_set(st, **kw)
         try:
             tailnet.STATE.update(want=True, port=7871, phase="off", auth_url=None, approve_url=None, host=None, error="")
             assert tailnet.tick() == "starting"
@@ -900,24 +905,39 @@ def u_tailnet():
             r = read()
             assert r["calls"].count(["funnel", "reset"]) == resets + 2 and ["down"] in r["calls"] and not r.get("funnel_on"), r["calls"][-3:]
             assert tailnet.snapshot()["phase"] == "off" and tailnet.snapshot()["name"] == name
-            write(daemon=True)   # forget: logout, then the node's keys gone
-            tailnet.forget()
-            assert read().get("logged_out") and not tailnet.state_dir().exists()
+            daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+            tailnet.forget()   # with away off: the daemon is started for the logout, then the node's keys gone
+            assert sum(c[0] == "tailscaled" for c in read()["calls"]) == daemons + 1, "forget didn't start the daemon to log out"
+            assert read().get("logged_out") and not tailnet.state_dir().exists(), read()
+            assert tailnet._P["daemon"] is None, "forget left a daemon running"
             # a download that isn't the pinned file is refused (the checksum), and nothing is installed
             junk = box / "junk.msi"
             junk.write_bytes(os.urandom(1000))
             real = dict(tailnet.MSI)
             tailnet.MSI["url"] = junk.as_uri()
             tailnet.CMD.clear()
+            tailnet.bin_dir = lambda: box / "tailscale-bin"   # never the real models/tailscale (it may hold real binaries)
             try:
                 tailnet.fetch_binaries()
                 raise AssertionError("a wrong MSI was used")
             except ModelError as e:
                 assert "checksum" in str(e)
+                # in the driver: a failed download waits FETCH_RETRY_S before the next one (never 39 MB every 2 s)
+                tailnet.STATE.update(want=True, port=7871)
+                tailnet._P["fetch_failed"] = 0.0
+                try:
+                    tailnet.tick()
+                    raise AssertionError("the driver used a wrong MSI")
+                except ModelError:
+                    pass
+                tailnet.MSI["url"] = "file:///nonexistent/never-fetched.msi"   # a second download would raise
+                assert tailnet.tick() == "fetching" and tailnet._P["fetch_failed"] > 0
+                tailnet.STATE["want"] = False
             finally:
                 tailnet.MSI.update(real)
             assert not tailnet.have_binaries()
         finally:
+            tailnet.bin_dir = saved[2]
             tailnet.CMD.clear()
             tailnet.CMD.update(saved[0])
             tailnet.STATE.clear()
@@ -4035,10 +4055,7 @@ def a_away():
     st_file = Path(os.environ["FAKE_TS_STATE"])
     st_file.write_text("{}", encoding="utf-8")
     read = lambda: json.loads(st_file.read_text(encoding="utf-8") or "{}")
-    def write(**kw):   # atomically: the fake's own processes read this file at the same time
-        tmp = st_file.with_name(st_file.name + ".smoke.tmp")
-        tmp.write_text(json.dumps({**read(), **kw}), encoding="utf-8")
-        os.replace(tmp, st_file)
+    write = lambda **kw: _fake_ts_set(st_file, **kw)
     api("/api/phone", {"on": True})
     pr = api("/api/phone/pair", {})["pairing"]
     status, hd, _ = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Away phone"})
@@ -4064,7 +4081,9 @@ def a_away():
         assert _away("GET", "/pair", port, host)[0] == 403 and _away("POST", "/api/phone/claim", port, host, body={"code": "X"})[0] == 403
         status, _, page = _away("GET", "/away", port, host)
         assert status == 200 and b"Away from home" in page
-        # a paired phone, at home, asks for its link; at the away address the code becomes its pass
+        # a paired phone, at home, asks for its link (its button shows only now); at the away address the code becomes its pass
+        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is True
+        assert api("/api/status").get("away_ready") is False, "the PC's own page offers the phone's away button"
         status, _, body = _lan("POST", "/api/phone/away/link", home, {})
         assert status == 200, body
         url = json.loads(body)["url"]
@@ -4087,6 +4106,7 @@ def a_away():
         api("/api/away", {"on": False})
         calls = read()["calls"]
         assert ["funnel", "reset"] in calls and ["down"] in calls and not read().get("funnel_on")
+        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is False
         try:
             _away("GET", "/", port, host)
             raise AssertionError("the away listener still answers after Off")
@@ -4105,6 +4125,12 @@ def a_away():
             raise AssertionError("the away listener still answers after Phone access was switched off")
         except ConnectionRefusedError:
             pass
+        # Forget with away off: the daemon comes up just for the logout, then goes, and the node's keys with it
+        daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+        api("/api/phone", {"on": True})
+        st = api("/api/away/forget", {})
+        r = read()
+        assert r.get("logged_out") and sum(c[0] == "tailscaled" for c in r["calls"]) == daemons + 1 and not st["name"], (st, r["calls"][-4:])
     finally:
         api("/api/phone", {"on": True})
         api("/api/away", {"on": False})
@@ -4991,7 +5017,8 @@ def main():
                 # away from home's checks drive a fake Tailscale (tools/fake_tailscale.py): the sandbox server inherits these
                 import tempfile
                 os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tools" / "fake_tailscale.py")
-                os.environ["FAKE_TS_STATE"] = str(Path(tempfile.gettempdir()) / f"uc-fake-ts-{os.getpid()}.json")
+                fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
+                os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
                     for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
@@ -5005,6 +5032,11 @@ def main():
             except Exception as e:   # noqa: BLE001 - the sandbox couldn't start: that is a failed run, not a crash
                 RESULTS.append((False, "sandbox server"))
                 print(f"  FAIL  sandbox server: {type(e).__name__}: {e}", flush=True)
+            finally:
+                fake_ts = Path(os.environ.get("FAKE_TS_STATE", "")).parent
+                if fake_ts.name.startswith("uc-fake-ts-"):
+                    import shutil
+                    shutil.rmtree(fake_ts, ignore_errors=True)
     a_untouched(before, dirs)
     failed = [n for ok, n in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed in {time.time() - t0:.0f} s" + (f"; FAILED: {', '.join(failed)}" if failed else ""))
