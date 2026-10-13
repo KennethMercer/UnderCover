@@ -24,8 +24,8 @@ const ASSIGN = [
     aim: () => [$("#keep")] },
   { head: "This is SafeHouse.", say: "Everything you keep lives here, room by room. Your cover is in the Library.", tab: "safehouse",
     aim: () => [$('#lib-list .litem[data-kept="true"]')], next: "Next" },
-  { head: "Last: a voice of your own.", say: "Name a person and train their voice, now or tonight. It all starts on this line.", tab: "doubleagent",
-    aim: () => [$("#da-start")], next: "Done" },
+  { head: "Last: a voice of your own.", say: "Name someone and press Train tonight. It trains while the PC is free, and you wake up to your first voice of your own.", tab: "doubleagent",
+    aim: () => [$("#da-person"), $("#da-tonight")], next: "Done" },
 ];
 const VOICE_KINDS = new Set(["train", "train-auto", "train-prepare", "train-export", "install", "night"]);   // "a voice of your own" started
 
@@ -126,15 +126,19 @@ $("#result").addEventListener("click", e => {
 new MutationObserver(() => { if (AS.step === 3 && $("#keep").dataset.kept === "true") assignGo(4); })
   .observe($("#keep"), { attributes: true, attributeFilter: ["data-kept", "aria-pressed"] });
 onJobs(() => { if (AS.step === 5 && runningJobs().some(j => VOICE_KINDS.has(j.kind) && !AS.before?.has(j.id))) assignComplete(); });
+// Train tonight (the suggested ending): the voice is queued, not running, so DoubleAgent says so
+document.addEventListener("uc:voicequeued", e => {
+  if (AS.step === 5) assignComplete(`<b>That's the whole job.</b> ${esc(e.detail?.person || "Your voice")} trains tonight; by morning it's in your voices, ready for FrontMan. Everything else is more of the same: a song, a voice, a listen.`);
+});
 $("#assign-next").onclick = () => { if (AS.step < ASSIGN.length) assignGo(AS.step + 1); else assignComplete(); };
 
 // ------------------------------------------------------------ the end: complete, skip, not now, replay
-function assignComplete() {
+function assignComplete(say) {
   AS.finished = true; AS.step = 0; store.set("uc-assign-step", 0);
   reaim();
   $("#assign").classList.add("done");
   $("#assign-n").textContent = "complete";
-  $("#assign-say").innerHTML = "<b>That's the whole job.</b> Everything else is more of the same: a song, a voice, a listen. Deep Cover (the glasses) shows the numbers when you want them.";
+  $("#assign-say").innerHTML = say || "<b>That's the whole job.</b> Everything else is more of the same: a song, a voice, a listen. Deep Cover (the glasses) shows the numbers when you want them.";
   $("#assign-line").style.width = "100%";
   $("#assign-next").hidden = true;
   $("#assign-skip").textContent = "Close";
