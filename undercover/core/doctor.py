@@ -390,12 +390,8 @@ def c_manifest(ctx) -> list:
 def phone_programs() -> set:
     """The program Windows Firewall has to let in: this process's own executable. In a venv, sys.executable is the venv's
     python.exe, which only starts the base interpreter; that one listens, so a rule for the venv path doesn't help."""
-    if os.name == "nt":
-        import ctypes
-        buf = ctypes.create_unicode_buffer(32768)
-        if ctypes.windll.kernel32.GetModuleFileNameW(None, buf, len(buf)):
-            return {buf.value}
-    return {sys.executable}
+    from . import platform
+    return {platform.own_executable()}
 
 
 def c_phone(ctx) -> list:
@@ -412,6 +408,10 @@ def c_phone(ctx) -> list:
     if not phone.usable(addr):
         return [_r("phone-network", "network", "info", "Phone access",
                    f"Phone access is on, on a test address ({addr}): there's no network or firewall to check.", "")]
+    from . import platform
+    if not platform.supports("firewall")[0]:
+        return [_r("phone-network", "network", "info", "Phone access",
+                   "Phone access is on. Checking the network type and the firewall works on Windows only for now.", "")]
     port = jobs.PORT or CONFIG["ui"]["port"]
     # the server (startup, the System room) never waits on PowerShell: a cold cache is read in the background
     w = phone.windows_check(addr, port, phone_programs(), wait=ctx.get("status") is None, fresh=bool(ctx.get("full")))

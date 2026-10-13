@@ -94,11 +94,37 @@ function follow(id, kind) {
       if (ev.state === "error" || ev.state === "lost") showError(ev.message, kind === "train" ? "Training stopped" : "That didn't work");
       else if (ev.state === "paused") { /* the Pause bar at the top says so, with Resume */ }
       else if (ev.message && kind === "prepare" && ev.message.length) showError(ev.message, "Some sources were skipped", null, true);
-      if (kind === "auto") { clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true; if (ev.state === "done") loadVoices(); }
+      if (kind === "auto") {
+        clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true;
+        if (ev.state === "done") loadVoices();   // the card after training: doubleagent.js, on uc:jobdone
+      }
       refresh().then(() => { if (kind === "export" && ev.voice) loadVoices(); });
     }
   });
   render();
+}
+
+// ------------------------------------------------------------ the one way to start a voice (DoubleAgent's line, doubleagent.js)
+// Now: a project for the person (creating it searches for clips; an existing one searches again), then Do it all.
+// Tonight: a new-voice item in the overnight queue, which SafeHouse's Running room shows.
+async function trainVoice(person, mode, tonight) {
+  if (tonight) {
+    W.last = await api("/api/work/add", { json: { kind: "new", target: person } });
+    renderQueue(); refreshJobs(true);
+    return;
+  }
+  T.list = await api("/api/train/projects");
+  const same = T.list.find(x => (x.person || "").toLowerCase() === person.toLowerCase());
+  let data;
+  if (same) {   // a fresh search; if it fails (offline, nothing new), the clips already prepared still train
+    try { data = await api(`/api/train/projects/${same.name}/search`, { json: { person, mode } }); }
+    catch (e) { if (!same.ready_sources) throw e; data = same; }
+  } else data = await api("/api/train/projects", { json: { person, mode } });
+  if (data.warning && !(data.sources || []).length) throw new Error(data.warning);
+  await loadProjects(data.name);
+  const r = await P("auto", {});
+  follow(r.job, "auto");
+  refreshJobs(true);
 }
 
 // ------------------------------------------------------------ step 1: find
@@ -151,10 +177,21 @@ async function addFiles(files) {
 }
 window.trainDrop = addFiles;
 
+// the list stays short: the first SOURCES_SHOWN, and any source that's prepared, failed, under way or added by hand;
+// "Show all" opens the rest (it says how many of them are ticked, since ticked sources get prepared shown or not)
+const SOURCES_SHOWN = 10;
 function renderSources() {
-  const p = T.proj, box = $("#tr-sources");
-  if (!p || !p.sources.length) { box.innerHTML = ""; return; }
-  box.innerHTML = p.sources.map(s => {
+  const p = T.proj, box = $("#tr-sources"), more = $("#tr-sources-more");
+  if (!p || !p.sources.length) { box.innerHTML = ""; more.hidden = true; return; }
+  if (T.allFor !== p.name) { T.allFor = p.name; T.allSources = false; }   // another project starts short again
+  const keep = (s, i) => T.allSources || i < SOURCES_SHOWN || s.status !== "found" || s.user;
+  const shown = p.sources.filter(keep), hidden = p.sources.filter((s, i) => !keep(s, i));
+  more.hidden = !hidden.length && !(T.allSources && p.sources.length > SOURCES_SHOWN);
+  if (hidden.length) {
+    const ticked = hidden.filter(s => s.selected).length;
+    more.textContent = `Show all ${p.sources.length} (${hidden.length} more${ticked ? `, ${ticked} of them ticked` : ""})`;
+  } else more.textContent = "Show fewer";
+  box.innerHTML = shown.map(s => {
     const mins = s.duration ? fmtTime(s.duration) : "";
     let side = `<span class="mono meta">${mins}</span>`;
     if (s.status === "ready") side = `<span class="tag ok">ready · ${s.extra?.phrases ?? 0} phrases</span>` + side;
@@ -183,6 +220,7 @@ function renderSources() {
   });
 }
 
+$("#tr-sources-more").onclick = () => { T.allSources = !T.allSources; renderSources(); };
 $("#tr-prepare").onclick = async () => {
   try { const r = await P("prepare"); follow(r.job, "prepare"); }
   catch (e) { showError(e.message, "Can't prepare yet"); }

@@ -438,6 +438,9 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .tab[aria-pressed="true"] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
 .tab:disabled { opacity: .45; }
 
+/* DoubleAgent's sources: the first ten, then "Show all" (train.js) */
+#tr-sources-more { justify-self: start; margin-top: 2px; }
+
 /* the update notice (phase 11b): one quiet line under the top bar's band, both themes, phones too */
 .uc-updated { display: flex; gap: 6px 10px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 14px;
   font-size: 13.5px; color: var(--muted); background: var(--panel); border-radius: var(--r); }

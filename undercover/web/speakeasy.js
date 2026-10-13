@@ -99,11 +99,10 @@ $("#se-newgo").onclick = () => seNewVoice(true);
 $("#se-newnight").onclick = () => seNewVoice(false);
 $("#se-newsteps").onclick = () => {
   const name = $("#se-newname").value.trim();
-  showTab("doubleagent");
-  if (typeof newVoice === "function") newVoice();
-  if (name) $("#tr-person").value = name;
-  $("#tr-find").scrollIntoView({ behavior: "smooth", block: "start" });
-  $("#tr-person").focus({ preventScroll: true });
+  showTab("doubleagent");   // DoubleAgent's line, the name filled in
+  if (name) $("#da-person").value = name;
+  $("#da-start").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#da-person").focus({ preventScroll: true });
 };
 $("#se-newname").addEventListener("keydown", e => { if (e.key === "Enter") seNewVoice(true); });
 

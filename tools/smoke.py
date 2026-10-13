@@ -250,6 +250,46 @@ def u_sources():
     assert not s.is_sung("Elliott Smith Interview 1998")
 
 
+@check("test mode refuses writes outside the test's folders (the real config.toml, phone.json, anywhere in the app); no module binds the config's path at import")
+def u_write_guard():
+    """2026-10-13: a vault check held the real config's path from an import made before its sandbox, and appended to the
+    user's config.toml and phone.json. Core writes now refuse that in test mode (fsutil.guard), and the path is read at
+    call time everywhere."""
+    import re
+    from undercover.core import config, fsutil, phone
+    real = ROOT / "config.toml"
+    before = {f: (f.stat().st_size, f.stat().st_mtime_ns) for f in (real, ROOT / "phone.json") if f.is_file()}
+    with isolated_data() as box:
+        tries = {
+            "config set_values": lambda: config.set_values("ui", {"zz_smoke": "1"}, config_file=real),
+            "fsutil.write_text": lambda: fsutil.write_text(ROOT / "zz-smoke-guard.txt", "no"),
+            "fsutil.torch_save": lambda: fsutil.torch_save({"x": 1}, ROOT / "zz-smoke-guard.pt"),
+            "phone save": lambda: (phone.state_file.__globals__["config"].__setattr__("CONFIG_FILE", real), phone._save()),
+        }
+        saved_cfg = config.CONFIG_FILE
+        try:
+            for name, fn in tries.items():
+                try:
+                    fn()
+                    raise AssertionError(f"{name} wrote outside the test's folders")
+                except (PermissionError, phone.PhoneError) as e:
+                    assert "Test mode" in str(e), (name, e)
+                finally:
+                    config.CONFIG_FILE = saved_cfg
+        finally:
+            config.CONFIG_FILE = saved_cfg
+            phone._FILE[0] = None
+        fsutil.write_text(box / "inside.txt", "yes")   # inside its own folder a test writes as usual
+        assert (box / "inside.txt").read_text(encoding="utf-8") == "yes"
+    assert not (ROOT / "zz-smoke-guard.txt").exists() and not (ROOT / "zz-smoke-guard.pt").exists()
+    assert {f: (f.stat().st_size, f.stat().st_mtime_ns) for f in before} == before, "a real settings file changed"
+    # the root cause: a module that binds config.CONFIG_FILE at import keeps the real path when a test repoints it
+    bad = [f"{f.relative_to(ROOT).as_posix()}" for f in (ROOT / "undercover").rglob("*.py")
+           if re.search(r"^\s*from\s+\S*config\s+import\s+[^\n]*\bCONFIG_FILE\b", f.read_text(encoding="utf-8"), re.M)]
+    assert not bad, f"these bind CONFIG_FILE at import (use config.CONFIG_FILE at call time): {bad}"
+    return "config, fsutil (text, torch) and phone writes refused outside; inside works; real files unchanged; no import-time binding"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -1687,24 +1727,74 @@ def _old(p: Path, hours: float = 8):
     os.utime(p, (t, t))
 
 
+def best_time(run, limit: float, tries: int = 3) -> tuple[float, list]:
+    """A timing check that a busy PC can't fail by itself: run() -> (seconds, value), up to `tries` times, stopping at
+    the first under `limit`. Load only ever adds time, so one fast run proves the code is fast; a real slowdown is slow
+    every time and still fails. -> (the best seconds, every (seconds, value) tried)."""
+    tried = []
+    for _ in range(tries):
+        tried.append(run())
+        if tried[-1][0] < limit:
+            break
+    return min(t for t, _ in tried), tried
+
+
+def _slowest_doctor_checks(n: int = 3) -> str:
+    """Each fast check timed on its own: which ones made the Doctor slow (for a timing failure's message)."""
+    from undercover.core import doctor, manifest
+    ctx = {"full": False, "status": None, "manifest": manifest.load(), "installed": manifest.installed(),
+           "pins": manifest.pins(), "hash": lambda p: ""}
+    ctx["expected"] = manifest.expected_packages(ctx["manifest"], ctx["pins"])
+    took = []
+    for c in doctor.CHECKS:
+        t0 = time.time()
+        try:
+            c(ctx)
+        except Exception:   # noqa: BLE001 - timing only; u_doctor_fast checks the results
+            pass
+        took.append((time.time() - t0, c.__name__))
+    return ", ".join(f"{name} {t:.2f} s" for t, name in sorted(took, reverse=True)[:n])
+
+
 @check("doctor (phase 10): fast checks run in < 2 s with no GPU, every result well-formed, the CLI answers")
 def u_doctor_fast():
     import subprocess
     from undercover.core import doctor
-    with isolated_data():
+
+    def here():
         t0 = time.time()
         rep = doctor.run(False)
-        took = time.time() - t0
+        return time.time() - t0, rep
+
+    def cold():   # a fresh Python: imports included, as the command line runs it
+        out = subprocess.run([sys.executable, "-c", "import sys, time; t=time.time(); from undercover import doctor as d; "
+                              "r=d.doctor.run(False); print(round(time.time()-t,2), 'torch' in sys.modules, r['counts']['bad'])"],
+                             cwd=ROOT, capture_output=True, text=True, timeout=120, env=env)
+        secs, torch_loaded, _ = out.stdout.split()
+        return float(secs), torch_loaded
+
+    with isolated_data() as box:
+        took, tried = best_time(here, 2)
+        rep = tried[-1][1]
         for r in rep["results"]:
             assert set(r) >= {"id", "group", "state", "title", "say", "detail", "fix"} and r["state"] in ("ok", "info", "warn", "bad"), r
-        assert took < 2, f"fast checks took {took:.1f} s"
-    out = subprocess.run([sys.executable, "-c", "import sys, time; t=time.time(); from undercover import doctor as d; "
-                          "r=d.doctor.run(False); print(round(time.time()-t,2), 'torch' in sys.modules, r['counts']['bad'])"],
-                         cwd=ROOT, capture_output=True, text=True, timeout=120)
-    secs, torch_loaded, _ = out.stdout.split()
-    assert torch_loaded == "False", "the fast checks imported torch"
-    assert float(secs) < 2, f"the command line's fast check took {secs} s"
-    return f"{len(rep['results'])} checks in {took:.2f} s here, {secs} s from a cold start, no torch"
+        assert took < 2, (f"fast checks took {', '.join(f'{t:.2f}' for t, _ in tried)} s in {len(tried)} tries; "
+                          f"slowest: {_slowest_doctor_checks()}")
+        # the fresh Python gets this sandbox too (the settings with these [paths], as _sandbox_config does): the user's
+        # own state (phone access on means a PowerShell firewall read the command line waits for, ~1 s) mustn't decide
+        # the result, and it never reads the real folders
+        import re
+        from undercover.core import config
+        block = "[paths]\n" + "".join(f"{k} = '{v}'\n" for k, v in config.CONFIG["paths"].items()) + "\n"
+        cold_cfg = box / "cold.toml"
+        cold_cfg.write_text(re.sub(r"(?ms)^\[paths\][ \t]*$.*?(?=^\[|\Z)", lambda _: block,
+                                   (ROOT / "config.toml").read_text(encoding="utf-8"), count=1), encoding="utf-8")
+        env = {**os.environ, "UNDERCOVER_CONFIG": str(cold_cfg), "UNDERCOVER_TEST_ROOTS": str(box)}
+        secs, tried_cold = best_time(cold, 2)
+    assert all(t == "False" for _, t in tried_cold), "the fast checks imported torch"
+    assert secs < 2, f"the command line's fast check took {', '.join(f'{t:.2f}' for t, _ in tried_cold)} s in {len(tried_cold)} tries"
+    retries = f" (best of {len(tried)} / {len(tried_cold)})" if len(tried) + len(tried_cold) > 2 else ""
+    return f"{len(rep['results'])} checks in {took:.2f} s here, {secs:.2f} s from a cold start{retries}, no torch"
 
 
 @check("doctor: a damaged model file is found (size, then checksum) and fetched again: replaced only once the new copy checks out")
@@ -2816,6 +2906,120 @@ def u_tutorial():
             + ("the shipped demo voice matches its manifest" if why is None else f"NOTE: {why}"))
 
 
+# ---------------------------------------------------------------- the platform helper and the tray (phase 18)
+
+WINDOWS_ONLY = ("ctypes.windll", "WinDLL(", "os.startfile", '"netsh"', '"powershell"', '"explorer"',
+                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(")
+
+
+@check("platform helper: every Windows-only call lives in core/platform.py; the helper works here and says 'not on this OS' elsewhere")
+def u_platform():
+    import subprocess as sp
+    import tempfile
+    from undercover.core import platform
+    bad = []
+    for f in (ROOT / "undercover").rglob("*.py"):
+        if f.name == "platform.py" and f.parent.name == "core":
+            continue
+        text = f.read_text(encoding="utf-8")
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in text]
+    assert not bad, f"Windows-only calls outside core/platform.py: {bad}"
+    if platform.WINDOWS:
+        assert platform.supports("startup") == (True, "") and platform.drives() and platform.own_executable().endswith(".exe")
+        assert platform.keep_awake(False) is True
+        assert any(r.get("Name") for r in platform.video_controllers())
+    # one per user: a second process can't claim the name while this one holds it
+    name = f"UnderCover-smoke-{os.getpid()}"
+    probe = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); from undercover.core import platform; "
+             f"print(platform.single_instance({name!r}))")
+    assert platform.single_instance(name)
+    out = sp.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60).stdout.strip()
+    assert out == "False", f"a second process claimed it: {out!r}"
+    platform.release_instance(name)
+    out = sp.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60).stdout.strip()
+    assert out == "True", f"released, but a second process still couldn't: {out!r}"
+    # Start with Windows: only ever in a folder of the test's own
+    if platform.WINDOWS:
+        with tempfile.TemporaryDirectory(prefix="uc-startup-") as d:
+            target = ROOT / "UnderCover.bat"
+            assert not platform.startup_entry_state(d)
+            assert platform.startup_entry(True, target, folder=d) and platform.startup_entry_state(d)
+            assert not platform.startup_entry(False, target, folder=d) and not platform.startup_entry_state(d)
+    # another OS: the plain answers
+    saved = platform.WINDOWS
+    platform.WINDOWS = False
+    try:
+        assert platform.supports("firewall")[0] is False and platform.supports("tray")[0] is False
+        assert platform.keep_awake(True) is False
+        for fn, args in ((platform.startup_folder, ()), (platform.network_and_firewall, ("192.168.1.5",)),
+                         (platform.video_controllers, ())):
+            try:
+                fn(*args)
+                raise AssertionError(f"{fn.__name__} ran as if on Windows")
+            except platform.NotOnThisOS as e:
+                assert "Windows only" in str(e), e
+        assert platform.own_executable() == sys.executable
+        try:   # no file manager opener: said plainly (and the job system passes it on as written)
+            platform.open_folder(ROOT)
+            raise AssertionError("open_folder ran without a way to open folders")
+        except platform.NotOnThisOS as e:
+            from undercover.core import jobs as _jobs
+            assert _jobs.friendly(e) == str(e) and "xdg-open" in str(e), e
+        from undercover.core import doctor, phone
+        real = (phone.enabled, phone.lan_address)
+        phone.enabled, phone.lan_address = (lambda: True), (lambda: "192.168.1.5")
+        try:
+            rows = doctor.c_phone({})
+            assert [r["state"] for r in rows] == ["info"] and "Windows only" in rows[0]["say"], rows
+        finally:
+            phone.enabled, phone.lan_address = real
+    finally:
+        platform.WINDOWS = saved
+    return "no Windows-only calls elsewhere; one instance; the startup shortcut in a temp folder; the other-OS answers"
+
+
+@check("tray: the menu and the icon from what the server says (stopped, idle, working, paused, a problem); no torch")
+def u_tray():
+    import subprocess as sp
+    from undercover.core import trayicon as tray
+    assert tray.icon_state(None) == ("stopped", None) and tray.tooltip(None) == "UnderCover isn't running"
+    assert [i["id"] for i in tray.menu_model(None) if i["id"] != "-"] == ["start", "close"]
+    idle = {"work": {"held": False, "resume": []}, "gpu_problem": None}
+    assert tray.icon_state(idle, []) == ("idle", None) and tray.tooltip(idle, []) == "UnderCover · ready"
+    m = tray.menu_model(idle, [], phone_on=False, startup_on=True)
+    ids = [i["id"] for i in m if i["id"] != "-"]
+    assert ids == ["open", "running", "phone", "restart", "quit", "startup"], ids
+    assert m[0]["default"] and next(i for i in m if i["id"] == "phone")["checked"] is False
+    assert next(i for i in m if i["id"] == "startup")["checked"] is True
+    cover = {"id": "c1", "kind": "cover", "state": "running", "title": "Cover: Hello as Agent Smoke", "total_left": 130}
+    train = {"id": "t1", "kind": "train", "state": "running", "title": "Training Morgan Freeman", "epoch": 120,
+             "epochs": 400, "total_left": 1800}
+    assert tray.icon_state(idle, [cover]) == ("working", "frontman")
+    assert tray.icon_state(idle, [train, cover]) == ("working", "doubleagent")
+    assert tray.job_line(train) == "Training Morgan Freeman · epoch 120 of 400 · about 30 min left"
+    assert tray.tooltip(idle, [cover, train]).startswith("UnderCover · Cover: Hello as Agent Smoke · about 2 min left (+1 more)")
+    m = tray.menu_model(idle, [train, cover])
+    assert [i["text"] for i in m if i["id"] == "running"] == [tray.job_line(train), tray.job_line(cover)]
+    assert any(i["id"] == "pause" for i in m) and not any(i["id"] == "resume" for i in m)
+    held = {"work": {"held": True, "resume": [{"kind": "train"}]}}
+    assert any(i["id"] == "resume" for i in tray.menu_model(held, []))
+    assert tray.icon_state({"gpu_problem": "no GPU"}, [cover]) == ("problem", None)
+    assert tray.icon_state(idle, [], doctor_bad=True)[0] == "problem"
+    finished = {**cover, "state": "done", "final": {"state": "done"}}
+    assert tray.icon_state(idle, [finished]) == ("idle", None)
+    # the icon leaves with UnderCover after any stop on purpose, stays through a restart or a crash
+    assert [tray.leaves_with_server(r) for r in ("quit", "window closed", "", "log off", "restart", None)] == \
+        [True, True, True, True, False, False]
+    imgs = [tray.draw_icon(st, mod).tobytes() for st, mod in (("idle", None), ("working", "frontman"), ("problem", None),
+                                                              ("stopped", None))]
+    assert len(set(imgs)) == 4 and tray.draw_icon("idle", size=16).size == (16, 16)
+    out = sp.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {str(ROOT)!r}); import undercover.core.trayicon; "
+                  "print('torch' in sys.modules, 'undercover.core.jobs' in sys.modules)"],
+                 capture_output=True, text=True, timeout=120).stdout.strip()
+    assert out == "False False", f"the tray loads heavy modules: {out}"
+    return "stopped / idle / working (the module's bar) / paused / problem; job lines; icons differ; light import"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -2886,8 +3090,17 @@ def u_phone_routes():
 def a_doctor():
     import io
     import zipfile
-    r = api("/api/doctor")
-    assert r["about"]["version"] and r["results"] and r["mode"] == "fast" and r["seconds"] < 2, r.get("seconds")
+    def report():   # the server keeps a fast report 5 s: a retry waits it out
+        if report.n:
+            time.sleep(5.2)
+        report.n += 1
+        rep = api("/api/doctor")
+        return rep["seconds"], rep
+    report.n = 0
+    secs, tried = best_time(report, 2)
+    r = tried[-1][1]
+    assert r["about"]["version"] and r["results"] and r["mode"] == "fast", r.get("mode")
+    assert secs < 2, f"the server's fast check took {', '.join(f'{t:.2f}' for t, _ in tried)} s in {len(tried)} tries"
     assert all(x["state"] in ("ok", "info", "warn", "bad") for x in r["results"])
     pv = api("/api/doctor/fix/packages")   # read only: installs nothing
     assert isinstance(pv.get("packages"), list) and isinstance(pv.get("refused"), list), pv
@@ -3097,6 +3310,25 @@ def a_tutorial():
     return f"existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
 
 
+@check("api: the tray's client against the sandbox (status, jobs, phone, pause / resume, a refusal in plain words)")
+def a_tray():
+    from undercover.core import trayicon as tray
+    port = int(BASE.rsplit(":", 1)[1])
+    srv = tray.Server(port)
+    st = srv.get("/api/status")
+    assert st and "work" in st, st
+    model = tray.menu_model(st, srv.get("/api/jobs"), (srv.get("/api/phone") or {}).get("enabled"))
+    assert model[0]["id"] == "open" and any(i["id"] == "phone" for i in model), model
+    ok, _ = srv.post("/api/work/pause")
+    assert ok
+    ok, _ = srv.post("/api/work/resume")
+    assert ok
+    ok, msg = srv.post("/api/phone/revoke", {"id": "nobody"})
+    assert not ok and "paired" in msg, msg   # the server's own words come back for the notification
+    assert tray.Server(1).get("/api/status") is None and tray.icon_state(None)[0] == "stopped"
+    return "status → menu; pause, resume; a refusal's words; a server that's down reads as stopped"
+
+
 @check("api: status ready")
 def a_status():
     s = wait_for(lambda: (lambda d: d if d.get("models") == "ready" else None)(api("/api/status")), 180, what="models ready")
@@ -3115,8 +3347,12 @@ def a_page():
     for mod, view in views.items():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
-    for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"'):
+    for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"',
+                 'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"'):
         assert part in html, f"missing {part}"
+    # the overnight queue lives in SafeHouse's Running room (the DoubleAgent redesign); DoubleAgent keeps only its door
+    room = html.index('id="room-running"')
+    assert html.index('id="q-panel"') > room and html.index('id="q-report"') > room, "the queue panel isn't in the Running room"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
         body = api(f)   # the home-screen manifest (phase 11) comes back parsed
@@ -3137,8 +3373,17 @@ def a_lists():
 def a_library():
     s = api("/api/library/summary")
     assert s["total"] > 0
+    lists = {}
     for k in ("covers", "speech", "songs", "voices", "training"):
-        assert isinstance(api(f"/api/library/{k}"), list), k
+        lists[k] = api(f"/api/library/{k}")
+        assert isinstance(lists[k], list), k
+    # the Kept / Recent tabs' counts per category match the lists (the chips follow the tab showing)
+    t = s["tabs"]
+    for k in ("covers", "speech"):
+        assert t["kept"][k] == sum(1 for x in lists[k] if x["kept"]), f"kept {k}"
+        assert t["recent"][k] == sum(1 for x in lists[k] if x["recent"]), f"recent {k}"
+    assert all(t["kept"][k] == s["counts"][k] for k in ("songs", "voices", "training")), "songs, voices and training are always kept"
+    assert set(t["recent"]) == {"covers", "speech"}, "only covers and speech have a recent tray"
     groups = api("/api/library/cleanup")
     assert "orphan_stems" in groups and "finished_training" in groups
     return f"{s['total'] / 1e9:.1f} GB in library"
@@ -3550,9 +3795,15 @@ def real_dirs() -> dict:
 
 
 def snapshot_real(dirs: dict) -> dict:
-    """{file: (size, mtime_ns)} of everything in the user's library, model and working folders."""
+    """{file: (size, mtime_ns)} of everything in the user's library, model and working folders, and the settings files
+    beside the config (config.toml, tutorial.json, phone.json, themes.json: a check once appended to the real config)."""
     import os
     snap = {}
+    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json"):
+        p = ROOT / name
+        if p.is_file():
+            st = p.stat()
+            snap[str(p)] = (st.st_size, st.st_mtime_ns)
     for k in WATCHED:
         for dp, _, files in os.walk(dirs[k]):
             for f in files:
@@ -3687,7 +3938,7 @@ def sandbox_server(port: int):
             print(f"  (the sandbox server is still running or its folder was left: {root})")
 
 
-@check("the real folders (uploads, output, models, cache, voices) are exactly as they were when this run started")
+@check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
 def a_untouched(before: dict, dirs: dict):
     after = snapshot_real(dirs)
     added = sorted(set(after) - set(before))
@@ -3722,11 +3973,11 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_write_guard, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -3739,7 +3990,7 @@ def main():
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes, a_tutorial):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
