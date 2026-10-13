@@ -24,8 +24,8 @@ const ASSIGN = [
     aim: () => [$("#keep")] },
   { head: "This is SafeHouse.", say: "Everything you keep lives here, room by room. Your cover is in the Library.", tab: "safehouse",
     aim: () => [$('#lib-list .litem[data-kept="true"]')], next: "Next" },
-  { head: "Last: a voice of your own.", say: "Find one that's already made, or train one from clips of a person. Both start here.", tab: "doubleagent",
-    aim: () => [$("#q-panel"), $("#tr-head")], next: "Done" },
+  { head: "Last: a voice of your own.", say: "Name a person and train their voice, now or tonight. It all starts on this line.", tab: "doubleagent",
+    aim: () => [$("#da-start")], next: "Done" },
 ];
 const VOICE_KINDS = new Set(["train", "train-auto", "train-prepare", "train-export", "install", "night"]);   // "a voice of your own" started
 
@@ -95,7 +95,6 @@ function assignGo(n, move = true) {
   if (move) {
     if (document.body.dataset.module !== st.tab) showTab(st.tab);
     if (n === 4) assignShowKept();
-    if (n === 5) $('#q-mode button[data-v="new"]')?.click();   // a new voice, not improving one
   }
   reaim();
   if (move) requestAnimationFrame(() => assignTargets()[0]?.scrollIntoView({ behavior: "smooth", block: "center" }));
