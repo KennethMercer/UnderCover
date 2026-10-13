@@ -15,6 +15,9 @@ from ..core.config import CONFIG, path
 from . import history as hstore
 
 
+DUET_NOTE = "Two singers in harmony: UnderCover can't separate them yet, so they're sung as one voice."   # phase 22: said plainly (the user: both ways were bad)
+
+
 @dataclass
 class CoverOptions:
     voice: str
@@ -132,7 +135,7 @@ class CoverEngine:
         secs["separate"] = round(time.perf_counter() - t, 2)
         report("separating", 1.0, "Stems ready")
         if karaoke and not stems.get("backing"):   # core.separate found no lead to split from the backing (a duet)
-            notes.append("Sung as one voice: two singers in harmony (the lead and backing couldn't be told apart).")
+            notes.append(DUET_NOTE)
         if opts.fit:
             opts = self._fit(opts, voice, stems, notes, bvoice)
 
