@@ -317,6 +317,130 @@ def u_demo_topup():
     finally:
         tts.synth = real
     return "4 min, then 8 min reads on from the next sentence; 8 again reads nothing; another reader refused"
+@check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
+       "Checking it stage, the voice a finished training made in its job snapshot")
+def u_da_mode():
+    import inspect
+    from undercover.core import jobs, worklist
+    from undercover.core.jobs import Job
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import night, service
+    from undercover.doubleagent import project as P
+    with isolated_data() as box:
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file inside the test's folder
+        real_train = service.train_new_voice
+        try:
+            worklist.add("new", "Smoke Test Singer", mode="singing")
+            worklist.add("new", "Smoke Test Talker")
+            q = {i["target"]: i for i in worklist._state()["queue"]}
+            assert q["Smoke Test Singer"]["mode"] == "singing" and "mode" not in q["Smoke Test Talker"], q
+            for kind, mode, words in (("new", "humming", "Speaking or Singing"), ("improve", "singing", "no Speaking")):
+                try:
+                    worklist.add(kind, "Smoke Test Other", mode=mode)
+                    raise AssertionError(f"{kind} took mode {mode}")
+                except ModelError as e:
+                    assert words in str(e), e
+            # the queue's run passes the item's mode on to the training
+            got = {}
+
+            def fake(job, person, control, push, **kw):
+                got.update(kw, person=person)
+                return "smoke-test-singer-uc"
+            service.train_new_voice = fake
+            night._new(Job("zz-smoke"), q["Smoke Test Singer"])
+            assert got.get("mode") == "singing" and got["person"] == "Smoke Test Singer", got
+            # a new project starts in the chosen mode, and the choice is applied to an existing one (apply_mode)
+            proj = service.project_for("Smoke Test Singer", "singing")
+            assert proj.mode == "singing", proj.mode
+            talker = service.project_for("Smoke Test Talker", "speaking")
+            assert service.apply_mode(talker, "Smoke Test Talker", "both").mode == "both", "nothing searched: the mode follows"
+            from undercover.doubleagent import sources as srcmod
+            real_search = srcmod.search
+            sung = P.Source(id="sung1", title="Smoke Test Talker - A Song (Official Audio)", url="https://example.invalid/1",
+                            channel="x", duration=200.0)
+            srcmod.search = lambda person, mode, **kw: [sung] if mode == "singing" else []
+            try:
+                spoken = P.Project.load(talker.name)
+                spoken.mode, spoken.sources = "speaking", [P.Source(id="talk1", title="Interview", url="https://example.invalid/2",
+                                                                    channel="x", duration=600.0)]
+                spoken.save()
+                got = service.apply_mode(spoken, "Smoke Test Talker", "singing")   # speech so far: their songs are added
+                assert got.mode == "singing" and [s.id for s in got.sources] == ["talk1", "sung1"], (got.mode, got.sources)
+                assert service.apply_mode(got, "Smoke Test Talker", "speaking").sources == got.sources, "songs were dropped"
+                got.train["epoch"] = 40
+                got.save_train()
+                assert service.apply_mode(P.Project.load(got.name), "Smoke Test Talker", "speaking").mode == "singing", \
+                    "a project that has trained changed mode"
+            finally:
+                srcmod.search = real_search
+        finally:
+            service.train_new_voice = real_train
+            jobs.PORT, worklist._STATE = old_port, old_state
+        # Checking it: the last save (an early stop's) is measured like the others and can win
+        from undercover.doubleagent.trainer import Trainer
+        tr = Trainer.__new__(Trainer)
+        tr.tdir = box / "zz-train"
+        tr.tdir.mkdir(parents=True)
+        (tr.tdir / "e63.pth").write_bytes(b"x")
+        saved = []
+        tr.proj = type("Proj", (), {"save_train": lambda self: saved.append(1)})()
+        tr._probe = lambda epoch, sr: {"identity": 0.91, "low": 0.8, "cents": 20.0, "content": 0.95, "test": "speech"}
+        st = {"epoch": 63, "best": 50, "sr": 40000, "saves": [
+            {"epoch": 50, "val": 0.3, "identity": 0.85, "low": 0.8, "cents": 21.0, "content": 0.95, "test": "speech"},
+            {"epoch": 63, "val": 0.29}]}
+        tr.check_last(st)
+        assert st["best"] == 63 and st["saves"][1]["identity"] == 0.91 and saved, st
+        tr.check_last(st)
+        assert len(saved) == 1, "a measured save was measured again"
+    src = inspect.getsource(service.train_new_voice)
+    assert src.index("tr.check_last(st)") < src.index('push("voice", 0.98,'), "nothing checked before Adding"
+    assert src.index("ACTIVE[proj.name] = ") < src.index("apply_mode(proj, person, mode)"), "the mode changed before the busy check"
+    # the page's card after training reads the voice from the finished job
+    a, b, c = Job("train-auto"), Job("zz-work"), Job("train-prepare")
+    a.finish("done", message="ready", voice="v-auto")
+    b.finish("done", message="ready", result={"voice": "v-queue", "after": None})
+    c.finish("done", message="ready")
+    assert (a.snapshot().get("voice"), b.snapshot().get("voice"), c.snapshot().get("voice")) == ("v-auto", "v-queue", None)
+    return "mode kept and passed on, refused where it doesn't apply; Checking it at 0.975; voice in the snapshot"
+@check("test mode refuses writes outside the test's folders (the real config.toml, phone.json, anywhere in the app); no module binds the config's path at import")
+def u_write_guard():
+    """2026-10-13: a vault check held the real config's path from an import made before its sandbox, and appended to the
+    user's config.toml and phone.json. Core writes now refuse that in test mode (fsutil.guard), and the path is read at
+    call time everywhere."""
+    import re
+    from undercover.core import config, fsutil, phone
+    real = ROOT / "config.toml"
+    before = {f: (f.stat().st_size, f.stat().st_mtime_ns) for f in (real, ROOT / "phone.json") if f.is_file()}
+    with isolated_data() as box:
+        tries = {
+            "config set_values": lambda: config.set_values("ui", {"zz_smoke": "1"}, config_file=real),
+            "fsutil.write_text": lambda: fsutil.write_text(ROOT / "zz-smoke-guard.txt", "no"),
+            "fsutil.torch_save": lambda: fsutil.torch_save({"x": 1}, ROOT / "zz-smoke-guard.pt"),
+            "phone save": lambda: (phone.state_file.__globals__["config"].__setattr__("CONFIG_FILE", real), phone._save()),
+        }
+        saved_cfg = config.CONFIG_FILE
+        try:
+            for name, fn in tries.items():
+                try:
+                    fn()
+                    raise AssertionError(f"{name} wrote outside the test's folders")
+                except (PermissionError, phone.PhoneError) as e:
+                    assert "Test mode" in str(e), (name, e)
+                finally:
+                    config.CONFIG_FILE = saved_cfg
+        finally:
+            config.CONFIG_FILE = saved_cfg
+            phone._FILE[0] = None
+        fsutil.write_text(box / "inside.txt", "yes")   # inside its own folder a test writes as usual
+        assert (box / "inside.txt").read_text(encoding="utf-8") == "yes"
+    assert not (ROOT / "zz-smoke-guard.txt").exists() and not (ROOT / "zz-smoke-guard.pt").exists()
+    assert {f: (f.stat().st_size, f.stat().st_mtime_ns) for f in before} == before, "a real settings file changed"
+    # the root cause: a module that binds config.CONFIG_FILE at import keeps the real path when a test repoints it
+    bad = [f"{f.relative_to(ROOT).as_posix()}" for f in (ROOT / "undercover").rglob("*.py")
+           if re.search(r"^\s*from\s+\S*config\s+import\s+[^\n]*\bCONFIG_FILE\b", f.read_text(encoding="utf-8"), re.M)]
+    assert not bad, f"these bind CONFIG_FILE at import (use config.CONFIG_FILE at call time): {bad}"
+    return "config, fsutil (text, torch) and phone writes refused outside; inside works; real files unchanged; no import-time binding"
 
 
 # ---------------------------------------------------------------- API checks (test server)
@@ -327,30 +451,31 @@ def u_paused():
     from undercover.core import jobs, worklist
     from undercover.core.jobs import Job, Paused
     from undercover.core.config import path
-    old_port, old_state = jobs.PORT, worklist._STATE
-    jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
-    f = path("cache_dir") / "worklist-7999.json"
-    try:
-        worklist.PAUSABLE.add("zz-smoke")
-        job = Job("zz-smoke")
-        job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
+    with isolated_data():   # the scratch queue file goes in the test's own cache, never the user's
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
+        f = path("cache_dir") / "worklist-7999.json"
+        try:
+            worklist.PAUSABLE.add("zz-smoke")
+            job = Job("zz-smoke")
+            job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
 
-        def fn(job):
-            raise Paused()
-        jobs.run_job(job, fn)
-        assert job.state == "paused", job.state
-        assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
-        worklist.forget_paused()
-        assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
-        # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
-        import inspect
-        from undercover.frontman import oneshot
-        src = inspect.getsource(oneshot.run)
-        assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
-    finally:
-        worklist.PAUSABLE.discard("zz-smoke")
-        jobs.PORT, worklist._STATE = old_port, old_state
-        f.unlink(missing_ok=True)
+            def fn(job):
+                raise Paused()
+            jobs.run_job(job, fn)
+            assert job.state == "paused", job.state
+            assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
+            worklist.forget_paused()
+            assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
+            # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
+            import inspect
+            from undercover.frontman import oneshot
+            src = inspect.getsource(oneshot.run)
+            assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
+        finally:
+            worklist.PAUSABLE.discard("zz-smoke")
+            jobs.PORT, worklist._STATE = old_port, old_state
+            f.unlink(missing_ok=True)
 
 
 @check("time left: every progress event gets total_left (whole-job and per-stage kinds, learned stage times)")
@@ -1122,6 +1247,106 @@ def u_characters():
             "unticked, scenes first; target = the scenes' voice; AI/TTS and dubs out; a recast said; gate")
 
 
+@check("the ear: thumbs on covers and speech, one fix for a reason that has one, forget, liked voices first (phone allowed)")
+def u_ear():
+    import time
+    from undercover.app import ear_api, phone_api
+    from undercover.core import config, ear
+    from undercover.core.config import path
+    from undercover.core.voices import get_voice, voice_info
+    from undercover.doubleagent import service
+    from undercover.frontman import history
+    from undercover.speakeasy import speak
+    with isolated_data():
+        assert ear.ear_file() == Path(config.CONFIG_FILE).with_name("ear.json")   # next to the (isolated) config
+        z = _fake_voice("zed-uc", "trained", {"trained": True, "person": "Zed", "likeness": 0.7})
+        z.installed = "2026-10-12 00:00"   # the newer one: first without thumbs
+        (z.dir / "meta.json").write_text(json.dumps(z.to_json(), indent=2), encoding="utf-8")
+        _fake_voice("zed-2-uc", "trained", {"trained": True, "person": "Zed", "likeness": 0.7})
+        _fake_voice("zed", "https://x/y", {"person": "Zed"})
+        out = path("output_dir") / "Song (zed-2-uc).mp3"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        cov = history.record({"output": str(out), "song": "", "voice": "zed-2-uc", "stems": {}, "title": "Song",
+                              "options": {"voice": "zed-2-uc", "octave": 0, "key": 1, "quality": "high", "karaoke": True}})
+        sid = "abcdef0123"
+        (speak.speech_dir() / "s.wav").write_bytes(b"x")
+        (speak.speech_dir() / f"{sid}.json").write_text(json.dumps({"id": sid, "file": "s.wav", "text": "hi", "voice": "zed-uc",
+                                                                    "pace": "natural", "mode": "cadence", "reader": "am_michael"}), encoding="utf-8")
+
+        def call(method, p, body=None):
+            h = _FakeHandler(p, body)
+            assert ear_api.handle(h, method, p)
+            return h
+        before = [v.name for v in service.installed_for("Zed")]
+        # a thumbs up: stored with the cover's own voice and settings (not the body's), marked in the items
+        h = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "up", "reasons": ["like"], "voice": "zed"})
+        assert h.err is None and h.out["fix"] is None and h.out["item"]["voice"] == "zed-2-uc", (h.err, h.out)
+        assert h.out["item"]["settings"] == {"octave": 0, "key": 1, "quality": "high", "karaoke": True}, h.out["item"]
+        g = call("GET", "/api/ear").out
+        assert g["items"][f"cover:{cov['id']}"]["thumb"] == "up" and g["summary"]["up"] == 1 and g["reasons"]["cover"]["down"][0]["id"] == "unlike"
+        # liked voices first: the voice APIs carry it, the one-shot's choice of a person's voices leans to it
+        assert voice_info(get_voice("zed-2-uc"))["ear"] == {"up": 1, "down": 0} and voice_info(get_voice("zed-uc"))["ear"] is None
+        after = [v.name for v in service.installed_for("Zed")]
+        assert after[0] == "zed-2-uc" and before[0] == "zed-uc", (before, after)
+        # ...and among equally good checked voices only (a clearly better score still wins)
+        c = [{"name": "zed", "score": 0.60}, {"name": "zed-2-uc", "score": 0.58}, {"name": "zed-uc", "score": 0.50}]
+        assert [x["name"] for x in ear.prefer(c, name=lambda x: x["name"], score=lambda x: x["score"])] == ["zed-2-uc", "zed", "zed-uc"]
+        c[0]["score"] = 0.70
+        assert ear.prefer(c, name=lambda x: x["name"], score=lambda x: x["score"])[0]["name"] == "zed"
+        # a thumbs down replaces it; "doesn't sound like them" on a trained voice offers Improve tonight
+        h = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["unlike", "key"], "note": " too   far "})
+        f = h.out["fix"]
+        assert f["reason"] == "unlike" and f["do"]["body"] == {"kind": "improve", "target": "zed-2-uc", "now": False} and f["alt"]["action"] == "pick_voice", f
+        assert h.out["item"]["note"] == "too far" and ear.taste("zed-2-uc") == {"up": 0, "down": 1}
+        # wrong key: make it again an octave lower (or higher); at the lowest only higher
+        f = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["key"]}).out["fix"]
+        assert f["do"]["action"] == "remake" and f["do"]["options"] == {"octave": -1} and f["alt"]["options"] == {"octave": 1}, f
+        # ...which FrontMan makes again with the cover's own song, voice and settings (the backing moves with the lead)
+        from undercover.frontman import api as fapi
+        got, real = {}, fapi._start_cover
+        fapi._start_cover = lambda h, body: got.update(body)
+        try:
+            h = _FakeHandler()
+            fapi._cover_again(h, cov["id"], {"options": {"octave": -1, "voice": "x"}})   # (a voice in options is ignored)
+        finally:
+            fapi._start_cover = real
+        assert got["voice"] == "zed-2-uc" and got["options"]["octave"] == -1 and got["options"]["key"] == 1 and "voice" not in got["options"], got
+        f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
+        assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
+        # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
+        f = ear.fix_for("cover", ["unlike"], {"name": "zed", "person": "Zed"}, {}, "x")
+        assert f["do"]["body"] == {"kind": "new", "target": "Zed", "now": False}, f
+        h = call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pace"]})
+        assert h.out["fix"]["do"]["options"] == {"pace": "slower"} and h.out["item"]["settings"] == {"pace": "natural", "mode": "cadence", "reader": "am_michael"}, h.out
+        assert call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pauses"]}).out["fix"] is None
+        # speech read by a stock Reader (no cadence): learning their cadence is the fix, not more training
+        f = ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "reader"}, sid)
+        assert f["do"]["body"] == {"kind": "cadence", "target": "zed-uc", "now": False}, f
+        assert ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "cadence"}, sid)["do"]["body"]["kind"] == "improve"
+        # superseded thumbs are written away once they dominate the file
+        for _ in range(260):
+            ear.rate("speech", sid, "up", "zed-uc", {}, [], "")
+        assert len(ear.ear_file().read_text(encoding="utf-8").splitlines()) < 260 and ear.thumb_of("speech", sid)["thumb"] == "up"
+        assert ear.taste("zed-uc") == {"up": 1, "down": 0}, ear.taste("zed-uc")
+        # refused: unknown reasons, a thumb that isn't up or down, a cover that's gone
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["meh"]}).err
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "sideways"}).err
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": "0000000000", "thumb": "up"}).err
+        # a half-written last line (a power cut) is skipped; forget one, then all
+        with open(ear.ear_file(), "a", encoding="utf-8") as fh:
+            fh.write('{"item": "cover:x", "thu')
+        time.sleep(0.01)
+        assert set(ear.items()) == {f"cover:{cov['id']}", f"speech:{sid}"}, ear.items()
+        assert call("POST", "/api/ear/forget", {"kind": "speech", "id": sid}).out == {"forgot": 1}
+        assert set(ear.items()) == {f"cover:{cov['id']}"}
+        assert call("POST", "/api/ear/forget", {}).err and call("POST", "/api/ear/forget", {"all": True}).out == {"forgot": 1}
+        assert ear.items() == {} and not ear.ear_file().exists()
+        for m, r in (("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget")):
+            assert phone_api.policy(m, r)[0] == "phone", (m, r, phone_api.policy(m, r))
+    return "up / down with reasons, the cover's own voice and settings; fixes: Improve tonight, a new voice, an octave, slower; forget one / all; liked first"
+
+
 @check("lead gate: an instrument in the lead stem isn't converted, lines left in the backing are; the stems stay as they were")
 def u_leadgate():
     import numpy as np
@@ -1342,8 +1567,8 @@ def u_display_names():
         got = {v.name: V.display_name(v) for v in V.list_voices()}
         assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
                        "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
-        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False}
-        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False}
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "ear": None}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "ear": None}
         # the route: set, read back through the APIs, clear
         h = _FakeHandler(body={"display": "  Barry   O  "})
         assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
@@ -2939,6 +3164,8 @@ PHONE_SAMPLES = [
     *[("POST", f"/api/work/{a}") for a in ("pause", "resume", "forget", "add", "remove", "order", "start", "settings", "dismiss")],
     ("POST", "/api/voices/install"), ("POST", "/api/voices/upload"), ("DELETE", "/api/voices/some-voice"),
     ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
+    ("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget"),
+    ("POST", "/api/history/0123456789/again"),
     ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
     ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
     *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
@@ -3258,11 +3485,21 @@ def a_page():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
     for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"',
-                 'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"'):
+                 'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"',
+                 'id="wn"', 'id="wn-ok"', 'id="sys-news"', 'id="ear-cover"', 'id="se-ear"', 'id="set-ear-row"'):
         assert part in html, f"missing {part}"
     # the overnight queue lives in SafeHouse's Running room (the DoubleAgent redesign); DoubleAgent keeps only its door
     room = html.index('id="room-running"')
     assert html.index('id="q-panel"') > room and html.index('id="q-report"') > room, "the queue panel isn't in the Running room"
+    # What's new: the notes file is well formed, newest first, one id each, short plain lines (whatsnew.js reads it)
+    wn = api("/static/whatsnew.json")
+    wn = json.loads(wn) if isinstance(wn, (bytes, str)) else wn
+    ents = wn["entries"]
+    assert ents and len({e["id"] for e in ents}) == len(ents), "What's new: ids must be unique"
+    assert [e["date"] for e in ents] == sorted((e["date"] for e in ents), reverse=True), "What's new: newest first"
+    for e in ents:
+        assert re.fullmatch(r"\d{4}-\d\d-\d\d", e["date"]) and e["title"].strip(), f"What's new: {e['id']} needs a date and a title"
+        assert 1 <= len(e["lines"]) <= 4 and all(0 < len(l) <= 200 for l in e["lines"]), f"What's new: {e['id']} takes 1-4 short lines"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
         body = api(f)   # the home-screen manifest (phase 11) comes back parsed
@@ -3283,8 +3520,17 @@ def a_lists():
 def a_library():
     s = api("/api/library/summary")
     assert s["total"] > 0
+    lists = {}
     for k in ("covers", "speech", "songs", "voices", "training"):
-        assert isinstance(api(f"/api/library/{k}"), list), k
+        lists[k] = api(f"/api/library/{k}")
+        assert isinstance(lists[k], list), k
+    # the Kept / Recent tabs' counts per category match the lists (the chips follow the tab showing)
+    t = s["tabs"]
+    for k in ("covers", "speech"):
+        assert t["kept"][k] == sum(1 for x in lists[k] if x["kept"]), f"kept {k}"
+        assert t["recent"][k] == sum(1 for x in lists[k] if x["recent"]), f"recent {k}"
+    assert all(t["kept"][k] == s["counts"][k] for k in ("songs", "voices", "training")), "songs, voices and training are always kept"
+    assert set(t["recent"]) == {"covers", "speech"}, "only covers and speech have a recent tray"
     groups = api("/api/library/cleanup")
     assert "orphan_stems" in groups and "finished_training" in groups
     return f"{s['total'] / 1e9:.1f} GB in library"
@@ -3304,6 +3550,11 @@ def a_train():
 def a_work():
     w = api("/api/work")
     assert "queue" in w and "held" in w
+    try:   # Train tonight's Speaking / Singing reaches the queue (refused here, so nothing is queued)
+        api("/api/work/add", {"kind": "new", "target": "Smoke Test", "mode": "humming"})
+        raise AssertionError("a new voice was queued with mode humming")
+    except urllib.error.HTTPError as e:
+        assert "Speaking or Singing" in json.loads(e.read()).get("error", ""), e.code
     api("/api/work/candidates")
     p = api("/api/work/pause", {})
     assert p["held"] is True
@@ -3696,9 +3947,15 @@ def real_dirs() -> dict:
 
 
 def snapshot_real(dirs: dict) -> dict:
-    """{file: (size, mtime_ns)} of everything in the user's library, model and working folders."""
+    """{file: (size, mtime_ns)} of everything in the user's library, model and working folders, and the settings files
+    beside the config (config.toml, tutorial.json, phone.json, themes.json: a check once appended to the real config)."""
     import os
     snap = {}
+    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json", "ear.json"):
+        p = ROOT / name
+        if p.is_file():
+            st = p.stat()
+            snap[str(p)] = (st.st_size, st.st_mtime_ns)
     for k in WATCHED:
         for dp, _, files in os.walk(dirs[k]):
             for f in files:
@@ -3833,7 +4090,7 @@ def sandbox_server(port: int):
             print(f"  (the sandbox server is still running or its folder was left: {root})")
 
 
-@check("the real folders (uploads, output, models, cache, voices) are exactly as they were when this run started")
+@check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
 def a_untouched(before: dict, dirs: dict):
     after = snapshot_real(dirs)
     added = sorted(set(after) - set(before))
@@ -3868,9 +4125,9 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_demo_pause, u_demo_topup, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_ear,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_platform, u_tray):
         fn()

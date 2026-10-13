@@ -42,10 +42,14 @@ ROUTES = [
     ("POST", r"/api/open-folder", "pc", "opens Explorer on the PC"),
     ("POST", r"/api/restart", "pc", "Restart"),
     ("POST", r"/api/quit", "pc", "Quit"),
+    # the ear (thumbs on covers and speech)
+    ("GET", r"/api/ear", "phone", "your thumbs"),
+    ("POST", r"/api/ear/(rate|forget)", "phone", "a thumb, or forgetting thumbs"),
     # FrontMan
     ("GET", r"/api/config|/api/history|/api/songs/search|/api/auto/plan", "phone", "covers page data, song search, one-shot plan"),
     ("GET", rf"/api/songs/{_ID}(/key)?", "phone", "a song"),
     ("POST", r"/api/upload|/api/estimate|/api/covers|/api/preview|/api/songs/youtube|/api/auto", "phone", "make covers"),
+    ("POST", rf"/api/history/{_ID}/again", "phone", "make a cover again (the ear's fix)"),
     ("POST", rf"/api/songs/{_ID}/presep", "phone", "prepare a song"),
     # DoubleAgent
     ("GET", r"/api/work/candidates|/api/work/lookup", "phone", "voices to improve tonight"),
