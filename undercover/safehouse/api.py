@@ -15,6 +15,8 @@ DELETE /api/library/songs/<id>[?stems_only=1]
 POST   /api/library/voices/<name>/rename    {name}   (the FOLDER; the page calls it "Rename folder...", Deep Cover)
 POST   /api/library/voices/<name>/display   {display}  what the pages show for the voice; empty = the default
 DELETE /api/library/voices/<name>/cadence   the voice's cadence only (the voice stays)
+POST   /api/library/voices/<name>/full-index   a new voice's full index back (kept 30 days after export; Deep Cover;
+                                            the voice list's full_index: {until, ...} says when it goes)
 GET    /api/library/voices/<name>/export    zip download
 GET    /api/library/smaller                 Make smaller (phase 24): each voice and project, what it would save
 POST   /api/library/smaller/start | keep | undo   {kind: voice|project, name} (safehouse/smaller.py)
@@ -159,6 +161,12 @@ def _route(h, method, p):
         _guard(SPEECH_WORK + ("night",))   # speech may be reading with it; a queue job may be making one
         remove_pack(m.group(1))
         return h._json({"ok": True})
+    m = re.fullmatch(r"voices/([a-z0-9-]+)/full-index", rest)
+    if m and method == "POST":
+        from .smaller import restore_full_index
+        _guard(COVER_WORK + SPEECH_WORK)   # a cover or speech may be reading with this voice
+        h._body()
+        return h._json(restore_full_index(m.group(1)))
     m = re.fullmatch(r"voices/([a-z0-9-]+)/display", rest)
     if m and method == "POST":
         from ..core.voices import display_name, set_display

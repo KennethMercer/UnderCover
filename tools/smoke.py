@@ -1427,11 +1427,12 @@ def u_rolloff_covers():
     # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
     # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
-    # only what Make smaller itself set aside or made); a new caller must be added here on purpose
+    # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and
+    # expired after its 30 days); a new caller must be added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 4, "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py",
-                                                                        "frontman/history.py", *["safehouse/smaller.py"] * 5,
+                                                                        "frontman/history.py", *["safehouse/smaller.py"] * 8,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
@@ -4038,6 +4039,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/tutorial/greetings"), ("GET", "/api/tutorial/greetings/good-morning.mp3"),
     ("GET", "/api/library/smaller"), ("POST", "/api/library/smaller/start"), ("POST", "/api/library/smaller/keep"),
     ("POST", "/api/library/smaller/undo"),
+    ("POST", "/api/library/voices/some-voice/full-index"),
 ]
 
 
@@ -4530,7 +4532,7 @@ def u_listenback_fetch():
             lb._ASR.update(saved[0])
             setup_models.ensure = saved[1]
     return "missing -> a pinned, hashed fetch in the background; the speech goes on; tried again next time"
-@check("a new voice's index at export (phase 24 follow-up): 10k k-means centres, the full one aside as Make smaller leaves it (Keep / Undo in SafeHouse); a broken index leaves the export as it was; 0 = off")
+@check("a new voice's index at export (phase 24 follow-up): 10k k-means centres, quietly (not in Make smaller's Keep / Undo); the full one kept 30 days (its date in the voice list, put back from the voice's detail), then removed, guarded and logged; a broken index leaves the export as it was; 0 = off")
 def u_shrink_export():
     import struct
     import numpy as np
@@ -4546,19 +4548,42 @@ def u_shrink_export():
         full = ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes()
         (vd / "model.index").write_bytes(full)
         assert trainer.shrink_exported_index(vd, k=0) is None and (vd / "model.index").read_bytes() == full   # off
+        t0 = time.time()
         r = trainer.shrink_exported_index(vd, k=50, device="cpu")
-        assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and r["at_export"], r
-        assert (vd / ri.ASIDE).read_bytes() == full and len(ri.read_vectors(vd / "model.index")) == 50
+        assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and 29.9 * 86400 < r["until"] - t0 < 30.1 * 86400, r
+        assert (vd / ri.EXPORT_ASIDE).read_bytes() == full and len(ri.read_vectors(vd / "model.index")) == 50
+        assert not (vd / ri.ASIDE).exists(), "the export left a Make smaller Keep / Undo"
         row = next(v for v in smaller.overview()["voices"] if v["name"] == "export-voice")
-        assert row["pending"] and row["result"]["at_export"], row      # SafeHouse offers Keep / Undo for it
+        assert not row["pending"] and row["saving"] == 0, row               # nothing for the user to decide
+        fi = smaller.full_index(vd)
+        assert fi["until"] == time.strftime("%Y-%m-%d", time.localtime(r["until"])) and fi["vectors_before"] == 300, fi
         assert trainer.shrink_exported_index(vd, k=50, device="cpu") is None, "shrunk twice"
-        smaller.undo_voice("export-voice")
-        assert (vd / "model.index").read_bytes() == full and not (vd / ri.ASIDE).exists()
+        smaller.restore_full_index("export-voice")                            # Deep Cover: put the full one back
+        assert (vd / "model.index").read_bytes() == full and smaller.full_index(vd) is None
+        assert not (vd / ri.EXPORT_RECORD).exists()
+        try:
+            smaller.restore_full_index("export-voice")
+            raise AssertionError("restored twice")
+        except Exception as e:
+            assert "no full index" in str(e), e
+        # 30 days later: removed (guarded, logged); the 10k index and the voice stay; a younger one is left alone
+        trainer.shrink_exported_index(vd, k=50, device="cpu")
+        young = voices_dir() / "young-voice"
+        young.mkdir()
+        (young / "model.index").write_bytes(full)
+        trainer.shrink_exported_index(young, k=50, device="cpu")
+        assert smaller.expire_full_indexes(now=t0 + 31 * 86400) == ["export-voice", "young-voice"]
+        assert not (vd / ri.EXPORT_ASIDE).exists() and not (vd / ri.EXPORT_RECORD).exists()
+        assert len(ri.read_vectors(vd / "model.index")) == 50 and (vd / "model.pth").exists()
+        trainer.shrink_exported_index(vd, k=50, device="cpu") is None   # (already small: nothing to keep)
+        (young / "model.index").write_bytes(full)
+        trainer.shrink_exported_index(young, k=50, device="cpu")
+        assert smaller.expire_full_indexes(now=t0 + 86400) == [] and (young / ri.EXPORT_ASIDE).exists()
         (vd / "model.index").write_bytes(b"not an index")              # it can't shrink: the export is untouched
         assert trainer.shrink_exported_index(vd, k=50, device="cpu") is None
-        assert (vd / "model.index").read_bytes() == b"not an index" and not (vd / ri.ASIDE).exists()
+        assert (vd / "model.index").read_bytes() == b"not an index" and not (vd / ri.EXPORT_ASIDE).exists()
         assert not (vd / "model.index.smaller.tmp").exists()
-    return "300 -> 50 with the full one aside (pending in Make smaller), Undo; off at 0; a bad index left alone"
+    return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
 
 
 @check("listen-back's drawn-out word (phase 24): in a short line (up to 4 words), a one-syllable word held over 0.30 s asks for a re-read; a marked pause after it, the last word, a longer word or a long sentence don't")

@@ -167,6 +167,11 @@ def compact_in_place(path: Path) -> tuple[int, int]:
 CENTRES = 10000   # phase 24: an index above this becomes this many k-means centres (RVC's own way to shrink a big set)
 ASIDE = "model.index.before-smaller"   # the full index, kept next to a shrunk one until Keep or Undo (Make smaller, export)
 SHRINK_RESULT = "smaller.json"         # what the shrink measured, beside it
+# A new voice's export shrinks its index quietly (the user's ear couldn't tell, phase 24): the full one is kept under its
+# own name, out of Make smaller's Keep / Undo, for EXPORT_KEEP_DAYS (Undo in the voice's detail), then removed.
+EXPORT_ASIDE = "model.index.full"
+EXPORT_RECORD = "full-index.json"
+EXPORT_KEEP_DAYS = 30
 
 
 def shrink(path: Path, k: int = CENTRES, dest: Path | None = None, device: str | None = None) -> tuple[int, int]:
