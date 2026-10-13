@@ -1094,7 +1094,7 @@ def u_leadgate():
     return f"hook {inst:.1f} s left as it is, chorus {ch:.1f} s converted, singing untouched, stems unchanged"
 
 
-@check("yield: long videos in spread stretches, the hiss rule per voice (real hiss still out), the names check of a character's voice")
+@check("yield: long videos in spread stretches, the hiss rule per voice (real hiss still out), music under speech when the clip came out clean, the names check of a character's voice")
 def u_yield():
     import numpy as np
     from undercover.doubleagent import project as P, service, sources as S
