@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .config import ROOT
 
-VERSION = "0.3.0"   # the installer's AppVersion (installer/UnderCover.iss) says the same
+VERSION = "0.4.0"   # the installer's AppVersion (installer/UnderCover.iss) says the same
 
 
 def git_commit(root: Path = ROOT) -> dict | None:
