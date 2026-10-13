@@ -3975,6 +3975,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
     ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/reset"),
+    ("GET", "/api/tutorial/greetings"), ("GET", "/api/tutorial/greetings/good-morning.mp3"),
 ]
 
 
@@ -4331,7 +4332,52 @@ def a_tutorial():
         assert c["can"] is False, c
     songs = api("/api/library/songs")
     assert all("sample" in x for x in songs)
-    return f"existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
+    # Agent Smoke's greetings: the list (empty until the clips ship), each clip served, nothing else in assets
+    g = api("/api/tutorial/greetings")
+    assert set(g) == {"greetings", "followon"} and (g["greetings"] or g["followon"] is None), g
+    for e in g["greetings"] + ([g["followon"]] if g["followon"] else []):
+        with urllib.request.urlopen(BASE + e["url"], timeout=30) as clip:
+            assert clip.headers["Content-Type"] == "audio/mpeg" and "max-age" in clip.headers["Cache-Control"] and clip.read(4), e
+    for bad in ("greetings.json", "..%2Fagent-smoke%2Fmeta.json", "..%2F..%2Fsample%2Fsample.json", "nope.mp3"):
+        try:
+            api("/api/tutorial/greetings/" + bad)
+            raise AssertionError(f"served {bad}")
+        except urllib.error.HTTPError as e:
+            assert e.code == 404, (bad, e.code)
+    return f"greetings {len(g['greetings'])}; existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
+
+
+@check("the greetings (Agent Smoke's clips for the First assignment): greetings.json -> urls; a clip that isn't there is left out; only named clips are served, with Range")
+def u_greetings():
+    from undercover.app import tutorial
+    with isolated_data() as box:
+        g = box / "greetings"
+        g.mkdir()
+        saved = tutorial.GREETINGS
+        tutorial.GREETINGS = g
+        try:
+            assert tutorial.greetings() == {"greetings": [], "followon": None}   # not shipped yet
+            (g / "good-morning.mp3").write_bytes(b"ID3morning")
+            (g / "follow-on.mp3").write_bytes(b"ID3follow")
+            (box / "secret.mp3").write_bytes(b"x")
+            (g / "greetings.json").write_text(json.dumps({"greetings": [
+                {"file": "good-morning.mp3", "from": 5, "to": 12, "text": "Good morning."},
+                {"file": "good-evening.mp3", "from": 17, "to": 24, "text": "Good evening."},   # no clip: left out
+                {"file": "../secret.mp3", "from": 0, "to": 5, "text": "x"}],                    # outside: never
+                "followon": {"file": "follow-on.mp3", "text": "A song and a voice are on your desk."}}), encoding="utf-8")
+            r = tutorial.greetings()
+            v = lambda n: int((g / n).stat().st_mtime)
+            assert r["greetings"] == [{"from": 5, "to": 12, "text": "Good morning.",
+                                       "url": f"/api/tutorial/greetings/good-morning.mp3?v={v('good-morning.mp3')}"}], r
+            assert r["followon"] == {"text": "A song and a voice are on your desk.",
+                                     "url": f"/api/tutorial/greetings/follow-on.mp3?v={v('follow-on.mp3')}"}, r
+            assert tutorial.greeting_file("good-morning.mp3") == g / "good-morning.mp3"
+            assert tutorial.greeting_file("follow-on.mp3") == g / "follow-on.mp3"
+            for bad in ("greetings.json", "good-evening.mp3", "../secret.mp3", "..\\secret.mp3", ""):
+                assert tutorial.greeting_file(bad) is None, bad
+        finally:
+            tutorial.GREETINGS = saved
+    return "manifest -> urls; missing and outside clips left out; only named clips served"
 
 
 @check("api: the tray's client against the sandbox (status, jobs, phone, pause / resume, a refusal in plain words)")
@@ -5038,7 +5084,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
