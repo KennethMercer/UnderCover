@@ -40,6 +40,20 @@ downloads the matching PyTorch and tools. Nothing heavy is bundled.
 - Build: `powershell -ExecutionPolicy Bypass -File installer\build.ps1` -> `dist\UnderCover-Setup-0.2.0.exe`. Local
   only: never publish or share a build.
 
+**Phase 25 (2026-10-13), release prep:**
+- **The .exe:** 0.4.0, 75.4 MB. Agent Smoke, the sample song and the greetings are bundled, and build.ps1 checks them
+  against the manifest.
+- **A fresh ROCm install measured in D:\UnderCoverTest25:** setup 262 s, about 2.5 GB downloaded, 8.3 GB on disk.
+  After that:
+  - the first cover: 1.2 GB of models;
+  - the first SpeakEasy line: 3.0 GB (Chatterbox);
+  - listen-back: 1.6 GB (Whisper, in the background).
+- **Checks:** the self-test, the Doctor (13/13), -Repair and unit smoke (66/66) all passed.
+- **Changes:** the Repair shortcut now runs -Repair; FRIENDS.md ships as READ ME.md.
+- **Still to do:** the user's click-through and a second-PC (NVIDIA) test.
+
+Details: docs/handoffs/phase25.md.
+
 ## Files
 
 | File | What it does | Tested |
