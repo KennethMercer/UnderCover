@@ -619,15 +619,17 @@ def f0_median(data: dict) -> float | None:
 
 
 def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None = None) -> dict | None:
-    """A new voice's index as k k-means centres ([training] index_centres, default 10k; 0 = off). The user's blind pairs
-    (phase 24) couldn't reliably tell 10k from full. The full index waits aside exactly as Make smaller leaves it
-    (model.index.before-smaller + smaller.json), so SafeHouse offers Keep / Undo, and Undo brings it back if a voice
-    ever sounds off. Never fails an export: when it can't shrink (a busy GPU, an odd index) the full index stays."""
+    """A new voice's index as k k-means centres ([training] index_centres, default 10k; 0 = off), quietly: the user's
+    blind pairs (phase 24) couldn't tell 10k from full, so nobody is asked to Keep anything. The full index is kept
+    aside under its own name (model.index.full + full-index.json with the date it goes) for EXPORT_KEEP_DAYS: the
+    voice's detail in SafeHouse offers to put it back (Deep Cover) until then; safehouse/smaller.expire_full_indexes
+    removes it after. It's rebuildable from the training project (data.pt), so it isn't the user's data. Never fails an
+    export: when it can't shrink (a busy GPU, an odd index) the full index stays."""
     from ..core import storage
-    from ..core.engine.rvc.index import ASIDE, SHRINK_RESULT, shrink
+    from ..core.engine.rvc.index import ASIDE, EXPORT_ASIDE, EXPORT_KEEP_DAYS, EXPORT_RECORD, shrink
     k = int(TCFG.get("index_centres", 10000) if k is None else k)
     idx = Path(vdir) / "model.index"
-    if k <= 0 or not idx.is_file() or (Path(vdir) / ASIDE).exists():
+    if k <= 0 or not idx.is_file() or (Path(vdir) / ASIDE).exists() or (Path(vdir) / EXPORT_ASIDE).exists():
         return None
     tmp = Path(vdir) / "model.index.smaller.tmp"
     try:
@@ -635,16 +637,17 @@ def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None =
         n0, n1 = shrink(idx, k, dest=tmp, device=device)
         if n1 >= n0:
             return None
+        now = time.time()
         r = {"vectors_before": n0, "vectors_after": n1, "bytes_before": before, "bytes_after": tmp.stat().st_size,
-             "made": time.strftime("%Y-%m-%d %H:%M"), "at_export": True}
-        storage.move_within([(idx, Path(vdir) / ASIDE)], Path(vdir))
+             "made": time.strftime("%Y-%m-%d %H:%M", time.localtime(now)), "until": now + EXPORT_KEEP_DAYS * 86400}
+        storage.move_within([(idx, Path(vdir) / EXPORT_ASIDE)], Path(vdir))
         storage.move_within([(tmp, idx)], Path(vdir))
-        fsutil.write_text(Path(vdir) / SHRINK_RESULT, json.dumps(r, indent=1))
+        fsutil.write_text(Path(vdir) / EXPORT_RECORD, json.dumps(r, indent=1))
         return r
     except Exception as e:   # noqa: BLE001 - the voice keeps its full index
         print(f"The new voice's index stays full (it couldn't be made smaller: {e}).", flush=True)
-        if not idx.exists() and (Path(vdir) / ASIDE).exists():
-            storage.move_within([(Path(vdir) / ASIDE, idx)], Path(vdir))
+        if not idx.exists() and (Path(vdir) / EXPORT_ASIDE).exists():
+            storage.move_within([(Path(vdir) / EXPORT_ASIDE, idx)], Path(vdir))
         return None
     finally:
         tmp.unlink(missing_ok=True)

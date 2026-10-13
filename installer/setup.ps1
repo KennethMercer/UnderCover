@@ -145,6 +145,7 @@ function Unzip([string]$zip, [string]$dest) {
     if ($DryRun) { Write-Host "    [dry-run] unzip $zip -> $dest" -ForegroundColor DarkGray; return }
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
     Expand-Archive -Path $zip -DestinationPath $dest -Force
+    Remove-Item -Force $zip -ErrorAction SilentlyContinue   # unpacked: the download (up to 106 MB) doesn't stay in %TEMP%
 }
 
 # ---------------------------------------------------------------------------------------------

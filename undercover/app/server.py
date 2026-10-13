@@ -351,7 +351,9 @@ class Handler(BaseHTTPRequestHandler):
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
                                    "away_ready": self.remote and _away_ready(),
-                                   "tutorial": tutorial.status()})
+                                   "tutorial": tutorial.status(),
+                                   # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
+                                   "app_folder": None if self.remote else str(ROOT)})
             if p == "/api/voices":
                 return self._json(voices_json())
             if p == "/api/search":
@@ -896,6 +898,11 @@ def main():
     from ..core import vault, worklist
     worklist.start()
     vault.start()   # Vaulting: quiet backups when the GPU queue is idle (off until a vault folder is picked)
+    try:   # phase 24: the full indexes kept 30 days after an export go when their time is up (daily)
+        from ..safehouse import smaller
+        smaller.start_expiry()
+    except Exception as e:   # noqa: BLE001 - never block startup
+        print(f"The kept full indexes couldn't be checked: {e}", flush=True)
     from ..core import gamepause
     gamepause.start()   # the game pause: asks before UnderCover's GPU work competes with a full-screen game
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()

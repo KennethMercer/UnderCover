@@ -51,14 +51,20 @@ def main(argv=None) -> int:
 
 
 def _server_running() -> bool:
-    """Is this install's UnderCover answering on its port? (One heal at a time: the server's lock is in its process.)"""
+    """Is THIS install's UnderCover answering on its port? (One heal at a time: the server's lock is in its process.)
+    Another install on the same port (a second copy on this PC) isn't: its yt-dlp lives in its own folder. A server too
+    old to say which folder it runs from counts as this one (the careful answer)."""
+    import os
     import urllib.request
-    from .core.config import CONFIG
+    from .core.config import CONFIG, ROOT
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{CONFIG['ui']['port']}/api/status", timeout=2) as r:
-            return r.status == 200
-    except OSError:
+            if r.status != 200:
+                return False
+            folder = json.loads(r.read() or b"{}").get("app_folder")
+    except (OSError, ValueError):
         return False
+    return folder is None or os.path.normcase(os.path.realpath(folder)) == os.path.normcase(os.path.realpath(ROOT))
 
 
 if __name__ == "__main__":
