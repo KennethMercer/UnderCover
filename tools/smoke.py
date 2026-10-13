@@ -250,6 +250,58 @@ def u_sources():
     assert not s.is_sung("Elliott Smith Interview 1998")
 
 
+@check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
+       "Checking it stage, the voice a finished training made in its job snapshot")
+def u_da_mode():
+    import inspect
+    from undercover.core import jobs, worklist
+    from undercover.core.jobs import Job
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import night, service
+    from undercover.doubleagent import project as P
+    with isolated_data():
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file inside the test's folder
+        real_train = service.train_new_voice
+        try:
+            worklist.add("new", "Smoke Test Singer", mode="singing")
+            worklist.add("new", "Smoke Test Talker")
+            q = {i["target"]: i for i in worklist._state()["queue"]}
+            assert q["Smoke Test Singer"]["mode"] == "singing" and "mode" not in q["Smoke Test Talker"], q
+            for kind, mode, words in (("new", "humming", "Speaking or Singing"), ("improve", "singing", "no Speaking")):
+                try:
+                    worklist.add(kind, "Smoke Test Other", mode=mode)
+                    raise AssertionError(f"{kind} took mode {mode}")
+                except ModelError as e:
+                    assert words in str(e), e
+            # the queue's run passes the item's mode on to the training
+            got = {}
+
+            def fake(job, person, control, push, **kw):
+                got.update(kw, person=person)
+                return "smoke-test-singer-uc"
+            service.train_new_voice = fake
+            night._new(Job("zz-smoke"), q["Smoke Test Singer"])
+            assert got.get("mode") == "singing" and got["person"] == "Smoke Test Singer", got
+            # a new project takes the chosen mode; asking for speech never widens a project to songs
+            proj = service.project_for("Smoke Test Singer", "singing")
+            assert proj.mode == "singing", proj.mode
+            assert service.project_for("Smoke Test Singer", "speaking").name == proj.name
+            assert P.Project.load(proj.name).mode == "singing"
+        finally:
+            service.train_new_voice = real_train
+            jobs.PORT, worklist._STATE = old_port, old_state
+    src = inspect.getsource(service.train_new_voice)
+    assert src.index('push("voice", 0.975') < src.index('push("voice", 0.98,'), "no Checking it push before Adding"
+    # the page's card after training reads the voice from the finished job
+    a, b, c = Job("train-auto"), Job("zz-work"), Job("train-prepare")
+    a.finish("done", message="ready", voice="v-auto")
+    b.finish("done", message="ready", result={"voice": "v-queue", "after": None})
+    c.finish("done", message="ready")
+    assert (a.snapshot().get("voice"), b.snapshot().get("voice"), c.snapshot().get("voice")) == ("v-auto", "v-queue", None)
+    return "mode kept and passed on, refused where it doesn't apply; Checking it at 0.975; voice in the snapshot"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -3799,7 +3851,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_da_mode, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

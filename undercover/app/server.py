@@ -557,7 +557,8 @@ class Handler(BaseHTTPRequestHandler):
             if action == "forget":   # Dismiss the paused work instead of resuming it
                 return self._json(worklist.forget_paused())
             if action == "add":
-                return self._json(worklist.add(b.get("kind", ""), b.get("target", ""), now=bool(b.get("now"))))
+                return self._json(worklist.add(b.get("kind", ""), b.get("target", ""), now=bool(b.get("now")),
+                                               mode=b.get("mode") or None))
             if action == "remove":
                 return self._json(worklist.remove(b.get("id", "")))
             if action == "order":
