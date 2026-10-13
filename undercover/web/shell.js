@@ -48,10 +48,12 @@ $("#wb-more").onclick = () => queueDrawer(true);
 $("#wb-open").onclick = () => { queueDrawer(false); location.hash = "#safehouse/running"; window.scrollTo({ top: 0 }); };
 $("#qd-close").onclick = $("#q-scrim").onclick = () => queueDrawer(false);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#q-drawer").hidden) queueDrawer(false); });
+// "+ New voice" / "Train a new voice tonight": DoubleAgent's line; "+ Improve a voice": its voice cards (Improve tonight)
 $$("[data-qadd]").forEach(b => b.onclick = () => {
   queueDrawer(false); showTab("doubleagent");
-  $(`#q-mode button[data-v="${b.dataset.qadd}"]`).click();
-  $("#q-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  const target = b.dataset.qadd === "improve" ? $("#da-voices") : $("#da-start");
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (b.dataset.qadd !== "improve") $("#da-person").focus({ preventScroll: true });
 });
 
 // the count on the DoubleAgent tab and SafeHouse's Running room: queue jobs waiting or running; a pip while the queue is set to run
