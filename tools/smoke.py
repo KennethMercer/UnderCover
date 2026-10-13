@@ -808,6 +808,41 @@ def u_cadence_starts():
     return "joins short sentences inside a paragraph only; lead-in in finish; index k-means; the shipped index small"
 
 
+@check("listen-back: finds missing / unsure / extra words, stretches one word only (capped, the rest untouched), comma clauses split; every part off by default")
+def u_listenback():
+    import numpy as np
+    from undercover.core.cadence import render
+    from undercover.core.config import CONFIG
+    from undercover.speakeasy import listenback as lb
+    saved = CONFIG.get("speakeasy")
+    try:
+        CONFIG.pop("speakeasy", None)
+        assert lb.settings() == {"listen_back": False, "stretch_words": False, "comma_lengthen": False, "tries": 3}
+    finally:
+        if saved is not None:
+            CONFIG["speakeasy"] = saved
+    assert lb.text_words("The name is Smoke, Agent Smoke.") == [("the", False), ("name", False), ("is", False),
+                                                               ("smoke", True), ("agent", False), ("smoke", False)]
+    W = lambda *ws: [[w, i * 0.3, i * 0.3 + 0.25, p] for i, (w, p) in enumerate(ws)]
+    text = "Good evening, agent."
+    assert lb.problems(text, W((" Good", .99), (" evening,", .95), (" agent.", .97))) == []
+    assert lb.problems(text, W((" Good", .99), (" agent.", .97))) == ["missing 'evening'"]
+    assert lb.problems(text, W((" Grieving.", .17), (" agent.", .9))) == ["missing 'good'", "missing 'evening'", "1 extra word(s)"]
+    assert lb.problems(text, W((" Good", .99), (" evening,", .3), (" agent.", .97))) == ["unsure 'evening,' (0.30)"]
+    sr = 24000
+    t = np.arange(sr, dtype=np.float32) / sr
+    x = (0.3 * np.sin(2 * np.pi * 150 * t)).astype(np.float32)
+    y = lb.stretch_span(x, sr, 0.4, 0.6, 1.4)
+    assert abs(len(y) - (len(x) + 0.2 * sr * 0.4)) < sr * 0.01, len(y)
+    assert np.allclose(y[: int(0.4 * sr) - 400], x[: int(0.4 * sr) - 400]), "the words before were changed"
+    assert np.allclose(y[-int(0.4 * sr) + 400:], x[-int(0.4 * sr) + 400:]), "the words after were changed"
+    assert lb.MAX_STRETCH <= 1.5
+    assert len(lb.insert_pause(x, sr, 0.5, 0.12)) == len(x) + int(0.12 * sr)
+    parts = render.split_clauses([{"text": "Well, if you insist, we start tonight.", "pause": 0.3}])
+    assert [q["text"] for q in parts] == ["Well,", "if you insist,", "we start tonight."] and parts[-1]["pause"] == 0.3
+    return "problems found; one word stretched, the rest untouched; clauses split; all off by default"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -4706,7 +4741,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
