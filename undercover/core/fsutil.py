@@ -40,6 +40,31 @@ def write_text(dest: Path, text: str):
     _replace(tmp, dest)
 
 
+def link_duplicate(keep: Path, dup: Path) -> bool:
+    """dup becomes a hard link to keep when the two are byte-identical (phase 24): one copy on disk, both names work,
+    and deleting either name leaves the other's data. Nothing writes these files in place (saves and installs write
+    a new file and swap it in), so a later write splits them back into two copies. A copy elsewhere (Storage, the
+    Vault) is simply two files. -> False, with nothing changed, when they differ or the drive can't link."""
+    import filecmp
+    keep, dup = Path(keep), Path(dup)
+    guard(dup)
+    try:
+        if os.path.samefile(keep, dup):
+            return True
+        if keep.stat().st_size != dup.stat().st_size or not filecmp.cmp(keep, dup, shallow=False):
+            return False
+        tmp = dup.with_name(f"{dup.name}.{uuid.uuid4().hex[:8]}.link")
+        os.link(keep, tmp)
+    except OSError:
+        return False
+    try:
+        _replace(tmp, dup)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def torch_save(obj, dest: Path):
     import torch
     dest = Path(dest)

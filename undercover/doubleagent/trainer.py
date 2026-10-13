@@ -647,6 +647,7 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
         v.extra["person"] = proj.person.strip()
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     idx.unlink(missing_ok=True)
+    fsutil.link_duplicate(v.pth, pth)   # the exported save is the voice's own model.pth: one copy on disk (phase 24)
     st.update(exported=name, exported_epoch=epoch, state="exported")
     (tdir / "resume.pt").unlink(missing_ok=True)   # 1.3 GB; a finished voice doesn't need it (retraining starts fresh)
     # keep the exported save and the two best alternatives (to try another on the Train tab); the rest are 55 MB each
