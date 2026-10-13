@@ -843,7 +843,7 @@ def u_listenback():
     return "problems found; one word stretched, the rest untouched; clauses split; re-reads on, stretches off"
 
 
-@check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener; off and forget clean up; a wrong download is refused")
+@check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
     from undercover.core import tailnet
@@ -884,10 +884,21 @@ def u_tailnet():
                     raise AssertionError(f"funnel aimed at {bad}")
                 except ModelError:
                     pass
+            # after a restart the away listener may have another port: a funnel aimed elsewhere isn't "ready", it's re-aimed
+            write(funnel_target="http://127.0.0.1:7999")
+            assert tailnet.tick() != "ready"
+            wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="the funnel re-aimed")
+            assert read()["funnel_target"] == "http://127.0.0.1:7871", read()
             name = (tailnet.state_dir() / "uc-name").read_text(encoding="utf-8")
+            # UnderCover exiting: the funnel reset and our daemon gone (none left behind pointing at a dead listener)
+            daemon_proc = tailnet._P["daemon"]
+            resets = read()["calls"].count(["funnel", "reset"])
+            tailnet.at_exit()
+            daemon_proc.wait(10)
+            assert read()["calls"].count(["funnel", "reset"]) == resets + 1 and not read().get("funnel_on")
             tailnet.stop()
             r = read()
-            assert ["funnel", "reset"] in r["calls"] and ["down"] in r["calls"] and not r.get("funnel_on"), r["calls"][-3:]
+            assert r["calls"].count(["funnel", "reset"]) == resets + 2 and ["down"] in r["calls"] and not r.get("funnel_on"), r["calls"][-3:]
             assert tailnet.snapshot()["phase"] == "off" and tailnet.snapshot()["name"] == name
             write(daemon=True)   # forget: logout, then the node's keys gone
             tailnet.forget()
@@ -4081,13 +4092,27 @@ def a_away():
             raise AssertionError("the away listener still answers after Off")
         except ConnectionRefusedError:
             pass
+        # on again (the sign-in is kept: no new sign-in), then Phone access off takes away from home with it
+        st = api("/api/away", {"on": True})
+        port = st["port"]
+        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready again")
+        resets = read()["calls"].count(["funnel", "reset"])
+        api("/api/phone", {"on": False})
+        st = api("/api/away")
+        assert not st["on"] and not st["listening"] and read()["calls"].count(["funnel", "reset"]) == resets + 1, st
+        try:
+            _away("GET", "/", port, host)
+            raise AssertionError("the away listener still answers after Phone access was switched off")
+        except ConnectionRefusedError:
+            pass
     finally:
+        api("/api/phone", {"on": True})
         api("/api/away", {"on": False})
         dev = next((d for d in api("/api/phone")["devices"] if d["name"] == "Away phone"), None)
         if dev:
             api("/api/phone/revoke", {"id": dev["id"]})
         api("/api/phone", {"on": False})
-    return f"sign-in -> approve -> ready; funnel to {port} only; the gate holds; a home link became an away pass; off closes"
+    return f"sign-in -> approve -> ready; funnel to {port} only; the gate holds; a home link became an away pass; off and Phone access off close it"
 
 
 @check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "

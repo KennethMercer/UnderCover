@@ -152,13 +152,24 @@ def _run_bg(key: str, args: list):
     threading.Thread(target=go, daemon=True, name=f"tailscale-{key}").start()
 
 
+def _proxies(x) -> list:
+    """Every "Proxy" target in Tailscale's serve config (Web -> host:443 -> Handlers -> path -> Proxy)."""
+    if isinstance(x, dict):
+        return [v for k, v in x.items() if k == "Proxy" and isinstance(v, str)] + [p for v in x.values() for p in _proxies(v)]
+    return [p for v in x for p in _proxies(v)] if isinstance(x, list) else []
+
+
 def _funnel_on(st: dict) -> bool:
+    """Funnel is on for this node AND points at this run's away listener (after a restart the port may differ: then
+    it's set again)."""
     try:
         f = json.loads(_cli("funnel", "status", "--json") or "{}")
     except (ValueError, OSError, subprocess.TimeoutExpired):
         return False
     host = (st.get("Self") or {}).get("DNSName", "").rstrip(".")
-    return any(k.startswith(host) and v for k, v in (f.get("AllowFunnel") or {}).items())
+    allowed = any(k.startswith(host) and v for k, v in (f.get("AllowFunnel") or {}).items())
+    targets = _proxies(f.get("Web") or {})
+    return allowed and (not targets or set(targets) == {funnel_target(STATE["port"])})
 
 
 def tick():
@@ -229,6 +240,23 @@ def stop():
         if p is not None and p.poll() is None:
             p.terminate()
         _P[key] = None
+
+
+def at_exit():
+    """UnderCover is exiting (Quit, restart, the window closed): nothing left pointing at a listener that's gone, and
+    no daemon left behind. Quick (a closing console gets a few seconds); the sign-in is kept for next time."""
+    p = _P.get("daemon")
+    if p is None or p.poll() is not None:
+        return
+    STATE["want"] = False
+    try:
+        _cli("funnel", "reset", timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    for key in ("up", "funnel", "daemon"):
+        q = _P.get(key)
+        if q is not None and q.poll() is None:
+            q.terminate()
 
 
 def forget():
