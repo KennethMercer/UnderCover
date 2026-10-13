@@ -35,6 +35,7 @@ async function assignBoot() {
   try { s = await api("/api/status"); } catch (e) { return; }
   if (!s.tutorial) return;   // no tutorial backend in this copy: nothing shows
   AS.known = true; AS.done = s.tutorial.done || null;
+  renderDemoOffer(s.tutorial);
   renderAssignSetting();
   if (AS.step > 0) return assignGo(AS.step, false);   // carry on where it was (a reload, a restart)
   if (AS.done) return;
@@ -77,6 +78,26 @@ $("#assign-greet-play").onclick = () => {
   $("#assign-greet-play").textContent = "❚❚"; $("#assign-greet-play").setAttribute("aria-label", "Stop the greeting");
   greetPart(0);
 };
+// the demo voice, refreshed (the backend's demo refresh): a newer Agent Smoke can be swapped in (the old one waits aside,
+// your name for him is kept), and the previous one brought back while it's kept. In the First assignment's Settings row.
+function renderDemoOffer(t) {
+  const box = $("#set-demo");
+  if (!box) return;
+  const up = t?.demo_update || null, prev = !!t?.demo_previous;
+  box.hidden = !up && !prev;
+  const made = up?.made ? new Date(up.made + "T12:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+  box.innerHTML = up ? `A newer ${esc(up.display || "Agent Smoke")} is available${made ? ` (made ${esc(made)})` : ""}. <button class="linkbtn" type="button" data-demo="update">Update</button>`
+    : prev ? `<button class="linkbtn quiet" type="button" data-demo="undo">Go back to the previous Agent Smoke</button>` : "";
+  $$("[data-demo]", box).forEach(b => b.onclick = async () => {
+    const how = b.dataset.demo; b.disabled = true;
+    try {
+      const r = await api(`/api/tutorial/demo/${how}`, { method: "POST" });
+      renderDemoOffer(r.tutorial);
+      if (typeof loadVoices === "function") loadVoices().catch(() => {});
+      showError(how === "update" ? "Agent Smoke is updated. The earlier one waits aside if you'd rather have him back." : "The previous Agent Smoke is back.", "Agent Smoke", null, true);
+    } catch (e) { b.disabled = false; showError(e.message, "Agent Smoke"); }
+  });
+}
 // the sample song (sample: true) and the demo voice (demo: true), if this copy has them
 async function deskNow() {
   const songs = await api("/api/library/songs"), voices = await api("/api/voices");
