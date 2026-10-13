@@ -159,11 +159,14 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     """The listen-back for one sentence: -> the take to convert (a new WAV when something was mended)."""
     s = settings()
     t0 = time.perf_counter()
+    timing = s["stretch_words"] or s["comma_lengthen"]   # Kokoro's timing reference only when a stretch may follow
     kref = Path(wav).with_name(Path(wav).stem + "_kokoro.wav")
-    sf.write(kref, np.asarray(tts.synth(text, reader), np.float32), tts.SR, subtype="PCM_16")
+    if timing:
+        sf.write(kref, np.asarray(tts.synth(text, reader), np.float32), tts.SR, subtype="PCM_16")
     takes = [(Path(wav), seed)]
-    heard = client.transcribe([str(wav), str(kref)], words=True)
-    kwords, best = heard[1]["words"], (Path(wav), seed, heard[0]["words"], problems(text, heard[0]["words"]))
+    heard = client.transcribe([str(wav)] + ([str(kref)] if timing else []), words=True)
+    kwords = heard[1]["words"] if timing else []
+    best = (Path(wav), seed, heard[0]["words"], problems(text, heard[0]["words"]))
     tries = 1
     while best[3] and tries < max(1, s["tries"]):   # read again with a new seed; keep the take with fewest problems
         nseed = seed + 1000 * tries
@@ -180,8 +183,10 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     if x.ndim > 1:
         x = x.mean(1)
     tw = text_words(text)
-    kx, ksr = sf.read(str(kref), dtype="float32")
-    mine, ko = _shares(text, words, x, sr), _shares(text, kwords, kx, ksr)
+    mine, ko = {}, {}
+    if timing:
+        kx, ksr = sf.read(str(kref), dtype="float32")
+        mine, ko = _shares(text, words, x, sr), _shares(text, kwords, kx, ksr)
     edits = []   # (start, end, factor, why) and pauses, applied last to first
     for i, (w, comma) in enumerate(tw):
         if i not in mine or i not in ko:
@@ -196,7 +201,8 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
             edits.append((b, b, 0.12, f"pause {w}"))
     for a, b, f, why in sorted(edits, key=lambda e: e[0], reverse=True):
         x = insert_pause(x, sr, a, f) if why.startswith("pause") else stretch_span(x, sr, a, b, f)
-    log.update(tries=tries, seed=best[1], problems=best[3], edits=[(why, round(f, 2)) for *_, f, why in edits],
+    log.update(tries=tries, seed=best[1], first_problems=problems(text, heard[0]["words"]), problems=best[3],
+               edits=[(why, round(f, 2)) for *_, f, why in edits],
                seconds=round(time.perf_counter() - t0, 2))
     kref.unlink(missing_ok=True)
     for t, _ in takes:
