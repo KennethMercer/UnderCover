@@ -26,6 +26,7 @@ import lzma
 import os
 import shutil
 import struct
+import threading
 import time
 import zlib
 from datetime import datetime, timedelta
@@ -44,6 +45,8 @@ CODEC = {}             # extension -> "lzma" / "zlib" (measured: set from the tr
 LZMA_PRESET = 6
 SECRETS = {"phone.json"}   # device tokens: never in the vault (after a restore, phones pair again)
 CHUNK = 1 << 20
+FLAC_MAX = 64 << 20     # bigger WAVs (raw sources in "Everything") stream through lzma instead of FLAC in memory
+_RUN_LOCK = threading.Lock()   # one run at a time: a run's prune must never see another run's fresh, unnamed objects
 
 
 # ---------------------------------------------------------------- what goes in
@@ -214,6 +217,68 @@ def find_object(objects: Path, sha: str) -> Path | None:
     return hits[0] if hits else None
 
 
+def _write_part(dest: Path, chunks) -> int:
+    """Write chunks to <dest>.part, fsync, rename into place. -> bytes written"""
+    fsutil.guard(dest)   # test mode: never outside the test's folders
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    n = 0
+    try:
+        with open(part, "wb") as fh:
+            for c in chunks:
+                fh.write(c)
+                n += len(c)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(part, dest)
+    finally:
+        part.unlink(missing_ok=True)
+    return n
+
+
+def _chunks(f: Path):
+    with open(f, "rb") as fh:
+        for c in iter(lambda: fh.read(CHUNK), b""):
+            yield c
+
+
+def _decoded(obj: Path):
+    """An object's original bytes, in chunks (lzma and raw stream; FLAC objects are small and decode at once)."""
+    codec = obj.suffix.lstrip(".")
+    if codec == "lzma":
+        d = lzma.LZMADecompressor()
+        for c in _chunks(obj):
+            yield d.decompress(c)
+    elif codec == "raw":
+        yield from _chunks(obj)
+    else:
+        yield decode(obj.read_bytes(), codec)
+
+
+def _put_big(objects: Path, f: Path, sha: str) -> tuple[Path, int]:
+    """A big file streamed through lzma (a few MB of memory), checked by decoding it back; raw if that's no smaller."""
+    dest = _object(objects, sha, "lzma")
+    comp, h = lzma.LZMACompressor(preset=LZMA_PRESET), hashlib.sha256()
+
+    def gen():
+        for c in _chunks(f):
+            h.update(c)
+            yield comp.compress(c)
+        yield comp.flush()
+    n = _write_part(dest, gen())
+    back = hashlib.sha256()
+    for c in _decoded(dest):
+        back.update(c)
+    if h.hexdigest() != sha:
+        dest.unlink(missing_ok=True)
+        raise OSError(f"{f.name} changed while it was being copied; it goes in on the next run")
+    if back.hexdigest() != sha or n >= f.stat().st_size:
+        dest.unlink(missing_ok=True)
+        raw = _object(objects, sha, "raw")
+        return raw, _write_part(raw, _chunks(f))
+    return dest, n
+
+
 def put(objects: Path, f: Path, sha: str) -> tuple[Path, int]:
     """Store one file's object (if the vault doesn't have it yet). Compressed copies are decoded and re-hashed before
     they count; anything that doesn't come back bit-identical, or doesn't get smaller, is stored raw.
@@ -221,10 +286,14 @@ def put(objects: Path, f: Path, sha: str) -> tuple[Path, int]:
     have = find_object(objects, sha)
     if have is not None:
         return have, 0
+    fsutil.guard(objects)
+    codec = codec_for(f)
+    if f.stat().st_size > FLAC_MAX:   # big: stream it, never the whole file in memory
+        return _put_big(objects, f, sha) if codec != "raw" else (_object(objects, sha, "raw"),
+                                                                 _write_part(_object(objects, sha, "raw"), _chunks(f)))
     data = f.read_bytes()
     if hashlib.sha256(data).hexdigest() != sha:
         raise OSError(f"{f.name} changed while it was being copied; it goes in on the next run")
-    codec = codec_for(f)
     blob = None
     if codec != "raw":
         try:
@@ -236,14 +305,7 @@ def put(objects: Path, f: Path, sha: str) -> tuple[Path, int]:
     if blob is None:
         codec, blob = "raw", data
     dest = _object(objects, sha, codec)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_name(dest.name + ".part")
-    with open(part, "wb") as fh:
-        fh.write(blob)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(part, dest)
-    return dest, len(blob)
+    return dest, _write_part(dest, [blob])
 
 
 def get(objects: Path, sha: str) -> bytes:
@@ -268,7 +330,20 @@ def root_of(folder: str | Path) -> Path:
     return Path(folder) / NAME
 
 
-def check_folder(folder: str) -> dict:
+def connected(folder: str | Path) -> bool:
+    """Is the vault's drive there? (Its folder may not be yet: the first run makes it.) A drive letter, a Linux mount
+    point or a share's root: the nearest folder above that exists, which must not be the bare filesystem root unless
+    the folder itself is there."""
+    p = Path(folder)
+    if p.exists():
+        return True
+    q = p.parent
+    while not q.exists() and q.parent != q:
+        q = q.parent
+    return q.exists() and (q != Path(q.anchor) or bool(p.drive))   # "E:\Vault" with E: there; not "/" for an unplugged mount
+
+
+def check_folder(folder: str, size: str | None = None) -> dict:
     """Is this a good place for the vault? {ok, why, warn, free, need}. Refused: inside the app folder or any library /
     working / model folder, too little space (2x the vault's raw size), can't write and read back. Warned: the same
     drive as UnderCover's library (a disk failure takes both)."""
@@ -294,7 +369,7 @@ def check_folder(folder: str) -> dict:
         probe = probe.parent
     if not probe.exists():
         return {"ok": False, "why": "That drive isn't there."}
-    need = sum(f.stat().st_size for _, _, f in items(settings()["size"]))
+    need = sum(f.stat().st_size for _, _, f in items(size or settings()["size"]))
     free = shutil.disk_usage(probe).free
     have = 0
     if (root_of(p) / "objects").is_dir():   # space already used by this vault counts as there
@@ -302,6 +377,11 @@ def check_folder(folder: str) -> dict:
     if free + have < 2 * need:
         return {"ok": False, "why": f"Not enough space there: the vault wants about {2 * need / 1e9:.1f} GB free "
                                     f"(twice what it holds), {free / 1e9:.1f} GB is.", "free": free, "need": need}
+    made = []   # folders this check creates: removed again, so looking at a drive leaves nothing on it
+    d = root_of(p)
+    while not d.exists():
+        made.append(d)
+        d = d.parent
     try:
         root_of(p).mkdir(parents=True, exist_ok=True)
         t = root_of(p) / ".write-test"
@@ -312,8 +392,18 @@ def check_folder(folder: str) -> dict:
             raise OSError("read back differently")
     except OSError as e:
         return {"ok": False, "why": f"Couldn't write there ({e.strerror or e})."}
+    finally:
+        for d in made:   # innermost first; only empty folders
+            try:
+                d.rmdir()
+            except OSError:
+                break
     warn = ""
-    if os.path.splitdrive(str(p))[0].upper() == os.path.splitdrive(str(path("uploads_dir")))[0].upper() and os.name == "nt":
+    try:   # the same device as the library (any OS: st_dev), so a disk failure would take both
+        same = os.stat(probe).st_dev == os.stat(path("uploads_dir")).st_dev
+    except OSError:
+        same = False
+    if same:
         warn = "That's the same drive as your library: the vault won't survive that disk failing. Another drive is better."
     return {"ok": True, "why": "", "warn": warn, "free": free, "need": need}
 
@@ -339,8 +429,16 @@ def run(folder: str | None = None, size: str | None = None, progress=None, cance
     if not folder:
         raise ModelError("The vault is off: pick a drive for it in SafeHouse first.")
     root = root_of(folder)
-    if not root.parent.exists():
+    if storage.ALLOWED_ROOTS is not None and not any(storage._inside(root, r) for r in storage.ALLOWED_ROOTS):
+        # a sandbox copies the user's settings, [vault] included: it must never write into their real vault
+        raise ModelError("Test mode: the vault folder is outside the test's own; nothing was vaulted.")
+    if not connected(folder):
         raise ModelError(f"The vault's drive isn't connected ({folder}).")
+    with _RUN_LOCK:
+        return _run(root, size, progress, cancel)
+
+
+def _run(root: Path, size: str, progress, cancel) -> dict:
     objects = root / "objects"
     st = _state(root)
     index = st.setdefault("index", {})
@@ -373,17 +471,20 @@ def run(folder: str | None = None, size: str | None = None, progress=None, cance
             progress(f"Vaulting {f.name}", done / total)
     for k in [k for k in index if k not in snap]:
         index.pop(k)
-    stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     snaps = root / "snapshots"
     snaps.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    while (snaps / f"{stamp}.json").exists():   # names are per second: never overwrite an earlier picture
+        time.sleep(0.25)
+        stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     fsutil.write_text(snaps / f"{stamp}.json", json.dumps({"made": stamp, "size": size, "files": snap}))
     rep = {"made": stamp, "files": len(snap), "new": new, "bytes_written": wrote, "seconds": round(time.time() - t0, 1),
            "raw": sum(v[1] for v in snap.values())}
+    rep["pruned"] = prune(root)
+    rep["stored"] = sum(f.stat().st_size for f in objects.rglob("*") if f.is_file()) if objects.is_dir() else 0
     st["runs"] = (st.get("runs") or [])[-49:] + [rep]
     st["format"] = FORMAT
     _save_state(root, st)
-    rep["pruned"] = prune(root)
-    rep["stored"] = sum(f.stat().st_size for f in objects.rglob("*") if f.is_file()) if objects.is_dir() else 0
     return rep
 
 
@@ -451,6 +552,10 @@ def contents(folder: str | None = None, stamp: str | None = None) -> dict:
     snap = load_snapshot(root, stamp)
     groups: dict = {}
     for key, (sha, size, _, kind) in snap["files"].items():
+        try:
+            target_of(key)
+        except ModelError:   # a name this version won't restore (a damaged or foreign snapshot): leave it out
+            continue
         top, _, rest = key.partition("/")
         item = rest.split("/", 1)[0] if top in ("voices", "training") else rest
         g = groups.setdefault(kind, {}).setdefault(item, {"item": item, "kind": kind, "files": 0, "bytes": 0, "keys": []})
@@ -531,15 +636,45 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
         run(folder)   # what's there now goes into the vault first, so replacing loses nothing
     done = []
     for key, sha, t in plan:
-        data = get(root / "objects", sha)
-        if t == config.CONFIG_FILE:
-            data = _config_keeping_paths(data)
-        t.parent.mkdir(parents=True, exist_ok=True)
-        part = t.with_name(t.name + ".vault-part")
-        part.write_bytes(data)
-        os.replace(part, t)
+        if storage._same(t, config.CONFIG_FILE):
+            data = _config_keeping_paths(get(root / "objects", sha))
+            _write_part(t, [data])
+        else:
+            obj = find_object(root / "objects", sha)
+            if obj is None:
+                raise ModelError(f"The vault is missing a piece ({sha[:12]}…); restored so far: {len(done)} files.")
+            h = hashlib.sha256()
+
+            def checked(obj=obj, h=h):
+                for c in _decoded(obj):
+                    h.update(c)
+                    yield c
+            part = t.with_name(t.name + ".vault-part")
+            _write_part(part, checked())
+            if h.hexdigest() != sha:
+                part.unlink(missing_ok=True)
+                raise ModelError(f"A piece of the vault is damaged ({obj.name}); that file wasn't restored.")
+            os.replace(part, t)
         done.append(key)
     return {"restored": done, "same": same, "skipped": conflicts if on_conflict == "skip" else [], "conflicts": []}
+
+
+def restore_now(keys: list[str], on_conflict: str, stamp: str | None = None) -> bool:
+    """A restore in the background (Replace vaults everything first, which can take minutes): the outcome lands in
+    STATE["restore"] for GET /api/vault. False if a restore is already running."""
+    if (STATE.get("restore") or {}).get("running"):
+        return False
+    STATE["restore"] = {"running": True, "result": None, "error": ""}
+
+    def go():
+        try:
+            STATE["restore"]["result"] = restore(keys, on_conflict, stamp=stamp)
+        except Exception as e:   # noqa: BLE001 - shown in SafeHouse
+            STATE["restore"]["error"] = str(e) or type(e).__name__
+        finally:
+            STATE["restore"]["running"] = False
+    threading.Thread(target=go, daemon=True, name="vault-restore").start()
+    return True
 
 
 def _config_keeping_paths(data: bytes) -> bytes:
@@ -560,7 +695,7 @@ def _config_keeping_paths(data: bytes) -> bytes:
 
 QUIET_MIN = 10      # a change settles this long before it's vaulted (a cover being kept, a voice being added)
 DAILY_H = 24
-STATE = {"running": False, "progress": None, "error": "", "sig": None, "since": 0.0, "last_check": 0.0}
+STATE = {"running": False, "progress": None, "error": "", "sig": None, "since": 0.0, "status": None, "restore": None}
 
 
 def signature(size: str) -> list:
@@ -582,7 +717,7 @@ def due(now: float | None = None) -> str | None:
     if not s["folder"]:
         return None
     root = root_of(s["folder"])
-    if not Path(s["folder"]).exists():
+    if not connected(s["folder"]):
         STATE["error"] = f"The vault's drive isn't connected ({s['folder']})."
         return None
     STATE["error"] = "" if STATE["error"].startswith("The vault's drive") else STATE["error"]
@@ -635,13 +770,14 @@ def start():
 
     def loop():
         while True:
-            time.sleep(60)
-            try:
+            try:   # the Doctor and the tray read this copy: a slow or sleeping drive never holds them up
+                STATE["status"] = status()
                 why = due()
                 if why and _idle():
                     run_now(why)
             except Exception as e:   # noqa: BLE001 - the watcher never dies
                 STATE["error"] = str(e)
+            time.sleep(60)
     threading.Thread(target=loop, daemon=True, name="vault-watch").start()
 
 
@@ -649,8 +785,8 @@ def status() -> dict:
     """For SafeHouse and the Doctor: on/off, where, the last run, how big, what's happening."""
     s = settings()
     out = {**s, "on": bool(s["folder"]), "running": STATE["running"], "progress": STATE["progress"],
-           "error": STATE["error"], "connected": bool(s["folder"]) and Path(s["folder"]).exists(), "last": None,
-           "snapshots": 0, "stored": 0, "raw": 0}
+           "error": STATE["error"], "connected": bool(s["folder"]) and connected(s["folder"]), "last": None,
+           "snapshots": 0, "stored": 0, "raw": 0, "restore": STATE.get("restore")}
     if out["connected"]:
         root = root_of(s["folder"])
         st = _state(root)
@@ -669,7 +805,7 @@ def set_folder(folder: str, size: str | None = None) -> dict:
     if size not in ("matters", "everything"):
         raise ModelError('Pick "What matters" or "Everything I\'d miss".')
     if folder:
-        chk = check_folder(folder)
+        chk = check_folder(folder, size)
         if not chk["ok"]:
             raise ModelError(chk["why"])
     set_values("vault", {"folder": json.dumps(str(Path(folder)) if folder else ""), "size": json.dumps(size)})
