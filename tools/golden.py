@@ -14,6 +14,8 @@ quality regression is caught before the user hears it. Numbers flag; the ear dec
                                                          neither moves the baseline nor blocks: the phase tries again)
     python tools/golden.py accept RUN                    the items heard as new / same take the run's scores into the baseline
     python tools/golden.py rebands                       run the set twice more and widen every band to the largest spread seen
+    python tools/golden.py retire SONG --note "..."      take a song out of the regression set (its files, scores and
+                                                         renders are kept, under "retired", for the phase that will use it)
     python tools/golden.py refreeze VOICE                after the user approved a newer version of a voice: a fresh copy, and
                                                          that voice's items start a new baseline on the next run (MasterPlan, q2)
 
@@ -160,7 +162,8 @@ def merged_baseline(old: dict, run1: tuple, others: list, fresh: set) -> dict:
     return {"run": stamp if not old else old.get("run", stamp), "made": time.strftime("%Y-%m-%d %H:%M"),
             "scores": {i: (old["scores"][i] if keep(i) else sc) for i, sc in s1.items()},
             "bands": {i: ((old.get("bands") or {}).get(i, nb.get(i, {})) if keep(i) else nb.get(i, {})) for i in s1},
-            "renders": {i: (old.get("renders", {}).get(i, old.get("run")) if keep(i) else stamp) for i in s1}}
+            "renders": {i: (old.get("renders", {}).get(i, old.get("run")) if keep(i) else stamp) for i in s1},
+            **({"retired": old["retired"]} if old.get("retired") else {})}   # a retired song's scores outlive a make
 
 
 def blocking(verdicts: dict, pending: list) -> list:
@@ -369,6 +372,8 @@ def run_set(stamp: str, spec: dict) -> dict:
             for v in spec["voices"]}
     scores, to_hear = {}, []
     for s in spec["songs"]:
+        if not spec["covers"].get(s["name"]):
+            continue   # retired (or no voices): not run
         song = GOLDEN / "work" / "uploads" / f"{s['name']}.flac"
         song.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(GOLDEN / "songs" / s["file"], song)
@@ -457,7 +462,8 @@ def _code_stamp() -> str:
 
 def _prune():
     b = _read(GOLDEN / "baseline.json", {})
-    keep = {b.get("run")} | set((b.get("renders") or {}).values())
+    keep = {b.get("run")} | set((b.get("renders") or {}).values()) | {
+        r for x in (b.get("retired") or {}).values() for r in (x.get("renders") or {}).values()}   # a retired song's audio stays
     runs = sorted(p for p in (GOLDEN / "runs").glob("*") if p.is_dir())
     for p in runs[:-KEEP_RUNS]:
         if p.name not in keep:
@@ -523,6 +529,9 @@ def main():
     v.add_argument("--note", default="")
     sub.add_parser("accept").add_argument("run")
     sub.add_parser("rebands")
+    rt = sub.add_parser("retire")
+    rt.add_argument("song")
+    rt.add_argument("--note", required=True)
     rf = sub.add_parser("refreeze")
     rf.add_argument("voice")
     a = ap.parse_args()
@@ -609,6 +618,20 @@ def main():
         _write(GOLDEN / "baseline.json", base)
         _prune()
         print("bands widened from the baseline and 2 more runs")
+    elif a.cmd == "retire":
+        if a.song not in spec["covers"]:
+            raise SystemExit(f"{a.song} isn't in the regression set")
+        spec.setdefault("retired", {})[a.song] = {"voices": spec["covers"].pop(a.song), "note": a.note,
+                                                  "at": time.strftime("%Y-%m-%d %H:%M")}
+        _write(GOLDEN / "set.json", spec)
+        base = _read(GOLDEN / "baseline.json", {})
+        gone = [i for i in (base.get("scores") or {}) if a.song in parts(i)]
+        base.setdefault("retired", {})[a.song] = {
+            "note": a.note, "scores": {i: base["scores"].pop(i) for i in gone},
+            "bands": {i: (base.get("bands") or {}).pop(i, {}) for i in gone},
+            "renders": {i: (base.get("renders") or {}).pop(i, base.get("run")) for i in gone}}
+        _write(GOLDEN / "baseline.json", base)
+        print(f"{a.song} retired ({len(gone)} items); its files and scores are kept under 'retired'")
     elif a.cmd == "refreeze":
         _freeze_voice(spec, a.voice)
         _write(GOLDEN / "set.json", spec)
