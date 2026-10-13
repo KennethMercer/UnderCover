@@ -397,7 +397,7 @@ function voiceDetail(d, v) {
       <dt>Cadence</dt><dd>${v.cadence ? `yes, for SpeakEasy · ${gb(v.cadence.size)} <span class="meta" data-deep>· ${esc(v.cadence.engine || "")} · from ${v.cadence.data_minutes ?? "?"} min · made ${esc(when(v.cadence.made))}</span>
         <button class="linkbtn" id="lib-del-cad" type="button" data-deep data-pc>Delete cadence</button>` : "none"}</dd>
       ${v.full_index ? `<dt data-deep>Full index</dt><dd data-deep>Kept${v.full_index.until ? ` until ${esc(fullIndexDate(v.full_index.until))}` : ""} <span class="meta">· ${v.full_index.vectors_before ?? "?"} → ${v.full_index.vectors_after ?? "?"} vectors · ${gb(v.full_index.bytes_before || 0)} before</span>
-        <button class="linkbtn" id="lib-full-idx" type="button" data-deep data-pc>Put the full index back</button></dd>` : ""}
+        <button class="linkbtn" id="lib-full-idx" type="button" data-pc>Put the full index back</button></dd>` : ""}
       <dt data-deep>Size</dt><dd data-deep>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep data-pc>Rename folder…</button>
