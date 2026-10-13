@@ -1626,6 +1626,8 @@ def u_golden():
     b = {"cover:toxic__sb": {"likeness": 0.75, "words_kept": 0.81, "cents_off": 21.0, "loud_db": -14.1, "octave": 0}}
     bd = G.bands(a, b)["cover:toxic__sb"]
     assert bd == {"likeness": 0.05, "words_kept": 0.05, "cents_off": 5.0, "loud_db": 0.5}, bd   # the spread, never under the floor
+    c = {"cover:toxic__sb": {"likeness": 0.68, "words_kept": 0.8, "cents_off": 20.0, "loud_db": -14.0, "octave": 0}}
+    assert G.bands(a, b, c)["cover:toxic__sb"]["likeness"] == 0.07   # three runs: the largest spread
     base = {"run": "r0", "scores": a, "bands": {"cover:toxic__sb": bd}}
     same = {"cover:toxic__sb": {"likeness": 0.62, "words_kept": 0.95, "cents_off": 29.0, "loud_db": -14.9}}
     assert G.flags(base, same) == [], G.flags(base, same)   # within twice the bands, or better
@@ -1648,7 +1650,8 @@ def u_golden():
     old = {"run": "r0", "scores": {"cover:a__v1": {"likeness": 0.7}, "cover:a__v2": {"likeness": 0.6}},
            "bands": {"cover:a__v1": {"likeness": 0.02}, "cover:a__v2": {"likeness": 0.02}}}
     m = G.merged_baseline(old, ("r5", {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.2}, "cover:b__v1": {"likeness": 0.3}}),
-                          {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.25}, "cover:b__v1": {"likeness": 0.3}}, {"v2", "b"})
+                          [{"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.25}, "cover:b__v1": {"likeness": 0.3}},
+                           {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.21}, "cover:b__v1": {"likeness": 0.3}}], {"v2", "b"})
     assert m["scores"]["cover:a__v1"] == {"likeness": 0.7} and m["scores"]["cover:a__v2"] == {"likeness": 0.2}, m
     assert m["bands"]["cover:a__v2"] == {"likeness": 0.05} and G.render_run(m, "cover:b__v1") == "r5" and G.render_run(m, "cover:a__v1") == "r0"
     spec = {"voices": [{"name": "v1"}, {"name": "morgan-freeman-uc"}], "covers": {"a": ["v1", "gone"]}}
