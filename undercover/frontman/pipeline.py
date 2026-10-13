@@ -153,8 +153,8 @@ class CoverEngine:
             if g["instrument"] or g["chorus"]:
                 gwork = path("cache_dir") / "converted"
                 gwork.mkdir(parents=True, exist_ok=True)
-                mode = opts.chorus or CONFIG["conversion"].get("chorus", "convert")
-                mode = mode if mode in CHORUS_MODES else "convert"
+                mode = opts.chorus or CONFIG["conversion"].get("chorus", "keep")
+                mode = mode if mode in CHORUS_MODES else "keep"
                 top = (split_top(stems["backing"], self.separator, Path(stems["backing"]).parent)
                        if mode == "top" and g["chorus"] and stems.get("backing") else None)
                 cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top)
