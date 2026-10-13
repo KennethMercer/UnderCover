@@ -100,6 +100,7 @@ def rate(kind: str, item_id: str, thumb: str, voice: str | None, settings: dict 
            "at": time.strftime("%Y-%m-%d %H:%M:%S")}
     with _LOCK:
         f = ear_file()
+        fsutil.guard(f)   # test mode: never the user's real ear.json
         f.parent.mkdir(parents=True, exist_ok=True)
         cur = items()
         if _CACHE["lines"] > 2 * len(cur) + 200:   # mostly superseded thumbs: write it again, latest per item
@@ -125,6 +126,7 @@ def forget(kind: str | None = None, item_id: str | None = None) -> int:
             if left:
                 fsutil.write_text(f, "".join(json.dumps(r) + "\n" for r in left))
             else:
+                fsutil.guard(f)
                 f.unlink(missing_ok=True)
         return len(gone)
 
