@@ -4516,6 +4516,15 @@ def u_listenback_fetch():
                 raise AssertionError("heard without a recogniser")
             except RuntimeError as e:
                 assert "downloading" in str(e), e
+            lb._ASR["fetching"].join(10)
+            n = len(asked)                                             # a failed download waits before the next try
+            setup_models.ensure = lambda **k: (_ for _ in ()).throw(OSError("offline"))
+            lb._asr()
+            lb._ASR["fetching"].join(10)
+            assert lb._ASR["fetch_failed"] > 0
+            setup_models.ensure = lambda files=None, sha256=None, progress=None: asked.append((files, sha256)) or []
+            lb._asr()
+            assert len(asked) == n and not lb._ASR["fetching"].is_alive(), "retried at once after a failure"
         finally:
             lb._ASR.clear()
             lb._ASR.update(saved[0])
