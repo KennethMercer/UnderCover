@@ -19,7 +19,8 @@ from .config import CONFIG
 
 POLL_S = 5
 GONE_S = 15
-STATE = {"game": None, "asking": None, "answer": None, "paused_for": None, "gone_since": None, "reason": ""}
+STATE = {"game": None, "asking": None, "answer": None, "paused_for": None, "gone_since": None, "reason": "",
+         "orphan_since": None}
 _LOCK = threading.Lock()
 
 
@@ -34,7 +35,8 @@ def _ours(app: dict) -> bool:
 
 
 def _gpu_busy() -> bool:
-    return not jobs.GPU_QUEUE.empty() or any(not j.finished and j.kind != "doctor" for j in list(jobs.JOBS.values()))
+    """Real GPU work: a job waiting for the GPU or the one on it (downloads and the like never ask)."""
+    return not jobs.GPU_QUEUE.empty() or jobs.CURRENT[0] is not None
 
 
 def observe(app: dict | None, now: float, busy: bool, reason: str = "") -> str | None:
@@ -76,6 +78,8 @@ def answer(choice: str) -> dict:
         STATE.update(asking=None, answer=choice)
         exe = game["exe"]
     if choice == "pause":
+        if worklist.hold()["held"]:   # already held (by you): keep it yours, so the game's end resumes nothing
+            return status()
         worklist.pause_all(by="game")
         with _LOCK:
             STATE["paused_for"] = exe
@@ -104,8 +108,7 @@ def status() -> dict:
     ok, why = platform.supports("fullscreen")
     with _LOCK:
         st = {k: STATE[k] for k in ("game", "asking", "answer", "paused_for", "reason")}
-    held = worklist._state()
-    return {**st, **s, "supported": ok, "why": why, "held": bool(held.get("held")), "held_by": held.get("held_by")}
+    return {**st, **s, "supported": ok, "why": why, **worklist.hold()}
 
 
 def before_start(job, sleep=time.sleep, look=None, clock=time.time) -> str:
@@ -125,11 +128,18 @@ def before_start(job, sleep=time.sleep, look=None, clock=time.time) -> str:
             return "start"
         observe(app, clock(), True, reason)
         with _LOCK:
-            choice = STATE["answer"]
+            choice, asking = STATE["answer"], STATE["asking"]
+        if asking and not getattr(job, "_game_said", False):   # the job says why it isn't starting (once)
+            job._game_said = True
+            try:
+                job.push(stage="waiting", message=f"Waiting: {asking['title']} is full-screen. Answer in the tray, "
+                                                  "on any UnderCover page or on your phone.")
+            except Exception:   # noqa: BLE001 - only a message
+                pass
         if choice in ("both", "never"):
             return "start"
         if choice == "pause":
-            while worklist._state().get("held") and worklist._state().get("held_by") == "game" and not getattr(job, "cancel", False):
+            while worklist.hold() == {"held": True, "held_by": "game"} and not getattr(job, "cancel", False):
                 sleep(1)   # the watcher resumes when the game closes; a Resume by hand lets it start too
             return "held"
         sleep(1)
@@ -139,10 +149,20 @@ def tick(app: dict | None, now: float, busy: bool) -> str | None:
     """The watcher's one step: look, and when the game the work was paused for has gone, resume it, but only if the
     hold is still the game's own (a Resume or a Pause by hand since then wins). -> "resumed" or None"""
     if observe(app, now, busy) == "resume":
-        st = worklist._state()
-        if st.get("held") and st.get("held_by") == "game":
+        if worklist.hold() == {"held": True, "held_by": "game"}:
             worklist.resume_all()
             return "resumed"
+        return None
+    # a hold the game made that nothing here remembers (UnderCover restarted mid-game): no game on the screen for
+    # GONE_S, and it resumes the same way
+    if worklist.hold() == {"held": True, "held_by": "game"} and STATE["game"] is None and not (app and not _ours(app)):
+        STATE["orphan_since"] = STATE["orphan_since"] or now
+        if now - STATE["orphan_since"] >= GONE_S:
+            STATE["orphan_since"] = None
+            worklist.resume_all()
+            return "resumed"
+    else:
+        STATE["orphan_since"] = None
     return None
 
 
@@ -162,7 +182,9 @@ def start():
     def loop():
         while True:
             try:
-                tick(_look(), time.time(), _gpu_busy())
+                busy = _gpu_busy()
+                if busy or STATE["game"] is not None or worklist.hold()["held_by"] == "game":
+                    tick(_look(), time.time(), busy)   # nothing to ask about otherwise: no look at the screen
             except Exception:   # noqa: BLE001 - the watcher never dies
                 pass
             time.sleep(POLL_S)
