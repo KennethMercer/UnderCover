@@ -502,8 +502,23 @@ def c_vault(ctx) -> list:
     return [_r("vault", "files", "ok", "Vault", f"Your voices, songs and covers are vaulted (last copy {when}).", detail)]
 
 
+def c_away(ctx) -> list:
+    """Away from home (phase 20): off (nothing to say), on and where it's got to, a problem the driver hit."""
+    from . import tailnet
+    s = tailnet.snapshot()
+    if not s["on"]:
+        return []
+    if s["error"]:
+        return [_r("away", "network", "warn", "Away from home", "Away from home hit a problem; it keeps trying.", s["error"][:300])]
+    if s["phase"] == "ready":
+        return [_r("away", "network", "ok", "Away from home", f"Paired phones reach UnderCover from anywhere at {s['link']}.", "")]
+    step = {"fetching": "fetching its pieces", "starting": "starting", "sign-in": "waiting for the Tailscale sign-in",
+            "approve": "waiting for the one-time approval"}.get(s["phase"], s["phase"])
+    return [_r("away", "network", "info", "Away from home", f"Away from home is on and {step} (SafeHouse, Settings, Phone).", "")]
+
+
 CHECKS = [c_manifest, c_python, c_torch, c_gpu, c_packages, c_tools, c_models, c_disk, c_paths, c_port, c_stale, c_work,
-          c_phone, c_ytdlp, c_vault]
+          c_phone, c_ytdlp, c_vault, c_away]
 
 
 def run(full: bool = False, status: dict | None = None, progress=None, cancel=None) -> dict:

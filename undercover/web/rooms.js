@@ -428,6 +428,7 @@ function renderPhone() {
     : `Listening at ${s.url} on your home network. Only paired phones get in. The first time, Windows may ask whether Python may use the network: allow it on private networks only.`;
   $("#phone-pair").disabled = !s.listening;
   if (s.enabled) phoneChecks(); else { $("#phone-checks").innerHTML = ""; phoneChecksAt = 0; }   // switched on again: read at once
+  if (s.enabled) loadAway(); else $("#set-away-row").hidden = true;
   $("#phone-pairing").hidden = !p;
   if (p) {
     $("#phone-qr").innerHTML = p.qr;   // an SVG made by the server (core/qr.py)
@@ -466,6 +467,46 @@ async function phoneChecks() {
     $("#phone-checks").innerHTML = rows.map(doctorRow).join("");
   } catch (e) { $("#phone-checks").innerHTML = ""; }
 }
+// ------------------------------------------------------------ Settings: Away from home (phase 20; core/tailnet.py)
+// /api/away (PC only): the switch, then one line for where it's got to (fetching the pieces, starting, Tailscale's
+// sign-in, the one approval, ready with the link). The room checks every few seconds until it's ready.
+const AW = { st: null, poll: null };
+const AWAY_SAY = { off: "", fetching: "Fetching the away-from-home pieces (about 44 MB, once)…", starting: "Starting…",
+  "sign-in": "Sign in to Tailscale (a free account; Google, Microsoft, GitHub or Apple works). This page carries on by itself after.",
+  approve: "One approval: Tailscale asks once to let this PC's private link through.", ready: "Ready." };
+async function loadAway() {
+  if (document.body.dataset.client === "phone") return;
+  try { AW.st = await api("/api/away"); } catch (e) { $("#away-step").textContent = e.message; return; }
+  renderAway();
+}
+function renderAway() {
+  const s = AW.st;
+  $("#set-away-row").hidden = !s.supported || !s.phone_on;
+  $("#set-away").setAttribute("aria-checked", s.on);
+  $("#away-box").hidden = !s.on;
+  let say = AWAY_SAY[s.phase] || "";
+  if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
+  $("#away-step").textContent = s.problem || (s.error ? `${say} (${s.error})` : say);
+  const si = $("#away-signin"), ap = $("#away-approve");
+  si.hidden = !(s.phase === "sign-in" && s.auth_url); if (s.auth_url) si.href = s.auth_url;
+  ap.hidden = !(s.phase === "approve" && s.approve_url); if (s.approve_url) ap.href = s.approve_url;
+  $("#away-ct").hidden = s.phase !== "approve";
+  $("#away-link").hidden = !s.link;
+  if (s.link) $("#away-link").innerHTML = `Your away link: <b class="mono">${esc(s.link)}</b>. On a paired phone, at home on the Wi-Fi: Settings, <b>Use this phone away from home</b>.`;
+  clearInterval(AW.poll);
+  if (s.on && s.phase !== "ready") AW.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadAway(); }, 3000);
+}
+$("#set-away").onclick = async () => {
+  const on = $("#set-away").getAttribute("aria-checked") !== "true";
+  try { AW.st = await api("/api/away", { json: { on } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
+};
+confirmClick($("#away-forget"), "Forget? Click again", async () => { AW.st = await api("/api/away/forget", { json: {} }); renderAway(); });
+// the phone: on the home Wi-Fi it asks for its single-use away link and opens it (on the away address it's there already)
+if (location.protocol === "https:") $("#set-away-me-row").hidden = true;
+$("#away-me").onclick = async () => {
+  try { location.href = (await api("/api/phone/away/link", { json: {} })).url; }
+  catch (e) { showError(e.message, "Couldn't get the away link"); }
+};
 $("#set-phone").onclick = async () => {
   const on = $("#set-phone").getAttribute("aria-checked") !== "true";
   try { PH.st = await api("/api/phone", { json: { on } }); renderPhone(); } catch (e) { showError(e.message, "Couldn't change Phone access"); }
