@@ -32,6 +32,9 @@ async function libShow() {
 }
 function libHide() { L.visible = false; L.audio.pause(); }
 document.addEventListener("uc:module", e => { if (e.detail === "safehouse") libShow(); else if (L.visible) libHide(); });
+// a cover, speech, voice or training that finishes while the Library is open: its lists and counts catch up
+const LIB_KINDS = new Set(["cover", "auto", "speech", "install", "train", "train-auto", "train-export", "night"]);
+document.addEventListener("uc:jobdone", e => { if (L.visible && LIB_KINDS.has(e.detail?.kind)) refreshAll(true); });
 
 async function loadSummary() {
   try { L.summary = await api("/api/library/summary"); } catch (e) { return; }
@@ -49,7 +52,7 @@ async function loadSummary() {
     : `Working (${s.ytdlp}).`;
   $("#lib-ytdlp-auto").checked = !!s.ytdlp_auto;
   if (s.ytdlp_job && !L.ytdlpWatch) ytdlpWatch(s.ytdlp_job);
-  renderCats();
+  renderKf();   // the tabs' totals and the chips' numbers
 }
 // System room: YouTube changes often; the check fetches PyPI's newest yt-dlp + its solver, tests it, and uses it only if
 // it works at least as well (else keeps or goes back to the last known good). A job: progress on the button.
@@ -86,8 +89,18 @@ async function loadCat(keepSel) {
 const refreshAll = async keepSel => { await Promise.all([loadSummary(), loadCat(keepSel)]); };
 
 // ------------------------------------------------------------ chips, tools
+// The numbers follow the tab that's showing: under Kept each chip counts its kept things, under Recent only covers and
+// speech have a number (the others have no recent tray). The tabs count every category. (The user, 2026-10-12: "Covers 1"
+// under an empty Kept made no sense.)
+const kfNow = () => hasTray() ? L.kf : "kept";
+function tabCounts(kf) {
+  const t = L.summary?.tabs?.[kf];
+  if (t) return t;
+  const c = L.summary?.counts || {};   // a server from before the per-tab counts: totals, as before
+  return kf === "kept" ? c : { covers: c.covers, speech: c.speech };
+}
 function renderCats() {
-  const c = L.summary?.counts || {};
+  const c = tabCounts(kfNow());
   $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
   $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderCats(); loadCat(); });
 }
@@ -109,11 +122,12 @@ function renderTools() {
 L.kf = store.get("uc-lib-kf", "kept");
 const hasTray = () => L.cat === "covers" || L.cat === "speech";
 function renderKf() {
-  const tray = hasTray(), all = L.data[L.cat] || [];
-  $$("#lib-kfilter .tab").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === (tray ? L.kf : "kept")));
+  const tray = hasTray(), sum = o => Object.values(o).reduce((n, v) => n + (+v || 0), 0);
+  $$("#lib-kfilter .tab").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === kfNow()));
   $("#lib-kfilter [data-v=recent]").disabled = !tray;
-  $("#lib-n-kept").textContent = tray ? all.filter(x => x.kept).length : all.length;
-  $("#lib-n-recent").textContent = tray ? all.filter(x => x.recent).length : "";
+  $("#lib-n-kept").textContent = L.summary ? sum(tabCounts("kept")) : "";
+  $("#lib-n-recent").textContent = L.summary ? sum(tabCounts("recent")) : "";
+  renderCats();   // the chips' numbers follow the tab
 }
 $$("#lib-kfilter .tab").forEach(b => b.onclick = () => { L.kf = b.dataset.v; store.set("uc-lib-kf", L.kf); L.sel = null; renderKf(); renderList(); renderDetail(); });
 $("#lib-q").addEventListener("input", () => renderList());
@@ -185,7 +199,7 @@ function renderList() {
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
-      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
+      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
   }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
       : hasTray() && L.kf === "kept" ? "Nothing kept yet. Send to SafeHouse keeps one for good; until then it's under Recent." : "Nothing here."}</div>`);
   $$(".litem", box).forEach(el => {
@@ -286,11 +300,13 @@ function coverDetail(d, c) {
       ${c.seconds?.total ? `<dt data-deep>Made in</dt><dd data-deep>${c.seconds.total.toFixed(1)} s</dd>` : ""}
       ${c.notes?.length ? `<dt>Notes</dt><dd>${esc(c.notes.join(" "))}</dd>` : ""}
       <dt data-deep>File</dt><dd class="mono" data-deep>${esc(c.file)} · ${gb(c.size)}</dd></dl>
+    <div class="ear" id="lib-ear" hidden></div>
     <p class="meta" id="lib-keepline">${esc(keepLine(c))}</p>
     <div id="lib-rename-box"></div>
     <div class="lactions">${c.song_id ? `<button class="btn primary" id="lib-reuse">Use these settings</button>` : ""}<button class="btn" id="lib-keep" type="button" data-kept="${!!c.kept}">${c.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${c.url}?download">Download</a>
       <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
   wirePlayer(c.url);
+  if (typeof earShow === "function") earShow($("#lib-ear"), "cover", c);
   $$("#lib-src button").forEach(b => b.onclick = () => { $$("#lib-src button").forEach(x => x.setAttribute("aria-pressed", x === b)); switchSource(c[b.dataset.src]); });
   const reuse = $("#lib-reuse");
   if (reuse) reuse.onclick = async () => {
@@ -316,12 +332,14 @@ function speechDetail(d, x) {
       <dt data-deep>Settings</dt><dd data-deep>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
       ${x.seconds?.total ? `<dt data-deep>Made in</dt><dd data-deep>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
       <dt data-deep>Files</dt><dd class="mono" data-deep>${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
+    <div class="ear" id="lib-ear" hidden></div>
     <p class="meta" id="lib-keepline">${esc(keepLine(x))}</p>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><button class="btn" id="lib-keep" type="button" data-kept="${!!x.kept}">${x.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${x.url}?download">Download WAV</a>
       ${x.mp3_url ? `<a class="btn" href="${x.mp3_url}?download">Download MP3</a>` : ""}
       <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
   wirePlayer(x.url);
+  if (typeof earShow === "function") earShow($("#lib-ear"), "speech", x);
   $("#lib-again").onclick = () => {   // the same text and voice, ready to make again (or change)
     $("#se-text").value = x.text; $("#se-text").dispatchEvent(new Event("input"));
     if (typeof SE !== "undefined") { SE.voice = x.voice; store.set("uc-se-voice", x.voice); }

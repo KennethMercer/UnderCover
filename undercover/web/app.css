@@ -445,6 +445,17 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .uc-updated { display: flex; gap: 6px 10px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 14px;
   font-size: 13.5px; color: var(--muted); background: var(--panel); border-radius: var(--r); }
 .uc-updated[hidden] { display: none; }
+/* What's new (whatsnew.js): once after an update, under the top bar; the notes in plain lines, Got it puts it away */
+.wn { display: grid; gap: 10px; padding: 14px 18px; background: var(--panel); border-radius: var(--r); border-left: 3px solid var(--accent); }
+.wn[hidden] { display: none; }
+.wn-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.wn-k { font: 600 12px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.wn-body { display: grid; gap: 10px; }
+.wn-entry h3 { margin: 0 0 2px; font: 600 16px var(--display); }
+.wn-entry ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; display: grid; gap: 2px; }
+.wn .row { display: flex; gap: 10px 16px; align-items: center; flex-wrap: wrap; }
+.wn-row small { max-width: 80ch; }
+#sys-news-more { justify-self: start; }
 /* the one-shot's plan: the subject in plain words, a weak voice said plainly with its way out (phase 15) */
 #os-subject.meta { margin-top: 8px; }
 #os-subject .linkbtn { margin-left: 4px; }

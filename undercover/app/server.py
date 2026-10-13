@@ -34,7 +34,7 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
-from . import doctor_api, phone_api, themes_api, tutorial
+from . import doctor_api, ear_api, phone_api, themes_api, tutorial
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -281,7 +281,7 @@ class Handler(BaseHTTPRequestHandler):
             if (train_api.handle(self, "GET", p) or safehouse_api.handle(self, "GET", p)
                     or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)
                     or doctor_api.handle(self, "GET", p) or phone_api.handle(self, "GET", p)
-                    or themes_api.handle(self, "GET", p)):
+                    or themes_api.handle(self, "GET", p) or ear_api.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -366,7 +366,8 @@ class Handler(BaseHTTPRequestHandler):
         if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
                 or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)
                 or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)
-                or themes_api.handle(self, "POST", p) or tutorial.handle(self, "POST", p)):
+                or themes_api.handle(self, "POST", p) or tutorial.handle(self, "POST", p)
+                or ear_api.handle(self, "POST", p)):
             return
         if p == "/api/voices/install":
             return self._start_install(self._body())
@@ -557,7 +558,8 @@ class Handler(BaseHTTPRequestHandler):
             if action == "forget":   # Dismiss the paused work instead of resuming it
                 return self._json(worklist.forget_paused())
             if action == "add":
-                return self._json(worklist.add(b.get("kind", ""), b.get("target", ""), now=bool(b.get("now"))))
+                return self._json(worklist.add(b.get("kind", ""), b.get("target", ""), now=bool(b.get("now")),
+                                               mode=b.get("mode") or None))
             if action == "remove":
                 return self._json(worklist.remove(b.get("id", "")))
             if action == "order":
