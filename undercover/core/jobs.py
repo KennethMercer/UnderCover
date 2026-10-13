@@ -255,6 +255,11 @@ class Job:
                 snap["plan"]["voice_display"] = name(plan.get("voice"), "display") or vid
         if last.get("final"):
             snap["final"] = {"state": last.get("state"), "message": last.get("message")}
+            # the voice a training made (Do it all: voice=; a queue item: its result), so the page needn't look it up
+            res = last.get("result")
+            voice = last.get("voice") or (res.get("voice") if isinstance(res, dict) else None)
+            if voice:
+                snap["voice"] = voice
         return snap
 
 
