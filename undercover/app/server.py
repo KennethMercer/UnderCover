@@ -898,6 +898,11 @@ def main():
     from ..core import vault, worklist
     worklist.start()
     vault.start()   # Vaulting: quiet backups when the GPU queue is idle (off until a vault folder is picked)
+    try:   # phase 24: the full indexes kept 30 days after an export go when their time is up (daily)
+        from ..safehouse import smaller
+        smaller.start_expiry()
+    except Exception as e:   # noqa: BLE001 - never block startup
+        print(f"The kept full indexes couldn't be checked: {e}", flush=True)
     from ..core import gamepause
     gamepause.start()   # the game pause: asks before UnderCover's GPU work competes with a full-screen game
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()

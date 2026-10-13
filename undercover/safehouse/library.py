@@ -244,6 +244,14 @@ def songs() -> list[dict]:
     return out
 
 
+def _full_index(vdir):
+    from .smaller import full_index
+    try:
+        return full_index(vdir)
+    except OSError:
+        return None
+
+
 def voices() -> list[dict]:
     from ..doubleagent.service import undertrained
     from ..doubleagent.cadence import pack_of, pack_size
@@ -272,7 +280,7 @@ def voices() -> list[dict]:
             "epoch": ex.get("epoch"), "train_minutes": ex.get("train_minutes"), "from_speech": ex.get("from_speech"),
             "f0_range": ex.get("f0_range"), "undertrained": undertrained(v), "score": score, "verdict": verdict,
             "size": _size(v.dir), "covers": len(used), "cover_titles": [h.get("title") or Path(h["output"]).stem for h in used][:5],
-            "sample": sample, "cadence": cad,
+            "sample": sample, "cadence": cad, "full_index": _full_index(v.dir),
         })
     out.sort(key=lambda x: x["name"])
     return out

@@ -318,6 +318,68 @@ def undo_project(name: str):
     storage.remove_files(gone, within=[_projects_dir()], dirs=[aside])
 
 
+# ---------------------------------------------------------------- a new voice's full index (kept quietly at export)
+
+def full_index(vdir: Path) -> dict | None:
+    """{until (YYYY-MM-DD), vectors_before, vectors_after, bytes_before} while a new voice's full index is kept, else None."""
+    from ..core.engine.rvc.index import EXPORT_ASIDE, EXPORT_RECORD
+    if not (Path(vdir) / EXPORT_ASIDE).is_file():
+        return None
+    r = _read(Path(vdir) / EXPORT_RECORD, {}) or {}
+    until = r.get("until")
+    return {"until": time.strftime("%Y-%m-%d", time.localtime(until)) if until else None,
+            **{k: r.get(k) for k in ("vectors_before", "vectors_after", "bytes_before")}}
+
+
+def restore_full_index(name: str) -> dict:
+    """The voice's full index back in place of the 10k one (Deep Cover, the voice's detail, within the 30 days)."""
+    from ..core import gpu
+    from ..core.engine.rvc.index import EXPORT_ASIDE, EXPORT_RECORD
+    d = _child(_voices_dir(), name)
+    if not (d / EXPORT_ASIDE).is_file():
+        raise ModelError("This voice has no full index kept any more.")
+    storage.remove_files([d / "model.index"], within=[_voices_dir()])   # the 10k one (made at export, rebuildable)
+    storage.move_within([(d / EXPORT_ASIDE, d / "model.index")], d)
+    storage.remove_files([d / EXPORT_RECORD], within=[_voices_dir()])
+    gpu.forget_voice(name)
+    return {"ok": True, "name": name}
+
+
+def expire_full_indexes(now: float | None = None) -> list[str]:
+    """Remove the full indexes kept at export once their 30 days are over (guarded, logged). They're rebuildable from
+    the voice's training project, so they aren't the user's data in the never-delete sense. -> the voices tidied."""
+    from ..core.engine.rvc.index import EXPORT_ASIDE, EXPORT_RECORD
+    now = time.time() if now is None else now
+    vd = _voices_dir()
+    done = []
+    for d in sorted(vd.iterdir()) if vd.is_dir() else []:
+        rec = d / EXPORT_RECORD
+        if not (d / EXPORT_ASIDE).is_file():
+            continue
+        until = (_read(rec, {}) or {}).get("until")
+        if until is None or until > now:
+            continue
+        storage.remove_files([d / EXPORT_ASIDE] + ([rec] if rec.exists() else []), within=[vd])
+        print(f"Make smaller: {d.name}'s full index was kept 30 days after it was added and is removed now "
+              f"(its 10k index stays; the full one can be rebuilt from its training project).", flush=True)
+        done.append(d.name)
+    return done
+
+
+def start_expiry():
+    """At startup and then once a day: the kept full indexes whose 30 days are over go."""
+    import threading
+
+    def loop():
+        while True:
+            try:
+                expire_full_indexes()
+            except Exception as e:   # noqa: BLE001 - tried again tomorrow
+                print(f"Make smaller: couldn't tidy the kept full indexes ({e}).", flush=True)
+            time.sleep(86400)
+    threading.Thread(target=loop, daemon=True, name="full-index-expiry").start()
+
+
 # ---------------------------------------------------------------- jobs and routes
 
 def start(kind: str, name: str) -> dict:
