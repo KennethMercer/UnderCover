@@ -44,7 +44,39 @@ async function assignBoot() {
     : desk.voice ? "A voice is on your desk; bring a song you like. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own. The voice isn't anyone's."
     : "Bring a song and a voice. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own.";
   $("#assign-brief").hidden = false;
+  greetBoot(!!(desk.song && desk.voice));
 }
+
+// ------------------------------------------------------------ Agent Smoke's greeting on the brief (the backend's clips)
+// GET /api/tutorial/greetings: {greetings: [{from, to, text, url}], followon: {text, url}}. The greeting is picked by the
+// local hour (from inclusive, to exclusive); the follow-on ("A song and a voice are on your desk…") plays after it only
+// when both really are there. A play button only: nothing plays by itself.
+const GREET = { parts: [], audio: null, i: 0 };
+async function greetBoot(full) {
+  let g;
+  try { g = await api("/api/tutorial/greetings"); } catch (e) { return; }
+  const h = new Date().getHours(), pick = (g.greetings || []).find(x => h >= x.from && h < x.to);
+  if (!pick?.url) return;
+  GREET.parts = [pick, full && g.followon?.url ? g.followon : null].filter(Boolean);
+  $("#assign-greet-say").textContent = `“${GREET.parts.map(p => p.text).join(" ")}”`;
+  $("#assign-greet").hidden = false;
+}
+function greetStop() { GREET.audio?.pause(); GREET.audio = null; GREET.i = 0; $("#assign-greet-play").textContent = "▶"; $("#assign-greet-play").setAttribute("aria-label", "Play Agent Smoke's greeting"); }
+function greetPart(i) {
+  const p = GREET.parts[i];
+  if (!p) return greetStop();
+  GREET.i = i;
+  const a = GREET.audio = new Audio(p.url);
+  a.volume = VOL.muted ? 0 : VOL.level; a.muted = VOL.muted;   // the page's own volume
+  a.onended = () => { if (GREET.audio === a) greetPart(i + 1); };
+  a.play().catch(() => greetStop());
+}
+$("#assign-greet-play").onclick = () => {
+  if (GREET.audio && !GREET.audio.paused) return greetStop();
+  if (typeof stopAll === "function") stopAll();
+  $("#assign-greet-play").textContent = "❚❚"; $("#assign-greet-play").setAttribute("aria-label", "Stop the greeting");
+  greetPart(0);
+};
 // the sample song (sample: true) and the demo voice (demo: true), if this copy has them
 async function deskNow() {
   const songs = await api("/api/library/songs"), voices = await api("/api/voices");
@@ -150,8 +182,8 @@ function assignClose() {
   reaim();
 }
 $("#assign-skip").onclick = () => { if (!$("#assign").classList.contains("done")) assignMarkDone(); assignClose(); };
-$("#assign-take").onclick = () => assignStart();
-$("#assign-later").onclick = () => { $("#assign-brief").hidden = true; assignMarkDone(); };
+$("#assign-take").onclick = () => { greetStop(); assignStart(); };
+$("#assign-later").onclick = () => { greetStop(); $("#assign-brief").hidden = true; assignMarkDone(); };
 $("#set-assign-replay").onclick = async () => {
   try { await api("/api/tutorial/reset", { method: "POST" }); } catch (e) { return showError(e.message, "Couldn't start the assignment"); }
   AS.done = null; renderAssignSetting();
