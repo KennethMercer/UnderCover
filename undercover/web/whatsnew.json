@@ -2,6 +2,16 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-13-thumbs",
+      "date": "2026-10-13",
+      "title": "Thumbs up, thumbs down",
+      "lines": [
+        "Under every cover and speech: How did it come out? Two thumbs, and an optional why.",
+        "A thumbs down offers one fix when there is one: an octave lower, read it slower, improve the voice tonight.",
+        "The voices you like rise to the top of FrontMan's list. Your ear, in SafeHouse's Settings, can forget them all."
+      ]
+    },
+    {
       "id": "2026-10-12-whatsnew",
       "date": "2026-10-12",
       "title": "A note after each update",
