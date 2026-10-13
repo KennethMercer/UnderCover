@@ -16,7 +16,8 @@ import time
 import zipfile
 from pathlib import Path
 
-from .config import CONFIG_FILE, ROOT, path
+from . import config
+from .config import ROOT, path
 
 TAIL = 2_000_000          # at most the last 2 MB of each log
 LOGS = [("server.log", "What UnderCover printed while it ran"), ("errors.log", "Errors, with the code's own details"),
@@ -73,8 +74,8 @@ def _items(report: dict | None) -> list:
             items.append((f"logs/{name}", lambda p=p: _tail(p), what))
     if manifest.file().exists():
         items.append(("manifest.json", lambda: manifest.file().read_text(encoding="utf-8"), "The install record"))
-    if CONFIG_FILE.exists():
-        items.append(("config.toml", lambda: CONFIG_FILE.read_text(encoding="utf-8"), "UnderCover's settings"))
+    if config.CONFIG_FILE.exists():   # read when asked: a test's isolated config, not whatever was loaded at import
+        items.append(("config.toml", lambda: config.CONFIG_FILE.read_text(encoding="utf-8"), "UnderCover's settings"))
     items.append(("doctor-report.json", lambda: json.dumps(report or {}, indent=1), "The Doctor's checks, run just now"))
     full = logs / "doctor-report.json"
     if full.exists():

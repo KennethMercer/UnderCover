@@ -336,6 +336,44 @@ def u_da_mode():
     c.finish("done", message="ready")
     assert (a.snapshot().get("voice"), b.snapshot().get("voice"), c.snapshot().get("voice")) == ("v-auto", "v-queue", None)
     return "mode kept and passed on, refused where it doesn't apply; Checking it at 0.975; voice in the snapshot"
+@check("test mode refuses writes outside the test's folders (the real config.toml, phone.json, anywhere in the app); no module binds the config's path at import")
+def u_write_guard():
+    """2026-10-13: a vault check held the real config's path from an import made before its sandbox, and appended to the
+    user's config.toml and phone.json. Core writes now refuse that in test mode (fsutil.guard), and the path is read at
+    call time everywhere."""
+    import re
+    from undercover.core import config, fsutil, phone
+    real = ROOT / "config.toml"
+    before = {f: (f.stat().st_size, f.stat().st_mtime_ns) for f in (real, ROOT / "phone.json") if f.is_file()}
+    with isolated_data() as box:
+        tries = {
+            "config set_values": lambda: config.set_values("ui", {"zz_smoke": "1"}, config_file=real),
+            "fsutil.write_text": lambda: fsutil.write_text(ROOT / "zz-smoke-guard.txt", "no"),
+            "fsutil.torch_save": lambda: fsutil.torch_save({"x": 1}, ROOT / "zz-smoke-guard.pt"),
+            "phone save": lambda: (phone.state_file.__globals__["config"].__setattr__("CONFIG_FILE", real), phone._save()),
+        }
+        saved_cfg = config.CONFIG_FILE
+        try:
+            for name, fn in tries.items():
+                try:
+                    fn()
+                    raise AssertionError(f"{name} wrote outside the test's folders")
+                except (PermissionError, phone.PhoneError) as e:
+                    assert "Test mode" in str(e), (name, e)
+                finally:
+                    config.CONFIG_FILE = saved_cfg
+        finally:
+            config.CONFIG_FILE = saved_cfg
+            phone._FILE[0] = None
+        fsutil.write_text(box / "inside.txt", "yes")   # inside its own folder a test writes as usual
+        assert (box / "inside.txt").read_text(encoding="utf-8") == "yes"
+    assert not (ROOT / "zz-smoke-guard.txt").exists() and not (ROOT / "zz-smoke-guard.pt").exists()
+    assert {f: (f.stat().st_size, f.stat().st_mtime_ns) for f in before} == before, "a real settings file changed"
+    # the root cause: a module that binds config.CONFIG_FILE at import keeps the real path when a test repoints it
+    bad = [f"{f.relative_to(ROOT).as_posix()}" for f in (ROOT / "undercover").rglob("*.py")
+           if re.search(r"^\s*from\s+\S*config\s+import\s+[^\n]*\bCONFIG_FILE\b", f.read_text(encoding="utf-8"), re.M)]
+    assert not bad, f"these bind CONFIG_FILE at import (use config.CONFIG_FILE at call time): {bad}"
+    return "config, fsutil (text, torch) and phone writes refused outside; inside works; real files unchanged; no import-time binding"
 
 
 # ---------------------------------------------------------------- API checks (test server)
@@ -3303,8 +3341,17 @@ def a_lists():
 def a_library():
     s = api("/api/library/summary")
     assert s["total"] > 0
+    lists = {}
     for k in ("covers", "speech", "songs", "voices", "training"):
-        assert isinstance(api(f"/api/library/{k}"), list), k
+        lists[k] = api(f"/api/library/{k}")
+        assert isinstance(lists[k], list), k
+    # the Kept / Recent tabs' counts per category match the lists (the chips follow the tab showing)
+    t = s["tabs"]
+    for k in ("covers", "speech"):
+        assert t["kept"][k] == sum(1 for x in lists[k] if x["kept"]), f"kept {k}"
+        assert t["recent"][k] == sum(1 for x in lists[k] if x["recent"]), f"recent {k}"
+    assert all(t["kept"][k] == s["counts"][k] for k in ("songs", "voices", "training")), "songs, voices and training are always kept"
+    assert set(t["recent"]) == {"covers", "speech"}, "only covers and speech have a recent tray"
     groups = api("/api/library/cleanup")
     assert "orphan_stems" in groups and "finished_training" in groups
     return f"{s['total'] / 1e9:.1f} GB in library"
@@ -3721,9 +3768,15 @@ def real_dirs() -> dict:
 
 
 def snapshot_real(dirs: dict) -> dict:
-    """{file: (size, mtime_ns)} of everything in the user's library, model and working folders."""
+    """{file: (size, mtime_ns)} of everything in the user's library, model and working folders, and the settings files
+    beside the config (config.toml, tutorial.json, phone.json, themes.json: a check once appended to the real config)."""
     import os
     snap = {}
+    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json"):
+        p = ROOT / name
+        if p.is_file():
+            st = p.stat()
+            snap[str(p)] = (st.st_size, st.st_mtime_ns)
     for k in WATCHED:
         for dp, _, files in os.walk(dirs[k]):
             for f in files:
@@ -3858,7 +3911,7 @@ def sandbox_server(port: int):
             print(f"  (the sandbox server is still running or its folder was left: {root})")
 
 
-@check("the real folders (uploads, output, models, cache, voices) are exactly as they were when this run started")
+@check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
 def a_untouched(before: dict, dirs: dict):
     after = snapshot_real(dirs)
     added = sorted(set(after) - set(before))
@@ -3893,7 +3946,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_da_mode, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_write_guard, u_da_mode, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
