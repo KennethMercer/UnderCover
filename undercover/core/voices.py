@@ -671,13 +671,48 @@ def is_demo(v: Voice) -> bool:
     return bool((v.extra or {}).get("demo"))
 
 
+# How alike a voice sounds, in a word for the pages (phase 19). Two scales: a voice trained here has its likeness at
+# export (its own clips; on the user's voices: Peter Griffin 0.50 "weak" by the gate, Obama 0.70 and SpongeBob 0.77
+# approved by ear, Freeman 0.80); a downloaded voice has the voice check's score against the person (good from 0.45,
+# weak from 0.30; the ones it called bad or broken sit near 0, so they're "poor", not unmeasured).
+TRAINED_WORDS = ((0.80, "great"), (0.65, "good"), (-9.0, "fair"))
+CHECKED_WORDS = ((0.55, "great"), (0.45, "good"), (0.30, "fair"), (-9.0, "poor"))
+_QCACHE: dict = {"key": None, "data": {}}
+
+
+def _checked_score(v: Voice) -> float | None:
+    """The voice check's score for a downloaded voice (the DoubleAgent quality cache, read only): for its own person
+    when the voice knows it (None if never checked for them: another person's check says nothing), else its best."""
+    f = path("cache_dir") / "voice_quality.json"
+    try:
+        key = (str(f), f.stat().st_mtime_ns)
+        if _QCACHE["key"] != key:
+            _QCACHE.update(key=key, data=json.loads(f.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+    ex = v.extra or {}
+    names = {v.name, ex.get("original_name")} - {None}
+    hits = [(k, q) for k, q in _QCACHE["data"].items() if q.get("voice") in names and q.get("score") is not None]
+    pick = [q for k, q in hits if k.split("|")[0] == slug(ex["person"])] if ex.get("person") else [q for k, q in hits]
+    return max(float(q["score"]) for q in pick) if pick else None
+
+
+def likeness_word(v: Voice) -> str | None:
+    """"great" | "good" | "fair" ("poor": a downloaded voice the check found unlike the person) | None (not measured)."""
+    ex = v.extra or {}
+    score, words = (ex.get("likeness"), TRAINED_WORDS) if ex.get("trained") else (_checked_score(v), CHECKED_WORDS)
+    if score is None:
+        return None
+    return next(w for cut, w in words if score >= cut)
+
+
 def voice_info(v: Voice) -> dict:
-    """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool), `demo` (bool) and
-    `ear` ({up, down}: the user's thumbs on its covers and speech, or null; FrontMan's basic voice list puts liked
-    voices first)."""
+    """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool), `demo` (bool),
+    `likeness_word` (see likeness_word) and `ear` ({up, down}: the user's thumbs on its covers and speech, or null;
+    FrontMan's basic voice list puts liked voices first)."""
     from . import ear
     return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v),
-            "ear": ear.taste(v.name)}
+            "likeness_word": likeness_word(v), "ear": ear.taste(v.name)}
 
 
 def set_display(name: str, text: str) -> Voice:

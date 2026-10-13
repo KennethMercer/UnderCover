@@ -41,9 +41,7 @@ def _item(kind: str, item_id: str) -> tuple[str | None, dict]:
 
 
 def _voice(name: str | None) -> dict | None:
-    from ..core import voices as V
-    from ..core.voices import ModelError, display_name, get_voice
-    likeness_word = getattr(V, "likeness_word", lambda v: None)   # (phase 19's word; absent before it merges)
+    from ..core.voices import ModelError, display_name, get_voice, likeness_word
     if not name:
         return None
     try:

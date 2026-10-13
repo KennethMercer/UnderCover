@@ -430,18 +430,50 @@ def from_link(url: str) -> list[Source]:
     return out
 
 
+STRETCH_GAP = 3.0   # s of silence between stretches: more than cadence's 2.5 s phrase gap, so no run spans a cut
+
+
+def stretches(duration: float, cap: float, length: float) -> list[tuple[float, float]]:
+    """[(start, seconds)] of a long video to keep: max_minutes_per_source in stretches of `length` spread evenly
+    between its first and last minute (intros, outros), instead of its first 12 min. Phase 19: a 4 h SpongeBob
+    compilation's first 12 min gave 0.0-0.4 min of clean voice; one episode's scenes run long, so spreading
+    samples more scenes. A video up to 2 min longer than the cap keeps one stretch from the start."""
+    if not duration or duration <= cap:
+        return []
+    if duration <= cap + 120 or length <= 0 or length >= cap:
+        return [(60.0 if duration > cap + 120 else 0.0, cap)]
+    k = max(1, round(cap / length))
+    span = duration - 120 - length
+    return [(round(60 + span * i / (k - 1), 1) if k > 1 else 60.0, length) for i in range(k)]
+
+
+def trim_args(duration: float, spread: bool = True) -> list[str]:
+    """ffmpeg arguments that cut a long video's audio down to its stretches (with STRETCH_GAP of silence between);
+    spread=False: its first 12 minutes from minute 1, as before."""
+    keep = stretches(duration, TCFG["max_minutes_per_source"] * 60, TCFG.get("stretch_minutes", 2.0) * 60 if spread else 0)
+    if not keep:
+        return []
+    if len(keep) == 1:
+        return ["-ss", str(keep[0][0]), "-t", str(keep[0][1])]
+    parts = ";".join(f"[0:a]atrim=start={a}:duration={d},asetpts=PTS-STARTPTS,apad=pad_dur={STRETCH_GAP}[s{i}]"
+                     for i, (a, d) in enumerate(keep))
+    joined = "".join(f"[s{i}]" for i in range(len(keep)))
+    return ["-filter_complex", f"{parts};{joined}concat=n={len(keep)}:v=0:a=1[kept]", "-map", "[kept]"]
+
+
 def download(src: Source, dest_dir: Path, progress=None) -> Path:
-    """Download the audio as 44.1 kHz mono wav. Long videos are trimmed to max_minutes_per_source, skipping
-    the first minute (intros, music) when the video is long enough. Returns the wav path."""
+    """Download the audio as 44.1 kHz mono wav. Long videos are cut to max_minutes_per_source, in stretches spread
+    through the video (see stretches()). Returns the wav path."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     out = dest_dir / f"{src.id}.wav"
     if out.exists() and out.stat().st_size > 0:
         return out
     # The whole audio stream is fetched (yt-dlp's range download streams through ffmpeg at about real time,
     # ~10x slower) and trimmed locally.
-    cap = TCFG["max_minutes_per_source"] * 60
-    start = 60 if src.duration > cap + 120 else 0
-    trim = ["-ss", str(start), "-t", str(cap)] if src.duration and src.duration > cap else []
+    # Spread only through a character's scenes (a compilation of many). A person's long video is mostly one talk, and
+    # measured on the user's projects spreading gained nothing (Obama 51.9 / 51.8 min) or lost (Freeman's Q&As: the
+    # audience's questions, 11.8 -> 10.3).
+    trim = trim_args(src.duration, spread=(src.extra or {}).get("kind") == "scene")
     # Download into a private temp folder and move the finished wav into place last: an interrupted download (crash,
     # power cut) then never leaves a truncated "<id>.wav" that later runs would trust.
     import shutil
