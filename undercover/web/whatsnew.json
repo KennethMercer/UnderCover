@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-13-full-index",
+      "date": "2026-10-13",
+      "title": "A new voice sounds off? Put the full index back",
+      "lines": [
+        "New voices are shrunk quietly when they're added. UnderCover keeps the full version for 30 days.",
+        "In Deep Cover, the voice's page in SafeHouse shows when it goes, and lets you put it back."
+      ]
+    },
+    {
       "id": "2026-10-13-octaves",
       "date": "2026-10-13",
       "title": "Two octaves, your pick",

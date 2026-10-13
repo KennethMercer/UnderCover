@@ -381,6 +381,8 @@ function songDetail(d, s) {
   });
 }
 
+// "2026-11-12" as a plain date in the reader's own style
+function fullIndexDate(u) { const d = new Date(`${u}T12:00:00`); return isNaN(d) ? u : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); }
 function voiceDetail(d, v) {
   const [cls, word] = quality(v);
   const src = v.trained ? `trained in UnderCover${v.project ? ` · <button class="linkbtn" id="lib-open-proj">open project</button>` : ""}`
@@ -394,6 +396,8 @@ function voiceDetail(d, v) {
       <dt>Used in</dt><dd>${v.covers ? v.cover_titles.map(esc).join("<br>") : "no covers yet"}</dd>
       <dt>Cadence</dt><dd>${v.cadence ? `yes, for SpeakEasy · ${gb(v.cadence.size)} <span class="meta" data-deep>· ${esc(v.cadence.engine || "")} · from ${v.cadence.data_minutes ?? "?"} min · made ${esc(when(v.cadence.made))}</span>
         <button class="linkbtn" id="lib-del-cad" type="button" data-deep data-pc>Delete cadence</button>` : "none"}</dd>
+      ${v.full_index ? `<dt data-deep>Full index</dt><dd data-deep>Kept${v.full_index.until ? ` until ${esc(fullIndexDate(v.full_index.until))}` : ""} <span class="meta">· ${v.full_index.vectors_before ?? "?"} → ${v.full_index.vectors_after ?? "?"} vectors · ${gb(v.full_index.bytes_before || 0)} before</span>
+        <button class="linkbtn" id="lib-full-idx" type="button" data-deep data-pc>Put the full index back</button></dd>` : ""}
       <dt data-deep>Size</dt><dd data-deep>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep data-pc>Rename folder…</button>
@@ -416,6 +420,11 @@ function voiceDetail(d, v) {
   }
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
   confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
+  if ($("#lib-full-idx")) $("#lib-full-idx").onclick = async e => {   // the shrunk voice's full index, kept 30 days
+    e.target.disabled = true;
+    try { await api(`/api/library/voices/${encodeURIComponent(v.name)}/full-index`, { json: {} }); showError("The full index is back. New covers use it.", "Put back", null, true); afterChange(); }
+    catch (err) { e.target.disabled = false; showError(err.message, "Couldn't put the full index back"); }
+  };
   if ($("#lib-del-cad")) confirmClick($("#lib-del-cad"), "Click again: the voice stays", async () => {
     await api(`/api/library/voices/${encodeURIComponent(v.name)}/cadence`, { method: "DELETE" }); afterChange(); });
 }
