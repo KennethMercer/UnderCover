@@ -228,7 +228,7 @@ def _presep(h, song_id: str, body: dict):
             if job.cancel:
                 raise Cancelled()
         separate(path("uploads_dir") / meta["file"], dereverb=want[2], karaoke=want[3],
-                 separator=ENGINE.separator, quality=want[1], progress=progress)
+                 separator=ENGINE.separator, quality=want[1], progress=progress, one_voice_if_no_lead=True)
         job.finish("done", message="Stems ready")
     GPU_QUEUE.put((job, run))
     h._json({"started": True, "job": job.id})

@@ -350,7 +350,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             continue
         song = Path(path("uploads_dir")) / meta["file"]
         # separate now (cached for the cover): catches a bad download early and gives the melody's pitch
-        stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high",
+        stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high", one_voice_if_no_lead=True,
                          progress=lambda f, name, pick=pick, label=label, n=n: push(
                              "song", 0.02 + 0.9 * (n + 0.4 + 0.6 * f) / per, f"Separating the vocals of {label}“{pick.title}”"))
         song_hz, sung = vocal_stats(stems["vocals"], gpu.MODELS.converter.rmvpe)

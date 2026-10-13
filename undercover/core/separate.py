@@ -191,9 +191,11 @@ def lead_missing(lead: Path, backing: Path) -> bool:
 
 def separate(audio: Path, dereverb: bool | None = None, karaoke: bool | None = None,
              separator: StemSeparator | None = None, quality: str | None = None,
-             progress=None) -> dict[str, Path]:
+             progress=None, one_voice_if_no_lead: bool = False) -> dict[str, Path]:
     """Full separation stage. Returns paths for 'vocals' (the vocal to convert),
-    'instrumental', and optionally 'backing' (backing vocals, to mix back in)."""
+    'instrumental', and optionally 'backing' (backing vocals, to mix back in).
+    one_voice_if_no_lead (covers): when the karaoke split finds no lead (a duet, lead_missing), the whole vocal is the
+    lead and there's no backing. Training leaves it off: a duet's blended voices aren't one person's clips."""
     audio = Path(audio).resolve()
     if not audio.exists():
         raise FileNotFoundError(f"Song not found: {audio}")
@@ -226,7 +228,7 @@ def separate(audio: Path, dereverb: bool | None = None, karaoke: bool | None = N
             k = separator.run(result["vocals"], SEP["karaoke_model"],
                               root / (Path(SEP["vocal_model"]).stem + sfx) / ("karaoke_" + Path(SEP["karaoke_model"]).stem), ov,
                               step_cb("karaoke"))
-            if not lead_missing(k["vocals"], k["instrumental"]):
+            if not (one_voice_if_no_lead and lead_missing(k["vocals"], k["instrumental"])):
                 result["vocals"], result["backing"] = k["vocals"], k["instrumental"]
             # else: no lead to be found (a duet): the whole vocal is converted as one voice, with no backing stem
 
