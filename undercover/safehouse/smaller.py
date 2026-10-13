@@ -4,8 +4,10 @@ hard-linked, key changes and speech as FLAC); this is for what was made before.
 
   a voice     its index as 10k k-means centres (core/engine/rvc/index.shrink; Agent Smoke: 256 MB -> 15 MB). Checked
               by reading a fixed line through the voice with both indexes: how alike the two come out, and how like
-              the person each is when the voice has its training project. The full index waits aside
-              (model.index.before-smaller) until the user keeps the smaller one (Keep) or puts it back (Undo).
+              the person each is when the voice has its training project; both readings are kept to hear (Before /
+              After: <cache>/previews/smaller-<voice>-full|small.flac, result.full_url / small_url). The full index
+              waits aside (model.index.before-smaller) until the user keeps the smaller one (Keep) or puts it back
+              (Undo); the readings go with either.
   a project   its WAV clips as FLAC (each decoded and compared: bit-identical), and once its voice is added, the
               prepared data (train/data.pt: rebuilt by the next Train more). The originals wait aside
               (<project>/before-smaller/) until Keep or Undo. The exported save, when it's the same bytes as the voice's
@@ -80,8 +82,20 @@ def voice_row(d: Path) -> dict | None:
         return None
     after = min(n, CENTRES) * dims * 2 + 24
     pending = (d / INDEX_ASIDE).exists()
+    result = _read(d / RESULT) if pending else None
+    if result:
+        from ..core.files import file_url
+        for key, f in _readings(d.name).items():
+            result[f"{key}_url"] = file_url(f) if f.exists() else None
     return {"name": d.name, "index_bytes": size, "vectors": n, "saving": max(0, size - after) if n > CENTRES else 0,
-            "pending": pending, "result": _read(d / RESULT) if pending else None}
+            "pending": pending, "result": result}
+
+
+def _readings(name: str) -> dict:
+    """The two test readings of a voice waiting for Keep or Undo: {"full": path, "small": path}."""
+    from ..core.config import path
+    d = path("cache_dir") / "previews"
+    return {k: d / f"smaller-{name}-{k}.flac" for k in ("full", "small")}
 
 
 def project_row(d: Path) -> dict | None:
@@ -120,11 +134,15 @@ def _test_readings(name: str, small: Path) -> dict:
     conv = gpu.MODELS.converter
     x = render.trim(render.load16(TEST_LINE))
     shift = render.octave_shift(x, conv.rmvpe, (v.extra or {}).get("f0_median"))
+    import soundfile as sf
     emb = SpeakerEmbedder()
     out = {}
+    files = _readings(name)
+    files["full"].parent.mkdir(parents=True, exist_ok=True)
     for key, lv in (("full", LoadedVoice(v, conv.device, conv.half)), ("small", LoadedVoice(replace(v, index=small), conv.device, conv.half))):
         y, sr = conv.convert(x, lv, Settings(pitch=shift))
         out[key] = emb.embed(_to16(y, sr))
+        sf.write(str(files[key]), render.level(np.nan_to_num(y)), sr, subtype="PCM_16")   # to hear: Before / After
         del lv
     alike = float(np.dot(out["full"], out["small"]) / (np.linalg.norm(out["full"]) * np.linalg.norm(out["small"]) + 1e-9))
     r = {"alike": round(alike, 4)}
@@ -188,6 +206,12 @@ def keep_voice(name: str):
     if not (d / INDEX_ASIDE).exists():
         raise ModelError("There's nothing set aside for that voice.")
     storage.remove_files([d / INDEX_ASIDE, d / RESULT], within=[_voices_dir()])
+    _drop_readings(name)
+
+
+def _drop_readings(name: str):
+    from ..core.config import path
+    storage.remove_files([f for f in _readings(name).values() if f.exists()], within=[path("cache_dir") / "previews"])
 
 
 def undo_voice(name: str):
@@ -197,6 +221,7 @@ def undo_voice(name: str):
         raise ModelError("There's nothing set aside for that voice.")
     os.replace(d / INDEX_ASIDE, d / "model.index")
     storage.remove_files([d / RESULT], within=[_voices_dir()])
+    _drop_readings(name)
     gpu.forget_voice(name)
 
 
