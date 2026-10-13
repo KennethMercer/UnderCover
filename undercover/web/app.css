@@ -832,6 +832,10 @@ body:not([data-client="phone"]) [data-phone] { display: none !important; }
 .vt-size { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
 .vt-size .seg button { padding: 6px 12px; text-align: left; }
 #vt-all { justify-self: start; }
+/* Make it smaller (smaller.js): the Vault's rows */
+#smaller[hidden] { display: none; }
+#sm-all { justify-self: start; }
+.sm-hear { display: inline-flex; gap: 8px; align-items: baseline; }
 @media (max-width: 620px) { .vt-row { grid-template-columns: minmax(0, 1fr); } .vt-row .row { justify-content: flex-start; } }
 
 /* phase 22: two octaves, a quick blind pick under the one-shot's plan (oneshot.js osOctaves) */
