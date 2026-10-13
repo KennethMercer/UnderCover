@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 
 from ..core import fsutil, jobs, tray
-from ..core.config import path
+from ..core.config import CONFIG, path
 from ..core.files import file_url
 from ..core.jobs import Cancelled
 from ..core.cadence import engine_info, engine_ready
@@ -233,6 +233,10 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
     from ..core import gpu
     from ..core.cadence import WorkerError, render
     t0 = time.perf_counter()
+    from . import listenback
+    lb = listenback.settings()
+    if (CONFIG.get("speakeasy") or {}).get("clause_split"):
+        sents = render.split_clauses(sents)
     sents = render.join_short(sents)   # a sentence of a word or two is read with its neighbour (no stray sound before it)
     v = get_voice(p["voice"])
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
@@ -250,7 +254,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
     def progress(msg, done=0, total=0):
         job.push(stage="reading", frac=0.0, message=msg)
     reqs: list = []
-    pieces, made, t_tts, t_rvc = [], 0.0, 0.0, 0.0
+    pieces, made, t_tts, t_rvc, t_lb = [], 0.0, 0.0, 0.0, 0.0
     try:
         for i, s in enumerate(sents):
             while len(reqs) < min(len(sents), i + ahead):
@@ -263,6 +267,14 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
             except WorkerError as e:
                 raise SpeakError(str(e))
             t_tts += time.perf_counter() - t
+            if lb["listen_back"]:   # hear the reading back and mend what the ear would catch (listenback.py)
+                entry = {"job": job.id, "voice": p["voice"], "sentence": i, "text": s["text"]}
+                try:
+                    wav = listenback.review(s["text"], wav, pack, ref, 1234 + i, tts.pick_reader(p["target_hz"]), entry)
+                except Exception as e:   # noqa: BLE001 - the reading as it came is still good to use
+                    entry["error"] = f"{type(e).__name__}: {e}"
+                listenback.write_log(entry)
+                t_lb += entry.get("seconds", 0.0)
             t = time.perf_counter()
             y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0))
             y = _level(y)
@@ -285,7 +297,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
         raise
     job.push(stage="saving", frac=1.0, message="Saving")
     return _save(np.concatenate(pieces) if pieces else np.zeros(sr, np.float32), sr, text, p,
-                 {"total": round(time.perf_counter() - t0, 2), "reader": round(t_tts, 2), "voice": round(t_rvc, 2)}, job.id)
+                 {"total": round(time.perf_counter() - t0, 2), "reader": round(t_tts, 2), "voice": round(t_rvc, 2), "listen": round(t_lb, 2)}, job.id)
 
 
 def _title(text: str, n: int = 6) -> str:
