@@ -492,6 +492,12 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .assign-brief { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 18px; align-items: start; }
 .assign-brief .mark { width: 44px; height: 44px; border-radius: 10px; background: var(--panel-2); display: grid; place-items: center; }
 .assign-brief .mark .ico { width: 24px; height: 24px; }
+.assign-greet { display: flex; gap: 10px; align-items: center; margin: 2px 0 8px; }
+.assign-greet[hidden] { display: none; }
+.assign-greet .play { width: 34px; height: 34px; font-size: 12px; flex: none; }
+.assign-greet > span { display: grid; gap: 1px; min-width: 0; }
+.assign-greet b { font-weight: 600; font-size: 13.5px; }
+.assign-greet small { color: var(--muted); font-size: 13.5px; font-style: italic; }
 .assign-brief h2 { font: 700 20px/1.15 var(--display); letter-spacing: -.02em; text-transform: none; color: var(--fg); margin: 0 0 4px; }
 .assign-brief p { margin: 0; color: var(--muted); max-width: 64ch; }
 .assign-steps { display: flex; gap: 6px 18px; flex-wrap: wrap; margin: 8px 0 0; padding: 0; list-style: none; counter-reset: s; font: 500 12.5px var(--mono); color: var(--muted); }
