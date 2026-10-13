@@ -1422,12 +1422,13 @@ def u_rolloff_covers():
     # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
     # MasterPlan), the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
-    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); Vaulting's
+    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover; the demo
+    # refresh's: its own .agent-smoke-updating, the previous build it set aside, and on Undo the shipped copy); Vaulting's
     # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
     # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
     # only what Make smaller itself set aside or made); a new caller must be added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/tailnet.py",
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 4, "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py",
                                                                         "frontman/history.py", *["safehouse/smaller.py"] * 5,
@@ -3766,7 +3767,27 @@ def u_tutorial():
                 raise AssertionError("updated when already the newest")
             except ModelError:
                 pass
-            tutorial.undo_demo()                                    # back to the first build, as shipped, for the rest
+            tutorial.undo_demo()                                    # back to the first build
+            calls, real_retry = [], tutorial.fsutil.retry           # the new one can't go in (a file held open): the
+            def failing(fn, *a, **k):                               # installed one is back, nothing goes missing
+                calls.append(1)
+                if len(calls) == 3:
+                    raise PermissionError("held open")
+                return real_retry(fn, *a, **k)
+            tutorial.fsutil.retry = failing
+            try:
+                tutorial.update_demo()
+                raise AssertionError("the update said it worked")
+            except PermissionError:
+                pass
+            finally:
+                tutorial.fsutil.retry = real_retry
+            assert (vd / "agent-smoke" / "model.pth").read_bytes() == b"not really a model"
+            assert voices.get_voice("agent-smoke").display == "My Smoke"
+            assert not (vd / tutorial.PREVIOUS / "meta.json.previous").exists(), "a half update was left"
+            assert not [d for d in vd.iterdir() if d.name.startswith(".agent-smoke-updating")], "the update's folder was left"
+            assert [x.name for x in voices.list_voices()].count("agent-smoke") == 1
+            # the shipped files back to the first build, as the rest of the check expects
             old = b"not really a model"
             (ship / "model.pth").write_bytes(old)
             (ship / "manifest.json").write_text(json.dumps({"files": {"model.pth": {

@@ -337,10 +337,25 @@ def update_demo() -> dict:
                     index=str(dest / "model.index") if (tmp / "model.index").exists() else "",
                     display=old.get("display") or meta.get("display") or "")
         meta.setdefault("extra", {})["demo_build"] = _shipped_build()
-        (tmp / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        fsutil.retry(lambda: dest.replace(prev))
-        fsutil.retry(lambda: (prev / "meta.json").replace(prev / "meta.json.previous"))   # out of the voice list
-        fsutil.retry(lambda: tmp.replace(dest))
+        # named meta.json only once it's in place: the voice list sees any folder with one (a dot folder too)
+        (tmp / "meta.json.new").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        try:
+            fsutil.retry(lambda: dest.replace(prev))   # a file held open (Windows) fails here: nothing has changed yet
+            try:
+                fsutil.retry(lambda: (prev / "meta.json").replace(prev / "meta.json.previous"))   # out of the voice list
+                fsutil.retry(lambda: tmp.replace(dest))
+                fsutil.retry(lambda: (dest / "meta.json.new").replace(dest / "meta.json"))
+            except OSError:   # the new one couldn't go in: the installed one goes back, Agent Smoke never goes missing
+                if dest.exists() and not (dest / "meta.json").exists():
+                    dest.replace(tmp)
+                if (prev / "meta.json.previous").exists():
+                    (prev / "meta.json.previous").replace(prev / "meta.json")
+                if not dest.exists():
+                    prev.replace(dest)
+                raise
+        finally:
+            if tmp.exists():
+                storage.remove_files([], [vd], dirs=[tmp])
         gpu.forget_voice(DEMO.name)
         return {"tutorial": status(), "updated": DEMO.name}
 
