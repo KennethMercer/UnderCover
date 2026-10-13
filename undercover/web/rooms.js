@@ -188,6 +188,7 @@ async function loadStorage() {
   const moving = runningJobs().find(j => j.kind === "move");
   if (moving && !R.moving) followMove(moving);
   renderPlaces();
+  if (typeof vaultLoad === "function") vaultLoad();   // the Vault section (vault.js)
 }
 
 function renderPlaces() {
