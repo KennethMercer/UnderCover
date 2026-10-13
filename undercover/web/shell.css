@@ -75,6 +75,54 @@
 .mini { font-size: 12.5px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 3px 9px; white-space: nowrap; }
 .mini:hover:not(:disabled) { border-color: var(--accent); }
 .mini:disabled { opacity: .5; }
+/* the likeness in a word and its dot (the server's likeness_word): the sentence's own font, only the colour says it; the dot
+   comes after the word, and alone it's the shorthand where there's no room (the word on hover) */
+.like { font: inherit; white-space: nowrap; }
+.like::after { content: ""; display: inline-block; width: .5em; height: .5em; margin-left: .3em; border-radius: 50%; background: currentColor; vertical-align: .08em; }
+.like.poor { color: var(--muted); } .like.poor::after { background: var(--err); opacity: .75; }   /* "not really them": dim word, a dull red dot */
+.like.fair { color: var(--warn); }
+.like.good { color: var(--ok); }
+.like.great { color: color-mix(in srgb, var(--ok) 70%, #d8ffe4); }
+:root[data-theme="light"] .like.great { color: color-mix(in srgb, var(--ok) 80%, #000); }
+.like.dot { font-size: 0; } .like.dot::after { font-size: 13px; margin: 0; }   /* the dot alone */
+.vc b .vc-speaks { width: 14px; height: 14px; margin-left: 6px; vertical-align: -2px; color: var(--c-speakeasy); }
+
+/* ---------- DoubleAgent: the line to start a voice, the one in the works, the card after training ---------- */
+.da-start { display: grid; gap: 10px; }
+.da-start > .meta { margin: 0; font-size: 12.5px; }
+.da-cmd { display: flex; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 10px 10px 16px; }
+#view-train .da-cmd input { flex: 1 1 auto; min-width: 0; background: none; border: 0; padding: 6px 0; font: 500 18px var(--display); color: var(--fg); }
+#view-train .da-cmd input:focus { outline: none; }
+.da-cmd:focus-within { border-color: var(--accent); }
+.da-cmd .seg { flex: none; }
+#da-train { white-space: nowrap; display: grid; justify-items: center; padding: 8px 18px; font-weight: 600; }
+#da-train small { font: 500 11.5px var(--mono); opacity: .8; }
+.da-under { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: baseline; font-size: 13.5px; color: var(--muted); }
+.da-under .linkbtn { font-size: 13.5px; }
+.da-work { --jc: var(--c-doubleagent); display: grid; gap: 10px; background: var(--panel); border-left: 3px solid var(--jc); border-radius: var(--r); padding: 16px 18px; }
+.da-work[hidden], .da-outcome[hidden] { display: none; }
+.da-work .who { display: flex; align-items: center; gap: 8px; color: var(--jc); font-weight: 600; font-size: 13.5px; }
+.da-work .who::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.da-work .bar { margin: 0; } .da-work .bar i { background: var(--jc); }
+.da-prog { display: flex; gap: 6px 14px; justify-content: space-between; flex-wrap: wrap; align-items: baseline; }
+.da-stages { display: flex; gap: 6px 22px; flex-wrap: wrap; font-size: 13.5px; color: var(--muted); }
+.da-stages i { font-style: normal; display: inline-flex; align-items: center; gap: 7px; }
+.da-stages i::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+.da-stages i.done { color: var(--fg); } .da-stages i.done::before { background: var(--ok); }
+.da-stages i.now { color: var(--jc); font-weight: 600; } .da-stages i.now::before { background: var(--jc); }
+.da-work .row, .da-outcome .row { gap: 10px 16px; }
+.da-work .linkbtn.confirm { color: var(--err); }
+.da-outcome { display: grid; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; }
+.da-outcome h3 { margin: 0; font: 600 17px var(--display); }
+.da-outcome p { margin: 0; }
+.deepmark { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font: 500 12px var(--mono); color: var(--accent); vertical-align: middle; }
+.deepmark .ico { width: 14px; height: 14px; }
+@media (max-width: 680px) {
+  .da-cmd { display: grid; grid-template-columns: minmax(0, 1fr); padding: 12px 14px; }
+  .da-cmd .seg { justify-self: start; }
+  #da-train { width: 100%; padding: 12px 16px; }
+  .da-under > .sep { display: none; }
+}
 
 /* ---------- queue drawer: right side; a bottom sheet on a phone ---------- */
 .scrim { position: fixed; inset: 0; background: color-mix(in srgb, #000 45%, transparent); z-index: 20; }

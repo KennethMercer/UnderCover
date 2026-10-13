@@ -94,11 +94,37 @@ function follow(id, kind) {
       if (ev.state === "error" || ev.state === "lost") showError(ev.message, kind === "train" ? "Training stopped" : "That didn't work");
       else if (ev.state === "paused") { /* the Pause bar at the top says so, with Resume */ }
       else if (ev.message && kind === "prepare" && ev.message.length) showError(ev.message, "Some sources were skipped", null, true);
-      if (kind === "auto") { clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true; if (ev.state === "done") loadVoices(); }
+      if (kind === "auto") {
+        clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true;
+        if (ev.state === "done") loadVoices();   // the card after training: doubleagent.js, on uc:jobdone
+      }
       refresh().then(() => { if (kind === "export" && ev.voice) loadVoices(); });
     }
   });
   render();
+}
+
+// ------------------------------------------------------------ the one way to start a voice (DoubleAgent's line, doubleagent.js)
+// Now: a project for the person (creating it searches for clips; an existing one searches again), then Do it all.
+// Tonight: a new-voice item in the overnight queue, which SafeHouse's Running room shows.
+async function trainVoice(person, mode, tonight) {
+  if (tonight) {
+    W.last = await api("/api/work/add", { json: { kind: "new", target: person } });
+    renderQueue(); refreshJobs(true);
+    return;
+  }
+  T.list = await api("/api/train/projects");
+  const same = T.list.find(x => (x.person || "").toLowerCase() === person.toLowerCase());
+  let data;
+  if (same) {   // a fresh search; if it fails (offline, nothing new), the clips already prepared still train
+    try { data = await api(`/api/train/projects/${same.name}/search`, { json: { person, mode } }); }
+    catch (e) { if (!same.ready_sources) throw e; data = same; }
+  } else data = await api("/api/train/projects", { json: { person, mode } });
+  if (data.warning && !(data.sources || []).length) throw new Error(data.warning);
+  await loadProjects(data.name);
+  const r = await P("auto", {});
+  follow(r.job, "auto");
+  refreshJobs(true);
 }
 
 // ------------------------------------------------------------ step 1: find
