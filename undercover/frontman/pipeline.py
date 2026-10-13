@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..core import tray
-from ..core.config import path
+from ..core.config import CONFIG, path
 from . import history as hstore
 
 
@@ -38,6 +38,7 @@ class CoverOptions:
     backing_octave: int | None = None # backing voice only, whole octaves (on top of the song key)
     fit: bool | None = None           # set octave + key from the voice's range and the song's melody (overrides both)
     lead_gate: bool | None = None     # only singing gets converted (phase 15; default on): see leadgate.py
+    chorus: str | None = None         # lines in the backing stem: convert | top | keep (leadgate.CHORUS_MODES; None: config)
 
 
 @dataclass
@@ -147,13 +148,17 @@ class CoverEngine:
         # karaoke split put in the backing are converted too; the stems themselves stay as they were
         cstems = stems
         if opts.lead_gate is not False:
-            from .leadgate import apply as gate_apply, note as gate_note, plan as gate_plan
+            from .leadgate import CHORUS_MODES, apply as gate_apply, note as gate_note, plan as gate_plan, split_top
             g = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
             if g["instrument"] or g["chorus"]:
                 gwork = path("cache_dir") / "converted"
                 gwork.mkdir(parents=True, exist_ok=True)
-                cstems = gate_apply(stems, g, gwork, stamp)
-                notes += gate_note(g)
+                mode = opts.chorus or CONFIG["conversion"].get("chorus", "convert")
+                mode = mode if mode in CHORUS_MODES else "convert"
+                top = (split_top(stems["backing"], self.separator, Path(stems["backing"]).parent)
+                       if mode == "top" and g["chorus"] and stems.get("backing") else None)
+                cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top)
+                notes += gate_note(g, mode)
         from .remix import lufs, prefetch
         # mix prep (stem loudness, key-shifted instrumental) runs on the CPU while the GPU converts
         prefetch([cstems["vocals"], cstems.get("backing"), cstems.get("reverb"), song], key=key,
