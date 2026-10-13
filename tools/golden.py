@@ -313,13 +313,20 @@ def _kept(ref: list, hyp: list) -> float | None:
 
 
 def _mix_scores(path: Path) -> dict:
+    """The file as the user's player decodes it: loudness (LUFS), true peak (dBTP, 4x oversampled) and the share of
+    samples at full scale, per channel. Phase 21: decoding with -ac 1 read every cover 3 dB hot (ffmpeg's stereo to mono
+    is (L + R) / sqrt 2), so the first make's +1 to +2 dB peaks and Toxic's 0.8% "clipped" were the measure's."""
+    import re
     import numpy as np
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", "44100", "-"],
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", "44100", "-"],
                          capture_output=True, check=True).stdout
     x = np.frombuffer(raw, np.float32)
-    act = x[np.abs(x) > 1e-3] if np.any(np.abs(x) > 1e-3) else x
-    return {"loud_db": round(float(20 * np.log10(np.sqrt(np.mean(act ** 2)) + 1e-9)), 2),
-            "peak_db": round(float(20 * np.log10(np.abs(x).max() + 1e-9)), 2),
+    err = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af", "ebur128=peak=true:framelog=quiet",
+                          "-f", "null", "-"], capture_output=True, text=True, errors="replace").stderr
+    lu = re.findall(r"I:\s+(-?[\d.]+) LUFS", err)
+    tp = re.findall(r"Peak:\s+(-?[\d.]+|-inf) dBFS", err)
+    return {"loud_db": float(lu[-1]) if lu else None,
+            "peak_db": float(tp[-1]) if tp and tp[-1] != "-inf" else None,
             "clipped": round(float(np.mean(np.abs(x) >= 0.999)), 5)}
 
 

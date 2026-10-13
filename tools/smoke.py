@@ -4090,6 +4090,9 @@ def _cover_with(song, voice):
     out = Path(c.get("output") or c.get("file") or "")
     size = out.stat().st_size if out.exists() else c.get("size", 0)
     assert size > 100_000, f"cover output looks empty ({size} bytes)"
+    from undercover.frontman.remix import true_peak
+    tp = true_peak(out) if out.exists() else None
+    assert tp is None or tp <= -0.95, f"the cover peaks at {tp} dBTP as a player decodes it (ceiling -1)"   # phase 21
     import re
     assert re.fullmatch(r"[0-9a-f]{10}", c["id"]) and not c["kept"] and c["recent"], f"a new cover should be unkept and recent: {c}"
     assert c["id"] in {x["id"] for x in api("/api/history")}, "the new cover isn't in the recent tray"
