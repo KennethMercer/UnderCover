@@ -605,7 +605,18 @@ def u_gamepause():
             worklist.pause_all()
             assert gp.tick(None, 300, busy=False) is None and gp.tick(None, 316, busy=False) is None
             assert worklist._state()["held"] and worklist._state()["held_by"] == "you"
+            # already paused by you when a game asks: Pause keeps the hold yours (the game's end resumes nothing)
+            gp.tick(game, 330, busy=True)
+            gp.answer("pause")
+            assert worklist.hold() == {"held": True, "held_by": "you"} and gp.STATE["paused_for"] is None
+            gp.tick(None, 340, busy=False)
+            assert gp.tick(None, 356, busy=False) is None and worklist.hold()["held"]
             worklist.resume_all()
+            # UnderCover restarted mid-game (its memory gone, the game's hold saved): no game for 15 s, it resumes
+            worklist.pause_all(by="game")
+            reset()
+            assert gp.tick(None, 360, busy=False) is None and gp.tick(None, 376, busy=False) == "resumed"
+            assert not worklist.hold()["held"]
             # Keep both: no more asking until that game closes; a different game asks afresh
             gp.tick(game, 400, busy=True)
             gp.answer("both")
@@ -648,6 +659,8 @@ def u_gamepause():
             gp.answer("both")
             th.join(5)
             assert out.get("r") == "start"
+            assert any("Waiting: Cyberpunk 2077 is full-screen" in (e.get("message") or "") for e in job.events), \
+                "the waiting job didn't say why"
             # ... and Pause makes it wait until the game is gone (the watcher resumes), then it starts
             reset()
             job2 = Job("zz-smoke")
@@ -667,6 +680,11 @@ def u_gamepause():
             job3 = Job("zz-smoke")
             job3.cancel = True
             assert gp.before_start(job3, sleep=lambda _s: None, look=lambda: game) == "start"
+            # the GPU worker asks the gates before every job, and says which job is on the GPU (what "busy" means)
+            import inspect
+            src = inspect.getsource(jobs.gpu_worker)
+            assert src.index("gate(job)") < src.index("CURRENT[0] = job") < src.index("run_job(job, fn)"), "the gate isn't wired"
+            assert not gp._gpu_busy()
         finally:
             CONFIG["game_pause"], jobs.PORT, worklist._STATE = saved[0], saved[1], saved[2]
             gp.STATE.clear()

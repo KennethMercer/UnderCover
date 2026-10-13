@@ -69,6 +69,8 @@ def fullscreen_app() -> dict | None:
     if how is None:   # borderless: no title bar, and the window covers its whole monitor
         if user32.GetWindowLongW(hwnd, -16) & 0x00C00000 == 0x00C00000:   # GWL_STYLE has WS_CAPTION: a normal window
             return None
+        if user32.IsZoomed(hwnd):   # maximized, not full-screen: a browser or an editor with its own title bar
+            return None
 
         class MONITORINFO(ctypes.Structure):
             _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),

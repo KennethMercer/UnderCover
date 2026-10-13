@@ -204,6 +204,13 @@ def held() -> bool:
     return bool(_state().get("held"))
 
 
+def hold() -> dict:
+    """{held, held_by} read under the lock (who paused: "you", or "game" for the game pause)."""
+    with _LOCK:
+        st = _state()
+        return {"held": bool(st.get("held")), "held_by": st.get("held_by")}
+
+
 # ---------------------------------------------------------------- the overnight queue
 
 def add(kind: str, target: str, now: bool = False, mode: str | None = None) -> dict:
