@@ -24,7 +24,9 @@ function earRedraw() {
   $$(".ear[data-ear-kind]").forEach(box => earDraw(box));
   if (typeof renderHistory === "function") renderHistory();
   if (typeof seRecent === "function" && typeof SE !== "undefined" && SE.recent) seRecent();
-  if (typeof renderList === "function" && typeof L !== "undefined" && (L.cat === "covers" || L.cat === "speech")) renderList();
+  if (typeof renderList === "function" && typeof L !== "undefined" && (L.cat === "covers" || L.cat === "speech")) {
+    renderList(); if (typeof placeDetail === "function") placeDetail();   // on a phone the detail sits under its row again
+  }
   if (typeof renderVoices === "function" && typeof S !== "undefined" && S.voicesLoaded) renderVoices();
   renderEarSetting();
 }
