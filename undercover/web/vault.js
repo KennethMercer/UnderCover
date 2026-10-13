@@ -16,10 +16,11 @@ async function vaultLoad() {
   clearTimeout(VT.timer);
   try { VT.s = await api("/api/vault"); } catch (e) { $("#vt-body").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
   const s = VT.s;
-  if (s.on && s.connected && s.snapshots) {
+  if (s.on && s.connected && s.snapshots && (!(s.running || s.restore?.running) || !VT.c || VT.wasBusy === false)) {   // not every 2 s while a copy runs
     try { VT.c = await api(`/api/vault/contents${VT.snap ? `?snapshot=${encodeURIComponent(VT.snap)}` : ""}`); await vtTitles(); }
     catch (e) { VT.c = null; }
-  } else VT.c = null;
+  } else if (!(s.on && s.connected && s.snapshots)) VT.c = null;
+  VT.wasBusy = !!(s.running || s.restore?.running);
   vtRestoreOutcome();
   renderVault();
   if ((s.running || s.restore?.running) && !$("#room-storage").hidden) VT.timer = setTimeout(vaultLoad, 2000);   // while a copy or a restore runs
