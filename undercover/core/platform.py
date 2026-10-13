@@ -29,7 +29,7 @@ def _not(what: str) -> NotOnThisOS:
 
 def supports(feature: str) -> tuple[bool, str]:
     """(can it work here?, why not). Features: tray, startup, firewall, keep_awake, drives, gpu_driver, show_in_folder,
-    fullscreen (seeing a full-screen game: the game pause)."""
+    fullscreen (seeing a full-screen game: the game pause), away (Tailscale for away from home, phase 20)."""
     if feature == "tray":
         if not WINDOWS:
             return False, "The tray icon is Windows-only for now."
@@ -38,9 +38,33 @@ def supports(feature: str) -> tuple[bool, str]:
         except ImportError:
             return False, "pystray isn't installed (installer/requirements/common.txt)."
         return True, ""
-    if feature in ("startup", "firewall", "keep_awake", "drives", "gpu_driver", "show_in_folder", "fullscreen"):
+    if feature in ("startup", "firewall", "keep_awake", "drives", "gpu_driver", "show_in_folder", "fullscreen", "away"):
         return (True, "") if WINDOWS else (False, f"{feature} is Windows-only for now.")
     return False, f"Unknown feature '{feature}'."
+
+
+# ---------------------------------------------------------------- away from home (phase 20)
+
+def extract_msi(msi, target) -> None:
+    """An administrative extraction of an .msi into `target` (msiexec /a: the files only, no install, no service, no
+    driver, nothing in the registry). Tailscale publishes Windows binaries only inside its installer."""
+    if not WINDOWS:
+        raise _not("Unpacking a Windows installer")
+    r = subprocess.run(["msiexec", "/a", str(msi), "/qn", f"TARGETDIR={target}"], capture_output=True, text=True,
+                       errors="replace", timeout=300, creationflags=NO_WINDOW)
+    if r.returncode != 0:
+        raise OSError(f"msiexec /a ended with code {r.returncode}")
+
+
+def tailscale_names() -> tuple[str, str]:
+    """(the daemon's, the command line's) file names on this OS."""
+    return ("tailscaled.exe", "tailscale.exe") if WINDOWS else ("tailscaled", "tailscale")
+
+
+def tailscaled_os_args() -> list:
+    """The daemon's OS-specific flags: on Windows, run as this user with our own pipe (dev mode: the pipe accepts only
+    this user; measured in the phase 20 spike)."""
+    return ["--windows-mode=dev"] if WINDOWS else []
 
 
 # ---------------------------------------------------------------- a full-screen game (the game pause)

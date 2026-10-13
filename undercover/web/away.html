@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0a0908">
+<title>Away from home · UnderCover</title>
+<!-- Away from home (phase 20): the one page the away address serves before a phone has its away token. Self-contained
+     (no /static/: everything else needs the token). The single-use code comes in the link's #fragment (never sent to a
+     server in a URL), from the phone's own UnderCover on the home Wi-Fi. Hooks for the look chat: #away-msg, #away-done. -->
+<style>
+  :root { color-scheme: dark; --bg: #0a0908; --ink: #ece7de; --dim: #a39d93; --gold: #c9a45c; --bad: #d8735f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         display: grid; place-items: center; padding: 24px 16px; }
+  main { width: 100%; max-width: 380px; }
+  .mark { font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+  h1 { font-size: 26px; margin: 6px 0 4px; font-weight: 600; }
+  p { color: var(--dim); margin: 0 0 16px; }
+  #away-msg { color: var(--bad); }
+  #away-done { color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">UnderCover</div>
+  <h1>Away from home</h1>
+  <p id="away-wait">Checking this phone's pass…</p>
+  <p id="away-msg" role="status" hidden></p>
+  <p id="away-done" hidden>This phone now reaches UnderCover from anywhere. Opening it… Add it to your home screen to keep the way in.</p>
+</main>
+<script>
+(async () => {
+  const code = decodeURIComponent((location.hash || "").slice(1));
+  history.replaceState(null, "", "/away");   // the code doesn't stay in the address bar or the history
+  const say = (el, text) => { document.getElementById("away-wait").hidden = true; const e = document.getElementById(el); if (text) e.textContent = text; e.hidden = false; };
+  if (!code) return say("away-msg", "This link is missing its pass. On the home Wi-Fi, open UnderCover on this phone and tap Use this phone away from home.");
+  try {
+    const r = await fetch("/api/phone/away", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return say("away-msg", j.error || "That pass didn't work. On the home Wi-Fi, ask for a new one.");
+    say("away-done");
+    setTimeout(() => location.replace("/"), 1200);
+  } catch (e) {
+    say("away-msg", "UnderCover didn't answer. Is the PC on, with away from home switched on?");
+  }
+})();
+</script>
+</body>
+</html>

@@ -34,6 +34,9 @@ RATE = (600, 10, 30)      # window (s), tries per address, tries in all
 MAX_DEVICES = 10
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I: easy to type from the screen
 COOKIE = "uc_device"
+AWAY_COOKIE = "uc_away"   # the away-from-home address's own token (phase 20): a cookie can't cross origins
+AWAY_CODE_S = 600         # a transfer code (home Wi-Fi -> the away address) lasts 10 minutes, and works once
+_AWAY_CODES: dict = {}    # sha256(code) -> (device id, expires)
 SEEN_EVERY = 300          # write "last seen" at most this often (s)
 
 _LOCK = threading.RLock()
@@ -62,8 +65,8 @@ def _load() -> dict:
         except (OSError, ValueError):
             data = {}
         _STATE.clear()
-        _STATE.update({"enabled": bool(data.get("enabled")), "devices": [d for d in data.get("devices") or []
-                                                                         if isinstance(d, dict) and d.get("hash")]})
+        _STATE.update({"enabled": bool(data.get("enabled")), "away": bool(data.get("away")),
+                       "devices": [d for d in data.get("devices") or [] if isinstance(d, dict) and d.get("hash")]})
         _FILE[0] = f
     return _STATE
 
@@ -88,6 +91,48 @@ def set_enabled(on: bool):
         if not on:
             PAIRING = None
         _save()
+
+
+def away_on() -> bool:
+    with _LOCK:
+        return _load()["away"]
+
+
+def set_away(on: bool):
+    with _LOCK:
+        _load()["away"] = bool(on)
+        _save()
+
+
+def away_code(device_id: str) -> str:
+    """A single-use transfer code for a paired phone (asked on the home Wi-Fi): redeemed at the away address within
+    AWAY_CODE_S, it gives that phone a token there too. 128 random bits: nothing to guess on the open internet."""
+    with _LOCK:
+        if not any(d["id"] == device_id for d in _load()["devices"]):
+            raise PhoneError("That phone isn't paired.", 404)
+        now = time.time()
+        for k in [k for k, (_, exp) in _AWAY_CODES.items() if exp < now]:
+            _AWAY_CODES.pop(k)
+        code = secrets.token_urlsafe(16)
+        _AWAY_CODES[hash_token(code)] = (device_id, now + AWAY_CODE_S)
+        return code
+
+
+def redeem_away(code: str) -> tuple[str, dict]:
+    """A transfer code -> (a new away token, the device). The code works once; the device keeps one away token (a new
+    one replaces the old). Revoke removes the device, and both its tokens with it."""
+    with _LOCK:
+        hit = _AWAY_CODES.pop(hash_token(code or ""), None)
+        if hit is None or hit[1] < time.time():
+            raise PhoneError("That link has expired or was used already. On the home Wi-Fi, ask for a new one.", 403)
+        st = _load()
+        d = next((d for d in st["devices"] if d["id"] == hit[0]), None)
+        if d is None:
+            raise PhoneError("That phone isn't paired any more.", 403)
+        token = secrets.token_urlsafe(32)
+        d["away_hash"] = hash_token(token)
+        _save()
+        return token, public(d)
 
 
 def lan_address() -> str | None:
@@ -199,18 +244,19 @@ def devices() -> list[dict]:
         return [public(d) for d in _load()["devices"]]
 
 
-def device_for(token: str | None, addr: str = "") -> dict | None:
-    """The paired device this token belongs to (None: no token, unknown, revoked, or phone access is off)."""
+def device_for(token: str | None, addr: str = "", away: bool = False) -> dict | None:
+    """The paired device this token belongs to (None: no token, unknown, revoked, or phone access is off). away: the
+    token is checked against the device's away token (the away-from-home address), never its home one."""
     if not token:
         return None
     h = hash_token(token)
     with _LOCK:
         st = _load()
-        if not st["enabled"]:
+        if not st["enabled"] or (away and not st["away"]):
             return None
         found = None
         for d in st["devices"]:
-            if hmac.compare_digest(d["hash"], h):
+            if hmac.compare_digest(d.get("away_hash" if away else "hash") or "", h):
                 found = d
         if found is None:
             return None
@@ -222,14 +268,15 @@ def device_for(token: str | None, addr: str = "") -> dict | None:
                 _save()
             except (OSError, PhoneError):
                 pass
-        return {**public(found), "hash": found["hash"]}
+        return {**public(found), "hash": found["away_hash" if away else "hash"]}
 
 
 def still_valid(token_hash: str) -> bool:
     """For long answers (the job stream): is this device still paired and phone access still on?"""
     with _LOCK:
         st = _load()
-        return st["enabled"] and any(hmac.compare_digest(d["hash"], token_hash) for d in st["devices"])
+        return st["enabled"] and any(hmac.compare_digest(d["hash"], token_hash) or
+                                     hmac.compare_digest(d.get("away_hash") or "", token_hash) for d in st["devices"])
 
 
 def revoke(device_id: str) -> dict:
