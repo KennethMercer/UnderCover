@@ -152,11 +152,16 @@ def summary() -> dict:
         "app": sum(_size(path("models_dir") / d) for d in ("rvc", "separator", "speaker", "tts")),
     }
     du = shutil.disk_usage(ROOT)
+    cv, sp = covers(), speak.list_speech()
+    counts = {"covers": len(cv), "speech": len(sp), "songs": len(_song_metas()),
+              "voices": len(list(path("voices_dir").glob("*/meta.json"))),
+              "training": len(list((cache / "training").glob("*/project.json")))}
+    # what each of the Library's Kept / Recent tabs holds per category: covers and speech have a recent tray; songs,
+    # voices and training are always kept (and have no Recent)
+    tabs = {"kept": {**counts, "covers": sum(1 for x in cv if x["kept"]), "speech": sum(1 for x in sp if x["kept"])},
+            "recent": {"covers": sum(1 for x in cv if x["recent"]), "speech": sum(1 for x in sp if x["recent"])}}
     return {"categories": cats, "total": sum(cats.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
-            **ytdlp_info(),
-            "counts": {"covers": len(covers()), "speech": len(speak.list_speech()), "songs": len(_song_metas()),
-                       "voices": len(list(path("voices_dir").glob("*/meta.json"))),
-                       "training": len(list((cache / "training").glob("*/project.json")))}}
+            **ytdlp_info(), "counts": counts, "tabs": tabs}
 
 
 def covers() -> list[dict]:

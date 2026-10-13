@@ -1,6 +1,10 @@
 """Crash-safe file writes. This PC has had sudden power-offs (PLAN.md, incident 2026-10-09): a file written in place
 can be left half-written. These write to a temporary file in the same folder, flush it to disk, then swap it in,
-so a power cut leaves either the old version or the new one, never a broken file."""
+so a power cut leaves either the old version or the new one, never a broken file.
+
+Test mode (storage.ALLOWED_ROOTS, set by smoke's isolated_data() and every sandbox server): a write outside the test's own
+folders raises before anything is written. On 2026-10-13 a vault check held the real config's path from an import made
+before its sandbox and appended to the user's config.toml and phone.json; config and phone writes all come through here."""
 import os
 import time
 import uuid
@@ -18,8 +22,16 @@ def _replace(tmp: Path, dest: Path, tries: int = 50):
             time.sleep(0.05)
 
 
+def guard(dest: Path):
+    """Test mode: refuse a write outside the test's folders (normal use: no-op)."""
+    from . import storage   # here, not at the top: storage imports this module
+    if storage.ALLOWED_ROOTS is not None and not any(storage._inside(Path(dest), r) for r in storage.ALLOWED_ROOTS):
+        raise PermissionError(f"Test mode: {dest} is outside the test's folders; nothing was written.")
+
+
 def write_text(dest: Path, text: str):
     dest = Path(dest)
+    guard(dest)
     tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
@@ -31,6 +43,7 @@ def write_text(dest: Path, text: str):
 def torch_save(obj, dest: Path):
     import torch
     dest = Path(dest)
+    guard(dest)
     tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         with open(tmp, "wb") as f:

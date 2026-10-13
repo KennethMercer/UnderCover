@@ -355,58 +355,32 @@
     <div class="modhead"><div class="modmark"><svg class="ico" aria-hidden="true"><use href="#g-doubleagent"/></svg></div>
       <div><h1>DoubleAgent</h1><p>Finds a person's voice, trains it, and keeps making it better.</p></div></div>
 
-    <section class="panel" id="q-report" hidden>
-      <div class="row spread"><div><h2>Last night</h2><p class="meta" id="q-report-when"></p></div><button class="linkbtn" id="q-dismiss" type="button">Dismiss</button></div>
-      <div class="qreport" id="q-report-list"></div>
+    <section class="da-start" id="da-start">
+      <div class="rn-lbl"><b>A new voice</b><small>Name a person. UnderCover finds clips of them, keeps only their voice, trains it, and adds it to your voices.</small></div>
+      <div class="da-cmd">
+        <input type="text" id="da-person" autocomplete="off" placeholder="Who should it sound like?" aria-label="Who should it sound like">
+        <span class="seg" id="da-mode" role="group" aria-label="Kind of audio"><button type="button" data-v="speaking" aria-pressed="true">Speaking</button><button type="button" data-v="singing" aria-pressed="false">Singing</button></span>
+        <button class="btn primary" id="da-train" type="button">Train the voice<small>about 1 hour</small></button>
+      </div>
+      <div class="da-under"><span>e.g. Elliott Smith, or Barack Obama</span><span class="sep">·</span><button class="linkbtn" id="da-tonight" type="button">Train tonight instead</button><span>adds it to tonight's work in SafeHouse, so the PC stays free now</span></div>
+      <p class="meta">For personal use: don't pass the results off as the real person.</p>
     </section>
 
+    <section class="da-work" id="da-work" hidden aria-live="polite"></section>
+    <section class="da-outcome" id="da-outcome" hidden></section>
+
+
     <section class="panel" id="da-voices">
-      <div class="row spread"><h2>Your voices</h2><span class="meta">downloaded voices can be improved once DoubleAgent knows whose they are</span></div>
+      <div class="row spread"><h2>Your voices</h2><span class="meta" id="da-voices-say">every one works in FrontMan; the ones with the bubble speak in SpeakEasy too</span></div>
       <div class="vcards" id="da-cards"><p class="meta">Loading…</p></div>
       <button class="linkbtn" id="da-more" type="button" hidden></button>
     </section>
 
-    <section class="panel" id="q-panel">
-      <div class="row spread">
-        <div><h2>Overnight queue</h2><p class="qtotal" id="q-total"></p></div>
-        <div class="row"><button class="btn" id="q-start" type="button" hidden>Start now</button>
-          <span class="row qat"><button class="btn primary" id="q-at" type="button" hidden>Start at 11:00 pm</button><input type="time" id="q-at-time" value="23:00" aria-label="Start time"></span>
-          <button class="linkbtn" id="q-stop" type="button" hidden>Don't start more</button></div>
-      </div>
-      <div class="qpick">
-        <div class="seg" id="q-mode" role="tablist" aria-label="Add to the queue">
-          <button type="button" data-v="improve" aria-pressed="true">Improve my voices</button>
-          <button type="button" data-v="new" aria-pressed="false">New voices</button>
-          <button type="button" data-v="cadence" aria-pressed="false">Cadence</button>
-        </div>
-        <div id="q-improve">
-          <p class="meta">More singing (their album tracks first) or more speech, every clip checked again, a fresh training. The new voice replaces the old only if it measures better.</p>
-          <div class="vpick" id="q-cands"></div>
-          <div class="row spread"><span class="meta" id="q-sel-sum">Tick the voices to improve.</span><button class="btn primary" id="q-add-sel" type="button" disabled>Add to the queue</button></div>
-          <details class="qother" id="q-other" hidden data-deep><summary class="meta">Voices that can't be improved</summary><p class="meta" id="q-cands-off"></p></details>
-        </div>
-        <div id="q-cadence" hidden>
-          <p class="meta">Teaches a voice how the person talks (their pace and pauses), for SpeakEasy. It transcribes their clips, measures
-            how they speak and picks the clip that reads most like them: minutes, not hours. Kept only if it sounds more like them.</p>
-          <div class="vpick" id="q-cad-cands"></div>
-          <div class="row spread"><span class="meta" id="q-cad-sum">Tick the voices.</span><button class="btn primary" id="q-cad-add" type="button" disabled>Add to the queue</button></div>
-        </div>
-        <div id="q-new" hidden>
-          <div class="search"><input id="q-name" type="search" autocomplete="off" placeholder="Type a singer or a person, e.g. Adele" aria-label="Person or artist"></div>
-          <div class="qsugg" id="q-sugg" aria-live="polite"></div>
-        </div>
-      </div>
-      <div class="qlist" id="q-list"></div>
-      <div class="qopts">
-        <label class="toggle"><input type="checkbox" id="q-finish"><span>Finish by 7:00 am<br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
-        <label class="toggle"><input type="checkbox" id="q-awake"><span>Keep the PC awake<br><span class="meta">Only while voice work runs.</span></span></label>
-      </div>
-      <p class="meta">Covers you start meanwhile go first. Pause / Resume at the top of the page stops and continues everything; the queue is saved, so a restart carries on.</p>
-    </section>
 
+    <div class="da-steps" id="da-steps" data-deep>
     <section class="panel" id="tr-head">
       <div class="row spread">
-        <h2>New voice, step by step</h2>
+        <h2>Step by step <span class="deepmark"><svg class="ico" aria-hidden="true"><use href="#g-deep"/></svg>Deep Cover</span></h2>
         <div class="row"><select id="tr-pick" aria-label="Training project"></select><button class="btn" id="tr-new">New voice</button></div>
       </div>
       <p class="meta" id="tr-intro">Name a person and DoubleAgent finds clips of them, keeps only their voice, and trains a voice model you can use in FrontMan. For personal use: don't pass the results off as the real person.</p>
@@ -430,6 +404,7 @@
       </div>
       <p class="meta" id="tr-find-hint">Searches YouTube for interviews, speeches and podcasts (or live and isolated vocals for singing). Untick anything that looks wrong.</p>
       <div class="sources" id="tr-sources"></div>
+      <button class="linkbtn" id="tr-sources-more" type="button" hidden></button>
       <div class="row" id="tr-add" hidden data-deep>
         <input type="text" id="tr-link" class="grow" placeholder="Paste a YouTube link (video or playlist) to add a source" aria-label="Link to add">
         <button class="btn" id="tr-link-add">Add</button>
@@ -511,6 +486,7 @@
     </section>
 
     <section class="panel" id="tr-done" hidden></section>
+    </div>
   </div>
 
   <div class="view" id="view-library" hidden>
@@ -583,6 +559,47 @@
     <section class="rn-sec">
       <div class="rn-lbl"><b>Recent</b><small>The last five finished, and how they ended.</small></div>
       <div class="rn-list" id="rn-recent"></div>
+    </section>
+    <section class="panel" id="q-report" hidden>
+      <div class="row spread"><div><h2>Last night</h2><p class="meta" id="q-report-when"></p></div><button class="linkbtn" id="q-dismiss" type="button">Dismiss</button></div>
+      <div class="qreport" id="q-report-list"></div>
+    </section>
+    <section class="panel" id="q-panel" data-deep>
+      <div class="row spread">
+        <div><h2>Tonight's queue, in detail</h2><p class="qtotal" id="q-total"></p></div>
+        <div class="row"><button class="btn" id="q-start" type="button" hidden>Start now</button>
+          <span class="row qat"><button class="btn primary" id="q-at" type="button" hidden>Start at 11:00 pm</button><input type="time" id="q-at-time" value="23:00" aria-label="Start time"></span>
+          <button class="linkbtn" id="q-stop" type="button" hidden>Don't start more</button></div>
+      </div>
+      <div class="qpick">
+        <div class="seg" id="q-mode" role="tablist" aria-label="Add to the queue">
+          <button type="button" data-v="improve" aria-pressed="true">Improve my voices</button>
+          <button type="button" data-v="new" aria-pressed="false">New voices</button>
+          <button type="button" data-v="cadence" aria-pressed="false">Cadence</button>
+        </div>
+        <div id="q-improve">
+          <p class="meta">More singing (their album tracks first) or more speech, every clip checked again, a fresh training. The new voice replaces the old only if it measures better.</p>
+          <div class="vpick" id="q-cands"></div>
+          <div class="row spread"><span class="meta" id="q-sel-sum">Tick the voices to improve.</span><button class="btn primary" id="q-add-sel" type="button" disabled>Add to the queue</button></div>
+          <details class="qother" id="q-other" hidden data-deep><summary class="meta">Voices that can't be improved</summary><p class="meta" id="q-cands-off"></p></details>
+        </div>
+        <div id="q-cadence" hidden>
+          <p class="meta">Teaches a voice how the person talks (their pace and pauses), for SpeakEasy. It transcribes their clips, measures
+            how they speak and picks the clip that reads most like them: minutes, not hours. Kept only if it sounds more like them.</p>
+          <div class="vpick" id="q-cad-cands"></div>
+          <div class="row spread"><span class="meta" id="q-cad-sum">Tick the voices.</span><button class="btn primary" id="q-cad-add" type="button" disabled>Add to the queue</button></div>
+        </div>
+        <div id="q-new" hidden>
+          <div class="search"><input id="q-name" type="search" autocomplete="off" placeholder="Type a singer or a person, e.g. Adele" aria-label="Person or artist"></div>
+          <div class="qsugg" id="q-sugg" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="qlist" id="q-list"></div>
+      <div class="qopts">
+        <label class="toggle"><input type="checkbox" id="q-finish"><span>Finish by 7:00 am<br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="q-awake"><span>Keep the PC awake<br><span class="meta">Only while voice work runs.</span></span></label>
+      </div>
+      <p class="meta">Covers you start meanwhile go first. Pause / Resume at the top of the page stops and continues everything; the queue is saved, so a restart carries on.</p>
     </section>
     </div>
 
