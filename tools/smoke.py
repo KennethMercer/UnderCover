@@ -1424,12 +1424,14 @@ def u_rolloff_covers():
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
     # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); Vaulting's
     # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
-    # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); a new
-    # caller must be added here on purpose
+    # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
+    # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
+    # only what Make smaller itself set aside or made); a new caller must be added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py",
-                                                                        "frontman/history.py", "speakeasy/speak.py"], calls
+                                                                        "frontman/history.py", *["safehouse/smaller.py"] * 5,
+                                                                        "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
@@ -2375,6 +2377,7 @@ def u_person():
         tdir = proj.dir / "train"
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "e5.pth").write_bytes(b"x")
+        (tdir / "data.pt").write_bytes(b"")   # (torch.load is stubbed; export checks the file is there, phase 24)
         proj.train = {"best": 5, "train_minutes": 9.0, "saves": [{"epoch": 5, "identity": 0.8}]}
         proj.save()
         real = (trainer.torch.load, trainer.index_feats, trainer.f0_median, trainer.f0_range, V.install, rvc_index.write_ivf_flat)
