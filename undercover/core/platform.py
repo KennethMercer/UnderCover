@@ -28,7 +28,8 @@ def _not(what: str) -> NotOnThisOS:
 
 
 def supports(feature: str) -> tuple[bool, str]:
-    """(can it work here?, why not). Features: tray, startup, firewall, keep_awake, drives, gpu_driver, show_in_folder."""
+    """(can it work here?, why not). Features: tray, startup, firewall, keep_awake, drives, gpu_driver, show_in_folder,
+    fullscreen (seeing a full-screen game: the game pause)."""
     if feature == "tray":
         if not WINDOWS:
             return False, "The tray icon is Windows-only for now."
@@ -37,9 +38,65 @@ def supports(feature: str) -> tuple[bool, str]:
         except ImportError:
             return False, "pystray isn't installed (installer/requirements/common.txt)."
         return True, ""
-    if feature in ("startup", "firewall", "keep_awake", "drives", "gpu_driver", "show_in_folder"):
+    if feature in ("startup", "firewall", "keep_awake", "drives", "gpu_driver", "show_in_folder", "fullscreen"):
         return (True, "") if WINDOWS else (False, f"{feature} is Windows-only for now.")
     return False, f"Unknown feature '{feature}'."
+
+
+# ---------------------------------------------------------------- a full-screen game (the game pause)
+
+def fullscreen_app() -> dict | None:
+    """The program filling the screen right now, or None: {"exe", "path", "title", "how", "pid"}. Read only.
+    how: "exclusive" (a game holding the screen: Windows' QUNS_RUNNING_D3D_FULL_SCREEN), "busy" (Windows' own
+    "something is full-screen", QUNS_BUSY), or "borderless" (the foreground window covers its whole monitor with no
+    title bar: many modern games). The desktop and the taskbar are never it."""
+    if not WINDOWS:
+        raise _not("Seeing a full-screen game")
+    import ctypes
+    from ctypes import wintypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    quns = ctypes.c_int(0)
+    how = None
+    if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(quns)) == 0:
+        how = {3: "exclusive", 2: "busy"}.get(quns.value)
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    cls = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, cls, 256)
+    if cls.value in ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+        return None
+    if how is None:   # borderless: no title bar, and the window covers its whole monitor
+        if user32.GetWindowLongW(hwnd, -16) & 0x00C00000 == 0x00C00000:   # GWL_STYLE has WS_CAPTION: a normal window
+            return None
+        if user32.IsZoomed(hwnd):   # maximized, not full-screen: a browser or an editor with its own title bar
+            return None
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD)]
+        rect, mi = wintypes.RECT(), MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)) or not user32.GetMonitorInfoW(
+                user32.MonitorFromWindow(hwnd, 2), ctypes.byref(mi)):   # MONITOR_DEFAULTTONEAREST
+            return None
+        m = mi.rcMonitor
+        if not (rect.left <= m.left and rect.top <= m.top and rect.right >= m.right and rect.bottom >= m.bottom):
+            return None
+        how = "borderless"
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    exe = ""
+    h = kernel32.OpenProcess(0x1000, False, pid.value)   # PROCESS_QUERY_LIMITED_INFORMATION: no rights to change it
+    if h:
+        n, buf = wintypes.DWORD(1024), ctypes.create_unicode_buffer(1024)
+        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+            exe = buf.value
+        kernel32.CloseHandle(h)
+    title = ctypes.create_unicode_buffer(512)
+    user32.GetWindowTextW(hwnd, title, 512)
+    from pathlib import Path
+    return {"exe": Path(exe).name if exe else "", "path": exe, "title": title.value, "how": how, "pid": pid.value}
 
 
 # ---------------------------------------------------------------- files and folders

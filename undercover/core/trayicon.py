@@ -83,14 +83,32 @@ def tooltip(status: dict | None, jobs: list | None = None, doctor_bad: bool = Fa
     return "UnderCover · ready"
 
 
+def game_question(game: dict | None) -> str | None:
+    """The game pause's question as one line (None when nothing is being asked)."""
+    a = (game or {}).get("asking")
+    if not a:
+        return None
+    return f"{a.get('title') or a.get('exe')} is full-screen: pause UnderCover while you play?"
+
+
 def menu_model(status: dict | None, jobs: list | None = None, phone_on: bool | None = None,
-               startup_on: bool | None = None) -> list[dict]:
-    """The menu as data: [{"id", "text", "enabled", "checked", "default"}] (separators: {"id": "-"})."""
+               startup_on: bool | None = None, game: dict | None = None) -> list[dict]:
+    """The menu as data: [{"id", "text", "enabled", "checked", "default"}] (separators: {"id": "-"}). While the game
+    pause asks, its question and three answers come first."""
     if status is None:
         return [{"id": "start", "text": "Start UnderCover", "default": True},
                 {"id": "-"},
                 {"id": "close", "text": "Close this icon"}]
-    items = [{"id": "open", "text": "Open UnderCover", "default": True}]
+    items = []
+    q = game_question(game)
+    if q:
+        exe = game["asking"].get("exe") or "this game"
+        items += [{"id": "game-q", "text": q[:120], "enabled": False},
+                  {"id": "game-pause", "text": "Pause while I play"},
+                  {"id": "game-both", "text": "Keep both running"},
+                  {"id": "game-never", "text": f"Don't ask for {exe[:60]}"},
+                  {"id": "-"}]
+    items.append({"id": "open", "text": "Open UnderCover", "default": True})
     run = running(jobs)
     for j in run[:4]:
         items.append({"id": "running", "text": job_line(j), "enabled": False})
@@ -202,7 +220,7 @@ def run(port: int):
     from .config import path
     srv = Server(port)
     st = {"status": None, "jobs": [], "phone": None, "phone_at": 0.0, "doctor_bad": False, "doctor_at": 0.0,
-          "down_since": None, "startup": None}
+          "down_since": None, "startup": None, "game": None, "asked_at": None}
     lock = threading.Lock()   # one icon / menu update at a time (the poll and the actions both update)
     try:
         st["startup"] = platform.startup_entry_state()
@@ -217,6 +235,12 @@ def run(port: int):
             return
         st["down_since"] = None
         st["jobs"] = srv.get("/api/jobs") or []
+        game = srv.get("/api/gamepause")
+        st["game"] = game if isinstance(game, dict) else None
+        a = (st["game"] or {}).get("asking")
+        if a and a.get("since") != st["asked_at"]:   # a new question: one balloon (Windows holds it back in an
+            st["asked_at"] = a.get("since")          # exclusive full-screen game; the menu and the phone still ask)
+            say(f"{game_question(st['game'])} Choose in this icon's menu, or on your phone.")
         if time.time() - st["phone_at"] > 60:   # the tick changes only when someone flips it (the action re-reads it)
             ph = srv.get("/api/phone")
             st["phone"] = ph.get("enabled") if isinstance(ph, dict) else None
@@ -238,6 +262,10 @@ def run(port: int):
                 webbrowser.open(srv.base + "/")
             elif item_id in ("pause", "resume"):
                 ok, msg = srv.post(f"/api/work/{item_id}")
+                if not ok:
+                    say(msg)
+            elif item_id in ("game-pause", "game-both", "game-never"):
+                ok, msg = srv.post("/api/gamepause", {"answer": item_id.split("-", 1)[1]})
                 if not ok:
                     say(msg)
             elif item_id == "phone":
@@ -268,7 +296,7 @@ def run(port: int):
         return go
 
     def items():
-        model = menu_model(st["status"], st["jobs"], st["phone"], st["startup"])
+        model = menu_model(st["status"], st["jobs"], st["phone"], st["startup"], st["game"])
         out = []
         for it in model:
             if it["id"] == "-":

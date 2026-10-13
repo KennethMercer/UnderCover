@@ -97,6 +97,21 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && do
 
 // ------------------------------------------------------------ status + theme
 let pageBuild = null;
+// the game pause (core/gamepause.py): while a full-screen game is up and UnderCover has GPU work, the question shows on
+// every open page, a paired phone's too (in an exclusive full-screen game the phone is the one place it's seen)
+function gameAsk(a) {
+  const box = $("#gp-ask");
+  box.hidden = !a;
+  if (!a) return;
+  $("#gp-q").textContent = `${a.title || a.exe} is full-screen while ${a.reason || "UnderCover is working on the graphics card"}. Pause UnderCover while you play?`;
+  $("#gp-never").textContent = `Don't ask for ${a.exe}`;
+}
+for (const [id, answer] of [["gp-pause", "pause"], ["gp-both", "both"], ["gp-never", "never"]]) {
+  $("#" + id).onclick = async () => {
+    try { await api("/api/gamepause", { json: { answer } }); $("#gp-ask").hidden = true; }
+    catch (e) { showError(e.message, "Couldn't answer the game question"); }
+  };
+}
 $("#uc-updated-go").onclick = () => location.reload();
 async function pollStatus() {
   try {
@@ -119,6 +134,7 @@ async function pollStatus() {
     tr.hidden = !t;
     if (t) tr.innerHTML = `<i class="dot wait"></i><span>Training ${esc(t.project)}${t.eta ? ` · ${fmtSecs(t.eta)} left` : t.epoch ? ` · ${t.epoch}/${t.epochs}` : ""}</span>`;
     if (typeof renderWorkBar === "function") renderWorkBar(s.work);   // work.js: Pause / Resume bar (the tab title: jobs.js)
+    gameAsk(s.work && s.work.game_ask);
     if (s.models.startsWith("error")) { showError(s.models.replace(/^error: /, ""), s.gpu_problem ? "GPU not available" : "Models failed to load"); return; }
     S.modelsReady = s.models === "ready"; S.firstRun = !!s.first_run;
     setTimeout(pollStatus, s.models === "ready" ? 5000 : 1000);
@@ -349,13 +365,14 @@ function renderVoices() {
   const isLink = /^https?:\/\//i.test(q);
   const list = isLink ? [] : S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q) || voiceDisplay(v.name).toLowerCase().includes(q))
     .sort((a, b) => (a.likeness_word === "poor") - (b.likeness_word === "poor"));   // the ones that aren't really them sink
+  const shownList = typeof earSort === "function" ? earSort(list) : list;   // the ones you've liked rise (ear.js)
   const box = $("#voices");
   if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
-  else box.innerHTML = list.map(v => `
+  else box.innerHTML = shownList.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
-      <span class="vtext"><b>${vname(v.name)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
+      <span class="vtext"><b>${vname(v.name)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
       <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
@@ -630,6 +647,7 @@ const active = () => ab === "cover" ? aCover : aOrig;
 async function showResult(item, seconds) {
   S.result = item; playingHist = item.id;
   $("#result").hidden = false;
+  if (typeof earShow === "function") earShow($("#ear-cover"), "cover", item);   // How did it come out? (ear.js)
   $("#result-h").textContent = `${item.title} · ${item.voice}${item.backing_voice ? " + " + item.backing_voice : ""}`;
   renderKeep();
   stopAll();
@@ -820,7 +838,7 @@ function renderHistory() {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
-    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
+    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
       <small class="hdate">${esc((h.created || "").slice(0, 16))}</small>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("");

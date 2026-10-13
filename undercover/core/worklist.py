@@ -31,12 +31,14 @@ CONTROL_LOOKUPS: list = []    # job -> trainer Control (for jobs that don't carr
 
 
 def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda item: item["target"], follows=None,
-                  shown=lambda item: item["target"]):
+                  shown=lambda item: item["target"], modes: tuple = ()):
     """A kind of queue item. run(job, item) -> result dict; estimate(item) -> minutes per step and "total";
     target(text) -> the normalised target (raise ModelError if it's not valid); label(item) -> what the job shows;
     follows(item, other) -> True when item must run after other (a voice's cadence after that voice's training);
-    shown(item) -> the target as people read it (a voice's display name; the stored target stays the id)."""
-    KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label, "follows": follows, "shown": shown}
+    shown(item) -> the target as people read it (a voice's display name; the stored target stays the id);
+    modes: the item's optional `mode` values this kind takes (a new voice: speaking / singing / both)."""
+    KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label, "follows": follows, "shown": shown,
+                   "modes": tuple(modes)}
 
 
 def register_resume(kind: str, start):
@@ -103,11 +105,13 @@ def active() -> bool:
     return bool(_voice_jobs())
 
 
-def pause_all(resume_after_restart: bool = False) -> dict:
-    """Stop all voice work cleanly and remember it for Resume (or, for a restart, resume it right after)."""
+def pause_all(resume_after_restart: bool = False, by: str = "you") -> dict:
+    """Stop all voice work cleanly and remember it for Resume (or, for a restart, resume it right after). by: who held
+    it ("you", or "game" for the game pause, which only resumes a hold that is still its own)."""
     with _LOCK:
         st = _state()
         st["held"] = True
+        st["held_by"] = by
         if resume_after_restart:
             st["resume_after_restart"] = True
         _save()
@@ -142,6 +146,7 @@ def resume_all() -> dict:
     with _LOCK:
         st = _state()
         st["held"] = False
+        st.pop("held_by", None)
         specs, st["resume"] = st["resume"], []
         _log(f"resume {[x.get('label') for x in specs]}")
         for it in st["queue"]:
@@ -199,16 +204,26 @@ def held() -> bool:
     return bool(_state().get("held"))
 
 
+def hold() -> dict:
+    """{held, held_by} read under the lock (who paused: "you", or "game" for the game pause)."""
+    with _LOCK:
+        st = _state()
+        return {"held": bool(st.get("held")), "held_by": st.get("held_by")}
+
+
 # ---------------------------------------------------------------- the overnight queue
 
-def add(kind: str, target: str, now: bool = False) -> dict:
+def add(kind: str, target: str, now: bool = False, mode: str | None = None) -> dict:
     """Add a queue item. now=True: run it as soon as the GPU is free, without starting the rest of the queue
-    ("Start now" in SpeakEasy / DoubleAgent; it still waits for a training that's running)."""
+    ("Start now" in SpeakEasy / DoubleAgent; it still waits for a training that's running). mode: kept on the item
+    for kinds that take one (a new voice: speaking / singing / both); None lets the run decide."""
     target = (target or "").strip()
     if kind not in KINDS:
         raise ModelError("Pick Improve a voice or Train a new voice.")
     if not target:
         raise ModelError("Type a voice or a person's name.")
+    if mode and mode not in KINDS[kind]["modes"]:
+        raise ModelError("Pick Speaking or Singing." if KINDS[kind]["modes"] else "This kind of work has no Speaking / Singing choice.")
     target = KINDS[kind]["target"](target)   # e.g. a voice that must exist (friendly error if it doesn't)
     with _LOCK:
         q = _state()["queue"]
@@ -219,6 +234,8 @@ def add(kind: str, target: str, now: bool = False) -> dict:
             "added": time.strftime("%Y-%m-%d %H:%M")}
     if now:
         item["now"] = True
+    if mode:
+        item["mode"] = mode
     item["estimate"] = estimate(item)
     with _LOCK:
         q = _state()["queue"]

@@ -191,7 +191,10 @@ async function daStart(tonight) {
   try {
     await trainVoice(person, DA_MODE.v, tonight);   // train.js
     $("#da-person").value = "";
-    if (tonight) showError(`${person} is in tonight's work: it trains while the PC is free. SafeHouse's Running room shows it.`, "Added to tonight", null, true);
+    if (tonight) {
+      showError(`${person} is in tonight's work: it trains while the PC is free. SafeHouse's Running room shows it.`, "Added to tonight", null, true);
+      document.dispatchEvent(new CustomEvent("uc:voicequeued", { detail: { person } }));   // the First assignment ends on it
+    }
     else { daOutcomeClear(); renderDaWork(); }
   } catch (e) { showError(e.message, tonight ? "Couldn't add it to tonight" : "Couldn't start the voice"); }
   finally { btn.disabled = false; btn.innerHTML = label; }
@@ -242,8 +245,10 @@ onJobs(() => { if (!$("#view-train").hidden) renderDaWork(); });
 function daOutcome(voice) { store.set("uc-da-outcome", voice); loadCandidates(); }   // the card draws once the voice is in the list
 document.addEventListener("uc:jobdone", async e => {
   const j = e.detail;
-  if (j.kind !== "train-auto" || j.state !== "done" || !j.project) return;
-  try {
+  if (j.kind !== "train-auto" || j.state !== "done") return;
+  if (j.voice) return daOutcome(j.voice);   // the job names the voice it made
+  if (!j.project) return;
+  try {   // an older server: its project does
     const proj = (await api("/api/train/projects")).find(p => p.name === j.project);
     if (proj?.train?.exported) daOutcome(proj.train.exported);
   } catch (err) { /* the voice is in the list anyway; only the card is missed */ }

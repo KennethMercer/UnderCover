@@ -1,0 +1,101 @@
+{
+  "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
+  "entries": [
+    {
+      "id": "2026-10-13-tonight-mode",
+      "date": "2026-10-13",
+      "title": "Train tonight remembers Singing",
+      "lines": [
+        "A voice queued for tonight now trains the way you picked: Speaking or Singing.",
+        "While a voice trains, \"Checking it\" now lights up as it's checked against real clips of the person."
+      ]
+    },
+    {
+      "id": "2026-10-13-thumbs",
+      "date": "2026-10-13",
+      "title": "Thumbs up, thumbs down",
+      "lines": [
+        "Under every cover and speech: How did it come out? Two thumbs, and an optional why.",
+        "A thumbs down offers one fix when there is one: an octave lower, read it slower, improve the voice tonight.",
+        "The voices you like rise to the top of FrontMan's list. Your ear, in SafeHouse's Settings, can forget them all."
+      ]
+    },
+    {
+      "id": "2026-10-12-whatsnew",
+      "date": "2026-10-12",
+      "title": "A note after each update",
+      "lines": [
+        "After an update, a short note like this says what changed. Got it puts it away.",
+        "SafeHouse's System room keeps every note, newest first."
+      ]
+    },
+    {
+      "id": "2026-10-12-libcounts",
+      "date": "2026-10-12",
+      "title": "SafeHouse counts what you see",
+      "lines": [
+        "The numbers on the Library's chips count only the tab you're on: Kept or Recent.",
+        "The Library catches up by itself when a cover or speech finishes."
+      ]
+    },
+    {
+      "id": "2026-10-12-doubleagent",
+      "date": "2026-10-12",
+      "title": "DoubleAgent, rebuilt",
+      "lines": [
+        "One line to train a voice: a name, Speaking or Singing, Train the voice.",
+        "Train tonight instead puts it in the overnight queue, which now lives in SafeHouse's Running room.",
+        "Every voice says how like the person it sounds: fair, good or great.",
+        "When a voice is ready, one card says what to do next. Step by step is in Deep Cover."
+      ]
+    },
+    {
+      "id": "2026-10-12-tray",
+      "date": "2026-10-12",
+      "title": "UnderCover in the tray",
+      "lines": [
+        "An icon by the clock shows when UnderCover is working, with Pause, Resume and Quit, even with no browser open."
+      ]
+    },
+    {
+      "id": "2026-10-12-characters",
+      "date": "2026-10-12",
+      "title": "Cartoon characters",
+      "lines": [
+        "Ask for a character (\"Toxic as SpongeBob\") and UnderCover looks for their scenes, not people talking about them."
+      ]
+    },
+    {
+      "id": "2026-10-12-first-assignment",
+      "date": "2026-10-12",
+      "title": "Your first assignment",
+      "lines": [
+        "A new copy of UnderCover starts with a short guided run: a cover, a listen, a keep. Replay it in SafeHouse's Settings."
+      ]
+    },
+    {
+      "id": "2026-10-12-ytdlp",
+      "date": "2026-10-12",
+      "title": "Downloads that mend themselves",
+      "lines": [
+        "When YouTube starts refusing videos, UnderCover tries a newer downloader and keeps it only if it works better."
+      ]
+    },
+    {
+      "id": "2026-10-12-themes",
+      "date": "2026-10-12",
+      "title": "Themes",
+      "lines": [
+        "Deep Cover's Settings has five looks. Make your own and share it with a friend as one file."
+      ]
+    },
+    {
+      "id": "2026-10-12-phone",
+      "date": "2026-10-12",
+      "title": "Your phone",
+      "lines": [
+        "Phone access in SafeHouse's Settings lets a paired phone on your home Wi-Fi use UnderCover."
+      ]
+    }
+  ]
+}

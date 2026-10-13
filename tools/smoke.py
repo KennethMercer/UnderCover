@@ -250,6 +250,295 @@ def u_sources():
     assert not s.is_sung("Elliott Smith Interview 1998")
 
 
+@check("vault: what goes in (trained voices, songs, covers, speech, choices, settings; no secrets), compressed and bit-identical, incremental, cut-short safe, pruning, restore that asks")
+def u_vault():
+    import hashlib
+    import numpy as np
+    import soundfile as sf
+    from datetime import datetime
+    from undercover.core import vault, storage
+    from undercover.core.voices import ModelError
+    sha = lambda f: hashlib.sha256(Path(f).read_bytes()).hexdigest()
+    with isolated_data() as box:
+        # imported inside: config.CONFIG_FILE is the sandbox's only now (imported earlier, it was the user's real
+        # config.toml, and this check appended to it on 2026-10-13 before the guard below existed)
+        from undercover.core.config import CONFIG, CONFIG_FILE, path
+        assert storage._inside(CONFIG_FILE, box), f"the config isn't the sandbox's: {CONFIG_FILE}"
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            vd = path("voices_dir")
+            for name, extra in (("mine-uc", {"trained": True}), ("downloaded", {}), ("agent-smoke", {"trained": False, "demo": True})):
+                (vd / name).mkdir(parents=True)
+                (vd / name / "meta.json").write_text(json.dumps({"name": name, "extra": extra}), encoding="utf-8")
+                (vd / name / "model.pth").write_bytes(os.urandom(50_000) + bytes(200_000))
+                (vd / name / "model.index").write_bytes(np.arange(60_000, dtype=np.float32).tobytes())
+            up, out = path("uploads_dir"), path("output_dir")
+            for d in (up, out / "speech"):
+                d.mkdir(parents=True, exist_ok=True)
+            (up / "abc.flac").write_bytes(os.urandom(30_000))
+            (up / "abc.json").write_text('{"title": "A song"}', encoding="utf-8")
+            (out / "A song (mine-uc).mp3").write_bytes(os.urandom(20_000))
+            tone = (np.sin(np.arange(44100) / 20) * 8000).astype(np.int16)
+            sf.write(out / "speech" / "line.wav", tone, 44100, subtype="PCM_16")
+            sf.write(out / "speech" / "float.wav", tone.astype(np.float32) / 32768, 44100, subtype="FLOAT")
+            # a speech as SpeakEasy keeps it: its wav and mp3 named by title, its record by id
+            (out / "speech" / "Good evening (mine-uc).mp3").write_bytes(os.urandom(5_000))
+            sf.write(out / "speech" / "Good evening (mine-uc).wav", tone, 44100, subtype="PCM_16")
+            (out / "speech" / "0123456789.json").write_text(json.dumps({"id": "0123456789", "title": "Good evening",
+                "voice": "mine-uc", "file": "Good evening (mine-uc).wav", "mp3": "Good evening (mine-uc).mp3"}), encoding="utf-8")
+            tr = path("cache_dir") / "training" / "mine"
+            (tr / "clips").mkdir(parents=True)
+            (tr / "project.json").write_text('{"name": "mine", "mode": "speaking"}', encoding="utf-8")
+            sf.write(tr / "clips" / "c1.wav", tone, 44100, subtype="PCM_16")
+            (CONFIG_FILE.parent / "phone.json").write_text('{"devices": [{"token": "SECRET"}]}', encoding="utf-8")
+            keys = {k: kind for kind, k, _ in vault.items("matters")}
+            assert "voices/mine-uc/model.pth" in keys and not any(k.startswith(("voices/downloaded", "voices/agent-smoke")) for k in keys), keys
+            assert "songs/abc.flac" in keys and keys["covers/speech/line.wav"] == "speech" and "settings/config.toml" in keys, keys
+            assert "training/mine/project.json" in keys and not any("clips" in k for k in keys), "clips are for Everything"
+            assert any("clips" in k for _, k, _ in vault.items("everything"))
+            assert not any(k.endswith("phone.json") for _, k, _ in vault.items("everything")), "a secret went in"
+            # the folder: refused inside the library, fine beside it
+            assert not vault.check_folder(str(path("uploads_dir") / "v"))["ok"]
+            vf = box / "vault-drive"
+            chk = vault.check_folder(str(vf))
+            assert chk["ok"], chk
+            vault.set_folder(str(vf))
+            r1 = vault.run()
+            root = vault.root_of(vf)
+            objs = {f.name.split(".", 1)[1] for f in (root / "objects").rglob("*") if f.is_file()}
+            assert {"flac", "raw"} <= objs and ("lzma" in objs or "zlib" in objs), objs
+            snap = vault.load_snapshot(root)["files"]
+            for _, k, f in vault.items("matters"):   # every object comes back bit-identical
+                assert vault.get(root / "objects", snap[k][0]) == f.read_bytes(), k
+            line = next((root / "objects").rglob(sha(out / "speech" / "line.wav") + ".*"))
+            assert line.suffix == ".flac", line
+            assert r1["stored"] < r1["raw"], r1
+            # incremental: nothing new, nothing written; one change, one object
+            r2 = vault.run()   # straight after: a second snapshot, never the first one overwritten
+            assert len(vault.snapshots(vault.root_of(vf))) == 2, vault.snapshots(vault.root_of(vf))
+            assert r2["new"] == 0 and r2["bytes_written"] == 0, r2
+            (up / "abc.json").write_text('{"title": "A song, renamed"}', encoding="utf-8")
+            assert vault.run()["new"] == 1
+            st = vault.status()   # what SafeHouse and the Doctor read: the stored size is saved with the run
+            assert st["stored"] > 0 and st["stored"] < st["raw"] and st["last"]["pruned"] == 0, st
+            # a run cut short leaves the last snapshot whole, and no new one
+            before = vault.snapshots(root)
+            try:
+                vault.run(cancel=lambda: True)
+                raise AssertionError("a cancelled run finished")
+            except InterruptedError:
+                pass
+            assert vault.snapshots(root) == before
+            # a damaged object is an error, never a quiet bad restore
+            victim = next(f for f in (root / "objects").rglob("*.raw"))
+            good = victim.read_bytes()
+            victim.write_bytes(b"x" + good[1:])
+            try:
+                vault.get(root / "objects", victim.name.split(".")[0])
+                raise AssertionError("a damaged object restored")
+            except ModelError:
+                pass
+            victim.write_bytes(good)
+            # restore: missing comes back; a different one asks; both / replace / skip
+            orig = (out / "A song (mine-uc).mp3").read_bytes()
+            (out / "A song (mine-uc).mp3").unlink()
+            c = vault.contents()
+            cover = next(i for i in c["kinds"]["cover"] if i["item"] == "A song (mine-uc).mp3")
+            assert cover["here"] == "missing", cover
+            assert vault.restore(cover["keys"])["restored"] == cover["keys"]
+            assert (out / "A song (mine-uc).mp3").read_bytes() == orig
+            (out / "A song (mine-uc).mp3").write_bytes(b"changed")
+            asked = vault.restore(cover["keys"])
+            assert asked["conflicts"] == cover["keys"] and not asked["restored"] and (out / "A song (mine-uc).mp3").read_bytes() == b"changed"
+            vault.restore(cover["keys"], "both")
+            assert (out / "A song (mine-uc) (from vault).mp3").read_bytes() == orig and (out / "A song (mine-uc).mp3").read_bytes() == b"changed"
+            n_snaps = len(vault.snapshots(root))
+            vault.restore(cover["keys"], "replace")
+            assert (out / "A song (mine-uc).mp3").read_bytes() == orig and len(vault.snapshots(root)) == n_snaps + 1, "replace didn't vault first"
+            voice = [k for k in snap if k.startswith("voices/mine-uc/")]
+            (vd / "mine-uc" / "model.pth").write_bytes(b"retrained")
+            vault.restore(voice, "both")
+            assert sha(vd / "mine-uc-from-vault" / "model.pth") == snap["voices/mine-uc/model.pth"][0]
+            assert (vd / "mine-uc-from-vault" / "meta.json").is_file(), "keep both brought back part of a voice"
+            # a restored config keeps this install's [paths]
+            here_paths = CONFIG_FILE.read_text(encoding="utf-8")
+            CONFIG_FILE.write_text(here_paths + "\n[extra]\nx = 1\n", encoding="utf-8")
+            vault.restore(["settings/config.toml"], "replace")
+            import tomllib
+            got = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            assert got["paths"] == tomllib.loads(here_paths)["paths"] and "vault" in got, got
+            # restore never writes outside the library
+            snap2 = vault.load_snapshot(root)
+            snap2["files"]["covers/../../escape.txt"] = snap2["files"]["songs/abc.json"]
+            stamp = vault.snapshots(root)[-1]
+            (root / "snapshots" / f"{stamp}.json").write_text(json.dumps(snap2), encoding="utf-8")
+            try:
+                vault.restore(["covers/../../escape.txt"], "both")
+                raise AssertionError("a restore wrote outside the library")
+            except ModelError:
+                pass
+            # one row per song and per speech, titled from its own record, even when its files are gone (Q's pages)
+            for f in [*(out / "speech").glob("Good evening*"), out / "speech" / "0123456789.json"]:
+                f.unlink()
+            c = vault.contents()
+            sp = [i for i in c["kinds"]["speech"] if i["item"] == "0123456789"]
+            assert len(sp) == 1 and sp[0]["title"] == "Good evening (mine-uc)" and sp[0]["files"] == 3 and sp[0]["here"] == "missing", sp
+            assert not [i for i in c["kinds"]["speech"] if i["item"].startswith(("Good evening", "0123456789.json"))]
+            sg = [i for i in c["kinds"]["song"] if i["item"] == "abc"]
+            assert len(sg) == 1 and sg[0]["title"] == "A song, renamed" and sg[0]["files"] == 2, c["kinds"]["song"]
+            assert set(vault.restore(sp[0]["keys"])["restored"]) == set(sp[0]["keys"])
+            assert (out / "speech" / "0123456789.json").is_file() and (out / "speech" / "Good evening (mine-uc).wav").is_file()
+            listed = [k for its in vault.contents()["kinds"].values() for it in its for k in it["keys"]]
+            assert listed and "covers/../../escape.txt" not in listed, "one bad name broke or entered the listing"
+            # big files stream (a few MB of memory) and still come back bit-identical
+            saved_max = vault.FLAC_MAX
+            try:
+                vault.FLAC_MAX = 1000
+                big = out / "speech" / "big.wav"
+                sf.write(big, np.tile(tone, 4), 44100, subtype="PCM_16")
+                vault.run()
+                obj = next((root / "objects").rglob(sha(big) + ".*"))
+                assert obj.suffix in (".lzma", ".raw"), obj
+                orig_big = big.read_bytes()
+                big.unlink()
+                key = "covers/speech/big.wav"
+                vault.restore([key])
+                assert big.read_bytes() == orig_big
+            finally:
+                vault.FLAC_MAX = saved_max
+            # one run at a time: two at once both finish, and every object a kept snapshot names is there
+            import threading
+            (up / "two.flac").write_bytes(os.urandom(40_000))
+            ths = [threading.Thread(target=vault.run) for _ in range(2)]
+            for t in ths:
+                t.start()
+            for t in ths:
+                t.join()
+            for stamp in vault.snapshots(root):
+                for k, v in vault.load_snapshot(root, stamp)["files"].items():
+                    assert vault.find_object(root / "objects", v[0]), (stamp, k)
+            # pruning: the policy, and only unreferenced objects go (the library untouched)
+            stamps = ["2026-01-05T10-00-00", "2026-01-20T10-00-00", "2026-08-01T10-00-00", "2026-08-03T10-00-00",
+                      "2026-10-01T10-00-00", "2026-10-02T10-00-00", "2026-10-11T09-00-00", "2026-10-12T09-00-00"]
+            kept = vault.keep_which(stamps, datetime(2026, 10, 13, 12))
+            assert kept == ["2026-01-20T10-00-00", "2026-08-03T10-00-00", "2026-10-02T10-00-00", "2026-10-11T09-00-00",
+                            "2026-10-12T09-00-00"], kept
+            orphan = root / "objects" / "ff" / ("f" * 64 + ".raw")
+            orphan.parent.mkdir(exist_ok=True)
+            orphan.write_bytes(b"nobody's")
+            lib_before = {str(f): f.stat().st_size for d in (vd, up, out) for f in d.rglob("*") if f.is_file()}
+            assert vault.prune(root) >= 1 and not orphan.exists()
+            assert {str(f): f.stat().st_size for d in (vd, up, out) for f in d.rglob("*") if f.is_file()} == lib_before
+            for _, k, f in vault.items("matters"):   # still all restorable
+                if k in vault.load_snapshot(root)["files"]:
+                    vault.get(root / "objects", vault.load_snapshot(root)["files"][k][0])
+            # test mode: a vault folder outside the test's own (a sandbox inherits the user's [vault]) is refused
+            # before anything is written
+            outside = ROOT.parent / "zz-uc-smoke-vault"
+            try:
+                vault.run(folder=str(outside))
+                raise AssertionError("a test-mode run wrote outside the test's folders")
+            except ModelError as e:
+                assert "Test mode" in str(e), e
+            assert not outside.exists()
+            # a check leaves nothing behind, and sizes the choice being made
+            fresh = box / "fresh-drive" / "deep" / "vault"
+            ok = vault.check_folder(str(fresh))
+            assert ok["ok"] and not (box / "fresh-drive").exists(), "a folder check left folders behind"
+            assert vault.check_folder(str(fresh), "everything")["need"] > ok["need"]
+            vault.set_folder("")
+            assert not vault.status()["on"]
+        finally:
+            CONFIG["vault"] = saved_vault
+    return f"{r1['files']} files: {r1['raw'] / 1e3:.0f} kB kept in {r1['stored'] / 1e3:.0f} kB; incremental, safe, asks, prunes"
+
+
+@check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
+       "Checking it stage, the voice a finished training made in its job snapshot")
+def u_da_mode():
+    import inspect
+    from undercover.core import jobs, worklist
+    from undercover.core.jobs import Job
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import night, service
+    from undercover.doubleagent import project as P
+    with isolated_data() as box:
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file inside the test's folder
+        real_train = service.train_new_voice
+        try:
+            worklist.add("new", "Smoke Test Singer", mode="singing")
+            worklist.add("new", "Smoke Test Talker")
+            q = {i["target"]: i for i in worklist._state()["queue"]}
+            assert q["Smoke Test Singer"]["mode"] == "singing" and "mode" not in q["Smoke Test Talker"], q
+            for kind, mode, words in (("new", "humming", "Speaking or Singing"), ("improve", "singing", "no Speaking")):
+                try:
+                    worklist.add(kind, "Smoke Test Other", mode=mode)
+                    raise AssertionError(f"{kind} took mode {mode}")
+                except ModelError as e:
+                    assert words in str(e), e
+            # the queue's run passes the item's mode on to the training
+            got = {}
+
+            def fake(job, person, control, push, **kw):
+                got.update(kw, person=person)
+                return "smoke-test-singer-uc"
+            service.train_new_voice = fake
+            night._new(Job("zz-smoke"), q["Smoke Test Singer"])
+            assert got.get("mode") == "singing" and got["person"] == "Smoke Test Singer", got
+            # a new project starts in the chosen mode, and the choice is applied to an existing one (apply_mode)
+            proj = service.project_for("Smoke Test Singer", "singing")
+            assert proj.mode == "singing", proj.mode
+            talker = service.project_for("Smoke Test Talker", "speaking")
+            assert service.apply_mode(talker, "Smoke Test Talker", "both").mode == "both", "nothing searched: the mode follows"
+            from undercover.doubleagent import sources as srcmod
+            real_search = srcmod.search
+            sung = P.Source(id="sung1", title="Smoke Test Talker - A Song (Official Audio)", url="https://example.invalid/1",
+                            channel="x", duration=200.0)
+            srcmod.search = lambda person, mode, **kw: [sung] if mode == "singing" else []
+            try:
+                spoken = P.Project.load(talker.name)
+                spoken.mode, spoken.sources = "speaking", [P.Source(id="talk1", title="Interview", url="https://example.invalid/2",
+                                                                    channel="x", duration=600.0)]
+                spoken.save()
+                got = service.apply_mode(spoken, "Smoke Test Talker", "singing")   # speech so far: their songs are added
+                assert got.mode == "singing" and [s.id for s in got.sources] == ["talk1", "sung1"], (got.mode, got.sources)
+                assert service.apply_mode(got, "Smoke Test Talker", "speaking").sources == got.sources, "songs were dropped"
+                got.train["epoch"] = 40
+                got.save_train()
+                assert service.apply_mode(P.Project.load(got.name), "Smoke Test Talker", "speaking").mode == "singing", \
+                    "a project that has trained changed mode"
+            finally:
+                srcmod.search = real_search
+        finally:
+            service.train_new_voice = real_train
+            jobs.PORT, worklist._STATE = old_port, old_state
+        # Checking it: the last save (an early stop's) is measured like the others and can win
+        from undercover.doubleagent.trainer import Trainer
+        tr = Trainer.__new__(Trainer)
+        tr.tdir = box / "zz-train"
+        tr.tdir.mkdir(parents=True)
+        (tr.tdir / "e63.pth").write_bytes(b"x")
+        saved = []
+        tr.proj = type("Proj", (), {"save_train": lambda self: saved.append(1)})()
+        tr._probe = lambda epoch, sr: {"identity": 0.91, "low": 0.8, "cents": 20.0, "content": 0.95, "test": "speech"}
+        st = {"epoch": 63, "best": 50, "sr": 40000, "saves": [
+            {"epoch": 50, "val": 0.3, "identity": 0.85, "low": 0.8, "cents": 21.0, "content": 0.95, "test": "speech"},
+            {"epoch": 63, "val": 0.29}]}
+        tr.check_last(st)
+        assert st["best"] == 63 and st["saves"][1]["identity"] == 0.91 and saved, st
+        tr.check_last(st)
+        assert len(saved) == 1, "a measured save was measured again"
+    src = inspect.getsource(service.train_new_voice)
+    assert src.index("tr.check_last(st)") < src.index('push("voice", 0.98,'), "nothing checked before Adding"
+    assert src.index("ACTIVE[proj.name] = ") < src.index("apply_mode(proj, person, mode)"), "the mode changed before the busy check"
+    # the page's card after training reads the voice from the finished job
+    a, b, c = Job("train-auto"), Job("zz-work"), Job("train-prepare")
+    a.finish("done", message="ready", voice="v-auto")
+    b.finish("done", message="ready", result={"voice": "v-queue", "after": None})
+    c.finish("done", message="ready")
+    assert (a.snapshot().get("voice"), b.snapshot().get("voice"), c.snapshot().get("voice")) == ("v-auto", "v-queue", None)
+    return "mode kept and passed on, refused where it doesn't apply; Checking it at 0.975; voice in the snapshot"
 @check("test mode refuses writes outside the test's folders (the real config.toml, phone.json, anywhere in the app); no module binds the config's path at import")
 def u_write_guard():
     """2026-10-13: a vault check held the real config's path from an import made before its sandbox, and appended to the
@@ -290,6 +579,135 @@ def u_write_guard():
     return "config, fsutil (text, torch) and phone writes refused outside; inside works; real files unchanged; no import-time binding"
 
 
+@check("game pause: asks (never assumes) when a full-screen game meets GPU work; Pause / Keep both / Don't ask; resumes only its own hold when the game closes; a job about to start waits for the answer")
+def u_gamepause():
+    import threading
+    from undercover.core import gamepause as gp, jobs, worklist
+    from undercover.core.config import CONFIG
+    from undercover.core.jobs import Job
+    from undercover.core.voices import ModelError
+    game = {"exe": "Cyberpunk2077.exe", "title": "Cyberpunk 2077", "how": "exclusive"}
+    other = {"exe": "eldenring.exe", "title": "ELDEN RING", "how": "borderless"}
+    with isolated_data():
+        saved = (dict(CONFIG.get("game_pause") or {}), jobs.PORT, worklist._STATE, dict(gp.STATE))
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue in the test's own cache
+        CONFIG["game_pause"] = {}
+        reset = lambda: gp.STATE.update(game=None, asking=None, answer=None, paused_for=None, gone_since=None, reason="")
+        try:
+            reset()
+            # no GPU work: a game is just a game
+            gp.tick(game, 0, busy=False)
+            assert gp.STATE["asking"] is None
+            # GPU work: ask, and keep asking with no answer: nothing is ever paused by itself
+            for t in range(0, 60, 5):
+                gp.tick(game, 10 + t, busy=True)
+            assert gp.STATE["asking"]["exe"] == "Cyberpunk2077.exe" and not worklist._state().get("held")
+            # UnderCover's own page full-screen is never a game
+            reset()
+            gp.tick({"exe": "chrome.exe", "title": "UnderCover — Google Chrome", "how": "busy"}, 0, busy=True)
+            assert gp.STATE["asking"] is None and gp.STATE["game"] is None
+            # Pause: the work holds as the game's; the game gone 15 s: it resumes
+            reset()
+            gp.tick(game, 0, busy=True)
+            gp.answer("pause")
+            st = worklist._state()
+            assert st["held"] and st["held_by"] == "game" and gp.STATE["paused_for"] == "Cyberpunk2077.exe"
+            assert gp.tick(None, 100, busy=False) is None and worklist._state()["held"], "resumed before the game was gone 15 s"
+            assert gp.tick(None, 116, busy=False) == "resumed" and not worklist._state()["held"]
+            # a hand Resume, then a hand Pause during the game: its end resumes nothing (the hold is yours)
+            gp.tick(game, 200, busy=True)
+            gp.answer("pause")
+            worklist.resume_all()
+            worklist.pause_all()
+            assert gp.tick(None, 300, busy=False) is None and gp.tick(None, 316, busy=False) is None
+            assert worklist._state()["held"] and worklist._state()["held_by"] == "you"
+            # already paused by you when a game asks: Pause keeps the hold yours (the game's end resumes nothing)
+            gp.tick(game, 330, busy=True)
+            gp.answer("pause")
+            assert worklist.hold() == {"held": True, "held_by": "you"} and gp.STATE["paused_for"] is None
+            gp.tick(None, 340, busy=False)
+            assert gp.tick(None, 356, busy=False) is None and worklist.hold()["held"]
+            worklist.resume_all()
+            # UnderCover restarted mid-game (its memory gone, the game's hold saved): no game for 15 s, it resumes
+            worklist.pause_all(by="game")
+            reset()
+            assert gp.tick(None, 360, busy=False) is None and gp.tick(None, 376, busy=False) == "resumed"
+            assert not worklist.hold()["held"]
+            # Keep both: no more asking until that game closes; a different game asks afresh
+            gp.tick(game, 400, busy=True)
+            gp.answer("both")
+            gp.tick(game, 405, busy=True)
+            assert gp.STATE["asking"] is None and not worklist._state()["held"]
+            gp.tick(other, 410, busy=True)
+            assert gp.STATE["asking"]["exe"] == "eldenring.exe"
+            # Don't ask for this game: kept in the (test's) config, never asked again
+            gp.answer("never")
+            assert "eldenring.exe" in gp.settings()["never_ask"]
+            gp.tick(None, 500, busy=False)
+            gp.tick(None, 516, busy=False)
+            gp.tick(other, 520, busy=True)
+            assert gp.STATE["asking"] is None
+            gp.set_never("eldenring.exe", False)
+            assert "eldenring.exe" not in gp.settings()["never_ask"]
+            try:
+                reset()
+                gp.answer("pause")
+                raise AssertionError("an answer with no game on the screen")
+            except ModelError:
+                pass
+            # asking switched off: nothing asks, nothing waits
+            gp.set_ask(False)
+            reset()
+            gp.tick(game, 600, busy=True)
+            assert gp.STATE["asking"] is None
+            assert gp.before_start(Job("zz-smoke"), sleep=lambda _s: None, look=lambda: game) == "start"
+            gp.set_ask(True)
+            # a queued job about to start while a game is up waits for the answer: Keep both lets it start
+            reset()
+            job = Job("zz-smoke")
+            job.title = "Making a voice of Agent Smoke"
+            out = {}
+            th = threading.Thread(target=lambda: out.update(r=gp.before_start(job, sleep=lambda _s: time.sleep(0.01),
+                                                                               look=lambda: game, clock=lambda: 700)))
+            th.start()
+            wait_for(lambda: gp.STATE["asking"], 5, every=0.02, what="the question")
+            assert "waiting to start" in gp.STATE["reason"] and th.is_alive(), "the job started without an answer"
+            gp.answer("both")
+            th.join(5)
+            assert out.get("r") == "start"
+            assert any("Waiting: Cyberpunk 2077 is full-screen" in (e.get("message") or "") for e in job.events), \
+                "the waiting job didn't say why"
+            # ... and Pause makes it wait until the game is gone (the watcher resumes), then it starts
+            reset()
+            job2 = Job("zz-smoke")
+            th = threading.Thread(target=lambda: out.update(r2=gp.before_start(job2, sleep=lambda _s: time.sleep(0.01),
+                                                                                look=lambda: game, clock=lambda: 800)))
+            th.start()
+            wait_for(lambda: gp.STATE["asking"], 5, every=0.02, what="the question")
+            gp.answer("pause")
+            time.sleep(0.2)
+            assert th.is_alive() and worklist._state()["held_by"] == "game", "it started while paused for the game"
+            gp.tick(None, 900, busy=True)
+            assert gp.tick(None, 916, busy=True) == "resumed"
+            th.join(5)
+            assert out.get("r2") == "held" and not th.is_alive()
+            # cancelling a waiting job lets it go (run_job then finishes it as cancelled)
+            reset()
+            job3 = Job("zz-smoke")
+            job3.cancel = True
+            assert gp.before_start(job3, sleep=lambda _s: None, look=lambda: game) == "start"
+            # the GPU worker asks the gates before every job, and says which job is on the GPU (what "busy" means)
+            import inspect
+            src = inspect.getsource(jobs.gpu_worker)
+            assert src.index("gate(job)") < src.index("CURRENT[0] = job") < src.index("run_job(job, fn)"), "the gate isn't wired"
+            assert not gp._gpu_busy()
+        finally:
+            CONFIG["game_pause"], jobs.PORT, worklist._STATE = saved[0], saved[1], saved[2]
+            gp.STATE.clear()
+            gp.STATE.update(saved[3])
+    return "no work: no question; no answer: no pause; Pause / both / never; resumes only its own hold; a starting job waits"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -298,30 +716,31 @@ def u_paused():
     from undercover.core import jobs, worklist
     from undercover.core.jobs import Job, Paused
     from undercover.core.config import path
-    old_port, old_state = jobs.PORT, worklist._STATE
-    jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
-    f = path("cache_dir") / "worklist-7999.json"
-    try:
-        worklist.PAUSABLE.add("zz-smoke")
-        job = Job("zz-smoke")
-        job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
+    with isolated_data():   # the scratch queue file goes in the test's own cache, never the user's
+        old_port, old_state = jobs.PORT, worklist._STATE
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file: never the real one
+        f = path("cache_dir") / "worklist-7999.json"
+        try:
+            worklist.PAUSABLE.add("zz-smoke")
+            job = Job("zz-smoke")
+            job.resume_spec = {"kind": "zz-smoke", "label": "smoke"}
 
-        def fn(job):
-            raise Paused()
-        jobs.run_job(job, fn)
-        assert job.state == "paused", job.state
-        assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
-        worklist.forget_paused()
-        assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
-        # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
-        import inspect
-        from undercover.frontman import oneshot
-        src = inspect.getsource(oneshot.run)
-        assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
-    finally:
-        worklist.PAUSABLE.discard("zz-smoke")
-        jobs.PORT, worklist._STATE = old_port, old_state
-        f.unlink(missing_ok=True)
+            def fn(job):
+                raise Paused()
+            jobs.run_job(job, fn)
+            assert job.state == "paused", job.state
+            assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
+            worklist.forget_paused()
+            assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
+            # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
+            import inspect
+            from undercover.frontman import oneshot
+            src = inspect.getsource(oneshot.run)
+            assert 'spec["song_url"]' in src and 'spec["prefer_train"] = True' in src
+        finally:
+            worklist.PAUSABLE.discard("zz-smoke")
+            jobs.PORT, worklist._STATE = old_port, old_state
+            f.unlink(missing_ok=True)
 
 
 @check("time left: every progress event gets total_left (whole-job and per-stage kinds, learned stage times)")
@@ -707,10 +1126,12 @@ def u_rolloff_covers():
     # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
     # MasterPlan), the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
-    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); a new caller
-    # must be added here on purpose
+    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); Vaulting's
+    # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); a new caller must be
+    # added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/themes.py",
-                                                                        "core/ytdlp.py", "frontman/history.py", "speakeasy/speak.py"], calls
+                                                                        "core/vault.py", "core/vault.py", "core/ytdlp.py",
+                                                                        "frontman/history.py", "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
@@ -1093,6 +1514,106 @@ def u_characters():
             "unticked, scenes first; target = the scenes' voice; AI/TTS and dubs out; a recast said; gate")
 
 
+@check("the ear: thumbs on covers and speech, one fix for a reason that has one, forget, liked voices first (phone allowed)")
+def u_ear():
+    import time
+    from undercover.app import ear_api, phone_api
+    from undercover.core import config, ear
+    from undercover.core.config import path
+    from undercover.core.voices import get_voice, voice_info
+    from undercover.doubleagent import service
+    from undercover.frontman import history
+    from undercover.speakeasy import speak
+    with isolated_data():
+        assert ear.ear_file() == Path(config.CONFIG_FILE).with_name("ear.json")   # next to the (isolated) config
+        z = _fake_voice("zed-uc", "trained", {"trained": True, "person": "Zed", "likeness": 0.7})
+        z.installed = "2026-10-12 00:00"   # the newer one: first without thumbs
+        (z.dir / "meta.json").write_text(json.dumps(z.to_json(), indent=2), encoding="utf-8")
+        _fake_voice("zed-2-uc", "trained", {"trained": True, "person": "Zed", "likeness": 0.7})
+        _fake_voice("zed", "https://x/y", {"person": "Zed"})
+        out = path("output_dir") / "Song (zed-2-uc).mp3"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        cov = history.record({"output": str(out), "song": "", "voice": "zed-2-uc", "stems": {}, "title": "Song",
+                              "options": {"voice": "zed-2-uc", "octave": 0, "key": 1, "quality": "high", "karaoke": True}})
+        sid = "abcdef0123"
+        (speak.speech_dir() / "s.wav").write_bytes(b"x")
+        (speak.speech_dir() / f"{sid}.json").write_text(json.dumps({"id": sid, "file": "s.wav", "text": "hi", "voice": "zed-uc",
+                                                                    "pace": "natural", "mode": "cadence", "reader": "am_michael"}), encoding="utf-8")
+
+        def call(method, p, body=None):
+            h = _FakeHandler(p, body)
+            assert ear_api.handle(h, method, p)
+            return h
+        before = [v.name for v in service.installed_for("Zed")]
+        # a thumbs up: stored with the cover's own voice and settings (not the body's), marked in the items
+        h = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "up", "reasons": ["like"], "voice": "zed"})
+        assert h.err is None and h.out["fix"] is None and h.out["item"]["voice"] == "zed-2-uc", (h.err, h.out)
+        assert h.out["item"]["settings"] == {"octave": 0, "key": 1, "quality": "high", "karaoke": True}, h.out["item"]
+        g = call("GET", "/api/ear").out
+        assert g["items"][f"cover:{cov['id']}"]["thumb"] == "up" and g["summary"]["up"] == 1 and g["reasons"]["cover"]["down"][0]["id"] == "unlike"
+        # liked voices first: the voice APIs carry it, the one-shot's choice of a person's voices leans to it
+        assert voice_info(get_voice("zed-2-uc"))["ear"] == {"up": 1, "down": 0} and voice_info(get_voice("zed-uc"))["ear"] is None
+        after = [v.name for v in service.installed_for("Zed")]
+        assert after[0] == "zed-2-uc" and before[0] == "zed-uc", (before, after)
+        # ...and among equally good checked voices only (a clearly better score still wins)
+        c = [{"name": "zed", "score": 0.60}, {"name": "zed-2-uc", "score": 0.58}, {"name": "zed-uc", "score": 0.50}]
+        assert [x["name"] for x in ear.prefer(c, name=lambda x: x["name"], score=lambda x: x["score"])] == ["zed-2-uc", "zed", "zed-uc"]
+        c[0]["score"] = 0.70
+        assert ear.prefer(c, name=lambda x: x["name"], score=lambda x: x["score"])[0]["name"] == "zed"
+        # a thumbs down replaces it; "doesn't sound like them" on a trained voice offers Improve tonight
+        h = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["unlike", "key"], "note": " too   far "})
+        f = h.out["fix"]
+        assert f["reason"] == "unlike" and f["do"]["body"] == {"kind": "improve", "target": "zed-2-uc", "now": False} and f["alt"]["action"] == "pick_voice", f
+        assert h.out["item"]["note"] == "too far" and ear.taste("zed-2-uc") == {"up": 0, "down": 1}
+        # wrong key: make it again an octave lower (or higher); at the lowest only higher
+        f = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["key"]}).out["fix"]
+        assert f["do"]["action"] == "remake" and f["do"]["options"] == {"octave": -1} and f["alt"]["options"] == {"octave": 1}, f
+        # ...which FrontMan makes again with the cover's own song, voice and settings (the backing moves with the lead)
+        from undercover.frontman import api as fapi
+        got, real = {}, fapi._start_cover
+        fapi._start_cover = lambda h, body: got.update(body)
+        try:
+            h = _FakeHandler()
+            fapi._cover_again(h, cov["id"], {"options": {"octave": -1, "voice": "x"}})   # (a voice in options is ignored)
+        finally:
+            fapi._start_cover = real
+        assert got["voice"] == "zed-2-uc" and got["options"]["octave"] == -1 and got["options"]["key"] == 1 and "voice" not in got["options"], got
+        f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
+        assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
+        # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
+        f = ear.fix_for("cover", ["unlike"], {"name": "zed", "person": "Zed"}, {}, "x")
+        assert f["do"]["body"] == {"kind": "new", "target": "Zed", "now": False}, f
+        h = call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pace"]})
+        assert h.out["fix"]["do"]["options"] == {"pace": "slower"} and h.out["item"]["settings"] == {"pace": "natural", "mode": "cadence", "reader": "am_michael"}, h.out
+        assert call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pauses"]}).out["fix"] is None
+        # speech read by a stock Reader (no cadence): learning their cadence is the fix, not more training
+        f = ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "reader"}, sid)
+        assert f["do"]["body"] == {"kind": "cadence", "target": "zed-uc", "now": False}, f
+        assert ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "cadence"}, sid)["do"]["body"]["kind"] == "improve"
+        # superseded thumbs are written away once they dominate the file
+        for _ in range(260):
+            ear.rate("speech", sid, "up", "zed-uc", {}, [], "")
+        assert len(ear.ear_file().read_text(encoding="utf-8").splitlines()) < 260 and ear.thumb_of("speech", sid)["thumb"] == "up"
+        assert ear.taste("zed-uc") == {"up": 1, "down": 0}, ear.taste("zed-uc")
+        # refused: unknown reasons, a thumb that isn't up or down, a cover that's gone
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["meh"]}).err
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "sideways"}).err
+        assert call("POST", "/api/ear/rate", {"kind": "cover", "id": "0000000000", "thumb": "up"}).err
+        # a half-written last line (a power cut) is skipped; forget one, then all
+        with open(ear.ear_file(), "a", encoding="utf-8") as fh:
+            fh.write('{"item": "cover:x", "thu')
+        time.sleep(0.01)
+        assert set(ear.items()) == {f"cover:{cov['id']}", f"speech:{sid}"}, ear.items()
+        assert call("POST", "/api/ear/forget", {"kind": "speech", "id": sid}).out == {"forgot": 1}
+        assert set(ear.items()) == {f"cover:{cov['id']}"}
+        assert call("POST", "/api/ear/forget", {}).err and call("POST", "/api/ear/forget", {"all": True}).out == {"forgot": 1}
+        assert ear.items() == {} and not ear.ear_file().exists()
+        for m, r in (("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget")):
+            assert phone_api.policy(m, r)[0] == "phone", (m, r, phone_api.policy(m, r))
+    return "up / down with reasons, the cover's own voice and settings; fixes: Improve tonight, a new voice, an octave, slower; forget one / all; liked first"
+
+
 @check("lead gate: an instrument in the lead stem isn't converted, lines left in the backing are; the stems stay as they were")
 def u_leadgate():
     import numpy as np
@@ -1432,8 +1953,8 @@ def u_display_names():
         got = {v.name: V.display_name(v) for v in V.list_voices()}
         assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
                        "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
-        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "likeness_word": None}
-        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "likeness_word": None}
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "likeness_word": None, "ear": None}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "likeness_word": None, "ear": None}
         # the route: set, read back through the APIs, clear
         h = _FakeHandler(body={"display": "  Barry   O  "})
         assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
@@ -2951,8 +3472,9 @@ def u_platform():
     try:
         assert platform.supports("firewall")[0] is False and platform.supports("tray")[0] is False
         assert platform.keep_awake(True) is False
+        assert platform.supports("fullscreen")[0] is False
         for fn, args in ((platform.startup_folder, ()), (platform.network_and_firewall, ("192.168.1.5",)),
-                         (platform.video_controllers, ())):
+                         (platform.video_controllers, ()), (platform.fullscreen_app, ())):
             try:
                 fn(*args)
                 raise AssertionError(f"{fn.__name__} ran as if on Windows")
@@ -2990,6 +3512,10 @@ def u_tray():
     ids = [i["id"] for i in m if i["id"] != "-"]
     assert ids == ["open", "running", "phone", "restart", "quit", "startup"], ids
     assert m[0]["default"] and next(i for i in m if i["id"] == "phone")["checked"] is False
+    asking = {"asking": {"exe": "eldenring.exe", "title": "ELDEN RING", "since": 1.0}}
+    g = [i["id"] for i in tray.menu_model(idle, [], game=asking) if i["id"] != "-"]
+    assert g[:5] == ["game-q", "game-pause", "game-both", "game-never", "open"], g
+    assert tray.game_question(asking).startswith("ELDEN RING is full-screen") and tray.game_question({"asking": None}) is None
     assert next(i for i in m if i["id"] == "startup")["checked"] is True
     cover = {"id": "c1", "kind": "cover", "state": "running", "title": "Cover: Hello as Agent Smoke", "total_left": 130}
     train = {"id": "t1", "kind": "train", "state": "running", "title": "Training Morgan Freeman", "epoch": 120,
@@ -3029,6 +3555,8 @@ PHONE_SAMPLES = [
     *[("POST", f"/api/work/{a}") for a in ("pause", "resume", "forget", "add", "remove", "order", "start", "settings", "dismiss")],
     ("POST", "/api/voices/install"), ("POST", "/api/voices/upload"), ("DELETE", "/api/voices/some-voice"),
     ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
+    ("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget"),
+    ("POST", "/api/history/0123456789/again"),
     ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
     ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
     *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
@@ -3056,6 +3584,9 @@ PHONE_SAMPLES = [
     ("POST", "/api/storage/check"), ("POST", "/api/storage/move"),
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
+    ("GET", "/api/vault"), ("GET", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
+    ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"),
+    ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
     ("POST", "/api/phone/revoke"),
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
@@ -3348,11 +3879,21 @@ def a_page():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
     for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"',
-                 'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"'):
+                 'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"',
+                 'id="wn"', 'id="wn-ok"', 'id="sys-news"', 'id="ear-cover"', 'id="se-ear"', 'id="set-ear-row"'):
         assert part in html, f"missing {part}"
     # the overnight queue lives in SafeHouse's Running room (the DoubleAgent redesign); DoubleAgent keeps only its door
     room = html.index('id="room-running"')
     assert html.index('id="q-panel"') > room and html.index('id="q-report"') > room, "the queue panel isn't in the Running room"
+    # What's new: the notes file is well formed, newest first, one id each, short plain lines (whatsnew.js reads it)
+    wn = api("/static/whatsnew.json")
+    wn = json.loads(wn) if isinstance(wn, (bytes, str)) else wn
+    ents = wn["entries"]
+    assert ents and len({e["id"] for e in ents}) == len(ents), "What's new: ids must be unique"
+    assert [e["date"] for e in ents] == sorted((e["date"] for e in ents), reverse=True), "What's new: newest first"
+    for e in ents:
+        assert re.fullmatch(r"\d{4}-\d\d-\d\d", e["date"]) and e["title"].strip(), f"What's new: {e['id']} needs a date and a title"
+        assert 1 <= len(e["lines"]) <= 4 and all(0 < len(l) <= 200 for l in e["lines"]), f"What's new: {e['id']} takes 1-4 short lines"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
         body = api(f)   # the home-screen manifest (phase 11) comes back parsed
@@ -3400,9 +3941,36 @@ def a_train():
 
 
 @check("api: work queue, candidates, pause/resume")
+@check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here)")
+def a_vault():
+    from undercover.core import storage
+    vf = storage.ALLOWED_ROOTS[0] / "vault-drive"
+    bad = api("/api/vault/check?folder=" + urllib.parse.quote(str(ROOT / "output")))
+    assert bad["ok"] is False, bad
+    st = api("/api/vault/settings", {"folder": str(vf), "size": "matters"})
+    assert st["on"] and st["connected"], st
+    try:
+        assert api("/api/vault/run", {})["started"] is True
+        wait_for(lambda: not api("/api/vault")["running"], 600, what="the vault run")
+        st = api("/api/vault")
+        assert st["last"] and not st["error"], st
+        c = api("/api/vault/contents")
+        keys = [k for its in c["kinds"].values() for it in its for k in it["keys"]]
+        r = api("/api/vault/restore", {"keys": keys[:20], "on_conflict": "ask"})
+        assert not r["conflicts"] and not r["restored"] and r["same"], r
+    finally:
+        api("/api/vault/settings", {"folder": ""})
+    return f"{st['last']['files']} files, {st['raw'] / 1e6:.1f} MB kept in {st['stored'] / 1e6:.1f} MB"
+
+
 def a_work():
     w = api("/api/work")
     assert "queue" in w and "held" in w
+    try:   # Train tonight's Speaking / Singing reaches the queue (refused here, so nothing is queued)
+        api("/api/work/add", {"kind": "new", "target": "Smoke Test", "mode": "humming"})
+        raise AssertionError("a new voice was queued with mode humming")
+    except urllib.error.HTTPError as e:
+        assert "Speaking or Singing" in json.loads(e.read()).get("error", ""), e.code
     api("/api/work/candidates")
     p = api("/api/work/pause", {})
     assert p["held"] is True
@@ -3799,7 +4367,7 @@ def snapshot_real(dirs: dict) -> dict:
     beside the config (config.toml, tutorial.json, phone.json, themes.json: a check once appended to the real config)."""
     import os
     snap = {}
-    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json"):
+    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json", "ear.json"):
         p = ROOT / name
         if p.is_file():
             st = p.stat()
@@ -3973,9 +4541,9 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_write_guard, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_gamepause, u_da_mode, u_write_guard, u_vault, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_platform, u_tray):
         fn()
@@ -3990,7 +4558,7 @@ def main():
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
