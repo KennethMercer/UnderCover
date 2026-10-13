@@ -45,6 +45,8 @@ key = 0                          # semitones, whole song
 octave = 0                       # new vocal only
 pitch = 0                        # legacy vocal-only semitones (CLI --pitch); not a multiple of 12 = out of key
 pitch_cleanup = true             # repair pitch-tracker octave glitches and blips (cuts octave jumps 60-75%)
+chorus = "keep"                  # lines the karaoke split put in the backing: keep (the original singers; the user's ear,
+                                 # 2026-10-13: Toxic's layered choruses converted were "atrocious") | top | convert
 pitch_correction = 0.0           # snap to the song's scale: 0 off, 0.3-0.5 gentle, 1 hard autotune
 index_ratio = 0.75               # 0 = ignore .index, 1 = fully snap to the voice's training features
 protect = 0.33                   # protect consonants/breaths (0.5 = off)

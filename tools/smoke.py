@@ -177,7 +177,25 @@ def u_fit():
     assert fit["octave"] <= -1 and fit["outside"] < 0.5, fit
     fit0 = pick_fit([300.0, 440.0, 600.0], False, f0)
     assert fit0["octave"] == 0 and fit0["key"] == 0, fit0
-    return f"low voice -> octave {fit['octave']} key {fit['key']:+d}"
+    # the register (phase 22, by ear): the melody's median goes where the voice is comfortable, a speech-trained voice
+    # ~4 st over its speaking median, by octave (the vocal) and up to 7 st of key (the whole song)
+    rng = np.random.default_rng(22)
+    hold_on = 200.0 * 2 ** (rng.uniform(-5, 5, 800) / 12)
+    smoke = pick_fit([85.7, 110.3, 159.6], True, hold_on)      # Agent Smoke: the user wanted 4-6 st down
+    assert 12 * smoke["octave"] + smoke["key"] in range(-7, -3) and abs(smoke["register_st"]) < 1.5, smoke
+    deep = pick_fit([72.0, 104.6, 174.7], True, hold_on)       # Freeman: well under the original
+    assert 12 * deep["octave"] + deep["key"] <= -6 and abs(deep["register_st"]) < 1.5, deep
+    sung = pick_fit([140.0, 200.0, 300.0], False, hold_on)     # a singer at that pitch keeps the song as it is
+    sb = pick_fit([115.4, 229.7, 420.3], True, hold_on)       # SpongeBob: not raised to his register (by ear: 0 beat +6)
+    toxic = 387.0 * 2 ** (rng.uniform(-10, 4, 800) / 12)      # a wide, high melody (Toxic: low notes ~216 Hz)
+    fr = pick_fit([72.0, 104.6, 174.7], True, toxic)           # Freeman: not so deep the low notes growl (by ear: -15 beat -18)
+    assert -17 <= 12 * fr["octave"] + fr["key"] <= -13, fr
+    assert 12 * sb["octave"] + sb["key"] == 0, sb
+    assert sung["octave"] == 0 and sung["key"] == 0, sung
+    from undercover.frontman import fit as F
+    assert "alt" not in deep or abs((12 * deep["alt"]["octave"] + deep["alt"]["key"]) - (12 * deep["octave"] + deep["key"])) >= F.ALT_APART
+    return (f"low voice -> octave {fit['octave']} key {fit['key']:+d}; Agent Smoke on a 200 Hz melody -> "
+            f"{12 * smoke['octave'] + smoke['key']:+d} st, Freeman -> {12 * deep['octave'] + deep['key']:+d} st, a singer at that pitch -> 0")
 
 
 @check("worklist: overnight window and deadline")
@@ -1714,6 +1732,14 @@ def u_ear():
         finally:
             fapi._start_cover = real
         assert got["voice"] == "zed-2-uc" and got["options"]["octave"] == -1 and got["options"]["key"] == 1 and "voice" not in got["options"], got
+        # two octaves of it, previewed for a quick blind pick (phase 22): only octave / key change
+        pv, realp = {}, fapi._start_preview
+        fapi._start_preview = lambda h, body: pv.update(body)
+        try:
+            fapi._cover_octaves(_FakeHandler(), cov["id"], {"variants": [{"octave": 0, "key": 1}, {"octave": -1, "key": 0, "voice": "x"}]})
+        finally:
+            fapi._start_preview = realp
+        assert [(v["octave"], v["key"]) for v in pv["variants"]] == [(0, 1), (-1, 0)] and pv["voice"] == "zed-2-uc" and "voice" not in pv["variants"][1], pv
         f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
         assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
         # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
@@ -1761,6 +1787,8 @@ def u_golden():
     b = {"cover:toxic__sb": {"likeness": 0.75, "words_kept": 0.81, "cents_off": 21.0, "loud_db": -14.1, "octave": 0}}
     bd = G.bands(a, b)["cover:toxic__sb"]
     assert bd == {"likeness": 0.05, "words_kept": 0.05, "cents_off": 5.0, "loud_db": 0.5}, bd   # the spread, never under the floor
+    c = {"cover:toxic__sb": {"likeness": 0.68, "words_kept": 0.8, "cents_off": 20.0, "loud_db": -14.0, "octave": 0}}
+    assert G.bands(a, b, c)["cover:toxic__sb"]["likeness"] == 0.07   # three runs: the largest spread
     base = {"run": "r0", "scores": a, "bands": {"cover:toxic__sb": bd}}
     same = {"cover:toxic__sb": {"likeness": 0.62, "words_kept": 0.95, "cents_off": 29.0, "loud_db": -14.9}}
     assert G.flags(base, same) == [], G.flags(base, same)   # within twice the bands, or better
@@ -1783,7 +1811,8 @@ def u_golden():
     old = {"run": "r0", "scores": {"cover:a__v1": {"likeness": 0.7}, "cover:a__v2": {"likeness": 0.6}},
            "bands": {"cover:a__v1": {"likeness": 0.02}, "cover:a__v2": {"likeness": 0.02}}}
     m = G.merged_baseline(old, ("r5", {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.2}, "cover:b__v1": {"likeness": 0.3}}),
-                          {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.25}, "cover:b__v1": {"likeness": 0.3}}, {"v2", "b"})
+                          [{"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.25}, "cover:b__v1": {"likeness": 0.3}},
+                           {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.21}, "cover:b__v1": {"likeness": 0.3}}], {"v2", "b"})
     assert m["scores"]["cover:a__v1"] == {"likeness": 0.7} and m["scores"]["cover:a__v2"] == {"likeness": 0.2}, m
     assert m["bands"]["cover:a__v2"] == {"likeness": 0.05} and G.render_run(m, "cover:b__v1") == "r5" and G.render_run(m, "cover:a__v1") == "r0"
     spec = {"voices": [{"name": "v1"}, {"name": "morgan-freeman-uc"}], "covers": {"a": ["v1", "gone"]}}
@@ -1848,6 +1877,17 @@ def u_leadgate():
         assert rms(l2, c0, c1) > 0.9 * rms(back, c0, c1) and rms(b2, c0, c1) < 0.01 * rms(back, c0, c1), "the chorus wasn't moved"
         assert abs(rms(l2, 1, 7) - rms(lead, 1, 7)) < 1e-3, "the singing changed"
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
+    # a duet (phase 22): two voices in harmony all the way are "backing" to the karaoke model and its lead is silence;
+    # then there's no lead to split off and the whole vocal is converted as one voice
+    import tempfile
+    from undercover.core.separate import lead_missing
+    with tempfile.TemporaryDirectory() as td:
+        silent, lead_f, back_f, quiet = (Path(td) / n for n in ("silent.wav", "lead.wav", "back.wav", "quiet.wav"))
+        sf.write(str(silent), np.zeros(16000 * 4, np.float32), 16000)
+        sf.write(str(lead_f), voice[:16000 * 4], 16000)
+        sf.write(str(back_f), 0.3 * voice[16000:16000 * 5], 16000)
+        sf.write(str(quiet), 0.1 * voice[:16000 * 4], 16000)
+        assert lead_missing(silent, back_f) and not lead_missing(lead_f, back_f) and not lead_missing(quiet, back_f)
     return f"hook {inst:.1f} s left as it is, chorus {ch:.1f} s converted, singing untouched, stems unchanged"
 
 
@@ -3752,7 +3792,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/voices/install"), ("POST", "/api/voices/upload"), ("DELETE", "/api/voices/some-voice"),
     ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
     ("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget"),
-    ("POST", "/api/history/0123456789/again"),
+    ("POST", "/api/history/0123456789/again"), ("POST", "/api/history/0123456789/octaves"),
     ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
     ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
     *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
