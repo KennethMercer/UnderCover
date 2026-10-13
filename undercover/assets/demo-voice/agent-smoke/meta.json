@@ -6,27 +6,27 @@
  "version": "v2",
  "sr": 40000,
  "f0": true,
- "source": "demo voice: Kokoro bm_george reading The Secret Agent (Conrad, public domain)",
- "installed": "2026-10-12 18:10",
+ "source": "demo voice: Kokoro am_michael reading The Secret Agent (Conrad, public domain)",
+ "installed": "2026-10-13 04:25",
  "extra": {
-  "original_pth": "e627.pth",
+  "original_pth": "e48.pth",
   "original_index": "added_agent-smoke.index",
   "trained": false,
-  "epoch": 627,
-  "train_minutes": 3.86,
+  "epoch": 48,
+  "train_minutes": 55.64,
   "likeness": null,
-  "f0_median": 136.7,
+  "f0_median": 110.3,
   "f0_range": [
-   89.1,
-   136.7,
-   180.9
+   85.7,
+   110.3,
+   159.6
   ],
   "from_speech": true,
   "person": "Agent Smoke",
   "demo": true,
   "note": "demo voice, made for UnderCover, not a real person",
-  "reader": "bm_george",
-  "made": "2026-10-12"
+  "reader": "am_michael",
+  "made": "2026-10-13"
  },
  "display": "Agent Smoke"
 }

@@ -250,6 +250,73 @@ def u_sources():
     assert not s.is_sung("Elliott Smith Interview 1998")
 
 
+@check("demo voice builder: a paused training leaves a folder that resumes (resume.pt and all, byte for byte)")
+def u_demo_pause():
+    """2026-10-12: a pause lost a training 10 epochs from the end (the builder's sandbox took resume.pt with it)."""
+    import hashlib
+    import inspect
+    import make_demo_voice as mdv
+    with isolated_data() as box:
+        proj = box / "sandbox" / "training" / "agent-smoke"
+        (proj / "train").mkdir(parents=True)
+        (proj / "clips").mkdir()
+        (proj / "project.json").write_text(json.dumps({"name": "agent-smoke", "train": {"state": "paused", "epoch": 88}}),
+                                           encoding="utf-8")
+        (proj / "train" / "resume.pt").write_bytes(os.urandom(1 << 16))
+        (proj / "train" / "e80.pth").write_bytes(os.urandom(4096))
+        (proj / "clips" / "p0001.wav").write_bytes(os.urandom(2048))
+        digest = lambda d: {str(f.relative_to(d)): hashlib.sha256(f.read_bytes()).hexdigest() for f in d.rglob("*") if f.is_file()}
+        before = digest(proj)
+        keep = box / "kept" / "agent-smoke-paused"
+        (keep / "stale").mkdir(parents=True)   # an older kept copy is replaced, not merged
+        mdv.keep_paused(proj, keep)
+        shutil.rmtree(box / "sandbox")   # the builder's sandbox goes
+        assert digest(keep) == before, "the kept folder isn't the project byte for byte"
+        projects = box / "new-sandbox" / "training"
+        projects.mkdir(parents=True)
+        assert mdv.restore_paused(keep, projects) == "agent-smoke"
+        assert digest(projects / "agent-smoke") == before, "the resumed project isn't the kept one"
+    src = inspect.getsource(mdv.main)
+    i = src.index('"paused" and what == "training"')
+    assert src.index("keep_paused(", i) < src.index("sys.exit(", i), "a paused training exits before it's kept"
+    assert "restore_paused(resume" in src and '"--resume"' in src
+    return "kept before the sandbox goes; restored byte for byte into a new one; --resume wired"
+
+
+@check("demo voice builder: more minutes later reads on (new sentences, never the same twice, the reader checked)")
+def u_demo_topup():
+    import numpy as np
+    import make_demo_voice as mdv
+    from undercover.speakeasy import tts
+    real = tts.synth
+    read = []
+
+    def fake(text, reader):   # 30 s of silence per sentence, and a note of what was read
+        read.append(text)
+        return np.zeros(int(tts.SR * 30), np.float32)
+    text = " ".join(f"Sentence number {i} is here." for i in range(40))
+    try:
+        tts.synth = fake
+        with isolated_data() as box:
+            work = box / "speech"
+            work.mkdir()
+            first = mdv.synthesize(text, "am_michael", 4, work)
+            got1 = list(read)
+            read.clear()
+            more = mdv.synthesize(text, "am_michael", 8, work)
+            assert len(first) == 2 and len(more) == 4 and more[:2] == first, (first, more)
+            assert got1 and read and not set(got1) & set(read), "a sentence was read twice"
+            assert read[0] == f"Sentence number {len(got1)} is here.", read[0]
+            read.clear()
+            assert mdv.synthesize(text, "am_michael", 8, work) == more and not read, "enough already: nothing more read"
+            try:
+                mdv.synthesize(text, "bm_george", 12, work)
+                raise AssertionError("another reader was mixed in")
+            except SystemExit as e:
+                assert "am_michael" in str(e), e
+    finally:
+        tts.synth = real
+    return "4 min, then 8 min reads on from the next sentence; 8 again reads nothing; another reader refused"
 @check("vault: what goes in (trained voices, songs, covers, speech, choices, settings; no secrets), compressed and bit-identical, incremental, cut-short safe, pruning, restore that asks")
 def u_vault():
     import hashlib
@@ -706,6 +773,39 @@ def u_gamepause():
             gp.STATE.clear()
             gp.STATE.update(saved[3])
     return "no work: no question; no answer: no pause; Pause / both / never; resumes only its own hold; a starting job waits"
+
+
+@check("cadence reading: very short sentences are read with a neighbour (never across a paragraph), the voice conversion gets a lead-in; Agent Smoke ships a shrunk index")
+def u_cadence_starts():
+    """2026-10-13: "Good evening." came out as "Grieving." (the conversion, no context before the onset) and short
+    sentences read alone got stray sounds ("E. Listen carefully."); measured fixes in core/cadence/render.py."""
+    import inspect
+    import struct
+    import numpy as np
+    from undercover.core.cadence import render
+    S = lambda t, p=0.3: {"text": t, "pause": p}
+    j = render.join_short([S("Good evening."), S("The name is Smoke, Agent Smoke."), S("Go.", 0.0)])
+    assert [x["text"] for x in j] == ["Good evening. The name is Smoke, Agent Smoke. Go."], j
+    j = render.join_short([S("Listen carefully.", 0.7), S("A new paragraph starts here.", 0.0)])
+    assert [x["text"] for x in j] == ["Listen carefully.", "A new paragraph starts here."], "joined across a paragraph"
+    j = render.join_short([S("One more thing before you go.", 0.7), S("Right.", 0.3), S("Then go.", 0.0)])
+    assert [x["text"] for x in j] == ["One more thing before you go.", "Right. Then go."], j
+    assert render.join_short([S("Hi.", 0.0)]) == [S("Hi.", 0.0)]
+    src = inspect.getsource(render.finish)
+    assert "LEAD_S" in src and "y[int(sr * LEAD_S):]" in src, "the conversion lost its lead-in"
+    import make_demo_voice as mdv
+    from undercover.core.engine.rvc import index as rvcindex
+    with isolated_data() as box:
+        f = box / "model.index"
+        v = np.random.default_rng(0).normal(size=(3000, 16)).astype(np.float16)
+        f.write_bytes(rvcindex.COMPACT_MAGIC + struct.pack("<qq", *v.shape) + v.tobytes())
+        assert mdv.shrink_index(box, k=200) == (3000, 200)
+        back = rvcindex.read_vectors(f)
+        assert back.shape == (200, 16) and np.isfinite(back).all()
+        assert mdv.shrink_index(box, k=500) == (200, 200), "a small index was changed"
+    man = json.loads((ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke" / "manifest.json").read_text(encoding="utf-8"))
+    assert {"model.pth", "model.index"} <= set(man["files"]) and man["files"]["model.index"]["size"] < 32e6, man["files"]
+    return "joins short sentences inside a paragraph only; lead-in in finish; index k-means; the shipped index small"
 
 
 # ---------------------------------------------------------------- API checks (test server)
@@ -4605,7 +4705,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_gamepause, u_da_mode, u_write_guard, u_vault, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
