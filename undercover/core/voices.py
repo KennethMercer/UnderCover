@@ -672,8 +672,12 @@ def is_demo(v: Voice) -> bool:
 
 
 def voice_info(v: Voice) -> dict:
-    """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool) and `demo` (bool)."""
-    return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v)}
+    """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool), `demo` (bool) and
+    `ear` ({up, down}: the user's thumbs on its covers and speech, or null; FrontMan's basic voice list puts liked
+    voices first)."""
+    from . import ear
+    return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v),
+            "ear": ear.taste(v.name)}
 
 
 def set_display(name: str, text: str) -> Voice:
