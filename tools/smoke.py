@@ -1619,6 +1619,8 @@ def u_golden():
     import os
     import tempfile
     import golden as G
+    # words kept: the share of the lead's words that come through in order; extra words (moved choruses) aren't errors
+    assert G._kept("i'm loving it".split(), "so i'm really loving it baby".split()) == 1.0 and G._kept("a b c d".split(), "a x c".split()) == 0.5
     assert G.parts("cover:toxic__spongebob-uc") == {"toxic", "spongebob-uc"} and G.parts("speech:rain__morgan-freeman-uc:reader") == {"rain", "morgan-freeman-uc"}
     a = {"cover:toxic__sb": {"likeness": 0.70, "words_kept": 0.80, "cents_off": 20.0, "loud_db": -14.0, "octave": 0}}
     b = {"cover:toxic__sb": {"likeness": 0.75, "words_kept": 0.81, "cents_off": 21.0, "loud_db": -14.1, "octave": 0}}

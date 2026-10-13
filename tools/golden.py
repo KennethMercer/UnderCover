@@ -298,6 +298,20 @@ def _wer(ref: list, hyp: list) -> float:
     return d[-1] / len(ref)
 
 
+def _kept(ref: list, hyp: list) -> float | None:
+    """The share of the reference's words that come through, in order (longest common subsequence / reference).
+    Not 1 - WER: the converted lead may rightly hold more words than a lead stem (the choruses the lead gate moved
+    over from the backing), and those aren't errors."""
+    if not ref:
+        return None
+    d = [0] * (len(hyp) + 1)
+    for r in ref:
+        prev = 0
+        for j, h in enumerate(hyp, 1):
+            prev, d[j] = d[j], (prev + 1 if r == h else max(d[j], d[j - 1]))
+    return round(d[-1] / len(ref), 3)
+
+
 def _mix_scores(path: Path) -> dict:
     import numpy as np
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", "44100", "-"],
@@ -346,10 +360,11 @@ def run_set(stamp: str, spec: dict) -> dict:
         stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high")
         song_hz = song_vocal_f0(stems["vocals"], rmvpe)
         melody = _LAST_F0.get(str(stems["vocals"]))
-        lead16 = _load16(stems["vocals"])
         back16 = _load16(stems["backing"]) if stems.get("backing") else None
-        g = leadgate.plan(lead16, back16)
+        g = leadgate.plan(_load16(stems["vocals"]), back16)
         gate_s = round(sum(b - a for a, b in g["instrument"]) + sum(b - a for a, b in g["chorus"]), 1)
+        # the reference for words and pitch: the lead as it went into the conversion (after the gate)
+        lead16 = _load16(leadgate.apply(stems, g, tmp, f"golden-{s['name']}")["vocals"])
         chordal = chordal_backing(stems.get("backing"), rmvpe)
         for vname in spec["covers"].get(s["name"], []):
             if vname not in refs:
@@ -382,7 +397,7 @@ def run_set(stamp: str, spec: dict) -> dict:
             both = (f_o[:m] > 0) & (f_c[:m] > 0)
             cents = float(np.median(np.abs(1200 * np.log2(f_c[:m][both] / f_o[:m][both])))) if both.sum() > 20 else None
             sc = {"likeness": _likeness(conv16, refs[vname], emb),
-                  "words_kept": round(1 - min(1.0, _wer(wo, _words(tc))), 3) if wo else None,
+                  "words_kept": _kept(wo, _words(tc)),
                   "cents_off": round(cents, 1) if cents is not None else None,
                   "outside": round(outside, 3) if outside is not None else None,
                   "hiss": noisiness(conv16, 16000), "bleed_db": vocal_cleanliness(res.converted_vocal).get("bleed"),
