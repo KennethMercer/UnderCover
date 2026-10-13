@@ -186,6 +186,74 @@ function renderOS(ev) {
     ? "Covers you start meanwhile are made right away; training waits for them. You can watch it in DoubleAgent."
     : ev.stage === "queued" ? "Waiting for the GPU to finish the current job…" : "";
 }
+// Phase 22 (the voice lab's contract): when two octaves fit this voice about as well (plan.settings_fit.alt), offer a
+// quick blind pick. "Hear both" renders 15 s of the cover's most-sung part at each (POST /api/history/<id>/octaves);
+// the two come back shuffled as A and B, unlabelled, in sync like the previews. Picking the one the cover already has
+// keeps it; picking the other makes the cover again at that octave (/again). Rendering costs the GPU half a minute, so
+// it waits for "Hear both" instead of starting after every cover.
+function osOctaves(plan, item) {
+  const fit = plan.settings_fit, alt = fit?.alt;
+  $("#os-oct")?.remove();
+  if (!alt || !item?.id) return;
+  const cur = { octave: fit.octave ?? 0, key: fit.key || 0 }, other = { octave: alt.octave ?? 0, key: alt.key || 0 };
+  const who = plan.voice ? plan.voice.display || voiceDisplay(plan.voice.name) : "this voice";
+  $("#os-plan").insertAdjacentHTML("beforeend", `<div class="os-oct" id="os-oct">
+    <p><b>Two octaves suit ${esc(who)} about as well.</b> Hear both and pick the one that sounds more like them.</p>
+    <div class="row"><button class="btn" type="button" id="os-oct-go">Hear both</button><span class="meta" id="os-oct-st">about half a minute</span></div>
+    <div class="os-oct-ab" id="os-oct-ab" hidden></div></div>`);
+  $("#os-oct-go").onclick = async () => {
+    const go = $("#os-oct-go"), st = $("#os-oct-st");
+    go.disabled = true; st.textContent = "Rendering both…";
+    try {
+      const { job } = await api(`/api/history/${item.id}/octaves`, { json: { variants: [cur, other] } });
+      const stop = watchJob(job, ev => {
+        if (!ev.final) { if (ev.message) st.textContent = ev.message; return; }
+        stop();
+        if (ev.state !== "done" || !ev.previews?.length) { go.disabled = false; st.textContent = ""; return showError(ev.message || "The previews didn't come out.", "Couldn't render both"); }
+        go.hidden = true; st.textContent = "";
+        osOctAB([...ev.previews].sort(() => Math.random() - 0.5), cur, item);   // shuffled: blind
+      });
+    } catch (e) { go.disabled = false; st.textContent = ""; showError(e.message, "Couldn't render both"); }
+  };
+}
+function osOctAB(list, cur, item) {
+  const box = $("#os-oct-ab");
+  box.hidden = false;
+  box.innerHTML = list.map((p, i) => `<div class="pcard" data-i="${i}">
+      <div class="ptitle"><button class="play" type="button" aria-label="Play ${"AB"[i]}">▶</button><b>${"AB"[i]}</b></div>
+      <button class="btn" type="button" data-oct-pick="${i}">This one</button>
+      <audio preload="auto" src="${esc(p.url)}"></audio></div>`).join("") +
+    `<p class="meta">Switch between them while one plays: they stay in sync. <button class="linkbtn quiet" type="button" id="os-oct-keep">Keep the cover as it is</button></p>`;
+  applyVolume();
+  const cards = $$(".pcard", box), audios = cards.map(c => $("audio", c));
+  let pos = 0;
+  cards.forEach((card, i) => {
+    const a = audios[i];
+    $(".play", card).onclick = () => {
+      if (!a.paused) return a.pause();
+      const playing = audios.find(x => !x.paused);
+      if (playing) { pos = playing.currentTime; playing.pause(); }
+      stopAll();
+      try { a.currentTime = Math.min(pos, a.duration || pos); } catch (e) {}
+      a.play().catch(() => {});
+    };
+    a.addEventListener("play", () => { card.classList.add("playing"); $(".play", card).textContent = "❚❚"; });
+    a.addEventListener("pause", () => { card.classList.remove("playing"); $(".play", card).textContent = "▶"; });
+  });
+  const done = say => { audios.forEach(a => a.pause()); $("#os-oct").innerHTML = `<p class="meta">${say}</p>`; };
+  $("#os-oct-keep").onclick = () => done("Kept as it is.");
+  $$("[data-oct-pick]", box).forEach(b => b.onclick = async () => {
+    const o = list[+b.dataset.octPick].options || {}, pick = { octave: o.octave ?? 0, key: o.key || 0 };
+    if (pick.octave === cur.octave && pick.key === cur.key) return done("That's the one you have. Kept.");
+    b.disabled = true;
+    try {
+      const { job } = await api(`/api/history/${item.id}/again`, { json: { options: pick } });
+      done("Making it again at that octave. It replaces the player when it's done; the first one stays in your covers.");
+      if (!S.job) { S.job = job; summary(); startProgress(job); }
+      refreshJobs(true);
+    } catch (e) { b.disabled = false; showError(e.message, "Couldn't make it again"); }
+  });
+}
 function osFollow(id, title) {
   if (OS.es) OS.es();
   OS.job = id; OS.plan = null;
@@ -215,6 +283,7 @@ function osFollow(id, title) {
         }
       } catch (e) {}
       if (ev.result) showResult(ev.result, ev.seconds);
+      osOctaves(plan, ev.result);   // two octaves fit about as well: a quick blind pick (phase 22)
       $("#os-plan").insertAdjacentHTML("beforeend", qualityHtml(plan.voice));   // a weak voice is said with the cover too
       bindQuality();
       const others = (plan.song?.compared || []).filter(x => !x.chosen && x.id);
