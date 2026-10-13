@@ -621,11 +621,12 @@ def hiss_limit(proj: Project, music_limits: dict) -> float:
 # the separated phrases with music at -12..0 dB under them came out as clean as those under -12 (quiet gaps ~-53 dB,
 # the same flatness), yet the rule left out 39 of his 63 minutes. Speech with music up to MUSIC_CLEAN_DB is kept
 # when its clip shows it: clean gaps and under the voice's hiss limit. Singing keeps its own limit.
-MUSIC_CLEAN_DB = -3.0
+MUSIC_CLEAN_DB = -3.0   # [training] music_db_clean overrides it (-12 or lower: off)
 
 
 def _music_survived(p: Phrase, hiss: float) -> bool:
-    return not p.sung and p.music_db <= MUSIC_CLEAN_DB and p.floor <= HISS_FLOOR_DB and 0 <= p.noise <= hiss
+    return (not p.sung and p.music_db <= TCFG.get("music_db_clean", MUSIC_CLEAN_DB) and p.floor <= HISS_FLOOR_DB
+            and 0 <= p.noise <= hiss)
 
 
 def _measure_noise(proj: Project):
