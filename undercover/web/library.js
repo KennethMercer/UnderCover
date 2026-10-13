@@ -49,7 +49,7 @@ async function loadSummary() {
     : `Working (${s.ytdlp}).`;
   $("#lib-ytdlp-auto").checked = !!s.ytdlp_auto;
   if (s.ytdlp_job && !L.ytdlpWatch) ytdlpWatch(s.ytdlp_job);
-  renderCats();
+  renderKf();   // the tabs' totals and the chips' numbers
 }
 // System room: YouTube changes often; the check fetches PyPI's newest yt-dlp + its solver, tests it, and uses it only if
 // it works at least as well (else keeps or goes back to the last known good). A job: progress on the button.
@@ -86,8 +86,18 @@ async function loadCat(keepSel) {
 const refreshAll = async keepSel => { await Promise.all([loadSummary(), loadCat(keepSel)]); };
 
 // ------------------------------------------------------------ chips, tools
+// The numbers follow the tab that's showing: under Kept each chip counts its kept things, under Recent only covers and
+// speech have a number (the others have no recent tray). The tabs count every category. (The user, 2026-10-12: "Covers 1"
+// under an empty Kept made no sense.)
+const kfNow = () => hasTray() ? L.kf : "kept";
+function tabCounts(kf) {
+  const t = L.summary?.tabs?.[kf];
+  if (t) return t;
+  const c = L.summary?.counts || {};   // a server from before the per-tab counts: totals, as before
+  return kf === "kept" ? c : { covers: c.covers, speech: c.speech };
+}
 function renderCats() {
-  const c = L.summary?.counts || {};
+  const c = tabCounts(kfNow());
   $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
   $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderCats(); loadCat(); });
 }
@@ -109,11 +119,12 @@ function renderTools() {
 L.kf = store.get("uc-lib-kf", "kept");
 const hasTray = () => L.cat === "covers" || L.cat === "speech";
 function renderKf() {
-  const tray = hasTray(), all = L.data[L.cat] || [];
-  $$("#lib-kfilter .tab").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === (tray ? L.kf : "kept")));
+  const tray = hasTray(), sum = o => Object.values(o).reduce((n, v) => n + (+v || 0), 0);
+  $$("#lib-kfilter .tab").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === kfNow()));
   $("#lib-kfilter [data-v=recent]").disabled = !tray;
-  $("#lib-n-kept").textContent = tray ? all.filter(x => x.kept).length : all.length;
-  $("#lib-n-recent").textContent = tray ? all.filter(x => x.recent).length : "";
+  $("#lib-n-kept").textContent = L.summary ? sum(tabCounts("kept")) : "";
+  $("#lib-n-recent").textContent = L.summary ? sum(tabCounts("recent")) : "";
+  renderCats();   // the chips' numbers follow the tab
 }
 $$("#lib-kfilter .tab").forEach(b => b.onclick = () => { L.kf = b.dataset.v; store.set("uc-lib-kf", L.kf); L.sel = null; renderKf(); renderList(); renderDetail(); });
 $("#lib-q").addEventListener("input", () => renderList());

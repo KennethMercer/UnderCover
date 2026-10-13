@@ -3214,8 +3214,17 @@ def a_lists():
 def a_library():
     s = api("/api/library/summary")
     assert s["total"] > 0
+    lists = {}
     for k in ("covers", "speech", "songs", "voices", "training"):
-        assert isinstance(api(f"/api/library/{k}"), list), k
+        lists[k] = api(f"/api/library/{k}")
+        assert isinstance(lists[k], list), k
+    # the Kept / Recent tabs' counts per category match the lists (the chips follow the tab showing)
+    t = s["tabs"]
+    for k in ("covers", "speech"):
+        assert t["kept"][k] == sum(1 for x in lists[k] if x["kept"]), f"kept {k}"
+        assert t["recent"][k] == sum(1 for x in lists[k] if x["recent"]), f"recent {k}"
+    assert all(t["kept"][k] == s["counts"][k] for k in ("songs", "voices", "training")), "songs, voices and training are always kept"
+    assert set(t["recent"]) == {"covers", "speech"}, "only covers and speech have a recent tray"
     groups = api("/api/library/cleanup")
     assert "orphan_stems" in groups and "finished_training" in groups
     return f"{s['total'] / 1e9:.1f} GB in library"
