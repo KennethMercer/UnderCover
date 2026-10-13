@@ -259,7 +259,7 @@ def u_da_mode():
     from undercover.core.voices import ModelError
     from undercover.doubleagent import night, service
     from undercover.doubleagent import project as P
-    with isolated_data():
+    with isolated_data() as box:
         old_port, old_state = jobs.PORT, worklist._STATE
         jobs.PORT, worklist._STATE = 7999, None   # a scratch queue file inside the test's folder
         real_train = service.train_new_voice
@@ -283,16 +283,52 @@ def u_da_mode():
             service.train_new_voice = fake
             night._new(Job("zz-smoke"), q["Smoke Test Singer"])
             assert got.get("mode") == "singing" and got["person"] == "Smoke Test Singer", got
-            # a new project takes the chosen mode; asking for speech never widens a project to songs
+            # a new project starts in the chosen mode, and the choice is applied to an existing one (apply_mode)
             proj = service.project_for("Smoke Test Singer", "singing")
             assert proj.mode == "singing", proj.mode
-            assert service.project_for("Smoke Test Singer", "speaking").name == proj.name
-            assert P.Project.load(proj.name).mode == "singing"
+            talker = service.project_for("Smoke Test Talker", "speaking")
+            assert service.apply_mode(talker, "Smoke Test Talker", "both").mode == "both", "nothing searched: the mode follows"
+            from undercover.doubleagent import sources as srcmod
+            real_search = srcmod.search
+            sung = P.Source(id="sung1", title="Smoke Test Talker - A Song (Official Audio)", url="https://example.invalid/1",
+                            channel="x", duration=200.0)
+            srcmod.search = lambda person, mode, **kw: [sung] if mode == "singing" else []
+            try:
+                spoken = P.Project.load(talker.name)
+                spoken.mode, spoken.sources = "speaking", [P.Source(id="talk1", title="Interview", url="https://example.invalid/2",
+                                                                    channel="x", duration=600.0)]
+                spoken.save()
+                got = service.apply_mode(spoken, "Smoke Test Talker", "singing")   # speech so far: their songs are added
+                assert got.mode == "singing" and [s.id for s in got.sources] == ["talk1", "sung1"], (got.mode, got.sources)
+                assert service.apply_mode(got, "Smoke Test Talker", "speaking").sources == got.sources, "songs were dropped"
+                got.train["epoch"] = 40
+                got.save_train()
+                assert service.apply_mode(P.Project.load(got.name), "Smoke Test Talker", "speaking").mode == "singing", \
+                    "a project that has trained changed mode"
+            finally:
+                srcmod.search = real_search
         finally:
             service.train_new_voice = real_train
             jobs.PORT, worklist._STATE = old_port, old_state
+        # Checking it: the last save (an early stop's) is measured like the others and can win
+        from undercover.doubleagent.trainer import Trainer
+        tr = Trainer.__new__(Trainer)
+        tr.tdir = box / "zz-train"
+        tr.tdir.mkdir(parents=True)
+        (tr.tdir / "e63.pth").write_bytes(b"x")
+        saved = []
+        tr.proj = type("Proj", (), {"save_train": lambda self: saved.append(1)})()
+        tr._probe = lambda epoch, sr: {"identity": 0.91, "low": 0.8, "cents": 20.0, "content": 0.95, "test": "speech"}
+        st = {"epoch": 63, "best": 50, "sr": 40000, "saves": [
+            {"epoch": 50, "val": 0.3, "identity": 0.85, "low": 0.8, "cents": 21.0, "content": 0.95, "test": "speech"},
+            {"epoch": 63, "val": 0.29}]}
+        tr.check_last(st)
+        assert st["best"] == 63 and st["saves"][1]["identity"] == 0.91 and saved, st
+        tr.check_last(st)
+        assert len(saved) == 1, "a measured save was measured again"
     src = inspect.getsource(service.train_new_voice)
-    assert src.index('push("voice", 0.975') < src.index('push("voice", 0.98,'), "no Checking it push before Adding"
+    assert src.index("tr.check_last(st)") < src.index('push("voice", 0.98,'), "nothing checked before Adding"
+    assert src.index("ACTIVE[proj.name] = ") < src.index("apply_mode(proj, person, mode)"), "the mode changed before the busy check"
     # the page's card after training reads the voice from the finished job
     a, b, c = Job("train-auto"), Job("zz-work"), Job("train-prepare")
     a.finish("done", message="ready", voice="v-auto")
@@ -3287,6 +3323,11 @@ def a_train():
 def a_work():
     w = api("/api/work")
     assert "queue" in w and "held" in w
+    try:   # Train tonight's Speaking / Singing reaches the queue (refused here, so nothing is queued)
+        api("/api/work/add", {"kind": "new", "target": "Smoke Test", "mode": "humming"})
+        raise AssertionError("a new voice was queued with mode humming")
+    except urllib.error.HTTPError as e:
+        assert "Speaking or Singing" in json.loads(e.read()).get("error", ""), e.code
     api("/api/work/candidates")
     p = api("/api/work/pause", {})
     assert p["held"] is True

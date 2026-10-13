@@ -542,6 +542,18 @@ class Trainer:
             self._probe_ok = False
             return None
 
+    def check_last(self, st: dict):
+        """Do it all's "Checking it": the last save, when nothing measured it (an early stop's falls between the
+        regular saves), measured against real clips like the others, so it can be picked too."""
+        last = next((s for s in st.get("saves", []) if s["epoch"] == st.get("epoch")), None)
+        if last is None or last.get("identity") is not None or not (self.tdir / f"e{last['epoch']}.pth").exists():
+            return
+        probe = self._probe(last["epoch"], st.get("sr") or CONFIG["training"]["sample_rate"])
+        if probe:
+            last.update(probe)
+            self._pick_best(st)
+            self.proj.save_train()
+
     def _reprobe(self, st: dict, sr: int):
         """Resuming: saves measured with a different test (e.g. speech before the project had a sung reference)
         can't be compared with new ones, so measure them again with this run's test."""
