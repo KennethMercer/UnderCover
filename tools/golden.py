@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 APP = Path(os.environ.get("UNDERCOVER_DATA_ROOT") or ROOT)
 GOLDEN = Path(os.environ.get("UNDERCOVER_GOLDEN") or APP / "golden")
 
@@ -209,9 +210,9 @@ def _freeze_voice(spec: dict, name: str):
     """A copy of the voice (read from the app's voices) and its person's reference embedding (from its project)."""
     import numpy as np
     src = APP / "models" / "voices" / name
-    if not src.is_dir():
-        demo = ROOT / "undercover" / "assets" / "demo-voice" / name
-        src = demo if (demo / "model.pth").exists() else None
+    if not src.is_dir():   # the demo voice: its model files live in the app folder's assets (not in git)
+        src = next((d for d in (APP / "undercover" / "assets" / "demo-voice" / name, ROOT / "undercover" / "assets" / "demo-voice" / name)
+                    if (d / "model.pth").exists()), None)
     if src is None:
         print(f"  {name}: not installed, left out")
         return
