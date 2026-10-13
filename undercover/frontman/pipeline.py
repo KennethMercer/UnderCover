@@ -130,7 +130,7 @@ class CoverEngine:
 
         report("separating", 0.0, "Separating vocals from the instrumental")
         t = time.perf_counter()
-        stems = stems or separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality,
+        stems = stems or separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality, one_voice_if_no_lead=True,
                          progress=lambda f, step: report("separating", f, {"main": "Separating vocals", "karaoke": "Splitting lead and backing vocals", "dereverb": "Removing reverb"}[step]))
         secs["separate"] = round(time.perf_counter() - t, 2)
         report("separating", 1.0, "Stems ready")
@@ -230,7 +230,7 @@ class CoverEngine:
         song = Path(song).resolve()
         karaoke = True if opts.backing_voice else opts.karaoke
         report("separating", 0.0, "Separating vocals (needed once; the full cover reuses it)")
-        stems = separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality,
+        stems = separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality, one_voice_if_no_lead=True,
                          progress=lambda f, step: report("separating", f, "Separating vocals"))
         start, dur = busiest_window(stems["vocals"], seconds)
         work = path("cache_dir") / "previews" / uuid.uuid4().hex[:10]

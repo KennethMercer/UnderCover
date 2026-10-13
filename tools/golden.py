@@ -372,7 +372,7 @@ def run_set(stamp: str, spec: dict) -> dict:
         song = GOLDEN / "work" / "uploads" / f"{s['name']}.flac"
         song.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(GOLDEN / "songs" / s["file"], song)
-        stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high")
+        stems = separate(song, dereverb=True, karaoke=True, separator=gpu.MODELS.separator, quality="high", one_voice_if_no_lead=True)
         song_hz = song_vocal_f0(stems["vocals"], rmvpe)
         melody = _LAST_F0.get(str(stems["vocals"]))
         back16 = _load16(stems["backing"]) if stems.get("backing") else None
