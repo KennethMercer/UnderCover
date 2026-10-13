@@ -38,6 +38,12 @@ function noteVoices(list) {
 const voiceDisplay = id => VOICES.get(id)?.display || id || "";
 const voiceTrained = id => { const t = VOICES.get(id)?.trained; return t != null ? !!t : /-uc$/.test(id || ""); };
 const vname = id => id ? `<span class="vname" data-voice="${esc(id)}"${voiceTrained(id) ? ' data-trained="1" title="Trained in UnderCover"' : ""}>${esc(voiceDisplay(id))}${voiceTrained(id) ? '<span class="sr-only"> (trained in UnderCover)</span>' : ""}</span>` : "";
+// How like the person a voice sounds, in a word and its dot (the server's likeness_word, on every voice API: "great" |
+// "good" | "fair" | "poor"; poor = a downloaded voice the check judged bad or broken; null = not measured, so nothing).
+// The page never sets the cut-offs. The word sits in the sentence's own font; the dot alone is the shorthand in lists.
+const LIKE_WORDS = ["great", "good", "fair", "poor"];
+const likeWord = (w, after = "") => LIKE_WORDS.includes(w) ? `<span class="like ${w}">${w}</span>${after ? " " + after : ""}` : "";
+const likeDot = w => LIKE_WORDS.includes(w) ? ` <span class="like dot ${w}" role="img" aria-label="${w} likeness" title="${w} likeness"></span>` : "";
 const initialOf = s => (String(s || "").replace(/^[^a-z0-9]+/i, "")[0] || "?").toUpperCase();
 const vinitial = id => esc(initialOf(voiceDisplay(id)));
 document.addEventListener("keydown", e => {
@@ -341,14 +347,15 @@ function voiceDesc(v) {
 function renderVoices() {
   const q = $("#q").value.trim().toLowerCase();
   const isLink = /^https?:\/\//i.test(q);
-  const list = isLink ? [] : S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q) || voiceDisplay(v.name).toLowerCase().includes(q));
+  const list = isLink ? [] : S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q) || voiceDisplay(v.name).toLowerCase().includes(q))
+    .sort((a, b) => (a.likeness_word === "poor") - (b.likeness_word === "poor"));   // the ones that aren't really them sink
   const box = $("#voices");
   if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
   else box.innerHTML = list.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
-      <span class="vtext"><b>${vname(v.name)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
+      <span class="vtext"><b>${vname(v.name)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
       <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
