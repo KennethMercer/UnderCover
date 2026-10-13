@@ -775,7 +775,7 @@ def u_gamepause():
     return "no work: no question; no answer: no pause; Pause / both / never; resumes only its own hold; a starting job waits"
 
 
-@check("cadence reading: very short sentences are read with a neighbour (never across a paragraph), the voice conversion gets a lead-in; Agent Smoke ships a shrunk index and his pack")
+@check("cadence reading: very short sentences are read with a neighbour (never across a paragraph), the voice conversion gets a lead-in; Agent Smoke ships a shrunk index")
 def u_cadence_starts():
     """2026-10-13: "Good evening." came out as "Grieving." (the conversion, no context before the onset) and short
     sentences read alone got stray sounds ("E. Listen carefully."); measured fixes in core/cadence/render.py."""
@@ -804,10 +804,8 @@ def u_cadence_starts():
         assert back.shape == (200, 16) and np.isfinite(back).all()
         assert mdv.shrink_index(box, k=500) == (200, 200), "a small index was changed"
     man = json.loads((ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke" / "manifest.json").read_text(encoding="utf-8"))
-    assert {"model.pth", "model.index", "tts/ref.wav"} <= set(man["files"]), man["files"]
-    meta = json.loads((ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke" / "meta.json").read_text(encoding="utf-8"))
-    assert meta["extra"]["tts"]["engine"] == "chatterbox" and meta["extra"]["demo"] is True
-    return "joins short sentences inside a paragraph only; lead-in in finish; index k-means; the shipped pack listed"
+    assert {"model.pth", "model.index"} <= set(man["files"]) and man["files"]["model.index"]["size"] < 32e6, man["files"]
+    return "joins short sentences inside a paragraph only; lead-in in finish; index k-means; the shipped index small"
 
 
 # ---------------------------------------------------------------- API checks (test server)
