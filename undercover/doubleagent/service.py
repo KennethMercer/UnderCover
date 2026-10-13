@@ -360,7 +360,8 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         if not good and not prefer_train:
             # quick first (phase 15): a voice that sounds somewhat like them makes a cover in minutes; training one
             # takes about an hour. Said plainly, with the way to a closer voice (tick Train a new voice).
-            good = sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"])[:1]
+            good = ear.prefer(sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"]),
+                              name=lambda c: c["name"], score=lambda c: c["score"])[:1]
             quick = bool(good)
         drop_downloads(keep=good[0]["name"] if good else None)
         if good:
