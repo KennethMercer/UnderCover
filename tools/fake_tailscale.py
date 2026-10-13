@@ -66,9 +66,12 @@ if args[:2] == ["status", "--json"]:
 elif args[:1] == ["up"]:
     update(up_called=True, hostname=next((a.split("=", 1)[1] for a in args if a.startswith("--hostname=")), None))
     print("To authenticate, visit:\n\n\thttps://login.tailscale.com/a/fake-login\n", flush=True)
-    sys.exit(0 if wait_for("signed_in") else 1)
+    if not wait_for("signed_in"):
+        sys.exit(1)
+    update(backend="Running")   # signed in (again: after `down`, `up` reconnects with the kept state)
 elif args[:3] == ["funnel", "status", "--json"]:
-    print(json.dumps({"AllowFunnel": {f"{host}:443": True}} if st.get("funnel_on") else {}))
+    print(json.dumps({"TCP": {"443": {"HTTPS": True}}, "Web": {f"{host}:443": {"Handlers": {"/": {"Proxy": st.get("funnel_target")}}}},
+                      "AllowFunnel": {f"{host}:443": True}} if st.get("funnel_on") else {}))
 elif args[:2] == ["funnel", "reset"]:
     update(funnel_on=False, funnel_target=None)
 elif args[:1] == ["funnel"]:

@@ -340,6 +340,9 @@ def _route(h, method, p):
             threading.Thread(target=warm, daemon=True, name="phone-warm").start()
         else:
             close()
+            if phone.away_on() or _A["srv"] is not None:   # off means nothing reaches this PC from a phone: away too
+                phone.set_away(False)
+                away_close()
         return h._json(state())
     if p == "/api/phone/pair":
         if not listen():

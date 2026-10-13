@@ -936,7 +936,13 @@ def _install_console_handler():
 
 
 def _hard_exit():
-    """End this process immediately (core/platform.hard_exit: a normal exit can hang in the GPU runtime's teardown)."""
+    """End this process immediately (core/platform.hard_exit: a normal exit can hang in the GPU runtime's teardown).
+    Away from home's Tailscale daemon is ours: it goes too (a restart starts it again)."""
+    try:
+        from ..core import tailnet
+        tailnet.at_exit()
+    except Exception:   # noqa: BLE001 - exiting regardless
+        pass
     platform.hard_exit(0)
 
 
