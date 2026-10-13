@@ -181,8 +181,9 @@ def fix_for(kind: str, reasons, voice: dict | None, settings: dict | None, item_
     """The one fix a thumbs down offers when one of its reasons has one (the user's answer), else None.
     voice: {name, display, trained, person, likeness_word} as the caller knows it.
     -> {reason, say, do: {label, action, ...}, alt?: {label, action, ...}, meta?}
-    Actions: "work" (POST /api/work/add with `body`), "pick_voice" (open the voice list), "remake" (make the cover again
-    with `options` merged into its own), "respeak" (read the text again with `options`)."""
+    Actions: "work" (POST /api/work/add with `body`), "pick_voice" (open the voice list), "remake" (POST
+    /api/history/<id>/again {options}: the cover again with those changed), "respeak" (POST /api/speak with the speech's
+    text, voice and reader and `options`)."""
     reasons = list(reasons or [])
     settings = settings or {}
     v = voice or {}

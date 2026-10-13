@@ -10,6 +10,8 @@ POST   /api/upload                          raw body + X-Filename: a song droppe
 POST   /api/songs/youtube                   {url} or a search result -> fetched into uploads/
 POST   /api/songs/<id>/presep               separate in the background while the GPU is idle
 POST   /api/estimate | /api/covers | /api/preview
+POST   /api/history/<id>/again              {options} the cover made again: its song, voice and settings, with these
+                                            changed (the ear's fix: {octave: -1}; the backing follows the lead's octave)
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
 """
 import hashlib
@@ -61,6 +63,8 @@ def handle(h, method: str, p: str) -> bool:
             _estimate(h, h._body())
         elif p == "/api/covers":
             _start_cover(h, h._body())
+        elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/again", p):
+            _cover_again(h, m.group(1), h._body())
         elif p == "/api/preview":
             _start_preview(h, h._body())
         elif p == "/api/songs/youtube":
@@ -158,6 +162,23 @@ def _start_cover(h, body: dict):
 
     GPU_QUEUE.put((job, run))
     h._json({"job": job.id, "position": GPU_QUEUE.qsize()})
+
+
+AGAIN_KEYS = ("octave", "key")   # what a "make it again" may change (the ear's fixes)
+
+
+def _cover_again(h, item_id: str, body: dict):
+    """Make a finished cover again with its own song, voice and settings, `options` changed (only AGAIN_KEYS). When
+    the backing was at the lead's octave, it moves with it."""
+    from .history import get
+    it = get(item_id)   # LookupError when it's gone
+    old = dict(it.get("options") or {})
+    change = {k: v for k, v in (body.get("options") or {}).items() if k in AGAIN_KEYS}
+    opts = {**old, **change}
+    if "octave" in change and old.get("backing_octave") == old.get("octave"):
+        opts["backing_octave"] = change["octave"]
+    _start_cover(h, {"song": Path(it.get("song") or "").stem, "voice": opts.pop("voice", None) or it.get("voice"),
+                     "options": opts})
 
 
 def _presep(h, song_id: str, body: dict):

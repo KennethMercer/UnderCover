@@ -1108,6 +1108,16 @@ def u_ear():
         # wrong key: make it again an octave lower (or higher); at the lowest only higher
         f = call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["key"]}).out["fix"]
         assert f["do"]["action"] == "remake" and f["do"]["options"] == {"octave": -1} and f["alt"]["options"] == {"octave": 1}, f
+        # ...which FrontMan makes again with the cover's own song, voice and settings (the backing moves with the lead)
+        from undercover.frontman import api as fapi
+        got, real = {}, fapi._start_cover
+        fapi._start_cover = lambda h, body: got.update(body)
+        try:
+            h = _FakeHandler()
+            fapi._cover_again(h, cov["id"], {"options": {"octave": -1, "voice": "x"}})   # (a voice in options is ignored)
+        finally:
+            fapi._start_cover = real
+        assert got["voice"] == "zed-2-uc" and got["options"]["octave"] == -1 and got["options"]["key"] == 1 and "voice" not in got["options"], got
         f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
         assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
         # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
@@ -2952,6 +2962,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/voices/install"), ("POST", "/api/voices/upload"), ("DELETE", "/api/voices/some-voice"),
     ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
     ("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget"),
+    ("POST", "/api/history/0123456789/again"),
     ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
     ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
     *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
