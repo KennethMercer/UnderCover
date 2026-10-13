@@ -126,7 +126,8 @@ CHORUS_MODES = ("convert", "top", "keep")
 # What happens to lines the karaoke split put in the backing stem while the lead is silent (phase 22): "convert" moves
 # all of it into the conversion (phase 15; on Toxic's stacked choruses the user heard it as "atrocious": RVC follows
 # one pitch), "top" splits the backing again with the karaoke model and converts only its top voice, the harmonies
-# under it staying as they were, "keep" leaves the choruses to the original singers.
+# under it staying as they were, "keep" leaves the choruses to the original singers. The default is keep: blind, on
+# Toxic, the user put keep first for SpongeBob (convert and top about equal) and for Freeman (keep > convert > top).
 
 
 def split_top(backing: Path, separator, cache: Path) -> dict:
@@ -203,4 +204,7 @@ def note(gate: dict, chorus: str = "convert") -> list[str]:
                    "the harmonies under it kept as they were.")
     elif gate["chorus"] and chorus != "keep":
         out.append(f"Some lines were in the backing track ({span(gate['chorus'])}): converted with the voice too.")
+    elif gate["chorus"]:
+        out.append(f"Some lines are in the backing track ({span(gate['chorus'])}): left to the original singers, as the "
+                   "backing harmonies are.")
     return out
