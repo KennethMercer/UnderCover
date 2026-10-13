@@ -245,8 +245,10 @@ onJobs(() => { if (!$("#view-train").hidden) renderDaWork(); });
 function daOutcome(voice) { store.set("uc-da-outcome", voice); loadCandidates(); }   // the card draws once the voice is in the list
 document.addEventListener("uc:jobdone", async e => {
   const j = e.detail;
-  if (j.kind !== "train-auto" || j.state !== "done" || !j.project) return;
-  try {
+  if (j.kind !== "train-auto" || j.state !== "done") return;
+  if (j.voice) return daOutcome(j.voice);   // the job names the voice it made
+  if (!j.project) return;
+  try {   // an older server: its project does
     const proj = (await api("/api/train/projects")).find(p => p.name === j.project);
     if (proj?.train?.exported) daOutcome(proj.train.exported);
   } catch (err) { /* the voice is in the list anyway; only the card is missed */ }

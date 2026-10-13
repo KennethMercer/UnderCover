@@ -109,7 +109,7 @@ function follow(id, kind) {
 // Tonight: a new-voice item in the overnight queue, which SafeHouse's Running room shows.
 async function trainVoice(person, mode, tonight) {
   if (tonight) {
-    W.last = await api("/api/work/add", { json: { kind: "new", target: person } });
+    W.last = await api("/api/work/add", { json: { kind: "new", target: person, mode } });   // the queue keeps Speaking / Singing
     renderQueue(); refreshJobs(true);
     return;
   }
