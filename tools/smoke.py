@@ -281,6 +281,11 @@ def u_vault():
             tone = (np.sin(np.arange(44100) / 20) * 8000).astype(np.int16)
             sf.write(out / "speech" / "line.wav", tone, 44100, subtype="PCM_16")
             sf.write(out / "speech" / "float.wav", tone.astype(np.float32) / 32768, 44100, subtype="FLOAT")
+            # a speech as SpeakEasy keeps it: its wav and mp3 named by title, its record by id
+            (out / "speech" / "Good evening (mine-uc).mp3").write_bytes(os.urandom(5_000))
+            sf.write(out / "speech" / "Good evening (mine-uc).wav", tone, 44100, subtype="PCM_16")
+            (out / "speech" / "0123456789.json").write_text(json.dumps({"id": "0123456789", "title": "Good evening",
+                "voice": "mine-uc", "file": "Good evening (mine-uc).wav", "mp3": "Good evening (mine-uc).mp3"}), encoding="utf-8")
             tr = path("cache_dir") / "training" / "mine"
             (tr / "clips").mkdir(parents=True)
             (tr / "project.json").write_text('{"name": "mine", "mode": "speaking"}', encoding="utf-8")
@@ -372,6 +377,17 @@ def u_vault():
                 raise AssertionError("a restore wrote outside the library")
             except ModelError:
                 pass
+            # one row per song and per speech, titled from its own record, even when its files are gone (Q's pages)
+            for f in [*(out / "speech").glob("Good evening*"), out / "speech" / "0123456789.json"]:
+                f.unlink()
+            c = vault.contents()
+            sp = [i for i in c["kinds"]["speech"] if i["item"] == "0123456789"]
+            assert len(sp) == 1 and sp[0]["title"] == "Good evening (mine-uc)" and sp[0]["files"] == 3 and sp[0]["here"] == "missing", sp
+            assert not [i for i in c["kinds"]["speech"] if i["item"].startswith(("Good evening", "0123456789.json"))]
+            sg = [i for i in c["kinds"]["song"] if i["item"] == "abc"]
+            assert len(sg) == 1 and sg[0]["title"] == "A song, renamed" and sg[0]["files"] == 2, c["kinds"]["song"]
+            assert set(vault.restore(sp[0]["keys"])["restored"]) == set(sp[0]["keys"])
+            assert (out / "speech" / "0123456789.json").is_file() and (out / "speech" / "Good evening (mine-uc).wav").is_file()
             listed = [k for its in vault.contents()["kinds"].values() for it in its for k in it["keys"]]
             assert listed and "covers/../../escape.txt" not in listed, "one bad name broke or entered the listing"
             # big files stream (a few MB of memory) and still come back bit-identical
