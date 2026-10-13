@@ -4,7 +4,7 @@
 // Keep both / Replace (the current one is vaulted first) / Cancel. Deep Cover: an older copy, the sizes. PC-only actions
 // carry data-pc (a phone sees the state). Uses helpers from app.js ($, $$, esc, api, showError, gb, voiceDisplay, store,
 // loadVoices), library.js (when, confirmClick, L, loadCat) and rooms.js (R: the drives from /api/storage).
-const VT = { s: null, c: null, pick: null, check: null, all: false, snap: null, ask: null, titles: {}, files: {}, timer: 0, restoreSeen: null };
+const VT = { s: null, c: null, pick: null, check: null, all: false, snap: null, ask: null, timer: 0, restoreSeen: null };
 const VT_KINDS = [["voice", "Voices you trained"], ["song", "Songs"], ["cover", "Covers"], ["speech", "Speech"], ["project", "Training projects"], ["settings", "Settings"]];
 const VT_SETTINGS = { "config.toml": "Your settings", "tutorial.json": "First assignment", "voice_quality.json": "Voice checks", "themes": "Your themes" };
 const VT_RANK = { same: 0, missing: 1, different: 2 };
@@ -17,7 +17,7 @@ async function vaultLoad() {
   try { VT.s = await api("/api/vault"); } catch (e) { $("#vt-body").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
   const s = VT.s;
   if (s.on && s.connected && s.snapshots && (!(s.running || s.restore?.running) || !VT.c || VT.wasBusy === false)) {   // not every 2 s while a copy runs
-    try { VT.c = await api(`/api/vault/contents${VT.snap ? `?snapshot=${encodeURIComponent(VT.snap)}` : ""}`); await vtTitles(); }
+    try { VT.c = await api(`/api/vault/contents${VT.snap ? `?snapshot=${encodeURIComponent(VT.snap)}` : ""}`); }
     catch (e) { VT.c = null; }
   } else if (!(s.on && s.connected && s.snapshots)) VT.c = null;
   VT.wasBusy = !!(s.running || s.restore?.running);
@@ -25,32 +25,20 @@ async function vaultLoad() {
   renderVault();
   if ((s.running || s.restore?.running) && !$("#room-storage").hidden) VT.timer = setTimeout(vaultLoad, 2000);   // while a copy or a restore runs
 }
-// songs and speech are stored as <id>.<ext> files: their titles come from the library
-async function vtTitles() {
-  const k = VT.c?.kinds || {};
-  for (const [kind, url] of [["song", "/api/library/songs"], ["speech", "/api/library/speech"]]) {
-    if (!k[kind]?.length) continue;   // fetched each time: a restored or new speech is known at once
-    try {
-      const r = await api(url), list = r.songs || r;
-      VT.titles[kind] = Object.fromEntries(list.map(x => [x.id, x.title]));
-      VT.files[kind] = Object.fromEntries(list.flatMap(x => [x.file, x.mp3].filter(Boolean).map(f => [f, x.id])));   // a speech's audio is named, its record is by id
-    } catch (e) { VT.titles[kind] = {}; VT.files[kind] = {}; }
-  }
-}
-// one row per thing: a song's or speech's files (<id>.wav, <id>.json…) group under their id; the state is the worst of them
+// one row per item, as the server groups them: a song's or speech's files are one item under its id, titled from its own
+// record. Voices show their display name, covers their file name; settings group by their first folder (themes/...).
 function vtItems(kind) {
   const list = VT.c?.kinds?.[kind] || [];
-  if (kind !== "song" && kind !== "speech" && kind !== "settings") return list.map(x => ({ ...x, name: kind === "voice" ? voiceDisplay(x.item)
-    : kind === "cover" ? (x.item === "history.jsonl" ? "The list of your covers" : x.item.replace(/\.[^.]+$/, "")) : x.item }));
+  if (kind !== "settings") return list.map(x => ({ ...x, name: kind === "voice" ? voiceDisplay(x.item)
+    : kind === "cover" ? (x.item === "history.jsonl" ? "The list of your covers" : (x.title || x.item).replace(/\.[^.]+$/, "")) : x.title || x.item }));
   const by = {};
   for (const x of list) {
-    const base = x.item.replace(/^speech\//, "");
-    const id = kind === "settings" ? x.item.split("/")[0] : VT.files[kind]?.[base] || base.replace(/\.[^.]+$/, "").replace(/\.(peaks|key)$/, "");
+    const id = x.item.split("/")[0];
     const g = by[id] ||= { item: id, kind, files: 0, bytes: 0, keys: [], here: "same" };
     g.files += x.files; g.bytes += x.bytes; g.keys.push(...x.keys);
     if (VT_RANK[x.here] > VT_RANK[g.here]) g.here = x.here;   // changed beats missing beats here
   }
-  return Object.values(by).map(g => ({ ...g, name: kind === "settings" ? VT_SETTINGS[g.item] || g.item : VT.titles[kind]?.[g.item] || g.item }));
+  return Object.values(by).map(g => ({ ...g, name: VT_SETTINGS[g.item] || g.item }));
 }
 
 // ------------------------------------------------------------ the section
