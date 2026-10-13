@@ -316,7 +316,8 @@ class Handler(BaseHTTPRequestHandler):
                     or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)
                     or doctor_api.handle(self, "GET", p) or phone_api.handle(self, "GET", p)
                     or themes_api.handle(self, "GET", p) or ear_api.handle(self, "GET", p)
-                    or vault_api.handle(self, "GET", p) or gamepause_api.handle(self, "GET", p)):
+                    or vault_api.handle(self, "GET", p) or gamepause_api.handle(self, "GET", p)
+                    or tutorial.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -514,6 +515,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._error("That file no longer exists.", 404)
         if self.remote and f.suffix.lower() not in AUDIO_EXT:   # a phone plays and downloads audio, nothing else (phase 11)
             return self._error("That file no longer exists.", 404)
+        self._send_file(f, download)
+
+    def _send_file(self, f: Path, download: bool = False, cache: str | None = None):
+        """A file the caller has already checked, with HTTP Range (audio seeks) and an optional Cache-Control."""
         size = f.stat().st_size
         start, end = 0, size - 1
         rng = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
@@ -537,6 +542,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", mimetypes.guess_type(f.name)[0] or "application/octet-stream")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
+        if cache:
+            self.send_header("Cache-Control", cache)
         if download:
             self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(f.name)}")
         self.end_headers()
