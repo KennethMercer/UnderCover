@@ -250,6 +250,193 @@ def u_sources():
     assert not s.is_sung("Elliott Smith Interview 1998")
 
 
+@check("vault: what goes in (trained voices, songs, covers, speech, choices, settings; no secrets), compressed and bit-identical, incremental, cut-short safe, pruning, restore that asks")
+def u_vault():
+    import hashlib
+    import numpy as np
+    import soundfile as sf
+    from datetime import datetime
+    from undercover.core import vault, storage
+    from undercover.core.voices import ModelError
+    sha = lambda f: hashlib.sha256(Path(f).read_bytes()).hexdigest()
+    with isolated_data() as box:
+        # imported inside: config.CONFIG_FILE is the sandbox's only now (imported earlier, it was the user's real
+        # config.toml, and this check appended to it on 2026-10-13 before the guard below existed)
+        from undercover.core.config import CONFIG, CONFIG_FILE, path
+        assert storage._inside(CONFIG_FILE, box), f"the config isn't the sandbox's: {CONFIG_FILE}"
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            vd = path("voices_dir")
+            for name, extra in (("mine-uc", {"trained": True}), ("downloaded", {}), ("agent-smoke", {"trained": False, "demo": True})):
+                (vd / name).mkdir(parents=True)
+                (vd / name / "meta.json").write_text(json.dumps({"name": name, "extra": extra}), encoding="utf-8")
+                (vd / name / "model.pth").write_bytes(os.urandom(50_000) + bytes(200_000))
+                (vd / name / "model.index").write_bytes(np.arange(60_000, dtype=np.float32).tobytes())
+            up, out = path("uploads_dir"), path("output_dir")
+            for d in (up, out / "speech"):
+                d.mkdir(parents=True, exist_ok=True)
+            (up / "abc.flac").write_bytes(os.urandom(30_000))
+            (up / "abc.json").write_text('{"title": "A song"}', encoding="utf-8")
+            (out / "A song (mine-uc).mp3").write_bytes(os.urandom(20_000))
+            tone = (np.sin(np.arange(44100) / 20) * 8000).astype(np.int16)
+            sf.write(out / "speech" / "line.wav", tone, 44100, subtype="PCM_16")
+            sf.write(out / "speech" / "float.wav", tone.astype(np.float32) / 32768, 44100, subtype="FLOAT")
+            tr = path("cache_dir") / "training" / "mine"
+            (tr / "clips").mkdir(parents=True)
+            (tr / "project.json").write_text('{"name": "mine", "mode": "speaking"}', encoding="utf-8")
+            sf.write(tr / "clips" / "c1.wav", tone, 44100, subtype="PCM_16")
+            (CONFIG_FILE.parent / "phone.json").write_text('{"devices": [{"token": "SECRET"}]}', encoding="utf-8")
+            keys = {k: kind for kind, k, _ in vault.items("matters")}
+            assert "voices/mine-uc/model.pth" in keys and not any(k.startswith(("voices/downloaded", "voices/agent-smoke")) for k in keys), keys
+            assert "songs/abc.flac" in keys and keys["covers/speech/line.wav"] == "speech" and "settings/config.toml" in keys, keys
+            assert "training/mine/project.json" in keys and not any("clips" in k for k in keys), "clips are for Everything"
+            assert any("clips" in k for _, k, _ in vault.items("everything"))
+            assert not any(k.endswith("phone.json") for _, k, _ in vault.items("everything")), "a secret went in"
+            # the folder: refused inside the library, fine beside it
+            assert not vault.check_folder(str(path("uploads_dir") / "v"))["ok"]
+            vf = box / "vault-drive"
+            chk = vault.check_folder(str(vf))
+            assert chk["ok"], chk
+            vault.set_folder(str(vf))
+            r1 = vault.run()
+            root = vault.root_of(vf)
+            objs = {f.name.split(".", 1)[1] for f in (root / "objects").rglob("*") if f.is_file()}
+            assert {"flac", "raw"} <= objs and ("lzma" in objs or "zlib" in objs), objs
+            snap = vault.load_snapshot(root)["files"]
+            for _, k, f in vault.items("matters"):   # every object comes back bit-identical
+                assert vault.get(root / "objects", snap[k][0]) == f.read_bytes(), k
+            line = next((root / "objects").rglob(sha(out / "speech" / "line.wav") + ".*"))
+            assert line.suffix == ".flac", line
+            assert r1["stored"] < r1["raw"], r1
+            # incremental: nothing new, nothing written; one change, one object
+            r2 = vault.run()   # straight after: a second snapshot, never the first one overwritten
+            assert len(vault.snapshots(vault.root_of(vf))) == 2, vault.snapshots(vault.root_of(vf))
+            assert r2["new"] == 0 and r2["bytes_written"] == 0, r2
+            (up / "abc.json").write_text('{"title": "A song, renamed"}', encoding="utf-8")
+            assert vault.run()["new"] == 1
+            st = vault.status()   # what SafeHouse and the Doctor read: the stored size is saved with the run
+            assert st["stored"] > 0 and st["stored"] < st["raw"] and st["last"]["pruned"] == 0, st
+            # a run cut short leaves the last snapshot whole, and no new one
+            before = vault.snapshots(root)
+            try:
+                vault.run(cancel=lambda: True)
+                raise AssertionError("a cancelled run finished")
+            except InterruptedError:
+                pass
+            assert vault.snapshots(root) == before
+            # a damaged object is an error, never a quiet bad restore
+            victim = next(f for f in (root / "objects").rglob("*.raw"))
+            good = victim.read_bytes()
+            victim.write_bytes(b"x" + good[1:])
+            try:
+                vault.get(root / "objects", victim.name.split(".")[0])
+                raise AssertionError("a damaged object restored")
+            except ModelError:
+                pass
+            victim.write_bytes(good)
+            # restore: missing comes back; a different one asks; both / replace / skip
+            orig = (out / "A song (mine-uc).mp3").read_bytes()
+            (out / "A song (mine-uc).mp3").unlink()
+            c = vault.contents()
+            cover = next(i for i in c["kinds"]["cover"] if i["item"] == "A song (mine-uc).mp3")
+            assert cover["here"] == "missing", cover
+            assert vault.restore(cover["keys"])["restored"] == cover["keys"]
+            assert (out / "A song (mine-uc).mp3").read_bytes() == orig
+            (out / "A song (mine-uc).mp3").write_bytes(b"changed")
+            asked = vault.restore(cover["keys"])
+            assert asked["conflicts"] == cover["keys"] and not asked["restored"] and (out / "A song (mine-uc).mp3").read_bytes() == b"changed"
+            vault.restore(cover["keys"], "both")
+            assert (out / "A song (mine-uc) (from vault).mp3").read_bytes() == orig and (out / "A song (mine-uc).mp3").read_bytes() == b"changed"
+            n_snaps = len(vault.snapshots(root))
+            vault.restore(cover["keys"], "replace")
+            assert (out / "A song (mine-uc).mp3").read_bytes() == orig and len(vault.snapshots(root)) == n_snaps + 1, "replace didn't vault first"
+            voice = [k for k in snap if k.startswith("voices/mine-uc/")]
+            (vd / "mine-uc" / "model.pth").write_bytes(b"retrained")
+            vault.restore(voice, "both")
+            assert sha(vd / "mine-uc-from-vault" / "model.pth") == snap["voices/mine-uc/model.pth"][0]
+            assert (vd / "mine-uc-from-vault" / "meta.json").is_file(), "keep both brought back part of a voice"
+            # a restored config keeps this install's [paths]
+            here_paths = CONFIG_FILE.read_text(encoding="utf-8")
+            CONFIG_FILE.write_text(here_paths + "\n[extra]\nx = 1\n", encoding="utf-8")
+            vault.restore(["settings/config.toml"], "replace")
+            import tomllib
+            got = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            assert got["paths"] == tomllib.loads(here_paths)["paths"] and "vault" in got, got
+            # restore never writes outside the library
+            snap2 = vault.load_snapshot(root)
+            snap2["files"]["covers/../../escape.txt"] = snap2["files"]["songs/abc.json"]
+            stamp = vault.snapshots(root)[-1]
+            (root / "snapshots" / f"{stamp}.json").write_text(json.dumps(snap2), encoding="utf-8")
+            try:
+                vault.restore(["covers/../../escape.txt"], "both")
+                raise AssertionError("a restore wrote outside the library")
+            except ModelError:
+                pass
+            listed = [k for its in vault.contents()["kinds"].values() for it in its for k in it["keys"]]
+            assert listed and "covers/../../escape.txt" not in listed, "one bad name broke or entered the listing"
+            # big files stream (a few MB of memory) and still come back bit-identical
+            saved_max = vault.FLAC_MAX
+            try:
+                vault.FLAC_MAX = 1000
+                big = out / "speech" / "big.wav"
+                sf.write(big, np.tile(tone, 4), 44100, subtype="PCM_16")
+                vault.run()
+                obj = next((root / "objects").rglob(sha(big) + ".*"))
+                assert obj.suffix in (".lzma", ".raw"), obj
+                orig_big = big.read_bytes()
+                big.unlink()
+                key = "covers/speech/big.wav"
+                vault.restore([key])
+                assert big.read_bytes() == orig_big
+            finally:
+                vault.FLAC_MAX = saved_max
+            # one run at a time: two at once both finish, and every object a kept snapshot names is there
+            import threading
+            (up / "two.flac").write_bytes(os.urandom(40_000))
+            ths = [threading.Thread(target=vault.run) for _ in range(2)]
+            for t in ths:
+                t.start()
+            for t in ths:
+                t.join()
+            for stamp in vault.snapshots(root):
+                for k, v in vault.load_snapshot(root, stamp)["files"].items():
+                    assert vault.find_object(root / "objects", v[0]), (stamp, k)
+            # pruning: the policy, and only unreferenced objects go (the library untouched)
+            stamps = ["2026-01-05T10-00-00", "2026-01-20T10-00-00", "2026-08-01T10-00-00", "2026-08-03T10-00-00",
+                      "2026-10-01T10-00-00", "2026-10-02T10-00-00", "2026-10-11T09-00-00", "2026-10-12T09-00-00"]
+            kept = vault.keep_which(stamps, datetime(2026, 10, 13, 12))
+            assert kept == ["2026-01-20T10-00-00", "2026-08-03T10-00-00", "2026-10-02T10-00-00", "2026-10-11T09-00-00",
+                            "2026-10-12T09-00-00"], kept
+            orphan = root / "objects" / "ff" / ("f" * 64 + ".raw")
+            orphan.parent.mkdir(exist_ok=True)
+            orphan.write_bytes(b"nobody's")
+            lib_before = {str(f): f.stat().st_size for d in (vd, up, out) for f in d.rglob("*") if f.is_file()}
+            assert vault.prune(root) >= 1 and not orphan.exists()
+            assert {str(f): f.stat().st_size for d in (vd, up, out) for f in d.rglob("*") if f.is_file()} == lib_before
+            for _, k, f in vault.items("matters"):   # still all restorable
+                if k in vault.load_snapshot(root)["files"]:
+                    vault.get(root / "objects", vault.load_snapshot(root)["files"][k][0])
+            # test mode: a vault folder outside the test's own (a sandbox inherits the user's [vault]) is refused
+            # before anything is written
+            outside = ROOT.parent / "zz-uc-smoke-vault"
+            try:
+                vault.run(folder=str(outside))
+                raise AssertionError("a test-mode run wrote outside the test's folders")
+            except ModelError as e:
+                assert "Test mode" in str(e), e
+            assert not outside.exists()
+            # a check leaves nothing behind, and sizes the choice being made
+            fresh = box / "fresh-drive" / "deep" / "vault"
+            ok = vault.check_folder(str(fresh))
+            assert ok["ok"] and not (box / "fresh-drive").exists(), "a folder check left folders behind"
+            assert vault.check_folder(str(fresh), "everything")["need"] > ok["need"]
+            vault.set_folder("")
+            assert not vault.status()["on"]
+        finally:
+            CONFIG["vault"] = saved_vault
+    return f"{r1['files']} files: {r1['raw'] / 1e3:.0f} kB kept in {r1['stored'] / 1e3:.0f} kB; incremental, safe, asks, prunes"
+
+
 @check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
        "Checking it stage, the voice a finished training made in its job snapshot")
 def u_da_mode():
@@ -794,10 +981,12 @@ def u_rolloff_covers():
     # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
     # MasterPlan), the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
-    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); a new caller
-    # must be added here on purpose
+    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); Vaulting's
+    # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); a new caller must be
+    # added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/themes.py",
-                                                                        "core/ytdlp.py", "frontman/history.py", "speakeasy/speak.py"], calls
+                                                                        "core/vault.py", "core/vault.py", "core/ytdlp.py",
+                                                                        "frontman/history.py", "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
@@ -3126,6 +3315,8 @@ PHONE_SAMPLES = [
     ("POST", "/api/storage/check"), ("POST", "/api/storage/move"),
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
+    ("GET", "/api/vault"), ("GET", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
+    ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
     ("POST", "/api/phone/revoke"),
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
@@ -3480,6 +3671,28 @@ def a_train():
 
 
 @check("api: work queue, candidates, pause/resume")
+@check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here)")
+def a_vault():
+    from undercover.core import storage
+    vf = storage.ALLOWED_ROOTS[0] / "vault-drive"
+    bad = api("/api/vault/check?folder=" + urllib.parse.quote(str(ROOT / "output")))
+    assert bad["ok"] is False, bad
+    st = api("/api/vault/settings", {"folder": str(vf), "size": "matters"})
+    assert st["on"] and st["connected"], st
+    try:
+        assert api("/api/vault/run", {})["started"] is True
+        wait_for(lambda: not api("/api/vault")["running"], 600, what="the vault run")
+        st = api("/api/vault")
+        assert st["last"] and not st["error"], st
+        c = api("/api/vault/contents")
+        keys = [k for its in c["kinds"].values() for it in its for k in it["keys"]]
+        r = api("/api/vault/restore", {"keys": keys[:20], "on_conflict": "ask"})
+        assert not r["conflicts"] and not r["restored"] and r["same"], r
+    finally:
+        api("/api/vault/settings", {"folder": ""})
+    return f"{st['last']['files']} files, {st['raw'] / 1e6:.1f} MB kept in {st['stored'] / 1e6:.1f} MB"
+
+
 def a_work():
     w = api("/api/work")
     assert "queue" in w and "held" in w
@@ -4058,7 +4271,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_write_guard, u_da_mode, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_da_mode, u_write_guard, u_vault, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_ear,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -4075,7 +4288,7 @@ def main():
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
