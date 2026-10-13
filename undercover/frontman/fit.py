@@ -10,6 +10,9 @@ MAX_KEY = 6          # whole-song transposition allowed when fitting a melody to
 KEY_COST = 0.004     # per semitone of key change: the band gets transposed too, so only when it buys real fit
 LOW_WEIGHT = 1.5     # a note under the voice's range (mumbled, growly) is worse than one above it (airier)
 REGISTER_COST = 0.01  # per semitone the melody's median sits from the voice's training median (octave choice only)
+KEY_EASY, KEY_FAR_COST = 3, 0.02   # past 3 semitones the band's transposition is heard: each further one costs more
+                                   # (phase 22: the register term took Freeman's Toxic two octaves down, then key +6
+                                   # pulled the melody back into range by transposing the whole band a tritone)
 CLOSE = 0.03         # two octaves this close in cost: both are worth hearing
 
 
@@ -38,7 +41,8 @@ def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: in
         for key in sorted(range(-max_key, max_key + 1), key=abs):   # nearest the original first wins ties
             g = f * 2.0 ** (octave + key / 12)
             below, above = float(np.mean(g < lo)), float(np.mean(g > hi))
-            cost = LOW_WEIGHT * below + above + KEY_COST * abs(key) + REGISTER_COST * abs(reg) + 0.001 * abs(octave)
+            cost = (LOW_WEIGHT * below + above + KEY_COST * abs(key) + KEY_FAR_COST * max(0, abs(key) - KEY_EASY)
+                    + REGISTER_COST * abs(reg) + 0.001 * abs(octave))
             if best is None or cost < best["cost"] - 1e-9:
                 best = {"octave": octave, "key": key, "outside": round(below + above, 3), "below": round(below, 3),
                         "above": round(above, 3), "cost": round(cost, 4), "register_st": round(reg, 1)}
