@@ -516,6 +516,8 @@ def check_names(proj, person: str, push):
     ref = proj.reference
     if not ref.get("auto") or not ref.get("scene_minutes") or not srcmod.is_character_project(proj):
         return proj
+    if str(ref["cluster"]) in (ref.get("names") or {}) and ref.get("names_for") == ref.get("clip"):
+        return proj   # already checked for this pick (a Resume, or the train step after a prepare)
     top = [ref] + [sp for sp in proj.speakers if sp["cluster"] != ref["cluster"]
                    and sp.get("scene_minutes", 0) >= 0.5 * ref["scene_minutes"]][:2]
     if len(top) < 2:
@@ -531,13 +533,14 @@ def check_names(proj, person: str, push):
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         proj.reference["names"] = {str(k): v for k, v in said.items()}
+        proj.reference["names_for"] = proj.reference.get("clip")
         if me.get("said", 0) >= 2 and quiet:
             alt = quiet[0]
             note = (f"The voice heard most said “{person}” {me['said']} times, so it's most likely someone talking to "
                     f"{person}; using the voice that never says it ({alt['scene_minutes']} min in scenes).")
             P.set_reference(proj, cluster=alt["cluster"], auto=True)
-            proj.reference["names"] = {str(k): v for k, v in said.items()}
-            proj.reference["names_note"] = note
+            proj.reference.update(names={str(k): v for k, v in said.items()}, names_for=proj.reference.get("clip"),
+                                  names_note=note)
             push("voice", 0.11, note)
         proj.save()
     return P.Project.load(proj.name)

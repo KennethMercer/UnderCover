@@ -1113,6 +1113,8 @@ def u_likeness_word():
                        "zz-c3": "great", "zz-c4": "poor", "zz-c5": "fair"}, got   # c5: its own person's check, not another's
         _fake_voice("zz-c6", "https://x/y")
         assert voice_info(get_voice("zz-c6"))["likeness_word"] is None
+        _fake_voice("zz-c7", "https://x/y", {"person": "Plankton", "original_name": "zz-c4"})   # checked only for Zed
+        assert likeness_word(get_voice("zz-c7")) is None, "another person's check was used"
         from undercover.app.server import voices_json
         from undercover.doubleagent import night
         from undercover.safehouse import library
@@ -1162,10 +1164,16 @@ def u_yield():
             p.noise = 0.2
         P.score(proj)
         assert proj.reference["hiss_limit"] == 0.30 and proj.phrases[-3].reason == "hiss or artifacts", proj.reference
-        # music under speech: kept up to -3 dB when the clip came out clean (clean gaps, under the hiss limit), not otherwise
+        # music under speech: off by default (until the ear rules); on, kept up to -3 dB when the clip came out clean
         for p, (m, fl) in zip(proj.phrases[:4], [(-6.0, -45.0), (-6.0, -25.0), (-1.0, -45.0), (-15.0, -25.0)]):
             p.music_db, p.floor = m, fl
         P.score(proj)
+        assert [p.reason for p in proj.phrases[:4]] == ["music or noise", "music or noise", "music or noise", ""]
+        P.TCFG["music_db_clean"] = -3.0
+        try:
+            P.score(proj)
+        finally:
+            P.TCFG.pop("music_db_clean")
         why = [p.reason for p in proj.phrases[:4]]
         assert why == ["", "music or noise", "music or noise", ""], why
         # the names check: the voice heard most keeps saying "SpongeBob", the other never does -> it's switched, and said
