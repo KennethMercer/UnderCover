@@ -808,7 +808,7 @@ def u_cadence_starts():
     return "joins short sentences inside a paragraph only; lead-in in finish; index k-means; the shipped index small"
 
 
-@check("listen-back: finds missing / unsure / extra words, stretches one word only (capped, the rest untouched), comma clauses split; every part off by default")
+@check("listen-back: finds missing / unsure / extra words, stretches one word only (capped, the rest untouched), comma clauses split; re-reads on by default, stretches off")
 def u_listenback():
     import numpy as np
     from undercover.core.cadence import render
@@ -817,7 +817,7 @@ def u_listenback():
     saved = CONFIG.get("speakeasy")
     try:
         CONFIG.pop("speakeasy", None)
-        assert lb.settings() == {"listen_back": False, "stretch_words": False, "comma_lengthen": False, "tries": 3}
+        assert lb.settings() == {"listen_back": True, "stretch_words": False, "comma_lengthen": False, "tries": 3}
     finally:
         if saved is not None:
             CONFIG["speakeasy"] = saved
@@ -840,7 +840,7 @@ def u_listenback():
     assert len(lb.insert_pause(x, sr, 0.5, 0.12)) == len(x) + int(0.12 * sr)
     parts = render.split_clauses([{"text": "Well, if you insist, we start tonight.", "pause": 0.3}])
     assert [q["text"] for q in parts] == ["Well,", "if you insist,", "we start tonight."] and parts[-1]["pause"] == 0.3
-    return "problems found; one word stretched, the rest untouched; clauses split; all off by default"
+    return "problems found; one word stretched, the rest untouched; clauses split; re-reads on, stretches off"
 
 
 # ---------------------------------------------------------------- API checks (test server)

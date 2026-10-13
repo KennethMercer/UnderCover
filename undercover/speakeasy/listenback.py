@@ -12,6 +12,7 @@ confidence for both. Word-local only, never the whole line (whole-line tempo str
 Every part has a switch in [speakeasy]; what fired is logged per sentence (logs/listenback.jsonl) for the golden set."""
 import json
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -39,9 +40,61 @@ LOW_CONFIDENCE = 0.5
 FADE_S = 0.015
 
 
+LOW_VRAM_GB = 12        # under this, the worker's own Whisper is freed before the listen-back loads one here
+_ASR = {"model": None, "failed": ""}
+_ASR_LOCK = threading.Lock()
+
+
+def _asr():
+    """Whisper in this process (the server), kept warm like the converter: the listen-back hears sentence n while the
+    cadence worker reads n+1. In the worker, its transcribe queued behind the prefetched readings and serialised the
+    whole line (about 3x as-now; measured 2026-10-13). Same model file and prompt as the worker. None if it can't load
+    (then re-reads are skipped and the log says why)."""
+    if _ASR["model"] is not None or _ASR["failed"]:
+        return _ASR["model"]
+    with _ASR_LOCK:
+        if _ASR["model"] is None and not _ASR["failed"]:
+            try:
+                import torch
+                import whisper
+                dev = "cuda" if torch.cuda.is_available() else "cpu"
+                if dev == "cuda" and torch.cuda.get_device_properties(0).total_memory / 2**30 < LOW_VRAM_GB:
+                    try:   # a small card: the worker's Whisper goes first (the cadence engine stays loaded there)
+                        client.WORKER.call("free", what="whisper", timeout=30)
+                    except Exception:   # noqa: BLE001 - no worker yet, nothing to free
+                        pass
+                f = path("models_dir") / "whisper" / "large-v3-turbo.pt"
+                if not f.is_file():
+                    raise FileNotFoundError("the speech recogniser isn't downloaded yet")
+                _ASR["model"] = whisper.load_model(str(f), device=dev)
+            except Exception as e:   # noqa: BLE001 - out of memory, not downloaded: reading goes on without re-reads
+                _ASR["failed"] = f"{type(e).__name__}: {e}"[:200]
+    return _ASR["model"]
+
+
+def hear(files: list) -> list:
+    """[{"text", "words": [[word, start, end, confidence]]}] for each file, heard in this process."""
+    from ..core.cadence.engines import WHISPER_PROMPT
+    m = _asr()
+    if m is None:
+        raise RuntimeError(f"no speech recogniser for the listen-back ({_ASR['failed']})")
+    out = []
+    with _ASR_LOCK:
+        for f in files:
+            r = m.transcribe(render.load16(Path(f)), language="en", fp16=m.device.type == "cuda",
+                             condition_on_previous_text=False, temperature=0.0, initial_prompt=WHISPER_PROMPT,
+                             word_timestamps=True)
+            out.append({"text": r["text"].strip(), "words": [[w["word"], round(w["start"], 2), round(w["end"], 2),
+                                                              round(float(w.get("probability", 1.0)), 3)]
+                                                             for s in r["segments"] for w in s.get("words", [])]})
+    return out
+
+
 def settings() -> dict:
     s = CONFIG.get("speakeasy") or {}
-    return {"listen_back": bool(s.get("listen_back", False)), "stretch_words": bool(s.get("stretch_words", False)),
+    # defaults from the user's blind A/Bs (2026-10-13): re-reads on (they fixed "evening"); the word stretch fixed
+    # nothing and the comma lengthening flubbed "insist", so both stay off unless switched on
+    return {"listen_back": bool(s.get("listen_back", True)), "stretch_words": bool(s.get("stretch_words", False)),
             "comma_lengthen": bool(s.get("comma_lengthen", False)), "tries": int(s.get("listen_back_tries", 3))}
 
 
@@ -164,7 +217,7 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     if timing:
         sf.write(kref, np.asarray(tts.synth(text, reader), np.float32), tts.SR, subtype="PCM_16")
     takes = [(Path(wav), seed)]
-    heard = client.transcribe([str(wav)] + ([str(kref)] if timing else []), words=True)
+    heard = hear([str(wav)] + ([str(kref)] if timing else []))
     kwords = heard[1]["words"] if timing else []
     best = (Path(wav), seed, heard[0]["words"], problems(text, heard[0]["words"]))
     tries = 1
@@ -172,7 +225,7 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
         nseed = seed + 1000 * tries
         fut, w2 = render.request(text, pack, ref, seed=nseed)
         client.wait(fut)
-        h = client.transcribe([str(w2)], words=True)[0]["words"]
+        h = hear([str(w2)])[0]["words"]
         p = problems(text, h)
         takes.append((Path(w2), nseed))
         if len(p) < len(best[3]):

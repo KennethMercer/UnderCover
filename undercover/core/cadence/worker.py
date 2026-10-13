@@ -135,7 +135,7 @@ class F5:
 ENGINE_CLASSES = {"chatterbox": Chatterbox, "f5": F5}
 LOADED: dict = {}
 WHISPER: dict = {}
-PROMPT = "Well, thank you. So, as I was saying, it's been a long road, hasn't it? Let me tell you why."
+from .engines import WHISPER_PROMPT as PROMPT   # shared with SpeakEasy's listen-back (the same hearing)
 
 
 def engine(name, rid):

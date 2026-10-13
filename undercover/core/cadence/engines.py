@@ -55,6 +55,11 @@ ENGINES = {
 }
 
 
+# Whisper's initial prompt (punctuated, conversational English): the worker's transcripts and SpeakEasy's listen-back
+# hear with the same one, so a confidence threshold measured in one holds in the other
+WHISPER_PROMPT = "Well, thank you. So, as I was saying, it's been a long road, hasn't it? Let me tell you why."
+
+
 def engine_info(engine: str) -> dict:
     return ENGINES.get(engine) or ENGINES["chatterbox"]
 
