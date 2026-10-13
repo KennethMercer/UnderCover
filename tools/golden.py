@@ -346,6 +346,7 @@ def run_set(stamp: str, spec: dict) -> dict:
     import numpy as np
     import soundfile as sf
     from undercover.core import gpu, jobs
+    from undercover.core.config import CONFIG
     from undercover.core.cadence import transcribe
     from undercover.core.separate import separate
     from undercover.core.speaker import SpeakerEmbedder
@@ -377,7 +378,10 @@ def run_set(stamp: str, spec: dict) -> dict:
         g = leadgate.plan(_load16(stems["vocals"]), back16)
         gate_s = round(sum(b - a for a, b in g["instrument"]) + sum(b - a for a, b in g["chorus"]), 1)
         # the reference for words and pitch: the lead as it went into the conversion (after the gate)
-        lead16 = _load16(leadgate.apply(stems, g, tmp, f"golden-{s['name']}")["vocals"])
+        mode = CONFIG["conversion"].get("chorus", "keep")   # the pipeline's own chorus mode (phase 22: keep)
+        top = (leadgate.split_top(stems["backing"], gpu.MODELS.separator, Path(stems["backing"]).parent)
+               if mode == "top" and g["chorus"] and stems.get("backing") else None)
+        lead16 = _load16(leadgate.apply(stems, g, tmp, f"golden-{s['name']}", chorus=mode, top=top)["vocals"])
         chordal = chordal_backing(stems.get("backing"), rmvpe)
         for vname in spec["covers"].get(s["name"], []):
             if vname not in refs:
