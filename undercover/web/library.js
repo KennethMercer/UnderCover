@@ -199,7 +199,7 @@ function renderList() {
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
-      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
+      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
   }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
       : hasTray() && L.kf === "kept" ? "Nothing kept yet. Send to SafeHouse keeps one for good; until then it's under Recent." : "Nothing here."}</div>`);
   $$(".litem", box).forEach(el => {
@@ -300,11 +300,13 @@ function coverDetail(d, c) {
       ${c.seconds?.total ? `<dt data-deep>Made in</dt><dd data-deep>${c.seconds.total.toFixed(1)} s</dd>` : ""}
       ${c.notes?.length ? `<dt>Notes</dt><dd>${esc(c.notes.join(" "))}</dd>` : ""}
       <dt data-deep>File</dt><dd class="mono" data-deep>${esc(c.file)} · ${gb(c.size)}</dd></dl>
+    <div class="ear" id="lib-ear" hidden></div>
     <p class="meta" id="lib-keepline">${esc(keepLine(c))}</p>
     <div id="lib-rename-box"></div>
     <div class="lactions">${c.song_id ? `<button class="btn primary" id="lib-reuse">Use these settings</button>` : ""}<button class="btn" id="lib-keep" type="button" data-kept="${!!c.kept}">${c.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${c.url}?download">Download</a>
       <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
   wirePlayer(c.url);
+  if (typeof earShow === "function") earShow($("#lib-ear"), "cover", c);
   $$("#lib-src button").forEach(b => b.onclick = () => { $$("#lib-src button").forEach(x => x.setAttribute("aria-pressed", x === b)); switchSource(c[b.dataset.src]); });
   const reuse = $("#lib-reuse");
   if (reuse) reuse.onclick = async () => {
@@ -330,12 +332,14 @@ function speechDetail(d, x) {
       <dt data-deep>Settings</dt><dd data-deep>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
       ${x.seconds?.total ? `<dt data-deep>Made in</dt><dd data-deep>${x.seconds.total.toFixed(1)} s for ${fmtTime(x.duration)}</dd>` : ""}
       <dt data-deep>Files</dt><dd class="mono" data-deep>${esc([x.file, x.mp3].filter(Boolean).join(" · "))} · ${gb(x.size)}</dd></dl>
+    <div class="ear" id="lib-ear" hidden></div>
     <p class="meta" id="lib-keepline">${esc(keepLine(x))}</p>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><button class="btn" id="lib-keep" type="button" data-kept="${!!x.kept}">${x.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${x.url}?download">Download WAV</a>
       ${x.mp3_url ? `<a class="btn" href="${x.mp3_url}?download">Download MP3</a>` : ""}
       <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
   wirePlayer(x.url);
+  if (typeof earShow === "function") earShow($("#lib-ear"), "speech", x);
   $("#lib-again").onclick = () => {   // the same text and voice, ready to make again (or change)
     $("#se-text").value = x.text; $("#se-text").dispatchEvent(new Event("input"));
     if (typeof SE !== "undefined") { SE.voice = x.voice; store.set("uc-se-voice", x.voice); }

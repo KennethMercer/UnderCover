@@ -57,8 +57,10 @@ def installed_for(person: str) -> list:
         vt = [t for t in name.split("-") if t not in generic and not t.isdigit()]
         # all the person's words in the voice name, or a voice named by part of the name incl. the surname
         return bool(vt) and (all(t in vt for t in toks) or (set(vt) <= set(toks) and toks[-1] in vt))
+    from ..core import ear
     cands = [v for v in list_voices() if matches(v.name) and not undertrained(v)]
-    cands.sort(key=lambda v: (bool(v.extra.get("trained")), v.name == key, v.installed), reverse=True)
+    # trained first; then the one the user's thumbs like (the ear everywhere), the exact name, the newest
+    cands.sort(key=lambda v: (bool(v.extra.get("trained")), ear.liking(v.name), v.name == key, v.installed), reverse=True)
     return cands
 
 
@@ -157,29 +159,55 @@ def is_musician(person: str) -> bool:
     return False
 
 
-def project_for(person: str):
+def project_for(person: str, mode: str | None = None):
     """The Train-tab project for this person that isn't finished yet (or a new one). Musicians get "both":
     interviews (for the voice check's other speakers) plus isolated vocals from their songs, so the trained
-    voice has actually sung."""
+    voice has actually sung. mode: the person's own choice (DoubleAgent's Speaking / Singing) instead of that guess:
+    a new project starts in it; an existing one is left for apply_mode (train_new_voice calls it)."""
     from . import project as P
     key = slug(person)
     proj = next((P.Project.load(p["name"]) for p in P.list_projects()
                  if slug(p["person"]) == key and not p["train"].get("exported")), None)
     if proj is None:
-        return P.Project.create(person, "both" if is_musician(person) else "speaking")
-    if proj.mode == "speaking" and not proj.train.get("epoch") and is_musician(person):
-        # an interviews-only project for a singer: add sources of them singing (nothing trained yet)
-        from . import sources as srcmod
-        try:
-            sung = srcmod.search(person, "singing")
-        except ModelError:
-            sung = []
+        return P.Project.create(person, mode or ("both" if is_musician(person) else "speaking"))
+    if not mode and proj.mode == "speaking" and not proj.train.get("epoch") and is_musician(person):
+        proj = _add_songs(proj, person, "both")   # an interviews-only project for a singer (nothing trained yet)
+    return proj
+
+
+def _add_songs(proj, person: str, mode: str):
+    """Add sources of the person singing to a speech project and switch it to `mode` (both / singing)."""
+    from . import project as P
+    from . import sources as srcmod
+    try:
+        sung = srcmod.search(person, "singing")
+    except ModelError:
+        sung = []
+    with P.lock(proj.name):
+        proj = P.Project.load(proj.name)
+        have = {s.id for s in proj.sources}
+        proj.sources += [x for x in sung if x.id not in have]
+        proj.mode = mode
+        proj.save()
+    return proj
+
+
+def apply_mode(proj, person: str, mode: str | None):
+    """The person's Speaking / Singing choice (DoubleAgent's line, a queued Train tonight) on a project that hasn't
+    trained yet. Nothing searched: the search follows it. Speech so far and they chose singing: their songs are added.
+    Chose speaking for a project that has songs: it keeps them (they can be unticked in Deep Cover's steps).
+    A project that has trained keeps its mode."""
+    from . import project as P
+    if not mode or proj.mode == mode or proj.train.get("epoch"):
+        return proj
+    if not proj.sources:
         with P.lock(proj.name):
             proj = P.Project.load(proj.name)
-            have = {s.id for s in proj.sources}
-            proj.sources += [x for x in sung if x.id not in have]
-            proj.mode = "both"
+            proj.mode = mode
             proj.save()
+        return proj
+    if proj.mode == "speaking":
+        return _add_songs(proj, person, mode)
     return proj
 
 
@@ -352,11 +380,14 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             checked.append({"name": "-", "verdict": "unknown", "note": "couldn't test (clips had only one speaker)"})
         plan["checked"] = checked
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
+        from ..core import ear
+        good = ear.prefer(good, name=lambda c: c["name"], score=lambda c: c["score"])   # equally good: the liked one
         quick = False
         if not good and not prefer_train:
             # quick first (phase 15): a voice that sounds somewhat like them makes a cover in minutes; training one
             # takes about an hour. Said plainly, with the way to a closer voice (tick Train a new voice).
-            good = sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"])[:1]
+            good = ear.prefer(sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"]),
+                              name=lambda c: c["name"], score=lambda c: c["score"])[:1]
             quick = bool(good)
         drop_downloads(keep=good[0]["name"] if good else None)
         if good:
@@ -564,11 +595,13 @@ NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably", "talk a
 
 def train_new_voice(job, person: str, control, push, project: str | None = None,
                     target_minutes: float | None = None, prepare_only: bool = False, speaking: bool = False,
-                    subject: dict | None = None) -> str:
+                    subject: dict | None = None, mode: str | None = None) -> str:
     """Find clips -> prepare (topping up sources until the target) -> auto-confirm -> train -> add. Returns voice name.
     project: continue that Train-tab project (its ticked sources, choices and reference are kept).
     prepare_only: stop once the clips are ready and return the PROJECT name (a cadence for a downloaded voice);
-    speaking: a new project gathers speech even for a singer (a cadence is about how they talk)."""
+    speaking: a new project gathers speech even for a singer (a cadence is about how they talk);
+    mode: speaking / singing / both as the person chose it (a queued "Train tonight"); a project that has searched
+    already keeps its own."""
     from . import api as train_api
     from . import project as P
     from . import sources as srcmod
@@ -582,7 +615,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         from .night import _project_named
         proj = _project_named(person) or P.Project.create(person, "speaking")
     else:
-        proj = project_for(person)
+        proj = project_for(person, mode)
     busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
                  and (n == proj.name or a["kind"] in ("train", "auto"))), None)
     if busy:
@@ -590,6 +623,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                          "try again when it's done (or pause it).")
     train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
     try:
+        proj = apply_mode(proj, person, mode)   # once the project is ours (a reused one too: the queue's)
         if not proj.sources:
             push("voice", 0.01, f"Searching YouTube for {person}")
             from .subject import search_kind
@@ -732,6 +766,13 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
             raise jobs.Cancelled()
         if st.get("state") == "paused":
             raise Paused()
+        # "Checking it" (DoubleAgent's fourth stage): the saves were measured against real clips while it trained
+        # (likeness, melody, words); the last one (an early stop's, between the regular saves) is measured now
+        push("voice", 0.975, "Checking it against real clips")
+        tr.check_last(st)
+        best = next((s for s in st.get("saves", []) if s["epoch"] == st.get("best")), {})
+        if best.get("identity") is not None:
+            push("voice", 0.977, f"Checking it against real clips: epoch {best['epoch']} sounds most like {person}")
         push("voice", 0.98, "Adding the new voice")
         v = export_voice(P.Project.load(proj.name), overwrite=True)
         return v.name

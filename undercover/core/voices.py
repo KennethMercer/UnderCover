@@ -707,10 +707,12 @@ def likeness_word(v: Voice) -> str | None:
 
 
 def voice_info(v: Voice) -> dict:
-    """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool), `demo` (bool) and
-    `likeness_word` (see likeness_word)."""
+    """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool), `demo` (bool),
+    `likeness_word` (see likeness_word) and `ear` ({up, down}: the user's thumbs on its covers and speech, or null;
+    FrontMan's basic voice list puts liked voices first)."""
+    from . import ear
     return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v),
-            "likeness_word": likeness_word(v)}
+            "likeness_word": likeness_word(v), "ear": ear.taste(v.name)}
 
 
 def set_display(name: str, text: str) -> Voice:

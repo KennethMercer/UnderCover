@@ -197,7 +197,7 @@ def _new(job, item) -> dict:
     known = _project_named(item["target"])   # reuse what's already prepared for this person
     known = known.name if known is not None and not known.train.get("exported") else None
     name = service.train_new_voice(job, item["target"], worklist.control_for(job), worklist.pusher(job), project=known,
-                                     target_minutes=IMPROVE_SINGING_MIN)
+                                     target_minutes=IMPROVE_SINGING_MIN, mode=item.get("mode"))
     proj = _project_for_item({"kind": "improve", "target": name}, create=False)
     score = None
     if proj is not None:
@@ -335,4 +335,5 @@ def shown_voice(item: dict) -> str:
 
 worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=shown_voice,
                        label=lambda item: f"Improving {shown_voice(item)}")
-worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}")
+worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}",
+                       modes=("speaking", "singing", "both"))

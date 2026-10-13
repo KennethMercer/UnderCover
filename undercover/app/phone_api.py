@@ -42,10 +42,14 @@ ROUTES = [
     ("POST", r"/api/open-folder", "pc", "opens Explorer on the PC"),
     ("POST", r"/api/restart", "pc", "Restart"),
     ("POST", r"/api/quit", "pc", "Quit"),
+    # the ear (thumbs on covers and speech)
+    ("GET", r"/api/ear", "phone", "your thumbs"),
+    ("POST", r"/api/ear/(rate|forget)", "phone", "a thumb, or forgetting thumbs"),
     # FrontMan
     ("GET", r"/api/config|/api/history|/api/songs/search|/api/auto/plan", "phone", "covers page data, song search, one-shot plan"),
     ("GET", rf"/api/songs/{_ID}(/key)?", "phone", "a song"),
     ("POST", r"/api/upload|/api/estimate|/api/covers|/api/preview|/api/songs/youtube|/api/auto", "phone", "make covers"),
+    ("POST", rf"/api/history/{_ID}/again", "phone", "make a cover again (the ear's fix)"),
     ("POST", rf"/api/songs/{_ID}/presep", "phone", "prepare a song"),
     # DoubleAgent
     ("GET", r"/api/work/candidates|/api/work/lookup", "phone", "voices to improve tonight"),
@@ -80,6 +84,12 @@ ROUTES = [
     ("POST", r"/api/doctor/fix/.+", "pc", "the Doctor's Fixes"),
     ("GET", r"/api/doctor/bundle|/api/doctor/bundle\.zip", "pc", "the diagnostics file"),
     ("POST", r"/api/doctor/open-logs", "pc", "opens the logs folder on the PC"),
+    ("GET", r"/api/vault", "phone", "the vault's state"),
+    ("GET", r"/api/gamepause", "phone", "the game pause's question"),
+    ("POST", r"/api/gamepause", "phone", "answer the game pause from the sofa"),
+    ("POST", r"/api/gamepause/settings", "pc", "the game pause's settings"),
+    ("GET", r"/api/vault/check|/api/vault/contents", "pc", "the vault's folder check and what it holds"),
+    ("POST", r"/api/vault/settings|/api/vault/run|/api/vault/restore", "pc", "the vault: its folder, a run, a restore"),
     # Themes (phase 14): a phone may read and use them; making, importing and deleting are done on the PC
     ("GET", r"/api/themes", "phone", "the theme list"),
     ("GET", rf"/api/themes/{_ID}/(export|theme\.css|preview\.png|fonts/[^/]+)", "phone", "a theme's css, fonts, preview, file"),
