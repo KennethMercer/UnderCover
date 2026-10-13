@@ -195,7 +195,8 @@ def op_transcribe(rid, req):
                          temperature=0.0, initial_prompt=PROMPT, word_timestamps=bool(req.get("words")))
         text = r["text"].strip()
         if req.get("words"):
-            out.append({"text": text, "words": [[w["word"], round(w["start"], 2), round(w["end"], 2)]
+            out.append({"text": text, "words": [[w["word"], round(w["start"], 2), round(w["end"], 2),
+                                                  round(float(w.get("probability", 1.0)), 3)]   # [3]: Whisper's confidence
                                                  for s in r["segments"] for w in s.get("words", [])]})
         else:
             out.append(text)

@@ -6,6 +6,7 @@ pack = the voice's extra.tts (written by DoubleAgent): engine, ref (file in the 
 cfg_weight, exaggeration, tempo (1.0 = as the engine reads; < 1 slows it toward the person's measured rate).
 """
 import math
+import re
 import uuid
 from pathlib import Path
 
@@ -42,6 +43,17 @@ def join_short(sents: list, min_words: int = SHORT_WORDS) -> list:
                 i -= 1
                 continue
         i += 1
+    return out
+
+
+def split_clauses(sents: list, gap: float = 0.12) -> list:
+    """Each sentence's comma clauses read as their own pieces (a comma's contour from the engine's own phrase end),
+    joined by a short pause: one of the comma treatments the user compares blind ([speakeasy] clause_split)."""
+    out = []
+    for s in sents:
+        parts = [p.strip() for p in re.split(r"(?<=,)\s+", s["text"]) if p.strip()]
+        for k, p in enumerate(parts):
+            out.append({**s, "text": p, "pause": s["pause"] if k == len(parts) - 1 else gap})
     return out
 
 
