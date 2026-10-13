@@ -38,7 +38,7 @@ function smRow(x) {
     state = x.kind === "voice"
       ? (r.same === false ? `<span class="st warn">came out a little different</span>` : `<span class="st ok">sounds the same ✓</span>`) + `<span class="meta">saves ${gb(saved)}</span>`
       : `<span class="st ok">every clip checked ✓</span><span class="meta">saves ${gb(saved)}</span>`;
-    const hear = r.full_url && r.small_url ? `<span class="sm-hear"><span class="meta">Hear it:</span><button class="linkbtn" type="button" data-sm-play="${esc(r.full_url)}">Before</button><button class="linkbtn" type="button" data-sm-play="${esc(r.small_url)}">After</button></span>` : "";
+    const hear = r.full_url || r.small_url ? `<span class="sm-hear"><span class="meta">Hear it:</span>${r.full_url ? `<button class="linkbtn" type="button" data-sm-play="${esc(r.full_url)}">Before</button>` : ""}${r.small_url ? `<button class="linkbtn" type="button" data-sm-play="${esc(r.small_url)}">After</button>` : ""}</span>` : "";   // a reading cleaned away: its button goes
     acts = `${hear}<button class="btn${r.same === false ? "" : " primary"}" type="button" data-sm-keep="${esc(k)}" data-pc>Keep it smaller</button><button class="${r.same === false ? "btn primary" : "linkbtn"}" type="button" data-sm-undo="${esc(k)}" data-pc>Undo</button>`;
     deep = x.kind === "voice" ? `${r.vectors_before ?? "?"} → ${r.vectors_after ?? "?"} vectors · alike ${r.alike ?? "?"}${r.likeness_full != null ? ` · likeness ${r.likeness_full} → ${r.likeness_small}` : ""} · ${gb(r.bytes_before || 0)} → ${gb(r.bytes_after || 0)}`
       : `${r.clips ?? "?"} clips · ${gb(r.clips_bytes_before || 0)} → ${gb(r.clips_bytes_after || 0)}${r.data_bytes ? ` · prepared data ${gb(r.data_bytes)} aside` : ""}`;
