@@ -97,6 +97,21 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && do
 
 // ------------------------------------------------------------ status + theme
 let pageBuild = null;
+// the game pause (core/gamepause.py): while a full-screen game is up and UnderCover has GPU work, the question shows on
+// every open page, a paired phone's too (in an exclusive full-screen game the phone is the one place it's seen)
+function gameAsk(a) {
+  const box = $("#gp-ask");
+  box.hidden = !a;
+  if (!a) return;
+  $("#gp-q").textContent = `${a.title || a.exe} is full-screen while ${a.reason || "UnderCover is working on the graphics card"}. Pause UnderCover while you play?`;
+  $("#gp-never").textContent = `Don't ask for ${a.exe}`;
+}
+for (const [id, answer] of [["gp-pause", "pause"], ["gp-both", "both"], ["gp-never", "never"]]) {
+  $("#" + id).onclick = async () => {
+    try { await api("/api/gamepause", { json: { answer } }); $("#gp-ask").hidden = true; }
+    catch (e) { showError(e.message, "Couldn't answer the game question"); }
+  };
+}
 $("#uc-updated-go").onclick = () => location.reload();
 async function pollStatus() {
   try {
@@ -119,6 +134,7 @@ async function pollStatus() {
     tr.hidden = !t;
     if (t) tr.innerHTML = `<i class="dot wait"></i><span>Training ${esc(t.project)}${t.eta ? ` · ${fmtSecs(t.eta)} left` : t.epoch ? ` · ${t.epoch}/${t.epochs}` : ""}</span>`;
     if (typeof renderWorkBar === "function") renderWorkBar(s.work);   // work.js: Pause / Resume bar (the tab title: jobs.js)
+    gameAsk(s.work && s.work.game_ask);
     if (s.models.startsWith("error")) { showError(s.models.replace(/^error: /, ""), s.gpu_problem ? "GPU not available" : "Models failed to load"); return; }
     S.modelsReady = s.models === "ready"; S.firstRun = !!s.first_run;
     setTimeout(pollStatus, s.models === "ready" ? 5000 : 1000);

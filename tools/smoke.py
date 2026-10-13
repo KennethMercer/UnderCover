@@ -579,6 +579,135 @@ def u_write_guard():
     return "config, fsutil (text, torch) and phone writes refused outside; inside works; real files unchanged; no import-time binding"
 
 
+@check("game pause: asks (never assumes) when a full-screen game meets GPU work; Pause / Keep both / Don't ask; resumes only its own hold when the game closes; a job about to start waits for the answer")
+def u_gamepause():
+    import threading
+    from undercover.core import gamepause as gp, jobs, worklist
+    from undercover.core.config import CONFIG
+    from undercover.core.jobs import Job
+    from undercover.core.voices import ModelError
+    game = {"exe": "Cyberpunk2077.exe", "title": "Cyberpunk 2077", "how": "exclusive"}
+    other = {"exe": "eldenring.exe", "title": "ELDEN RING", "how": "borderless"}
+    with isolated_data():
+        saved = (dict(CONFIG.get("game_pause") or {}), jobs.PORT, worklist._STATE, dict(gp.STATE))
+        jobs.PORT, worklist._STATE = 7999, None   # a scratch queue in the test's own cache
+        CONFIG["game_pause"] = {}
+        reset = lambda: gp.STATE.update(game=None, asking=None, answer=None, paused_for=None, gone_since=None, reason="")
+        try:
+            reset()
+            # no GPU work: a game is just a game
+            gp.tick(game, 0, busy=False)
+            assert gp.STATE["asking"] is None
+            # GPU work: ask, and keep asking with no answer: nothing is ever paused by itself
+            for t in range(0, 60, 5):
+                gp.tick(game, 10 + t, busy=True)
+            assert gp.STATE["asking"]["exe"] == "Cyberpunk2077.exe" and not worklist._state().get("held")
+            # UnderCover's own page full-screen is never a game
+            reset()
+            gp.tick({"exe": "chrome.exe", "title": "UnderCover — Google Chrome", "how": "busy"}, 0, busy=True)
+            assert gp.STATE["asking"] is None and gp.STATE["game"] is None
+            # Pause: the work holds as the game's; the game gone 15 s: it resumes
+            reset()
+            gp.tick(game, 0, busy=True)
+            gp.answer("pause")
+            st = worklist._state()
+            assert st["held"] and st["held_by"] == "game" and gp.STATE["paused_for"] == "Cyberpunk2077.exe"
+            assert gp.tick(None, 100, busy=False) is None and worklist._state()["held"], "resumed before the game was gone 15 s"
+            assert gp.tick(None, 116, busy=False) == "resumed" and not worklist._state()["held"]
+            # a hand Resume, then a hand Pause during the game: its end resumes nothing (the hold is yours)
+            gp.tick(game, 200, busy=True)
+            gp.answer("pause")
+            worklist.resume_all()
+            worklist.pause_all()
+            assert gp.tick(None, 300, busy=False) is None and gp.tick(None, 316, busy=False) is None
+            assert worklist._state()["held"] and worklist._state()["held_by"] == "you"
+            # already paused by you when a game asks: Pause keeps the hold yours (the game's end resumes nothing)
+            gp.tick(game, 330, busy=True)
+            gp.answer("pause")
+            assert worklist.hold() == {"held": True, "held_by": "you"} and gp.STATE["paused_for"] is None
+            gp.tick(None, 340, busy=False)
+            assert gp.tick(None, 356, busy=False) is None and worklist.hold()["held"]
+            worklist.resume_all()
+            # UnderCover restarted mid-game (its memory gone, the game's hold saved): no game for 15 s, it resumes
+            worklist.pause_all(by="game")
+            reset()
+            assert gp.tick(None, 360, busy=False) is None and gp.tick(None, 376, busy=False) == "resumed"
+            assert not worklist.hold()["held"]
+            # Keep both: no more asking until that game closes; a different game asks afresh
+            gp.tick(game, 400, busy=True)
+            gp.answer("both")
+            gp.tick(game, 405, busy=True)
+            assert gp.STATE["asking"] is None and not worklist._state()["held"]
+            gp.tick(other, 410, busy=True)
+            assert gp.STATE["asking"]["exe"] == "eldenring.exe"
+            # Don't ask for this game: kept in the (test's) config, never asked again
+            gp.answer("never")
+            assert "eldenring.exe" in gp.settings()["never_ask"]
+            gp.tick(None, 500, busy=False)
+            gp.tick(None, 516, busy=False)
+            gp.tick(other, 520, busy=True)
+            assert gp.STATE["asking"] is None
+            gp.set_never("eldenring.exe", False)
+            assert "eldenring.exe" not in gp.settings()["never_ask"]
+            try:
+                reset()
+                gp.answer("pause")
+                raise AssertionError("an answer with no game on the screen")
+            except ModelError:
+                pass
+            # asking switched off: nothing asks, nothing waits
+            gp.set_ask(False)
+            reset()
+            gp.tick(game, 600, busy=True)
+            assert gp.STATE["asking"] is None
+            assert gp.before_start(Job("zz-smoke"), sleep=lambda _s: None, look=lambda: game) == "start"
+            gp.set_ask(True)
+            # a queued job about to start while a game is up waits for the answer: Keep both lets it start
+            reset()
+            job = Job("zz-smoke")
+            job.title = "Making a voice of Agent Smoke"
+            out = {}
+            th = threading.Thread(target=lambda: out.update(r=gp.before_start(job, sleep=lambda _s: time.sleep(0.01),
+                                                                               look=lambda: game, clock=lambda: 700)))
+            th.start()
+            wait_for(lambda: gp.STATE["asking"], 5, every=0.02, what="the question")
+            assert "waiting to start" in gp.STATE["reason"] and th.is_alive(), "the job started without an answer"
+            gp.answer("both")
+            th.join(5)
+            assert out.get("r") == "start"
+            assert any("Waiting: Cyberpunk 2077 is full-screen" in (e.get("message") or "") for e in job.events), \
+                "the waiting job didn't say why"
+            # ... and Pause makes it wait until the game is gone (the watcher resumes), then it starts
+            reset()
+            job2 = Job("zz-smoke")
+            th = threading.Thread(target=lambda: out.update(r2=gp.before_start(job2, sleep=lambda _s: time.sleep(0.01),
+                                                                                look=lambda: game, clock=lambda: 800)))
+            th.start()
+            wait_for(lambda: gp.STATE["asking"], 5, every=0.02, what="the question")
+            gp.answer("pause")
+            time.sleep(0.2)
+            assert th.is_alive() and worklist._state()["held_by"] == "game", "it started while paused for the game"
+            gp.tick(None, 900, busy=True)
+            assert gp.tick(None, 916, busy=True) == "resumed"
+            th.join(5)
+            assert out.get("r2") == "held" and not th.is_alive()
+            # cancelling a waiting job lets it go (run_job then finishes it as cancelled)
+            reset()
+            job3 = Job("zz-smoke")
+            job3.cancel = True
+            assert gp.before_start(job3, sleep=lambda _s: None, look=lambda: game) == "start"
+            # the GPU worker asks the gates before every job, and says which job is on the GPU (what "busy" means)
+            import inspect
+            src = inspect.getsource(jobs.gpu_worker)
+            assert src.index("gate(job)") < src.index("CURRENT[0] = job") < src.index("run_job(job, fn)"), "the gate isn't wired"
+            assert not gp._gpu_busy()
+        finally:
+            CONFIG["game_pause"], jobs.PORT, worklist._STATE = saved[0], saved[1], saved[2]
+            gp.STATE.clear()
+            gp.STATE.update(saved[3])
+    return "no work: no question; no answer: no pause; Pause / both / never; resumes only its own hold; a starting job waits"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -3224,8 +3353,9 @@ def u_platform():
     try:
         assert platform.supports("firewall")[0] is False and platform.supports("tray")[0] is False
         assert platform.keep_awake(True) is False
+        assert platform.supports("fullscreen")[0] is False
         for fn, args in ((platform.startup_folder, ()), (platform.network_and_firewall, ("192.168.1.5",)),
-                         (platform.video_controllers, ())):
+                         (platform.video_controllers, ()), (platform.fullscreen_app, ())):
             try:
                 fn(*args)
                 raise AssertionError(f"{fn.__name__} ran as if on Windows")
@@ -3263,6 +3393,10 @@ def u_tray():
     ids = [i["id"] for i in m if i["id"] != "-"]
     assert ids == ["open", "running", "phone", "restart", "quit", "startup"], ids
     assert m[0]["default"] and next(i for i in m if i["id"] == "phone")["checked"] is False
+    asking = {"asking": {"exe": "eldenring.exe", "title": "ELDEN RING", "since": 1.0}}
+    g = [i["id"] for i in tray.menu_model(idle, [], game=asking) if i["id"] != "-"]
+    assert g[:5] == ["game-q", "game-pause", "game-both", "game-never", "open"], g
+    assert tray.game_question(asking).startswith("ELDEN RING is full-screen") and tray.game_question({"asking": None}) is None
     assert next(i for i in m if i["id"] == "startup")["checked"] is True
     cover = {"id": "c1", "kind": "cover", "state": "running", "title": "Cover: Hello as Agent Smoke", "total_left": 130}
     train = {"id": "t1", "kind": "train", "state": "running", "title": "Training Morgan Freeman", "epoch": 120,
@@ -3332,6 +3466,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
     ("GET", "/api/vault"), ("GET", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
+    ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
     ("POST", "/api/phone/revoke"),
@@ -4287,7 +4422,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_da_mode, u_write_guard, u_vault, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_gamepause, u_da_mode, u_write_guard, u_vault, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_ear,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
