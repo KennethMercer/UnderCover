@@ -191,7 +191,10 @@ async function daStart(tonight) {
   try {
     await trainVoice(person, DA_MODE.v, tonight);   // train.js
     $("#da-person").value = "";
-    if (tonight) showError(`${person} is in tonight's work: it trains while the PC is free. SafeHouse's Running room shows it.`, "Added to tonight", null, true);
+    if (tonight) {
+      showError(`${person} is in tonight's work: it trains while the PC is free. SafeHouse's Running room shows it.`, "Added to tonight", null, true);
+      document.dispatchEvent(new CustomEvent("uc:voicequeued", { detail: { person } }));   // the First assignment ends on it
+    }
     else { daOutcomeClear(); renderDaWork(); }
   } catch (e) { showError(e.message, tonight ? "Couldn't add it to tonight" : "Couldn't start the voice"); }
   finally { btn.disabled = false; btn.innerHTML = label; }

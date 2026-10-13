@@ -88,6 +88,11 @@
   <div id="wa-toast" aria-hidden="true"></div>
 
   <div class="uc-updated" id="uc-updated" hidden role="status">UnderCover was updated: <button class="linkbtn" id="uc-updated-go" type="button">Reload</button></div>
+  <section class="wn" id="wn" hidden aria-labelledby="wn-k">
+    <div class="wn-head"><span class="wn-k" id="wn-k">What's new</span><span class="meta" id="wn-when"></span></div>
+    <div class="wn-body" id="wn-body"></div>
+    <div class="row"><button class="btn" id="wn-ok" type="button">Got it</button><button class="linkbtn" id="wn-all" type="button">Every change, in SafeHouse</button></div>
+  </section>
   <div class="alert" id="err" hidden role="alert">
     <div><b id="err-title">Something went wrong</b><p id="err-msg"></p></div>
     <div class="alert-btns"><button class="btn primary" id="err-action" hidden></button><button class="icon-btn" id="err-x">Dismiss</button></div>
@@ -617,6 +622,11 @@
       <div class="sys" id="sys-about"><span><b>UnderCover</b><small id="sys-version">…</small><span class="kv2" id="sys-about-deep" data-deep></span></span>
         <button class="linkbtn" id="sys-logs" type="button" data-deep data-pc>Open logs</button></div>
     </div>
+    <section class="rn-sec" id="sys-news">
+      <div class="rn-lbl"><b>What's new</b><small>What each update changed, newest first.</small></div>
+      <div class="rn-list" id="sys-news-list"></div>
+      <button class="linkbtn" id="sys-news-more" type="button" hidden></button>
+    </section>
     <section class="rn-sec" id="sys-sweep">
       <div class="rn-lbl"><b>Sweep</b><small id="sys-doctor-sum">The Doctor checks UnderCover's own parts and fixes the safe things. It never touches your songs, voices, covers or speech.</small></div>
       <div class="rn-list" id="sys-doctor"></div>
@@ -774,6 +784,7 @@
 <script src="/static/speakeasy.js"></script>
 <script src="/static/shell.js"></script>
 <script src="/static/tutorial.js"></script>
+<script src="/static/whatsnew.js"></script>
 <script src="/static/winamp.js"></script>
 </body>
 </html>
