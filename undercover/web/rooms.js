@@ -189,6 +189,7 @@ async function loadStorage() {
   if (moving && !R.moving) followMove(moving);
   renderPlaces();
   if (typeof vaultLoad === "function") vaultLoad();   // the Vault section (vault.js)
+  if (typeof smallerLoad === "function") smallerLoad();   // Make it smaller (smaller.js)
 }
 
 function renderPlaces() {
