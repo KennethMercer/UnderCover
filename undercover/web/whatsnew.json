@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-13-tonight-mode",
+      "date": "2026-10-13",
+      "title": "Train tonight remembers Singing",
+      "lines": [
+        "A voice queued for tonight now trains the way you picked: Speaking or Singing.",
+        "While a voice trains, \"Checking it\" now lights up as it's checked against real clips of the person."
+      ]
+    },
+    {
       "id": "2026-10-13-thumbs",
       "date": "2026-10-13",
       "title": "Thumbs up, thumbs down",
