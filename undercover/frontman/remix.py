@@ -138,6 +138,13 @@ def _reverb_ir(seconds: float, sr: int) -> Path:
     return p
 
 
+def true_peak(p: Path) -> float:
+    """True peak (dBTP, 4x oversampled) of a file as a player decodes it; -70 for silence."""
+    err = _run(["-nostats", "-i", str(p), "-af", "ebur128=peak=true:framelog=quiet", "-f", "null", "-"])
+    m = re.findall(r"Peak:\s+(-?[\d.]+|-inf) dBFS", err)
+    return -70.0 if not m or m[-1] == "-inf" else float(m[-1])
+
+
 def _encode_args(fmt: str) -> list[str]:
     if fmt == "mp3":
         return ["-c:a", "libmp3lame", "-b:a", RCFG["mp3_bitrate"]]
@@ -247,14 +254,23 @@ def remix(instrumental: Path, vocal: Path, original_vocal: Path, out: Path, song
             _run(["-y", *inputs, "-filter_complex", ";".join(graph), "-map", "[mix]",
                   "-c:a", "pcm_f32le", str(premix)])
         master_gain = (target - lufs(premix)) if target is not None else 0.0
-        limit = 10 ** (RCFG["limiter_db"] / 20)
-        with timed("remix.master", format=s.format):
-            _run(["-y", "-i", str(premix), "-af",
-                  # 4x oversampled limiting catches inter-sample peaks (a master measured +0.4 dBTP before);
-                  # slower release avoids pumping
-                  f"volume={master_gain:.2f}dB,aresample=176400,"
-                  f"alimiter=limit={limit:.4f}:attack=5:release=150:level=disabled,aresample={sr}",
-                  "-ar", str(sr), *_encode_args(s.format), str(out)])
+        ceiling = RCFG["limiter_db"]
+        limit_db = ceiling
+        for attempt in range(3):
+            with timed("remix.master", format=s.format, limit_db=round(limit_db, 2)) as rec:
+                _run(["-y", "-i", str(premix), "-af",
+                      # 4x oversampled limiting catches inter-sample peaks (a master measured +0.4 dBTP before);
+                      # slower release avoids pumping
+                      f"volume={master_gain:.2f}dB,aresample=176400,"
+                      f"alimiter=limit={10 ** (limit_db / 20):.4f}:attack=5:release=150:level=disabled,aresample={sr}",
+                      "-ar", str(sr), *_encode_args(s.format), str(out)])
+                # The encoder adds its own overshoot (a loud MP3 master decoded at -0.7 dBTP against a -1 limiter,
+                # phase 21): measure the file as a player decodes it, and if it's over the ceiling, master again
+                # with the limiter lowered by the overshoot.
+                tp = rec["true_peak"] = true_peak(out)
+            if tp <= ceiling + 0.05:
+                break
+            limit_db -= tp - ceiling + 0.1
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return out
