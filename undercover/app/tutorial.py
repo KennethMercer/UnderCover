@@ -1,6 +1,9 @@
 """The First assignment's backend (phase 17; the page side is tutorial.js, contract docs/handoffs/tutorial.md).
 
-    /api/status            tutorial: {done: "YYYY-MM-DD" | "existing install" | null}
+    /api/status            tutorial: {done: "YYYY-MM-DD" | "existing install" | null,
+                                      demo_update: {voice, display, made} | null, demo_previous: bool}
+    POST /api/tutorial/demo/update   a newer Agent Smoke than the one installed ships: swap it in (the old one aside)
+    POST /api/tutorial/demo/undo     the previous Agent Smoke back
     POST /api/tutorial/done    marks it done today            -> {tutorial: {done}}
     POST /api/tutorial/reset   seeds the sample song and the demo voice again if they're gone, done = null -> {tutorial}
     GET  /api/tutorial/greetings         Agent Smoke's greeting clips -> {greetings: [{from, to, text, url}],
@@ -16,6 +19,11 @@
 - **The greetings** (`undercover/assets/demo-voice/greetings/`: greetings.json {greetings: [{file, from, to, text}],
   followon: {file, text}} + the mp3s): the page picks one by the browser's local hour (from inclusive, to exclusive)
   and plays the follow-on when the song and the voice are both on the desk. Nothing else in assets is reachable.
+- **A newer demo voice** (the user's words: "A newer Agent Smoke is available: Update"): the installed demo voice's
+  build (extra.demo_build: the SHA-256 of its model.pth, written at seeding; an older seed is hashed once) against the
+  shipped manifest's. Update is the user's choice: the installed folder moves aside to voices/.agent-smoke-previous (its
+  meta.json renamed, so the voice list doesn't show it), the shipped one goes in, the name the user gave it stays.
+  Undo swaps them back. One previous build is kept; the next update replaces it.
 - **The demo voice** "Agent Smoke" (`undercover/assets/demo-voice/agent-smoke/`, made by tools/make_demo_voice.py):
   copied into voices_dir when it isn't there. Its meta says demo: true, trained: false; nothing treats its "person" as
   someone to search for (core/voices.is_demo). The user may delete it; Replay brings it back.
@@ -34,6 +42,8 @@ from ..core.voices import ModelError
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
 SAMPLE = ASSETS / "sample"
 DEMO = ASSETS / "demo-voice" / "agent-smoke"
+PREVIOUS = ".agent-smoke-previous"   # the demo voice before its last update (meta.json renamed: not in the voice list)
+_BUILD: dict = {}                    # (model.pth, size, mtime) -> its SHA-256: hashed once
 GREETINGS = ASSETS / "demo-voice" / "greetings"
 GREETINGS_URL = "/api/tutorial/greetings/"
 _LOCK = threading.Lock()
@@ -69,7 +79,11 @@ def status() -> dict:
         key = (str(f), None)
     if _CACHE.get("key") != key:
         _CACHE.update(key=key, done=(load() or {}).get("done"))
-    return {"done": _CACHE["done"]}
+    try:
+        upd = demo_update()
+    except Exception:   # noqa: BLE001 - the status never fails over the offer
+        upd = None
+    return {"done": _CACHE["done"], "demo_update": upd, "demo_previous": (path("voices_dir") / PREVIOUS).is_dir()}
 
 
 def _existing_install() -> bool:
@@ -231,11 +245,137 @@ def seed_voice() -> str | None:
     meta = json.loads((DEMO / "meta.json").read_text(encoding="utf-8"))
     meta.update(name=DEMO.name, dir=str(dest), pth=str(dest / "model.pth"),
                 index=str(dest / "model.index") if (tmp / "model.index").exists() else "")
+    meta.setdefault("extra", {})["demo_build"] = _shipped_build()
     (tmp / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     fsutil.retry(lambda: tmp.replace(dest))
     from ..core import gpu
     gpu.forget_voice(DEMO.name)
     return DEMO.name
+
+
+# ---------------------------------------------------------------- a newer demo voice
+
+def _sha(f: Path) -> str:
+    import hashlib
+    st = f.stat()
+    key = (str(f), st.st_size, st.st_mtime_ns)
+    if key not in _BUILD:
+        h = hashlib.sha256()
+        with open(f, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        _BUILD[key] = h.hexdigest()
+    return _BUILD[key]
+
+
+def _shipped_build() -> str | None:
+    try:
+        return json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))["files"]["model.pth"]["sha256"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _installed_demo():
+    from ..core.voices import get_voice
+    if not (path("voices_dir") / DEMO.name / "meta.json").is_file():
+        return None
+    try:
+        v = get_voice(DEMO.name)
+    except Exception:   # noqa: BLE001 - not a readable voice: nothing to offer
+        return None
+    return v if (v.extra or {}).get("demo") else None
+
+
+def demo_update() -> dict | None:
+    """{voice, display, made} when the shipped demo voice is a newer build than the installed one; else None. Asked on
+    every /api/status: answered from a cache until the installed meta, its model or the shipped manifest changes."""
+    def mtime(f):
+        try:
+            return f.stat().st_mtime_ns
+        except OSError:
+            return None
+    dest = path("voices_dir") / DEMO.name
+    key = (str(dest), mtime(dest / "meta.json"), mtime(dest / "model.pth"), mtime(DEMO / "manifest.json"))
+    if _CACHE.get("demo_key") != key:
+        _CACHE.update(demo_key=key, demo=_demo_update())
+    return _CACHE["demo"]
+
+
+def _demo_update() -> dict | None:
+    v = _installed_demo()
+    ship = _shipped_build()
+    if v is None or not ship or not Path(v.pth).is_file():
+        return None
+    have = (v.extra or {}).get("demo_build") or _sha(Path(v.pth))
+    if have == ship or demo_files():   # the same build, or the shipped files aren't whole (nothing to offer)
+        return None
+    try:
+        made = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8")).get("made")
+    except (OSError, ValueError):
+        made = None
+    return {"voice": v.name, "display": v.display or "Agent Smoke", "made": made}
+
+
+def update_demo() -> dict:
+    """The newer Agent Smoke in, the installed one aside (PREVIOUS, replacing an older previous). The user's choice."""
+    from ..core import gpu
+    with _LOCK:
+        upd = demo_update()
+        if upd is None:
+            raise ModelError("Agent Smoke is already the newest.")
+        vd = path("voices_dir")
+        dest, prev, tmp = vd / DEMO.name, vd / PREVIOUS, vd / f".{DEMO.name}-updating"
+        if storage.ALLOWED_ROOTS is not None and storage.refuse([dest, prev, tmp]):
+            raise ModelError(storage.refuse([dest, prev, tmp]))
+        old = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+        for d in (tmp, prev):
+            if d.exists():   # an update an earlier try didn't finish; the previous build before this one
+                storage.remove_files([], [vd], dirs=[d])
+        shutil.copytree(DEMO, tmp, ignore=shutil.ignore_patterns("meta.json", "manifest.json"))
+        meta = json.loads((DEMO / "meta.json").read_text(encoding="utf-8"))
+        meta.update(name=DEMO.name, dir=str(dest), pth=str(dest / "model.pth"),
+                    index=str(dest / "model.index") if (tmp / "model.index").exists() else "",
+                    display=old.get("display") or meta.get("display") or "")
+        meta.setdefault("extra", {})["demo_build"] = _shipped_build()
+        # named meta.json only once it's in place: the voice list sees any folder with one (a dot folder too)
+        (tmp / "meta.json.new").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        try:
+            fsutil.retry(lambda: dest.replace(prev))   # a file held open (Windows) fails here: nothing has changed yet
+            try:
+                fsutil.retry(lambda: (prev / "meta.json").replace(prev / "meta.json.previous"))   # out of the voice list
+                fsutil.retry(lambda: tmp.replace(dest))
+                fsutil.retry(lambda: (dest / "meta.json.new").replace(dest / "meta.json"))
+            except OSError:   # the new one couldn't go in: the installed one goes back, Agent Smoke never goes missing
+                if dest.exists() and not (dest / "meta.json").exists():
+                    dest.replace(tmp)
+                if (prev / "meta.json.previous").exists():
+                    (prev / "meta.json.previous").replace(prev / "meta.json")
+                if not dest.exists():
+                    prev.replace(dest)
+                raise
+        finally:
+            if tmp.exists():
+                storage.remove_files([], [vd], dirs=[tmp])
+        gpu.forget_voice(DEMO.name)
+        return {"tutorial": status(), "updated": DEMO.name}
+
+
+def undo_demo() -> dict:
+    """The previous Agent Smoke back (the newer one goes: it ships with UnderCover, Update brings it again)."""
+    from ..core import gpu
+    with _LOCK:
+        vd = path("voices_dir")
+        dest, prev = vd / DEMO.name, vd / PREVIOUS
+        if not (prev / "meta.json.previous").is_file():
+            raise ModelError("There's no earlier Agent Smoke to go back to.")
+        if storage.ALLOWED_ROOTS is not None and storage.refuse([dest, prev]):
+            raise ModelError(storage.refuse([dest, prev]))
+        if dest.exists():
+            storage.remove_files([], [vd], dirs=[dest])
+        fsutil.retry(lambda: (prev / "meta.json.previous").replace(prev / "meta.json"))
+        fsutil.retry(lambda: prev.replace(dest))
+        gpu.forget_voice(DEMO.name)
+        return {"tutorial": status()}
 
 
 # ---------------------------------------------------------------- the greetings
@@ -302,6 +442,11 @@ def handle(h, method: str, p: str) -> bool:
         h._json(mark_done())
     elif p == "/api/tutorial/reset":
         h._json(reset())
+    elif p in ("/api/tutorial/demo/update", "/api/tutorial/demo/undo"):
+        try:
+            h._json(update_demo() if p.endswith("update") else undo_demo())
+        except ModelError as e:
+            h._error(str(e), 409)
     else:
         h._error("Not found", 404)
     return True
