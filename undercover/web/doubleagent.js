@@ -238,7 +238,16 @@ function renderDaWork() {
 onJobs(() => { if (!$("#view-train").hidden) renderDaWork(); });
 
 // ------------------------------------------------------------ after training: one card, ready (next steps) or weak (one way out)
+// any Do it all that finishes while the page is open (this tab's, another's, the phone's): its project names the voice
 function daOutcome(voice) { store.set("uc-da-outcome", voice); loadCandidates(); }   // the card draws once the voice is in the list
+document.addEventListener("uc:jobdone", async e => {
+  const j = e.detail;
+  if (j.kind !== "train-auto" || j.state !== "done" || !j.project) return;
+  try {
+    const proj = (await api("/api/train/projects")).find(p => p.name === j.project);
+    if (proj?.train?.exported) daOutcome(proj.train.exported);
+  } catch (err) { /* the voice is in the list anyway; only the card is missed */ }
+});
 function daOutcomeClear() { store.set("uc-da-outcome", null); $("#da-outcome").hidden = true; }
 function renderDaOutcome() {
   const v = store.get("uc-da-outcome", null), box = $("#da-outcome");
@@ -249,7 +258,7 @@ function renderDaOutcome() {
   const weak = w === "fair" || w === "poor" || c.quality?.ok === false;
   const mins = c.minutes != null ? Math.round(c.minutes) : null;
   box.innerHTML = weak
-    ? `<h3>${name} is ready, but only a ${likeWord(w || "fair")} likeness.</h3>
+    ? `<h3>${name} is ready${w ? `, but only a ${likeWord(w)} likeness` : ", but it's weak"}.</h3>
        <p class="meta">${mins != null && mins < 10 ? `Only ${mins} minute${mins === 1 ? "" : "s"} of their clean voice were found; 10 is the aim. ` : ""}It sounds somewhat like them. More clips would make it good, or great.</p>
        <div class="row"><button class="btn primary" type="button" data-da-more>Find more clips and keep training</button><span class="meta">about 1 hour</span>
          <button class="linkbtn quiet" type="button" data-da-close>Use it as it is</button></div>`

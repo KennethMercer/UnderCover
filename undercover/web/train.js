@@ -96,7 +96,7 @@ function follow(id, kind) {
       else if (ev.message && kind === "prepare" && ev.message.length) showError(ev.message, "Some sources were skipped", null, true);
       if (kind === "auto") {
         clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true;
-        if (ev.state === "done") { loadVoices(); if (ev.voice && typeof daOutcome === "function") daOutcome(ev.voice); }   // the card after training
+        if (ev.state === "done") loadVoices();   // the card after training: doubleagent.js, on uc:jobdone
       }
       refresh().then(() => { if (kind === "export" && ev.voice) loadVoices(); });
     }
@@ -115,8 +115,11 @@ async function trainVoice(person, mode, tonight) {
   }
   T.list = await api("/api/train/projects");
   const same = T.list.find(x => (x.person || "").toLowerCase() === person.toLowerCase());
-  const data = same ? await api(`/api/train/projects/${same.name}/search`, { json: { person, mode } })
-                    : await api("/api/train/projects", { json: { person, mode } });
+  let data;
+  if (same) {   // a fresh search; if it fails (offline, nothing new), the clips already prepared still train
+    try { data = await api(`/api/train/projects/${same.name}/search`, { json: { person, mode } }); }
+    catch (e) { if (!same.ready_sources) throw e; data = same; }
+  } else data = await api("/api/train/projects", { json: { person, mode } });
   if (data.warning && !(data.sources || []).length) throw new Error(data.warning);
   await loadProjects(data.name);
   const r = await P("auto", {});
