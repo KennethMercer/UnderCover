@@ -1614,6 +1614,65 @@ def u_ear():
     return "up / down with reasons, the cover's own voice and settings; fixes: Improve tonight, a new voice, an octave, slower; forget one / all; liked first"
 
 
+@check("golden set bookkeeping: noise bands, flags past twice the band, at most 4 pairs, only verdicts move the baseline")
+def u_golden():
+    import os
+    import tempfile
+    import golden as G
+    assert G.parts("cover:toxic__spongebob-uc") == {"toxic", "spongebob-uc"} and G.parts("speech:rain__morgan-freeman-uc:reader") == {"rain", "morgan-freeman-uc"}
+    a = {"cover:toxic__sb": {"likeness": 0.70, "words_kept": 0.80, "cents_off": 20.0, "loud_db": -14.0, "octave": 0}}
+    b = {"cover:toxic__sb": {"likeness": 0.75, "words_kept": 0.81, "cents_off": 21.0, "loud_db": -14.1, "octave": 0}}
+    bd = G.bands(a, b)["cover:toxic__sb"]
+    assert bd == {"likeness": 0.05, "words_kept": 0.05, "cents_off": 5.0, "loud_db": 0.5}, bd   # the spread, never under the floor
+    base = {"run": "r0", "scores": a, "bands": {"cover:toxic__sb": bd}}
+    same = {"cover:toxic__sb": {"likeness": 0.62, "words_kept": 0.95, "cents_off": 29.0, "loud_db": -14.9}}
+    assert G.flags(base, same) == [], G.flags(base, same)   # within twice the bands, or better
+    worse = {"cover:toxic__sb": {"likeness": 0.55, "words_kept": 0.85, "cents_off": 33.0, "loud_db": -12.5}, "cover:new__x": {"likeness": 0.1}}
+    fl = G.flags(base, worse)
+    assert {f["score"] for f in fl[:2]} == {"loud_db", "likeness"} and fl[2]["score"] == "cents_off" and len(fl) == 3, fl   # worst first; a new item isn't judged
+    many = [{"item": f"cover:s{i}__v"} for i in range(6)]
+    assert G.pick_pairs(many, [f"cover:s{i}__v" for i in range(9)], 3) == [f"cover:s{i}__v" for i in range(4)]
+    items = ["cover:a__v", "cover:b__v", "cover:c__v"]
+    assert G.pick_pairs([], items, 0) == ["cover:a__v"] and G.pick_pairs([], items, 1) == ["cover:b__v"]   # one rotating item
+    assert G.pick_pairs([{"item": "cover:b__v"}], items, 0) == ["cover:b__v", "cover:a__v"]
+    # only verdicts move the baseline; "old" blocks, a flag not heard yet holds
+    nb = G.accepted(base, "r1", {"cover:toxic__sb": {"likeness": 0.9}, "cover:new__x": {"likeness": 0.3}}, {})
+    assert nb["scores"]["cover:toxic__sb"] == a["cover:toxic__sb"] and nb["scores"]["cover:new__x"] == {"likeness": 0.3}
+    assert G.render_run(nb, "cover:new__x") == "r1" and G.render_run(nb, "cover:toxic__sb") == "r0"
+    nb = G.accepted(base, "r1", {"cover:toxic__sb": {"likeness": 0.9}}, {"cover:toxic__sb": "same"})
+    assert nb["scores"]["cover:toxic__sb"] == {"likeness": 0.9} and G.render_run(nb, "cover:toxic__sb") == "r1"
+    assert G.blocking({"cover:a__v": "old", "cover:b__v": "new"}, ["cover:b__v", "cover:c__v"]) == ["cover:a__v", "cover:c__v"]
+    # make: items whose song and voice weren't (re)frozen keep their baseline; a refrozen voice's items start again
+    old = {"run": "r0", "scores": {"cover:a__v1": {"likeness": 0.7}, "cover:a__v2": {"likeness": 0.6}},
+           "bands": {"cover:a__v1": {"likeness": 0.02}, "cover:a__v2": {"likeness": 0.02}}}
+    m = G.merged_baseline(old, ("r5", {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.2}, "cover:b__v1": {"likeness": 0.3}}),
+                          {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.25}, "cover:b__v1": {"likeness": 0.3}}, {"v2", "b"})
+    assert m["scores"]["cover:a__v1"] == {"likeness": 0.7} and m["scores"]["cover:a__v2"] == {"likeness": 0.2}, m
+    assert m["bands"]["cover:a__v2"] == {"likeness": 0.05} and G.render_run(m, "cover:b__v1") == "r5" and G.render_run(m, "cover:a__v1") == "r0"
+    spec = {"voices": [{"name": "v1"}, {"name": "morgan-freeman-uc"}], "covers": {"a": ["v1", "gone"]}}
+    its = G.items_of(spec)
+    assert its[0] == "cover:a__v1" and "cover:a__gone" not in its and "speech:rain__morgan-freeman-uc:reader" in its, its
+    # its own config: every written path inside the golden folder; models read from the app folder
+    saved_env, saved_g = os.environ.get("UNDERCOVER_CONFIG"), G.GOLDEN
+    with tempfile.TemporaryDirectory() as td:
+        G.GOLDEN = Path(td) / "golden"
+        try:
+            G._config()
+            text = (G.GOLDEN / "config.toml").read_text(encoding="utf-8")
+        finally:
+            G.GOLDEN = saved_g
+            if saved_env is None:
+                os.environ.pop("UNDERCOVER_CONFIG", None)
+            else:
+                os.environ["UNDERCOVER_CONFIG"] = saved_env
+    import tomllib
+    paths = tomllib.loads(text)["paths"]
+    inside = Path(td).as_posix() + "/golden"
+    assert all(paths[k].startswith(inside) for k in ("voices_dir", "cache_dir", "output_dir", "logs_dir", "uploads_dir")), paths
+    assert paths["models_dir"].endswith("/models") and not paths["models_dir"].startswith(inside), paths
+    return "bands with floors; flags worst first; 4 pairs + 1 rotating; verdicts move the baseline, old blocks; make keeps untouched items; its own folders"
+
+
 @check("lead gate: an instrument in the lead stem isn't converted, lines left in the backing are; the stems stay as they were")
 def u_leadgate():
     import numpy as np
@@ -4543,7 +4602,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_gamepause, u_da_mode, u_write_guard, u_vault, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_platform, u_tray):
         fn()

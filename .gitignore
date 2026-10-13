@@ -24,3 +24,4 @@ __pycache__/
 installer/dist/
 # Phase 9 A/B listening samples: real people's voices, never committed
 docs/research/samples/
+golden/
