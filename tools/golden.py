@@ -8,7 +8,8 @@ quality regression is caught before the user hears it. Numbers flag; the ear dec
                                    The first make freezes "Hold On" and the default voices; the set grows the same way.
     python tools/golden.py run [--force]                 the set again -> runs/<stamp>/scores.json + renders
     python tools/golden.py compare [RUN]                 what moved past twice its noise band, the bad way
-    python tools/golden.py pairs [RUN]                   blind pairs (every flag + one rotating item, at most 4) + key.json
+    python tools/golden.py pairs [RUN] [--items A,B]     blind pairs (every flag + one rotating item, or the items a phase
+                                                         changed on purpose; at most 4) + key.json
     python tools/golden.py verdict RUN ITEM new|old|same the ear's answer
     python tools/golden.py accept RUN                    the items heard as new / same take the run's scores into the baseline
     python tools/golden.py rebands                       run the set twice more and widen every band to the largest spread seen
@@ -506,8 +507,10 @@ def main():
     m.add_argument("--voice", action="append", default=[])
     r = sub.add_parser("run")
     r.add_argument("--force", action="store_true")
-    for c in ("compare", "pairs"):
-        sub.add_parser(c).add_argument("run", nargs="?")
+    sub.add_parser("compare").add_argument("run", nargs="?")
+    pp = sub.add_parser("pairs")
+    pp.add_argument("run", nargs="?")
+    pp.add_argument("--items", default="", help="these items (a phase's deliberate changes), comma separated, instead of flags + rotating")
     v = sub.add_parser("verdict")
     v.add_argument("run")
     v.add_argument("item")
@@ -571,7 +574,8 @@ def main():
         sc = _read(GOLDEN / "runs" / run / "scores.json", {})["scores"]
         fl = flags(_read(GOLDEN / "baseline.json", {}), sc)
         n_runs = len(list((GOLDEN / "runs").glob("*")))
-        chosen = pick_pairs(fl, sorted(sc), n_runs)
+        chosen = ([i.strip() for i in a.items.split(",") if i.strip() in sc][:MAX_PAIRS] if a.items
+                  else pick_pairs(fl, sorted(sc), n_runs))
         out = make_pairs(run, chosen)
         print(f"{len(chosen)} pair(s) in {out} (key.json is for MasterPlan only)")
     elif a.cmd == "verdict":
