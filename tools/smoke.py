@@ -775,6 +775,41 @@ def u_gamepause():
     return "no work: no question; no answer: no pause; Pause / both / never; resumes only its own hold; a starting job waits"
 
 
+@check("cadence reading: very short sentences are read with a neighbour (never across a paragraph), the voice conversion gets a lead-in; Agent Smoke ships a shrunk index and his pack")
+def u_cadence_starts():
+    """2026-10-13: "Good evening." came out as "Grieving." (the conversion, no context before the onset) and short
+    sentences read alone got stray sounds ("E. Listen carefully."); measured fixes in core/cadence/render.py."""
+    import inspect
+    import struct
+    import numpy as np
+    from undercover.core.cadence import render
+    S = lambda t, p=0.3: {"text": t, "pause": p}
+    j = render.join_short([S("Good evening."), S("The name is Smoke, Agent Smoke."), S("Go.", 0.0)])
+    assert [x["text"] for x in j] == ["Good evening. The name is Smoke, Agent Smoke. Go."], j
+    j = render.join_short([S("Listen carefully.", 0.7), S("A new paragraph starts here.", 0.0)])
+    assert [x["text"] for x in j] == ["Listen carefully.", "A new paragraph starts here."], "joined across a paragraph"
+    j = render.join_short([S("One more thing before you go.", 0.7), S("Right.", 0.3), S("Then go.", 0.0)])
+    assert [x["text"] for x in j] == ["One more thing before you go.", "Right. Then go."], j
+    assert render.join_short([S("Hi.", 0.0)]) == [S("Hi.", 0.0)]
+    src = inspect.getsource(render.finish)
+    assert "LEAD_S" in src and "y[int(sr * LEAD_S):]" in src, "the conversion lost its lead-in"
+    import make_demo_voice as mdv
+    from undercover.core.engine.rvc import index as rvcindex
+    with isolated_data() as box:
+        f = box / "model.index"
+        v = np.random.default_rng(0).normal(size=(3000, 16)).astype(np.float16)
+        f.write_bytes(rvcindex.COMPACT_MAGIC + struct.pack("<qq", *v.shape) + v.tobytes())
+        assert mdv.shrink_index(box, k=200) == (3000, 200)
+        back = rvcindex.read_vectors(f)
+        assert back.shape == (200, 16) and np.isfinite(back).all()
+        assert mdv.shrink_index(box, k=500) == (200, 200), "a small index was changed"
+    man = json.loads((ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke" / "manifest.json").read_text(encoding="utf-8"))
+    assert {"model.pth", "model.index", "tts/ref.wav"} <= set(man["files"]), man["files"]
+    meta = json.loads((ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke" / "meta.json").read_text(encoding="utf-8"))
+    assert meta["extra"]["tts"]["engine"] == "chatterbox" and meta["extra"]["demo"] is True
+    return "joins short sentences inside a paragraph only; lead-in in finish; index k-means; the shipped pack listed"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -4489,7 +4524,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_ear,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

@@ -85,10 +85,78 @@ def synthesize(text: str, reader: str, minutes: float, into: Path) -> list[Path]
     return files
 
 
+INDEX_CENTRES = 10000   # build 4's 166,906 vectors (256 MB) -> 10k k-means centres (15 MB): likeness 0.928 -> 0.923,
+                        # within run-to-run noise; Hold On sung through both: 0.996 alike (measured 2026-10-13)
+PACK_TEXT = ("The city was quiet that night, and the lamps along the river burned low. "
+             "Nobody saw him cross the bridge, and nobody asked where he was going.")
+
+
+def shrink_index(folder: Path, k: int = INDEX_CENTRES) -> tuple[int, int]:
+    """The voice's index as k k-means centres (compact fp16): RVC's own way to shrink a big set, on the GPU when there
+    is one (seconds; scikit-learn on the CPU takes hours here). -> (vectors before, after)"""
+    import struct
+    import numpy as np
+    import torch
+    from undercover.core.engine.rvc import index as rvcindex
+    f = folder / "model.index"
+    x = rvcindex.read_vectors(f)
+    if len(x) <= k:
+        return len(x), len(x)
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    X = torch.from_numpy(x).to(dev)
+    xx = (X * X).sum(1)
+    C = X[torch.randperm(len(X), device=dev, generator=torch.Generator(device=dev).manual_seed(0))[:k]].clone()
+
+    def assign(C):
+        cc = (C * C).sum(1)
+        lab = torch.empty(len(X), dtype=torch.long, device=dev)
+        dist = torch.empty(len(X), device=dev)
+        for i in range(0, len(X), 8192):
+            dist[i:i + 8192], lab[i:i + 8192] = (xx[i:i + 8192, None] - 2 * X[i:i + 8192] @ C.T + cc[None]).min(1)
+        return lab, dist
+    for _ in range(25):
+        lab, dist = assign(C)
+        cnt = torch.bincount(lab, minlength=k).float()
+        C = torch.zeros_like(C).index_add_(0, lab, X) / cnt.clamp(min=1)[:, None]
+        empty = torch.nonzero(cnt == 0).flatten()
+        if len(empty):   # an empty centre restarts at one of the points farthest from their own centre
+            C[empty] = X[dist.topk(len(empty)).indices]
+    v = C.float().cpu().numpy().astype(np.float16)
+    assert np.isfinite(v).all()
+    tmp = f.with_name("model.index.tmp")
+    with open(tmp, "wb") as fh:
+        fh.write(rvcindex.COMPACT_MAGIC + struct.pack("<qq", *v.shape))
+        fh.write(v.tobytes())
+    tmp.replace(f)
+    return len(x), len(v)
+
+
+def add_cadence_pack(folder: Path, reader: str, meta: dict) -> dict:
+    """SpeakEasy reads him with Chatterbox (the user's blind pick over plain Kokoro, 2026-10-13): a cadence pack whose
+    reference is his own reader saying PACK_TEXT (synthetic speech, nobody's voice). -> meta with extra.tts"""
+    import numpy as np
+    import soundfile as sf
+    from undercover.speakeasy import tts
+    (folder / "tts").mkdir(exist_ok=True)
+    sf.write(folder / "tts" / "ref.wav", np.asarray(tts.synth(PACK_TEXT, reader), np.float32), tts.SR, subtype="PCM_16")
+    meta.setdefault("extra", {})["tts"] = {"engine": "chatterbox", "cfg_weight": 0.3, "exaggeration": 0.5, "v": 1,
+                                           "ref": "ref.wav", "ref_text": PACK_TEXT, "tempo": 1.0, "gap_s": 0.5,
+                                           "para_gap_s": 0.8, "made": time.strftime("%Y-%m-%d"),
+                                           "source": f"Kokoro {reader} (Apache-2.0), synthetic"}
+    return meta
+
+
+def finish_voice(folder: Path, reader: str, meta: dict) -> dict:
+    """The steps after training: the index shrunk, the cadence pack added. -> the meta to write"""
+    before, after = shrink_index(folder)
+    print(f"index: {before} vectors -> {after} k-means centres ({(folder / 'model.index').stat().st_size / 1e6:.1f} MB)")
+    return add_cadence_pack(folder, reader, meta)
+
+
 def write_manifest(reader: str):
     import hashlib
     files = {}
-    for name in ("model.pth", "model.index"):
+    for name in ("model.pth", "model.index", "tts/ref.wav"):
         f = OUT / name
         if f.exists():
             h = hashlib.sha256()
@@ -126,8 +194,23 @@ def main():
     ap.add_argument("--audio-dir", help="keep the synthesized speech here and reuse it next time (it takes ~25 min)")
     ap.add_argument("--manifest-only", action="store_true", help="only (re)write manifest.json for the files already there")
     ap.add_argument("--resume", help="a paused training's project folder (printed when it paused): carry on from there")
+    ap.add_argument("--refit", action="store_true",
+                    help="no training: shrink the shipped voice's index and (re)make its cadence pack, then the manifest")
     a = ap.parse_args()
     if a.manifest_only:
+        print(write_manifest(a.reader))
+        return
+    if a.refit:
+        new, old = OUT.with_name(".agent-smoke-new"), OUT.with_name(".agent-smoke-old")
+        for d in (new, old):
+            if d.exists():
+                shutil.rmtree(d)
+        shutil.copytree(OUT, new, ignore=shutil.ignore_patterns("manifest.json"))
+        meta = finish_voice(new, a.reader, json.loads((new / "meta.json").read_text(encoding="utf-8")))
+        (new / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+        OUT.replace(old)
+        new.replace(OUT)
+        shutil.rmtree(old)
         print(write_manifest(a.reader))
         return
     import smoke
@@ -207,6 +290,7 @@ def main():
         for f in ("model.pth", "model.index"):
             if (src / f).exists():
                 shutil.copyfile(src / f, new / f)
+        meta = finish_voice(new, a.reader, meta)
         (new / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
         if OUT.exists():
             OUT.replace(old)
