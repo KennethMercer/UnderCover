@@ -1094,6 +1094,36 @@ def u_leadgate():
     return f"hook {inst:.1f} s left as it is, chorus {ch:.1f} s converted, singing untouched, stems unchanged"
 
 
+@check("likeness word: every voice API says fair / good / great (poor: checked unlike the person), null when unmeasured")
+def u_likeness_word():
+    from undercover.core.config import path
+    from undercover.core.voices import get_voice, likeness_word, voice_info
+    with isolated_data():
+        for name, lk in (("zz-t1", 0.5), ("zz-t2", 0.7), ("zz-t3", 0.8)):
+            _fake_voice(name, "trained", {"trained": True, "likeness": lk})
+        _fake_voice("zz-t0", "trained", {"trained": True})
+        for name in ("zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5"):
+            _fake_voice(name, "https://x/y", {"person": "Zed"} if name == "zz-c5" else {})
+        (path("cache_dir") / "voice_quality.json").write_text(json.dumps({
+            "zed|a": {"voice": "zz-c1", "score": 0.35}, "zed|b": {"voice": "zz-c2", "score": 0.5},
+            "zed|c": {"voice": "zz-c3", "score": 0.6}, "zed|d": {"voice": "zz-c4", "score": -0.02, "verdict": "bad"},
+            "other|e": {"voice": "zz-c5", "score": 0.7}, "zed|f": {"voice": "zz-c5", "score": 0.32}}), encoding="utf-8")
+        got = {n: likeness_word(get_voice(n)) for n in ("zz-t0", "zz-t1", "zz-t2", "zz-t3", "zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5")}
+        assert got == {"zz-t0": None, "zz-t1": "fair", "zz-t2": "good", "zz-t3": "great", "zz-c1": "fair", "zz-c2": "good",
+                       "zz-c3": "great", "zz-c4": "poor", "zz-c5": "fair"}, got   # c5: its own person's check, not another's
+        _fake_voice("zz-c6", "https://x/y")
+        assert voice_info(get_voice("zz-c6"))["likeness_word"] is None
+        from undercover.app.server import voices_json
+        from undercover.doubleagent import night
+        from undercover.safehouse import library
+        from undercover.speakeasy import speak
+        for api, rows, key in (("/api/voices", voices_json(), "name"), ("/api/work/candidates", night.candidates(), "voice"),
+                               ("/api/library/voices", library.voices(), "name"), ("/api/speak/voices", speak.voices(), "name")):
+            w = {r[key]: r.get("likeness_word", "missing") for r in rows}
+            assert w.get("zz-t2") == "good" and w.get("zz-c4") == "poor" and w.get("zz-c6", None) is None, (api, w)
+    return "trained 0.50 fair / 0.70 good / 0.80 great; checked 0.35 fair / 0.50 good / 0.60 great / -0.02 poor; on all four voice APIs"
+
+
 @check("yield: long videos in spread stretches, the hiss rule per voice (real hiss still out), music under speech when the clip came out clean, the names check of a character's voice")
 def u_yield():
     import numpy as np
@@ -1104,6 +1134,7 @@ def u_yield():
     assert S.stretches(600, 720, 120) == [] and S.stretches(780, 720, 120) == [(0.0, 720)] and S.stretches(3600, 720, 0) == [(60.0, 720)]
     args = S.trim_args(4 * 3600)
     assert args[0] == "-filter_complex" and "concat=n=6" in args[1] and f"apad=pad_dur={S.STRETCH_GAP}" in args[1], args
+    assert S.trim_args(4 * 3600, spread=False) == ["-ss", "60.0", "-t", "720"], S.trim_args(4 * 3600, spread=False)   # a person's long video
     # the noise floor: a voice with gaps between its words is clean there; white noise at 20 dB SNR fills them
     rng = np.random.default_rng(19)
     x, sr = _speechlike(sr=32000, secs=4.0, seed=19)
@@ -1353,8 +1384,8 @@ def u_display_names():
         got = {v.name: V.display_name(v) for v in V.list_voices()}
         assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
                        "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
-        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False}
-        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False}
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "likeness_word": None}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "likeness_word": None}
         # the route: set, read back through the APIs, clear
         h = _FakeHandler(body={"display": "  Barry   O  "})
         assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
@@ -3685,7 +3716,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial):
         fn()

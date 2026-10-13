@@ -447,9 +447,10 @@ def stretches(duration: float, cap: float, length: float) -> list[tuple[float, f
     return [(round(60 + span * i / (k - 1), 1) if k > 1 else 60.0, length) for i in range(k)]
 
 
-def trim_args(duration: float) -> list[str]:
-    """ffmpeg arguments that cut a long video's audio down to its stretches (with STRETCH_GAP of silence between)."""
-    keep = stretches(duration, TCFG["max_minutes_per_source"] * 60, TCFG.get("stretch_minutes", 2.0) * 60)
+def trim_args(duration: float, spread: bool = True) -> list[str]:
+    """ffmpeg arguments that cut a long video's audio down to its stretches (with STRETCH_GAP of silence between);
+    spread=False: its first 12 minutes from minute 1, as before."""
+    keep = stretches(duration, TCFG["max_minutes_per_source"] * 60, TCFG.get("stretch_minutes", 2.0) * 60 if spread else 0)
     if not keep:
         return []
     if len(keep) == 1:
@@ -469,7 +470,10 @@ def download(src: Source, dest_dir: Path, progress=None) -> Path:
         return out
     # The whole audio stream is fetched (yt-dlp's range download streams through ffmpeg at about real time,
     # ~10x slower) and trimmed locally.
-    trim = trim_args(src.duration)
+    # Spread only through a character's scenes (a compilation of many). A person's long video is mostly one talk, and
+    # measured on the user's projects spreading gained nothing (Obama 51.9 / 51.8 min) or lost (Freeman's Q&As: the
+    # audience's questions, 11.8 -> 10.3).
+    trim = trim_args(src.duration, spread=(src.extra or {}).get("kind") == "scene")
     # Download into a private temp folder and move the finished wav into place last: an interrupted download (crash,
     # power cut) then never leaves a truncated "<id>.wav" that later runs would trust.
     import shutil
