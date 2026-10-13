@@ -6,51 +6,55 @@ import math
 
 import numpy as np
 
-MAX_KEY = 6          # whole-song transposition allowed when fitting a melody to a voice (semitones each way)
-KEY_COST = 0.004     # per semitone of key change: the band gets transposed too, so only when it buys real fit
+MAX_KEY = 7          # whole-song transposition allowed (semitones each way): the ear takes the band moved to where the
+                     # voice is comfortable over a voice out of its register (phase 22)
+KEY_COST = 0.002     # per semitone of key change (the band is transposed too): breaks ties toward the original key
+OCTAVE_COST = 0.001  # per octave the vocal alone moves (cheaper than moving the band: same pitch, the band moved less)
 LOW_WEIGHT = 1.5     # a note under the voice's range (mumbled, growly) is worse than one above it (airier)
-REGISTER_COST = 0.01  # per semitone the melody's median sits from the voice's training median (octave choice only)
-KEY_EASY, KEY_FAR_COST = 3, 0.02   # past 3 semitones the band's transposition is heard: each further one costs more
-                                   # (phase 22: the register term took Freeman's Toxic two octaves down, then key +6
-                                   # pulled the melody back into range by transposing the whole band a tritone)
-CLOSE = 0.03         # two octaves this close in cost: both are worth hearing
+REGISTER_COST = 0.02  # per semitone the melody's median sits from where the voice is comfortable
+SPEECH_LIFT = 4.0    # a speech-trained voice sings comfortably ~4 st above its speaking median (phase 22, by ear:
+                     # Agent Smoke's "Hold On" wanted 4-6 st down from the original, between +10 (too high) and 0 (too
+                     # low) against his median; SpongeBob's "Pink Pony Club" between +8.7 (a tad high) and -3.3 (low))
+CLOSE = 0.03         # two registers this close in cost: both are worth hearing
+ALT_APART = 5        # ...when they're at least this many semitones apart (not the same pitch reached another way)
 
 
 def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: int = MAX_KEY) -> dict:
-    """Octave (vocal only) + key (whole song) that put the melody as fully inside the voice's range as possible, and,
-    among octaves that fit about as well, nearest the voice's own register (phase 22).
-    Range = the voice's 5th-95th percentile pitch (-2 / +3 semitones of slack, +7 more for speech-trained voices).
-    A melody wider than the voice can't fit whole: notes below count 1.5x notes above, and each semitone of
-    key change costs a little. Example: Elliott Smith (149-280 Hz) on an acoustic Plug In Baby (165-716 Hz):
-    octave -1 alone left the low notes growling at ~82 Hz, octave 0 left most of it straining up high.
-    Register: each semitone the melody's median sits from the voice's training median (by the octave alone; the key
-    stays for the range) costs REGISTER_COST. Freeman's "Hold On" fitted fully at octave 0, 11 st above his median,
-    and the user heard it "out of his register"; an octave down also fits fully, at his median (likeness 0.31 ->
-    0.43). -> {octave, key, outside, below, above, cost, register_st, alt?}: `alt` is the next octave's best when
-    it's within CLOSE of the best (the page can offer both as a quick blind pair)."""
+    """Octave (vocal only) + key (whole song) that put the melody where the voice is comfortable: its median at the
+    voice's own register (the training median, +SPEECH_LIFT for a voice trained on speech) and as much of it as
+    possible inside the voice's range (5th-95th percentile, -2 / +3 semitones of slack, +7 more for speech).
+    Phase 22: the fit used to think in octaves with small key moves; the user's ear wants the whole song moved to the
+    voice's register, even half an octave down. Notes below the range count 1.5x; each semitone of key costs a
+    little (ties keep the original key). -> {octave, key, outside, below, above, cost, register_st, alt?}: register_st
+    is the melody's median after the shift against the voice's comfortable pitch; `alt` is the best with another
+    octave when it's within CLOSE (the page can offer both as a quick blind pick)."""
     lo, mid, hi = f0_range
     lo, hi = lo * 2 ** (-2 / 12), hi * 2 ** ((3 + (7 if from_speech else 0)) / 12)
     f = song_f0[song_f0 > 0]
     if len(f) < 50:
         return {"octave": 0, "key": 0, "outside": 0.0, "below": 0.0, "above": 0.0, "cost": 0.0, "register_st": None}
     med = float(np.median(f))
+    comfy = mid * 2 ** ((SPEECH_LIFT if from_speech else 0.0) / 12) if mid else None
     per_octave = {}
     for octave in (0, -1, 1, -2, 2):
-        reg = 12 * math.log2(med * 2.0 ** octave / mid) if mid else 0.0
         best = None
         for key in sorted(range(-max_key, max_key + 1), key=abs):   # nearest the original first wins ties
-            g = f * 2.0 ** (octave + key / 12)
+            shift = octave + key / 12
+            g = f * 2.0 ** shift
             below, above = float(np.mean(g < lo)), float(np.mean(g > hi))
-            cost = (LOW_WEIGHT * below + above + KEY_COST * abs(key) + KEY_FAR_COST * max(0, abs(key) - KEY_EASY)
-                    + REGISTER_COST * abs(reg) + 0.001 * abs(octave))
+            reg = 12 * math.log2(med * 2.0 ** shift / comfy) if comfy else 0.0
+            cost = (LOW_WEIGHT * below + above + KEY_COST * abs(key) + OCTAVE_COST * abs(octave)
+                    + REGISTER_COST * abs(reg))
             if best is None or cost < best["cost"] - 1e-9:
                 best = {"octave": octave, "key": key, "outside": round(below + above, 3), "below": round(below, 3),
                         "above": round(above, 3), "cost": round(cost, 4), "register_st": round(reg, 1)}
         per_octave[octave] = best
     ranked = sorted(per_octave.values(), key=lambda x: x["cost"])
     out = dict(ranked[0])
-    if ranked[1]["cost"] - ranked[0]["cost"] <= CLOSE:
-        out["alt"] = dict(ranked[1])
+    net = lambda x: 12 * x["octave"] + x["key"]
+    other = next((x for x in ranked[1:] if abs(net(x) - net(out)) >= ALT_APART), None)
+    if other and other["cost"] - out["cost"] <= CLOSE:
+        out["alt"] = dict(other)
     return out
 
 

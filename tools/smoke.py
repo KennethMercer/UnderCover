@@ -177,22 +177,20 @@ def u_fit():
     assert fit["octave"] <= -1 and fit["outside"] < 0.5, fit
     fit0 = pick_fit([300.0, 440.0, 600.0], False, f0)
     assert fit0["octave"] == 0 and fit0["key"] == 0, fit0
-    # the register (phase 22): a deep speaking voice (Freeman 72-175 Hz, median 105) fits a ~200 Hz melody fully at
-    # octave 0 thanks to the speech slack, but sings it an octave up from himself: the octave down, near his median
+    # the register (phase 22, by ear): the melody's median goes where the voice is comfortable, a speech-trained voice
+    # ~4 st over its speaking median, by octave (the vocal) and up to 7 st of key (the whole song)
     rng = np.random.default_rng(22)
     hold_on = 200.0 * 2 ** (rng.uniform(-5, 5, 800) / 12)
-    deep = pick_fit([72.0, 104.6, 174.7], True, hold_on)
-    assert deep["octave"] == -1 and deep["key"] == 0 and abs(deep["register_st"]) < 3, deep
-    tenor = pick_fit([140.0, 200.0, 300.0], True, hold_on)   # a voice at that pitch keeps it
-    assert tenor["octave"] == 0 and tenor["key"] == 0, tenor
-    # a key past 3 semitones costs more (the whole band moves); a close second octave comes back as `alt`
+    smoke = pick_fit([85.7, 110.3, 159.6], True, hold_on)      # Agent Smoke: the user wanted 4-6 st down
+    assert 12 * smoke["octave"] + smoke["key"] in range(-7, -3) and abs(smoke["register_st"]) < 1.5, smoke
+    deep = pick_fit([72.0, 104.6, 174.7], True, hold_on)       # Freeman: well under the original
+    assert 12 * deep["octave"] + deep["key"] <= -6 and abs(deep["register_st"]) < 1.5, deep
+    sung = pick_fit([140.0, 200.0, 300.0], False, hold_on)     # a singer at that pitch keeps the song as it is
+    assert sung["octave"] == 0 and sung["key"] == 0, sung
     from undercover.frontman import fit as F
-    wide = 387.0 * 2 ** (rng.uniform(-12, 9, 800) / 12)   # Toxic: 194-661 Hz
-    fr = pick_fit([72.0, 104.6, 174.7], True, wide)
-    assert fr.get("alt") and {fr["octave"], fr["alt"]["octave"]} == {-1, -2}, fr
-    assert F.KEY_FAR_COST > F.KEY_COST and abs(fr["alt"]["cost"] - fr["cost"]) <= F.CLOSE
-    return (f"low voice -> octave {fit['octave']} key {fit['key']:+d}; a deep speaking voice on a 200 Hz melody -> octave -1 "
-            f"({deep['register_st']:+.1f} st from his median); Toxic for him: {fr['octave']}/{fr['key']:+d} or {fr['alt']['octave']}/{fr['alt']['key']:+d}")
+    assert "alt" not in deep or abs((12 * deep["alt"]["octave"] + deep["alt"]["key"]) - (12 * deep["octave"] + deep["key"])) >= F.ALT_APART
+    return (f"low voice -> octave {fit['octave']} key {fit['key']:+d}; Agent Smoke on a 200 Hz melody -> "
+            f"{12 * smoke['octave'] + smoke['key']:+d} st, Freeman -> {12 * deep['octave'] + deep['key']:+d} st, a singer at that pitch -> 0")
 
 
 @check("worklist: overnight window and deadline")
