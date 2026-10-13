@@ -141,8 +141,11 @@ class Project:
     def clip_path(self, pid: str) -> Path:
         """The phrase's clip: <id>.flac (new clips, and old ones made smaller), else an older <id>.wav."""
         d = self.dir / "clips"
+        flac = d / f"{pid}.flac"
+        if flac.exists():
+            return flac
         wav = d / f"{pid}.wav"
-        return wav if wav.exists() and not (d / f"{pid}.flac").exists() else d / f"{pid}.flac"
+        return wav if wav.exists() else flac
 
     # ------------------------------------------------------------ embeddings
     def _emb_file(self) -> Path:

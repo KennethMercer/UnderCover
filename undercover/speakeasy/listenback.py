@@ -38,7 +38,9 @@ NUMBERS.update({"30": "thirty", "40": "forty", "50": "fifty", "60": "sixty", "70
 MIN_COMMA_PAUSE = 0.08
 LOW_CONFIDENCE = 0.5
 DRAWL_S = 0.30         # a one-syllable word held this long, not the last and with no pause marked after it, is drawn out
-                       # ("GOOD......morning": 0.36 s against 0.12-0.18 s natural; the user's ear, phase 24)
+                       # ("GOOD......morning": 0.36 s against 0.12-0.20 s natural; the user's ear, phase 24)
+DRAWL_LINE = 4         # ...in a short line only: in flowing speech Whisper's word edges can't tell a held word from a
+                       # stressed one (on the golden set's 18 speech readings, every line flagged a word at 0.30 s)
 PAUSE_MARKS = ",.;:!?…—–-"
 FADE_S = 0.015
 
@@ -152,8 +154,8 @@ def problems(text: str, words: list) -> list[str]:
             if k is not None and len(words[k]) > 3 and words[k][3] < LOW_CONFIDENCE]
     pause = _pause_after(text)
     for i, (w, k) in enumerate(zip(want, idx)):   # Whisper's word end takes in a pause after it: not when one is marked
-        if (k is not None and i < len(want) - 1 and not pause[i] and len(words[k]) > 2 and syllables(w) == 1
-                and words[k][2] - words[k][1] > DRAWL_S):
+        if (len(want) <= DRAWL_LINE and k is not None and i < len(want) - 1 and not pause[i] and len(words[k]) > 2
+                and syllables(w) == 1 and words[k][2] - words[k][1] > DRAWL_S):
             out.append(f"drawn-out {w!r} ({words[k][2] - words[k][1]:.2f} s)")
     extra = len(words) - sum(k is not None for k in idx)
     if extra > 0:

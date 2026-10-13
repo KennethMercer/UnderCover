@@ -50,6 +50,17 @@ def _projects_dir() -> Path:
     return projects_dir()
 
 
+def _child(root: Path, name: str) -> Path:
+    """root/name for a plain folder name (letters, digits, - _ . and spaces; never a path, a drive or a dot name)."""
+    import re
+    if not re.fullmatch(r"[\w][\w .-]*", name or "") or name.endswith((".", " ")):
+        raise ModelError("Which voice or project?")
+    p = Path(root) / name
+    if p.parent != Path(root):
+        raise ModelError("Which voice or project?")
+    return p
+
+
 def _read(f: Path, default=None):
     try:
         return json.loads(Path(f).read_text(encoding="utf-8"))
@@ -139,11 +150,12 @@ def _test_readings(name: str, small: Path) -> dict:
     out = {}
     files = _readings(name)
     files["full"].parent.mkdir(parents=True, exist_ok=True)
-    for key, lv in (("full", LoadedVoice(v, conv.device, conv.half)), ("small", LoadedVoice(replace(v, index=small), conv.device, conv.half))):
+    for key, voice in (("full", v), ("small", replace(v, index=small))):
+        lv = LoadedVoice(voice, conv.device, conv.half)   # one at a time: the GPU is shared
         y, sr = conv.convert(x, lv, Settings(pitch=shift))
+        del lv
         out[key] = emb.embed(_to16(y, sr))
         sf.write(str(files[key]), render.level(np.nan_to_num(y)), sr, subtype="PCM_16")   # to hear: Before / After
-        del lv
     alike = float(np.dot(out["full"], out["small"]) / (np.linalg.norm(out["full"]) * np.linalg.norm(out["small"]) + 1e-9))
     r = {"alike": round(alike, 4)}
     ref = _person(v)
@@ -177,7 +189,7 @@ def shrink_voice(name: str, check=True, k: int | None = None, device: str | None
     """The voice's index -> 10k centres; the full one aside. -> the result (also kept in <voice>/smaller.json)."""
     from ..core import gpu
     from ..core.engine.rvc.index import CENTRES, shrink
-    d = _voices_dir() / name
+    d = _child(_voices_dir(), name)
     idx = d / "model.index"
     if not idx.is_file():
         raise ModelError("That voice has no index to make smaller.")
@@ -185,6 +197,7 @@ def shrink_voice(name: str, check=True, k: int | None = None, device: str | None
         raise ModelError("That voice is already smaller, waiting for Keep or Undo.")
     before = idx.stat().st_size
     tmp = d / "model.index.smaller.tmp"
+    done = False
     try:
         n0, n1 = shrink(idx, k or CENTRES, dest=tmp, device=device)
         if n1 >= n0:
@@ -192,17 +205,20 @@ def shrink_voice(name: str, check=True, k: int | None = None, device: str | None
         r = _test_readings(name, tmp) if check else {}
         r.update(vectors_before=n0, vectors_after=n1, bytes_before=before, bytes_after=tmp.stat().st_size,
                  made=time.strftime("%Y-%m-%d %H:%M"))
-        os.replace(idx, d / INDEX_ASIDE)
-        os.replace(tmp, idx)
+        storage.move_within([(idx, d / INDEX_ASIDE)], d)   # the full index aside,
+        storage.move_within([(tmp, idx)], d)               # then the small one in its place (a target never overwritten)
         fsutil.write_text(d / RESULT, json.dumps(r, indent=1))
+        done = True
     finally:
         tmp.unlink(missing_ok=True)
+        if not done and not (d / INDEX_ASIDE).exists():
+            _drop_readings(name)
     gpu.forget_voice(name)
     return r
 
 
 def keep_voice(name: str):
-    d = _voices_dir() / name
+    d = _child(_voices_dir(), name)
     if not (d / INDEX_ASIDE).exists():
         raise ModelError("There's nothing set aside for that voice.")
     storage.remove_files([d / INDEX_ASIDE, d / RESULT], within=[_voices_dir()])
@@ -216,11 +232,11 @@ def _drop_readings(name: str):
 
 def undo_voice(name: str):
     from ..core import gpu
-    d = _voices_dir() / name
+    d = _child(_voices_dir(), name)
     if not (d / INDEX_ASIDE).exists():
         raise ModelError("There's nothing set aside for that voice.")
-    os.replace(d / INDEX_ASIDE, d / "model.index")
-    storage.remove_files([d / RESULT], within=[_voices_dir()])
+    storage.remove_files([d / "model.index", d / RESULT], within=[_voices_dir()])   # the small one (made here) goes
+    storage.move_within([(d / INDEX_ASIDE, d / "model.index")], d)
     _drop_readings(name)
     gpu.forget_voice(name)
 
@@ -232,7 +248,7 @@ def shrink_project(name: str, progress=None) -> dict:
     linked to the voice's file. -> the result (kept in <project>/before-smaller/smaller.json)."""
     import soundfile as sf
     report = progress or (lambda f, m: None)
-    d = _projects_dir() / name
+    d = _child(_projects_dir(), name)
     pj = _read(d / "project.json")
     if pj is None:
         raise ModelError("That project isn't there any more.")
@@ -253,19 +269,18 @@ def shrink_project(name: str, progress=None) -> dict:
         if not np.array_equal(back, y):
             part.unlink(missing_ok=True)
             raise ModelError(f"A clip didn't come back the same as FLAC ({w.name}); nothing more was changed.")
-        os.replace(part, flac)
+        os.replace(part, flac)   # a new file of ours
         r["clips_bytes_before"] += w.stat().st_size
         r["clips_bytes_after"] += flac.stat().st_size
-        os.replace(w, aside / "clips" / w.name)
+        storage.move_within([(w, aside / "clips" / w.name)], d)
         r["clips"] += 1
         if i % 100 == 0:
             report(0.9 * i / max(1, len(wavs)), f"clip {i + 1} of {len(wavs)}")
     tr = pj.get("train") or {}
     data = d / "train" / "data.pt"
     if tr.get("exported") and data.is_file():
-        (aside / "train").mkdir(parents=True, exist_ok=True)
         r["data_bytes"] = data.stat().st_size
-        os.replace(data, aside / "train" / "data.pt")
+        storage.move_within([(data, aside / "train" / "data.pt")], d)
     if tr.get("exported") and tr.get("exported_epoch") is not None:
         save = d / "train" / f"e{tr['exported_epoch']}.pth"
         vp = _voices_dir() / str(tr["exported"]) / "model.pth"
@@ -281,7 +296,7 @@ def shrink_project(name: str, progress=None) -> dict:
 
 
 def keep_project(name: str):
-    d = _projects_dir() / name
+    d = _child(_projects_dir(), name)
     if not (d / ASIDE).is_dir():
         raise ModelError("There's nothing set aside for that project.")
     storage.remove_files([], within=[_projects_dir()], dirs=[d / ASIDE])
@@ -289,20 +304,17 @@ def keep_project(name: str):
 
 def undo_project(name: str):
     """The WAV clips and data.pt back (never over a newer one: a data.pt made since stays); their FLAC copies go."""
-    d = _projects_dir() / name
+    d = _child(_projects_dir(), name)
     aside = d / ASIDE
     if not aside.is_dir():
         raise ModelError("There's nothing set aside for that project.")
-    gone = []
-    for w in sorted((aside / "clips").glob("*.wav")):
-        dest = d / "clips" / w.name
-        if not dest.exists():
-            os.replace(w, dest)
-            if dest.with_suffix(".flac").exists():
-                gone.append(dest.with_suffix(".flac"))
+    moves = [(w, d / "clips" / w.name) for w in sorted((aside / "clips").glob("*.wav")) if not (d / "clips" / w.name).exists()]
     data = aside / "train" / "data.pt"
     if data.exists() and not (d / "train" / "data.pt").exists():
-        os.replace(data, d / "train" / "data.pt")
+        moves.append((data, d / "train" / "data.pt"))
+    if moves:
+        storage.move_within(moves, d)
+    gone = [dst.with_suffix(".flac") for _, dst in moves if dst.suffix == ".wav" and dst.with_suffix(".flac").exists()]
     storage.remove_files(gone, within=[_projects_dir()], dirs=[aside])
 
 
@@ -310,7 +322,7 @@ def undo_project(name: str):
 
 def start(kind: str, name: str) -> dict:
     if kind == "voice":
-        if not (_voices_dir() / name / "model.index").is_file():
+        if not (_child(_voices_dir(), name) / "model.index").is_file():
             raise ModelError("That voice isn't there any more.")
         job = jobs.Job("smaller", title=f"Making {name} smaller")
         jobs.JOBS[job.id] = job
@@ -324,12 +336,13 @@ def start(kind: str, name: str) -> dict:
         jobs.GPU_QUEUE.put((job, run))   # the test readings use the GPU
         return {"job": job.id}
     if kind == "project":
-        from ..doubleagent.api import _busy
-        if _busy(name):
-            raise ModelError("That project is busy. Try again when it's done.")
-        if not (_projects_dir() / name / "project.json").exists():
+        from ..doubleagent.api import ACTIVE, _busy
+        if not (_child(_projects_dir(), name) / "project.json").exists():
             raise ModelError("That project isn't there any more.")
         job = jobs.Job("smaller", title=f"Making the {name} project smaller")
+        if _busy(name):
+            raise ModelError("That project is busy. Try again when it's done.")
+        ACTIVE[name] = {"job": job, "control": None, "kind": "smaller"}   # Train more and Transcribe wait for it
         jobs.JOBS[job.id] = job
 
         def run():
@@ -352,8 +365,7 @@ def handle(h, method: str, rest: str) -> bool:
     if rest in ("smaller/start", "smaller/keep", "smaller/undo") and method == "POST":
         b = h._body()
         kind, name = str(b.get("kind") or ""), str(b.get("name") or "")
-        if not name or "/" in name or "\\" in name or name.startswith("."):
-            raise ModelError("Which voice or project?")
+        _child(_voices_dir() if kind == "voice" else _projects_dir(), name)   # a plain name, or "Which voice or project?"
         if rest == "smaller/start":
             return h._json(start(kind, name)) or True
         fn = {("keep", "voice"): keep_voice, ("undo", "voice"): undo_voice,

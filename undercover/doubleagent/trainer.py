@@ -629,7 +629,13 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     if not pth.exists():
         raise ModelError(f"There's no save from epoch {epoch}. Pick one of the saves listed.")
     name = slug(name or st.get("voice_name") or proj.name)
-    data = torch.load(tdir / "data.pt", map_location="cpu", weights_only=True)
+    data_pt = tdir / "data.pt"
+    if not data_pt.exists() and (proj.dir / "before-smaller" / "train" / "data.pt").exists():
+        data_pt = proj.dir / "before-smaller" / "train" / "data.pt"   # Make smaller set it aside (phase 24): still there
+    if not data_pt.exists():
+        raise ModelError("This project's prepared data was cleared to save space (SafeHouse, Make smaller). Train more "
+                         "rebuilds it (a few minutes), then this save can be added.")
+    data = torch.load(data_pt, map_location="cpu", weights_only=True)
     feats = index_feats(data).float().numpy()
     if len(feats) > 200_000:  # RVC: shrink very large sets to 10k k-means centres first
         from sklearn.cluster import MiniBatchKMeans

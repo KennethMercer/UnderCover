@@ -4404,7 +4404,13 @@ def u_smaller():
         assert all(proj.clip_path(p).suffix == ".wav" for p in clips) and not list((d / "clips").glob("*.flac"))
         assert (d / "train" / "data.pt").read_bytes() == b"d" * 5000 and not (d / smaller.ASIDE).exists()
         smaller.shrink_project("smaller-test")                     # again, then Keep: only what was set aside goes
+        from undercover.doubleagent.trainer import export_voice
         smaller.keep_project("smaller-test")
+        try:                                                       # adding another save now says what to do
+            export_voice(Project.load("smaller-test"), epoch=5)
+            raise AssertionError("export ran without its prepared data")
+        except Exception as e:
+            assert "Train more" in str(e), e
         assert not (d / smaller.ASIDE).exists() and all(proj.clip_path(p).suffix == ".flac" for p in clips)
         assert (vd / "model.pth").read_bytes() == pth and (d / "train" / "e5.pth").read_bytes() == pth
         # a voice: its index shrunk (here 300 -> 50 on the CPU), the full one aside; its readings to hear; Undo and Keep
@@ -4427,7 +4433,7 @@ def u_smaller():
     return "project: clips FLAC, data.pt aside, save linked, Undo, Keep; voice: index 300 -> 50, Undo, Keep"
 
 
-@check("listen-back's drawn-out word (phase 24): a one-syllable word held over 0.30 s mid-phrase asks for a re-read; a marked pause after it, the last word or a longer word don't")
+@check("listen-back's drawn-out word (phase 24): in a short line (up to 4 words), a one-syllable word held over 0.30 s asks for a re-read; a marked pause after it, the last word, a longer word or a long sentence don't")
 def u_drawl():
     from undercover.speakeasy import listenback as lb
     w = lambda *t: [[a, s, e, 0.9] for a, s, e in t]
@@ -4436,6 +4442,9 @@ def u_drawl():
     assert lb.problems("Good, morning.", w(("Good,", 0.0, 0.40), ("morning.", 0.40, 0.76))) == [], "a comma's pause counted"
     assert lb.problems("It was late.", w(("It", 0, 0.1), ("was", 0.1, 0.2), ("late.", 0.2, 0.8))) == [], "the last word counted"
     assert lb.problems("An evening walk.", w(("An", 0, 0.1), ("evening", 0.1, 0.6), ("walk.", 0.6, 0.9))) == [], "a longer word counted"
+    long_line = "Ladies and gentlemen we have a lot to cover today."   # flowing speech: Whisper's edges can't tell
+    ws = [[t, 0.4 * i, 0.4 * i + 0.4, 0.9] for i, t in enumerate(long_line.split())]
+    assert lb.problems(long_line, ws) == [], "a long line flagged a drawn-out word"
     assert [lb.syllables(x) for x in ("good", "you're", "late", "morning", "evening", "little")] == [1, 1, 1, 2, 3, 2]
     return "drawn-out caught; comma, last word and longer words left alone"
 
