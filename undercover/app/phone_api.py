@@ -85,6 +85,9 @@ ROUTES = [
     ("GET", r"/api/doctor/bundle|/api/doctor/bundle\.zip", "pc", "the diagnostics file"),
     ("POST", r"/api/doctor/open-logs", "pc", "opens the logs folder on the PC"),
     ("GET", r"/api/vault", "phone", "the vault's state"),
+    ("GET", r"/api/gamepause", "phone", "the game pause's question"),
+    ("POST", r"/api/gamepause", "phone", "answer the game pause from the sofa"),
+    ("POST", r"/api/gamepause/settings", "pc", "the game pause's settings"),
     ("GET", r"/api/vault/check|/api/vault/contents", "pc", "the vault's folder check and what it holds"),
     ("POST", r"/api/vault/settings|/api/vault/run|/api/vault/restore", "pc", "the vault: its folder, a run, a restore"),
     # Themes (phase 14): a phone may read and use them; making, importing and deleting are done on the PC

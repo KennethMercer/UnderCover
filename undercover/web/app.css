@@ -448,6 +448,7 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 /* What's new (whatsnew.js): once after an update, under the top bar; the notes in plain lines, Got it puts it away */
 .wn { display: grid; gap: 10px; padding: 14px 18px; background: var(--panel); border-radius: var(--r); border-left: 3px solid var(--accent); }
 .wn[hidden] { display: none; }
+.gp-q { margin: 0; max-width: 80ch; }   /* the game pause's question (index.html #gp-ask: the What's new card's shape) */
 .wn-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .wn-k { font: 600 12px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
 .wn-body { display: grid; gap: 10px; }
