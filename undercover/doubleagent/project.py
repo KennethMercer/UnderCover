@@ -4,7 +4,8 @@ Layout (<cache_dir>/training/<name>/):
   project.json      sources, phrases (with scores, reasons, operator choices), reference, training state
   embeddings.npz    speaker embeddings per phrase (+ per-window minimum for mixed-speaker detection)
   raw/<src>.wav     downloaded or added audio (44.1 kHz mono)
-  clips/<id>.wav    one phrase of separated, de-reverbed voice (44.1 kHz mono, 16-bit)
+  clips/<id>.flac   one phrase of separated, de-reverbed voice (44.1 kHz mono, 16-bit; lossless FLAC since phase 24,
+                    0.44 of the WAV's size; a project's older <id>.wav clips are read as they are)
 """
 import hashlib
 import json
@@ -138,7 +139,13 @@ class Project:
         raise ModelError("That sample isn't in this project.")
 
     def clip_path(self, pid: str) -> Path:
-        return self.dir / "clips" / f"{pid}.wav"
+        """The phrase's clip: <id>.flac (new clips, and old ones made smaller), else an older <id>.wav."""
+        d = self.dir / "clips"
+        flac = d / f"{pid}.flac"
+        if flac.exists():
+            return flac
+        wav = d / f"{pid}.wav"
+        return wav if wav.exists() else flac
 
     # ------------------------------------------------------------ embeddings
     def _emb_file(self) -> Path:
