@@ -32,6 +32,9 @@ async function libShow() {
 }
 function libHide() { L.visible = false; L.audio.pause(); }
 document.addEventListener("uc:module", e => { if (e.detail === "safehouse") libShow(); else if (L.visible) libHide(); });
+// a cover, speech, voice or training that finishes while the Library is open: its lists and counts catch up
+const LIB_KINDS = new Set(["cover", "auto", "speech", "install", "train", "train-auto", "train-export", "night"]);
+document.addEventListener("uc:jobdone", e => { if (L.visible && LIB_KINDS.has(e.detail?.kind)) refreshAll(true); });
 
 async function loadSummary() {
   try { L.summary = await api("/api/library/summary"); } catch (e) { return; }
