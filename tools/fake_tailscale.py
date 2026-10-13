@@ -3,7 +3,9 @@ a JSON file named by FAKE_TS_STATE; a check moves it along (signed in, Funnel ap
     python fake_tailscale.py daemon [flags...]        the daemon: marks itself alive, then waits to be stopped
     python fake_tailscale.py cli --socket=X <command>  status --json | up ... | funnel ... | funnel status --json |
                                                         funnel reset | down | logout
+    python fake_tailscale.py set '{"key": value}'      a check's own change (under the same lock as the fake's)
 Every command is appended to the state's "calls", so a check can see exactly what the app asked for."""
+import contextlib
 import json
 import os
 import sys
@@ -26,17 +28,65 @@ def save(st: dict):
     os.replace(tmp, F)
 
 
+@contextlib.contextmanager
+def locked():
+    """Several fake processes (and the check itself) change the file at once: one at a time (a lock file)."""
+    lock = F.with_name(F.name + ".lock")
+    for _ in range(500):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            time.sleep(0.01)
+    else:
+        fd = None   # a lock left by a killed process: carry on
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+        with contextlib.suppress(OSError):
+            os.unlink(lock)
+
+
 def update(**kw):
-    st = load()
-    st.update(kw)
-    save(st)
+    with locked():
+        st = load()
+        st.update(kw)
+        save(st)
     return st
 
 
 def log(args):
-    st = load()
-    st.setdefault("calls", []).append(args)
-    save(st)
+    with locked():
+        st = load()
+        st.setdefault("calls", []).append(args)
+        save(st)
+
+
+def _lock_byte(fd) -> bool:
+    """A lock the OS drops when the holder dies (so "is the daemon alive?" is real, even after a kill)."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def daemon_alive() -> bool:
+    alive = F.with_name(F.name + ".alive")
+    if not alive.exists():
+        return False
+    fd = os.open(alive, os.O_RDWR)
+    try:
+        return not _lock_byte(fd)   # it could be locked: nobody holds it, so no daemon
+    finally:
+        os.close(fd)   # closing drops a lock this process took
 
 
 def wait_for(key):
@@ -48,7 +98,13 @@ def wait_for(key):
 
 
 mode, args = sys.argv[1], [a for a in sys.argv[2:] if not a.startswith("--socket=")]
+if mode == "set":   # a check moves the story along: python fake_tailscale.py set '{"signed_in": true}'
+    update(**json.loads(args[0]))
+    sys.exit(0)
 if mode == "daemon":
+    fd = os.open(F.with_name(F.name + ".alive"), os.O_RDWR | os.O_CREAT)
+    if not _lock_byte(fd):
+        sys.exit("another fake daemon is running")
     log(["tailscaled", *args])
     update(daemon=True, backend=load().get("backend") or "NeedsLogin")
     while True:
@@ -56,7 +112,7 @@ if mode == "daemon":
 log(args)
 st = load()
 host = st.get("host", "uc-fakeone.tailfake.ts.net")
-if not st.get("daemon"):
+if not daemon_alive():
     sys.exit(1)
 if args[:2] == ["status", "--json"]:
     out = {"BackendState": st.get("backend", "NeedsLogin"), "Self": {"DNSName": host + "." if st.get("backend") == "Running" else ""}}

@@ -302,8 +302,8 @@ def _away_route(h, method, p):
         return h._json(away_state())
     if p == "/api/away/forget":
         phone.set_away(False)
+        tailnet.forget()   # first: the logout needs the daemon running
         away_close()
-        tailnet.forget()
         return h._json(away_state())
     raise LookupError("Not found")
 
