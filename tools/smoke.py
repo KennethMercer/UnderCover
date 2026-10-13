@@ -1131,6 +1131,12 @@ def u_yield():
             p.noise = 0.2
         P.score(proj)
         assert proj.reference["hiss_limit"] == 0.30 and proj.phrases[-3].reason == "hiss or artifacts", proj.reference
+        # music under speech: kept up to -3 dB when the clip came out clean (clean gaps, under the hiss limit), not otherwise
+        for p, (m, fl) in zip(proj.phrases[:4], [(-6.0, -45.0), (-6.0, -25.0), (-1.0, -45.0), (-15.0, -25.0)]):
+            p.music_db, p.floor = m, fl
+        P.score(proj)
+        why = [p.reason for p in proj.phrases[:4]]
+        assert why == ["", "music or noise", "music or noise", ""], why
         # the names check: the voice heard most keeps saying "SpongeBob", the other never does -> it's switched, and said
         proj = P.Project.create("SpongeBob", "speaking", name="zz-names")
         proj.sources = [S.Source(id=f"s{k}", url="", title=f"SpongeBob scenes {k}", duration=600, extra={"kind": "scene"}) for k in range(2)]
