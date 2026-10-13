@@ -4530,6 +4530,35 @@ def u_listenback_fetch():
             lb._ASR.update(saved[0])
             setup_models.ensure = saved[1]
     return "missing -> a pinned, hashed fetch in the background; the speech goes on; tried again next time"
+@check("a new voice's index at export (phase 24 follow-up): 10k k-means centres, the full one aside as Make smaller leaves it (Keep / Undo in SafeHouse); a broken index leaves the export as it was; 0 = off")
+def u_shrink_export():
+    import struct
+    import numpy as np
+    from undercover.core.engine.rvc import index as ri
+    from undercover.core.voices import voices_dir
+    from undercover.doubleagent import trainer
+    from undercover.safehouse import smaller
+    with isolated_data():
+        vd = voices_dir() / "export-voice"
+        vd.mkdir(parents=True)
+        (vd / "model.pth").write_bytes(b"p")
+        vecs = np.random.default_rng(2).standard_normal((300, 8)).astype(np.float16)
+        full = ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes()
+        (vd / "model.index").write_bytes(full)
+        assert trainer.shrink_exported_index(vd, k=0) is None and (vd / "model.index").read_bytes() == full   # off
+        r = trainer.shrink_exported_index(vd, k=50, device="cpu")
+        assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and r["at_export"], r
+        assert (vd / ri.ASIDE).read_bytes() == full and len(ri.read_vectors(vd / "model.index")) == 50
+        row = next(v for v in smaller.overview()["voices"] if v["name"] == "export-voice")
+        assert row["pending"] and row["result"]["at_export"], row      # SafeHouse offers Keep / Undo for it
+        assert trainer.shrink_exported_index(vd, k=50, device="cpu") is None, "shrunk twice"
+        smaller.undo_voice("export-voice")
+        assert (vd / "model.index").read_bytes() == full and not (vd / ri.ASIDE).exists()
+        (vd / "model.index").write_bytes(b"not an index")              # it can't shrink: the export is untouched
+        assert trainer.shrink_exported_index(vd, k=50, device="cpu") is None
+        assert (vd / "model.index").read_bytes() == b"not an index" and not (vd / ri.ASIDE).exists()
+        assert not (vd / "model.index.smaller.tmp").exists()
+    return "300 -> 50 with the full one aside (pending in Make smaller), Undo; off at 0; a bad index left alone"
 
 
 @check("listen-back's drawn-out word (phase 24): in a short line (up to 4 words), a one-syllable word held over 0.30 s asks for a re-read; a marked pause after it, the last word, a longer word or a long sentence don't")
@@ -5349,7 +5378,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_listenback_fetch, u_lossless, u_smaller, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

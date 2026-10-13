@@ -618,6 +618,38 @@ def f0_median(data: dict) -> float | None:
     return round(float(f0.median()), 1) if len(f0) else None
 
 
+def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None = None) -> dict | None:
+    """A new voice's index as k k-means centres ([training] index_centres, default 10k; 0 = off). The user's blind pairs
+    (phase 24) couldn't reliably tell 10k from full. The full index waits aside exactly as Make smaller leaves it
+    (model.index.before-smaller + smaller.json), so SafeHouse offers Keep / Undo, and Undo brings it back if a voice
+    ever sounds off. Never fails an export: when it can't shrink (a busy GPU, an odd index) the full index stays."""
+    from ..core import storage
+    from ..core.engine.rvc.index import ASIDE, SHRINK_RESULT, shrink
+    k = int(TCFG.get("index_centres", 10000) if k is None else k)
+    idx = Path(vdir) / "model.index"
+    if k <= 0 or not idx.is_file() or (Path(vdir) / ASIDE).exists():
+        return None
+    tmp = Path(vdir) / "model.index.smaller.tmp"
+    try:
+        before = idx.stat().st_size
+        n0, n1 = shrink(idx, k, dest=tmp, device=device)
+        if n1 >= n0:
+            return None
+        r = {"vectors_before": n0, "vectors_after": n1, "bytes_before": before, "bytes_after": tmp.stat().st_size,
+             "made": time.strftime("%Y-%m-%d %H:%M"), "at_export": True}
+        storage.move_within([(idx, Path(vdir) / ASIDE)], Path(vdir))
+        storage.move_within([(tmp, idx)], Path(vdir))
+        fsutil.write_text(Path(vdir) / SHRINK_RESULT, json.dumps(r, indent=1))
+        return r
+    except Exception as e:   # noqa: BLE001 - the voice keeps its full index
+        print(f"The new voice's index stays full (it couldn't be made smaller: {e}).", flush=True)
+        if not idx.exists() and (Path(vdir) / ASIDE).exists():
+            storage.move_within([(Path(vdir) / ASIDE, idx)], Path(vdir))
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def export_voice(proj: Project, epoch: int | None = None, name: str | None = None, overwrite: bool = False):
     """Install a saved epoch (default: best) plus a freshly built index as a normal UnderCover voice."""
     from ..core.voices import install
@@ -654,6 +686,7 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     idx.unlink(missing_ok=True)
     fsutil.link_duplicate(v.pth, pth)   # the exported save is the voice's own model.pth: one copy on disk (phase 24)
+    shrink_exported_index(v.dir)        # 10k centres; the full index aside (the user's ear, phase 24 follow-up)
     st.update(exported=name, exported_epoch=epoch, state="exported")
     (tdir / "resume.pt").unlink(missing_ok=True)   # 1.3 GB; a finished voice doesn't need it (retraining starts fresh)
     # keep the exported save and the two best alternatives (to try another on the Train tab); the rest are 55 MB each
