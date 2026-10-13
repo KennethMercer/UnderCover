@@ -3189,11 +3189,21 @@ def a_page():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
     for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"',
-                 'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"'):
+                 'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"',
+                 'id="wn"', 'id="wn-ok"', 'id="sys-news"'):
         assert part in html, f"missing {part}"
     # the overnight queue lives in SafeHouse's Running room (the DoubleAgent redesign); DoubleAgent keeps only its door
     room = html.index('id="room-running"')
     assert html.index('id="q-panel"') > room and html.index('id="q-report"') > room, "the queue panel isn't in the Running room"
+    # What's new: the notes file is well formed, newest first, one id each, short plain lines (whatsnew.js reads it)
+    wn = api("/static/whatsnew.json")
+    wn = json.loads(wn) if isinstance(wn, (bytes, str)) else wn
+    ents = wn["entries"]
+    assert ents and len({e["id"] for e in ents}) == len(ents), "What's new: ids must be unique"
+    assert [e["date"] for e in ents] == sorted((e["date"] for e in ents), reverse=True), "What's new: newest first"
+    for e in ents:
+        assert re.fullmatch(r"\d{4}-\d\d-\d\d", e["date"]) and e["title"].strip(), f"What's new: {e['id']} needs a date and a title"
+        assert 1 <= len(e["lines"]) <= 4 and all(0 < len(l) <= 200 for l in e["lines"]), f"What's new: {e['id']} takes 1-4 short lines"
     files = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
     for f in files:
         body = api(f)   # the home-screen manifest (phase 11) comes back parsed
