@@ -1126,6 +1126,15 @@ def u_ear():
         h = call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pace"]})
         assert h.out["fix"]["do"]["options"] == {"pace": "slower"} and h.out["item"]["settings"] == {"pace": "natural", "mode": "cadence", "reader": "am_michael"}, h.out
         assert call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pauses"]}).out["fix"] is None
+        # speech read by a stock Reader (no cadence): learning their cadence is the fix, not more training
+        f = ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "reader"}, sid)
+        assert f["do"]["body"] == {"kind": "cadence", "target": "zed-uc", "now": False}, f
+        assert ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "cadence"}, sid)["do"]["body"]["kind"] == "improve"
+        # superseded thumbs are written away once they dominate the file
+        for _ in range(260):
+            ear.rate("speech", sid, "up", "zed-uc", {}, [], "")
+        assert len(ear.ear_file().read_text(encoding="utf-8").splitlines()) < 260 and ear.thumb_of("speech", sid)["thumb"] == "up"
+        assert ear.taste("zed-uc") == {"up": 1, "down": 0}, ear.taste("zed-uc")
         # refused: unknown reasons, a thumb that isn't up or down, a cover that's gone
         assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "down", "reasons": ["meh"]}).err
         assert call("POST", "/api/ear/rate", {"kind": "cover", "id": cov["id"], "thumb": "sideways"}).err

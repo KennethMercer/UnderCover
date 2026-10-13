@@ -34,7 +34,7 @@ NOTE_MAX = 500
 PREFER_MARGIN = 0.03   # "equally good": voice-check scores this close are a tie the ear breaks
 
 _LOCK = threading.RLock()
-_CACHE: dict = {"key": None, "items": {}}
+_CACHE: dict = {"key": None, "items": {}, "voices": {}, "lines": 0}
 
 
 class EarError(ValueError):
@@ -59,15 +59,21 @@ def items() -> dict:
             return {}
         key = (str(f), st.st_mtime_ns, st.st_size)
         if _CACHE["key"] != key:
-            out = {}
+            out, lines = {}, 0
             for line in f.read_text(encoding="utf-8").splitlines():
+                lines += 1
                 try:
                     r = json.loads(line)
                 except ValueError:
                     continue   # a half-written line
                 if isinstance(r, dict) and r.get("item"):
                     out[r["item"]] = r
-            _CACHE.update(key=key, items=out)
+            voices: dict = {}
+            for r in out.values():
+                if r.get("voice"):
+                    t = voices.setdefault(r["voice"], {"up": 0, "down": 0})
+                    t[r["thumb"]] += 1
+            _CACHE.update(key=key, items=out, voices=voices, lines=lines)
         return dict(_CACHE["items"])
 
 
@@ -95,8 +101,13 @@ def rate(kind: str, item_id: str, thumb: str, voice: str | None, settings: dict 
     with _LOCK:
         f = ear_file()
         f.parent.mkdir(parents=True, exist_ok=True)
-        with open(f, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(json.dumps(rec) + "\n")
+        cur = items()
+        if _CACHE["lines"] > 2 * len(cur) + 200:   # mostly superseded thumbs: write it again, latest per item
+            cur[rec["item"]] = rec
+            fsutil.write_text(f, "".join(json.dumps(r) + "\n" for r in cur.values()))
+        else:
+            with open(f, "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(json.dumps(rec) + "\n")
     return rec
 
 
@@ -150,12 +161,10 @@ def summary() -> dict:
 
 def taste(voice: str) -> dict | None:
     """{up, down} for a voice, or None when it has no thumbs (every voice API carries it as `ear`)."""
-    up = down = 0
-    for r in items().values():
-        if r.get("voice") == voice:
-            up += r["thumb"] == "up"
-            down += r["thumb"] == "down"
-    return {"up": up, "down": down} if up or down else None
+    with _LOCK:
+        items()   # (re)loads the per-voice counts with the file
+        t = _CACHE["voices"].get(voice)
+        return dict(t) if t else None
 
 
 def liking(voice: str) -> int:
@@ -188,6 +197,13 @@ def fix_for(kind: str, reasons, voice: dict | None, settings: dict | None, item_
     settings = settings or {}
     v = voice or {}
     name = v.get("display") or v.get("name") or "This voice"
+    if kind == "speech" and "unlike" in reasons and v.get("trained") and settings.get("mode") != "cadence":
+        # read by a stock Reader, not in their own cadence: their cadence is the likelier fix than more training
+        return {"reason": "unlike", "say": f"This was read without {name}'s own cadence.",
+                "meta": "Their cadence makes it sound like them, not just their timbre.",
+                "do": {"label": "Learn their cadence tonight", "action": "work",
+                       "body": {"kind": "cadence", "target": v["name"], "now": False}},
+                "alt": {"label": "Try another voice", "action": "pick_voice"}}
     if "unlike" in reasons and v.get("name"):
         word = v.get("likeness_word")
         meta = (f"The voice is only a {word} likeness so far. More clips usually fix this." if word in ("fair", "poor")
