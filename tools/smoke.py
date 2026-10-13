@@ -861,6 +861,149 @@ def u_listenback():
     return "problems found; one word stretched, the rest untouched; clauses split; re-reads on, stretches off"
 
 
+def _fake_ts_set(state_file, **kw):
+    """Change the fake Tailscale's state (signed in, Funnel approved...) through the fake itself: its processes change
+    the same file at the same time, under its lock."""
+    import subprocess
+    subprocess.run([sys.executable, str(ROOT / "tools" / "fake_tailscale.py"), "set", json.dumps(kw)], check=True,
+                   env={**os.environ, "FAKE_TS_STATE": str(state_file)}, timeout=30)
+
+
+@check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
+def u_tailnet():
+    import re
+    from undercover.core import tailnet
+    from undercover.core.voices import ModelError
+    fake = ROOT / "tools" / "fake_tailscale.py"
+    with isolated_data() as box:
+        st = box / "fake-ts.json"
+        os.environ["FAKE_TS_STATE"] = str(st)
+        saved = (dict(tailnet.CMD), dict(tailnet.STATE), tailnet.bin_dir)
+        tailnet.CMD.update(tailscale=[sys.executable, str(fake), "cli"], tailscaled=[sys.executable, str(fake), "daemon"])
+        read = lambda: json.loads(st.read_text(encoding="utf-8")) if st.exists() else {}
+        write = lambda **kw: _fake_ts_set(st, **kw)
+        try:
+            tailnet.STATE.update(want=True, port=7871, phase="off", auth_url=None, approve_url=None, host=None, error="")
+            assert tailnet.tick() == "starting"
+            wait_for(lambda: read().get("daemon"), 20, every=0.2, what="the fake daemon")
+            daemon = next(c for c in read()["calls"] if c[0] == "tailscaled")
+            assert "--tun=userspace-networking" in daemon and any(a.startswith("--statedir=") and str(box) in a for a in daemon), daemon
+            assert tailnet.tick() == "sign-in"
+            wait_for(lambda: tailnet.tick() == "sign-in" and tailnet.STATE["auth_url"], 20, every=0.2, what="the login URL")
+            assert tailnet.STATE["auth_url"].startswith("https://login.tailscale.com/"), tailnet.STATE
+            assert re.fullmatch(r"uc-[a-z]{6}", read()["hostname"]), "the node name isn't a random uc- name"
+            up = next(c for c in read()["calls"] if c[:1] == ["up"])
+            assert "--unattended" in up and "--accept-dns=false" in up, up
+            write(backend="Running", signed_in=True, host="uc-fakeone.tailfake.ts.net")
+            wait_for(lambda: tailnet.tick() == "approve", 20, every=0.2, what="the approval step")
+            assert tailnet.STATE["approve_url"].startswith("https://login.tailscale.com/f/") and tailnet.STATE["host"] == "uc-fakeone.tailfake.ts.net"
+            write(funnel_approved=True)
+            wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="ready")
+            assert read()["funnel_target"] == "http://127.0.0.1:7871", read()
+            assert tailnet.snapshot()["link"] == "https://uc-fakeone.tailfake.ts.net"
+            for bad in (7860, 7862, 7870):   # the PC's own UI, a home listener, any other port: never a funnel target
+                try:
+                    tailnet.funnel_target(bad)
+                    raise AssertionError(f"funnel aimed at {bad}")
+                except ModelError:
+                    pass
+            # after a restart the away listener may have another port: a funnel aimed elsewhere isn't "ready", it's re-aimed
+            write(funnel_target="http://127.0.0.1:7999")
+            assert tailnet.tick() != "ready"
+            wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="the funnel re-aimed")
+            assert read()["funnel_target"] == "http://127.0.0.1:7871", read()
+            name = (tailnet.state_dir() / "uc-name").read_text(encoding="utf-8")
+            # UnderCover exiting: the funnel reset and our daemon gone (none left behind pointing at a dead listener)
+            daemon_proc = tailnet._P["daemon"]
+            resets = read()["calls"].count(["funnel", "reset"])
+            tailnet.at_exit()
+            daemon_proc.wait(10)
+            assert read()["calls"].count(["funnel", "reset"]) == resets + 1 and not read().get("funnel_on")
+            tailnet.stop()
+            r = read()
+            assert r["calls"].count(["funnel", "reset"]) == resets + 2 and ["down"] in r["calls"] and not r.get("funnel_on"), r["calls"][-3:]
+            assert tailnet.snapshot()["phase"] == "off" and tailnet.snapshot()["name"] == name
+            daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+            tailnet.forget()   # with away off: the daemon is started for the logout, then the node's keys gone
+            assert sum(c[0] == "tailscaled" for c in read()["calls"]) == daemons + 1, "forget didn't start the daemon to log out"
+            assert read().get("logged_out") and not tailnet.state_dir().exists(), read()
+            assert tailnet._P["daemon"] is None, "forget left a daemon running"
+            # a download that isn't the pinned file is refused (the checksum), and nothing is installed
+            junk = box / "junk.msi"
+            junk.write_bytes(os.urandom(1000))
+            real = dict(tailnet.MSI)
+            tailnet.MSI["url"] = junk.as_uri()
+            tailnet.CMD.clear()
+            tailnet.bin_dir = lambda: box / "tailscale-bin"   # never the real models/tailscale (it may hold real binaries)
+            try:
+                tailnet.fetch_binaries()
+                raise AssertionError("a wrong MSI was used")
+            except ModelError as e:
+                assert "checksum" in str(e)
+                # in the driver: a failed download waits FETCH_RETRY_S before the next one (never 39 MB every 2 s)
+                tailnet.STATE.update(want=True, port=7871)
+                tailnet._P["fetch_failed"] = 0.0
+                try:
+                    tailnet.tick()
+                    raise AssertionError("the driver used a wrong MSI")
+                except ModelError:
+                    pass
+                tailnet.MSI["url"] = "file:///nonexistent/never-fetched.msi"   # a second download would raise
+                assert tailnet.tick() == "fetching" and tailnet._P["fetch_failed"] > 0
+                tailnet.STATE["want"] = False
+            finally:
+                tailnet.MSI.update(real)
+            assert not tailnet.have_binaries()
+        finally:
+            tailnet.bin_dir = saved[2]
+            tailnet.CMD.clear()
+            tailnet.CMD.update(saved[0])
+            tailnet.STATE.clear()
+            tailnet.STATE.update(saved[1])
+            os.environ.pop("FAKE_TS_STATE", None)
+    return "starting -> sign-in -> approve -> ready; funnel only to the away port; off, forget; wrong download refused"
+
+
+@check("away tokens (phase 20): a paired phone's single-use transfer code becomes an away token; never the home one; codes expire and work once; Revoke ends both")
+def u_phone_away():
+    from undercover.core import phone
+    from undercover.core.phone import PhoneError
+    with isolated_data():
+        phone._FILE[0] = None
+        phone.set_enabled(True)
+        code = phone.new_pairing()["code"]
+        home, dev = phone.claim(code, "Test phone", "192.168.1.50")
+        assert phone.device_for(home) and phone.device_for(home, away=True) is None
+        phone.set_away(True)
+        c = phone.away_code(dev["id"])
+        assert len(c) >= 20
+        away, d2 = phone.redeem_away(c)
+        assert d2["id"] == dev["id"] and away != home
+        assert phone.device_for(away, away=True)["id"] == dev["id"]
+        assert phone.device_for(away) is None and phone.device_for(home, away=True) is None, "home and away tokens mixed"
+        for bad in (c, "x" * 22, ""):   # used once already, made up, empty
+            try:
+                phone.redeem_away(bad)
+                raise AssertionError(f"redeemed {bad!r}")
+            except PhoneError:
+                pass
+        old = phone.away_code(dev["id"])
+        phone._AWAY_CODES[phone.hash_token(old)] = (dev["id"], time.time() - 1)
+        try:
+            phone.redeem_away(old)
+            raise AssertionError("an expired code worked")
+        except PhoneError:
+            pass
+        phone.set_away(False)
+        assert phone.device_for(away, away=True) is None, "away off, yet the away token works"
+        phone.set_away(True)
+        assert "away_hash" not in json.dumps(phone.devices()), "a hash in the public list"
+        phone.revoke(dev["id"])
+        assert phone.device_for(home) is None and phone.device_for(away, away=True) is None
+        phone._FILE[0] = None
+    return "code -> away token; home and away kept apart; once only; expiry; away off; Revoke ends both"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -1280,9 +1423,11 @@ def u_rolloff_covers():
     # MasterPlan), the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
     # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); Vaulting's
-    # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); a new caller must be
-    # added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/themes.py",
+    # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
+    # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); a new
+    # caller must be added here on purpose
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/tailnet.py",
+                                                                        "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py",
                                                                         "frontman/history.py", "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
@@ -3824,7 +3969,8 @@ PHONE_SAMPLES = [
     ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
-    ("POST", "/api/phone/revoke"),
+    ("POST", "/api/phone/revoke"), ("GET", "/api/away"), ("POST", "/api/away"), ("POST", "/api/away/forget"),
+    ("POST", "/api/phone/away/link"), ("POST", "/api/phone/away"), ("GET", "/away"),
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
@@ -3923,6 +4069,117 @@ def _lan(method, path, token=None, body=None, origin=True, host=None):
         return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
     finally:
         c.close()
+
+
+def _away(method, path, port, host, cookie=None, body=None, origin=True):
+    """A request as Tailscale Funnel would bring it to the away listener: -> (status, headers, body)."""
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    h = {"Host": host}
+    if origin and method != "GET":
+        h["Origin"] = origin if isinstance(origin, str) else f"https://{host}"
+    if cookie:
+        h["Cookie"] = cookie
+    data = None if body is None else json.dumps(body).encode()
+    if data is not None:
+        h["Content-Type"] = "application/json"
+    try:
+        c.request(method, path, body=data, headers=h)
+        r = c.getresponse()
+        return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+    finally:
+        c.close()
+
+
+@check("api: away from home (phase 20) on a fake Tailscale: sign-in, approval, ready; Funnel only to the away listener; its gate (Host, Origin, no pairing, away tokens only); a home phone's link becomes its away pass; off closes it")
+def a_away():
+    st_file = Path(os.environ["FAKE_TS_STATE"])
+    st_file.write_text("{}", encoding="utf-8")
+    read = lambda: json.loads(st_file.read_text(encoding="utf-8") or "{}")
+    write = lambda **kw: _fake_ts_set(st_file, **kw)
+    api("/api/phone", {"on": True})
+    pr = api("/api/phone/pair", {})["pairing"]
+    status, hd, _ = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Away phone"})
+    assert status == 200
+    home = hd["set-cookie"].split("uc_device=", 1)[1].split(";", 1)[0]
+    try:
+        st = api("/api/away", {"on": True})
+        port = st["port"]
+        assert st["on"] and st["listening"] and 7870 <= port < 7880, st
+        wait_for(lambda: api("/api/away")["auth_url"], 60, every=0.5, what="the Tailscale sign-in link")
+        assert api("/api/away")["phase"] == "sign-in"
+        write(backend="Running", signed_in=True, host="uc-fakeaway.tailfake.ts.net")
+        wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="the approval link")
+        write(funnel_approved=True)
+        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/away")), 60, every=0.5, what="ready")
+        host = st["host"]
+        assert st["link"] == f"https://{host}", st
+        sandbox_port = int(BASE.rsplit(":", 1)[1])
+        assert read()["funnel_target"] == f"http://127.0.0.1:{port}" and port != sandbox_port, read()   # never 7860, never the home listener
+        # the gate
+        assert _away("GET", "/", port, host)[0] == 401, "the away address answered without a pass"
+        assert _away("GET", "/", port, f"127.0.0.1:{port}")[0] == 403, "the away address took a Host that isn't its name"
+        assert _away("GET", "/pair", port, host)[0] == 403 and _away("POST", "/api/phone/claim", port, host, body={"code": "X"})[0] == 403
+        status, _, page = _away("GET", "/away", port, host)
+        assert status == 200 and b"Away from home" in page
+        # a paired phone, at home, asks for its link (its button shows only now); at the away address the code becomes its pass
+        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is True
+        assert api("/api/status").get("away_ready") is False, "the PC's own page offers the phone's away button"
+        status, _, body = _lan("POST", "/api/phone/away/link", home, {})
+        assert status == 200, body
+        url = json.loads(body)["url"]
+        assert url.startswith(f"https://{host}/away#"), url
+        code = url.split("#", 1)[1]
+        assert _away("POST", "/api/phone/away", port, host, body={"code": code}, origin=f"http://{host}")[0] == 403
+        status, hd, body = _away("POST", "/api/phone/away", port, host, body={"code": code})
+        assert status == 200, body
+        cookie = hd.get("set-cookie", "")
+        assert all(x in cookie for x in ("uc_away=", "Secure", "HttpOnly", "SameSite=Strict")), cookie
+        away = cookie.split("uc_away=", 1)[1].split(";", 1)[0]
+        assert _away("POST", "/api/phone/away", port, host, body={"code": code})[0] == 403, "a code worked twice"
+        s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"uc_away={away}")[2])
+        assert s_["client"] == "phone" and s_["device"] == "Away phone", s_
+        assert _away("GET", "/api/status", port, host, cookie=f"uc_away={home}")[0] == 401, "the home token works away"
+        assert _lan("GET", "/api/status", away)[0] == 401, "the away pass works at home"
+        status, _, body = _away("POST", "/api/restart", port, host, cookie=f"uc_away={away}", body={})
+        assert status == 403 and b"needs the PC" in body, (status, body)
+        # off: nothing reaches this PC from outside any more
+        api("/api/away", {"on": False})
+        calls = read()["calls"]
+        assert ["funnel", "reset"] in calls and ["down"] in calls and not read().get("funnel_on")
+        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is False
+        try:
+            _away("GET", "/", port, host)
+            raise AssertionError("the away listener still answers after Off")
+        except ConnectionRefusedError:
+            pass
+        # on again (the sign-in is kept: no new sign-in), then Phone access off takes away from home with it
+        st = api("/api/away", {"on": True})
+        port = st["port"]
+        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready again")
+        resets = read()["calls"].count(["funnel", "reset"])
+        api("/api/phone", {"on": False})
+        st = api("/api/away")
+        assert not st["on"] and not st["listening"] and read()["calls"].count(["funnel", "reset"]) == resets + 1, st
+        try:
+            _away("GET", "/", port, host)
+            raise AssertionError("the away listener still answers after Phone access was switched off")
+        except ConnectionRefusedError:
+            pass
+        # Forget with away off: the daemon comes up just for the logout, then goes, and the node's keys with it
+        daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+        api("/api/phone", {"on": True})
+        st = api("/api/away/forget", {})
+        r = read()
+        assert r.get("logged_out") and sum(c[0] == "tailscaled" for c in r["calls"]) == daemons + 1 and not st["name"], (st, r["calls"][-4:])
+    finally:
+        api("/api/phone", {"on": True})
+        api("/api/away", {"on": False})
+        dev = next((d for d in api("/api/phone")["devices"] if d["name"] == "Away phone"), None)
+        if dev:
+            api("/api/phone/revoke", {"id": dev["id"]})
+        api("/api/phone", {"on": False})
+    return f"sign-in -> approve -> ready; funnel to {port} only; the gate holds; a home link became an away pass; off and Phone access off close it"
 
 
 @check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
@@ -4827,7 +5084,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_greetings, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -4843,8 +5100,13 @@ def main():
             port = sandbox_port()
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
+                # away from home's checks drive a fake Tailscale (tools/fake_tailscale.py): the sandbox server inherits these
+                import tempfile
+                os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tools" / "fake_tailscale.py")
+                fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
+                os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
@@ -4856,6 +5118,11 @@ def main():
             except Exception as e:   # noqa: BLE001 - the sandbox couldn't start: that is a failed run, not a crash
                 RESULTS.append((False, "sandbox server"))
                 print(f"  FAIL  sandbox server: {type(e).__name__}: {e}", flush=True)
+            finally:
+                fake_ts = Path(os.environ.get("FAKE_TS_STATE", "")).parent
+                if fake_ts.name.startswith("uc-fake-ts-"):
+                    import shutil
+                    shutil.rmtree(fake_ts, ignore_errors=True)
     a_untouched(before, dirs)
     failed = [n for ok, n in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed in {time.time() - t0:.0f} s" + (f"; FAILED: {', '.join(failed)}" if failed else ""))
