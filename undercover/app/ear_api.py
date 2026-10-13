@@ -6,6 +6,8 @@
     POST /api/ear/rate       {kind: "cover"|"speech", id, thumb: "up"|"down", reasons?: [id], note?}
                              -> {item: {...}, fix: {reason, say, do, alt?, meta?} | null}
                              The voice and settings are read from the cover's or speech's own record, not the body.
+                             fix.do / fix.alt actions: work (POST /api/work/add `body`), pick_voice, remake (POST
+                             /api/history/<id>/again {options}), respeak (POST /api/speak with the speech's own fields + options)
     POST /api/ear/forget     {kind, id} one item, or {all: true} -> {forgot: n}
 Phones (app/phone_api.ROUTES): all three.
 """
