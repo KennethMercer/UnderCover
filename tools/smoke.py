@@ -283,6 +283,42 @@ def u_demo_pause():
     return "kept before the sandbox goes; restored byte for byte into a new one; --resume wired"
 
 
+@check("demo voice builder: more minutes later reads on (new sentences, never the same twice, the reader checked)")
+def u_demo_topup():
+    import numpy as np
+    import make_demo_voice as mdv
+    from undercover.speakeasy import tts
+    real = tts.synth
+    read = []
+
+    def fake(text, reader):   # 30 s of silence per sentence, and a note of what was read
+        read.append(text)
+        return np.zeros(int(tts.SR * 30), np.float32)
+    text = " ".join(f"Sentence number {i} is here." for i in range(40))
+    try:
+        tts.synth = fake
+        with isolated_data() as box:
+            work = box / "speech"
+            work.mkdir()
+            first = mdv.synthesize(text, "am_michael", 4, work)
+            got1 = list(read)
+            read.clear()
+            more = mdv.synthesize(text, "am_michael", 8, work)
+            assert len(first) == 2 and len(more) == 4 and more[:2] == first, (first, more)
+            assert got1 and read and not set(got1) & set(read), "a sentence was read twice"
+            assert read[0] == f"Sentence number {len(got1)} is here.", read[0]
+            read.clear()
+            assert mdv.synthesize(text, "am_michael", 8, work) == more and not read, "enough already: nothing more read"
+            try:
+                mdv.synthesize(text, "bm_george", 12, work)
+                raise AssertionError("another reader was mixed in")
+            except SystemExit as e:
+                assert "am_michael" in str(e), e
+    finally:
+        tts.synth = real
+    return "4 min, then 8 min reads on from the next sentence; 8 again reads nothing; another reader refused"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -3832,7 +3868,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_demo_pause, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_demo_pause, u_demo_topup, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

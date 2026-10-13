@@ -48,13 +48,30 @@ def text_of_book() -> str:
 
 
 def synthesize(text: str, reader: str, minutes: float, into: Path) -> list[Path]:
-    """Kokoro reads sentences until `minutes` of speech; ~2-minute WAV files with short pauses between sentences."""
+    """Kokoro reads sentences until `minutes` of speech in `into` (counting what's there already); ~2-minute WAV files
+    with short pauses between sentences. agent-smoke-text.json beside them says where the reading stopped, so a top-up
+    (more minutes later) reads on, new text, never the same sentences twice. -> every recording, old and new."""
     import numpy as np
     import soundfile as sf
     from undercover.speakeasy import tts
-    files, chunk, total, gap = [], [], 0.0, np.zeros(int(tts.SR * 0.35), np.float32)
-    for s in tts.sentences(text):
-        a = tts.synth(s["text"], reader)
+    have = sorted(into.glob("agent-smoke-*.wav"))
+    total = sum(sf.info(str(f)).duration for f in have)
+    sents = list(tts.sentences(text))
+    mark = into / "agent-smoke-text.json"
+    if mark.is_file():
+        m = json.loads(mark.read_text(encoding="utf-8"))
+        if m["reader"] != reader:
+            sys.exit(f"{into} holds {m['reader']}'s reading, not {reader}'s: use another --audio-dir")
+        start = m["next_sentence"]
+    else:   # recordings from before the mark (the first 30 min, 2026-10-12): read on from the middle of the book
+        start = len(sents) // 2 if have else 0
+    if have:
+        print(f"  {len(have)} recordings, {total / 60:.1f} min; reading on from sentence {start} of {len(sents)}")
+    files, chunk, gap = list(have), [], np.zeros(int(tts.SR * 0.35), np.float32)
+    for i in range(start, len(sents)):
+        if total >= minutes * 60:
+            break
+        a = tts.synth(sents[i]["text"], reader)
         chunk += [a, gap]
         total += (len(a) + len(gap)) / tts.SR
         if sum(map(len, chunk)) / tts.SR >= 120 or total >= minutes * 60:
@@ -62,9 +79,9 @@ def synthesize(text: str, reader: str, minutes: float, into: Path) -> list[Path]
             sf.write(f, np.concatenate(chunk), tts.SR)
             files.append(f)
             chunk = []
+            mark.write_text(json.dumps({"reader": reader, "next_sentence": i + 1, "minutes": round(total / 60, 1)}),
+                            encoding="utf-8")
             print(f"  {f.name}: {total / 60:.1f} min so far", flush=True)
-        if total >= minutes * 60:
-            break
     return files
 
 
@@ -153,11 +170,12 @@ def main():
             print("the text: The Secret Agent (Conrad, 1907), Project Gutenberg #974")
             work = Path(a.audio_dir) if a.audio_dir else root / "demo-voice-src"
             work.mkdir(parents=True, exist_ok=True)
+            import soundfile as sf
             files = sorted(work.glob("agent-smoke-*.wav"))
-            if files:
+            if files and sum(sf.info(str(f)).duration for f in files) >= a.minutes * 60 - 30:
                 print(f"reusing {len(files)} recordings in {work}")
             else:
-                print(f"Kokoro {a.reader} reads {a.minutes:.0f} min into {work}")
+                print(f"Kokoro {a.reader} reads up to {a.minutes:.0f} min into {work}")
                 files = synthesize(text_of_book(), a.reader, a.minutes, work)
             name = smoke.api("/api/train/projects", {"person": "Agent Smoke", "mode": "speaking", "no_search": True})["name"]
             for f in files:
