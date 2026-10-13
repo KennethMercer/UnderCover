@@ -265,6 +265,8 @@ class Job:
 
 JOBS: dict[str, Job] = {}
 GPU_QUEUE: "queue.Queue[tuple[Job, callable]]" = queue.Queue()
+START_GATES: list = []   # gate(job): called before a queued GPU job starts and may wait (the game pause asks first)
+CURRENT: list = [None]   # the job the GPU worker is running now (the game pause asks only about real GPU work)
 STATUS = {"models": "starting", "gpu": None, "vram_gb": None, "started": time.time()}
 PORT = None   # the port this server listens on (set at startup): a test server keeps its own queue file
 
@@ -309,7 +311,13 @@ def gpu_worker():
     while True:
         job, fn = GPU_QUEUE.get()
         try:
-            run_job(job, fn)
+            for gate in START_GATES:
+                gate(job)
+            CURRENT[0] = job
+            try:
+                run_job(job, fn)
+            finally:
+                CURRENT[0] = None
         except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
             try:
                 job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).")
