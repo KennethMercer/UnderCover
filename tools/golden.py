@@ -10,7 +10,8 @@ quality regression is caught before the user hears it. Numbers flag; the ear dec
     python tools/golden.py compare [RUN]                 what moved past twice its noise band, the bad way
     python tools/golden.py pairs [RUN] [--items A,B]     blind pairs (every flag + one rotating item, or the items a phase
                                                          changed on purpose; at most 4) + key.json
-    python tools/golden.py verdict RUN ITEM new|old|same the ear's answer
+    python tools/golden.py verdict RUN ITEM new|old|same|neither [--note ...]   the ear's answer ("neither": both off; it
+                                                         neither moves the baseline nor blocks: the phase tries again)
     python tools/golden.py accept RUN                    the items heard as new / same take the run's scores into the baseline
     python tools/golden.py rebands                       run the set twice more and widen every band to the largest spread seen
     python tools/golden.py refreeze VOICE                after the user approved a newer version of a voice: a fresh copy, and
@@ -518,7 +519,8 @@ def main():
     v = sub.add_parser("verdict")
     v.add_argument("run")
     v.add_argument("item")
-    v.add_argument("verdict", choices=("new", "old", "same"))
+    v.add_argument("verdict", choices=("new", "old", "same", "neither"))
+    v.add_argument("--note", default="")
     sub.add_parser("accept").add_argument("run")
     sub.add_parser("rebands")
     rf = sub.add_parser("refreeze")
@@ -584,7 +586,8 @@ def main():
         print(f"{len(chosen)} pair(s) in {out} (key.json is for MasterPlan only)")
     elif a.cmd == "verdict":
         with open(GOLDEN / "verdicts.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"run": a.run, "item": a.item, "verdict": a.verdict, "at": time.strftime("%Y-%m-%d %H:%M")}) + "\n")
+            f.write(json.dumps({"run": a.run, "item": a.item, "verdict": a.verdict, "note": a.note,
+                                "at": time.strftime("%Y-%m-%d %H:%M")}) + "\n")
         print(f"{a.item}: {a.verdict}")
     elif a.cmd == "accept":
         base = _read(GOLDEN / "baseline.json", {})
