@@ -10,6 +10,9 @@ POST   /api/upload                          raw body + X-Filename: a song droppe
 POST   /api/songs/youtube                   {url} or a search result -> fetched into uploads/
 POST   /api/songs/<id>/presep               separate in the background while the GPU is idle
 POST   /api/estimate | /api/covers | /api/preview
+POST   /api/history/<id>/octaves            {variants: [{octave, key}, {octave, key}]} 15 s previews of the cover at
+                                            each (the one-shot's plan.settings_fit.alt: two octaves that fit about as
+                                            well, for a quick blind pick; the pick then goes to /again) -> {job}
 POST   /api/history/<id>/again              {options} the cover made again: its song, voice and settings, with these
                                             changed (the ear's fix: {octave: -1}; the backing follows the lead's octave)
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
@@ -65,6 +68,8 @@ def handle(h, method: str, p: str) -> bool:
             _start_cover(h, h._body())
         elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/again", p):
             _cover_again(h, m.group(1), h._body())
+        elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/octaves", p):
+            _cover_octaves(h, m.group(1), h._body())
         elif p == "/api/preview":
             _start_preview(h, h._body())
         elif p == "/api/songs/youtube":
@@ -179,6 +184,26 @@ def _cover_again(h, item_id: str, body: dict):
         opts["backing_octave"] = change["octave"]
     _start_cover(h, {"song": Path(it.get("song") or "").stem, "voice": opts.pop("voice", None) or it.get("voice"),
                      "options": opts})
+
+
+def _cover_octaves(h, item_id: str, body: dict):
+    """Short previews of a finished cover at two octave / key settings (phase 22: when two octaves fit a voice about as
+    well, the user picks by ear). Only octave and key change; the backing follows the lead's octave as in /again."""
+    from .history import get
+    it = get(item_id)
+    variants = []
+    old = dict(it.get("options") or {})
+    for v in (body.get("variants") or [])[:2]:
+        change = {k: int(v[k]) for k in AGAIN_KEYS if k in v}
+        if "octave" in change and old.get("backing_octave") == old.get("octave"):
+            change["backing_octave"] = change["octave"]
+        variants.append({"label": f"octave {change.get('octave', old.get('octave', 0)):+d}, key {change.get('key', old.get('key', 0)):+d}",
+                         **change})
+    if len(variants) != 2:
+        return h._error("Give the two octave / key settings to compare.")
+    opts = {k: v for k, v in old.items() if k != "voice"}
+    _start_preview(h, {"song": Path(it.get("song") or "").stem, "voice": old.get("voice") or it.get("voice"),
+                       "options": opts, "variants": variants})
 
 
 def _presep(h, song_id: str, body: dict):

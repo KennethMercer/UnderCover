@@ -177,7 +177,22 @@ def u_fit():
     assert fit["octave"] <= -1 and fit["outside"] < 0.5, fit
     fit0 = pick_fit([300.0, 440.0, 600.0], False, f0)
     assert fit0["octave"] == 0 and fit0["key"] == 0, fit0
-    return f"low voice -> octave {fit['octave']} key {fit['key']:+d}"
+    # the register (phase 22): a deep speaking voice (Freeman 72-175 Hz, median 105) fits a ~200 Hz melody fully at
+    # octave 0 thanks to the speech slack, but sings it an octave up from himself: the octave down, near his median
+    rng = np.random.default_rng(22)
+    hold_on = 200.0 * 2 ** (rng.uniform(-5, 5, 800) / 12)
+    deep = pick_fit([72.0, 104.6, 174.7], True, hold_on)
+    assert deep["octave"] == -1 and deep["key"] == 0 and abs(deep["register_st"]) < 3, deep
+    tenor = pick_fit([140.0, 200.0, 300.0], True, hold_on)   # a voice at that pitch keeps it
+    assert tenor["octave"] == 0 and tenor["key"] == 0, tenor
+    # a key past 3 semitones costs more (the whole band moves); a close second octave comes back as `alt`
+    from undercover.frontman import fit as F
+    wide = 387.0 * 2 ** (rng.uniform(-12, 9, 800) / 12)   # Toxic: 194-661 Hz
+    fr = pick_fit([72.0, 104.6, 174.7], True, wide)
+    assert fr.get("alt") and {fr["octave"], fr["alt"]["octave"]} == {-1, -2}, fr
+    assert F.KEY_FAR_COST > F.KEY_COST and abs(fr["alt"]["cost"] - fr["cost"]) <= F.CLOSE
+    return (f"low voice -> octave {fit['octave']} key {fit['key']:+d}; a deep speaking voice on a 200 Hz melody -> octave -1 "
+            f"({deep['register_st']:+.1f} st from his median); Toxic for him: {fr['octave']}/{fr['key']:+d} or {fr['alt']['octave']}/{fr['alt']['key']:+d}")
 
 
 @check("worklist: overnight window and deadline")
@@ -1579,6 +1594,14 @@ def u_ear():
         finally:
             fapi._start_cover = real
         assert got["voice"] == "zed-2-uc" and got["options"]["octave"] == -1 and got["options"]["key"] == 1 and "voice" not in got["options"], got
+        # two octaves of it, previewed for a quick blind pick (phase 22): only octave / key change
+        pv, realp = {}, fapi._start_preview
+        fapi._start_preview = lambda h, body: pv.update(body)
+        try:
+            fapi._cover_octaves(_FakeHandler(), cov["id"], {"variants": [{"octave": 0, "key": 1}, {"octave": -1, "key": 0, "voice": "x"}]})
+        finally:
+            fapi._start_preview = realp
+        assert [(v["octave"], v["key"]) for v in pv["variants"]] == [(0, 1), (-1, 0)] and pv["voice"] == "zed-2-uc" and "voice" not in pv["variants"][1], pv
         f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
         assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
         # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
@@ -3620,7 +3643,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/voices/install"), ("POST", "/api/voices/upload"), ("DELETE", "/api/voices/some-voice"),
     ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
     ("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget"),
-    ("POST", "/api/history/0123456789/again"),
+    ("POST", "/api/history/0123456789/again"), ("POST", "/api/history/0123456789/octaves"),
     ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
     ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
     *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
