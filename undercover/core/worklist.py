@@ -105,11 +105,13 @@ def active() -> bool:
     return bool(_voice_jobs())
 
 
-def pause_all(resume_after_restart: bool = False) -> dict:
-    """Stop all voice work cleanly and remember it for Resume (or, for a restart, resume it right after)."""
+def pause_all(resume_after_restart: bool = False, by: str = "you") -> dict:
+    """Stop all voice work cleanly and remember it for Resume (or, for a restart, resume it right after). by: who held
+    it ("you", or "game" for the game pause, which only resumes a hold that is still its own)."""
     with _LOCK:
         st = _state()
         st["held"] = True
+        st["held_by"] = by
         if resume_after_restart:
             st["resume_after_restart"] = True
         _save()
@@ -144,6 +146,7 @@ def resume_all() -> dict:
     with _LOCK:
         st = _state()
         st["held"] = False
+        st.pop("held_by", None)
         specs, st["resume"] = st["resume"], []
         _log(f"resume {[x.get('label') for x in specs]}")
         for it in st["queue"]:
