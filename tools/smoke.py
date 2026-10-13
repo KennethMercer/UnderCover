@@ -3782,7 +3782,7 @@ def snapshot_real(dirs: dict) -> dict:
     beside the config (config.toml, tutorial.json, phone.json, themes.json: a check once appended to the real config)."""
     import os
     snap = {}
-    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json"):
+    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json", "ear.json"):
         p = ROOT / name
         if p.is_file():
             st = p.stat()
