@@ -57,8 +57,10 @@ def installed_for(person: str) -> list:
         vt = [t for t in name.split("-") if t not in generic and not t.isdigit()]
         # all the person's words in the voice name, or a voice named by part of the name incl. the surname
         return bool(vt) and (all(t in vt for t in toks) or (set(vt) <= set(toks) and toks[-1] in vt))
+    from ..core import ear
     cands = [v for v in list_voices() if matches(v.name) and not undertrained(v)]
-    cands.sort(key=lambda v: (bool(v.extra.get("trained")), v.name == key, v.installed), reverse=True)
+    # trained first; then the one the user's thumbs like (the ear everywhere), the exact name, the newest
+    cands.sort(key=lambda v: (bool(v.extra.get("trained")), ear.liking(v.name), v.name == key, v.installed), reverse=True)
     return cands
 
 
@@ -352,11 +354,14 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             checked.append({"name": "-", "verdict": "unknown", "note": "couldn't test (clips had only one speaker)"})
         plan["checked"] = checked
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
+        from ..core import ear
+        good = ear.prefer(good, name=lambda c: c["name"], score=lambda c: c["score"])   # equally good: the liked one
         quick = False
         if not good and not prefer_train:
             # quick first (phase 15): a voice that sounds somewhat like them makes a cover in minutes; training one
             # takes about an hour. Said plainly, with the way to a closer voice (tick Train a new voice).
-            good = sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"])[:1]
+            good = ear.prefer(sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"]),
+                              name=lambda c: c["name"], score=lambda c: c["score"])[:1]
             quick = bool(good)
         drop_downloads(keep=good[0]["name"] if good else None)
         if good:
