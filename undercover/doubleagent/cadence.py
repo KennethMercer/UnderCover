@@ -602,11 +602,11 @@ def train(job, voice_name: str, push, control=None) -> dict:
         raise ModelError("The cadence engine (Chatterbox) isn't installed in this UnderCover. Run setup again to add it.")
     proj = project_for_voice(v)
     if proj is None and (v.extra or {}).get("demo"):
-        raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
+        raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
     if proj is None:
         person = None if (v.extra or {}).get("trained") else (v.extra or {}).get("person")
         if not person:
-            raise ModelError(f"UnderCover doesn't know whose voice '{v.name}' is, so it can't find their clips.")
+            raise ModelError(f"UnderCover doesn't know whose voice {label_of(v.name)} is, so it can't find their clips.")
         push("clips", 0.0, f"Finding clips of {person} talking")
         name = service.train_new_voice(job, person, control or worklist.control_for(job),
                                        lambda st, f, m, **kw: push("clips", f, m, **kw), prepare_only=True,
@@ -710,8 +710,8 @@ def train(job, voice_name: str, push, control=None) -> dict:
                           note=f"Found a cadence for {label_of(v.name)} {how}. Listen to both and keep the one you like: "
                                "the current one stays until you choose.")
             return result
-        result.update(replaced=True, note=(f"{v.name} now speaks with {proj.person}'s cadence" if old is None else
-                                           f"New cadence for {v.name} (the old one couldn't be read; it's kept in tts/previous)")
+        result.update(replaced=True, note=(f"{label_of(v.name)} now speaks with {proj.person}'s cadence" if old is None else
+                                           f"New cadence for {label_of(v.name)} (the old one couldn't be read; it's kept in tts/previous)")
                       + f" (from {mins} min of their speech).")
         return result
     finally:
@@ -943,7 +943,7 @@ def record_verdict(voice_name: str, compared: list, winner: str, why: str, by: s
     v = get_voice(voice_name)
     pack = (v.extra or {}).get("tts")
     if not pack:
-        raise ModelError(f"{v.name} has no cadence to record a verdict on.")
+        raise ModelError(f"{label_of(v.name)} has no cadence to record a verdict on.")
     pack.setdefault("verdicts", []).append({"date": time.strftime("%Y-%m-%d %H:%M"), "compared": list(compared),
                                             "winner": winner, "why": why, "by": by})
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
@@ -998,7 +998,7 @@ def _target(t: str) -> str:
     v = get_voice(t)
     ok, why = can_train(v)
     if not ok:
-        raise ModelError(f"Can't train a cadence for {v.name}: {why}")
+        raise ModelError(f"Can't train a cadence for {label_of(v.name)}: {why}")
     return v.name
 
 

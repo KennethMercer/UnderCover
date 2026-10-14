@@ -235,7 +235,8 @@ class Job:
                 "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
                 "retry": self.state == "error" and self.retry_req is not None,
-                "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs)}
+                "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs),
+                "target": getattr(self, "target", None)}   # what a job works on, as data ({kind, name, display}): no title parsing
         # the newest value of each progress field within the current stage (some events carry only a note)
         for ev in reversed(evs[-40:]):
             if ev.get("stage") != stage and not ev.get("final"):
