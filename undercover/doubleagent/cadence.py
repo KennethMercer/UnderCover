@@ -708,13 +708,14 @@ def train(job, voice_name: str, push, control=None) -> dict:
                                                                  "heard", "pace", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
                                                                  "pitch_raw_st", "pitch_off_st")},
                 "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": []}
-        push("testing", 0.97, f"Matching {proj.person}'s own pace")   # phase 23: a pace-by-reference engine is calibrated once
-        try:
-            apply_pace(pack, calibrate_pack(pack, work / f"{win['clip']}.wav", check))
-        except (Cancelled, Paused):
-            raise
-        except Exception:   # noqa: BLE001 - the pack is fine without it; the first speech calibrates it
-            pass
+        if C.engine_info(C.reading_engine(pack.get("engine"))).get("pace_by_ref"):   # phase 23: off for every engine today (it read slurred)
+            push("testing", 0.97, f"Matching {proj.person}'s own pace")
+            try:
+                apply_pace(pack, calibrate_pack(pack, work / f"{win['clip']}.wav", check))
+            except (Cancelled, Paused):
+                raise
+            except Exception:   # noqa: BLE001 - the pack is fine without it; the first speech calibrates it
+                pass
         new = work / "pack"
         new.mkdir(exist_ok=True)
         shutil.copyfile(work / f"{win['clip']}.wav", new / "ref.wav")
