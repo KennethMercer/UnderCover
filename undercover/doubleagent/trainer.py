@@ -682,6 +682,12 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
         if pending_candidate(name) or (voices_dir() / name).exists():
             raise ModelError(f"A retrained {label_of(owner)} ({name}) is already in your voices. Decide on that one first "
                              "(DoubleAgent, its voice card); this training stays in its project, to add later.")
+    elif confirmed and (voices_dir() / name / "meta.json").exists():
+        from ..core import jobs
+        busy = jobs.jobs_using(name)   # its folder is about to be set aside
+        if busy:
+            raise ModelError(f"{busy[0].title or 'A cover or speech'} is using {label_of(name)} right now. Try again when "
+                             "it's done (or cancel it).")
     data_pt = tdir / "data.pt"
     if not data_pt.exists() and (proj.dir / "before-smaller" / "train" / "data.pt").exists():
         data_pt = proj.dir / "before-smaller" / "train" / "data.pt"   # Make smaller set it aside (phase 24): still there
