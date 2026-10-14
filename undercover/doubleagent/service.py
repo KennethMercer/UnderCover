@@ -866,6 +866,17 @@ def cadence_pack(v) -> dict | None:
     return pack_of(v)
 
 
+def pace_needs_calibration(v) -> bool:
+    """The voice's cadence hasn't had its pace matched to the person's for the engine that reads it now (phase 23)."""
+    from .cadence import pace_needs_calibration as needs
+    return needs((v.extra or {}).get("tts"))
+
+
+def calibrate_pace(v, check=None):
+    from .cadence import calibrate_voice_pace
+    return calibrate_voice_pace(v.name, check)
+
+
 def cadence_ref(v) -> Path:
     return v.dir / "tts" / ((v.extra or {}).get("tts") or {}).get("ref", "ref.wav")
 

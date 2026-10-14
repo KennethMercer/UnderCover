@@ -107,6 +107,32 @@ class Chatterbox:
         return wav.squeeze(0).cpu().numpy().astype(np.float32)
 
 
+class ChatterboxTurbo:
+    """Chatterbox-Turbo (phase 23): the same package, a 350M model with a one-step decoder. It ignores cfg_weight /
+    exaggeration (a pace preset then moves only the gaps), conditions on the reference clip once like Chatterbox."""
+    sr = 24000
+
+    def __init__(self, rid):
+        from .engines import TURBO_FILES
+        _ensure(TURBO_FILES, "the cadence model (about 2.8 GB)", rid)
+        from chatterbox.tts_turbo import ChatterboxTurboTTS
+        self.m = ChatterboxTurboTTS.from_local(path("models_dir") / "tts" / "chatterbox-turbo", DEVICE)
+        norm = self.m.norm_loudness   # its loudness step returns float64 in 0.1.7, which its tokenizer path rejects
+        self.m.norm_loudness = lambda wav, sr, *a, **k: np.asarray(norm(wav, sr, *a, **k), np.float32)
+        self.sr = self.m.sr
+        self.ref = None
+
+    def __call__(self, text, ref, ref_text, seed, opts):
+        st = os.stat(ref)   # a new pack puts a new clip at the same path (tts/ref.wav): its date and size tell
+        key = (ref, st.st_mtime_ns, st.st_size)
+        if self.ref != key:
+            self.m.prepare_conditionals(ref, exaggeration=0.0)
+            self.ref = key
+        torch.manual_seed(seed)
+        wav = self.m.generate(text, temperature=float(opts.get("temperature", 0.8)))
+        return wav.squeeze(0).cpu().numpy().astype(np.float32)
+
+
 class F5:
     sr = 24000
 
@@ -132,7 +158,7 @@ class F5:
         return np.asarray(wav, np.float32)
 
 
-ENGINE_CLASSES = {"chatterbox": Chatterbox, "f5": F5}
+ENGINE_CLASSES = {"chatterbox-turbo": ChatterboxTurbo, "chatterbox": Chatterbox, "f5": F5}
 LOADED: dict = {}
 WHISPER: dict = {}
 from .engines import WHISPER_PROMPT as PROMPT   # shared with SpeakEasy's listen-back (the same hearing)
