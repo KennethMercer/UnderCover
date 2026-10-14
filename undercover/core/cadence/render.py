@@ -73,6 +73,22 @@ def request(text: str, pack: dict, ref: Path, seed: int = 1234, progress=None):
     return fut, out
 
 
+def paced_ref(ref: Path, rate: float | None) -> Path:
+    """The reference clip read `rate` times as fast (pitch kept), made once and kept: an engine that copies the pace of
+    its reference (Turbo) reads slower from a slowed one. The same clip back when rate is None / 1."""
+    if not rate or abs(rate - 1.0) < 0.01:
+        return ref
+    import hashlib
+    import librosa
+    st = Path(ref).stat()
+    out = scratch() / ("ref_" + hashlib.sha1(f"{ref}|{st.st_mtime_ns}|{st.st_size}|{rate}".encode()).hexdigest()[:12] + ".wav")
+    if not out.exists():
+        x, sr = sf.read(str(ref), dtype="float32")
+        x = x.mean(1) if x.ndim > 1 else x
+        sf.write(str(out), librosa.effects.time_stretch(x, rate=rate), sr, subtype="PCM_16")
+    return out
+
+
 def load16(f: Path) -> np.ndarray:
     from scipy.signal import resample_poly
     x, sr = sf.read(str(f), dtype="float32", always_2d=True)

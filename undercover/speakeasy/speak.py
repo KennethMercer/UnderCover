@@ -80,6 +80,7 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
         eng = reading_engine(pack.get("engine", "chatterbox"))   # a Chatterbox-family pack reads with the default of them
         info = engine_info(eng)
         return {"voice": v.name, "mode": "cadence", "engine": eng, "engine_name": info["name"],
+                "ref_rate": pack.get("pace_ref_rate") if info.get("pace_by_ref") else None,   # its pace, calibrated (phase 23)
                 "rtf": info["rtf"], "person": (v.extra or {}).get("person") or pack.get("project"),
                 "reader": None, "auto": True, "reader_label": None, "reader_hz": None,
                 "target_hz": sp and sp["hz"], "target_low": sp and sp["low"], "pitch_from": sp and sp["how"],
@@ -240,8 +241,16 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
         sents = render.split_clauses(sents)
     sents = render.join_short(sents)   # a sentence of a word or two is read with its neighbour (no stray sound before it)
     v = get_voice(p["voice"])
+    if service.pace_needs_calibration(v):   # once per pack and engine: its natural pace is matched to the person's own
+        job.push(stage="reading", frac=0.0, message="Matching their pace (once, about a minute)")
+
+        def _stop():
+            if job.cancel:
+                raise Cancelled()
+        service.calibrate_pace(v, _stop)
+        v = get_voice(p["voice"])
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
-    ref = service.cadence_ref(v)
+    ref = render.paced_ref(service.cadence_ref(v), pack.get("pace_ref_rate") if engine_info(p["engine"]).get("pace_by_ref") else None)
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents],
              start_after=min(START_AFTER, len(sents)), total_left=round(tts.seconds_estimate(text) / p["rtf"] + 5, 1))
     conv = gpu.MODELS.converter

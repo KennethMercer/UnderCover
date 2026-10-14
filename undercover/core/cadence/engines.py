@@ -65,7 +65,9 @@ ENGINES = {
     "chatterbox-turbo": {"name": "Chatterbox Turbo", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 2.5,
                          "vram_gb": 3.6, "size_mb": 2830, "module": "chatterbox",
                          # Turbo ignores cfg_weight / exaggeration (they made Slower / Faster, phase 4c): with it the pace control
-                         # only moves the gaps between sentences, and the page calls it that (user, 2026-10-14)
+                         # only moves the gaps between sentences, and the page calls it that (user, 2026-10-14). Its natural pace
+                         # follows its reference clip's, so each pack is calibrated once (doubleagent/cadence.py: calibrate_pack)
+                         "pace_by_ref": True,
                          # Turbo's reading sits lower than the person's (Obama's 9 semitones under, golden run 2026-10-13): finish moves
                          # its median onto the voice's own, not just by octaves
                          "pitch_to_target": True,
