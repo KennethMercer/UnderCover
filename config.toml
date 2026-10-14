@@ -98,7 +98,7 @@ batch_size = 1           # no measurable effect (Phase 1)
 
 [training]
 # Voice training (Train a voice page / python -m undercover.train). Projects live in <cache_dir>/training/<name>/.
-target_minutes = 10              # clean target-voice minutes to aim for (more than ~30 rarely helps)
+target_minutes = 30              # clean target-voice minutes to aim for (Trump 2026-10-14: 36 min "miles better" than 16; more than ~30 rarely helps)
 search_per_query = 8             # YouTube results per query variant
 search_results = 12              # sources listed
 max_minutes_per_source = 12      # long videos are trimmed (skips the first minute); several shorter sources beat one long one
