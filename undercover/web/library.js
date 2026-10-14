@@ -417,7 +417,7 @@ function voiceDetail(d, v) {
       <dt data-deep>Size</dt><dd data-deep>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep data-pc>Rename folder…</button>
-      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep data-pc>Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
+      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep data-pc>Export .zip</a><button class="btn danger" id="lib-del">Remove…</button></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");
   if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("doubleagent"); try { await openProject(v.project); } catch (e) {} };
@@ -435,7 +435,7 @@ function voiceDetail(d, v) {
     nameIn.onkeydown = e => { if (e.key === "Enter") save(); };
   }
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
-  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
+  confirmClick($("#lib-del"), "Click again to remove", async () => { removedVoice(v.name, await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" })); afterChange(); loadVoices(); });
   if ($("#lib-full-idx")) $("#lib-full-idx").onclick = async e => {   // the shrunk voice's full index, kept 30 days
     e.target.disabled = true;
     try { await api(`/api/library/voices/${encodeURIComponent(v.name)}/full-index`, { json: {} }); showError("The full index is back. New covers use it.", "Put back", null, true); afterChange(); }

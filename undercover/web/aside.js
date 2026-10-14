@@ -20,9 +20,24 @@ function renderAside() {
       return `<div class="vt-row aside-row"><span><b>${esc(x.display || x.voice)}</b><small class="meta">${esc(x.why || "set aside")} · ${esc(when(x.at))}</small>
         ${asking && x.undo_for ? `<small class="meta aside-warn">Undo for ${esc(voiceDisplay(x.undo_for))} won't be able to bring it back.</small>` : ""}</span>
         <span class="row"><span class="meta mono">${gb(x.size || 0)}</span>
+        <button class="btn" type="button" data-aside-back="${esc(x.id)}" data-pc>Bring it back</button>
         <button class="btn${asking ? " confirm" : ""}" type="button" data-aside-rm="${esc(x.id)}" data-pc>${asking ? "Delete it?" : "Delete…"}</button></span></div>`;
     }).join("");
   $$("[data-aside-rm]", box).forEach(b => b.onclick = () => asideDelete(b.dataset.asideRm, b));
+  $$("[data-aside-back]", box).forEach(b => b.onclick = async () => { b.disabled = true; await asideRestore(b.dataset.asideBack); if (b.isConnected) b.disabled = false; });
+}
+// Bring it back: POST /api/library/aside/<id>/restore -> {voice, with}. It's refused when the name is taken now, or when the voice's own
+// Undo serves that folder ("Use Undo on …"): the server's words are shown as they come.
+async function asideRestore(id) {
+  try {
+    const r = await api(`/api/library/aside/${encodeURIComponent(id)}/restore`, { json: {} });
+    showError(`${voiceDisplay(r.voice)} is back${r.with ? `, with the retrained one that waited beside it` : ""}.`, "Brought back", null, true);
+    if (typeof loadVoices === "function") loadVoices();
+    if (typeof loadCandidates === "function") loadCandidates();
+  } catch (e) { showError(e.message, "Couldn't bring it back"); }
+  asideLoad();
+  if (typeof loadStorage === "function") loadStorage();
+  if (typeof afterChange === "function" && typeof L !== "undefined" && L.visible) afterChange();
 }
 // two clicks within 4 s; the first one says what it will cost (an Undo that would no longer work)
 async function asideDelete(id, btn) {
