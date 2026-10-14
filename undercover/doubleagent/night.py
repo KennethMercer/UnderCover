@@ -212,7 +212,10 @@ def _new(job, item) -> dict:
             score = voicecheck.check(name, proj, gpu.MODELS.converter, SpeakerEmbedder()).score
         except Exception:   # noqa: BLE001 - only for the report
             pass
-    return {"voice": name, "after": score, "note": f"'{name}' added to your voices."}
+    from .api import pending_of, waiting_note
+    owner = pending_of(name)   # a voice of that name was there: it waits beside it
+    return {"voice": name, "after": score, "pending_for": owner,
+            "note": waiting_note(owner) if owner else f"'{name}' added to your voices."}
 
 
 def _improve(job, item) -> dict:
@@ -375,7 +378,10 @@ def _project(job, item) -> dict:
             score = voicecheck.check(name, proj, gpu.MODELS.converter, SpeakerEmbedder()).score
         except Exception:   # noqa: BLE001 - only for the report
             pass
-    return {"voice": name, "after": score, "note": f"'{name}' added to your voices, from your choices in DoubleAgent."}
+    from .api import pending_of, waiting_note
+    owner = pending_of(name)
+    return {"voice": name, "after": score, "pending_for": owner,
+            "note": waiting_note(owner) if owner else f"'{name}' added to your voices, from your choices in DoubleAgent."}
 
 
 def _project_target(target: str) -> str:

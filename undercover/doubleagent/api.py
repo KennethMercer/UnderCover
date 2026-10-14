@@ -447,7 +447,9 @@ def start_auto(name: str, b: dict):
         finally:
             ACTIVE.pop(proj.name, None)
         gpu.forget_voice(name)
-        job.finish("done", message=f"{label_of(name)} is ready in your voices.", voice=name)
+        owner = pending_of(name)   # it landed on a voice that's there: it waits
+        job.finish("done", message=waiting_note(owner) if owner else f"{label_of(name)} is ready in your voices.",
+                   voice=name, pending_for=owner)
 
     job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}
     job.control = control
@@ -468,6 +470,21 @@ def _pause(h, proj, b):
     h._json({"ok": True})
 
 
+def pending_of(name: str) -> str | None:
+    """The voice a just-made voice waits beside (it landed on one that was there: Internal Affairs P4-1), else None."""
+    from ..core.voices import get_voice
+    try:
+        return (get_voice(name).extra or {}).get("pending_for")
+    except ModelError:
+        return None
+
+
+def waiting_note(voice: str) -> str:
+    """What a training that landed on an existing voice says: the new one waits beside it (Internal Affairs P4-1)."""
+    return (f"{label_of(voice)} was already in your voices, so the new one waits beside it. Listen to both on its "
+            "voice card (DoubleAgent) and keep the one you like; the other is set aside, not deleted.")
+
+
 def check_voice_name(proj, vname: str, replace: str | None = None):
     """A training never writes over another person's voice: a name already taken by a voice that isn't this project's
     is refused here, before any work (export refuses it too). replace: the one voice this run may replace on purpose
@@ -479,6 +496,13 @@ def check_voice_name(proj, vname: str, replace: str | None = None):
                          "name, or keep or set aside the waiting one first (DoubleAgent, its voice card).")
     if replace and vname == replace:
         return
+    try:
+        here = json.loads((voices_dir() / vname / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        here = {}
+    if (here.get("extra") or {}).get("improved_pending"):   # its new one would wait beside it, and one already does
+        raise ModelError(f"A retrained {label_of(vname)} already waits beside it. Compare the two first (DoubleAgent, "
+                         "its voice card), then train it again.")
     d = voices_dir() / vname
     meta = d / "meta.json"
     if not meta.exists():
@@ -526,9 +550,15 @@ def _export(h, proj, b):
             job.push(stage="export", fraction=0.2, label="building the search index")
             with P.lock(proj.name):
                 pr = P.Project.load(proj.name)
-            v = export_voice(pr, epoch=b.get("epoch"), name=b.get("name"), overwrite=bool(b.get("overwrite")))
+            # replace: the user's "Replace my voice" confirm, just now on the page (the old one is set aside, Undo
+            # puts it back). Without it, a voice that's already there isn't replaced: the new one waits beside it
+            replace = b.get("replace") is True
+            v = export_voice(pr, epoch=b.get("epoch"), name=b.get("name"), overwrite=bool(b.get("overwrite")) or replace,
+                             confirmed=replace)
             gpu.forget_voice(v.name)   # reload if an older version was cached
-            job.finish("done", message=f"{label_of(v.name)} is ready in your voices.", voice=v.name)
+            owner = (v.extra or {}).get("pending_for")
+            job.finish("done", message=waiting_note(owner) if owner else f"{label_of(v.name)} is ready in your voices.",
+                       voice=v.name, pending_for=owner)
         except Exception as e:
             job.finish("error", message=jobs.friendly(e, "adding the voice"))
 

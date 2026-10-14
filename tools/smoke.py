@@ -1151,7 +1151,7 @@ def u_pending_guard():
         refused(lambda: check_voice_name(proj, "morgan-freeman-uc-next", replace="morgan-freeman-uc-next"))
         refused(lambda: V.install([voices_dir() / "x.pth"], "morgan-freeman-uc-next", overwrite=True))
         assert (cand / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the candidate was touched"
-        check_voice_name(proj, "morgan-freeman-uc")                                          # its own voice: allowed
+        refused(lambda: check_voice_name(proj, "morgan-freeman-uc"), "already waits beside it")   # P4-1: one at a time
         refused(lambda: night._improve_target("morgan-freeman-uc"), "already waiting")
         # a new model of the voice itself (a manual retrain): the candidate keeps waiting beside it
         new = path("cache_dir") / "new.pth"
@@ -1249,6 +1249,195 @@ def u_speak_estimate():
         SA.handle(h, "GET", "/api/speak/estimate")
         assert h.err and h.out is None, "an unknown voice gave an estimate"
     return f"reader estimate {want} s for 10 words; GET and POST agree; an unknown voice refused"
+
+
+DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes): a new one is reviewed and listed here
+    # the only code that deletes a VOICE folder: remove_voice, and only from these (P4-1)
+    "core/voices.py::remove_voice::rmtree::v.dir",
+    "app/server.py::Handler.do_DELETE::remove_voice::m.group(1)",                # the user's Delete (the page asks twice)
+    "core/voices.py::main::remove_voice::a.name",                                # the CLI's remove
+    "doubleagent/service.py::resolve_voice.drop_downloads::remove_voice::name",  # a one-shot's own fresh downloads
+    "safehouse/library.py::_remove::rmtree::p",                                  # Storage clean-up the user ticks
+    "doubleagent/cadence.py::remove_pack::rmtree::v.dir / 'tts'",                # a cadence the user deletes
+    # temp and work folders, caches, projects, speech parts
+    "app/server.py::Handler._voice_upload::rmtree::work", "app/server.py::_clean_old_previews::rmtree::sub",
+    "core/separate.py::StemSeparator.run::rmtree::self.work_dir", "core/voices.py::download::rmtree::dest",
+    "core/voices.py::install::rmtree::work", "core/voices.py::download_and_install::rmtree::dl if dl.is_dir() else dl.parent",
+    "core/ytdlp.py::stage::rmtree::d", "core/ytdlp.py::stage::rmtree::dl", "core/ytdlp.py::heal::rmtree::tmp",
+    "doubleagent/cadence.py::train::rmtree::work", "doubleagent/project.py::Project.delete::rmtree::self.dir",
+    "doubleagent/project.py::process_source::rmtree::path('cache_dir') / 'stems' / file_hash(raw)",
+    "doubleagent/sources.py::download::rmtree::work", "frontman/remix.py::remix::rmtree::tmp",
+    "frontman/songs.py::download::rmtree::work", "frontman/songs.py::remove_song::rmtree::path('cache_dir') / 'stems' / sid",
+    "speakeasy/speak.py::make_speech::rmtree::pdir", "speakeasy/speak.py::_make_cadence::rmtree::pdir",
+    "speakeasy/speak.py::delete_speech::rmtree::parts_dir(m['job'])",
+    # core.storage itself (allow-lists, test-mode refusals) and its guarded callers
+    "core/storage.py::remove_tree::rmtree::p", "core/storage.py::remove_tree::rmtree::child",
+    "core/storage.py::remove_files::rmtree::p", "core/storage.py::move::rmtree::c",
+    "core/storage.py::remove_tree::remove_tree::child", "core/storage.py::move::remove_tree::now",
+    "app/tutorial.py::seed_voice::remove_files", "app/tutorial.py::update_demo::remove_files",
+    "app/tutorial.py::undo_demo::remove_files", "core/doctor.py::clear_stale::remove_files",
+    "core/tailnet.py::fetch_binaries::remove_files", "core/tailnet.py::forget::remove_files",
+    "core/themes.py::_drop::remove_files", "core/vault.py::prune::remove_files", "core/ytdlp.py::_drop::remove_files",
+    "doubleagent/improved.py::_drop_samples::remove_files", "frontman/history.py::roll_off::remove_files",
+    "safehouse/smaller.py::keep_voice::remove_files", "safehouse/smaller.py::_drop_readings::remove_files",
+    "safehouse/smaller.py::undo_voice::remove_files", "safehouse/smaller.py::keep_project::remove_files",
+    "safehouse/smaller.py::undo_project::remove_files", "safehouse/smaller.py::restore_full_index::remove_files",
+    "safehouse/smaller.py::expire_full_indexes::remove_files", "speakeasy/speak.py::roll_off::remove_files",
+}
+
+
+def _deleters() -> set:
+    """Every rmtree / remove_voice / remove_tree call in the app (file::function::call::first argument) and every
+    remove_files call (file::function::remove_files: storage's own allow-list guards those)."""
+    import ast
+    root = Path(__file__).resolve().parents[1] / "undercover"
+    out = set()
+    for f in sorted(root.rglob("*.py")):
+        stack: list = []
+
+        class V(ast.NodeVisitor):
+            def generic_visit(self, node):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    stack.append(node.name)
+                    super().generic_visit(node)
+                    stack.pop()
+                    return
+                if isinstance(node, ast.Call):
+                    fn = node.func
+                    name = fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else None
+                    where = f"{f.relative_to(root).as_posix()}::{'.'.join(stack) or '<module>'}::{name}"
+                    if name == "remove_files":
+                        out.add(where)
+                    elif name in ("rmtree", "remove_voice", "remove_tree"):
+                        out.add(f"{where}::{ast.unparse(node.args[0]) if node.args else ''}")
+                super().generic_visit(node)
+        V().visit(ast.parse(f.read_text(encoding="utf-8")))
+    return out
+
+
+@check("nothing deletes a voice folder but the user's own Delete (Internal Affairs P4-1): a structural scan of every rmtree / remove_voice / remove_tree / remove_files call against the reviewed list; install() has none on the voice")
+def u_no_voice_deletes():
+    found = _deleters()
+    new, gone = sorted(found - DELETERS), sorted(DELETERS - found)
+    assert not new, "new delete calls (review them: a voice folder is set aside, never deleted; then list them in DELETERS): " + "; ".join(new)
+    assert not gone, "listed delete calls no longer there (drop them from DELETERS): " + "; ".join(gone)
+    voice = sorted(k for k in found if "remove_voice" in k)
+    return f"{len(found)} delete calls, all reviewed; remove_voice only from: {', '.join(k.split('::')[1] for k in voice)}"
+
+
+@check("a run onto a voice that's already there never replaces it (Internal Affairs P4-1): queued / overnight / Do it all land as <voice>-next waiting for the blind A/B; one waits at a time; only a just-now confirmed replace takes the name, the old one set aside with Undo; a failed replace puts it back")
+def u_export_lands():
+    import ast
+    import inspect
+    import torch
+    from undercover.core import fsutil, voices as V
+    from undercover.core.engine.rvc import index as RI
+    from undercover.core.voices import ModelError, get_voice, listed_voices, voices_dir
+    from undercover.doubleagent import api as DA, improved, project as P, service, trainer as T
+    # only the page's export (its "Replace my voice" confirm) may pass confirmed; the runs never do
+    for mod in (service, T, DA, __import__("undercover.doubleagent.night", fromlist=["x"])):
+        for node in ast.walk(ast.parse(inspect.getsource(mod))):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) == "export_voice":
+                kws = {k.arg for k in node.keywords}
+                assert "confirmed" not in kws or mod is DA, f"{mod.__name__} exports with confirmed"
+    assert 'b.get("replace") is True' in inspect.getsource(DA._export)
+
+    def refused(fn, word):
+        try:
+            fn()
+        except ModelError as e:
+            assert word in str(e), e
+            return
+        raise AssertionError(f"not refused ({word})")
+    patches = [(torch, "load", lambda *a, **k: {}), (T, "index_feats", lambda d: torch.zeros((8, 4))),
+               (RI, "write_ivf_flat", lambda p, feats: Path(p).write_bytes(b"idx")), (T, "f0_median", lambda d: None),
+               (T, "f0_range", lambda d: None), (T, "shrink_exported_index", lambda d: None),
+               (V, "inspect_pth", lambda p: {"version": "v2", "sr": 40000, "f0": True})]
+
+    def collect(files, work):
+        out = Path(work) / "model.pth"
+        shutil.copyfile(files[0], out)
+        return [out], []
+    patches.append((V, "_collect", collect))
+    real = [(m, n, getattr(m, n)) for m, n, _ in patches]
+    for m, n, f in patches:
+        setattr(m, n, f)
+    try:
+        with isolated_data():
+            proj = P.Project.create("Morgan Freeman", "speaking")
+            (proj.dir / "train").mkdir(parents=True, exist_ok=True)
+            (proj.dir / "train" / "data.pt").write_bytes(b"d")
+            proj.train.update(saves=[{"epoch": 5, "identity": 0.81, "val": 1.0}], best=5, voice_name="morgan-freeman-uc",
+                              train_minutes=3.0, exported="morgan-freeman-uc")
+            proj.save()
+
+            def save(epoch, data):
+                (proj.dir / "train" / f"e{epoch}.pth").write_bytes(data)
+            cur = _voice_dir("morgan-freeman-uc", {"trained": True, "project": proj.name, "likeness": 0.7, "tts": {"ref": "ref.wav"}})
+            (cur / "tts").mkdir()
+            (cur / "tts" / "ref.wav").write_bytes(b"cadence")
+            # 1. a queued / overnight run and Do it all (overwrite, no confirm): it waits beside the voice
+            save(5, b"new-model-1")
+            v = T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True)
+            assert v.name == "morgan-freeman-uc-next" and v.extra["pending_for"] == "morgan-freeman-uc", v.extra
+            assert (cur / "model.pth").read_bytes() == b"m-morgan-freeman-uc", "the voice was replaced"
+            assert get_voice("morgan-freeman-uc").extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+            assert P.Project.load(proj.name).train["waiting"]["candidate"] == "morgan-freeman-uc-next"
+            assert [x.name for x in listed_voices()] == ["morgan-freeman-uc"]
+            # 2. one waits at a time: another run onto the voice is refused before any work, nothing touched
+            refused(lambda: DA.check_voice_name(proj, "morgan-freeman-uc"), "already waits beside it")
+            refused(lambda: T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True), "already waits")
+            # 3. the user's "Replace my voice" (confirmed): it takes the name, the old one set aside with Undo
+            improved.keep("morgan-freeman-uc", "current")                       # (the waiting one decided first)
+            save(5, b"new-model-2")
+            from undercover.core import jobs as J
+            busy = J.Job("cover", title="Hold On · Morgan")                     # a cover reading with it: the replace waits
+            busy.voices = {"morgan-freeman-uc"}
+            J.JOBS[busy.id] = busy
+            try:
+                refused(lambda: T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True,
+                                               confirmed=True), "using")
+            finally:
+                busy.finish("done")
+            assert (cur / "model.pth").read_bytes() == b"m-morgan-freeman-uc"
+            v = T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True, confirmed=True)
+            assert v.name == "morgan-freeman-uc" and (v.dir / "model.pth").read_bytes() == b"new-model-2"
+            assert (v.dir / "tts" / "ref.wav").read_bytes() == b"cadence", "the cadence didn't carry over"
+            rec = get_voice("morgan-freeman-uc").extra["improved_previous"]
+            aside = voices_dir() / ".aside" / rec["aside"]
+            assert (aside / "model.pth").read_bytes() == b"m-morgan-freeman-uc" and (aside / "meta.json.aside").exists()
+            improved.undo("morgan-freeman-uc")                                  # Undo: the old one back, the new one waits
+            assert (get_voice("morgan-freeman-uc").dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc"
+            assert (get_voice("morgan-freeman-uc-next").dir / "model.pth").read_bytes() == b"new-model-2"
+            assert (get_voice("morgan-freeman-uc").dir / "tts" / "ref.wav").exists()
+            improved.keep("morgan-freeman-uc", "current")
+            # 4. a replace that fails half-way puts the voice back as it was
+            real_write = fsutil.write_text
+
+            def boom(p, text):
+                if Path(p).name == "meta.json" and Path(p).parent.name == "morgan-freeman-uc":
+                    raise OSError("disk full")
+                return real_write(p, text)
+            fsutil.write_text = boom
+            try:
+                save(5, b"new-model-3")
+                try:
+                    T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True, confirmed=True)
+                    raise AssertionError("the failing replace didn't fail")
+                except OSError:
+                    pass
+            finally:
+                fsutil.write_text = real_write
+            back = get_voice("morgan-freeman-uc")
+            assert (back.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc" and (back.dir / "tts" / "ref.wav").exists()
+            assert any(d.name.endswith("-unfinished") for d in (voices_dir() / ".aside").iterdir()), "the half-made one"
+            # 5. a new name (nothing there) is just added
+            save(5, b"new-model-4")
+            assert T.export_voice(P.Project.load(proj.name), name="morgan-freeman-2", overwrite=True).name == "morgan-freeman-2"
+    finally:
+        for m, n, f in real:
+            setattr(m, n, f)
+    return "queued / Do it all -> waits as -next; a second refused; confirmed replace -> old aside, Undo; failed replace -> put back"
 
 
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
@@ -6121,7 +6310,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

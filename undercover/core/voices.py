@@ -11,6 +11,7 @@ Downloaded .pth files are loaded with torch.load(weights_only=True) so a malicio
 """
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -472,6 +473,37 @@ def _pick_index(indexes: list[Path]) -> Path | None:
     return max(pool, key=lambda p: p.stat().st_size)
 
 
+def set_aside(d: Path, tag: str = "") -> Path:
+    """A voice folder moved to voices/.aside/<name>-<stamp> (its meta.json renamed, so no list shows it), never
+    deleted (Internal Affairs P4-1). Test mode: the test's own folders only. -> where it went."""
+    from . import fsutil, storage
+    if storage.ALLOWED_ROOTS is not None:
+        why = storage.refuse([d])
+        if why:
+            raise ModelError(why)
+    base = voices_dir() / ".aside" / f"{d.name}-{time.strftime('%Y%m%d-%H%M%S')}{tag}"
+    dst, n = base, 1
+    while dst.exists():
+        dst, n = base.with_name(f"{base.name}-{n}"), n + 1
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fsutil.retry(lambda: os.replace(d, dst))
+    if (dst / "meta.json").exists():
+        os.replace(dst / "meta.json", dst / "meta.json.aside")
+    return dst
+
+
+def _put_back(aside: Path, target: Path):
+    """set_aside() undone (a replace that failed half-way): the voice as it was, the half-made one set aside."""
+    from . import fsutil
+    if target.exists():
+        if (target / "tts").is_dir() and not (aside / "tts").exists():
+            os.replace(target / "tts", aside / "tts")
+        set_aside(target, "-unfinished")
+    fsutil.retry(lambda: os.replace(aside, target))
+    if (target / "meta.json.aside").exists():
+        os.replace(target / "meta.json.aside", target / "meta.json")
+
+
 def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bool = False) -> Voice:
     """Unpack downloaded file(s), find the voice .pth/.index, validate, and register under `name`."""
     files = [files] if isinstance(files, Path) else files
@@ -504,7 +536,7 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         index = _pick_index(indexes)
 
         # a voice's cadence (tts/ + extra.tts, made from the person's clips) outlives a new model of the same voice
-        keep_tts, old_tts, old_display, old_pending = None, None, "", None
+        keep_tts, old_tts, old_display, old_pending, aside, old_meta = None, None, "", None, None, {}
         if target.exists():
             try:   # the name the user gave it outlives a new model of the same voice, like its cadence
                 old_meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
@@ -513,31 +545,41 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
                 old_meta = {}
             # a retrained one waiting beside this voice keeps waiting beside the new model (else it'd be orphaned)
             old_pending = (old_meta.get("extra") or {}).get("improved_pending")
-            if (target / "tts").is_dir():
-                keep_tts = work / "_kept_tts"
-                shutil.move(str(target / "tts"), keep_tts)
+            # the voice being replaced is set aside, never deleted (Internal Affairs P4-1); Undo puts it back
+            aside = set_aside(target)
+            if (aside / "tts").is_dir():   # the voice's cadence is the person's: it goes on with the new model
+                keep_tts = aside / "tts"
                 old_tts = (old_meta.get("extra") or {}).get("tts")
-            shutil.rmtree(target)
-        target.mkdir(parents=True)
-        if keep_tts is not None:
-            shutil.move(str(keep_tts), target / "tts")
-        shutil.move(str(pth), target / "model.pth")
-        if index:
-            shutil.move(str(index), target / "model.index")
-            try:   # half the size on disk (fp16); exports rebuild a faiss file for other tools
-                from .engine.rvc.index import compact_in_place
-                compact_in_place(target / "model.index")
-            except Exception:
-                pass   # unreadable/unusual index: keep it as it came (loading says so later)
-        voice = Voice(name=name, dir=target, pth=target / "model.pth",
-                      index=(target / "model.index") if index else None,
-                      version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
-                      installed=time.strftime("%Y-%m-%d %H:%M"), display=old_display,
-                      extra={"original_pth": pth.name, "original_index": index.name if index else None,
-                             **({"tts": old_tts} if keep_tts is not None and old_tts else {}),
-                             **({"improved_pending": old_pending} if old_pending else {})})
-        from . import fsutil
-        fsutil.write_text(target / "meta.json", json.dumps(voice.to_json(), indent=2))
+        try:
+            target.mkdir(parents=True)
+            if keep_tts is not None:
+                shutil.move(str(keep_tts), target / "tts")
+            shutil.move(str(pth), target / "model.pth")
+            if index:
+                shutil.move(str(index), target / "model.index")
+                try:   # half the size on disk (fp16); exports rebuild a faiss file for other tools
+                    from .engine.rvc.index import compact_in_place
+                    compact_in_place(target / "model.index")
+                except Exception:
+                    pass   # unreadable/unusual index: keep it as it came (loading says so later)
+            # Undo (DoubleAgent's improved-voice card, improved.undo) puts the old one back; the new one then waits
+            # beside it as <name>-next, like a retrained voice
+            prev = ({"improved_previous": {"at": time.strftime("%Y-%m-%d %H:%M"), "candidate": f"{name}-next",
+                                           "before": (old_meta.get("extra") or {}).get("likeness"), "after": None,
+                                           "aside": aside.name, "how": "replaced"}} if aside is not None else {})
+            voice = Voice(name=name, dir=target, pth=target / "model.pth",
+                          index=(target / "model.index") if index else None,
+                          version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
+                          installed=time.strftime("%Y-%m-%d %H:%M"), display=old_display,
+                          extra={"original_pth": pth.name, "original_index": index.name if index else None,
+                                 **({"tts": old_tts} if keep_tts is not None and old_tts else {}),
+                                 **({"improved_pending": old_pending} if old_pending else {}), **prev})
+            from . import fsutil
+            fsutil.write_text(target / "meta.json", json.dumps(voice.to_json(), indent=2))
+        except BaseException:
+            if aside is not None:   # the old voice back as it was
+                _put_back(aside, target)
+            raise
         return voice
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -782,7 +824,13 @@ def set_display(name: str, text: str) -> Voice:
 
 
 def remove_voice(name: str):
+    """The one code path that deletes a voice folder (tools/smoke.py u_no_voice_deletes holds the callers to: the
+    user's own Delete, asked twice on the page; the CLI's remove; a one-shot's own just-downloaded community voices).
+    A replace sets the old one aside instead (set_aside)."""
     v = get_voice(name)
+    from . import storage
+    if storage.ALLOWED_ROOTS is not None and (why := storage.refuse([v.dir])):
+        raise ModelError(why)
     shutil.rmtree(v.dir)
 
 
