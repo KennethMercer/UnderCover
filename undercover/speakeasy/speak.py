@@ -258,6 +258,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
         job.push(stage="reading", frac=0.0, message=msg)
     reqs: list = []
     pieces, made, t_tts, t_rvc, t_lb = [], 0.0, 0.0, 0.0, 0.0
+    pitch_hist: list = []   # each sentence's offset from the person's pitch (an engine that reads off it, Turbo)
     try:
         for i, s in enumerate(sents):
             while len(reqs) < min(len(sents), i + ahead):
@@ -279,7 +280,8 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
                 listenback.write_log(entry)
                 t_lb += entry.get("seconds", 0.0)
             t = time.perf_counter()
-            y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0), engine=p.get("engine"))
+            y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0), engine=p.get("engine"),
+                                history=pitch_hist)
             y = _level(y)
             t_rvc += time.perf_counter() - t
             pause = 0.0 if s["pause"] == 0 else (p["para_gap_s"] if s["pause"] >= 0.5 else p["gap_s"])
