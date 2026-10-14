@@ -863,7 +863,8 @@ function renderPreviews(list, kind, byHand, made) {
     a.addEventListener("pause", () => { card.classList.remove("playing"); $(".play", card).textContent = "▶"; pos = a.currentTime; });
     a.addEventListener("ended", () => { pos = 0; });
     $(".use", card).onclick = () => {
-      Object.assign(S.opts, list[i].options); if (byHand) S.opts.fit = false; store.set("uc-opts", S.opts); syncControls(); summary(); refreshEstimate();
+      // by hand is decided now, not when the set was drawn: fit may have been turned on since
+      Object.assign(S.opts, list[i].options); if (pvByHand(kind)) S.opts.fit = false; store.set("uc-opts", S.opts); syncControls(); summary(); refreshEstimate();
       previewSync();
     };
   });
