@@ -608,7 +608,8 @@ class Handler(BaseHTTPRequestHandler):
             if action == "forget":   # Dismiss the paused work instead of resuming it
                 return self._json(worklist.forget_paused())
             if action == "add":
-                return self._json(worklist.add(b.get("kind", ""), b.get("target", ""), now=bool(b.get("now")),
+                # a project queued from the Deep path names it as "project" (the target is the project's id)
+                return self._json(worklist.add(b.get("kind", ""), b.get("target") or b.get("project") or "", now=bool(b.get("now")),
                                                mode=b.get("mode") or None))
             if action == "remove":
                 return self._json(worklist.remove(b.get("id", "")))
