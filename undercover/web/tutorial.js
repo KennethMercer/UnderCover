@@ -208,6 +208,7 @@ function assignComplete(say) {
 }
 function assignClose() {
   AS.step = 0; AS.finished = false; store.set("uc-assign-step", 0);
+  loadOpts();   // the run used clean settings; the saved ones come back (a later change would otherwise save the clean ones over them)
   $("#assign").hidden = true; $("#assign-brief").hidden = true;
   reaim();
 }
