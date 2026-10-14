@@ -49,6 +49,13 @@ These are the principles that have settled every argument so far. When the docs 
    media. Offered the whole SpongeBob series from their drive, the user said: "I don't think we should cheat like
    that, the app should have to work with what it would be able to access on an arbitrary machine." When something
    can't be had (a region block), the app says so plainly and offers the user's own clips as a choice, not a shortcut.
+10. **The engine is smart, so the user doesn't have to be.** In the maker's words (2026-10-14): the primary user "will
+   likely never want to touch a Deep Cover setting, that's for true power users, a main feature of our app is that it's
+   more than just voice/speech/cover synthesis, it's a smart engine that can understand what a user wants and create the
+   optimal output on its own." So when the result is wrong, fix the engine's judgement (what it searches, picks,
+   keeps, tunes), never add a setting and call it solved. A Deep Cover control is an extra, not a fix. Example: the
+   Trump search picking 1980s interviews is fixed by a date-aware, speech-preferring search, not by asking the user to
+   untick sources.
 
 ## How the work is done
 
