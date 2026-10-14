@@ -508,10 +508,10 @@ def _cleanup_groups() -> dict:
 
 def clean_up(groups) -> dict:
     """Storage's Clean up, the ticked groups: files removed (_remove), duplicate voices SET ASIDE (P6-1).
-    -> {freed, set_aside: [{voice, aside}]}"""
+    -> {freed, set_aside: [{voice, aside}], skipped: [{voice, why}]}"""
     from ..core import gpu
     from ..core.voices import remove_to_aside
-    freed, moved = 0, []
+    freed, moved, skipped = 0, [], []
     for k, v in _cleanup_groups().items():
         if k not in groups:
             continue
@@ -519,10 +519,14 @@ def clean_up(groups) -> dict:
         for path_ in v["paths"]:
             _remove(path_)
         for d in v.get("aside", []):
-            r = remove_to_aside(d["voice"], why=f"the same model as {d['keeps_display']}")
+            try:
+                r = remove_to_aside(d["voice"], why=f"the same model as {d['keeps_display']}")
+            except (ModelError, OSError) as e:   # in use right now, or a file held open: it stays, said so
+                skipped.append({"voice": d["voice"], "why": str(e)})
+                continue
             gpu.forget_voice(d["voice"])
             moved.append({"voice": d["voice"], "aside": r["aside"]})
-    return {"freed": freed, "set_aside": moved}
+    return {"freed": freed, "set_aside": moved, "skipped": skipped}
 
 
 def _remove(p: Path):
