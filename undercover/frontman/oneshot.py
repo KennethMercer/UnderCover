@@ -19,7 +19,7 @@ import numpy as np
 
 from ..core import gpu, jobs, worklist
 from ..core.config import path
-from ..core.voices import ModelError
+from ..core.voices import ModelError, label_of
 from . import ambiguity
 from .fit import pick_fit, pick_octave
 from ..doubleagent.service import (_prefetch_voice_sources, installed_for, resolve_voice, subject_of, voice_f0,
@@ -462,16 +462,38 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     opts = CoverOptions(voice=v.name, key=key, octave=octave, quality="high", dereverb=True, karaoke=True,
                         backing_voice=None if chordal else v.name, backing_octave=octave,
                         backing_db=-3.0 if chordal else None, polish=True, pitch_cleanup=True)
+    # the exact options this cover used, for "Convert to try a variation" (Internal Affairs m1: the page assumed the
+    # backing was converted, so a variation of a stacked-harmony song converted the harmonies after all)
+    plan["settings"]["options"] = cover_options_of(opts)
     stage_w = {"separating": (0.0, 0.1), "converting": (0.1, 0.85), "mixing": (0.85, 1.0)}
 
     def cprog(stage, frac, msg):
         a, b = stage_w.get(stage, (0.95, 1.0))
         push("cover", a + (b - a) * frac, msg or stage.capitalize())
-    push("cover", 0.0, f"Making the cover with “{v.name}”")
+    push("cover", 0.0, f"Making the cover with {label_of(v.name)}")
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
     item = next((h for h in history_items() if h["id"] == res.id), None)
     job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
                plan=plan, seconds=res.seconds, notes=res.notes, elapsed=round(time.perf_counter() - t0, 1), quality=q)
+
+
+TYPICAL_SONG_S = 210.0   # a one-shot's song before it's found: three and a half minutes
+FETCH_S = 20.0           # finding and downloading it (measured 10-30 s)
+
+
+def cover_eta(voice: str) -> dict:
+    """A one-shot with an installed voice, in seconds: {low, high}. low: the song was fetched and separated before
+    (only conversion and mixing); high: a typical song fetched and separated now. From the measured speeds."""
+    from .pipeline import CoverOptions, estimate_for
+    o = CoverOptions(voice=voice, quality="high", dereverb=True, karaoke=True, backing_voice=voice, polish=True)
+    e = estimate_for(TYPICAL_SONG_S, o)
+    return {"low": round(e["converting"] + e["mixing"] + 5), "high": round(FETCH_S + e["total"] + 10)}
+
+
+def cover_options_of(opts: "CoverOptions") -> dict:
+    """A cover's options as the Convert form takes them (the voice is the plan's; unset options left out)."""
+    from dataclasses import asdict
+    return {k: v for k, v in asdict(opts).items() if k != "voice" and v is not None}
 
 
 def start_oneshot(body: dict):

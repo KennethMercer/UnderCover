@@ -136,6 +136,20 @@ def _route(h, method, p):
     m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9][A-Za-z0-9_-]*)/cadence(?:/(ab|verdict|sample/current|sample/pending))?", p)
     if m:
         return _cadence_ab(h, method, unquote(m.group(1)), m.group(2))
+    m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9][A-Za-z0-9_-]*)/improved(?:/(ab|keep|undo))?", p)
+    if m:   # an overnight improve's retrained voice: the blind A/B, Keep, Undo (Internal Affairs P2-1)
+        from . import improved
+        voice, act = unquote(m.group(1)), m.group(2)
+        if act is None and method == "GET":
+            return h._json({"improved": improved.state(voice)})
+        if method != "POST" or act is None:
+            raise LookupError("Not found")
+        b = h._body()
+        if act == "ab":
+            return h._json(improved.start_samples(voice))
+        if act == "keep":
+            return h._json(improved.keep(voice, str(b.get("keep") or "")))
+        return h._json(improved.undo(voice))
     m = re.fullmatch(r"/api/train/projects/([a-z0-9-]+)(?:/(\w+))?", p)
     if not m:
         raise LookupError("Not found")
@@ -332,7 +346,7 @@ def start_train(name: str, b: dict):
             if not vname:
                 raise ModelError("Give the new voice a name.")
             check_voice_name(proj, vname)
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             st.update(sr=sr, length=length, voice_name=vname, epochs=None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
@@ -373,6 +387,9 @@ def start_train(name: str, b: dict):
         if st.get("state") == "paused":
             return job.finish("paused", message="Training paused. Resume continues from the same point.",
                               train_state="paused", epoch=st.get("epoch"), best=st.get("best"))
+        if st.get("state") == "stopped":
+            return job.finish("cancelled", message="Training stopped. The saves made before the stop are kept.",
+                              train_state="stopped", epoch=st.get("epoch"), best=st.get("best"), outcome="stopped")
         job.finish("done", message=f"Training {st['state']}.", train_state=st["state"], epoch=st.get("epoch"),
                    best=st.get("best"), outcome=st.get("outcome"))
 
@@ -439,10 +456,15 @@ def start_auto(name: str, b: dict):
 
 
 def _pause(h, proj, b):
+    """Pause this project's work and hold it (the queue doesn't start it again by itself; Resume does)."""
+    from ..core import worklist
     a = _busy(proj.name)
-    if not a or not a["control"]:
+    if not a:
         raise ModelError("This voice isn't training right now.")
-    a["control"].pause = True
+    if a["control"]:
+        a["control"].pause = True   # (hold_one finds it through the job too; set here first for a job without one)
+        a["job"].control = a["job"].control or a["control"]
+    worklist.hold_one(a["job"])
     h._json({"ok": True})
 
 
@@ -542,14 +564,8 @@ def _cadence_ab(h, method, voice: str, action):
     if action is None and method == "GET":
         return h._json(cadence.ab_state(voice))
     if action and action.startswith("sample/") and method == "GET":
-        body = cadence.sample_file(voice, action.split("/")[1]).read_bytes()
-        h.send_response(200)
-        h.send_header("Content-Type", "audio/wav")
-        h.send_header("Content-Length", str(len(body)))
-        h.send_header("Cache-Control", "no-store")
-        h.end_headers()
-        h.wfile.write(body)
-        return
+        # with Range (206) and Accept-Ranges like /files: a phone's player seeks (Internal Affairs P2-3)
+        return h._send_file(cadence.sample_file(voice, action.split("/")[1]), cache="no-store")
     if method != "POST":
         raise LookupError("Not found")
     b = h._body()   # always read: an unread body would be taken for the start of the next request on this connection

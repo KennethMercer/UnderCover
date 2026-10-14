@@ -39,7 +39,9 @@ def estimate(item: dict) -> dict:
     else:
         raw_min = 90.0 if item["kind"] == "improve" else 45.0   # not searched yet: typical
     prep = raw_min / PREP_RT
-    train = LENGTHS["auto"] * _sec_per_step() * EARLY_STOP / 60
+    # a queued project trains at its own length (the options are saved before this runs: a Quick item says Quick's time)
+    length = (proj.train.get("length") if item["kind"] == "project" and proj is not None else None) or "auto"
+    train = LENGTHS.get(length, LENGTHS["auto"]) * _sec_per_step() * (EARLY_STOP if length == "auto" else 1.0) / 60
     return {"prepare": round(prep), "train": round(train), "compare": round(COMPARE_MIN if item["kind"] == "improve" else 1),
             "total": round(prep + train + (COMPARE_MIN if item["kind"] == "improve" else 1))}
 
@@ -65,7 +67,7 @@ def _project_for_item(item: dict, create: bool):
             from ..core.voices import get_voice, is_demo
             v = get_voice(item["target"])
             if is_demo(v):
-                raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
+                raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
             name = (v.extra or {}).get("project")
             if name:
                 try:
@@ -270,7 +272,7 @@ def _improve(job, item) -> dict:
                 P.score(proj)
             proj.save()
             st = proj.train
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"], length="auto", voice_name=cand)
             proj.save()
@@ -339,7 +341,7 @@ def _improve_target(target: str) -> str:
     from ..core.voices import get_voice, is_demo
     v = get_voice(target)   # friendly error if it doesn't exist
     if is_demo(v):
-        raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
+        raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
                          "of to improve it.")
     if (v.extra or {}).get("pending_for"):
         raise ModelError("That's a retrained version waiting to be compared, not a voice to improve.")

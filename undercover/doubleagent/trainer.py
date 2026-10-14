@@ -317,7 +317,12 @@ class Trainer:
 
         report(stage="preparing", fraction=0.0, note="downloading base models")
         base = setup_models.base_model_files(sr)
-        setup_models.ensure(files=base)
+        try:
+            setup_models.ensure(files=base, cancel=lambda: control.stop)   # Stop aborts the download, not after it
+        except setup_models.DownloadStopped:
+            st["state"], st["outcome"] = "stopped", "stopped"
+            proj.save_train()
+            return st
         report(stage="preparing", fraction=0.0, note="preparing samples")
         def prep_progress(f):
             control.service()   # covers queued meanwhile don't wait for data preparation either
@@ -509,7 +514,7 @@ class Trainer:
                 if hold:
                     self._preview(net_g, hold[0], sr, self.tdir / "previews" / f"e{epoch}.wav")
                 st.setdefault("saves", []).append({"epoch": epoch, "val": round(float(np.mean([x["val"] for x in hist[-5:]])), 4)})
-            st["state"] = "trained"
+            st["state"] = "stopped" if outcome == "stopped" else "trained"   # a Stop is said as one (P2-5)
             st["outcome"] = outcome
         proj.save_train()
         del net_g, net_d, opt_g, opt_d, items, hold

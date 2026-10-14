@@ -386,7 +386,9 @@ def start(kind: str, name: str) -> dict:
     if kind == "voice":
         if not (_child(_voices_dir(), name) / "model.index").is_file():
             raise ModelError("That voice isn't there any more.")
-        job = jobs.Job("smaller", title=f"Making {name} smaller")
+        from ..core.voices import label_of
+        job = jobs.Job("smaller", title=f"Making {label_of(name)} smaller")
+        job.target = {"kind": "voice", "name": name, "display": label_of(name)}
         jobs.JOBS[job.id] = job
 
         def run(job):
@@ -401,7 +403,9 @@ def start(kind: str, name: str) -> dict:
         from ..doubleagent.api import ACTIVE, _busy
         if not (_child(_projects_dir(), name) / "project.json").exists():
             raise ModelError("That project isn't there any more.")
-        job = jobs.Job("smaller", title=f"Making the {name} project smaller")
+        person = (_read(_child(_projects_dir(), name) / "project.json", {}) or {}).get("person") or ""
+        job = jobs.Job("smaller", title=f"Making {person}'s project smaller" if person else f"Making the {name} project smaller")
+        job.target = {"kind": "project", "name": name, "display": person or name}
         if _busy(name):
             raise ModelError("That project is busy. Try again when it's done.")
         ACTIVE[name] = {"job": job, "control": None, "kind": "smaller"}   # Train more and Transcribe wait for it

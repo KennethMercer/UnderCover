@@ -67,6 +67,8 @@ ROUTES = [
      "phone", "the training steps"),
     ("GET", rf"/api/train/voices/{_ID}/cadence(/sample/(current|pending))?", "phone", "Keep this one: the two readings"),
     ("POST", rf"/api/train/voices/{_ID}/cadence/(ab|verdict)", "phone", "Keep this one: listen and choose"),
+    ("GET", rf"/api/train/voices/{_ID}/improved", "phone", "an improved voice waiting: the two readings"),
+    ("POST", rf"/api/train/voices/{_ID}/improved/(ab|keep|undo)", "phone", "an improved voice: listen, keep, undo"),
     # SpeakEasy
     ("GET", r"/api/speak/(voices|readers|recent|plan)", "phone", "speech page data"),
     ("POST", r"/api/speak|/api/speak/(cadence|newvoice)", "phone", "make speech"),
