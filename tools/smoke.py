@@ -1282,7 +1282,7 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "safehouse/smaller.py::keep_voice::remove_files", "safehouse/smaller.py::_drop_readings::remove_files",
     "safehouse/smaller.py::undo_voice::remove_files", "safehouse/smaller.py::keep_project::remove_files",
     "safehouse/smaller.py::undo_project::remove_files", "safehouse/smaller.py::restore_full_index::remove_files",
-    "safehouse/smaller.py::expire_full_indexes::remove_files", "speakeasy/roll_off::remove_files",
+    "safehouse/smaller.py::expire_full_indexes::remove_files", "speakeasy/speak.py::roll_off::remove_files",
 }
 
 
@@ -1307,7 +1307,7 @@ def _deleters() -> set:
                     name = fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else None
                     where = f"{f.relative_to(root).as_posix()}::{'.'.join(stack) or '<module>'}::{name}"
                     if name == "remove_files":
-                        out.add(where if not where.startswith("speakeasy/speak.py") else "speakeasy/roll_off::remove_files")
+                        out.add(where)
                     elif name in ("rmtree", "remove_voice", "remove_tree"):
                         out.add(f"{where}::{ast.unparse(node.args[0]) if node.args else ''}")
                 super().generic_visit(node)
@@ -1390,6 +1390,16 @@ def u_export_lands():
             # 3. the user's "Replace my voice" (confirmed): it takes the name, the old one set aside with Undo
             improved.keep("morgan-freeman-uc", "current")                       # (the waiting one decided first)
             save(5, b"new-model-2")
+            from undercover.core import jobs as J
+            busy = J.Job("cover", title="Hold On · Morgan")                     # a cover reading with it: the replace waits
+            busy.voices = {"morgan-freeman-uc"}
+            J.JOBS[busy.id] = busy
+            try:
+                refused(lambda: T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True,
+                                               confirmed=True), "using")
+            finally:
+                busy.finish("done")
+            assert (cur / "model.pth").read_bytes() == b"m-morgan-freeman-uc"
             v = T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True, confirmed=True)
             assert v.name == "morgan-freeman-uc" and (v.dir / "model.pth").read_bytes() == b"new-model-2"
             assert (v.dir / "tts" / "ref.wav").read_bytes() == b"cadence", "the cadence didn't carry over"
