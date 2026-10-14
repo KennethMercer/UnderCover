@@ -453,10 +453,15 @@ def start_auto(name: str, b: dict):
 
 
 def _pause(h, proj, b):
+    """Pause this project's work and hold it (the queue doesn't start it again by itself; Resume does)."""
+    from ..core import worklist
     a = _busy(proj.name)
-    if not a or not a["control"]:
+    if not a:
         raise ModelError("This voice isn't training right now.")
-    a["control"].pause = True
+    if a["control"]:
+        a["control"].pause = True   # (hold_one finds it through the job too; set here first for a job without one)
+        a["job"].control = a["job"].control or a["control"]
+    worklist.hold_one(a["job"])
     h._json({"ok": True})
 
 
