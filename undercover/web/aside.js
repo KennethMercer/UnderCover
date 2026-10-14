@@ -14,10 +14,12 @@ function renderAside() {
   if (!AS.list.length) return;
   const total = AS.list.reduce((a, x) => a + (x.size || 0), 0);
   $("#as-say").textContent = `${AS.list.length} set aside · ${gb(total)}`;
+  // rows that read the same (two copies of one voice) get the folder name beside them, in basic view too
+  const same = x => AS.list.filter(y => (y.display || y.voice) === (x.display || x.voice)).length > 1;
   box.innerHTML = `<p class="vt-lead">When a voice is replaced or you keep the other one, the old voice is moved here, never deleted. Delete only what you're sure you won't want back.</p>`
     + AS.list.map(x => {
       const asking = AS.ask === x.id;
-      return `<div class="vt-row aside-row"><span><b>${esc(x.display || x.voice)}</b><small class="meta">${esc(x.why || "set aside")} · ${esc(when(x.at))}</small>
+      return `<div class="vt-row aside-row"><span><b>${esc(x.display || x.voice)}</b>${same(x) ? `<small class="meta mono">${esc(x.voice)}</small>` : ""}<small class="meta">${esc(x.why || "set aside")} · ${esc(when(x.at))}</small>
         ${asking && x.undo_for ? `<small class="meta aside-warn">Undo for ${esc(voiceDisplay(x.undo_for))} won't be able to bring it back.</small>` : ""}</span>
         <span class="row"><span class="meta mono">${gb(x.size || 0)}</span>
         <button class="btn" type="button" data-aside-back="${esc(x.id)}" data-pc>Bring it back</button>
