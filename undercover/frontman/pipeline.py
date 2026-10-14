@@ -403,6 +403,45 @@ def cancel_presep(keep=None):
         if j.kind == "presep" and not j.finished and getattr(j, "presep", None) != keep:
             j.cancel = True
 
+def blend_left(planned: float, elapsed: float, frac: float) -> float:
+    """Seconds left in a step from its estimate (planned) and its own progress: the estimate at first, the measured
+    rate taking over as the step gets going. Internal Affairs P3-4: a convert's slow first second extrapolated alone
+    read 20 s -> 184 s -> 18 s left."""
+    plan_left = max(planned * (1 - frac), planned - elapsed, 0.0)
+    if frac <= 0.05 or elapsed <= 0:
+        return plan_left
+    w = min(1.0, (frac - 0.05) / 0.25)
+    return w * (elapsed / frac * (1 - frac)) + (1 - w) * plan_left
+
+
+class Countdown:
+    """A job's time left from its estimate per stage ({stage: seconds}, stages in order): this stage's blend_left
+    plus the later stages' estimates. left(stage, frac) -> (stage_left, total_left), or None for a stage it doesn't
+    know."""
+
+    def __init__(self, est: dict, order: tuple = ("separating", "converting", "mixing")):
+        self.est, self.order, self.stage, self.t = est, order, None, time.perf_counter()
+
+    def left(self, stage: str, frac: float, now: float | None = None):
+        now = time.perf_counter() if now is None else now
+        if stage != self.stage:
+            self.stage, self.t = stage, now
+        if stage not in self.order:
+            return None
+        here = blend_left(float(self.est.get(stage) or 0), now - self.t, frac)
+        later = sum(float(self.est.get(s) or 0) for s in self.order[self.order.index(stage) + 1:])
+        return round(here, 1), round(here + later, 1)
+
+
+def preview_estimate(song: Path, opts: CoverOptions, variants: int, seconds: float = 15.0) -> dict:
+    """Expected seconds for a preview: the song's separation (0 when cached) and the versions' rendering (a short
+    excerpt each, plus cutting and the fit)."""
+    full = estimate(song, opts)
+    clip = estimate_for(seconds, opts)
+    render = variants * (clip["converting"] + clip["mixing"]) + 2.0 + (3.0 if opts.fit else 0.0)
+    return {"separating": full["separating"], "rendering": round(render, 1), "total": round(full["separating"] + render, 1)}
+
+
 def estimate(song: Path, opts: CoverOptions) -> dict:
     """Expected seconds per stage for this song, from measured speeds in logs/timings.jsonl
     (falls back to Phase 5 measurements). Separation is 0 when stems are cached."""

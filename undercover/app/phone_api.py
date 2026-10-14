@@ -70,7 +70,8 @@ ROUTES = [
     ("GET", rf"/api/train/voices/{_ID}/improved", "phone", "an improved voice waiting: the two readings"),
     ("POST", rf"/api/train/voices/{_ID}/improved/(ab|keep|undo)", "phone", "an improved voice: listen, keep, undo"),
     # SpeakEasy
-    ("GET", r"/api/speak/(voices|readers|recent|plan)", "phone", "speech page data"),
+    ("GET", r"/api/speak/(voices|readers|recent|plan|estimate)", "phone", "speech page data"),
+    ("POST", r"/api/speak/estimate", "phone", "how long a speech would take"),
     ("POST", r"/api/speak|/api/speak/(cadence|newvoice)", "phone", "make speech"),
     ("POST", rf"/api/speak/{_ID}/(rename|keep|unkeep)", "phone", "rename / keep speech"),
     ("DELETE", rf"/api/speak/{_ID}", "phone", "remove speech (the page asks twice)"),

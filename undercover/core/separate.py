@@ -86,12 +86,22 @@ def _sync():
 QUALITY = {"fast": 2, "high": 4, "max": 8}  # preset -> Roformer overlap
 
 
+_HASHES: dict = {}   # (path, size, mtime) -> hash: a song is read once per version of the file
+
+
 def file_hash(p: Path) -> str:
+    st = Path(p).stat()
+    key = (str(Path(p).resolve()), st.st_size, st.st_mtime_ns)
+    if key in _HASHES:
+        return _HASHES[key]
     h = hashlib.sha256()
     with open(p, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
-    return h.hexdigest()[:16]
+    if len(_HASHES) > 512:
+        _HASHES.clear()
+    _HASHES[key] = h.hexdigest()[:16]
+    return _HASHES[key]
 
 
 def stem_files(d: Path) -> list:

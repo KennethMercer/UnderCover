@@ -472,7 +472,11 @@ def check_voice_name(proj, vname: str, replace: str | None = None):
     """A training never writes over another person's voice: a name already taken by a voice that isn't this project's
     is refused here, before any work (export refuses it too). replace: the one voice this run may replace on purpose
     (an overnight improve's own voice, a downloaded one included)."""
-    from ..core.voices import voices_dir
+    from ..core.voices import label_of, pending_candidate, voices_dir
+    owner = pending_candidate(vname)
+    if owner:   # an unheard retrained voice (Internal Affairs P3-2): not even this project's own run writes over it
+        raise ModelError(f"\"{vname}\" is the retrained {label_of(owner)} waiting to be heard. Give this training its own "
+                         "name, or keep or set aside the waiting one first (DoubleAgent, its voice card).")
     if replace and vname == replace:
         return
     d = voices_dir() / vname
