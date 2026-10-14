@@ -7,7 +7,7 @@ pickers for the queue: candidates (voices that can be improved) and lookup (name
 import json
 
 from ..core.config import CONFIG, path
-from ..core.voices import ModelError, slug
+from ..core.voices import ModelError, label_of, slug
 from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
@@ -67,7 +67,7 @@ def _project_for_item(item: dict, create: bool):
             from ..core.voices import get_voice, is_demo
             v = get_voice(item["target"])
             if is_demo(v):
-                raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
+                raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
             name = (v.extra or {}).get("project")
             if name:
                 try:
@@ -330,7 +330,7 @@ def _improve_target(target: str) -> str:
     from ..core.voices import get_voice, is_demo
     v = get_voice(target)   # friendly error if it doesn't exist
     if is_demo(v):
-        raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
+        raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
                          "of to improve it.")
     return v.name
 

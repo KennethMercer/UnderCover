@@ -313,7 +313,8 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
     d = speech_dir()
     sid = uuid.uuid4().hex[:10]
     title = _title(text)
-    stem = _safe(f"{title.rstrip('…')} ({p['voice']})") or sid
+    from ..core.voices import label_of
+    stem = _safe(f"{title.rstrip('…')} ({label_of(p['voice'])})") or sid   # the id stays in the record
     base = stem
     for k in range(2, 1000):
         if not any((d / f"{stem}{ext}").exists() for ext in (".flac", ".wav", ".mp3")):

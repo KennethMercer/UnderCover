@@ -12,6 +12,7 @@ from typing import Callable
 
 from ..core import tray
 from ..core.config import CONFIG, path
+from ..core.voices import label_of
 from . import history as hstore
 
 
@@ -95,14 +96,14 @@ class CoverEngine:
         ex = voice.extra or {}
         rng = ex.get("f0_range") or ex.get("person_range")   # trained here, or the checked person's range
         if not rng:
-            notes.append(f"Fit to voice: {voice.name} has no measured range yet (voices trained in UnderCover have one, "
+            notes.append(f"Fit to voice: {label_of(voice.name)} has no measured range yet (voices trained in UnderCover have one, "
                          "and voices a one-shot cover checked against a person), so your octave and key were used.")
             return opts
         f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
         speech = ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")
         fit = pick_fit(rng, bool(speech), f0)
         notes.append(f"Fit to voice: octave {fit['octave']:+d}, key {fit['key']:+d} "
-                     f"({fit['outside']:.0%} of the melody outside {voice.name}'s range {rng[0]:.0f}-{rng[2]:.0f} Hz).")
+                     f"({fit['outside']:.0%} of the melody outside {label_of(voice.name)}'s range {rng[0]:.0f}-{rng[2]:.0f} Hz).")
         same_backing = bvoice is not None and bvoice.name == voice.name
         return replace(opts, octave=fit["octave"], key=fit["key"], pitch=None,
                        backing_octave=fit["octave"] if same_backing else opts.backing_octave)
@@ -139,7 +140,7 @@ class CoverEngine:
         if opts.fit:
             opts = self._fit(opts, voice, stems, notes, bvoice)
 
-        report("converting", 0.0, f"Converting the vocal to {voice.name}")
+        report("converting", 0.0, f"Converting the vocal to {label_of(voice.name)}")
         t = time.perf_counter()
         s = Settings()
         for k in ("index_ratio", "protect", "volume_envelope", "pitch_cleanup", "pitch_correction"):
@@ -175,7 +176,7 @@ class CoverEngine:
             bvoice = None
         lead_share = 0.5 if bvoice else 1.0
         audio, sr = self.converter.convert(load_16k(cstems["vocals"]), voice.name, s,
-                                           progress=lambda f: report("converting", f * lead_share, f"Converting the lead vocal to {voice.name}"))
+                                           progress=lambda f: report("converting", f * lead_share, f"Converting the lead vocal to {label_of(voice.name)}"))
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
         # 24-bit FLAC: ~half the size of float WAV, far below audible precision (kept for "vocal only" downloads)
@@ -187,7 +188,7 @@ class CoverEngine:
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
             bs = replace(s, pitch=key + 12 * boct)
             baudio, bsr = self.converter.convert(load_16k(cstems["backing"]), bvoice.name, bs,
-                                                 progress=lambda f: report("converting", 0.5 + 0.5 * f, f"Converting the backing vocals to {bvoice.name}"))
+                                                 progress=lambda f: report("converting", 0.5 + 0.5 * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
@@ -199,7 +200,8 @@ class CoverEngine:
         for k in ("reverb", "vocal_db", "backing_db", "format", "polish"):
             if getattr(opts, k) is not None:
                 setattr(ms, k, getattr(opts, k))
-        names = voice.name + (f" + {bvoice.name}" if bvoice and bvoice.name != voice.name else "")
+        # the file people download says who sings, as the pages name them (the voice ids stay in the history)
+        names = label_of(voice.name) + (f" + {label_of(bvoice.name)}" if bvoice and bvoice.name != voice.name else "")
         out = out or _unique(path("output_dir") / f"{_safe(title)} ({names})", ms.format)
         final = remix(cstems["instrumental"], conv_path, cstems["vocals"], out, song=song,
                       backing=conv_backing or cstems.get("backing"), s=ms,

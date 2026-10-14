@@ -19,7 +19,7 @@ import numpy as np
 
 from ..core import gpu, jobs, worklist
 from ..core.config import path
-from ..core.voices import ModelError
+from ..core.voices import ModelError, label_of
 from . import ambiguity
 from .fit import pick_fit, pick_octave
 from ..doubleagent.service import (_prefetch_voice_sources, installed_for, resolve_voice, subject_of, voice_f0,
@@ -467,7 +467,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     def cprog(stage, frac, msg):
         a, b = stage_w.get(stage, (0.95, 1.0))
         push("cover", a + (b - a) * frac, msg or stage.capitalize())
-    push("cover", 0.0, f"Making the cover with “{v.name}”")
+    push("cover", 0.0, f"Making the cover with {label_of(v.name)}")
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
     item = next((h for h in history_items() if h["id"] == res.id), None)
     job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
