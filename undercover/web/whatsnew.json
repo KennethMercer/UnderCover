@@ -2,6 +2,16 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-14-retrained",
+      "date": "2026-10-14",
+      "title": "A retrained voice waits for your ear",
+      "lines": [
+        "When Improve tonight retrains a voice, the new one waits beside the old. Hear both read the same line, blind, and keep the one you like.",
+        "Nothing is deleted: the other is set aside, and Undo brings it back.",
+        "Preview and cover progress now says what it's doing (the vocal split, lead and backing, reverb) and how long is left."
+      ]
+    },
+    {
       "id": "2026-10-14-qa2",
       "date": "2026-10-14",
       "title": "Small fixes from Internal Affairs",
