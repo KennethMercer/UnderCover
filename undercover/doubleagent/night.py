@@ -124,7 +124,7 @@ def _person_from_voice(v) -> str:
 def candidates() -> list:
     """Voices for the "Improve my voices" picker: what each was trained on, its last measured likeness, what an
     improve would do and roughly how long it takes."""
-    from ..core.voices import list_voices, voice_info
+    from ..core.voices import listed_voices, voice_info
     from . import service
     queued = {(i["kind"], i["target"].lower()) for i in worklist._state()["queue"] if i["state"] in ("queued", "paused", "running")}
     try:
@@ -132,7 +132,7 @@ def candidates() -> list:
     except (OSError, ValueError):
         qcache = {}
     out = []
-    for v in list_voices():
+    for v in listed_voices():
         ex = v.extra or {}
         c = {"voice": v.name, **voice_info(v), "minutes": ex.get("train_minutes"),
              "singing": None if ex.get("from_speech") is None else not ex.get("from_speech"), "likeness": None}
