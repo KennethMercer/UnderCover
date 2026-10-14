@@ -144,6 +144,22 @@ def pause_all(resume_after_restart: bool = False, by: str = "you") -> dict:
     return status()
 
 
+def hold_one(job, by: str = "you") -> dict:
+    """Pause ONE job and hold, as pause_all does (Internal Affairs P2-2: DoubleAgent's project Pause set only the
+    trainer's flag, so the queue loop started the work again 17 s later). The other running work isn't touched."""
+    with _LOCK:
+        st = _state()
+        st["held"] = True
+        st["held_by"] = by
+        _save()
+        _log(f"pause one: {job.kind} {(getattr(job, 'resume_spec', None) or {}).get('label')}")
+        job.pausing = True
+        ctl = job.control or next((c for c in (look(job) for look in CONTROL_LOOKUPS) if c is not None), None)
+        if ctl is not None:
+            ctl.pause = True
+    return status()
+
+
 def remember(job):
     """Called when a job ends as "paused": keep how to start it again."""
     spec = getattr(job, "resume_spec", None)
