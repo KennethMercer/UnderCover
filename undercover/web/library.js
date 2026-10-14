@@ -477,18 +477,35 @@ $("#lib-clean-btn").onclick = async () => {
   let g;
   try { g = await api("/api/library/cleanup"); } catch (e) { return showError(e.message); }
   const keys = Object.keys(g).filter(k => g[k].count);
+  // a group frees space (size) or moves voices to Set aside (aside, aside_size): nothing a voice is deleted here, so its size is "moved", not "freed"
+  const rowsOf = x => (x.aside || []).map(a => `<small>${esc(a.display || a.voice)}<span data-deep> (${esc(a.voice)})</span> goes to Set aside: the same model as ${esc(a.keeps_display || a.keeps)}${a.because ? `, kept because ${esc(a.because)}` : ""}</small>`).join("");
   $("#lib-clean-list").innerHTML = keys.length ? keys.map(k => `<label class="crow"><input type="checkbox" data-g="${k}" ${g[k].default ? "checked" : ""}>
-      <span><b>${esc(g[k].title)}</b><small>${esc(g[k].detail)}</small></span><span class="mono">${gb(g[k].size)}</span></label>`).join("")
+      <span><b>${esc(g[k].title)}</b>${g[k].aside?.length ? rowsOf(g[k]) : `<small>${esc(g[k].detail)}</small>`}</span>
+      <span class="mono">${g[k].aside_size ? `moved ${gb(g[k].aside_size)}` : gb(g[k].size)}</span></label>`).join("")
     : `<p class="meta">Nothing to clean up right now.</p>`;
-  const total = () => keys.filter(k => $(`[data-g=${k}]`).checked).reduce((a, k) => a + g[k].size, 0);
+  const sum = f => keys.filter(k => $(`[data-g=${k}]`).checked).reduce((a, k) => a + (g[k][f] || 0), 0);
   const go = $("#lib-clean-go");
-  const upd = () => { go.textContent = `Free ${gb(total())}`; go.disabled = !total(); };
+  const upd = () => {
+    const free = sum("size"), moved = sum("aside_size");
+    go.textContent = free && moved ? `Free ${gb(free)} and move ${gb(moved)} to Set aside` : moved ? `Move ${gb(moved)} to Set aside` : `Free ${gb(free)}`;
+    go.disabled = !free && !moved;
+  };
   $$("#lib-clean-list input").forEach(i => i.onchange = upd);
   upd(); panel.hidden = false;
   go.onclick = async () => {
     const groups = keys.filter(k => $(`[data-g=${k}]`).checked);
     go.disabled = true; go.textContent = "Freeing…";
-    try { const r = await api("/api/library/cleanup", { json: { groups } }); panel.hidden = true; showError(`Freed ${gb(r.freed)}.`, "Cleaned up", null, true); afterChange(); }
+    try {
+      const r = await api("/api/library/cleanup", { json: { groups } }); panel.hidden = true;
+      // freed: space given back. set_aside: voices moved to Set aside (nothing deleted; Bring it back is there). skipped: what was left, and why
+      const name = x => typeof x === "string" ? voiceDisplay(x) : (x.display || voiceDisplay(x.voice) || "");
+      const moved = Array.isArray(r.set_aside) ? r.set_aside : [], skipped = Array.isArray(r.skipped) ? r.skipped : [];
+      const say = [r.freed ? `Freed ${gb(r.freed)}.` : "",
+        moved.length ? `Set aside: ${moved.map(name).join(", ")}. Bring it back, or delete it for good, in Storage > Set aside.` : "",
+        skipped.length ? `Left alone: ${skipped.map(s => `${name(s)}${s.why ? ` (${s.why})` : ""}`).join("; ")}.` : ""].filter(Boolean).join(" ");
+      showError(say || "Nothing needed doing.", "Cleaned up", null, true); afterChange();
+      if (typeof asideLoad === "function") asideLoad();
+    }
     catch (e) { showError(e.message, "Couldn't clean up"); upd(); }
   };
 };
