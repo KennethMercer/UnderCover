@@ -405,7 +405,7 @@ $("#q-add-sel").onclick = async () => {
   const chosen = PICK.cands.filter(c => PICK.sel.has(c.voice));
   for (const c of chosen) {
     try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); }
-    catch (e) { showError(e.message, `Couldn't add ${c.voice}`); }
+    catch (e) { showError(e.message, `Couldn't add ${voiceDisplay(c.voice)}`); }
   }
   PICK.sel.clear(); renderQueue(); loadCandidates();
 };

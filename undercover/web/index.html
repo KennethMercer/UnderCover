@@ -132,7 +132,7 @@
       </div>
       <div class="row spread os-sub">
         <div class="ex" id="os-ex"><button type="button">Bohemian Rhapsody by Queen as Obama</button><button type="button">Toxic by Britney Spears as SpongeBob</button><button type="button">acoustic cover of Hello by Adele as Peter Griffin</button></div>
-        <label class="toggle" id="os-train-row"><input type="checkbox" id="os-train"><span>Train a new voice: about 1 hour</span></label>
+        <label class="toggle" id="os-train-row"><input type="checkbox" id="os-train" aria-label="Train a new voice if there isn't one, about 1 hour"><span>Train a new voice: about 1 hour</span></label>
       </div>
       <p class="meta" id="os-plan">Name a song and a voice. UnderCover gets the album version of the song from YouTube, finds (or trains) the voice, and makes the cover with the best settings.</p>
       <div id="auto-choices" hidden></div>
@@ -761,7 +761,7 @@
         <div class="se-field" data-deep><label for="se-nudge">Pitch <output id="se-nudge-out">auto</output></label>
           <input type="range" id="se-nudge" min="-6" max="6" step="0.5" value="0">
           <p id="se-pitch-note">Set from the voice's speaking pitch; nudge it if they sound too high or low.</p></div>
-        <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad"><span>Speak with <span id="se-cad-name">their</span> own cadence</span></label>
+        <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad" aria-label="Speak with their own cadence"><span>Speak with <span id="se-cad-name">their</span> own cadence</span></label>
           <p id="se-cad-note">Their pace and pauses, learned from their clips. Needs a cadence: "Train cadence" on the voice.</p>
           <p class="meta" id="se-cad-deep" data-deep></p></div>
       </div>
