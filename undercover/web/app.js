@@ -66,7 +66,7 @@ async function api(path, opts = {}) {
   catch (e) { throw new Error("Lost contact with UnderCover. Is the UnderCover window still open? Start it again with UnderCover.bat."); }
   if (r.status === 401) { location.replace("/pair"); throw new Error("This phone isn't paired any more."); }   // only phones get 401 (phase 11)
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || `Request failed (${r.status}).`);
+  if (!r.ok) throw Object.assign(new Error(data.error || `Request failed (${r.status}).`), { status: r.status, data });   // the body rides along (a 409 can say more)
   return data;
 }
 // action: optional { label, run } shown as a button in the banner; info: accent stripe instead of red
@@ -166,27 +166,34 @@ function sysStatus(s) {
 }
 // Restart (System room, its GPU alert): the dialog says what happens and holds the button that does it
 $$("[data-restart]").forEach(b => b.onclick = () => showError("Restarting takes about 10 seconds; your songs, voices and history are kept. Voice work pauses and carries on after.",
-  "Restart UnderCover?", { label: "Restart now", run: restartServer }, true));
+  "Restart UnderCover?", { label: "Restart now", run: () => restartServer() }, true));
 let restartShown = false;
 function restartNeeded() {
   if (restartShown) return;
   restartShown = true;
   showError("UnderCover was updated while it was running, so some settings won't take effect until it restarts. " +
             "Restarting takes about 10 seconds; your songs, voices and history are kept.", "Restart needed",
-            { label: "Restart now", run: restartServer }, true);
+            { label: "Restart now", run: () => restartServer() }, true);
 }
-async function restartServer() {
+// now = true: stop the running work and restart at once (the server offers it, in a 409, while work runs)
+async function restartServer(now = false) {
+  now = now === true;
   const btn = $("#err-action");
   btn.disabled = true; btn.textContent = "Restarting…";
   let before = null;
   try { before = (await api("/api/status")).started; } catch (e) {}
   let pausing = false;
-  try { pausing = !!(await api("/api/restart", { method: "POST" })).pausing; }
+  try { pausing = !!(await api("/api/restart", now ? { json: { now: true } } : { method: "POST" })).pausing; }
   catch (e) {
+    if (e.status === 409 && e.data?.now_ok) {   // work is running: wait for it, or stop it and restart now
+      const what = (e.data.busy || []).join(", ");
+      return showError(`${what ? `Running now: ${what}. ` : ""}${e.message}`, "Work is running",
+                       { label: "Restart now (stops running work)", run: () => restartServer(true) }, false);
+    }
     // A server from before this feature has no restart endpoint (404); anything else (e.g. busy) is explained by e.message.
     const old = /not found/i.test(e.message);
     showError(old ? "This copy of UnderCover is too old to restart itself. Start it again with UnderCover.bat or the desktop shortcut." : e.message,
-              "Couldn't restart", old ? null : { label: "Try again", run: restartServer }, !old);
+              "Couldn't restart", old ? null : { label: "Try again", run: () => restartServer() }, !old);
     return;
   }
   $("#err-msg").textContent = pausing
