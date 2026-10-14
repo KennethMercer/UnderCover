@@ -753,33 +753,46 @@ function previewVariants() {
   return [{ polish: false, label: "Polish off" }, { polish: true, label: "Polish on" }];
 }
 function syncPreviewKind() { $$("#preview-kind button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === previewKind)); }
+// each tab keeps its own renders (one set of cards per kind), so a tab never shows another tab's versions
+const PV_INTRO = "Renders 15 seconds of the song (the part with the most singing) a few ways, so you can pick by ear. The first preview of a new song takes about a minute (it separates the song once); after that, a few seconds each.";
+const PV_PICK = "Switch between versions while playing: they stay in sync. Pick one with “Use this”.";
+// "Fit pitch to the voice" picks the octave and key itself, which would make every octave or key version the same
+const pvByHand = kind => !!S.opts.fit && (kind === "octave" || kind === "key");
+const PV_BYHAND = " “Fit pitch to the voice” is on and sets the octave and key itself, so these versions set them by hand; Use this turns the fit off.";
+function showPreviewKind() {
+  $$("#preview-list audio").forEach(a => a.pause());
+  $$("#preview-list .pv-set").forEach(el => { el.hidden = el.dataset.kind !== previewKind; });
+  if (S.job) return;   // a render is running: its own progress line owns the status
+  const set = $(`#preview-list .pv-set[data-kind="${previewKind}"]`);
+  $("#preview-status").textContent = (set ? PV_PICK : PV_INTRO) + (pvByHand(previewKind) ? PV_BYHAND : "");
+}
 $("#preview-kind").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
-  previewKind = b.dataset.v; store.set("uc-preview-kind", previewKind); syncPreviewKind();
+  previewKind = b.dataset.v; store.set("uc-preview-kind", previewKind); syncPreviewKind(); showPreviewKind();
 });
 $("#preview-btn").onclick = () => {
-  $("#preview").hidden = false; syncPreviewKind();
+  $("#preview").hidden = false; syncPreviewKind(); showPreviewKind();
   $("#preview").scrollIntoView({ block: "nearest", behavior: "smooth" });
 };
 $("#preview-close").onclick = () => { $$("#preview-list audio").forEach(a => a.pause()); $("#preview").hidden = true; };
 
 $("#preview-go").onclick = async () => {
   if (!S.song || !S.voice || S.job || S.osBusy) return;
-  const variants = previewVariants();
+  const variants = previewVariants(), kind = previewKind, byHand = pvByHand(kind);
   $$("#preview-list audio").forEach(a => a.pause());
-  $("#preview-list").innerHTML = "";
+  $$(`#preview-list .pv-set[data-kind="${kind}"]`).forEach(el => el.remove());
   $("#preview-go").disabled = true;
   $("#preview-bar").hidden = false; $("#preview-bar i").style.width = "0%";
   $("#preview-status").textContent = "Starting…";
   try {
-    const { job } = await api("/api/preview", { json: { song: S.song.id, voice: S.voice, options: S.opts, variants } });
+    const { job } = await api("/api/preview", { json: { song: S.song.id, voice: S.voice, options: byHand ? { ...S.opts, fit: false } : S.opts, variants } });
     S.job = job; summary();
     const stop = watchJob(job, ev => {
       if (ev.message) $("#preview-status").textContent = ev.message;
       if (ev.frac != null) $("#preview-bar i").style.width = Math.round((ev.stage === "rendering" ? 0.3 + 0.7 * ev.frac : 0.3 * ev.frac) * 100) + "%";
       if (!ev.final) return;
       stop(); S.job = null; summary(); $("#preview-go").disabled = false; $("#preview-bar").hidden = true;
-      if (ev.state === "done") { renderPreviews(ev.previews); refreshEstimate(); }
+      if (ev.state === "done") { renderPreviews(ev.previews, kind, byHand); refreshEstimate(); }
       else if (ev.state === "cancelled") $("#preview-status").textContent = "Cancelled.";
       else { $("#preview-status").textContent = ""; showError(ev.message, "Preview failed"); }
     });
@@ -789,9 +802,10 @@ $("#preview-go").onclick = async () => {
   }
 };
 
-function renderPreviews(list) {
-  $("#preview-status").textContent = "Switch between versions while playing: they stay in sync. Pick one with “Use this”.";
-  const box = $("#preview-list");
+function renderPreviews(list, kind, byHand) {
+  const box = document.createElement("div");   // this tab's cards; display: contents keeps them in the grid
+  box.className = "pv-set"; box.dataset.kind = kind;
+  $("#preview-list").append(box);
   box.innerHTML = list.map((p, i) => `
     <div class="pcard" data-i="${i}">
       <div class="ptitle"><button class="play" aria-label="Play ${esc(p.label)}">▶</button><b>${esc(p.label)}</b></div>
@@ -799,6 +813,7 @@ function renderPreviews(list) {
       <audio preload="auto" src="${esc(p.url)}"></audio>
     </div>`).join("");
   applyVolume();
+  showPreviewKind();
   const cards = $$(".pcard", box), audios = cards.map(c => $("audio", c));
   let pos = 0;
   cards.forEach((card, i) => {
@@ -815,7 +830,7 @@ function renderPreviews(list) {
     a.addEventListener("pause", () => { card.classList.remove("playing"); $(".play", card).textContent = "▶"; pos = a.currentTime; });
     a.addEventListener("ended", () => { pos = 0; });
     $(".use", card).onclick = () => {
-      Object.assign(S.opts, list[i].options); store.set("uc-opts", S.opts); syncControls(); summary(); refreshEstimate();
+      Object.assign(S.opts, list[i].options); if (byHand) S.opts.fit = false; store.set("uc-opts", S.opts); syncControls(); summary(); refreshEstimate();
       $$(".use", box).forEach(b => b.textContent = "Use this"); $(".use", card).textContent = "✓ Using this";
     };
   });

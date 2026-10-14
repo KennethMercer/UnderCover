@@ -139,6 +139,8 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .prev-top { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .prev-top .seg { flex: 1; min-width: 260px; }
 .prev-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.pv-set { display: contents; }
+.pv-set[hidden] { display: none; }
 .pcard { border: 1px solid var(--line); border-radius: 9px; padding: 12px; display: grid; gap: 10px; background: var(--panel-2); }
 .pcard.playing { border-color: var(--accent); }
 .pcard .ptitle { display: flex; align-items: center; gap: 10px; }
