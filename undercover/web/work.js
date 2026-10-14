@@ -250,8 +250,9 @@ async function loadQueue() {
   renderQueue();
 }
 const jobWhat = i => ({ improve: `Improve ${esc(i.display || i.target)}`, cadence: `Cadence for ${esc(i.display || i.target)}`,
-                        newcad: `New voice with cadence: ${esc(i.target)}` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
-const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence" })[i.kind] || esc(i.kind);
+                        newcad: `New voice with cadence: ${esc(i.target)}`,
+                        project: `Training ${esc(i.display || i.target)} (your choices)` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
+const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence", project: "voice · your choices" })[i.kind] || esc(i.kind);
 // the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
 function renderDrawer() {
   renderRunning($("#qd-run"), { heading: "Running now" });
