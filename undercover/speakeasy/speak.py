@@ -79,7 +79,9 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
     if pack and cadence is not False and pack_ready(pack.get("engine", "chatterbox")):
         eng = reading_engine(pack.get("engine", "chatterbox"))   # a Chatterbox-family pack reads with the default of them
         info = engine_info(eng)
-        return {"voice": v.name, "mode": "cadence", "engine": eng, "engine_name": info["name"],
+        rate = (info.get("pace_ref_rate") or {}).get(pace)   # Turbo: Slower reads from a slowed reference (not cfg_weight)
+        return {"voice": v.name, "mode": "cadence", "engine": eng, "engine_name": info["name"], "ref_rate": rate,
+                "paced_by": "reference" if rate else "gaps" if pace != "natural" and "pace_ref_rate" in info else "engine",
                 "rtf": info["rtf"], "person": (v.extra or {}).get("person") or pack.get("project"),
                 "reader": None, "auto": True, "reader_label": None, "reader_hz": None,
                 "target_hz": sp and sp["hz"], "target_low": sp and sp["low"], "pitch_from": sp and sp["how"],
@@ -241,7 +243,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
     sents = render.join_short(sents)   # a sentence of a word or two is read with its neighbour (no stray sound before it)
     v = get_voice(p["voice"])
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
-    ref = service.cadence_ref(v)
+    ref = render.paced_ref(service.cadence_ref(v), p.get("ref_rate"))
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents],
              start_after=min(START_AFTER, len(sents)), total_left=round(tts.seconds_estimate(text) / p["rtf"] + 5, 1))
     conv = gpu.MODELS.converter
@@ -277,7 +279,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
                 listenback.write_log(entry)
                 t_lb += entry.get("seconds", 0.0)
             t = time.perf_counter()
-            y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0))
+            y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0), engine=p.get("engine"))
             y = _level(y)
             t_rvc += time.perf_counter() - t
             pause = 0.0 if s["pause"] == 0 else (p["para_gap_s"] if s["pause"] >= 0.5 else p["gap_s"])
