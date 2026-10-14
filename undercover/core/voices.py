@@ -490,14 +490,27 @@ def set_aside(d: Path, tag: str = "", note: dict | None = None) -> Path:
     fsutil.retry(lambda: os.replace(d, dst))
     if (dst / "meta.json").exists():
         os.replace(dst / "meta.json", dst / "meta.json.aside")
-    if note and (dst / "meta.json.aside").exists():
-        try:
+    if (dst / "meta.json.aside").exists():
+        try:   # why, and the name people knew it by (out of the lists, its default display can't be worked out later)
             meta = json.loads((dst / "meta.json.aside").read_text(encoding="utf-8"))
-            meta.setdefault("extra", {})["set_aside"] = {**note, "at": time.strftime("%Y-%m-%d %H:%M")}
+            meta.setdefault("extra", {})["set_aside"] = {"display": display_of_meta(meta), **(note or {}),
+                                                         "at": time.strftime("%Y-%m-%d %H:%M")}
             fsutil.write_text(dst / "meta.json.aside", json.dumps(meta, indent=2))
         except (OSError, ValueError):
             pass   # an unreadable meta: it's still set aside, just without the note
     return dst
+
+
+def display_of_meta(meta: dict) -> str:
+    """A voice's display name from its meta alone (a voice set aside isn't in the lists): the one given, else the
+    default (the person it was trained on, or its tidied name)."""
+    if (meta.get("display") or "").strip():
+        return meta["display"].strip()
+    try:
+        return display_name(Voice(**{**meta, "dir": Path(meta.get("dir") or "."), "pth": Path(meta.get("pth") or "."),
+                                      "index": Path(meta["index"]) if meta.get("index") else None}))
+    except (TypeError, ValueError, KeyError):
+        return meta.get("name") or ""
 
 
 def remove_to_aside(name: str) -> dict:

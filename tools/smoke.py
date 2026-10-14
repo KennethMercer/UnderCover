@@ -1464,6 +1464,7 @@ def u_aside_list():
         items = {x["id"]: x for x in library.aside()}
         kept = next(x for x in items.values() if x["undo_for"])
         assert kept["voice"] == "morgan-freeman-uc" and kept["size"] > 0 and "kept" in kept["why"], kept
+        assert kept["display"] == "Morgan Freeman", kept   # from its meta (set aside by a Keep, no note)
         assert items[odd.name]["why"] == "a replace that didn't finish" and items[odd.name]["undo_for"] is None
         assert items[odd.name]["at"] == "2026-10-01 01:01", items[odd.name]   # from its stamp, not the folder's time
 
@@ -1531,6 +1532,7 @@ def u_remove_aside():
         assert r["with"] and listed_voices() == [] and not (voices_dir() / "morgan-freeman-uc").exists()
         items = {x["id"]: x for x in library.aside()}
         assert items[r["aside"]]["why"] == "you removed it" and "when you removed it" in items[r["with"]]["why"], items
+        assert items[r["aside"]]["display"] == "Morgan Freeman", items[r["aside"]]   # its name, not its id (qa10)
         assert (voices_dir() / ".aside" / r["aside"] / "model.pth").read_bytes() == b"m-morgan-freeman-uc", "not kept"
         h = H()
         SA.handle(h, "POST", f"/api/library/aside/{r['aside']}/restore")    # Bring it back: both, still a pair
