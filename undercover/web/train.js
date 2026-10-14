@@ -346,17 +346,43 @@ function renderTrainForm() {
   const paused = st.state === "paused";
   const btn = $("#tr-start");
   btn.textContent = paused ? "Resume training" : (st.epoch ? "Train again from scratch" : "Start training");
-  btn.disabled = running || T.live?.kind === "prepare" || kept < 1;
-  ["#tr-name", "#tr-length", "#tr-sr"].forEach(s => $(s).disabled = running || paused);
+  const q = p.queued;   // this project is in tonight's queue with its own choices (the server's `queued`)
+  btn.disabled = running || T.live?.kind === "prepare" || kept < 1 || !!q;
+  $("#tr-tonight").hidden = !!q || running || paused; $("#tr-tonight").disabled = T.live?.kind === "prepare" || kept < 1;
+  $("#tr-queued").hidden = !q;
+  if (q) {
+    $("#tr-queued-say").textContent = q.state === "running" ? "· training now, from the queue" : q.state === "paused" ? "· paused; Resume continues it"
+      : q.now ? "· starts as soon as the GPU is free" : "· it trains while the PC is free, with the sources and choices you set here";
+    $("#tr-unqueue").disabled = q.state === "running";
+  }
+  ["#tr-name", "#tr-length", "#tr-sr"].forEach(s => $(s).disabled = running || paused || !!q);
   const steps = p.defaults.steps[$("#tr-length").value] || p.defaults.steps.auto;
   const est = steps * (st.sec_per_step || 0.3) + 60;   // + data preparation
-  $("#tr-start-note").innerHTML = kept < 1 ? "Keep at least 1 minute of samples first."
+  $("#tr-start-note").innerHTML = q ? ""
+    : kept < 1 ? "Keep at least 1 minute of samples first."
     : paused ? `Paused at epoch ${st.epoch}. <button class="linkbtn" id="tr-fresh">Start over instead</button>`
     : running ? "" : `≈ ${Math.max(1, Math.round(est / 60))} min on this GPU`;
   const fresh = $("#tr-fresh");
   if (fresh) fresh.onclick = () => startTraining(true);
 }
 $("#tr-start").onclick = () => startTraining(false);
+// Train tonight (the Deep path): this project, with its ticked sources and these choices, goes into tonight's queue
+$("#tr-tonight").onclick = async () => {
+  const b = $("#tr-tonight"); b.disabled = true;
+  try {
+    await api("/api/work/add", { json: { kind: "project", project: T.proj.name, voice_name: ownName(), length: $("#tr-length").value, sr: +$("#tr-sr").value } });
+    showError(`${T.proj.person || T.proj.name} trains tonight with your choices. SafeHouse's Running room shows it.`, "On it", null, true);
+    if (typeof refreshJobs === "function") refreshJobs(true);
+    await refresh();
+  } catch (e) { b.disabled = false; showError(e.message, "Couldn't queue it"); }
+};
+$("#tr-unqueue").onclick = async () => {
+  const q = T.proj?.queued; if (!q) return;
+  $("#tr-unqueue").disabled = true;
+  try { await api("/api/work/remove", { json: { id: q.id } }); await refresh(); }
+  catch (e) { $("#tr-unqueue").disabled = false; showError(e.message, "Couldn't take it out"); }
+};
+setInterval(() => { if (T.proj?.queued && !$("#view-train").hidden) refresh(); }, 10000);   // the queue starts it on its own: the line follows
 async function startTraining(fresh) {
   const st = T.proj.train || {};
   if (!fresh && st.epoch && st.state !== "paused" && !confirm("Train again from scratch? The saves from the last run are replaced.")) return;

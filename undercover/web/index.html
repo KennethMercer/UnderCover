@@ -480,7 +480,8 @@
           <div class="field" data-deep><span>Starting point</span><span class="meta">RVC v2 base (official)</span></div>
         </div>
         <p class="meta">Covers you start while a voice trains are made right away; training waits for them. Pause any time and resume later.</p>
-        <div class="row"><button class="btn primary big" id="tr-start">Start training</button><span class="meta" id="tr-start-note"></span></div>
+        <div class="row"><button class="btn primary big" id="tr-start">Start training</button><button class="linkbtn" id="tr-tonight" type="button">Train tonight instead</button><span class="meta" id="tr-start-note"></span></div>
+        <p class="meta" id="tr-queued" role="status" hidden><b>Queued for tonight</b> <span id="tr-queued-say"></span> <button class="linkbtn" id="tr-unqueue" type="button">Remove</button></p>
       </div>
       <div class="panel" id="tr-run" hidden>
         <div class="row spread"><h2 id="tr-run-h">Training…</h2><div class="row"><button class="btn" id="tr-pause">Pause</button><button class="btn" id="tr-stop">Stop &amp; keep best</button></div></div>
