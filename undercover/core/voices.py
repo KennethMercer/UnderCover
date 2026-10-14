@@ -525,8 +525,13 @@ def remove_to_aside(name: str, why: str = "you removed it") -> dict:
         raise ModelError(f"{busy[0].title or 'A cover or speech'} is using {label_of(v.name)} right now. Try again when "
                          "it's done (or cancel it).")
     cand = ((v.extra or {}).get("improved_pending") or {}).get("voice")
+    try:   # only the candidate that says it's this voice's (a folder copy carries the original's improved_pending: P7-1)
+        mine = json.loads((voices_dir() / cand / "meta.json").read_text(encoding="utf-8")).get("extra", {}).get(
+            "pending_for") == v.name if cand else False
+    except (OSError, ValueError, AttributeError):
+        mine = False
     with_ = None
-    if cand and (voices_dir() / cand / "meta.json").exists():
+    if mine:
         with_ = set_aside(voices_dir() / cand, note={"why": f"waited beside {label_of(v.name)} when you removed it"}).name
     try:
         a = set_aside(v.dir, note={"why": why, **({"with": with_} if with_ else {})})

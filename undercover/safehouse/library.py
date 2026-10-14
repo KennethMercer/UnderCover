@@ -128,7 +128,7 @@ def _duplicate_voices(hist: list) -> list[dict]:
 
     def why(v):   # what makes this the voice to keep, strongest first
         ex = v.extra or {}
-        cadence = (v.dir / "tts").is_dir() or bool(ex.get("tts"))
+        cadence = bool(ex.get("tts")) or ((v.dir / "tts").is_dir() and any((v.dir / "tts").iterdir()))   # not empty
         records = any(ex.get(k) for k in ("improved_pending", "improved_previous", "improved_turned_down"))
         # the demo voice the First assignment uses is always kept (a copy of it can't send it aside)
         return (is_demo(v) and v.name == DEMO_VOICE, cadence, v.name in exported, bool((v.display or "").strip()),
@@ -368,6 +368,14 @@ def restore_aside(aid: str) -> dict:
     """"Bring it back": a set-aside voice back in the voices. One that an Undo serves goes back through that Undo
     (its voice card), so the two stay a pair."""
     from ..core.voices import bring_back, label_of
+    from .smaller import index_back
+    try:
+        note = ((json.loads((_aside_dir() / aid / "meta.json.aside").read_text(encoding="utf-8")).get("extra") or {})
+                .get("set_aside") or {})
+    except (OSError, ValueError):
+        note = {}
+    if note.get("kind") == "full-index":   # a voice's full index, set aside when it couldn't be rebuilt
+        return index_back(aid)
     owner = _aside_records().get(aid, (None,))[0]
     if owner:
         raise ModelError(f"Use Undo on {label_of(owner)}'s voice card (DoubleAgent) to bring this one back.")

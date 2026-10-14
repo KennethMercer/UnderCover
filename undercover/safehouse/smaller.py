@@ -359,11 +359,66 @@ def expire_full_indexes(now: float | None = None) -> list[str]:
         until = (_read(rec, {}) or {}).get("until")
         if until is None or until > now:
             continue
-        storage.remove_files([d / EXPORT_ASIDE] + ([rec] if rec.exists() else []), within=[vd])
-        print(f"Make smaller: {d.name}'s full index was kept 30 days after it was added and is removed now "
-              f"(its 10k index stays; the full one can be rebuilt from its training project).", flush=True)
+        if _rebuildable(d):
+            storage.remove_files([d / EXPORT_ASIDE] + ([rec] if rec.exists() else []), within=[vd])
+            print(f"Make smaller: {d.name}'s full index was kept 30 days after it was added and is removed now "
+                  f"(its 10k index stays; the full one can be rebuilt from its training project).", flush=True)
+        else:   # its project is gone (Internal Affairs pass 7): nothing could rebuild it, so it's set aside instead
+            _index_aside(d)
+            storage.remove_files([rec] if rec.exists() else [], within=[vd])
+            print(f"Make smaller: {d.name}'s full index is 30 days old and its training project is gone, so it's "
+                  f"set aside (SafeHouse > Storage > Set aside), not removed.", flush=True)
         done.append(d.name)
     return done
+
+
+def _rebuildable(d: Path) -> bool:
+    """Can the voice's full index be rebuilt? Only from its training project's prepared data (export builds it)."""
+    from ..doubleagent.project import projects_dir
+    meta = _read(d / "meta.json", {}) or {}
+    proj = (meta.get("extra") or {}).get("project")
+    if not proj:
+        return False
+    p = projects_dir() / proj
+    return (p / "train" / "data.pt").is_file() or (p / "before-smaller" / "train" / "data.pt").is_file()
+
+
+def _index_aside(d: Path) -> Path:
+    """A voice's kept full index moved to voices/.aside/<voice>-full-index-<stamp>/ with a note (Set aside lists it;
+    Bring it back puts it back as the voice's index)."""
+    from ..core.engine.rvc.index import EXPORT_ASIDE
+    from ..core.voices import display_of_meta
+    meta = _read(d / "meta.json", {}) or {}
+    base = _voices_dir() / ".aside" / f"{d.name}-full-index-{time.strftime('%Y%m%d-%H%M%S')}"
+    dst, n = base, 1
+    while dst.exists():
+        dst, n = base.with_name(f"{base.name}-{n}"), n + 1
+    dst.mkdir(parents=True)
+    storage.move_within([(d / EXPORT_ASIDE, dst / EXPORT_ASIDE)], _voices_dir())
+    disp = display_of_meta(meta) or d.name
+    fsutil.write_text(dst / "meta.json.aside", json.dumps({
+        "name": d.name, "display": "", "extra": {"set_aside": {
+            "kind": "full-index", "for": d.name, "display": f"{disp}: full search index",
+            "why": "its 30 days were over and its training project is gone, so it couldn't be rebuilt",
+            "at": time.strftime("%Y-%m-%d %H:%M")}}}, indent=2))
+    return dst
+
+
+def index_back(aid: str) -> dict:
+    """Bring it back, for a set-aside full index: the voice's index again (in place of the 10k one)."""
+    from ..core.engine.rvc.index import EXPORT_ASIDE
+    a = _voices_dir() / ".aside" / aid
+    note = ((_read(a / "meta.json.aside", {}) or {}).get("extra") or {}).get("set_aside") or {}
+    d = _voices_dir() / (note.get("for") or "")
+    if note.get("kind") != "full-index" or not (d / "meta.json").is_file():
+        raise ModelError("Its voice isn't in your voices any more, so the index can't go back. Bring the voice back first.")
+    if (d / EXPORT_ASIDE).exists():
+        raise ModelError("That voice already has a full index kept.")
+    storage.move_within([(a / EXPORT_ASIDE, d / EXPORT_ASIDE)], _voices_dir())
+    restore_full_index(d.name)
+    storage.remove_files([a / "meta.json.aside"], within=[_voices_dir() / ".aside"])
+    storage.remove_empty(a, _voices_dir() / ".aside")
+    return {"voice": d.name, "with": None}
 
 
 def start_expiry():
