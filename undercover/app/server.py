@@ -480,6 +480,8 @@ class Handler(BaseHTTPRequestHandler):
             # set aside, not deleted (Internal Affairs P5-1): POST /api/library/aside/<aside>/restore brings it back
             r = remove_to_aside(m.group(1))
             gpu.forget_voice(m.group(1))
+            if r.get("with"):
+                gpu.forget_voice(r["with"])
             self._json({"ok": True, **r})
         except ModelError as e:
             self._error(str(e))
