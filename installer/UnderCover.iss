@@ -8,7 +8,7 @@
 ; "Where should UnderCover keep your files?" page (phase 4b).
 
 #define AppName "UnderCover"
-#define AppVersion "0.3.0"
+#define AppVersion "0.4.0"
 
 [Setup]
 AppId={{E6B05D70-0109-4D65-8AEC-89622D0F5C91}
@@ -45,11 +45,14 @@ Source: "setup.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "detect_gpu.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "selftest.py"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ignoreversion
+; The friend-facing briefing (installer/FRIENDS.md): what to expect, Repair, the optional extras, uninstall
+Source: "FRIENDS.md"; DestDir: "{app}"; DestName: "READ ME.md"; Flags: ignoreversion
 
 [Icons]
 ; UnderCover.cmd started from a shortcut runs windowless in the background (quit it from SafeHouse).
 Name: "{group}\{#AppName}"; Filename: "{app}\UnderCover.cmd"; WorkingDir: "{app}"
-Name: "{group}\Repair {#AppName} (re-run setup)"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup.ps1"" -InstallDir ""{app}"" -Force -Pause"; WorkingDir: "{app}"
+; Repair: the Doctor checks the install against its record and setup fixes only what's wrong (files and settings kept)
+Name: "{group}\Repair {#AppName}"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup.ps1"" -InstallDir ""{app}"" -Repair -Pause"; WorkingDir: "{app}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\{#AppName}"; Filename: "{app}\UnderCover.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
 
@@ -72,6 +75,11 @@ Type: filesandordirs; Name: "{app}\cache\keyshift"
 Type: filesandordirs; Name: "{app}\cache\previews"
 Type: filesandordirs; Name: "{app}\cache\stems"
 Type: filesandordirs; Name: "{app}\logs"
+; Away from home (phase 20): Tailscale's binaries (fetched on first use, fetched again if needed) and this PC's node keys
+; (uninstalling ends the private link; the node then shows as offline in the user's Tailscale admin page)
+Type: filesandordirs; Name: "{app}\models\tailscale"
+Type: filesandordirs; Name: "{app}\cache\tailscale-fetch"
+Type: filesandordirs; Name: "{app}\cache\tailscale-state"
 Type: files; Name: "{app}\UnderCover.cmd"
 
 [Code]

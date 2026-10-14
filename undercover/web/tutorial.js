@@ -35,6 +35,7 @@ async function assignBoot() {
   try { s = await api("/api/status"); } catch (e) { return; }
   if (!s.tutorial) return;   // no tutorial backend in this copy: nothing shows
   AS.known = true; AS.done = s.tutorial.done || null;
+  renderDemoOffer(s.tutorial);
   renderAssignSetting();
   if (AS.step > 0) return assignGo(AS.step, false);   // carry on where it was (a reload, a restart)
   if (AS.done) return;
@@ -44,6 +45,58 @@ async function assignBoot() {
     : desk.voice ? "A voice is on your desk; bring a song you like. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own. The voice isn't anyone's."
     : "Bring a song and a voice. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own.";
   $("#assign-brief").hidden = false;
+  greetBoot(!!(desk.song && desk.voice));
+}
+
+// ------------------------------------------------------------ Agent Smoke's greeting on the brief (the backend's clips)
+// GET /api/tutorial/greetings: {greetings: [{from, to, text, url}], followon: {text, url}}. The greeting is picked by the
+// local hour (from inclusive, to exclusive); the follow-on ("A song and a voice are on your desk…") plays after it only
+// when both really are there. A play button only: nothing plays by itself.
+const GREET = { parts: [], audio: null, i: 0 };
+async function greetBoot(full) {
+  let g;
+  try { g = await api("/api/tutorial/greetings"); } catch (e) { return; }
+  const h = new Date().getHours(), pick = (g.greetings || []).find(x => h >= x.from && h < x.to);
+  if (!pick?.url) return;
+  GREET.parts = [pick, full && g.followon?.url ? g.followon : null].filter(Boolean);
+  $("#assign-greet-say").textContent = `“${GREET.parts.map(p => p.text).join(" ")}”`;
+  $("#assign-greet").hidden = false;
+}
+function greetStop() { GREET.audio?.pause(); GREET.audio = null; GREET.i = 0; $("#assign-greet-play").textContent = "▶"; $("#assign-greet-play").setAttribute("aria-label", "Play Agent Smoke's greeting"); }
+function greetPart(i) {
+  const p = GREET.parts[i];
+  if (!p) return greetStop();
+  GREET.i = i;
+  const a = GREET.audio = new Audio(p.url);
+  a.volume = VOL.muted ? 0 : VOL.level; a.muted = VOL.muted;   // the page's own volume
+  a.onended = () => { if (GREET.audio === a) greetPart(i + 1); };
+  a.play().catch(() => greetStop());
+}
+$("#assign-greet-play").onclick = () => {
+  if (GREET.audio && !GREET.audio.paused) return greetStop();
+  if (typeof stopAll === "function") stopAll();
+  $("#assign-greet-play").textContent = "❚❚"; $("#assign-greet-play").setAttribute("aria-label", "Stop the greeting");
+  greetPart(0);
+};
+// the demo voice, refreshed (the backend's demo refresh): a newer Agent Smoke can be swapped in (the old one waits aside,
+// your name for him is kept), and the previous one brought back while it's kept. In the First assignment's Settings row.
+function renderDemoOffer(t) {
+  const box = $("#set-demo");
+  if (!box) return;
+  const up = t?.demo_update || null, prev = !!t?.demo_previous;
+  box.hidden = !up && !prev;
+  const made = up?.made ? new Date(up.made + "T12:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+  box.innerHTML = up ? `A newer ${esc(up.display || "Agent Smoke")} is available${made ? ` (made ${esc(made)})` : ""}. <button class="linkbtn" type="button" data-demo="update">Update</button>`
+    : prev ? `<button class="linkbtn quiet" type="button" data-demo="undo">Go back to the previous Agent Smoke</button>` : "";
+  $$("[data-demo]", box).forEach(b => b.onclick = async () => {
+    const how = b.dataset.demo; b.disabled = true;
+    try {
+      const r = await api(`/api/tutorial/demo/${how}`, { method: "POST" });
+      renderDemoOffer(r.tutorial);
+      if (typeof loadVoices === "function") loadVoices().catch(() => {});
+      showError(how === "update" ? "Agent Smoke is updated. The earlier one waits aside if you'd rather have him back." : "The previous Agent Smoke is back.", "Agent Smoke", null, true);
+    } catch (e) { b.disabled = false; showError(e.message, "Agent Smoke"); }
+  });
 }
 // the sample song (sample: true) and the demo voice (demo: true), if this copy has them
 async function deskNow() {
@@ -150,8 +203,8 @@ function assignClose() {
   reaim();
 }
 $("#assign-skip").onclick = () => { if (!$("#assign").classList.contains("done")) assignMarkDone(); assignClose(); };
-$("#assign-take").onclick = () => assignStart();
-$("#assign-later").onclick = () => { $("#assign-brief").hidden = true; assignMarkDone(); };
+$("#assign-take").onclick = () => { greetStop(); assignStart(); };
+$("#assign-later").onclick = () => { greetStop(); $("#assign-brief").hidden = true; assignMarkDone(); };
 $("#set-assign-replay").onclick = async () => {
   try { await api("/api/tutorial/reset", { method: "POST" }); } catch (e) { return showError(e.message, "Couldn't start the assignment"); }
   AS.done = null; renderAssignSetting();

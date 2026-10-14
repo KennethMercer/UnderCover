@@ -618,6 +618,41 @@ def f0_median(data: dict) -> float | None:
     return round(float(f0.median()), 1) if len(f0) else None
 
 
+def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None = None) -> dict | None:
+    """A new voice's index as k k-means centres ([training] index_centres, default 10k; 0 = off), quietly: the user's
+    blind pairs (phase 24) couldn't tell 10k from full, so nobody is asked to Keep anything. The full index is kept
+    aside under its own name (model.index.full + full-index.json with the date it goes) for EXPORT_KEEP_DAYS: the
+    voice's detail in SafeHouse offers to put it back (Deep Cover) until then; safehouse/smaller.expire_full_indexes
+    removes it after. It's rebuildable from the training project (data.pt), so it isn't the user's data. Never fails an
+    export: when it can't shrink (a busy GPU, an odd index) the full index stays."""
+    from ..core import storage
+    from ..core.engine.rvc.index import ASIDE, EXPORT_ASIDE, EXPORT_KEEP_DAYS, EXPORT_RECORD, shrink
+    k = int(TCFG.get("index_centres", 10000) if k is None else k)
+    idx = Path(vdir) / "model.index"
+    if k <= 0 or not idx.is_file() or (Path(vdir) / ASIDE).exists() or (Path(vdir) / EXPORT_ASIDE).exists():
+        return None
+    tmp = Path(vdir) / "model.index.smaller.tmp"
+    try:
+        before = idx.stat().st_size
+        n0, n1 = shrink(idx, k, dest=tmp, device=device)
+        if n1 >= n0:
+            return None
+        now = time.time()
+        r = {"vectors_before": n0, "vectors_after": n1, "bytes_before": before, "bytes_after": tmp.stat().st_size,
+             "made": time.strftime("%Y-%m-%d %H:%M", time.localtime(now)), "until": now + EXPORT_KEEP_DAYS * 86400}
+        storage.move_within([(idx, Path(vdir) / EXPORT_ASIDE)], Path(vdir))
+        storage.move_within([(tmp, idx)], Path(vdir))
+        fsutil.write_text(Path(vdir) / EXPORT_RECORD, json.dumps(r, indent=1))
+        return r
+    except Exception as e:   # noqa: BLE001 - the voice keeps its full index
+        print(f"The new voice's index stays full (it couldn't be made smaller: {e}).", flush=True)
+        if not idx.exists() and (Path(vdir) / EXPORT_ASIDE).exists():
+            storage.move_within([(Path(vdir) / EXPORT_ASIDE, idx)], Path(vdir))
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def export_voice(proj: Project, epoch: int | None = None, name: str | None = None, overwrite: bool = False):
     """Install a saved epoch (default: best) plus a freshly built index as a normal UnderCover voice."""
     from ..core.voices import install
@@ -629,7 +664,13 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     if not pth.exists():
         raise ModelError(f"There's no save from epoch {epoch}. Pick one of the saves listed.")
     name = slug(name or st.get("voice_name") or proj.name)
-    data = torch.load(tdir / "data.pt", map_location="cpu", weights_only=True)
+    data_pt = tdir / "data.pt"
+    if not data_pt.exists() and (proj.dir / "before-smaller" / "train" / "data.pt").exists():
+        data_pt = proj.dir / "before-smaller" / "train" / "data.pt"   # Make smaller set it aside (phase 24): still there
+    if not data_pt.exists():
+        raise ModelError("This project's prepared data was cleared to save space (SafeHouse, Make smaller). Train more "
+                         "rebuilds it (a few minutes), then this save can be added.")
+    data = torch.load(data_pt, map_location="cpu", weights_only=True)
     feats = index_feats(data).float().numpy()
     if len(feats) > 200_000:  # RVC: shrink very large sets to 10k k-means centres first
         from sklearn.cluster import MiniBatchKMeans
@@ -647,6 +688,8 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
         v.extra["person"] = proj.person.strip()
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     idx.unlink(missing_ok=True)
+    fsutil.link_duplicate(v.pth, pth)   # the exported save is the voice's own model.pth: one copy on disk (phase 24)
+    shrink_exported_index(v.dir)        # 10k centres; the full index aside (the user's ear, phase 24 follow-up)
     st.update(exported=name, exported_epoch=epoch, state="exported")
     (tdir / "resume.pt").unlink(missing_ok=True)   # 1.3 GB; a finished voice doesn't need it (retraining starts fresh)
     # keep the exported save and the two best alternatives (to try another on the Train tab); the rest are 55 MB each

@@ -16,6 +16,13 @@ A route a phone asks for that isn't in the table is refused too (a new route is 
     POST /api/phone/revoke           {id}
     POST /api/phone/claim            {code, name} from the phone -> sets its token cookie (no token needed)
     GET  /pair                       the pairing page (no token needed)
+Away from home (phase 20; core/tailnet.py):
+    GET  /api/away                   the switch and where it's got to (fetching / sign-in / approve / ready + link) (PC)
+    POST /api/away                   {on} switch it on or off (PC)
+    POST /api/away/forget            sign this PC out of Tailscale (PC)
+    POST /api/phone/away/link        a paired phone on the home Wi-Fi asks for its away link (a single-use code)
+    POST /api/phone/away             {code} at the away address: that phone's away token (cookie uc_away, Secure)
+    GET  /away                       the page that redeems the code (no token needed)
 """
 import re
 import threading
@@ -75,6 +82,9 @@ ROUTES = [
     ("GET", rf"/api/library/voices/{_ID}/export", "pc", "Export .zip (Deep Cover)"),
     ("DELETE", rf"/api/library/voices/{_ID}/cadence", "pc", "Delete cadence (Deep Cover)"),
     ("GET|POST", r"/api/library/cleanup", "pc", "Storage: Clean up"),
+    ("GET", r"/api/library/smaller", "pc", "Make smaller: what each voice and project would save"),
+    ("POST", r"/api/library/smaller/(start|keep|undo)", "pc", "Make smaller, Keep, Undo"),
+    ("POST", rf"/api/library/voices/{_ID}/full-index", "pc", "a new voice's full index back (Deep Cover)"),
     ("POST", r"/api/library/tools/ytdlp-(update|auto)", "pc", "the YouTube downloader's update and its switch"),
     ("GET", r"/api/addons|/api/storage", "phone", "the Add-ons and Storage rooms (reading)"),
     ("POST", rf"/api/addons/{_ID}/(install|remove|use)", "pc", "add-on installs"),
@@ -98,9 +108,16 @@ ROUTES = [
     ("DELETE", rf"/api/themes/{_ID}", "pc", "deleting a theme"),
     # the First assignment (the page side; its routes come with the tutorial backend): works at phone width too
     ("POST", r"/api/tutorial/(done|reset)", "phone", "the First assignment's done mark and Replay"),
+    ("POST", r"/api/tutorial/demo/(update|undo)", "phone", "a newer Agent Smoke: Update, and back"),
+    ("GET", r"/api/tutorial/greetings(/[^/]+\.mp3)?", "phone", "Agent Smoke's greeting clips"),
     # Phone access itself
     ("GET|POST", r"/api/phone", "pc", "Phone access settings"),
     ("POST", r"/api/phone/(pair|pair/cancel|revoke)", "pc", "pairing and Revoke"),
+    ("GET|POST", r"/api/away", "pc", "away from home: its switch and its sign-in"),
+    ("POST", r"/api/away/forget", "pc", "sign this PC out of Tailscale"),
+    ("POST", r"/api/phone/away/link", "phone", "a paired phone asks for its away link (on the home Wi-Fi)"),
+    ("POST", r"/api/phone/away", "phone", "redeem the away link (allowed only at the away address, before a token)"),
+    ("GET", r"/away", "open", "the page that redeems the away link"),
 ]
 _COMPILED = [(set(m.split("|")), re.compile(rx), pol, what) for m, rx, pol, what in ROUTES]
 
@@ -120,13 +137,20 @@ _LLOCK = threading.Lock()
 _QR: dict = {}
 
 
-def setup(make_server, port: int):
+def setup(make_server, port: int, make_away=None):
     """Called once at startup: make_server(addr, port) returns a server whose requests are all from the network.
     While Phone access is on, the listener is checked every minute: opened when the PC gets a home-network address after
-    UnderCover started (Wi-Fi comes up after login), moved when the router hands out a new one."""
+    UnderCover started (Wi-Fi comes up after login), moved when the router hands out a new one. make_away: the away
+    listener (phase 20), opened when away from home is on."""
     _L["make"], _L["port"] = make_server, port
+    _A["make"] = make_away
     if phone.enabled():
         listen()
+    if phone.enabled() and phone.away_on():
+        try:
+            away_open()
+        except Exception as e:   # noqa: BLE001 - never block startup; the room shows the problem
+            _A["problem"] = str(e)
 
     def keep():
         while True:
@@ -188,6 +212,48 @@ def url() -> str | None:
     return f"http://{_L['addr']}:{_L['port']}" if _L["srv"] is not None else None
 
 
+# ---------------------------------------------------------------- away from home (phase 20)
+
+_A = {"srv": None, "port": None, "make": None, "problem": None}
+AWAY_PORTS = range(7870, 7880)
+
+
+def away_open():
+    """The away listener on loopback (the first free port of AWAY_PORTS), then Tailscale toward it."""
+    from ..core import tailnet
+    with _LLOCK:
+        if _A["srv"] is None:
+            if _A["make"] is None:
+                raise PhoneError("The server isn't running.", 409)
+            for p in AWAY_PORTS:
+                try:
+                    _A["srv"] = _A["make"]("127.0.0.1", p)
+                    _A["port"] = p
+                    break
+                except OSError:
+                    continue
+            if _A["srv"] is None:
+                raise PhoneError("No free port for away from home (7870-7879).", 409)
+            threading.Thread(target=_A["srv"].serve_forever, daemon=True, name="away-listener").start()
+    tailnet.start(_A["port"])
+
+
+def away_close():
+    from ..core import tailnet
+    tailnet.stop()
+    with _LLOCK:
+        srv, _A["srv"], _A["port"] = _A["srv"], None, None
+        if srv is not None:
+            srv.shutdown()
+            srv.server_close()
+
+
+def away_state() -> dict:
+    from ..core import tailnet
+    return {**tailnet.snapshot(), "listening": _A["srv"] is not None, "port": _A["port"], "problem": _A["problem"],
+            "phone_on": phone.enabled()}
+
+
 def state() -> dict:
     on = phone.enabled()
     if on:
@@ -206,6 +272,12 @@ def state() -> dict:
 # ---------------------------------------------------------------- routes
 
 def handle(h, method: str, p: str) -> bool:
+    if p in ("/api/away", "/api/away/forget"):
+        try:
+            _away_route(h, method, p)
+        except PhoneError as e:
+            h._error(str(e), e.status)
+        return True
     if p != "/api/phone" and not p.startswith("/api/phone/"):
         return False
     try:
@@ -215,9 +287,51 @@ def handle(h, method: str, p: str) -> bool:
     return True
 
 
+def _away_route(h, method, p):
+    if h.remote:
+        raise PhoneError("Away from home is managed on the PC.", 403)
+    from ..core import tailnet
+    if p == "/api/away" and method == "GET":
+        return h._json(away_state())
+    if method != "POST":
+        raise LookupError("Not found")
+    b = h._body()
+    if p == "/api/away":
+        if b.get("on"):
+            if not phone.enabled():
+                raise PhoneError("Switch Phone access on first: away from home carries a phone you've paired at home.", 409)
+            phone.set_away(True)
+            away_open()
+        else:
+            phone.set_away(False)
+            away_close()
+        return h._json(away_state())
+    if p == "/api/away/forget":
+        phone.set_away(False)
+        tailnet.forget()   # first: the logout needs the daemon running
+        away_close()
+        return h._json(away_state())
+    raise LookupError("Not found")
+
+
 def _route(h, method, p):
     if p == "/api/phone/claim" and method == "POST":
         return _claim(h)
+    if p == "/api/phone/away/link" and method == "POST":   # a paired phone, on the home Wi-Fi
+        from ..core import tailnet
+        if not h.remote or getattr(h, "away", False) or h.device is None:
+            raise PhoneError("Ask for the away link from your paired phone, on the home Wi-Fi.", 400)
+        snap = tailnet.snapshot()
+        if not phone.away_on() or not snap["link"]:
+            raise PhoneError("Away from home isn't ready on the PC yet (SafeHouse, Settings, Phone).", 409)
+        h._body()
+        return h._json({"url": f"{snap['link']}/away#{phone.away_code(h.device['id'])}"})
+    if p == "/api/phone/away" and method == "POST":   # at the away address: the code -> this phone's away token
+        if not getattr(h, "away", False):
+            raise PhoneError("Open the away link on the phone itself.", 400)
+        token, dev = phone.redeem_away(str(h._body().get("code") or ""))
+        h.set_cookie = f"{phone.AWAY_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000"
+        return h._json({"ok": True, "device": dev})
     if h.remote:   # the gate refuses these for phones already; never let a phone change Phone access
         raise PhoneError("Phone access is managed on the PC.", 403)
     if p == "/api/phone" and method == "GET":
@@ -232,6 +346,9 @@ def _route(h, method, p):
             threading.Thread(target=warm, daemon=True, name="phone-warm").start()
         else:
             close()
+            if phone.away_on() or _A["srv"] is not None:   # off means nothing reaches this PC from a phone: away too
+                phone.set_away(False)
+                away_close()
         return h._json(state())
     if p == "/api/phone/pair":
         if not listen():

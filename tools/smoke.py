@@ -861,6 +861,149 @@ def u_listenback():
     return "problems found; one word stretched, the rest untouched; clauses split; re-reads on, stretches off"
 
 
+def _fake_ts_set(state_file, **kw):
+    """Change the fake Tailscale's state (signed in, Funnel approved...) through the fake itself: its processes change
+    the same file at the same time, under its lock."""
+    import subprocess
+    subprocess.run([sys.executable, str(ROOT / "tools" / "fake_tailscale.py"), "set", json.dumps(kw)], check=True,
+                   env={**os.environ, "FAKE_TS_STATE": str(state_file)}, timeout=30)
+
+
+@check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
+def u_tailnet():
+    import re
+    from undercover.core import tailnet
+    from undercover.core.voices import ModelError
+    fake = ROOT / "tools" / "fake_tailscale.py"
+    with isolated_data() as box:
+        st = box / "fake-ts.json"
+        os.environ["FAKE_TS_STATE"] = str(st)
+        saved = (dict(tailnet.CMD), dict(tailnet.STATE), tailnet.bin_dir)
+        tailnet.CMD.update(tailscale=[sys.executable, str(fake), "cli"], tailscaled=[sys.executable, str(fake), "daemon"])
+        read = lambda: json.loads(st.read_text(encoding="utf-8")) if st.exists() else {}
+        write = lambda **kw: _fake_ts_set(st, **kw)
+        try:
+            tailnet.STATE.update(want=True, port=7871, phase="off", auth_url=None, approve_url=None, host=None, error="")
+            assert tailnet.tick() == "starting"
+            wait_for(lambda: read().get("daemon"), 20, every=0.2, what="the fake daemon")
+            daemon = next(c for c in read()["calls"] if c[0] == "tailscaled")
+            assert "--tun=userspace-networking" in daemon and any(a.startswith("--statedir=") and str(box) in a for a in daemon), daemon
+            assert tailnet.tick() == "sign-in"
+            wait_for(lambda: tailnet.tick() == "sign-in" and tailnet.STATE["auth_url"], 20, every=0.2, what="the login URL")
+            assert tailnet.STATE["auth_url"].startswith("https://login.tailscale.com/"), tailnet.STATE
+            assert re.fullmatch(r"uc-[a-z]{6}", read()["hostname"]), "the node name isn't a random uc- name"
+            up = next(c for c in read()["calls"] if c[:1] == ["up"])
+            assert "--unattended" in up and "--accept-dns=false" in up, up
+            write(backend="Running", signed_in=True, host="uc-fakeone.tailfake.ts.net")
+            wait_for(lambda: tailnet.tick() == "approve", 20, every=0.2, what="the approval step")
+            assert tailnet.STATE["approve_url"].startswith("https://login.tailscale.com/f/") and tailnet.STATE["host"] == "uc-fakeone.tailfake.ts.net"
+            write(funnel_approved=True)
+            wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="ready")
+            assert read()["funnel_target"] == "http://127.0.0.1:7871", read()
+            assert tailnet.snapshot()["link"] == "https://uc-fakeone.tailfake.ts.net"
+            for bad in (7860, 7862, 7870):   # the PC's own UI, a home listener, any other port: never a funnel target
+                try:
+                    tailnet.funnel_target(bad)
+                    raise AssertionError(f"funnel aimed at {bad}")
+                except ModelError:
+                    pass
+            # after a restart the away listener may have another port: a funnel aimed elsewhere isn't "ready", it's re-aimed
+            write(funnel_target="http://127.0.0.1:7999")
+            assert tailnet.tick() != "ready"
+            wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="the funnel re-aimed")
+            assert read()["funnel_target"] == "http://127.0.0.1:7871", read()
+            name = (tailnet.state_dir() / "uc-name").read_text(encoding="utf-8")
+            # UnderCover exiting: the funnel reset and our daemon gone (none left behind pointing at a dead listener)
+            daemon_proc = tailnet._P["daemon"]
+            resets = read()["calls"].count(["funnel", "reset"])
+            tailnet.at_exit()
+            daemon_proc.wait(10)
+            assert read()["calls"].count(["funnel", "reset"]) == resets + 1 and not read().get("funnel_on")
+            tailnet.stop()
+            r = read()
+            assert r["calls"].count(["funnel", "reset"]) == resets + 2 and ["down"] in r["calls"] and not r.get("funnel_on"), r["calls"][-3:]
+            assert tailnet.snapshot()["phase"] == "off" and tailnet.snapshot()["name"] == name
+            daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+            tailnet.forget()   # with away off: the daemon is started for the logout, then the node's keys gone
+            assert sum(c[0] == "tailscaled" for c in read()["calls"]) == daemons + 1, "forget didn't start the daemon to log out"
+            assert read().get("logged_out") and not tailnet.state_dir().exists(), read()
+            assert tailnet._P["daemon"] is None, "forget left a daemon running"
+            # a download that isn't the pinned file is refused (the checksum), and nothing is installed
+            junk = box / "junk.msi"
+            junk.write_bytes(os.urandom(1000))
+            real = dict(tailnet.MSI)
+            tailnet.MSI["url"] = junk.as_uri()
+            tailnet.CMD.clear()
+            tailnet.bin_dir = lambda: box / "tailscale-bin"   # never the real models/tailscale (it may hold real binaries)
+            try:
+                tailnet.fetch_binaries()
+                raise AssertionError("a wrong MSI was used")
+            except ModelError as e:
+                assert "checksum" in str(e)
+                # in the driver: a failed download waits FETCH_RETRY_S before the next one (never 39 MB every 2 s)
+                tailnet.STATE.update(want=True, port=7871)
+                tailnet._P["fetch_failed"] = 0.0
+                try:
+                    tailnet.tick()
+                    raise AssertionError("the driver used a wrong MSI")
+                except ModelError:
+                    pass
+                tailnet.MSI["url"] = "file:///nonexistent/never-fetched.msi"   # a second download would raise
+                assert tailnet.tick() == "fetching" and tailnet._P["fetch_failed"] > 0
+                tailnet.STATE["want"] = False
+            finally:
+                tailnet.MSI.update(real)
+            assert not tailnet.have_binaries()
+        finally:
+            tailnet.bin_dir = saved[2]
+            tailnet.CMD.clear()
+            tailnet.CMD.update(saved[0])
+            tailnet.STATE.clear()
+            tailnet.STATE.update(saved[1])
+            os.environ.pop("FAKE_TS_STATE", None)
+    return "starting -> sign-in -> approve -> ready; funnel only to the away port; off, forget; wrong download refused"
+
+
+@check("away tokens (phase 20): a paired phone's single-use transfer code becomes an away token; never the home one; codes expire and work once; Revoke ends both")
+def u_phone_away():
+    from undercover.core import phone
+    from undercover.core.phone import PhoneError
+    with isolated_data():
+        phone._FILE[0] = None
+        phone.set_enabled(True)
+        code = phone.new_pairing()["code"]
+        home, dev = phone.claim(code, "Test phone", "192.168.1.50")
+        assert phone.device_for(home) and phone.device_for(home, away=True) is None
+        phone.set_away(True)
+        c = phone.away_code(dev["id"])
+        assert len(c) >= 20
+        away, d2 = phone.redeem_away(c)
+        assert d2["id"] == dev["id"] and away != home
+        assert phone.device_for(away, away=True)["id"] == dev["id"]
+        assert phone.device_for(away) is None and phone.device_for(home, away=True) is None, "home and away tokens mixed"
+        for bad in (c, "x" * 22, ""):   # used once already, made up, empty
+            try:
+                phone.redeem_away(bad)
+                raise AssertionError(f"redeemed {bad!r}")
+            except PhoneError:
+                pass
+        old = phone.away_code(dev["id"])
+        phone._AWAY_CODES[phone.hash_token(old)] = (dev["id"], time.time() - 1)
+        try:
+            phone.redeem_away(old)
+            raise AssertionError("an expired code worked")
+        except PhoneError:
+            pass
+        phone.set_away(False)
+        assert phone.device_for(away, away=True) is None, "away off, yet the away token works"
+        phone.set_away(True)
+        assert "away_hash" not in json.dumps(phone.devices()), "a hash in the public list"
+        phone.revoke(dev["id"])
+        assert phone.device_for(home) is None and phone.device_for(away, away=True) is None
+        phone._FILE[0] = None
+    return "code -> away token; home and away kept apart; once only; expiry; away off; Revoke ends both"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -1279,12 +1422,18 @@ def u_rolloff_covers():
     # the guarded delete's callers: the two roll-offs, and the Doctor's leftovers (phase 10: *.part / *.tmp only, read by
     # MasterPlan), the themes' (phase 14: a library theme's folder, only inside [paths] themes_dir: delete, replace,
     # staging leftovers) and the yt-dlp self-heal's (phase 16: pair and staging folders, only inside <cache>/ytdlp);
-    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover); Vaulting's
-    # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); a new caller must be
-    # added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/tutorial.py", "core/doctor.py", "core/themes.py",
+    # the First assignment's (phase 17: only <voices>/.agent-smoke-seeding, an interrupted seed's leftover; the demo
+    # refresh's: its own .agent-smoke-updating, the previous build it set aside, and on Undo the shipped copy); Vaulting's
+    # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
+    # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
+    # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
+    # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and
+    # expired after its 30 days); a new caller must be added here on purpose
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 4, "core/doctor.py", "core/tailnet.py",
+                                                                        "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py",
-                                                                        "frontman/history.py", "speakeasy/speak.py"], calls
+                                                                        "frontman/history.py", *["safehouse/smaller.py"] * 8,
+                                                                        "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
 
@@ -1299,7 +1448,7 @@ def u_rolloff_speech():
             items = []
             for i in range(15):
                 items.append(_fake_speech(i, speak))
-            wavs = lambda: sorted(p.name for p in speak.speech_dir().glob("*.wav"))
+            wavs = lambda: sorted(p.name for p in speak.speech_dir().iterdir() if p.suffix in (".flac", ".wav"))   # FLAC since phase 24
             assert len(wavs()) == 15 and len(speak.list_speech(everything=False)) == 15
             speak.set_kept(items[0]["id"], True)
             items.append(_fake_speech(15, speak))                 # the 16th: the kept oldest leaves the tray, nothing deleted
@@ -2232,6 +2381,7 @@ def u_person():
         tdir = proj.dir / "train"
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "e5.pth").write_bytes(b"x")
+        (tdir / "data.pt").write_bytes(b"")   # (torch.load is stubbed; export checks the file is there, phase 24)
         proj.train = {"best": 5, "train_minutes": 9.0, "saves": [{"epoch": 5, "identity": 0.8}]}
         proj.save()
         real = (trainer.torch.load, trainer.index_feats, trainer.f0_median, trainer.f0_range, V.install, rvc_index.write_ivf_flat)
@@ -3580,7 +3730,7 @@ def u_tutorial():
             _fake_demo_voice(t / "assets" / "demo-voice" / "agent-smoke")
             tutorial.SAMPLE, tutorial.DEMO = sample, t / "assets" / "demo-voice" / "agent-smoke"
             assert tutorial.state_file().parent == t and tutorial.load() is None
-            assert tutorial.first_run() == {"done": None}
+            assert tutorial.first_run()["done"] is None
             sid = tutorial.sample_song_id()
             assert sid, "the sample song wasn't added"
             meta = json.loads((config_path("uploads_dir") / f"{sid}.json").read_text(encoding="utf-8"))
@@ -3590,7 +3740,62 @@ def u_tutorial():
             info = voices.voice_info(v)
             assert info["demo"] is True and info["trained"] is False, info
             assert not [d for d in voices.voices_dir().iterdir() if d.name.startswith(".")], "a seeding folder was left"
-            assert tutorial.first_run() == {"done": None}   # once
+            assert tutorial.first_run()["done"] is None   # once
+            # a newer Agent Smoke ships: offered, Update swaps it in (the old aside, out of the voice list, the user's
+            # name for it kept), Undo puts the old one back
+            assert tutorial.status()["demo_update"] is None and v.extra.get("demo_build")
+            vd = voices.voices_dir()
+            m = json.loads((vd / "agent-smoke" / "meta.json").read_text(encoding="utf-8"))
+            m["display"] = "My Smoke"
+            (vd / "agent-smoke" / "meta.json").write_text(json.dumps(m), encoding="utf-8")
+            import hashlib
+            ship = tutorial.DEMO
+            (ship / "model.pth").write_bytes(b"a newer build of the demo voice")
+            pth = (ship / "model.pth").read_bytes()
+            (ship / "manifest.json").write_text(json.dumps({"made": "2026-10-14", "files": {"model.pth": {
+                "size": len(pth), "sha256": hashlib.sha256(pth).hexdigest()}}}), encoding="utf-8")
+            offer = tutorial.status()["demo_update"]
+            assert offer == {"voice": "agent-smoke", "display": "My Smoke", "made": "2026-10-14"}, offer
+            r = tutorial.update_demo()
+            assert (vd / "agent-smoke" / "model.pth").read_bytes() == pth and r["tutorial"]["demo_update"] is None
+            assert voices.get_voice("agent-smoke").display == "My Smoke" and r["tutorial"]["demo_previous"] is True
+            assert (vd / tutorial.PREVIOUS / "model.pth").read_bytes() == b"not really a model"
+            assert [x.name for x in voices.list_voices()].count("agent-smoke") == 1, "the previous build shows as a voice"
+            tutorial.undo_demo()
+            assert (vd / "agent-smoke" / "model.pth").read_bytes() == b"not really a model"
+            assert not (vd / tutorial.PREVIOUS).exists() and tutorial.status()["demo_update"]["voice"] == "agent-smoke"
+            tutorial.update_demo()                                  # Update twice: one previous build kept, never more
+            try:
+                tutorial.update_demo()
+                raise AssertionError("updated when already the newest")
+            except ModelError:
+                pass
+            tutorial.undo_demo()                                    # back to the first build
+            calls, real_retry = [], tutorial.fsutil.retry           # the new one can't go in (a file held open): the
+            def failing(fn, *a, **k):                               # installed one is back, nothing goes missing
+                calls.append(1)
+                if len(calls) == 3:
+                    raise PermissionError("held open")
+                return real_retry(fn, *a, **k)
+            tutorial.fsutil.retry = failing
+            try:
+                tutorial.update_demo()
+                raise AssertionError("the update said it worked")
+            except PermissionError:
+                pass
+            finally:
+                tutorial.fsutil.retry = real_retry
+            assert (vd / "agent-smoke" / "model.pth").read_bytes() == b"not really a model"
+            assert voices.get_voice("agent-smoke").display == "My Smoke"
+            assert not (vd / tutorial.PREVIOUS / "meta.json.previous").exists(), "a half update was left"
+            assert not [d for d in vd.iterdir() if d.name.startswith(".agent-smoke-updating")], "the update's folder was left"
+            assert [x.name for x in voices.list_voices()].count("agent-smoke") == 1
+            # the shipped files back to the first build, as the rest of the check expects
+            old = b"not really a model"
+            (ship / "model.pth").write_bytes(old)
+            (ship / "manifest.json").write_text(json.dumps({"files": {"model.pth": {
+                "size": len(old), "sha256": hashlib.sha256(old).hexdigest()}}}), encoding="utf-8")
+            assert tutorial.status()["demo_update"] is None
             # the demo voice is nobody to search for
             c = next(x for x in night.candidates() if x["voice"] == "agent-smoke")
             assert c["can"] is False and c["demo"] is True and "not a real person" in c["note"], c
@@ -3621,7 +3826,7 @@ def u_tutorial():
                 f.unlink()
             voices.remove_voice("agent-smoke")
             r = tutorial.reset()
-            assert r["tutorial"] == {"done": None} and r["seeded"]["song"] and r["seeded"]["voice"] == "agent-smoke", r
+            assert r["tutorial"]["done"] is None and r["seeded"]["song"] and r["seeded"]["voice"] == "agent-smoke", r
             assert tutorial.reset()["seeded"] == {"song": tutorial.sample_song_id(), "voice": "agent-smoke"}   # nothing doubled
             assert len([m for m in config_path("uploads_dir").glob("*.json")
                         if json.loads(m.read_text(encoding="utf-8")).get("sample")]) == 1
@@ -3655,7 +3860,7 @@ def u_tutorial():
             tutorial.SAMPLE, tutorial.DEMO = saved
     with isolated_data():   # an install that already made covers / trained voices: marked, nothing seeded
         _fake_voice("someone-uc", extra={"trained": True, "person": "Someone"})
-        assert tutorial.first_run() == {"done": "existing install"} and tutorial.sample_song_id() is None
+        assert tutorial.first_run()["done"] == "existing install" and tutorial.sample_song_id() is None
         assert not voices.voices_dir().joinpath("agent-smoke").exists()
     import inspect
     from undercover.doubleagent import api as da_api   # "Do it all" called a local function named like the module it uses
@@ -3826,11 +4031,17 @@ PHONE_SAMPLES = [
     ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
-    ("POST", "/api/phone/revoke"),
+    ("POST", "/api/phone/revoke"), ("GET", "/api/away"), ("POST", "/api/away"), ("POST", "/api/away/forget"),
+    ("POST", "/api/phone/away/link"), ("POST", "/api/phone/away"), ("GET", "/away"),
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
-    ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/reset"),
+    ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/reset"), ("POST", "/api/tutorial/demo/update"),
+    ("POST", "/api/tutorial/demo/undo"),
+    ("GET", "/api/tutorial/greetings"), ("GET", "/api/tutorial/greetings/good-morning.mp3"),
+    ("GET", "/api/library/smaller"), ("POST", "/api/library/smaller/start"), ("POST", "/api/library/smaller/keep"),
+    ("POST", "/api/library/smaller/undo"),
+    ("POST", "/api/library/voices/some-voice/full-index"),
 ]
 
 
@@ -3926,6 +4137,117 @@ def _lan(method, path, token=None, body=None, origin=True, host=None):
         c.close()
 
 
+def _away(method, path, port, host, cookie=None, body=None, origin=True):
+    """A request as Tailscale Funnel would bring it to the away listener: -> (status, headers, body)."""
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    h = {"Host": host}
+    if origin and method != "GET":
+        h["Origin"] = origin if isinstance(origin, str) else f"https://{host}"
+    if cookie:
+        h["Cookie"] = cookie
+    data = None if body is None else json.dumps(body).encode()
+    if data is not None:
+        h["Content-Type"] = "application/json"
+    try:
+        c.request(method, path, body=data, headers=h)
+        r = c.getresponse()
+        return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+    finally:
+        c.close()
+
+
+@check("api: away from home (phase 20) on a fake Tailscale: sign-in, approval, ready; Funnel only to the away listener; its gate (Host, Origin, no pairing, away tokens only); a home phone's link becomes its away pass; off closes it")
+def a_away():
+    st_file = Path(os.environ["FAKE_TS_STATE"])
+    st_file.write_text("{}", encoding="utf-8")
+    read = lambda: json.loads(st_file.read_text(encoding="utf-8") or "{}")
+    write = lambda **kw: _fake_ts_set(st_file, **kw)
+    api("/api/phone", {"on": True})
+    pr = api("/api/phone/pair", {})["pairing"]
+    status, hd, _ = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Away phone"})
+    assert status == 200
+    home = hd["set-cookie"].split("uc_device=", 1)[1].split(";", 1)[0]
+    try:
+        st = api("/api/away", {"on": True})
+        port = st["port"]
+        assert st["on"] and st["listening"] and 7870 <= port < 7880, st
+        wait_for(lambda: api("/api/away")["auth_url"], 60, every=0.5, what="the Tailscale sign-in link")
+        assert api("/api/away")["phase"] == "sign-in"
+        write(backend="Running", signed_in=True, host="uc-fakeaway.tailfake.ts.net")
+        wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="the approval link")
+        write(funnel_approved=True)
+        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/away")), 60, every=0.5, what="ready")
+        host = st["host"]
+        assert st["link"] == f"https://{host}", st
+        sandbox_port = int(BASE.rsplit(":", 1)[1])
+        assert read()["funnel_target"] == f"http://127.0.0.1:{port}" and port != sandbox_port, read()   # never 7860, never the home listener
+        # the gate
+        assert _away("GET", "/", port, host)[0] == 401, "the away address answered without a pass"
+        assert _away("GET", "/", port, f"127.0.0.1:{port}")[0] == 403, "the away address took a Host that isn't its name"
+        assert _away("GET", "/pair", port, host)[0] == 403 and _away("POST", "/api/phone/claim", port, host, body={"code": "X"})[0] == 403
+        status, _, page = _away("GET", "/away", port, host)
+        assert status == 200 and b"Away from home" in page
+        # a paired phone, at home, asks for its link (its button shows only now); at the away address the code becomes its pass
+        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is True
+        assert api("/api/status").get("away_ready") is False, "the PC's own page offers the phone's away button"
+        status, _, body = _lan("POST", "/api/phone/away/link", home, {})
+        assert status == 200, body
+        url = json.loads(body)["url"]
+        assert url.startswith(f"https://{host}/away#"), url
+        code = url.split("#", 1)[1]
+        assert _away("POST", "/api/phone/away", port, host, body={"code": code}, origin=f"http://{host}")[0] == 403
+        status, hd, body = _away("POST", "/api/phone/away", port, host, body={"code": code})
+        assert status == 200, body
+        cookie = hd.get("set-cookie", "")
+        assert all(x in cookie for x in ("uc_away=", "Secure", "HttpOnly", "SameSite=Strict")), cookie
+        away = cookie.split("uc_away=", 1)[1].split(";", 1)[0]
+        assert _away("POST", "/api/phone/away", port, host, body={"code": code})[0] == 403, "a code worked twice"
+        s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"uc_away={away}")[2])
+        assert s_["client"] == "phone" and s_["device"] == "Away phone", s_
+        assert _away("GET", "/api/status", port, host, cookie=f"uc_away={home}")[0] == 401, "the home token works away"
+        assert _lan("GET", "/api/status", away)[0] == 401, "the away pass works at home"
+        status, _, body = _away("POST", "/api/restart", port, host, cookie=f"uc_away={away}", body={})
+        assert status == 403 and b"needs the PC" in body, (status, body)
+        # off: nothing reaches this PC from outside any more
+        api("/api/away", {"on": False})
+        calls = read()["calls"]
+        assert ["funnel", "reset"] in calls and ["down"] in calls and not read().get("funnel_on")
+        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is False
+        try:
+            _away("GET", "/", port, host)
+            raise AssertionError("the away listener still answers after Off")
+        except ConnectionRefusedError:
+            pass
+        # on again (the sign-in is kept: no new sign-in), then Phone access off takes away from home with it
+        st = api("/api/away", {"on": True})
+        port = st["port"]
+        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready again")
+        resets = read()["calls"].count(["funnel", "reset"])
+        api("/api/phone", {"on": False})
+        st = api("/api/away")
+        assert not st["on"] and not st["listening"] and read()["calls"].count(["funnel", "reset"]) == resets + 1, st
+        try:
+            _away("GET", "/", port, host)
+            raise AssertionError("the away listener still answers after Phone access was switched off")
+        except ConnectionRefusedError:
+            pass
+        # Forget with away off: the daemon comes up just for the logout, then goes, and the node's keys with it
+        daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+        api("/api/phone", {"on": True})
+        st = api("/api/away/forget", {})
+        r = read()
+        assert r.get("logged_out") and sum(c[0] == "tailscaled" for c in r["calls"]) == daemons + 1 and not st["name"], (st, r["calls"][-4:])
+    finally:
+        api("/api/phone", {"on": True})
+        api("/api/away", {"on": False})
+        dev = next((d for d in api("/api/phone")["devices"] if d["name"] == "Away phone"), None)
+        if dev:
+            api("/api/phone/revoke", {"id": dev["id"]})
+        api("/api/phone", {"on": False})
+    return f"sign-in -> approve -> ready; funnel to {port} only; the gate holds; a home link became an away pass; off and Phone access off close it"
+
+
 @check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
        "phone; Revoke; switching off closes it; this PC's own requests unchanged)")
 def a_phone():
@@ -3973,6 +4295,8 @@ def a_phone():
     # 4. with the token: the basic pages work, the PC-only routes are refused with a plain message
     s = json.loads(_lan("GET", "/api/status", token)[2])
     assert s["client"] == "phone" and s["device"] == "Smoke phone", s
+    assert s.get("app_folder") is None, "a phone was told the PC's app folder"
+    assert Path(api("/api/status")["app_folder"]).resolve() == ROOT.resolve(), "this PC's status doesn't name its app folder"
     for p in ("/", "/static/app.js", "/api/jobs", "/api/work", "/api/voices", "/api/library/covers", "/api/speak/voices",
               "/api/doctor", "/api/addons", "/api/storage", "/api/history", "/api/config", "/api/train/projects"):
         status = _lan("GET", p, token)[0]
@@ -3980,7 +4304,7 @@ def a_phone():
     assert _lan("POST", "/api/work/settings", token, {})[0] == 200
     from undercover.core.config import path   # the sandbox's own folders (sandbox_server points this process at them)
     proj = next(p for p in (path("cache_dir") / "training").iterdir() if (p / "project.json").exists())
-    clip = next((proj / "clips").glob("*.wav"))
+    clip = next(f for f in (proj / "clips").iterdir() if f.suffix in (".flac", ".wav"))
     assert _lan("GET", f"/files/training/{proj.name}/clips/{clip.name}", token)[0] == 200, "a phone can't play a clip"
     assert _lan("GET", f"/files/training/{proj.name}/project.json", token)[0] == 404, "a phone read a project file"
     assert api(f"/files/training/{proj.name}/project.json"), "this PC can't read the project file any more"
@@ -4065,8 +4389,8 @@ def a_tutorial():
     assert t["done"] == "existing install", t   # the sandbox holds a trained voice: an install from before the tutorial
     assert api("/api/tutorial/done", {})["tutorial"]["done"] == time.strftime("%Y-%m-%d")
     r = api("/api/tutorial/reset", {})
-    assert r["tutorial"] == {"done": None}, r
-    assert api("/api/status")["tutorial"] == {"done": None}
+    assert r["tutorial"]["done"] is None, r
+    assert api("/api/status")["tutorial"]["done"] is None
     shipped = (tutorial.DEMO / "model.pth").is_file()
     if shipped:
         assert r["seeded"]["voice"] == "agent-smoke", r
@@ -4076,7 +4400,304 @@ def a_tutorial():
         assert c["can"] is False, c
     songs = api("/api/library/songs")
     assert all("sample" in x for x in songs)
-    return f"existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
+    # Agent Smoke's greetings: the list (empty until the clips ship), each clip served, nothing else in assets
+    g = api("/api/tutorial/greetings")
+    assert set(g) == {"greetings", "followon"} and (g["greetings"] or g["followon"] is None), g
+    for e in g["greetings"] + ([g["followon"]] if g["followon"] else []):
+        with urllib.request.urlopen(BASE + e["url"], timeout=30) as clip:
+            assert clip.headers["Content-Type"] == "audio/mpeg" and "max-age" in clip.headers["Cache-Control"] and clip.read(4), e
+    for bad in ("greetings.json", "..%2Fagent-smoke%2Fmeta.json", "..%2F..%2Fsample%2Fsample.json", "nope.mp3"):
+        try:
+            api("/api/tutorial/greetings/" + bad)
+            raise AssertionError(f"served {bad}")
+        except urllib.error.HTTPError as e:
+            assert e.code == 404, (bad, e.code)
+    return f"greetings {len(g['greetings'])}; existing install → done → reset; demo voice {'seeded' if shipped else 'not shipped yet'}; sample song {'yes' if r['seeded']['song'] else 'none (no audio yet)'}"
+
+
+@check("Make smaller (phase 24): a project's WAV clips become FLAC (bit-identical) and its data.pt waits aside, Undo puts them back, Keep deletes only what was set aside; a voice's index shrinks with the full one aside; never automatic")
+def u_smaller():
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.engine.rvc import index as ri
+    from undercover.doubleagent.project import Project, projects_dir
+    from undercover.core.voices import voices_dir
+    import struct
+    from undercover.safehouse import smaller
+    with isolated_data():
+        proj = Project(name="smaller-test", person="Test")
+        proj.train = {"exported": "smaller-voice", "exported_epoch": 5, "state": "exported"}
+        proj.dir.mkdir(parents=True)
+        proj.save()
+        d = proj.dir
+        (d / "clips").mkdir(parents=True, exist_ok=True)
+        (d / "train").mkdir(parents=True, exist_ok=True)
+        rng = np.random.default_rng(1)
+        clips = {}
+        for i in range(3):
+            y = (rng.standard_normal(22050) * 2000).astype(np.int16)
+            sf.write(str(d / "clips" / f"c{i}.wav"), y, 44100, subtype="PCM_16")
+            clips[f"c{i}"] = y
+        (d / "train" / "data.pt").write_bytes(b"d" * 5000)
+        vd = voices_dir() / "smaller-voice"
+        vd.mkdir(parents=True)
+        pth = os.urandom(4000)
+        (vd / "model.pth").write_bytes(pth)
+        (d / "train" / "e5.pth").write_bytes(pth)
+        vecs = rng.standard_normal((300, 8)).astype(np.float16)
+        with open(vd / "model.index", "wb") as f:
+            f.write(ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
+        ov = smaller.overview()
+        row = next(p for p in ov["projects"] if p["name"] == "smaller-test")
+        assert row["clips_wav_bytes"] > 0 and row["data_bytes"] == 5000 and not row["pending"], row
+        assert next(v for v in ov["voices"] if v["name"] == "smaller-voice")["saving"] == 0   # 300 vectors: already small
+        # the project: clips FLAC, data.pt aside, the save linked; nothing deleted
+        r = smaller.shrink_project("smaller-test")
+        assert r["clips"] == 3 and r["clips_bytes_after"] < r["clips_bytes_before"] and r["data_bytes"] == 5000, r
+        for pid, y in clips.items():
+            assert proj.clip_path(pid).suffix == ".flac"
+            back, _ = sf.read(str(proj.clip_path(pid)), dtype="int16")
+            assert np.array_equal(back, y)
+            assert (d / smaller.ASIDE / "clips" / f"{pid}.wav").exists(), "an original WAV went"
+        assert not (d / "train" / "data.pt").exists() and (d / smaller.ASIDE / "train" / "data.pt").exists()
+        assert os.path.samefile(d / "train" / "e5.pth", vd / "model.pth") and r["linked_bytes"] == 4000
+        try:
+            smaller.shrink_project("smaller-test")
+            raise AssertionError("made smaller twice while waiting")
+        except Exception as e:
+            assert "waiting" in str(e)
+        smaller.undo_project("smaller-test")                       # Undo: the WAVs and data.pt back, the FLACs gone
+        assert all(proj.clip_path(p).suffix == ".wav" for p in clips) and not list((d / "clips").glob("*.flac"))
+        assert (d / "train" / "data.pt").read_bytes() == b"d" * 5000 and not (d / smaller.ASIDE).exists()
+        smaller.shrink_project("smaller-test")                     # again, then Keep: only what was set aside goes
+        from undercover.doubleagent.trainer import export_voice
+        smaller.keep_project("smaller-test")
+        try:                                                       # adding another save now says what to do
+            export_voice(Project.load("smaller-test"), epoch=5)
+            raise AssertionError("export ran without its prepared data")
+        except Exception as e:
+            assert "Train more" in str(e), e
+        assert not (d / smaller.ASIDE).exists() and all(proj.clip_path(p).suffix == ".flac" for p in clips)
+        assert (vd / "model.pth").read_bytes() == pth and (d / "train" / "e5.pth").read_bytes() == pth
+        # a voice: its index shrunk (here 300 -> 50 on the CPU), the full one aside; its readings to hear; Undo and Keep
+        full = (vd / "model.index").read_bytes()
+        r = smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
+        assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and (vd / smaller.INDEX_ASIDE).read_bytes() == full
+        assert len(ri.read_vectors(vd / "model.index")) == 50
+        heard = smaller._readings("smaller-voice")                # (the real job writes them; here stand-ins)
+        for f in heard.values():
+            f.parent.mkdir(parents=True, exist_ok=True)
+            sf.write(str(f), np.zeros(800, np.int16), 16000, subtype="PCM_16")
+        res = next(v for v in smaller.overview()["voices"] if v["name"] == "smaller-voice")["result"]
+        assert res["full_url"].startswith("/files/previews/") and res["small_url"].endswith("-small.flac"), res
+        smaller.undo_voice("smaller-voice")
+        assert (vd / "model.index").read_bytes() == full and not (vd / smaller.INDEX_ASIDE).exists()
+        assert not any(f.exists() for f in heard.values()), "Undo left the readings"
+        smaller.shrink_voice("smaller-voice", check=False, k=50, device="cpu")
+        smaller.keep_voice("smaller-voice")
+        assert not (vd / smaller.INDEX_ASIDE).exists() and len(ri.read_vectors(vd / "model.index")) == 50
+    return "project: clips FLAC, data.pt aside, save linked, Undo, Keep; voice: index 300 -> 50, Undo, Keep"
+
+
+@check("listen-back on a fresh install (phase 25): no speech recogniser yet starts its pinned download in the background, the speech goes on, and the next one tries again (not a lasting failure)")
+def u_listenback_fetch():
+    from undercover.core import setup_models
+    from undercover.speakeasy import listenback as lb
+    with isolated_data():
+        saved = (dict(lb._ASR), setup_models.ensure)
+        asked = []
+        setup_models.ensure = lambda files=None, sha256=None, progress=None: asked.append((files, sha256)) or []
+        try:
+            lb._ASR.update(model=None, failed="", fetching=None)
+            assert lb._asr() is None and "downloading" in lb._ASR["why"] and not lb._ASR["failed"]
+            lb._ASR["fetching"].join(10)
+            (files, sha), = asked
+            assert list(files) == ["whisper/large-v3-turbo.pt"] and sha["whisper/large-v3-turbo.pt"], (files, sha)
+            assert lb._asr() is None and len(asked) == 2, "the next speech didn't try again"
+            lb._ASR["fetching"].join(10)
+            try:
+                lb.hear(["x.wav"])
+                raise AssertionError("heard without a recogniser")
+            except RuntimeError as e:
+                assert "downloading" in str(e), e
+            lb._ASR["fetching"].join(10)
+            n = len(asked)                                             # a failed download waits before the next try
+            setup_models.ensure = lambda **k: (_ for _ in ()).throw(OSError("offline"))
+            lb._asr()
+            lb._ASR["fetching"].join(10)
+            assert lb._ASR["fetch_failed"] > 0
+            setup_models.ensure = lambda files=None, sha256=None, progress=None: asked.append((files, sha256)) or []
+            lb._asr()
+            assert len(asked) == n and not lb._ASR["fetching"].is_alive(), "retried at once after a failure"
+        finally:
+            lb._ASR.clear()
+            lb._ASR.update(saved[0])
+            setup_models.ensure = saved[1]
+    return "missing -> a pinned, hashed fetch in the background; the speech goes on; tried again next time"
+@check("a new voice's index at export (phase 24 follow-up): 10k k-means centres, quietly (not in Make smaller's Keep / Undo); the full one kept 30 days (its date in the voice list, put back from the voice's detail), then removed, guarded and logged; a broken index leaves the export as it was; 0 = off")
+def u_shrink_export():
+    import struct
+    import numpy as np
+    from undercover.core.engine.rvc import index as ri
+    from undercover.core.voices import voices_dir
+    from undercover.doubleagent import trainer
+    from undercover.safehouse import smaller
+    with isolated_data():
+        vd = voices_dir() / "export-voice"
+        vd.mkdir(parents=True)
+        (vd / "model.pth").write_bytes(b"p")
+        vecs = np.random.default_rng(2).standard_normal((300, 8)).astype(np.float16)
+        full = ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes()
+        (vd / "model.index").write_bytes(full)
+        assert trainer.shrink_exported_index(vd, k=0) is None and (vd / "model.index").read_bytes() == full   # off
+        t0 = time.time()
+        r = trainer.shrink_exported_index(vd, k=50, device="cpu")
+        assert r["vectors_before"] == 300 and r["vectors_after"] == 50 and 29.9 * 86400 < r["until"] - t0 < 30.1 * 86400, r
+        assert (vd / ri.EXPORT_ASIDE).read_bytes() == full and len(ri.read_vectors(vd / "model.index")) == 50
+        assert not (vd / ri.ASIDE).exists(), "the export left a Make smaller Keep / Undo"
+        row = next(v for v in smaller.overview()["voices"] if v["name"] == "export-voice")
+        assert not row["pending"] and row["saving"] == 0, row               # nothing for the user to decide
+        fi = smaller.full_index(vd)
+        assert fi["until"] == time.strftime("%Y-%m-%d", time.localtime(r["until"])) and fi["vectors_before"] == 300, fi
+        assert trainer.shrink_exported_index(vd, k=50, device="cpu") is None, "shrunk twice"
+        smaller.restore_full_index("export-voice")                            # Deep Cover: put the full one back
+        assert (vd / "model.index").read_bytes() == full and smaller.full_index(vd) is None
+        assert not (vd / ri.EXPORT_RECORD).exists()
+        try:
+            smaller.restore_full_index("export-voice")
+            raise AssertionError("restored twice")
+        except Exception as e:
+            assert "no full index" in str(e), e
+        # 30 days later: removed (guarded, logged); the 10k index and the voice stay; a younger one is left alone
+        trainer.shrink_exported_index(vd, k=50, device="cpu")
+        young = voices_dir() / "young-voice"
+        young.mkdir()
+        (young / "model.index").write_bytes(full)
+        trainer.shrink_exported_index(young, k=50, device="cpu")
+        assert smaller.expire_full_indexes(now=t0 + 31 * 86400) == ["export-voice", "young-voice"]
+        assert not (vd / ri.EXPORT_ASIDE).exists() and not (vd / ri.EXPORT_RECORD).exists()
+        assert len(ri.read_vectors(vd / "model.index")) == 50 and (vd / "model.pth").exists()
+        trainer.shrink_exported_index(vd, k=50, device="cpu") is None   # (already small: nothing to keep)
+        (young / "model.index").write_bytes(full)
+        trainer.shrink_exported_index(young, k=50, device="cpu")
+        assert smaller.expire_full_indexes(now=t0 + 86400) == [] and (young / ri.EXPORT_ASIDE).exists()
+        (vd / "model.index").write_bytes(b"not an index")              # it can't shrink: the export is untouched
+        assert trainer.shrink_exported_index(vd, k=50, device="cpu") is None
+        assert (vd / "model.index").read_bytes() == b"not an index" and not (vd / ri.EXPORT_ASIDE).exists()
+        assert not (vd / "model.index.smaller.tmp").exists()
+    return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
+
+
+@check("listen-back's drawn-out word (phase 24): in a short line (up to 4 words), a one-syllable word held over 0.30 s asks for a re-read; a marked pause after it, the last word, a longer word or a long sentence don't")
+def u_drawl():
+    from undercover.speakeasy import listenback as lb
+    w = lambda *t: [[a, s, e, 0.9] for a, s, e in t]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.36), ("morning.", 0.36, 0.76))) == ["drawn-out 'good' (0.36 s)"]
+    assert lb.problems("Good morning.", w(("Good", 0.0, 0.16), ("morning.", 0.16, 0.44))) == []
+    assert lb.problems("Good, morning.", w(("Good,", 0.0, 0.40), ("morning.", 0.40, 0.76))) == [], "a comma's pause counted"
+    assert lb.problems("It was late.", w(("It", 0, 0.1), ("was", 0.1, 0.2), ("late.", 0.2, 0.8))) == [], "the last word counted"
+    assert lb.problems("An evening walk.", w(("An", 0, 0.1), ("evening", 0.1, 0.6), ("walk.", 0.6, 0.9))) == [], "a longer word counted"
+    long_line = "Ladies and gentlemen we have a lot to cover today."   # flowing speech: Whisper's edges can't tell
+    ws = [[t, 0.4 * i, 0.4 * i + 0.4, 0.9] for i, t in enumerate(long_line.split())]
+    assert lb.problems(long_line, ws) == [], "a long line flagged a drawn-out word"
+    assert [lb.syllables(x) for x in ("good", "you're", "late", "morning", "evening", "little")] == [1, 1, 1, 2, 3, 2]
+    return "drawn-out caught; comma, last word and longer words left alone"
+
+
+@check("smaller, never worse (phase 24): training clips as FLAC (old WAV clips still read); key changes as 24-bit FLAC, float WAV kept over full scale; the exported save hard-linked to the voice, and each copy survives the other's delete, a move and a restore; speech as FLAC")
+def u_lossless():
+    import numpy as np
+    import soundfile as sf
+    from undercover.core import fsutil, storage
+    from undercover.doubleagent.project import Project
+    from undercover.frontman import remix
+    with isolated_data() as box:
+        # clips: the project's clip path, FLAC first, an older WAV clip as it is
+        proj = Project(name="lossless-test")   # in the isolated cache
+        (proj.dir / "clips").mkdir(parents=True)
+        assert proj.clip_path("a").name == "a.flac"   # a new clip
+        y = (np.random.default_rng(0).standard_normal(44100) * 3000).astype(np.int16)
+        sf.write(str(proj.dir / "clips" / "b.wav"), y, 44100, subtype="PCM_16")
+        assert proj.clip_path("b").name == "b.wav"    # an older project's clip
+        sf.write(str(proj.clip_path("a")), y, 44100, subtype="PCM_16")
+        z, _ = sf.read(str(proj.clip_path("a")), dtype="int16")
+        assert np.array_equal(y, z), "a FLAC clip isn't bit-identical"
+        assert (proj.dir / "clips" / "a.flac").stat().st_size < (proj.dir / "clips" / "b.wav").stat().st_size
+        sf.write(str(proj.dir / "clips" / "b.flac"), y, 44100, subtype="PCM_16")
+        assert proj.clip_path("b").name == "b.flac"   # made smaller: the FLAC is the one read
+        # key changes: 24-bit FLAC within the 24-bit floor; over full scale stays float WAV (FLAC would clip)
+        t = np.linspace(0, 1, 44100, dtype=np.float32)
+        for peak, want in ((0.9, ".flac"), (1.3, ".wav")):
+            x = np.stack([np.sin(2 * np.pi * 220 * t), np.sin(2 * np.pi * 330 * t)], 1) * peak
+            tmp = box / f"k{peak}.part.wav"
+            sf.write(str(tmp), x, 44100, subtype="FLOAT")
+            out = remix._keep_small(tmp, box / f"k{peak}.flac", box / f"k{peak}.wav")
+            assert out.suffix == want and not tmp.exists(), (peak, out)
+            back, _ = sf.read(str(out), dtype="float32", always_2d=True)
+            err = float(np.abs(back - x).max())
+            assert err < (2 ** -23 if want == ".flac" else 1e-12), (peak, err)
+        # the exported save and the voice's model.pth: one copy on disk
+        a, b = box / "voices" / "v" / "model.pth", box / "train" / "e10.pth"
+        a.parent.mkdir(parents=True)
+        b.parent.mkdir(parents=True)
+        data = os.urandom(200_000)
+        a.write_bytes(data)
+        b.write_bytes(data)
+        assert fsutil.link_duplicate(a, b) and os.path.samefile(a, b)
+        c = box / "train" / "e11.pth"
+        c.write_bytes(os.urandom(200_000))
+        assert not fsutil.link_duplicate(a, c) and not os.path.samefile(a, c), "different files linked"
+        # a move or a Vault-style copy is two files; a restore (a new file swapped in) splits them; deleting one keeps the other
+        moved = box / "elsewhere"
+        storage.copy_tree(a.parent, moved)
+        assert (moved / "model.pth").read_bytes() == data and not os.path.samefile(moved / "model.pth", a)
+        part = a.with_name("model.pth.vault-part")
+        part.write_bytes(data)
+        os.replace(part, a)
+        assert not os.path.samefile(a, b) and b.read_bytes() == data, "a restore changed the other copy"
+        assert fsutil.link_duplicate(a, b)
+        storage.remove_files([], within=[box], dirs=[a.parent])   # the voice deleted
+        assert b.read_bytes() == data, "deleting the voice took the training save's data"
+        a.parent.mkdir(parents=True)
+        a.write_bytes(data)
+        assert fsutil.link_duplicate(a, b)
+        storage.remove_files([b], within=[box])                    # the save deleted
+        assert a.read_bytes() == data, "deleting the save took the voice's data"
+        fsutil.torch_save({"w": 1}, a)                             # a later save is a new file: no shared write
+    return "clips FLAC (bit-identical, WAV still read); key changes FLAC-24 / float over 1.0; save linked, each copy survives delete, move, restore"
+
+
+@check("the greetings (Agent Smoke's clips for the First assignment): greetings.json -> urls; a clip that isn't there is left out; only named clips are served, with Range")
+def u_greetings():
+    from undercover.app import tutorial
+    with isolated_data() as box:
+        g = box / "greetings"
+        g.mkdir()
+        saved = tutorial.GREETINGS
+        tutorial.GREETINGS = g
+        try:
+            assert tutorial.greetings() == {"greetings": [], "followon": None}   # not shipped yet
+            (g / "good-morning.mp3").write_bytes(b"ID3morning")
+            (g / "follow-on.mp3").write_bytes(b"ID3follow")
+            (box / "secret.mp3").write_bytes(b"x")
+            (g / "greetings.json").write_text(json.dumps({"greetings": [
+                {"file": "good-morning.mp3", "from": 5, "to": 12, "text": "Good morning."},
+                {"file": "good-evening.mp3", "from": 17, "to": 24, "text": "Good evening."},   # no clip: left out
+                {"file": "../secret.mp3", "from": 0, "to": 5, "text": "x"}],                    # outside: never
+                "followon": {"file": "follow-on.mp3", "text": "A song and a voice are on your desk."}}), encoding="utf-8")
+            r = tutorial.greetings()
+            v = lambda n: int((g / n).stat().st_mtime)
+            assert r["greetings"] == [{"from": 5, "to": 12, "text": "Good morning.",
+                                       "url": f"/api/tutorial/greetings/good-morning.mp3?v={v('good-morning.mp3')}"}], r
+            assert r["followon"] == {"text": "A song and a voice are on your desk.",
+                                     "url": f"/api/tutorial/greetings/follow-on.mp3?v={v('follow-on.mp3')}"}, r
+            assert tutorial.greeting_file("good-morning.mp3") == g / "good-morning.mp3"
+            assert tutorial.greeting_file("follow-on.mp3") == g / "follow-on.mp3"
+            for bad in ("greetings.json", "good-evening.mp3", "../secret.mp3", "..\\secret.mp3", ""):
+                assert tutorial.greeting_file(bad) is None, bad
+        finally:
+            tutorial.GREETINGS = saved
+    return "manifest -> urls; missing and outside clips left out; only named clips served"
 
 
 @check("api: the tray's client against the sandbox (status, jobs, phone, pause / resume, a refusal in plain words)")
@@ -4119,7 +4740,7 @@ def a_page():
     for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"',
                  'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"',
                  'id="wn"', 'id="wn-ok"', 'id="sys-news"', 'id="ear-cover"', 'id="se-ear"', 'id="set-ear-row"',
-                 'id="vault"', 'id="vt-body"'):
+                 'id="vault"', 'id="vt-body"', 'id="smaller"', 'id="sm-body"', 'id="set-demo"', 'id="assign-greet"'):
         assert part in html, f"missing {part}"
     # the overnight queue lives in SafeHouse's Running room (the DoubleAgent redesign); DoubleAgent keeps only its door
     room = html.index('id="room-running"')
@@ -4457,9 +5078,10 @@ def a_cadence():
         n += kept(p)
     (pdir / CAD_PROJ / "clips").mkdir(parents=True)
     for p in take:
-        f = pdir / src / "clips" / f"{p['id']}.wav"
-        if f.exists():
-            shutil.copyfile(f, pdir / CAD_PROJ / "clips" / f.name)
+        for f in (pdir / src / "clips" / f"{p['id']}{ext}" for ext in (".flac", ".wav")):   # FLAC since phase 24
+            if f.exists():
+                shutil.copyfile(f, pdir / CAD_PROJ / "clips" / f.name)
+                break
     shutil.copyfile(pdir / src / "embeddings.npz", pdir / CAD_PROJ / "embeddings.npz")
     pj.update(name=CAD_PROJ, phrases=take, train={})
     (pdir / CAD_PROJ / "project.json").write_text(json.dumps(pj), encoding="utf-8")
@@ -4783,7 +5405,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -4799,8 +5421,13 @@ def main():
             port = sandbox_port()
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
+                # away from home's checks drive a fake Tailscale (tools/fake_tailscale.py): the sandbox server inherits these
+                import tempfile
+                os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tools" / "fake_tailscale.py")
+                fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
+                os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
@@ -4812,6 +5439,11 @@ def main():
             except Exception as e:   # noqa: BLE001 - the sandbox couldn't start: that is a failed run, not a crash
                 RESULTS.append((False, "sandbox server"))
                 print(f"  FAIL  sandbox server: {type(e).__name__}: {e}", flush=True)
+            finally:
+                fake_ts = Path(os.environ.get("FAKE_TS_STATE", "")).parent
+                if fake_ts.name.startswith("uc-fake-ts-"):
+                    import shutil
+                    shutil.rmtree(fake_ts, ignore_errors=True)
     a_untouched(before, dirs)
     failed = [n for ok, n in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed in {time.time() - t0:.0f} s" + (f"; FAILED: {', '.join(failed)}" if failed else ""))
