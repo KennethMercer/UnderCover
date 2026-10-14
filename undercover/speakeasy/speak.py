@@ -23,7 +23,7 @@ from ..core import fsutil, jobs, tray
 from ..core.config import CONFIG, path
 from ..core.files import file_url
 from ..core.jobs import Cancelled
-from ..core.cadence import engine_info, pack_ready, reading_engine
+from ..core.cadence import engine_info, pack_engine, pack_ready
 from ..core.voices import ModelError, get_voice
 from ..doubleagent import service
 from . import tts
@@ -76,8 +76,8 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
     pack = service.cadence_pack(v)
     pace = pace_of(pace, speed)
     pc = PACES[pace]
-    if pack and cadence is not False and pack_ready(pack.get("engine", "chatterbox")):
-        eng = reading_engine(pack.get("engine", "chatterbox"))   # a Chatterbox-family pack reads with the default of them
+    if pack and cadence is not False and pack_ready(pack.get("engine", "chatterbox"), pack.get("engine_pin")):
+        eng = pack_engine(pack)   # a Chatterbox-family pack reads with the default of them, or the engine its voice is pinned to
         info = engine_info(eng)
         return {"voice": v.name, "mode": "cadence", "engine": eng, "engine_name": info["name"],
                 "ref_rate": pack.get("pace_ref_rate") if info.get("pace_by_ref") else None,   # its pace, calibrated (phase 23)

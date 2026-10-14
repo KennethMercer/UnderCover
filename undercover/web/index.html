@@ -764,12 +764,12 @@
     <section class="panel">
       <h2>3 · How</h2>
       <div class="se-opts">
-        <div class="se-field"><label id="se-pace-lab">Pace</label>
+        <div class="se-field" data-deep><label id="se-pace-lab">Pause between sentences</label>
           <div class="seg" id="se-pace" role="group" aria-labelledby="se-pace-lab">
-            <button type="button" data-p="slower" aria-pressed="false">Slower</button>
+            <button type="button" data-p="faster" aria-pressed="false">Shorter</button>
             <button type="button" data-p="natural" aria-pressed="true">Natural</button>
-            <button type="button" data-p="faster" aria-pressed="false">Faster</button></div>
-          <p id="se-pace-note">Natural is the person's own pace. Slower and Faster are read that way, not sped up afterwards.</p>
+            <button type="button" data-p="slower" aria-pressed="false">Longer</button></div>
+          <p id="se-pace-note">Natural is the person's own pauses. Shorter and Longer change only the gap between sentences (a Reader voice also reads a little faster or slower). Nothing is stretched afterwards.</p>
           <p class="meta" id="se-pace-deep" data-deep></p></div>
         <div class="se-field" id="se-reader-field" data-deep><label for="se-reader">Reader <output id="se-reader-out">auto</output></label>
           <select class="se-search" id="se-reader"></select>

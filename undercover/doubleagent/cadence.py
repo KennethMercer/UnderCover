@@ -695,7 +695,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
         # is replaced at once, and even then it's moved aside (tts/previous/), never deleted.
         gaps = person.get("sentence_gap_s") or [0.3, 0.45, 0.8]
         gap = float(np.clip(gaps[1], 0.25, 1.0))
-        waits = old is not None and C.pack_ready(old.get("engine") or engine)   # engine-agnostic inside the Chatterbox family
+        waits = old is not None and C.pack_ready(old.get("engine") or engine, old.get("engine_pin"))   # engine-agnostic inside the Chatterbox family
         pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins,
@@ -1020,7 +1020,7 @@ def make_samples(job, voice_name: str) -> dict:
         fut, wav = render.request(AB_LINE, pack, d / pack.get("ref", "ref.wav"), seed=AB_SEED)
         render.client.wait(fut, cancel=lambda: job.cancel)
         y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)),
-                              nudge=float(pack.get("pitch_nudge") or 0), engine=C.reading_engine(pack.get("engine")))
+                              nudge=float(pack.get("pitch_nudge") or 0), engine=C.pack_engine(pack))
         y = render.level(y)   # SpeakEasy's loudness, so both sound as they would there
         with _LOCK:
             fresh = get_voice(v.name)
