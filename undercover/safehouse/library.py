@@ -258,17 +258,24 @@ def _aside_dir() -> Path:
 
 
 def _aside_records() -> dict:
-    """{aside folder: (voice, why)} for the set-aside voices an Undo still points at."""
+    """{aside folder: (voice, why)} from the Undo records: a voice in the list (its Undo would bring the folder back),
+    or None when the voice holding the record is set aside itself (removed: the record only says why)."""
     from ..core.voices import list_voices
+    holders = [(v.name, v.extra or {}) for v in list_voices()]
+    d = _aside_dir()
+    for f in (d.iterdir() if d.is_dir() else []):
+        try:
+            holders.append((None, json.loads((f / "meta.json.aside").read_text(encoding="utf-8")).get("extra") or {}))
+        except (OSError, ValueError):
+            continue
     out = {}
-    for v in list_voices():
-        ex = v.extra or {}
+    for name, ex in holders:
         prev, down = ex.get("improved_previous") or {}, ex.get("improved_turned_down") or {}
-        if prev.get("aside"):
-            out[prev["aside"]] = (v.name, "replaced by a new model" if prev.get("how") == "replaced"
+        if prev.get("aside") and (name or prev["aside"] not in out):
+            out[prev["aside"]] = (name, "replaced by a new model" if prev.get("how") == "replaced"
                                   else "the one before the retrained voice you kept")
-        if down.get("aside"):
-            out[down["aside"]] = (v.name, "the retrained voice you didn't keep")
+        if down.get("aside") and (name or down["aside"] not in out):
+            out[down["aside"]] = (name, "the retrained voice you didn't keep")
     return out
 
 
@@ -295,6 +302,7 @@ def aside() -> list[dict]:
                 continue
         name = meta.get("name") or f.name
         undo_for, why = recs.get(f.name, (None, None))
+        why = why or ((meta.get("extra") or {}).get("set_aside") or {}).get("why")
         if not why:
             why = "a replace that didn't finish" if f.name.endswith("-unfinished") else "set aside earlier"
         # when it was set aside: the stamp in its name (a moved folder keeps its old modified time)
@@ -327,6 +335,16 @@ def remove_aside(aid: str) -> dict:
                 v.extra.pop(k)
         fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     return {"removed": aid, "freed": freed, "undo_ended_for": owner}
+
+
+def restore_aside(aid: str) -> dict:
+    """"Bring it back": a set-aside voice back in the voices. One that an Undo serves goes back through that Undo
+    (its voice card), so the two stay a pair."""
+    from ..core.voices import bring_back, label_of
+    owner = _aside_records().get(aid, (None,))[0]
+    if owner:
+        raise ModelError(f"Use Undo on {label_of(owner)}'s voice card (DoubleAgent) to bring this one back.")
+    return bring_back(aid)
 
 
 def voices() -> list[dict]:

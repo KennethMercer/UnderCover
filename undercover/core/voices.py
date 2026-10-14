@@ -473,9 +473,10 @@ def _pick_index(indexes: list[Path]) -> Path | None:
     return max(pool, key=lambda p: p.stat().st_size)
 
 
-def set_aside(d: Path, tag: str = "") -> Path:
+def set_aside(d: Path, tag: str = "", note: dict | None = None) -> Path:
     """A voice folder moved to voices/.aside/<name>-<stamp> (its meta.json renamed, so no list shows it), never
-    deleted (Internal Affairs P4-1). Test mode: the test's own folders only. -> where it went."""
+    deleted (Internal Affairs P4-1). note: why, kept in its meta (extra.set_aside) for SafeHouse's list. Test mode:
+    the test's own folders only. -> where it went."""
     from . import fsutil, storage
     if storage.ALLOWED_ROOTS is not None:
         why = storage.refuse([d])
@@ -489,7 +490,74 @@ def set_aside(d: Path, tag: str = "") -> Path:
     fsutil.retry(lambda: os.replace(d, dst))
     if (dst / "meta.json").exists():
         os.replace(dst / "meta.json", dst / "meta.json.aside")
+    if note and (dst / "meta.json.aside").exists():
+        try:
+            meta = json.loads((dst / "meta.json.aside").read_text(encoding="utf-8"))
+            meta.setdefault("extra", {})["set_aside"] = {**note, "at": time.strftime("%Y-%m-%d %H:%M")}
+            fsutil.write_text(dst / "meta.json.aside", json.dumps(meta, indent=2))
+        except (OSError, ValueError):
+            pass   # an unreadable meta: it's still set aside, just without the note
     return dst
+
+
+def remove_to_aside(name: str) -> dict:
+    """The user's Delete (FrontMan's Remove, SafeHouse's Delete): the voice is set aside, not deleted (Internal
+    Affairs P5-1: a double-click on Remove deleted a trained voice for good). A retrained one waiting beside it goes
+    with it. bring_back() puts them back; deleting for good is SafeHouse's Set aside section (its own control).
+    -> {aside, with}"""
+    from . import jobs
+    v = get_voice(name)
+    busy = jobs.jobs_using(v.name)
+    if busy:
+        raise ModelError(f"{busy[0].title or 'A cover or speech'} is using {label_of(v.name)} right now. Try again when "
+                         "it's done (or cancel it).")
+    cand = ((v.extra or {}).get("improved_pending") or {}).get("voice")
+    with_ = None
+    if cand and (voices_dir() / cand / "meta.json").exists():
+        with_ = set_aside(voices_dir() / cand, note={"why": f"waited beside {label_of(v.name)} when you removed it"}).name
+    try:
+        a = set_aside(v.dir, note={"why": "you removed it", **({"with": with_} if with_ else {})})
+    except BaseException:
+        if with_:   # the voice couldn't move (a file held open): its waiting one back beside it, as before
+            bring_back(with_)
+        raise
+    return {"aside": a.name, "with": with_}
+
+
+def bring_back(aid: str) -> dict:
+    """A voice set aside, back in the voices under its own name (and a retrained one that went aside with it).
+    Refused when that name is taken now. -> {voice, with}"""
+    d = voices_dir() / ".aside" / (aid or "")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", aid or "") or not d.is_dir():
+        raise LookupError("That set-aside voice isn't there.")
+    from . import fsutil
+    f = d / "meta.json.aside" if (d / "meta.json.aside").exists() else d / "meta.json"
+    try:
+        meta = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ModelError("That set-aside voice's details can't be read, so it can't be put back.")
+    name = slug(meta.get("name") or "")
+    target = voices_dir() / name
+    if not name or target.exists():
+        raise ModelError(f"There's a voice called {label_of(name)} in your voices now. Rename or remove it first.")
+    note = (meta.get("extra") or {}).pop("set_aside", None) or {}
+    fsutil.retry(lambda: os.replace(d, target))
+    meta.update(dir=str(target), pth=str(target / "model.pth"),
+                index=str(target / "model.index") if meta.get("index") else meta.get("index"))
+    fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
+    (target / "meta.json.aside").unlink(missing_ok=True)
+    with_ = None
+    if note.get("with") and (voices_dir() / ".aside" / note["with"]).is_dir():
+        try:
+            with_ = bring_back(note["with"])["voice"]
+        except ModelError:
+            pass   # its name is taken now: it stays aside, listed in SafeHouse
+    pending = ((meta.get("extra") or {}).get("improved_pending") or {}).get("voice")
+    if pending and pending != with_:
+        # what it was waiting on didn't come back with it: no "waiting" pointing at nothing (or at another voice)
+        meta["extra"].pop("improved_pending", None)
+        fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
+    return {"voice": name, "with": with_}
 
 
 def _put_back(aside: Path, target: Path):
@@ -824,9 +892,10 @@ def set_display(name: str, text: str) -> Voice:
 
 
 def remove_voice(name: str):
-    """The one code path that deletes a voice folder (tools/smoke.py u_no_voice_deletes holds the callers to: the
-    user's own Delete, asked twice on the page; the CLI's remove; a one-shot's own just-downloaded community voices).
-    A replace sets the old one aside instead (set_aside)."""
+    """The one code path that deletes a voice folder, and only for the CLI's remove and a one-shot's own
+    just-downloaded community voices (tools/smoke.py u_no_voice_deletes holds the callers). The user's Delete sets the
+    voice aside (remove_to_aside) and a replace does too (set_aside); deleting for good is SafeHouse's Set aside
+    section (safehouse/library.remove_aside)."""
     v = get_voice(name)
     from . import storage
     if storage.ALLOWED_ROOTS is not None and (why := storage.refuse([v.dir])):
