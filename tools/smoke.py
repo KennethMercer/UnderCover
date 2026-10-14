@@ -4065,6 +4065,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/library/smaller"), ("POST", "/api/library/smaller/start"), ("POST", "/api/library/smaller/keep"),
     ("POST", "/api/library/smaller/undo"),
     ("POST", "/api/library/voices/some-voice/full-index"),
+    ("POST", "/api/work/to-queue"),
 ]
 
 
@@ -4643,6 +4644,64 @@ def u_shrink_export():
         assert (vd / "model.index").read_bytes() == b"not an index" and not (vd / ri.EXPORT_ASIDE).exists()
         assert not (vd / "model.index.smaller.tmp").exists()
     return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
+
+
+@check("Train tonight instead: held work carries {id, kind, label, project, held_at, queue_as}; /api/work/to-queue moves a held project entry into the overnight queue as its project item (its own choices) and off the held list, the hold lifting when nothing else is held; a one-shot can't; an improve may replace its own voice")
+def u_to_queue():
+    from undercover.core import worklist
+    from undercover.core.voices import ModelError, voices_dir
+    from undercover.doubleagent import api as DA, night, project as P  # night registers the queue kinds
+    with isolated_data():
+        worklist._STATE = None
+        proj = P.Project.create("Donald Trump", "speaking")
+        proj.sources = [P.Source(id="v1", title="Rally", url="https://example.invalid/v1", duration=600.0, selected=True)]
+        proj.train = {"voice_name": "donald-trump-uc", "length": "quick", "sr": 48000, "state": "paused"}
+        proj.save()
+        class J:
+            resume_spec = {"kind": "train", "project": "donald-trump", "label": "Training Donald Trump"}
+        worklist.hold()
+        worklist._state()["held"] = True
+        worklist.remember(J())
+        worklist.remember(J())                                   # the same work twice: one entry
+        J.resume_spec = {"kind": "oneshot", "text": "Hold On by Agent Smoke", "label": "One-shot: Hold On"}
+        worklist.remember(J())
+        rows = worklist.status()["resume"]
+        assert [r["kind"] for r in rows] == ["train", "oneshot"], rows
+        train, one = rows
+        assert train["id"] and train["project"] == "donald-trump" and train["held_at"] and train["queue_as"] == "project", train
+        assert one["queue_as"] is None, one
+        try:
+            worklist.to_queue(one["id"])
+            raise AssertionError("a one-shot went overnight")
+        except ModelError as e:
+            assert "can't run overnight" in str(e), e
+        st = worklist.to_queue(train["id"])
+        item = next(i for i in st["queue"] if i["kind"] == "project")
+        assert item["target"] == "donald-trump" and [r["kind"] for r in st["resume"]] == ["oneshot"] and st["held"], st
+        tr = P.Project.load("donald-trump").train
+        assert (tr["length"], tr["sr"], tr["state"]) == ("quick", 48000, "paused"), tr   # its own choices, still resumable
+        worklist.forget_paused()
+        assert not worklist.status()["held"]
+        # a restart's saved entries without ids get them
+        worklist._state()["resume"] = [{"kind": "prepare", "project": "donald-trump", "label": "Preparing"}]
+        worklist._save()
+        worklist._STATE = None
+        assert worklist.status()["resume"][0]["id"]
+        # an overnight improve may replace its own voice (a downloaded one has no project); other names stay guarded
+        d = voices_dir() / "obama"
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"name": "obama", "extra": {}}), encoding="utf-8")
+        DA.check_voice_name(proj, "obama", replace="obama")
+        for bad in ("obama", "half-installed"):
+            if bad == "half-installed":
+                (voices_dir() / bad).mkdir()
+            try:
+                DA.check_voice_name(proj, bad)
+                raise AssertionError(f"{bad} was allowed")
+            except ModelError:
+                pass
+        worklist._STATE = None
+    return "held entries with ids; train -> the project item (choices kept, still paused), off the held list; one-shot refused; ids backfilled; improve replaces its own"
 
 
 @check("queue a project (the user: \"queue Trump with specific videos selected\"): /api/work/add {kind: project} takes an existing project with its own choices; nothing ticked or another person's voice name is refused when queued, not overnight; the project shows queued")
@@ -5587,7 +5646,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
