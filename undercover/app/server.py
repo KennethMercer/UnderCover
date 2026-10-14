@@ -144,9 +144,9 @@ def ytdlp_swapped() -> str | None:
 
 
 def voices_json() -> list[dict]:
-    from ..core.voices import list_voices, voice_info
+    from ..core.voices import listed_voices, voice_info
     return [{"name": v.name, "version": v.version, "sr": v.sr, "index": bool(v.index), "f0": v.f0,
-             "source": v.source, "installed": v.installed, **voice_info(v)} for v in list_voices()]
+             "source": v.source, "installed": v.installed, **voice_info(v)} for v in listed_voices()]
 
 
 # ---------------------------------------------------------------- HTTP handler

@@ -109,9 +109,9 @@ def _duplicate_voices(hist: list) -> tuple[list, str]:
     """Voice folders whose model.pth is byte-identical to another voice's (e.g. 'biden' and 'joe-biden' from two
     sites). Keeps the copy used for more covers (then the older install); returns (folders to remove, names)."""
     import hashlib
-    from ..core.voices import list_voices
+    from ..core.voices import listed_voices
     by_size: dict = {}
-    for v in list_voices():
+    for v in listed_voices():
         try:
             by_size.setdefault(v.pth.stat().st_size, []).append(v)
         except OSError:
@@ -260,7 +260,7 @@ def voices() -> list[dict]:
     hist = history()
     q = _quality()
     out = []
-    for v in list_voices():
+    for v in list_voices():   # all of them: a retrained one waiting is listed too (waiting_beside), its storage shown
         ex = v.extra or {}
         score = verdict = None
         for k, r in q.items():   # a measured check for this voice (installed or downloaded for a check)

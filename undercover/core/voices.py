@@ -567,6 +567,32 @@ def list_voices() -> list[Voice]:
     return out
 
 
+def waiting(v: "Voice", by_name: dict | None = None) -> str | None:
+    """The voice a retrained candidate (<voice>-next) waits beside, while it waits (its owner's improved_pending names
+    it); else None. A waiting candidate lives beside its voice only: no picker shows it on its own (SafeHouse lists it,
+    marked, beside its voice). by_name: the voices already loaded, by name (else the owner's meta is read)."""
+    owner = (v.extra or {}).get("pending_for")
+    if not owner:
+        return None
+    if by_name is not None:
+        o = by_name.get(owner)
+        ex = (o.extra or {}) if o else {}
+    else:
+        try:
+            ex = json.loads((voices_dir() / owner / "meta.json").read_text(encoding="utf-8")).get("extra") or {}
+        except (OSError, ValueError):
+            ex = {}
+    # its voice gone (or no longer waiting on it): the candidate is listed like any voice, the only copy left
+    return owner if (ex.get("improved_pending") or {}).get("voice") == v.name else None
+
+
+def listed_voices() -> list["Voice"]:
+    """The voices people pick from: every voice but a retrained candidate waiting beside its own (list_voices has all)."""
+    vs = list_voices()
+    by_name = {v.name: v for v in vs}
+    return [v for v in vs if not waiting(v, by_name)]
+
+
 def get_voice(name: str) -> Voice:
     for v in list_voices():
         if v.name == slug(name):
@@ -712,7 +738,7 @@ def voice_info(v: Voice) -> dict:
     FrontMan's basic voice list puts liked voices first)."""
     from . import ear
     return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v),
-            "likeness_word": likeness_word(v), "ear": ear.taste(v.name)}
+            "likeness_word": likeness_word(v), "ear": ear.taste(v.name), "waiting_beside": waiting(v)}
 
 
 def set_display(name: str, text: str) -> Voice:
