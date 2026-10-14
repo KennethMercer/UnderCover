@@ -73,6 +73,22 @@ def request(text: str, pack: dict, ref: Path, seed: int = 1234, progress=None):
     return fut, out
 
 
+def paced_ref(ref: Path, rate: float | None) -> Path:
+    """The reference clip read `rate` times as fast (pitch kept), made once and kept: an engine that copies the pace of
+    its reference (Turbo) reads slower from a slowed one. The same clip back when rate is None / 1."""
+    if not rate or abs(rate - 1.0) < 0.01:
+        return ref
+    import hashlib
+    import librosa
+    st = Path(ref).stat()
+    out = scratch() / ("ref_" + hashlib.sha1(f"{ref}|{st.st_mtime_ns}|{st.st_size}|{rate}".encode()).hexdigest()[:12] + ".wav")
+    if not out.exists():
+        x, sr = sf.read(str(ref), dtype="float32")
+        x = x.mean(1) if x.ndim > 1 else x
+        sf.write(str(out), librosa.effects.time_stretch(x, rate=rate), sr, subtype="PCM_16")
+    return out
+
+
 def load16(f: Path) -> np.ndarray:
     from scipy.signal import resample_poly
     x, sr = sf.read(str(f), dtype="float32", always_2d=True)
@@ -104,15 +120,18 @@ def stretch(x: np.ndarray, tempo: float) -> np.ndarray:
     return librosa.effects.time_stretch(x, rate=float(tempo)).astype(np.float32)
 
 
-def octave_shift(x16: np.ndarray, rmvpe, target_hz: float | None) -> float:
-    """The engine already speaks at the person's pitch: only a whole-octave correction (normally 0)."""
+def octave_shift(x16: np.ndarray, rmvpe, target_hz: float | None, fine: bool = False) -> float:
+    """The engine already speaks at the person's pitch: only a whole-octave correction (normally 0). fine (an engine that
+    reads lower or higher than the person, Turbo: Obama 9 semitones under his 235 Hz): the median onto the person's, to half
+    a semitone, at most an octave either way."""
     if not target_hz:
         return 0.0
     f0 = rmvpe.infer_from_audio(x16, thred=0.03)
     f0 = f0[f0 > 0]
     if len(f0) <= 20:
         return 0.0
-    return float(12 * round(math.log2(target_hz / float(np.median(f0)))))
+    st = 12 * math.log2(target_hz / float(np.median(f0)))
+    return float(np.clip(round(st * 2) / 2, -12, 12)) if fine else float(12 * round(st / 12))
 
 
 def level(y: np.ndarray, rms_db: float = -20.0, peak: float = 0.89) -> np.ndarray:
@@ -131,9 +150,10 @@ def level(y: np.ndarray, rms_db: float = -20.0, peak: float = 0.89) -> np.ndarra
 
 
 def finish(wav: Path, lv, conv, target_hz: float | None, tempo: float = 1.0, nudge: float = 0.0,
-           keep_wav: bool = False) -> tuple[np.ndarray, int]:
+           keep_wav: bool = False, engine: str | None = None) -> tuple[np.ndarray, int]:
     """The engine's WAV -> RVC in the voice -> float32 audio at the voice's rate (not levelled)."""
     from ..engine.convert import Settings
+    from .engines import ENGINES
     try:
         x = trim(load16(wav))
     finally:
@@ -142,7 +162,7 @@ def finish(wav: Path, lv, conv, target_hz: float | None, tempo: float = 1.0, nud
     if len(x) < 1600:   # nothing readable in it
         return np.zeros(0, np.float32), lv.tgt_sr
     x = stretch(x, tempo)
-    shift = octave_shift(x, conv.rmvpe, target_hz) + float(nudge or 0)
+    shift = octave_shift(x, conv.rmvpe, target_hz, fine=bool(ENGINES.get(engine or "", {}).get("pitch_to_target"))) + float(nudge or 0)
     # a lead-in of silence: converted straight from its first 50 ms, a sentence's opening came out garbled ("Good
     # evening." heard as "Grieving.", measured 2026-10-13); with context before it, it comes out as read
     y, sr = conv.convert(np.concatenate([np.zeros(int(16000 * LEAD_S), np.float32), x]), lv, Settings(pitch=shift))

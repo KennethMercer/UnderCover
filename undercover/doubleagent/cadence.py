@@ -498,7 +498,7 @@ class Tester:
         rows, sims, outs, everyday, f0s = [], [], [], [], []
         for i, (s, w) in enumerate(zip(TEST + PACE_TEST, wavs)):
             self.check()
-            y, sr = render.finish(w, self.lv, self.conv, self.hz, tempo=tempo, nudge=nudge, keep_wav=True)
+            y, sr = render.finish(w, self.lv, self.conv, self.hz, tempo=tempo, nudge=nudge, keep_wav=True, engine=C.reading_engine(None))
             g = np.gcd(sr, 16000)
             y16 = resample_poly(y, 16000 // g, sr // g).astype(np.float32)
             r = features(y16, s, self.conv.rmvpe)
@@ -888,7 +888,7 @@ def make_samples(job, voice_name: str) -> dict:
         fut, wav = render.request(AB_LINE, pack, d / pack.get("ref", "ref.wav"), seed=AB_SEED)
         render.client.wait(fut, cancel=lambda: job.cancel)
         y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)),
-                              nudge=float(pack.get("pitch_nudge") or 0))
+                              nudge=float(pack.get("pitch_nudge") or 0), engine=C.reading_engine(pack.get("engine")))
         y = render.level(y)   # SpeakEasy's loudness, so both sound as they would there
         with _LOCK:
             fresh = get_voice(v.name)

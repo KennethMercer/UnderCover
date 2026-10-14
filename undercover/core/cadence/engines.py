@@ -64,6 +64,13 @@ FAMILY = ("chatterbox-turbo", "chatterbox")
 ENGINES = {
     "chatterbox-turbo": {"name": "Chatterbox Turbo", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 2.5,
                          "vram_gb": 3.6, "size_mb": 2830, "module": "chatterbox",
+                         # Turbo ignores cfg_weight / exaggeration, which made Slower and Faster (phase 4c). Measured (tools/research/
+                         # turbo_pace.py, 3 voices x 3 seeds): a reference clip slowed to 0.75x reads 14% slower (Chatterbox's Slower
+                         # was -11..-15%); a sped-up one is unreliable (+13/+2/+2% at 1.4x), so Faster moves the gaps only.
+                         "pace_ref_rate": {"slower": 0.75},
+                         # Turbo's reading sits lower than the person's (Obama's 9 semitones under, golden run 2026-10-13): finish moves
+                         # its median onto the voice's own, not just by octaves
+                         "pitch_to_target": True,
                          "about": "Resemble AI's open model (MIT code and weights), the faster successor: about twice as fast as "
                                   "Chatterbox, cleaner on hard words, same cadence. Every output carries Resemble's inaudible watermark."},
     "chatterbox": {"name": "Chatterbox", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 1.0,   # with RVC, measured phase 4
