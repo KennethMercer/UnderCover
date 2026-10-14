@@ -89,7 +89,8 @@ function progressSay(ev) {
   const base = ev.label || ev.message || "";
   if (!base) return "";
   const step = ev.steps > 1 && ev.step_n && !/\d+ of \d+/.test(base) ? ` (step ${ev.step_n} of ${ev.steps})` : "";
-  const left = ev.total_left != null && ev.total_left > 0 ? ` · ${leftText(ev.total_left)}` : "";
+  const waiting = ev.stage === "preparing" || ev.state === "queued";
+  const left = ev.total_left != null && ev.total_left > (waiting ? 5 : 0) ? ` · ${leftText(ev.total_left)}` : "";
   return base + step + left;
 }
 const fmtPitch = v => { v = +v; return (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v); };
@@ -597,6 +598,9 @@ function setStage(name, cls, frac, eta) {
 function startProgress(job, elsewhere = false) {
   $("#progress").hidden = false; $("#progress-h").textContent = "Working"; $("#cancel").textContent = "Cancel"; $("#cancel").hidden = false;
   const est = S.estimate || {};
+  $(".stage[data-s=separating] .sname").textContent = "Separating vocals";   // a finished cover left "Stems ready" here
+  $(".stage[data-s=converting] .sname").textContent = "Converting the vocal";
+  $(".stage[data-s=mixing] .sname").textContent = "Mixing & loudness match";
   ORDER.forEach(s => setStage(s, "", 0, est[s] != null ? (s === "separating" && est.stems_cached && !S.opts.karaoke && !S.opts.dereverb ? "cached" : `≈ ${fmtSecs(est[s])}`) : "—"));
   $(".stage[data-s=converting] .sname").textContent = `Converting to ${voiceDisplay(S.voice)}`;
   $("#progress").scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -614,8 +618,9 @@ function startProgress(job, elsewhere = false) {
     // queued behind the song's preparation (or other work): it says what it waits for, with the step and the time left
     if (!ORDER.includes(ev.stage) && !ev.final && (ev.stage === "preparing" || ev.state === "queued") && (ev.label || ev.message)) {
       $("#progress-h").textContent = progressSay(ev); $("#sr-live").textContent = ev.label || ev.message;
+      $(".stage[data-s=separating] .sname").textContent = ev.label || ev.message;   // the waiting label only
       const f = ev.fraction ?? ev.frac;
-      if (f != null) setStage("separating", "active", f, ev.total_left != null ? `${fmtSecs(Math.max(1, ev.total_left))} left` : null);
+      if (f != null) setStage("separating", "active", f, ev.total_left > 5 ? `${fmtSecs(ev.total_left)} left` : "waiting");
       if (ev.total_left != null) { totalLeft = ev.total_left; leftAt = performance.now(); }
     }
     if (ORDER.includes(ev.stage)) {
@@ -780,11 +785,12 @@ function previewVariants() {
   if (previewKind === "octave") {
     const cur = +(o.octave || 0);
     return uniq([cur - 1, cur, cur + 1].map(x => clamp(x, -2, 2))).map(x => ({
-      octave: x, label: x === 0 ? (o.fit ? "Fit's pick" : "Same octave") : `Voice ${x > 0 ? "+" : "−"}${Math.abs(x)} octave` }));
+      octave: x, label: o.fit ? (x === cur ? "Fit's pick" : `${Math.abs(x - cur) > 1 ? "Two octaves" : "An octave"} ${x < cur ? "lower" : "higher"}`)   // around the pick, not absolute
+        : x === 0 ? "Same octave" : `Voice ${x > 0 ? "+" : "−"}${Math.abs(x)} octave` }));
   }
   if (previewKind === "key") {
     const cur = +(o.key || 0);
-    return uniq([cur - 2, cur, cur + 2].map(x => clamp(x, -6, 6))).map(x => ({ key: x, label: x === 0 && o.fit ? "Fit's pick" : keyLabel(x) }));
+    return uniq([cur - 2, cur, cur + 2].map(x => clamp(x, -6, 6))).map(x => ({ key: x, label: o.fit ? (x === cur ? "Fit's pick" : `${Math.abs(x - cur)} semitone${Math.abs(x - cur) === 1 ? "" : "s"} ${x < cur ? "lower" : "higher"}`) : keyLabel(x) }));
   }
   if (previewKind === "correction")
     return [{ pitch_correction: 0, label: "No correction" }, { pitch_correction: 0.4, label: "Gentle (0.4)" }, { pitch_correction: 1, label: "Full autotune" }];
@@ -854,8 +860,11 @@ $("#preview-go").onclick = async () => {
 };
 
 function renderPreviews(list, kind, made, variants) {
-  // the server's options carry the octave and key it settled on (the fit's pick, with the offset); keep what each variant asked for
-  list = list.map((p, i) => ({ ...p, options: Object.fromEntries(Object.keys(variants[i] || {}).filter(k => k !== "label" && p.options && k in p.options).map(k => [k, p.options[k]])) }));
+  // the server's options carry the octave AND key it settled on (the fit's pick, with the offset). An octave or key card keeps them
+  // both (that's what was heard: Use this applies the pair); the other tabs keep only what their variant asked for
+  const pitch = kind === "octave" || kind === "key";
+  list = list.map((p, i) => ({ ...p, options: pitch ? { ...(p.options || {}) }
+    : Object.fromEntries(Object.keys(variants[i] || {}).filter(k => k !== "label" && p.options && k in p.options).map(k => [k, p.options[k]])) }));
   const fitNote = list.find(p => p.fit)?.fit;   // "Fit to voice: octave -1, key +3 (…)"
   const box = document.createElement("div");   // this tab's cards; display: contents keeps them in the grid
   box.className = "pv-set"; box.dataset.kind = kind; box.dataset.song = made.song; box.dataset.voice = made.voice;
