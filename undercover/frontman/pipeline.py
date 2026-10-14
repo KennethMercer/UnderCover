@@ -243,16 +243,44 @@ class CoverEngine:
             return dst
         sliced = {k: cut(Path(v), k) for k, v in stems.items()}
         song_cut = cut(song, "song")
+        base, fit_note = preview_fit(self, opts, stems)
         out = []
         for i, v in enumerate(variants):
             report("rendering", i / len(variants), f"Rendering {v.get('label', i + 1)}")
-            overrides = {k: v[k] for k in v if k != "label" and hasattr(opts, k)}
-            o = replace(opts, **overrides, format="mp3")
+            overrides = variant_overrides(opts, base, v)
+            o = replace(base, **overrides, format="mp3", fit=False)   # the fit is settled once, above
             r = self.make_cover(song_cut, o, out=work / f"variant_{i}", stems=sliced, record=False,
                                 key_song=song, title="preview")
-            out.append({"label": v.get("label", str(i + 1)), "file": r.output, "options": overrides})
+            out.append({"label": v.get("label", str(i + 1)), "file": r.output,
+                        "options": {**overrides, "octave": o.octave, "key": o.key}, "fit": fit_note})
         report("rendering", 1.0, "Previews ready")
         return out
+
+
+def preview_fit(engine, opts: "CoverOptions", stems: dict) -> tuple["CoverOptions", str | None]:
+    """With "Fit pitch to the voice" on, the fit is worked out ONCE, on the full stems (the same melody the full cover
+    fits), not inside each 15 s variant: there it overwrote each variant's octave and key, so every octave or key
+    preview came out the same (Internal Affairs, Compare). -> (the options with the fitted octave / key, its note)."""
+    if not opts.fit:
+        return opts, None
+    from ..core.voices import get_voice
+    notes: list = []
+    voice = get_voice(opts.voice)
+    bvoice = get_voice(opts.backing_voice) if opts.backing_voice else None
+    fitted = engine._fit(opts, voice, stems, notes, bvoice)
+    return fitted, (notes[0] if notes else None)
+
+
+def variant_overrides(opts: "CoverOptions", base: "CoverOptions", v: dict) -> dict:
+    """A variant's option overrides. With the fit on, an octave or key is read relative to the page's own setting and
+    applied to the fitted one ("Same octave" = the fit's pick, +1 / -1 around it), clamped to the page's ranges."""
+    ov = {k: v[k] for k in v if k not in ("label", "fit") and hasattr(opts, k)}
+    if opts.fit:
+        if "octave" in ov:
+            ov["octave"] = max(-2, min(2, int(base.octave or 0) + int(ov["octave"]) - int(opts.octave or 0)))
+        if "key" in ov:
+            ov["key"] = max(-6, min(6, float(base.key or 0) + float(ov["key"]) - float(opts.key or 0)))
+    return ov
 
 
 def busiest_window(vocals: Path, seconds: float) -> tuple[float, float]:

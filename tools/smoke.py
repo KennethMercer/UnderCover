@@ -4697,6 +4697,39 @@ def u_shrink_export():
     return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
 
 
+@check("Compare with Fit on (Internal Affairs): the fit is worked out once on the full stems; octave / key versions are read relative to the page's setting and land around the fit's pick, so they differ; with Fit off they're as sent")
+def u_preview_fit():
+    from dataclasses import replace
+    from undercover.frontman import pipeline as PL
+    opts = PL.CoverOptions(voice="v", octave=0, key=0, fit=True)
+    calls = []
+
+    class Engine:
+        def _fit(self, o, voice, stems, notes, bvoice):
+            calls.append(1)
+            notes.append("Fit to voice: octave -1, key +2")
+            return replace(o, octave=-1, key=2)
+    from undercover.core import voices
+    real = voices.get_voice
+    voices.get_voice = lambda name: type("V", (), {"name": name, "extra": {}})()
+    try:
+        base, note = PL.preview_fit(Engine(), opts, {"vocals": "x"})
+    finally:
+        voices.get_voice = real
+    assert (base.octave, base.key) == (-1, 2) and note.startswith("Fit to voice") and len(calls) == 1
+    octs = [PL.variant_overrides(opts, base, {"octave": x, "label": "?"})["octave"] for x in (-1, 0, 1)]
+    assert octs == [-2, -1, 0], octs                      # around the fit's pick, all different
+    keys = [PL.variant_overrides(opts, base, {"key": x})["key"] for x in (-2, 0, 2)]
+    assert keys == [0, 2, 4], keys
+    assert PL.variant_overrides(opts, base, {"octave": 2})["octave"] == 1     # clamped to the page's range
+    assert PL.variant_overrides(opts, base, {"polish": False}) == {"polish": False}   # other kinds untouched
+    off = replace(opts, fit=False)
+    base_off, note_off = PL.preview_fit(Engine(), off, {})
+    assert base_off is off and note_off is None and len(calls) == 1         # Fit off: no fit, versions as sent
+    assert PL.variant_overrides(off, base_off, {"octave": 1})["octave"] == 1
+    return "one fit; octaves -2/-1/0 and keys 0/2/4 around it; clamped; Fit off as sent"
+
+
 @check("Train tonight instead: held work carries {id, kind, label, project, held_at, queue_as}; /api/work/to-queue moves a held project entry into the overnight queue as its project item (its own choices) and off the held list, the hold lifting when nothing else is held; a one-shot can't; an improve may replace its own voice")
 def u_to_queue():
     from undercover.core import worklist
@@ -5700,7 +5733,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
