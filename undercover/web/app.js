@@ -3,6 +3,12 @@
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+// "Click again to confirm" (one helper for every destructive two-click button): the second click counts only once the first has stood for
+// CONFIRM_MS, so a double click (two clicks 100 ms apart on a button that turns into "Confirm") can never confirm by accident (IA P5-1)
+const CONFIRM_MS = 600;
+const arm = el => { el.dataset.armedAt = Date.now(); };
+const disarm = el => { delete el.dataset.armedAt; };
+const armedFor = el => { const t = +el.dataset.armedAt; return t > 0 && Date.now() - t >= CONFIRM_MS; };   // true only for a deliberate second click
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const paceWord = x => x.pace ? x.pace[0].toUpperCase() + x.pace.slice(1) : `${(+x.speed).toFixed(1)}×`;
 const store = {
@@ -402,7 +408,8 @@ function renderVoices() {
   });
   $$(".remove", box).forEach(b => b.onclick = async e => {
     e.stopPropagation();
-    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Confirm remove"; setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Remove"; }, 4000); return; }
+    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Confirm remove"; setTimeout(() => { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; }, 4000); return; }
+    if (!armedFor(b)) return;   // a double click isn't a confirmation
     try { await api(`/api/voices/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); await loadVoices(); }
     catch (err) { showError(err.message, "Couldn't remove the voice"); }
   });
