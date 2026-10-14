@@ -253,6 +253,7 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
         push("voice", 0.04, f"Getting real clips of {person} to check voices against")
         try:
             P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, cancel=lambda: job.cancel or job.pausing,
+                              stop=lambda: job.cancel or getattr(control, "stop", False),
                               progress=lambda f, label, **kw: push("voice", 0.04 + 0.1 * f, f"Getting real clips of {person}: {label}"),
                               between=control.service,
                               friendly=lambda e: jobs.friendly(e, "preparing a source"))
@@ -666,6 +667,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                 try:
                     P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, progress=prog, between=control.service,
                                       cancel=lambda: job.cancel or job.pausing,
+                                      stop=lambda: job.cancel or getattr(control, "stop", False),
                                       friendly=lambda e: jobs.friendly(e, "preparing a source"))
                 except P.Cancelled:
                     raise Paused() if job.pausing else jobs.Cancelled()

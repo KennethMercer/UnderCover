@@ -17,6 +17,11 @@ from .timing import timed
 
 SEP = CONFIG["separation"]
 _progress = None  # current per-step callback(fraction), set by StemSeparator.run
+_stop = None      # Stop (not Pause): checked before every chunk, set by separate(stop=...); raises Stopped
+
+
+class Stopped(Exception):
+    """Separation was stopped part-way (Stop: within one chunk, about a second of GPU work). Nothing is cached."""
 
 # The separation models audio-separator fetches itself (it writes straight to the final name, so a cut-off download
 # leaves a broken file that looks present). Pinned for the Doctor (phase 10): the SHA-256 of the copies this app was
@@ -57,6 +62,8 @@ def _quiet_tqdm(iterable, *args, **kwargs):
     """Stand-in for tqdm inside audio-separator: no console bar, reports chunk progress instead."""
     n = len(iterable) if hasattr(iterable, "__len__") else 0
     for i, item in enumerate(iterable, 1):
+        if _stop is not None and _stop():
+            raise Stopped()
         yield item
         if _progress and n:
             _progress(i / n)
@@ -150,6 +157,8 @@ class StemSeparator:
             return cached
 
         sep = self._get(model)
+        if _stop is not None and _stop():   # Stop pressed while the model loaded: don't start this pass
+            raise Stopped()
         sep.model_instance.overlap = overlap  # read per call, so no reload needed
         shutil.rmtree(self.work_dir, ignore_errors=True)
         self.work_dir.mkdir(parents=True)
@@ -191,9 +200,21 @@ def lead_missing(lead: Path, backing: Path) -> bool:
 
 def separate(audio: Path, dereverb: bool | None = None, karaoke: bool | None = None,
              separator: StemSeparator | None = None, quality: str | None = None,
-             progress=None, one_voice_if_no_lead: bool = False) -> dict[str, Path]:
+             progress=None, one_voice_if_no_lead: bool = False, stop=None) -> dict[str, Path]:
     """Full separation stage. Returns paths for 'vocals' (the vocal to convert),
     'instrumental', and optionally 'backing' (backing vocals, to mix back in).
+    stop: a Stop check (never Pause): true -> Stopped is raised within one chunk (the user: "the stop has to be a
+    stop"; an 83-minute rally video took minutes to notice a Stop checked only between files)."""
+    global _stop
+    _stop = stop
+    try:
+        return _separate(audio, dereverb, karaoke, separator, quality, progress, one_voice_if_no_lead)
+    finally:
+        _stop = None
+
+
+def _separate(audio, dereverb, karaoke, separator, quality, progress, one_voice_if_no_lead) -> dict[str, Path]:
+    """separate() without the stop wiring.
     one_voice_if_no_lead (covers): when the karaoke split finds no lead (a duet, lead_missing), the whole vocal is the
     lead and there's no backing. Training leaves it off: a duet's blended voices aren't one person's clips."""
     audio = Path(audio).resolve()
