@@ -3905,7 +3905,7 @@ def u_page_rules():
     assert "assignBrief()" in replay.split("setTimeout(assignBoot")[0] and "assignStart()" not in replay.split("setTimeout(assignBoot")[0], "Replay must show the briefing"
     # the Compare panel: one set of cards per tab, and the octave / key previews never ride with fit on (it overrides them)
     app = (web / "app.js").read_text(encoding="utf-8")
-    assert "pv-set" in app and "fit: false" in app and "pvByHand" in app, "the Compare panel lost its per-tab sets or the fit guard"
+    assert "pv-set" in app and "pvByHand" in app and "Fit's pick" in app and "fit: false" not in app.split("function renderPreviews")[0].split("preview-go")[1], "the Compare panel lost its per-tab sets, or the fit:false workaround is back"
     # M3: result titles and library rows say display names
     lib = (web / "library.js").read_text(encoding="utf-8")
     assert "voiceDisplay(x.voice)" in lib and "voiceDisplay(h.voice)" in app, "voice ids are back in basic-view titles"
@@ -3916,6 +3916,9 @@ def u_page_rules():
     assert "tr-tonight" in (web / "train.js").read_text(encoding="utf-8") and 'id="tr-tonight"' in (web / "index.html").read_text(encoding="utf-8"), "step 4 lost its Train tonight"
     assert "pvByHand(kind)) S.opts.fit = false; store.set" in app, "Use this must decide by-hand at the click (and save: a comment once swallowed the rest of the line)"
     assert "const day = x => new Date(x.getFullYear()" in lib, "the Library's today / yesterday must use calendar days"
+    da = (web / "doubleagent.js").read_text(encoding="utf-8")
+    assert "impHtml" in da and 'data-imp-keep' in da and '"/keep"' in da, "DoubleAgent lost the retrained voice's blind A/B"
+    assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
     assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
     assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"

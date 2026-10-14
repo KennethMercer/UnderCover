@@ -56,6 +56,11 @@ function voiceLine(v) {
   return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~1 hour<span data-deep>, ~2 GB while training</span>)</span>`;
 }
 function planTime(p) {
+  const eta = p.eta_s;   // an installed voice: the server's own range, in seconds
+  if (eta && p.voice?.how === "installed") {
+    const lo = Math.max(1, Math.round(eta.low / 60)), hi = Math.round(eta.high / 60);
+    return hi < 1 ? "under a minute" : lo >= hi ? `about ${Math.max(1, hi)} min` : `about ${lo}–${hi} min`;
+  }
   const v = p.voice?.how;
   return v === "train" ? "about 1 hour" : v === "check" ? "about 3–5 min (an hour if it has to train)" : "about 1–3 min";
 }
@@ -279,7 +284,9 @@ function osFollow(id, title) {
         if (plan.settings) {
           // For this session only: your saved settings stay as they were ("Back to my settings" restores them).
           if (!OS.mine) OS.mine = { ...S.opts };
-          Object.assign(S.opts, { octave: plan.settings.octave, key: plan.settings.key || 0, backing_voice: plan.voice?.name, karaoke: true, dereverb: true, quality: "high" });
+          // the cover's exact options when the plan carries them (the original backing kept for stacked harmonies stays kept)
+          if (plan.settings.options) S.opts = { ...S.defaults, ...plan.settings.options };
+          else Object.assign(S.opts, { octave: plan.settings.octave, key: plan.settings.key || 0, backing_voice: plan.voice?.name, karaoke: true, dereverb: true, quality: "high" });
           syncControls(); refreshEstimate();
           $("#os-plan").insertAdjacentHTML("beforeend", ` <button class="linkbtn" id="os-mine" type="button">Back to my settings</button>`);
           $("#os-mine").onclick = () => { S.opts = OS.mine; OS.mine = null; syncControls(); refreshEstimate(); $("#os-mine").remove(); };
