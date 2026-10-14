@@ -1258,6 +1258,7 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "core/voices.py::main::remove_voice::a.name",                                # the CLI's remove
     "doubleagent/service.py::resolve_voice.drop_downloads::remove_voice::name",  # a one-shot's own fresh downloads
     "safehouse/library.py::_remove::rmtree::p",                                  # Storage clean-up the user ticks
+    "safehouse/library.py::remove_aside::remove_files",                          # a set-aside voice the user deletes
     "doubleagent/cadence.py::remove_pack::rmtree::v.dir / 'tts'",                # a cadence the user deletes
     # temp and work folders, caches, projects, speech parts
     "app/server.py::Handler._voice_upload::rmtree::work", "app/server.py::_clean_old_previews::rmtree::sub",
@@ -1438,6 +1439,51 @@ def u_export_lands():
         for m, n, f in real:
             setattr(m, n, f)
     return "queued / Do it all -> waits as -next; a second refused; confirmed replace -> old aside, Undo; failed replace -> put back"
+
+
+@check("SafeHouse lists the voices set aside (never deleted, P4-1): replaced, not kept, unfinished, with sizes, dates and the Undo each serves; deleting one is the user's own choice, only inside voices/.aside, and ends that Undo")
+def u_aside_list():
+    from undercover.core.voices import get_voice, voices_dir
+    from undercover.doubleagent import improved, night
+    from undercover.safehouse import api as SA, library
+    with isolated_data():
+        assert library.aside() == []
+        _voice_dir("morgan-freeman-uc", {"trained": True, "project": "morgan-freeman"})
+        _voice_dir("morgan-freeman-uc-next", {"trained": True, "project": "morgan-freeman"})
+        night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", 0.71, 0.74, 30)
+        improved.keep("morgan-freeman-uc", "new")                       # the old one goes aside
+        odd = voices_dir() / ".aside" / "someone-20261001-010101-unfinished"
+        odd.mkdir(parents=True)
+        (odd / "model.pth").write_bytes(b"x" * 10)
+        items = {x["id"]: x for x in library.aside()}
+        kept = next(x for x in items.values() if x["undo_for"])
+        assert kept["voice"] == "morgan-freeman-uc" and kept["size"] > 0 and "kept" in kept["why"], kept
+        assert items[odd.name]["why"] == "a replace that didn't finish" and items[odd.name]["undo_for"] is None
+        assert items[odd.name]["at"] == "2026-10-01 01:01", items[odd.name]   # from its stamp, not the folder's time
+
+        class H:
+            path, out, err = "/api/library/aside", None, None
+
+            def _json(self, obj, status=200):
+                self.out = obj
+
+            def _error(self, msg, status=400):
+                self.err = (msg, status)
+        h = H()
+        assert SA.handle(h, "GET", "/api/library/aside") and {x["id"] for x in h.out} == set(items)
+        for bad in ("..", "x/../..", "nope"):
+            h.err = None
+            SA.handle(h, "DELETE", f"/api/library/aside/{bad}")
+            assert h.err, f"{bad} accepted"
+        assert get_voice("morgan-freeman-uc").dir.exists()
+        SA.handle(h, "DELETE", f"/api/library/aside/{kept['id']}")
+        assert h.out["undo_ended_for"] == "morgan-freeman-uc" and h.out["freed"] > 0, h.out
+        assert not (voices_dir() / ".aside" / kept["id"]).exists()
+        assert not improved.state("morgan-freeman-uc"), "an Undo with nothing behind it"
+        assert (get_voice("morgan-freeman-uc").dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the voice was touched"
+        library.remove_aside(odd.name)
+        assert library.aside() == []
+    return "listed with why / size / Undo; bad ids refused; delete frees it and ends its Undo; the voice untouched"
 
 
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
@@ -1971,7 +2017,7 @@ def u_rolloff_covers():
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 4, "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py", "doubleagent/improved.py",
-                                                                        "frontman/history.py", *["safehouse/smaller.py"] * 8,
+                                                                        "frontman/history.py", "safehouse/library.py", *["safehouse/smaller.py"] * 8,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
@@ -4592,6 +4638,7 @@ PHONE_SAMPLES = [
     ("DELETE", "/api/library/songs/0123456789abcdef"), ("POST", "/api/library/voices/v-uc/display"),
     ("POST", "/api/library/voices/v-uc/rename"), ("GET", "/api/library/voices/v-uc/export"),
     ("DELETE", "/api/library/voices/v-uc/cadence"), ("GET", "/api/library/cleanup"), ("POST", "/api/library/cleanup"),
+    ("GET", "/api/library/aside"), ("DELETE", "/api/library/aside/morgan-20261014-120000"),
     ("POST", "/api/library/tools/ytdlp-update"), ("POST", "/api/library/tools/ytdlp-auto"), ("GET", "/api/addons"),
     ("GET", "/api/storage"),
     *[("POST", f"/api/addons/f5-tts/{a}") for a in ("install", "remove", "use")],
@@ -6311,7 +6358,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
