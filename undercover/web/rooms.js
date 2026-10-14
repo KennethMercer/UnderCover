@@ -190,6 +190,7 @@ async function loadStorage() {
   renderPlaces();
   if (typeof vaultLoad === "function") vaultLoad();   // the Vault section (vault.js)
   if (typeof smallerLoad === "function") smallerLoad();   // Make it smaller (smaller.js)
+  if (typeof asideLoad === "function") asideLoad();   // voices set aside, with what they take (aside.js)
 }
 
 function renderPlaces() {
