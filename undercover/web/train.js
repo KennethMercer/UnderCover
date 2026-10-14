@@ -99,6 +99,11 @@ function follow(id, kind) {
         clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true;
         if (ev.state === "done") loadVoices();   // the card after training: doubleagent.js, on uc:jobdone
       }
+      if (ev.state === "done" && ev.pending_for && ev.message)   // it landed beside a voice that was already there: it waits for the ear
+        showError(ev.message, `Waiting beside ${voiceDisplay(ev.pending_for)}`, { label: "Listen to both", run: () => libOpenAb(ev.pending_for) }, true);
+      if (kind === "export" && ev.state === "done" && T.replaced && !ev.pending_for && ev.voice)   // a confirmed replace: the old one is set aside, and Undo puts it back
+        showError(`${voiceDisplay(ev.voice)} is the new one now. The old one is set aside, not deleted.`, "Replaced", { label: "Undo", run: () => undoImp(ev.voice) }, true);
+      if (kind === "export") T.replaced = false;
       refresh().then(() => { if (kind === "export" && ev.voice) loadVoices(); });
     }
   });
@@ -461,17 +466,39 @@ function renderListen() {
       <div class="row">${playBtn(p.real_preview, "Play the real voice")}<span class="meta">held out from training</span></div></div>`
     + saves.slice().reverse().map(s => `<div class="ckpt${s.epoch === st.best ? " best" : ""}">
       <div class="row spread"><b>Epoch ${s.epoch}</b><span class="tag${s.epoch === st.best ? " ok" : ""}">${s.epoch === st.best ? "best · " : ""}${s.val.toFixed(3)}</span></div>
-      <div class="row">${playBtn(s.preview, `Play epoch ${s.epoch}`)}${busy ? "" : `<button class="linkbtn" data-export="${s.epoch}">${st.exported_epoch === s.epoch ? "Added ✓" : "Use this one"}</button>`}</div></div>`).join("");
+      <div class="row">${playBtn(s.preview, `Play epoch ${s.epoch}`)}${busy ? "" : `<button class="linkbtn" data-export="${s.epoch}">${st.waiting && st.waiting.epoch === s.epoch ? `Waiting beside ${esc(voiceDisplay(st.waiting.voice))}` : st.exported_epoch === s.epoch ? "Added ✓" : "Use this one"}</button>`}</div></div>`).join("");
   $$("[data-export]").forEach(b => b.onclick = () => exportVoice(+b.dataset.export));
+}
+// "Use this one" onto a voice that's already there: replace it (the old one is set aside, Undo puts it back) or let the two wait side by
+// side for the blind A/B (the new one lands as <voice>-next). Nothing is replaced unheard unless this is answered "Replace".
+function askReplace(name) {
+  return new Promise(resolve => {
+    const dlg = $("#replace-dlg"), who = voiceDisplay(name);
+    $("#replace-q").textContent = `Replace ${who} with this one?`;
+    $("#replace-say").textContent = `The current voice is set aside, not deleted. Undo puts it back. Or let them wait side by side: you hear both read the same line, blind, and keep the one you like.`;
+    const done = v => { dlg.close(); resolve(v); };
+    $("#replace-yes").onclick = () => done("replace"); $("#replace-wait").onclick = () => done("wait"); $("#replace-no").onclick = () => done(null);
+    dlg.oncancel = () => resolve(null);   // Esc
+    dlg.showModal();
+    $("#replace-wait").focus();
+  });
 }
 async function exportVoice(epoch) {
   const st = T.proj.train || {};
   const name = $("#tr-name").value || st.voice_name;
-  const overwrite = !!st.exported && st.exported === name;
-  if (!overwrite && (await api("/api/voices")).some(v => v.name === name) &&
-      !confirm(`A voice called “${name}” already exists. Replace it?`)) return;
-  try { const r = await P("export", { epoch, name, overwrite: true }); follow(r.job, "export"); }
-  catch (e) { showError(e.message, "Couldn't add the voice"); }
+  let replace = false, exists = false;
+  try {
+    exists = (await api("/api/voices")).some(v => v.name === name);
+    if (exists) {
+      const choice = await askReplace(name);
+      if (!choice) return;
+      replace = choice === "replace";
+    }
+    // overwrite without replace: it lands beside the voice as <voice>-next, for the A/B
+    const r = await P("export", { epoch, name, ...(replace ? { replace: true } : exists ? { overwrite: true } : {}) });
+    T.replaced = replace;
+    follow(r.job, "export");
+  } catch (e) { showError(e.message, "Couldn't add the voice"); }   // the server's own words: a voice in use, a retrained one already waiting
 }
 function onExportEvent(ev) {
   const d = $("#tr-done");
@@ -481,7 +508,13 @@ function onExportEvent(ev) {
 function renderDone() {
   const p = T.proj, st = p.train || {}, d = $("#tr-done");
   if (T.live?.kind === "export") return;
-  if (st.state === "exported" && st.exported) {
+  if (st.state === "exported" && st.waiting) {   // landed beside a voice that was already there: not "Added", waiting for the ear
+    d.hidden = false;
+    d.innerHTML = `<div class="row spread"><div><h3 class="tr-h3">Waiting beside ${esc(voiceDisplay(st.waiting.voice))}</h3>
+      <p class="meta">${esc(voiceDisplay(st.waiting.voice))} was already in your voices, so this one waits beside it (epoch ${st.waiting.epoch}). Listen to both on its voice card and keep the one you like; the other is set aside, not deleted.</p></div>
+      <button class="btn primary" id="tr-wait-ab">Listen to both</button></div>`;
+    $("#tr-wait-ab").onclick = () => libOpenAb(st.waiting.voice);
+  } else if (st.state === "exported" && st.exported) {
     d.hidden = false;
     d.innerHTML = `<div class="row spread"><div><h3 class="tr-h3">${esc(st.exported)} is ready</h3>
       <p class="meta">v2 · ${(st.sr || 40000) / 1000} kHz · epoch ${st.exported_epoch} · ${st.train_minutes} min of training audio · added to your voices</p></div>
