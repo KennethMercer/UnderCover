@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-13-preview-compare",
+      "date": "2026-10-13",
+      "title": "Preview's Compare panel, fixed",
+      "lines": [
+        "Each tab (Voice octave, Song key, Pitch correction, Polish) now keeps its own versions, so one tab never shows another's.",
+        "With “Fit pitch to the voice” on, the octave and key previews used to sound identical. They now set the pitch by hand, and Use this turns the fit off."
+      ]
+    },
+    {
       "id": "2026-10-13-full-index",
       "date": "2026-10-13",
       "title": "A new voice sounds off? Put the full index back",
