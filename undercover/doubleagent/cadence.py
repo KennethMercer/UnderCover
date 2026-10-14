@@ -741,15 +741,19 @@ def train(job, voice_name: str, push, control=None) -> dict:
 # the finished reading stretched) until the natural pace is within PACE_TOL of the person's own (phase 12's target).
 PACE_TOL = 0.10
 PACE_RATE_LO, PACE_RATE_HI = 0.5, 1.25   # the reference clip is read at this many times its speed
+PACE_AIM = 0.05    # aim this far inside the person's pace (on the side the first reading was): the smallest change that lands
 PACE_K = 0.5       # measured (tools/research/turbo_pace.py): pace follows the reference's speed to about the power 0.5
 PACE_READS = 4     # readings of the six lines at most (the first is at the clip's own speed)
 
 
 def choose_rate(read, target: float, tol: float = PACE_TOL) -> tuple[float, dict]:
     """The reference speed whose pace lands within tol of target: read(rate) -> pace (syllables per second). Starts at
-    1.0, then jumps by the pace-follows-rate-to-the-k model (k refitted from two readings). -> (rate, {rate: pace})."""
+    1.0, then jumps by the pace-follows-rate-to-the-k model (k refitted from two readings), aiming PACE_AIM inside the
+    target on the side it started (a pace within the tolerance already is left alone, and one just outside isn't pushed
+    past the person's: Obama at +12% went to -7% when aimed at the target itself). -> (rate, {rate: pace})."""
     err = lambda r: abs(tried[r] / target - 1)   # noqa: E731
     tried = {1.0: read(1.0)}
+    goal = target * (1 + PACE_AIM * (1 if tried[1.0] > target else -1))
     while len(tried) < PACE_READS:
         best = min(tried, key=err)
         if err(best) <= tol:
@@ -759,7 +763,7 @@ def choose_rate(read, target: float, tol: float = PACE_TOL) -> tuple[float, dict
         if len(pts) >= 2 and pts[0][0] != pts[-1][0] and pts[0][1] > 0 and pts[-1][1] > 0:
             fit = math.log(pts[-1][1] / pts[0][1]) / math.log(pts[-1][0] / pts[0][0])
             k = fit if 0.1 <= fit <= 2.0 else PACE_K
-        nxt = round(float(np.clip(best * (target / tried[best]) ** (1 / k), PACE_RATE_LO, PACE_RATE_HI)), 3)
+        nxt = round(float(np.clip(best * (goal / tried[best]) ** (1 / k), PACE_RATE_LO, PACE_RATE_HI)), 3)
         if any(abs(nxt - r) < 0.02 for r in tried):
             break   # the range's edge, or already read
         tried[nxt] = read(nxt)
