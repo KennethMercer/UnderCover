@@ -1103,6 +1103,7 @@ def u_cadence():
         E.weights_present, E.engine_ready, E.CONFIG = saved
     # phase 23: Turbo's reading sits lower than the person's (fine: the median onto theirs, half semitones, an octave at most);
     # Slower reads from a slowed reference (made once, kept), Faster moves the gaps only
+    import tempfile
     import numpy as np
     import soundfile as sf
     from undercover.core.cadence import render as R
