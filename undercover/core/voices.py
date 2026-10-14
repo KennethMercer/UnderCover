@@ -605,8 +605,8 @@ def pending_candidate(name: str) -> str | None:
     name = slug(name)
     if not name:
         return None
-    if extra(name).get("pending_for"):
-        return extra(name)["pending_for"]
+    if own := extra(name).get("pending_for"):
+        return own
     base = name.removesuffix("-next")
     if base != name and (extra(base).get("improved_pending") or {}).get("voice") == name:
         return base
