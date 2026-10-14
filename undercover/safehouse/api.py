@@ -23,6 +23,8 @@ POST   /api/library/smaller/start | keep | undo   {kind: voice|project, name} (s
 GET    /api/library/aside                   voices set aside, never deleted (a replaced voice, the one not kept after
                                             the blind A/B): {id, voice, display, size, at, why, undo_for}, newest first
 DELETE /api/library/aside/<id>              the user's explicit choice: delete one (ends undo_for's Undo) -> {freed}
+POST   /api/library/aside/<id>/restore      "Bring it back" (after a Remove: DELETE /api/voices/<v> sets it aside and
+                                            answers {aside, with}) -> {voice, with}
 GET    /api/library/cleanup                 what can be freed, per group
 POST   /api/library/cleanup                 {groups: [...]}
 (voices and training projects are deleted through the existing /api/voices/<name> and /api/train/projects/<p>)
@@ -81,9 +83,14 @@ def _route(h, method, p):
         raise LookupError("Not found")
     if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training", "aside"):
         return h._json(getattr(library, rest)())
-    m = re.fullmatch(r"aside/([a-z0-9-]+)", rest)
-    if m and method == "DELETE":
+    m = re.fullmatch(r"aside/([a-z0-9-]+)(/restore)?", rest)
+    if m and method == "DELETE" and not m.group(2):
         return h._json(library.remove_aside(m.group(1)))
+    if m and method == "POST" and m.group(2):
+        h._body()
+        r = library.restore_aside(m.group(1))
+        gpu.forget_voice(r["voice"])
+        return h._json(r)
     if rest == "tools/ytdlp-update" and method == "POST":
         h._body()
         return h._json(_update_ytdlp())

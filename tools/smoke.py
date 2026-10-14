@@ -1101,12 +1101,14 @@ def u_improved_keep():
         assert (v.dir / "tts" / "ref.wav").exists() and not get_voice("morgan-freeman-uc").extra.get("pending_for"), "a refused undo moved something"
         newer.rmdir()
         improved.undo("morgan-freeman-uc")
+        assert improved.state("morgan-freeman-uc")["undo"] is False, "Undo offered again after an Undo"
         v, c = get_voice("morgan-freeman-uc"), get_voice("morgan-freeman-uc-next")
         assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc" and (c.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next"
         assert (v.dir / "tts" / "ref.wav").exists() and v.extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
         improved.keep("morgan-freeman-uc", "current")                              # the other way
         assert {x.name for x in list_voices()} == {"morgan-freeman-uc"} and not get_voice("morgan-freeman-uc").extra.get("improved_pending")
         improved.undo("morgan-freeman-uc")
+        assert improved.state("morgan-freeman-uc")["undo"] is False, "Undo offered again after an Undo"
         assert {x.name for x in list_voices()} == {"morgan-freeman-uc", "morgan-freeman-uc-next"}
         assert get_voice("morgan-freeman-uc").extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
         assert [x.name for x in listed_voices()] == ["morgan-freeman-uc"], "the candidate waiting again is listed"
@@ -1151,7 +1153,7 @@ def u_pending_guard():
         refused(lambda: check_voice_name(proj, "morgan-freeman-uc-next", replace="morgan-freeman-uc-next"))
         refused(lambda: V.install([voices_dir() / "x.pth"], "morgan-freeman-uc-next", overwrite=True))
         assert (cand / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the candidate was touched"
-        refused(lambda: check_voice_name(proj, "morgan-freeman-uc"), "already waits beside it")   # P4-1: one at a time
+        refused(lambda: check_voice_name(proj, "morgan-freeman-uc"), "already waiting")   # P4-1: one at a time
         refused(lambda: night._improve_target("morgan-freeman-uc"), "already waiting")
         # a new model of the voice itself (a manual retrain): the candidate keeps waiting beside it
         new = path("cache_dir") / "new.pth"
@@ -1216,6 +1218,10 @@ def u_eta_narrow():
            c.left("converting", 0.5, t + 14)[1], c.left("converting", 0.9, t + 25)[1], c.left("mixing", 0.5, t + 27)[1]]
     assert all(b - a < 8 for a, b in zip(seq, seq[1:])) and max(seq) < 40, seq   # never 184 s from a slow first second
     assert PL.blend_left(20, 30, 0.5) == 30.0 and PL.blend_left(20, 0, 0) == 20.0
+    from undercover.doubleagent.trainer import train_eta   # pass 5: 4993 s said for an 8-minute run
+    assert train_eta(1000, 0, 0.0, None) is None and train_eta(1000, 0, 0.0, 0.5) == 500
+    assert train_eta(1000, 2, 1.0, None) is None and train_eta(1000, 5, 2.5, None) == 500
+    assert train_eta(1000, 25, 25.0, 0.5) == 750 and train_eta(1000, 100, 50.0, 0.9) == 500
     return f"library song {here['low']}-{here['high']} s (not here {far['low']}-{far['high']} s); countdown {seq}"
 
 
@@ -1252,9 +1258,9 @@ def u_speak_estimate():
 
 
 DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes): a new one is reviewed and listed here
-    # the only code that deletes a VOICE folder: remove_voice, and only from these (P4-1)
+    # the only code that deletes a VOICE folder: remove_voice, and only from these (P4-1); the user's Delete sets it
+    # aside (P5-1), and deleting for good is Storage's Set aside section (remove_aside, below)
     "core/voices.py::remove_voice::rmtree::v.dir",
-    "app/server.py::Handler.do_DELETE::remove_voice::m.group(1)",                # the user's Delete (the page asks twice)
     "core/voices.py::main::remove_voice::a.name",                                # the CLI's remove
     "doubleagent/service.py::resolve_voice.drop_downloads::remove_voice::name",  # a one-shot's own fresh downloads
     "safehouse/library.py::_remove::rmtree::p",                                  # Storage clean-up the user ticks
@@ -1386,8 +1392,8 @@ def u_export_lands():
             assert P.Project.load(proj.name).train["waiting"]["candidate"] == "morgan-freeman-uc-next"
             assert [x.name for x in listed_voices()] == ["morgan-freeman-uc"]
             # 2. one waits at a time: another run onto the voice is refused before any work, nothing touched
-            refused(lambda: DA.check_voice_name(proj, "morgan-freeman-uc"), "already waits beside it")
-            refused(lambda: T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True), "already waits")
+            refused(lambda: DA.check_voice_name(proj, "morgan-freeman-uc"), "already waiting")
+            refused(lambda: T.export_voice(P.Project.load(proj.name), name="morgan-freeman-uc", overwrite=True), "already waiting")
             # 3. the user's "Replace my voice" (confirmed): it takes the name, the old one set aside with Undo
             improved.keep("morgan-freeman-uc", "current")                       # (the waiting one decided first)
             save(5, b"new-model-2")
@@ -1484,6 +1490,76 @@ def u_aside_list():
         library.remove_aside(odd.name)
         assert library.aside() == []
     return "listed with why / size / Undo; bad ids refused; delete frees it and ends its Undo; the voice untouched"
+
+
+@check("the user's Delete sets a voice aside, never deletes it (Internal Affairs P5-1): a retrained one waiting goes with it; Bring it back restores both; refused while a job reads it, when the name is taken, and for one an Undo serves")
+def u_remove_aside():
+    import inspect
+    from undercover.app import server
+    from undercover.core import jobs as J
+    from undercover.core.voices import ModelError, get_voice, listed_voices, remove_to_aside, voices_dir
+    from undercover.doubleagent import improved, night
+    from undercover.safehouse import api as SA, library
+    assert "remove_to_aside(" in inspect.getsource(server.Handler.do_DELETE)
+
+    class H:
+        path, out, err = "/api/library/aside", None, None
+
+        def _json(self, obj, status=200):
+            self.out = obj
+
+        def _error(self, msg, status=400):
+            self.err = msg
+
+        def _body(self):
+            return {}
+    with isolated_data():
+        _voice_dir("morgan-freeman-uc", {"trained": True, "project": "morgan-freeman"})
+        _voice_dir("morgan-freeman-uc-next", {"trained": True, "project": "morgan-freeman"})
+        night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", 0.71, 0.74, 30)
+        busy = J.Job("cover", title="Hold On · Morgan")
+        busy.voices = {"morgan-freeman-uc"}
+        J.JOBS[busy.id] = busy
+        try:
+            remove_to_aside("morgan-freeman-uc")
+            raise AssertionError("removed while a cover read it")
+        except ModelError as e:
+            assert "using" in str(e), e
+        finally:
+            busy.finish("done")
+        r = remove_to_aside("morgan-freeman-uc")                 # what a double-click on Remove does now
+        assert r["with"] and listed_voices() == [] and not (voices_dir() / "morgan-freeman-uc").exists()
+        items = {x["id"]: x for x in library.aside()}
+        assert items[r["aside"]]["why"] == "you removed it" and "when you removed it" in items[r["with"]]["why"], items
+        assert (voices_dir() / ".aside" / r["aside"] / "model.pth").read_bytes() == b"m-morgan-freeman-uc", "not kept"
+        h = H()
+        SA.handle(h, "POST", f"/api/library/aside/{r['aside']}/restore")    # Bring it back: both, still a pair
+        assert h.out == {"voice": "morgan-freeman-uc", "with": "morgan-freeman-uc-next"}, (h.out, h.err)
+        assert [v.name for v in listed_voices()] == ["morgan-freeman-uc"] and library.aside() == []
+        assert get_voice("morgan-freeman-uc").extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+        assert "set_aside" not in get_voice("morgan-freeman-uc").extra
+        # the name taken meanwhile: refused, nothing moved
+        improved.keep("morgan-freeman-uc", "current")
+        r = remove_to_aside("morgan-freeman-uc")
+        _voice_dir("morgan-freeman-uc", {"trained": True, "project": "other"})
+        h.err = None
+        SA.handle(h, "POST", f"/api/library/aside/{r['aside']}/restore")
+        assert h.err and "in your voices now" in h.err and (voices_dir() / ".aside" / r["aside"]).is_dir(), h.err
+        held = next(x for x in library.aside() if x["id"] != r["aside"] and "didn't keep" in x["why"])
+        assert held["undo_for"] is None, held   # its voice was removed: the record (in .aside) still says why
+        # one an Undo serves goes back through that Undo
+        _voice_dir("ann-uc", {"trained": True, "project": "ann"})
+        _voice_dir("ann-uc-next", {"trained": True, "project": "ann"})
+        night.mark_improved_pending("ann-uc", "ann-uc-next", 0.7, 0.7, 10)
+        improved.keep("ann-uc", "current")
+        served = next(x for x in library.aside() if x["undo_for"] == "ann-uc")
+        h.err = None
+        SA.handle(h, "POST", f"/api/library/aside/{served['id']}/restore")
+        assert h.err and "Use Undo" in h.err, h.err
+        h.err = None
+        SA.handle(h, "POST", "/api/library/aside/nope/restore")
+        assert h.err, "an unknown id restored"
+    return "Remove -> aside (with its waiting one); Bring it back -> both; busy / name taken / unknown refused"
 
 
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
@@ -4640,6 +4716,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/library/voices/v-uc/rename"), ("GET", "/api/library/voices/v-uc/export"),
     ("DELETE", "/api/library/voices/v-uc/cadence"), ("GET", "/api/library/cleanup"), ("POST", "/api/library/cleanup"),
     ("GET", "/api/library/aside"), ("DELETE", "/api/library/aside/morgan-20261014-120000"),
+    ("POST", "/api/library/aside/morgan-20261014-120000/restore"),
     ("POST", "/api/library/tools/ytdlp-update"), ("POST", "/api/library/tools/ytdlp-auto"), ("GET", "/api/addons"),
     ("GET", "/api/storage"),
     *[("POST", f"/api/addons/f5-tts/{a}") for a in ("install", "remove", "use")],
@@ -6359,7 +6436,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

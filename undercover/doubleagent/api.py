@@ -501,8 +501,8 @@ def check_voice_name(proj, vname: str, replace: str | None = None):
     except (OSError, ValueError):
         here = {}
     if (here.get("extra") or {}).get("improved_pending"):   # its new one would wait beside it, and one already does
-        raise ModelError(f"A retrained {label_of(vname)} already waits beside it. Compare the two first (DoubleAgent, "
-                         "its voice card), then train it again.")
+        raise ModelError(f"One is already waiting: a retrained {label_of(vname)} waits beside it. Listen to the two and "
+                         "keep one first (DoubleAgent, its voice card); a new one can join it after that.")
     d = voices_dir() / vname
     meta = d / "meta.json"
     if not meta.exists():
