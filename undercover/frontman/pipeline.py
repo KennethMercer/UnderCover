@@ -406,11 +406,15 @@ def cancel_presep(keep=None):
 def estimate(song: Path, opts: CoverOptions) -> dict:
     """Expected seconds per stage for this song, from measured speeds in logs/timings.jsonl
     (falls back to Phase 5 measurements). Separation is 0 when stems are cached."""
+    from ..core.separate import audio_seconds
+    return estimate_for(audio_seconds(Path(song)), opts, song=Path(song))
+
+
+def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> dict:
+    """estimate() for `dur` seconds of song; song=None: nothing is cached yet (the one-shot plan, before the song)."""
     import statistics
     from ..core.config import CONFIG
-    from ..core.separate import QUALITY, SEP, audio_seconds, file_hash
-    song = Path(song)
-    dur = audio_seconds(song)
+    from ..core.separate import QUALITY, SEP, file_hash
     quality = opts.quality or SEP["quality"]
     ov = QUALITY[quality]
     speeds = {"sep": [], "synth": [], "f0": []}
@@ -431,7 +435,8 @@ def estimate(song: Path, opts: CoverOptions) -> dict:
                 speeds["f0"].append(r["seconds_audio"] / max(r["seconds"], 1e-3))
     med = lambda xs, d: statistics.median(xs[-10:]) if xs else d
     sep_rt = med(speeds["sep"], {2: 10.6, 4: 5.1, 8: 2.7}[ov])
-    stem_dir = path("cache_dir") / "stems" / file_hash(song) / (Path(SEP["vocal_model"]).stem + ("" if quality == "high" else f"_{quality}"))
+    stem_dir = (path("cache_dir") / "stems" / (file_hash(song) if song is not None else "none-yet")
+                / (Path(SEP["vocal_model"]).stem + ("" if quality == "high" else f"_{quality}")))
     from ..core.separate import stem_files
     cached = stem_dir.exists() and bool(stem_files(stem_dir))
     sep = 0.0 if cached else dur / sep_rt

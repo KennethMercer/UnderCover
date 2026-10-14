@@ -4697,6 +4697,22 @@ def u_shrink_export():
     return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
 
 
+@check("estimates (Internal Affairs m10): SpeakEasy gives the time to make it (one cold sentence with listen-back near the 39 s measured, not its 5 s of audio), and a one-shot with an installed voice a measured range")
+def u_estimates():
+    from undercover.frontman import oneshot
+    from undercover.speakeasy import speak, tts
+    text = "Good evening, the rain came in sideways that night."
+    audio = tts.seconds_estimate(text, 1.0)
+    cold = speak.eta_seconds(text, {"mode": "cadence", "rtf": 1.0, "speed": 1.0})
+    assert audio < 8 and 25 <= cold <= 60, (audio, cold)            # Internal Affairs: 39 s on an idle GPU, cold
+    reader = speak.eta_seconds(text, {"mode": "reader", "rtf": 3.0, "speed": 1.0})
+    assert reader < cold and reader >= audio / 3, (reader, cold)
+    with isolated_data():
+        r = oneshot.cover_eta("some-voice")
+    assert 0 < r["low"] < r["high"] < 900, r
+    return f"one sentence: {audio:.0f} s of audio, about {cold:.0f} s to make cold (reader {reader:.0f} s); one-shot {r['low']}-{r['high']} s"
+
+
 @check("a one-shot's variation starts from what it used (Internal Affairs m1): plan.settings.options carries the cover's exact options, the original backing kept for stacked harmonies")
 def u_oneshot_options():
     from undercover.frontman.oneshot import cover_options_of
@@ -5746,7 +5762,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
