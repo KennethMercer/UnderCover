@@ -115,9 +115,11 @@ function seReaders() {
   $("#se-reader").value = store.get("uc-se-reader", "auto");
   if (!$("#se-reader").value) $("#se-reader").value = "auto";
 }
-// Pace (phase 4c): Slower / Natural / Faster, made at that pace (the server's PACES), never stretched afterwards
+// Pause between sentences (phase 4c made it "pace"; phase 23: Turbo paces itself, so the control is Deep Cover's, "Shorter /
+// Natural / Longer", values still faster / natural / slower for the API): made that way, never stretched afterwards
 SE.pace = store.get("uc-se-pace", "natural");
-const sePaceFactor = () => ({ slower: 0.87, natural: 1, faster: 1.12 })[SE.pace] || 1;   // for the length estimate
+const sePace = () => document.body.classList.contains("deep") ? SE.pace : "natural";   // out of Deep Cover: Natural, whatever was left on
+const sePaceFactor = () => ({ slower: 0.87, natural: 1, faster: 1.12 })[sePace()] || 1;   // for the length estimate
 function sePaceShow() { $$("#se-pace button").forEach(b => b.setAttribute("aria-pressed", b.dataset.p === SE.pace)); }
 $$("#se-pace button").forEach(b => b.onclick = () => { SE.pace = b.dataset.p; store.set("uc-se-pace", SE.pace); sePaceShow(); seCount(); sePlan(); });
 sePaceShow();
@@ -131,7 +133,7 @@ function sePlan(soon) {
     if (!SE.voice) { SE.plan = null; seSummary(); return; }
     const seq = ++sePlanSeq;
     const qs = new URLSearchParams({ voice: SE.voice, reader: $("#se-reader").value || "auto", nudge: $("#se-nudge").value,
-                                     cadence: $("#se-cad").checked ? "1" : "0", pace: SE.pace });
+                                     cadence: $("#se-cad").checked ? "1" : "0", pace: sePace() });
     try { const p = await api(`/api/speak/plan?${qs}`); if (seq === sePlanSeq) { SE.plan = p; seShowPlan(); } }
     catch (e) { if (seq === sePlanSeq) { SE.plan = null; seSummary(); } }
   }, soon ? 120 : 0);
@@ -150,7 +152,7 @@ function seShowPlan() {
     : c.can ? `Their pace and pauses, learned from their clips. "Train cadence" on the voice makes it (minutes).` : (c.why || "Not available for this voice.");
   $("#se-cad-deep").textContent = c.has ? `${p.engine_name || c.engine} · from ${c.data_minutes ?? "?"} min of speech · likeness ${c.scores?.likeness ?? "?"} · cadence gap ${c.scores?.cadence_gap ?? "?"} · gap between sentences ${c.gap_s ?? "?"} s · tempo ${c.tempo ?? 1}` : "";
   $("#se-reader-field").hidden = cadOn;
-  $("#se-pace-deep").textContent = cadOn ? `${p.pace}: cfg_weight ${p.cfg_weight} · exaggeration ${p.exaggeration} · gap between sentences ${p.gap_s} s · no stretching`
+  $("#se-pace-deep").textContent = cadOn ? `${p.pace}: gap between sentences ${p.gap_s} s${p.engine === "chatterbox" ? ` · cfg_weight ${p.cfg_weight} · exaggeration ${p.exaggeration}` : ""} · no stretching`
     : `${p.pace}: the Reader reads at ${p.speed}× · pauses ×${p.gap_scale}`;
   if (cadOn) {
     $("#se-nudge-out").textContent = p.nudge ? st(p.nudge) : "their own";
@@ -186,7 +188,7 @@ $("#se-generate").onclick = async () => {
   if (!text || !SE.voice) return;
   $("#se-generate").disabled = true;
   let r;
-  try { r = await api("/api/speak", { json: { text, voice: SE.voice, reader: $("#se-reader").value, pace: SE.pace, nudge: +$("#se-nudge").value,
+  try { r = await api("/api/speak", { json: { text, voice: SE.voice, reader: $("#se-reader").value, pace: sePace(), nudge: +$("#se-nudge").value,
                                                cadence: $("#se-cad").checked ? null : false } }); }
   catch (e) { seSummary(); return showError(e.message, "SpeakEasy couldn't start"); }
   seStart(r.job, r.plan, r.estimate);
