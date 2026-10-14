@@ -4466,6 +4466,7 @@ def u_page_rules():
         src = (web / f).read_text(encoding="utf-8")
         assert f == "app.js" or "armedFor(" in src or "CONFIRM_MS" in src, f"{f} has a two-click confirm that a double click could confirm"
     assert "asideRestore" in (web / "aside.js").read_text(encoding="utf-8") and "removedVoice" in app, "Remove lost its Bring it back"
+    assert "aside_size" in lib and "goes to Set aside" in lib, "Clean up lost the duplicate voices going to Set aside"
     assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
     assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"
