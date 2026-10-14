@@ -383,7 +383,8 @@ def _start_preview(h, body: dict):
             job.push(stage=stage, frac=round(frac, 3), message=msg)
         res = ENGINE.make_preview(song, opts, variants, progress=progress)
         job.finish("done", message="Previews ready",
-                   previews=[{"label": r["label"], "url": file_url(r["file"]), "options": r["options"]} for r in res])
+                   previews=[{"label": r["label"], "url": file_url(r["file"]), "options": r["options"], "fit": r.get("fit")}
+                             for r in res])
 
     GPU_QUEUE.put((job, run))
     h._json({"job": job.id})
