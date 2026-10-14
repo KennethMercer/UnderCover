@@ -86,6 +86,7 @@ def _start(h, body: dict):
                 cadence=False if body.get("cadence") is False else None, pace=body.get("pace"))
     p = speak.plan(args["voice"], args["reader"], args["speed"], args["nudge"], args["cadence"], args["pace"])   # a bad voice/Reader fails now
     job = Job("speech", title=f"{text[:40].strip()}{'…' if len(text) > 40 else ''} · {label_of(args['voice'])}")
+    job.voices = {args["voice"]}
     JOBS[job.id] = job
 
     def run(job: Job):
