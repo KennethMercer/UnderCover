@@ -66,7 +66,7 @@ async function api(path, opts = {}) {
   catch (e) { throw new Error("Lost contact with UnderCover. Is the UnderCover window still open? Start it again with UnderCover.bat."); }
   if (r.status === 401) { location.replace("/pair"); throw new Error("This phone isn't paired any more."); }   // only phones get 401 (phase 11)
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || `Request failed (${r.status}).`);
+  if (!r.ok) throw Object.assign(new Error(data.error || `Request failed (${r.status}).`), { status: r.status, data });   // the body rides along (a 409 can say more)
   return data;
 }
 // action: optional { label, run } shown as a button in the banner; info: accent stripe instead of red
@@ -166,27 +166,34 @@ function sysStatus(s) {
 }
 // Restart (System room, its GPU alert): the dialog says what happens and holds the button that does it
 $$("[data-restart]").forEach(b => b.onclick = () => showError("Restarting takes about 10 seconds; your songs, voices and history are kept. Voice work pauses and carries on after.",
-  "Restart UnderCover?", { label: "Restart now", run: restartServer }, true));
+  "Restart UnderCover?", { label: "Restart now", run: () => restartServer() }, true));
 let restartShown = false;
 function restartNeeded() {
   if (restartShown) return;
   restartShown = true;
   showError("UnderCover was updated while it was running, so some settings won't take effect until it restarts. " +
             "Restarting takes about 10 seconds; your songs, voices and history are kept.", "Restart needed",
-            { label: "Restart now", run: restartServer }, true);
+            { label: "Restart now", run: () => restartServer() }, true);
 }
-async function restartServer() {
+// now = true: stop the running work and restart at once (the server offers it, in a 409, while work runs)
+async function restartServer(now = false) {
+  now = now === true;
   const btn = $("#err-action");
   btn.disabled = true; btn.textContent = "Restarting…";
   let before = null;
   try { before = (await api("/api/status")).started; } catch (e) {}
   let pausing = false;
-  try { pausing = !!(await api("/api/restart", { method: "POST" })).pausing; }
+  try { pausing = !!(await api("/api/restart", now ? { json: { now: true } } : { method: "POST" })).pausing; }
   catch (e) {
+    if (e.status === 409 && e.data?.now_ok) {   // work is running: wait for it, or stop it and restart now
+      const what = (e.data.busy || []).join(", ");
+      return showError(`${what ? `Running now: ${what}. ` : ""}${e.message}`, "Work is running",
+                       { label: "Restart now (stops running work)", run: () => restartServer(true) }, false);
+    }
     // A server from before this feature has no restart endpoint (404); anything else (e.g. busy) is explained by e.message.
     const old = /not found/i.test(e.message);
     showError(old ? "This copy of UnderCover is too old to restart itself. Start it again with UnderCover.bat or the desktop shortcut." : e.message,
-              "Couldn't restart", old ? null : { label: "Try again", run: restartServer }, !old);
+              "Couldn't restart", old ? null : { label: "Try again", run: () => restartServer() }, !old);
     return;
   }
   $("#err-msg").textContent = pausing
@@ -331,16 +338,19 @@ function upload(file) {
   xhr.send(file);
 }
 function renderSong() {
+  previewSync();   // versions made for another song are put away
   if (!S.song) return setDrop("empty");
   setDrop("loaded");
   const s = S.song;
   $("#song-name").textContent = s.name;
-  const base = `${fmtTime(s.duration)} · ${(s.sample_rate / 1000).toFixed(s.sample_rate % 1000 ? 1 : 0)} kHz · ${s.channels === 1 ? "mono" : s.channels === 2 ? "stereo" : s.channels + " ch"} · ${s.lufs} LUFS`;
-  $("#song-meta").textContent = (s.sample ? "sample song · " : "") + base;
+  // the length is for everyone; the sample rate, channels and loudness (and the key below) are Deep Cover's
+  const base = `${s.sample ? "sample song · " : ""}${fmtTime(s.duration)}`, tech = `${(s.sample_rate / 1000).toFixed(s.sample_rate % 1000 ? 1 : 0)} kHz · ${s.channels === 1 ? "mono" : s.channels === 2 ? "stereo" : s.channels + " ch"} · ${s.lufs} LUFS`;
+  const meta = key => { $("#song-meta").innerHTML = `${esc(base)}<span data-deep> · ${esc(tech)}${key ? ` · key ${esc(key)}` : ""}</span>`; };
+  meta("");
   S.songKey = null;
   api(`/api/songs/${s.id}/key`).then(k => {
     if (S.song?.id !== s.id) return;
-    S.songKey = k; $("#song-meta").textContent = `${s.sample ? "sample song · " : ""}${base} · key ${k.name}`;
+    S.songKey = k; meta(keyName(k.tonic, k.mode));
     $("#key-o").textContent = keyLabel(S.opts.key || 0);
   }).catch(() => {});
   drawWave($("#wave-song"), s.peaks, 0);
@@ -371,7 +381,7 @@ function renderVoices() {
   if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
   else box.innerHTML = shownList.map(v => `
-    <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
+    <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
       <span class="vtext"><b>${vname(v.name)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
       <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
@@ -505,6 +515,7 @@ $("#reset").onclick = () => { store.set("uc-opts", {}); loadOpts(); refreshEstim
 
 function summary() {
   const o = S.opts;
+  previewSync();
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
     (o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
@@ -518,7 +529,7 @@ function summary() {
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals` : "";
-    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta" data-deep>· ${pitchText(o)}</span><span class="meta">${est}</span>`;
+    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }
 }
 function pitchText(o) {
@@ -528,11 +539,14 @@ function pitchText(o) {
   return parts.join(", ");
 }
 const NOTES = "C C# D D# E F F# G G# A A# B".split(" ");
+// the conventional spelling of a key: minor keys say Eb and Bb (not D# and A#), C#, F# and G#; major keys say Db, Eb, Ab, Bb and F#
+const KEY_MINOR = "C C# D Eb E F F# G G# A Bb B".split(" "), KEY_MAJOR = "C Db D Eb E F F# G Ab A Bb B".split(" ");
+const keyName = (tonic, mode) => `${(mode === "minor" ? KEY_MINOR : KEY_MAJOR)[((tonic % 12) + 12) % 12]} ${mode}`;
 function keyLabel(k) {
   const shift = k ? `${fmtPitch(k)} st` : "original";
   if (!S.songKey) return shift;
-  const to = `${NOTES[((S.songKey.tonic + k) % 12 + 12) % 12]} ${S.songKey.mode}`;
-  return k ? `${shift} (${S.songKey.name} → ${to})` : `original (${S.songKey.name})`;
+  const to = keyName(S.songKey.tonic + k, S.songKey.mode), from = keyName(S.songKey.tonic, S.songKey.mode);
+  return k ? `${shift} (${from} → ${to})` : `original (${from})`;
 }
 function infoChips(r) {
   const c = [r.version, r.sr, r.epochs ? `${r.epochs >= 1000 ? r.epochs / 1000 + "k" : r.epochs} epochs` : null,
@@ -576,7 +590,7 @@ function startProgress(job, elsewhere = false) {
   $("#progress").hidden = false; $("#progress-h").textContent = "Working"; $("#cancel").textContent = "Cancel"; $("#cancel").hidden = false;
   const est = S.estimate || {};
   ORDER.forEach(s => setStage(s, "", 0, est[s] != null ? (s === "separating" && est.stems_cached && !S.opts.karaoke && !S.opts.dereverb ? "cached" : `≈ ${fmtSecs(est[s])}`) : "—"));
-  $(".stage[data-s=converting] .sname").textContent = `Converting to ${S.voice}`;
+  $(".stage[data-s=converting] .sname").textContent = `Converting to ${voiceDisplay(S.voice)}`;
   $("#progress").scrollIntoView({ block: "nearest", behavior: "smooth" });
   jobStart = performance.now(); let totalLeft = est.total, leftAt = performance.now();
   clearInterval(elapsedTimer);
@@ -645,11 +659,19 @@ applyVolume();
 let ab = "cover", wavePeaks = { cover: null, orig: null }, playingHist = null;
 const active = () => ab === "cover" ? aCover : aOrig;
 
+// covers of the same song in the same voice(s) are told apart: the first keeps its title, the later ones say (2), (3)
+function coverTitle(h) {
+  const same = HIST.filter(x => x.title === h.title && x.voice === h.voice && (x.backing_voice || "") === (h.backing_voice || ""))
+    .sort((a, b) => String(a.created).localeCompare(String(b.created)) || String(a.id).localeCompare(String(b.id)));
+  const n = same.findIndex(x => x.id === h.id);
+  return `${h.title}${n > 0 ? ` (${n + 1})` : ""}`;
+}
+const coverName = h => `${coverTitle(h)} · ${voiceDisplay(h.voice)}${h.backing_voice ? " + " + voiceDisplay(h.backing_voice) : ""}`;
 async function showResult(item, seconds) {
   S.result = item; playingHist = item.id;
   $("#result").hidden = false;
   if (typeof earShow === "function") earShow($("#ear-cover"), "cover", item);   // How did it come out? (ear.js)
-  $("#result-h").textContent = `${item.title} · ${item.voice}${item.backing_voice ? " + " + item.backing_voice : ""}`;
+  $("#result-h").textContent = coverName(item);
   renderKeep();
   stopAll();
   aCover.src = item.output; aOrig.src = item.original || "";
@@ -753,19 +775,29 @@ function previewVariants() {
   return [{ polish: false, label: "Polish off" }, { polish: true, label: "Polish on" }];
 }
 function syncPreviewKind() { $$("#preview-kind button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === previewKind)); }
-// each tab keeps its own renders (one set of cards per kind), so a tab never shows another tab's versions
-const PV_INTRO = "Renders 15 seconds of the song (the part with the most singing) a few ways, so you can pick by ear. The first preview of a new song takes about a minute (it separates the song once); after that, a few seconds each.";
-const PV_PICK = "Switch between versions while playing: they stay in sync. Pick one with “Use this”.";
+// each tab keeps its own renders (one set of cards per kind), so a tab never shows another tab's versions; a set belongs to
+// the song and voice it was made for and goes when either changes
 // "Fit pitch to the voice" picks the octave and key itself, which would make every octave or key version the same
-const pvByHand = kind => !!S.opts.fit && (kind === "octave" || kind === "key");
-const PV_BYHAND = " “Fit pitch to the voice” is on and sets the octave and key itself, so these versions set them by hand; Use this turns the fit off.";
-function showPreviewKind() {
-  $$("#preview-list audio").forEach(a => a.pause());
-  $$("#preview-list .pv-set").forEach(el => { el.hidden = el.dataset.kind !== previewKind; });
+function pvByHand(kind) { return !!S.opts.fit && (kind === "octave" || kind === "key"); }
+// brings the sets in line with the page (the song, the voice, the fit, the settings in use) without touching playback
+function previewSync() {
+  const box = $("#preview-list"); if (!box) return;
+  $$(".pv-set", box).forEach(el => {
+    if (el.dataset.song !== String(S.song?.id) || el.dataset.voice !== String(S.voice)) { $$("audio", el).forEach(a => a.pause()); el.remove(); }
+    else el.hidden = el.dataset.kind !== previewKind;
+  });
+  $$(".pcard", box).forEach(c => {   // ✓ marks the version whose settings are the ones in use now
+    const set = c.closest(".pv-set"), o = JSON.parse(c.dataset.opts || "{}");
+    const used = Object.keys(o).length > 0 && !(pvByHand(set.dataset.kind) || S.opts.fit && ("octave" in o || "key" in o)) && Object.entries(o).every(([k, v]) => S.opts[k] === v);
+    $(".use", c).textContent = used ? "✓ Using this" : "Use this";
+  });
   if (!$("#preview-bar").hidden) return;   // a preview is rendering: its own progress line owns the status
-  const set = $(`#preview-list .pv-set[data-kind="${previewKind}"]`);
-  $("#preview-status").textContent = (set ? PV_PICK : PV_INTRO) + (pvByHand(previewKind) ? PV_BYHAND : "");
+  const set = $(`.pv-set[data-kind="${previewKind}"]`, box);
+  $("#preview-status").textContent = (set ? "Switch between versions while playing: they stay in sync. Pick one with “Use this”."
+    : "Renders 15 seconds of the song (the part with the most singing) a few ways, so you can pick by ear. The first preview of a new song takes about a minute (it separates the song once); after that, a few seconds each.")
+    + (pvByHand(previewKind) ? " “Fit pitch to the voice” is on and sets the octave and key itself, so these versions set them by hand; Use this turns the fit off." : "");
 }
+function showPreviewKind() { $$("#preview-list audio").forEach(a => a.pause()); previewSync(); }
 $("#preview-kind").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   previewKind = b.dataset.v; store.set("uc-preview-kind", previewKind); syncPreviewKind(); showPreviewKind();
@@ -778,7 +810,7 @@ $("#preview-close").onclick = () => { $$("#preview-list audio").forEach(a => a.p
 
 $("#preview-go").onclick = async () => {
   if (!S.song || !S.voice || S.job || S.osBusy) return;
-  const variants = previewVariants(), kind = previewKind, byHand = pvByHand(kind);
+  const variants = previewVariants(), kind = previewKind, byHand = pvByHand(kind), made = { song: S.song.id, voice: S.voice, title: S.song.title };
   $$("#preview-list audio").forEach(a => a.pause());
   $$(`#preview-list .pv-set[data-kind="${kind}"]`).forEach(el => el.remove());
   $("#preview-go").disabled = true;
@@ -792,7 +824,8 @@ $("#preview-go").onclick = async () => {
       if (ev.frac != null) $("#preview-bar i").style.width = Math.round((ev.stage === "rendering" ? 0.3 + 0.7 * ev.frac : 0.3 * ev.frac) * 100) + "%";
       if (!ev.final) return;
       stop(); S.job = null; summary(); $("#preview-go").disabled = false; $("#preview-bar").hidden = true;
-      if (ev.state === "done") { renderPreviews(ev.previews, kind, byHand); refreshEstimate(); }
+      if (ev.state === "done" && (S.song?.id !== made.song || S.voice !== made.voice)) $("#preview-status").textContent = "The song or the voice changed while it rendered, so those versions were put away. Render again.";
+      else if (ev.state === "done") { renderPreviews(ev.previews, kind, byHand, made); refreshEstimate(); }
       else if (ev.state === "cancelled") $("#preview-status").textContent = "Cancelled.";
       else { $("#preview-status").textContent = ""; showError(ev.message, "Preview failed"); }
     });
@@ -802,12 +835,12 @@ $("#preview-go").onclick = async () => {
   }
 };
 
-function renderPreviews(list, kind, byHand) {
+function renderPreviews(list, kind, byHand, made) {
   const box = document.createElement("div");   // this tab's cards; display: contents keeps them in the grid
-  box.className = "pv-set"; box.dataset.kind = kind;
+  box.className = "pv-set"; box.dataset.kind = kind; box.dataset.song = made.song; box.dataset.voice = made.voice;
   $("#preview-list").append(box);
-  box.innerHTML = list.map((p, i) => `
-    <div class="pcard" data-i="${i}">
+  box.innerHTML = `<p class="meta pv-for">${esc(made.title)} · ${esc(voiceDisplay(made.voice))}</p>` + list.map((p, i) => `
+    <div class="pcard" data-i="${i}" data-opts="${esc(JSON.stringify(list[i].options || {}))}">
       <div class="ptitle"><button class="play" aria-label="Play ${esc(p.label)}">▶</button><b>${esc(p.label)}</b></div>
       <button class="btn use">Use this</button>
       <audio preload="auto" src="${esc(p.url)}"></audio>
@@ -831,7 +864,7 @@ function renderPreviews(list, kind, byHand) {
     a.addEventListener("ended", () => { pos = 0; });
     $(".use", card).onclick = () => {
       Object.assign(S.opts, list[i].options); if (byHand) S.opts.fit = false; store.set("uc-opts", S.opts); syncControls(); summary(); refreshEstimate();
-      $$(".use", box).forEach(b => b.textContent = "Use this"); $(".use", card).textContent = "✓ Using this";
+      previewSync();
     };
   });
 }
@@ -842,7 +875,7 @@ async function loadHistory() {
   let ok = true;
   try { HIST = await api("/api/history"); } catch (e) { HIST = []; ok = false; }
   const mine = S.result && HIST.find(x => x.id === S.result.id);
-  if (mine) { S.result.kept = mine.kept; renderKeep(); }
+  if (mine) { S.result.kept = mine.kept; renderKeep(); $("#result-h").textContent = coverName(S.result); }
   else if (ok && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // it rolled off the tray (or was deleted)
   renderHistory();
 }
@@ -854,7 +887,7 @@ function renderHistory() {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
-    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
+    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(coverTitle(h))} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
       <small class="hdate">${esc((h.created || "").slice(0, 16))}</small>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("");

@@ -62,7 +62,7 @@ function seVoices() {
     const cad = c.has ? `cadence <span class="y">✓</span>` : c.queue === "running" ? "cadence: making it now" : c.queue ? "cadence queued" : "cadence –";
     const act = c.has || c.queue || !c.can ? ""
       : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">${v.trained ? "Train cadence" : "Find clips + cadence"}</button>`;
-    return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-selected="${v.name === SE.voice}">
+    return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
       <div class="vtext"><b>${vname(v.name)}</b>${v.trained && v.likeness != null ? `<small data-deep>likeness ${(+v.likeness).toFixed(2)}</small>` : ""}<small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · ${cad}</span></small></div>
       <div class="se-vact">${act}</div></div>`;
@@ -155,7 +155,7 @@ function seShowPlan() {
   if (cadOn) {
     $("#se-nudge-out").textContent = p.nudge ? st(p.nudge) : "their own";
     $("#se-pitch-note").textContent = "With their cadence, they speak at their own pitch. Nudge it only if it sounds off.";
-    $("#se-cad-name").textContent = v0?.person ? `${v0.person}'s` : `${p.voice}'s`;
+    $("#se-cad-name").textContent = v0?.person ? `${v0.person}'s` : `${voiceDisplay(p.voice)}'s`; $("#se-cad").setAttribute("aria-label", `Speak with ${$("#se-cad-name").textContent} own cadence`);
     return seSummary();
   }
   $("#se-reader-out").textContent = `${p.auto ? "auto · " : ""}${p.reader}`;
@@ -164,7 +164,7 @@ function seShowPlan() {
     ? `Speaks around ${Math.round(p.target_hz)} Hz (from ${p.pitch_from}); the Reader is at ${Math.round(p.reader_hz)} Hz. Nudge it if they sound too high or low.`
     : "This voice's speaking pitch isn't known (a downloaded voice nobody checked), so the Reader's own pitch is used. Nudge it, or pick another Reader, if it sounds off.";
   const v = SE.voices.find(x => x.name === p.voice);
-  $("#se-cad-name").textContent = v?.person ? `${v.person}'s` : `${p.voice}'s`;
+  $("#se-cad-name").textContent = v?.person ? `${v.person}'s` : `${voiceDisplay(p.voice)}'s`; $("#se-cad").setAttribute("aria-label", `Speak with ${$("#se-cad-name").textContent} own cadence`);
   seSummary();
 }
 function seSummary() {
@@ -232,7 +232,7 @@ function seStart(job, plan, estimate, resumed = false) {
       $("#se-stop").hidden = true;
       if (ev.state === "done" && ev.result) {
         SE.result = ev.result;
-        $("#se-progress").textContent = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"} · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s`;
+        $("#se-progress").innerHTML = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"}<span data-deep> · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s</span>`;
         $("#se-wav").href = ev.result.url + "?download"; $("#se-wav").removeAttribute("aria-disabled");
         $("#se-wav").textContent = `Download ${(ev.result.file || "").split(".").pop().toUpperCase() || "FLAC"}`;   // phase 24: lossless FLAC
         if (ev.result.mp3_url) { $("#se-mp3").href = ev.result.mp3_url + "?download"; $("#se-mp3").removeAttribute("aria-disabled"); }
