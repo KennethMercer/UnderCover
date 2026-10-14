@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-14-queue-times",
+      "date": "2026-10-14",
+      "title": "Tonight's queue: real times",
+      "lines": [
+        "In SafeHouse's Running room, Start at and Finish by are time fields that show what's saved.",
+        "Previews made for another song or voice are put away, and each set says which voice it's for."
+      ]
+    },
+    {
       "id": "2026-10-14-qa1",
       "date": "2026-10-14",
       "title": "Names, phones and a cleaner first run",
