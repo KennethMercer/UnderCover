@@ -20,8 +20,14 @@ POST   /api/library/voices/<name>/full-index   a new voice's full index back (ke
 GET    /api/library/voices/<name>/export    zip download
 GET    /api/library/smaller                 Make smaller (phase 24): each voice and project, what it would save
 POST   /api/library/smaller/start | keep | undo   {kind: voice|project, name} (safehouse/smaller.py)
-GET    /api/library/cleanup                 what can be freed, per group
-POST   /api/library/cleanup                 {groups: [...]}
+GET    /api/library/aside                   voices set aside, never deleted (a replaced voice, the one not kept after
+                                            the blind A/B): {id, voice, display, size, at, why, undo_for}, newest first
+DELETE /api/library/aside/<id>              the user's explicit choice: delete one (ends undo_for's Undo) -> {freed}
+POST   /api/library/aside/<id>/restore      "Bring it back" (after a Remove: DELETE /api/voices/<v> sets it aside and
+                                            answers {aside, with}) -> {voice, with}
+GET    /api/library/cleanup                 what can be freed, per group (duplicate_voices: "aside" lists which voice
+                                            goes to Set aside and which it keeps, and why; aside_size, nothing freed)
+POST   /api/library/cleanup                 {groups: [...]} -> {freed, set_aside: [{voice, aside}]}
 (voices and training projects are deleted through the existing /api/voices/<name> and /api/train/projects/<p>)
 
 The Add-ons and Storage rooms (phase 4b):
@@ -48,7 +54,7 @@ from ..core.fsutil import retry as _retry
 from ..core.voices import ModelError, slug
 from ..frontman.songs import remove_song
 from . import library
-from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _remove, _update_ytdlp, _ytdlp_auto, covers
+from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _update_ytdlp, _ytdlp_auto, covers
 
 
 def handle(h, method: str, p: str) -> bool:
@@ -76,8 +82,16 @@ def _route(h, method, p):
         if smaller.handle(h, method, rest):
             return
         raise LookupError("Not found")
-    if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training"):
+    if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training", "aside"):
         return h._json(getattr(library, rest)())
+    m = re.fullmatch(r"aside/([a-z0-9-]+)(/restore)?", rest)
+    if m and method == "DELETE" and not m.group(2):
+        return h._json(library.remove_aside(m.group(1)))
+    if m and method == "POST" and m.group(2):
+        h._body()
+        r = library.restore_aside(m.group(1))
+        gpu.forget_voice(r["voice"])
+        return h._json(r)
     if rest == "tools/ytdlp-update" and method == "POST":
         h._body()
         return h._json(_update_ytdlp())
@@ -87,14 +101,7 @@ def _route(h, method, p):
         if method == "GET":
             return h._json({k: {kk: vv for kk, vv in v.items() if kk != "paths"} for k, v in _cleanup_groups().items()})
         _guard()
-        want = set((h._body().get("groups") or []))
-        freed = 0
-        for k, v in _cleanup_groups().items():
-            if k in want:
-                freed += v["size"]
-                for path_ in v["paths"]:
-                    _remove(path_)
-        return h._json({"freed": freed})
+        return h._json(library.clean_up(set(h._body().get("groups") or [])))
     if rest == "covers/zip" and method == "GET":
         ids = {x for x in (q.get("ids") or [""])[0].split(",") if re.fullmatch(r"[0-9a-f]{10}", x)}
         files = [(path("output_dir") / c["file"], c["file"]) for c in covers() if c["id"] in ids]

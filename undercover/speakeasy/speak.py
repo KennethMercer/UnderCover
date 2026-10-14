@@ -103,9 +103,9 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
 
 def voices() -> list[dict]:
     """Every voice with what SpeakEasy needs to list it (group, likeness, kind, auto Reader, cadence status)."""
-    from ..core.voices import list_voices, voice_info
+    from ..core.voices import listed_voices, voice_info
     out = []
-    for v in list_voices():
+    for v in listed_voices():
         ex = v.extra or {}
         try:
             p = plan(v.name)
@@ -154,7 +154,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
         return _make_cadence(job, text, sents, p)
     t0 = time.perf_counter()
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents], start_after=1,
-             total_left=round(tts.seconds_estimate(text, p["speed"]) / p["rtf"] + 2, 1))   # from the engine's measured speed
+             total_left=eta_seconds(text, p))   # from the engine's measured speed
     if not tts.ready():
         job.push(stage="reading", frac=0.0, message="Downloading the speech model (about 340 MB, once)")
         tts.kokoro(lambda f, d, t: job.push(stage="reading", frac=0.0, message=f"Downloading the speech model: {d / 1e6:.0f} of {t / 1e6:.0f} MB")
@@ -252,7 +252,7 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
     ref = render.paced_ref(service.cadence_ref(v), pack.get("pace_ref_rate") if engine_info(p["engine"]).get("pace_by_ref") else None)
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents],
-             start_after=min(START_AFTER, len(sents)), total_left=round(tts.seconds_estimate(text) / p["rtf"] + 5, 1))
+             start_after=min(START_AFTER, len(sents)), total_left=eta_seconds(text, p))
     conv = gpu.MODELS.converter
     lv = conv.voice(p["voice"])
     sr = lv.tgt_sr
@@ -325,7 +325,8 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
     d = speech_dir()
     sid = uuid.uuid4().hex[:10]
     title = _title(text)
-    stem = _safe(f"{title.rstrip('…')} ({p['voice']})") or sid
+    from ..core.voices import label_of
+    stem = _safe(f"{title.rstrip('…')} ({label_of(p['voice'])})") or sid   # the id stays in the record
     base = stem
     for k in range(2, 1000):
         if not any((d / f"{stem}{ext}").exists() for ext in (".flac", ".wav", ".mp3")):
@@ -361,6 +362,26 @@ def _mp3(wav: Path) -> Path | None:
 # ---------------------------------------------------------------- the saved results (SpeakEasy's Recent, SafeHouse)
 
 LOCK = threading.RLock()   # every change to a speech's JSON file and the roll-off
+COLD_ENGINE_S = 18.0   # the cadence engine (Chatterbox) loading in its worker, when it isn't running
+COLD_EAR_S = 12.0      # listen-back's Whisper loading, when it isn't loaded
+VOICE_S = 3.0          # the voice conversion's start (its models are usually loaded with the server)
+LISTEN_BACK = 1.25     # measured: re-reads cost 1.25x as-now on a quiet GPU (listen-back handoff)
+
+
+def eta_seconds(text: str, p: dict) -> float:
+    """How long making this speech takes (Internal Affairs m10: one sentence promised 0:05 was made in 39 s: the
+    audio's length had been given as the time, and listen-back and the models' start weren't counted)."""
+    from ..core.cadence import client
+    audio = tts.seconds_estimate(text, p.get("speed") or 1.0)
+    t = audio / max(float(p.get("rtf") or 1.0), 0.05) + VOICE_S
+    if p.get("mode") == "cadence":
+        from . import listenback
+        t *= LISTEN_BACK if listenback.settings().get("listen_back") else 1.0
+        if not client.WORKER.running():
+            t += COLD_ENGINE_S
+        if listenback.settings().get("listen_back") and listenback._ASR.get("model") is None:
+            t += COLD_EAR_S
+    return round(t, 1)
 
 
 def _item(m: dict) -> dict:

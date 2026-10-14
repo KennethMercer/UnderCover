@@ -100,6 +100,17 @@
     <div class="wn-body" id="wn-body"></div>
     <div class="row"><button class="btn" id="wn-ok" type="button">Got it</button><button class="linkbtn" id="wn-all" type="button">Every change, in SafeHouse</button></div>
   </section>
+  <dialog class="confirm-dlg" id="replace-dlg" aria-labelledby="replace-q">
+    <form method="dialog">
+      <h3 id="replace-q">Replace this voice?</h3>
+      <p id="replace-say"></p>
+      <div class="row dlg-btns">
+        <button class="btn" type="button" id="replace-yes">Replace my voice</button>
+        <button class="btn primary" type="button" id="replace-wait">Let them wait side by side</button>
+        <button class="linkbtn" type="button" id="replace-no">Cancel</button>
+      </div>
+    </form>
+  </dialog>
   <div class="alert" id="err" hidden role="alert">
     <div><b id="err-title">Something went wrong</b><p id="err-msg"></p></div>
     <div class="alert-btns"><button class="btn primary" id="err-action" hidden></button><button class="icon-btn" id="err-x">Dismiss</button></div>
@@ -132,7 +143,7 @@
       </div>
       <div class="row spread os-sub">
         <div class="ex" id="os-ex"><button type="button">Bohemian Rhapsody by Queen as Obama</button><button type="button">Toxic by Britney Spears as SpongeBob</button><button type="button">acoustic cover of Hello by Adele as Peter Griffin</button></div>
-        <label class="toggle" id="os-train-row"><input type="checkbox" id="os-train"><span>Train a new voice: about 1 hour</span></label>
+        <label class="toggle" id="os-train-row"><input type="checkbox" id="os-train" aria-label="Train a new voice if there isn't one, about 1 hour"><span>Train a new voice: about 1 hour</span></label>
       </div>
       <p class="meta" id="os-plan">Name a song and a voice. UnderCover gets the album version of the song from YouTube, finds (or trains) the voice, and makes the cover with the best settings.</p>
       <div id="auto-choices" hidden></div>
@@ -480,7 +491,8 @@
           <div class="field" data-deep><span>Starting point</span><span class="meta">RVC v2 base (official)</span></div>
         </div>
         <p class="meta">Covers you start while a voice trains are made right away; training waits for them. Pause any time and resume later.</p>
-        <div class="row"><button class="btn primary big" id="tr-start">Start training</button><span class="meta" id="tr-start-note"></span></div>
+        <div class="row"><button class="btn primary big" id="tr-start">Start training</button><button class="linkbtn" id="tr-tonight" type="button">Train tonight instead</button><span class="meta" id="tr-start-note"></span></div>
+        <p class="meta" id="tr-queued" role="status" hidden><b>Queued for tonight</b> <span id="tr-queued-say"></span> <button class="linkbtn" id="tr-unqueue" type="button">Remove</button></p>
       </div>
       <div class="panel" id="tr-run" hidden>
         <div class="row spread"><h2 id="tr-run-h">Training…</h2><div class="row"><button class="btn" id="tr-pause">Pause</button><button class="btn" id="tr-stop">Stop &amp; keep best</button></div></div>
@@ -551,6 +563,10 @@
       <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
         <span class="meta">Can't be undone, but anything here is re-made automatically if it's needed again.</span></div>
     </section>
+    <section class="panel" id="aside" hidden>
+      <div class="row spread"><h2>Set aside</h2><span class="meta" id="as-say"></span></div>
+      <div class="vt-body" id="as-body"></div>
+    </section>
     <section class="panel" id="smaller" hidden>
       <div class="row spread"><h2>Make it smaller</h2><span class="meta" id="sm-say"></span></div>
       <div class="vt-body" id="sm-body"></div>
@@ -571,11 +587,11 @@
     <div class="rn-now-box" id="rn-now"></div>
     <section class="rn-sec">
       <div class="rn-lbl"><b>Tonight</b><small id="rn-total"></small>
-        <span class="end" id="rn-when"><span class="seg" role="group" aria-label="When the queue starts"><button type="button" id="rn-at" aria-pressed="false">Start at 11:00 pm</button><button type="button" id="rn-go" aria-pressed="false">Start now</button></span>
+        <span class="end" id="rn-when"><input type="time" id="rn-at-time" value="23:00" aria-label="Start time"><span class="seg" role="group" aria-label="When the queue starts"><button type="button" id="rn-at" aria-pressed="false">Start at 11:00 pm</button><button type="button" id="rn-go" aria-pressed="false">Start now</button></span>
           <button class="linkbtn" id="rn-stop" type="button" hidden>Don't start more</button></span></div>
       <div class="rn-list" id="rn-list"></div>
       <div class="rn-opts" id="rn-opts">
-        <label class="toggle"><input type="checkbox" id="rn-finish"><span>Finish by 7:00 am<br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="rn-finish"><span>Finish by <input type="time" id="rn-finish-time" value="07:00" aria-label="Finish by"><br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
         <label class="toggle"><input type="checkbox" id="rn-awake"><span>Keep the PC awake<br><span class="meta">Only while voice work runs.</span></span></label>
       </div>
       <div class="rn-more"><button class="linkbtn" type="button" data-qadd="improve">Add a voice to improve</button><button class="linkbtn" type="button" data-qadd="new">Train a new voice tonight</button><span class="meta">· both open DoubleAgent</span></div>
@@ -620,7 +636,7 @@
       </div>
       <div class="qlist" id="q-list"></div>
       <div class="qopts">
-        <label class="toggle"><input type="checkbox" id="q-finish"><span>Finish by 7:00 am<br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
+        <label class="toggle"><input type="checkbox" id="q-finish"><span>Finish by <input type="time" id="q-finish-time" value="07:00" aria-label="Finish by"><br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
         <label class="toggle"><input type="checkbox" id="q-awake"><span>Keep the PC awake<br><span class="meta">Only while voice work runs.</span></span></label>
       </div>
       <p class="meta">Covers you start meanwhile go first. Pause / Resume at the top of the page stops and continues everything; the queue is saved, so a restart carries on.</p>
@@ -761,7 +777,7 @@
         <div class="se-field" data-deep><label for="se-nudge">Pitch <output id="se-nudge-out">auto</output></label>
           <input type="range" id="se-nudge" min="-6" max="6" step="0.5" value="0">
           <p id="se-pitch-note">Set from the voice's speaking pitch; nudge it if they sound too high or low.</p></div>
-        <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad"><span>Speak with <span id="se-cad-name">their</span> own cadence</span></label>
+        <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad" aria-label="Speak with their own cadence"><span>Speak with <span id="se-cad-name">their</span> own cadence</span></label>
           <p id="se-cad-note">Their pace and pauses, learned from their clips. Needs a cadence: "Train cadence" on the voice.</p>
           <p class="meta" id="se-cad-deep" data-deep></p></div>
       </div>
@@ -815,6 +831,7 @@
 <script src="/static/rooms.js"></script>
 <script src="/static/vault.js"></script>
 <script src="/static/smaller.js"></script>
+<script src="/static/aside.js"></script>
 <script src="/static/themes.js"></script>
 <script src="/static/work.js"></script>
 <script src="/static/doubleagent.js"></script>

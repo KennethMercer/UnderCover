@@ -38,6 +38,24 @@ function seCount() {
   const w = seWords(), secs = w / 3.0 / sePaceFactor();
   $("#se-count").textContent = w ? `${w.toLocaleString()} word${w === 1 ? "" : "s"} · about ${fmtTime(Math.max(1, secs))}` : "0 words";
   seSummary();
+  seEstimate();
+}
+// "Ready in about …" before Generate: the server's own estimate (GET/POST /api/speak/estimate: the engine's measured speed, the
+// listen-back, a cold start, and how many jobs wait), asked a moment after the text, voice, Reader, pace, nudge or cadence changes
+let seEstTimer = null, seEstSeq = 0;
+const seEstKey = () => [SE.voice, $("#se-reader").value, SE.pace, $("#se-nudge").value, $("#se-cad").checked ? 1 : 0, seText.value.trim()].join("\u0001");
+function seEstimate() {
+  clearTimeout(seEstTimer);
+  const text = seText.value.trim();
+  if (!text || !SE.voice) { SE.est = null; return; }
+  seEstTimer = setTimeout(async () => {
+    const key = seEstKey(), seq = ++seEstSeq;
+    try {
+      const r = await api("/api/speak/estimate", { json: { text, voice: SE.voice, reader: $("#se-reader").value || "auto", pace: SE.pace,
+                                                          nudge: +$("#se-nudge").value, mode: $("#se-cad").checked ? undefined : "reader" } });
+      if (seq === seEstSeq) { SE.est = { ...r, key }; seSummary(); }
+    } catch (e) { /* the page's own guess stands */ }
+  }, 600);
 }
 let seSave = null;
 seText.addEventListener("input", () => { seCount(); clearTimeout(seSave); seSave = setTimeout(() => store.set("uc-se-text", seText.value.slice(0, 200000)), 400); });
@@ -62,7 +80,7 @@ function seVoices() {
     const cad = c.has ? `cadence <span class="y">✓</span>` : c.queue === "running" ? "cadence: making it now" : c.queue ? "cadence queued" : "cadence –";
     const act = c.has || c.queue || !c.can ? ""
       : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">${v.trained ? "Train cadence" : "Find clips + cadence"}</button>`;
-    return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-selected="${v.name === SE.voice}">
+    return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
       <div class="vtext"><b>${vname(v.name)}</b>${v.trained && v.likeness != null ? `<small data-deep>likeness ${(+v.likeness).toFixed(2)}</small>` : ""}<small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · ${cad}</span></small></div>
       <div class="se-vact">${act}</div></div>`;
@@ -139,6 +157,7 @@ function sePlan(soon) {
 $("#se-cad").checked = store.get("uc-se-cad", true);
 $("#se-cad").onchange = () => { store.set("uc-se-cad", $("#se-cad").checked); sePlan(); };
 function seShowPlan() {
+  seEstimate();
   const p = SE.plan, st = v => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v)} st`;
   const v0 = SE.voices.find(x => x.name === p.voice), c = v0?.cadence || {};
   const cadOn = p.mode === "cadence";
@@ -155,7 +174,7 @@ function seShowPlan() {
   if (cadOn) {
     $("#se-nudge-out").textContent = p.nudge ? st(p.nudge) : "their own";
     $("#se-pitch-note").textContent = "With their cadence, they speak at their own pitch. Nudge it only if it sounds off.";
-    $("#se-cad-name").textContent = v0?.person ? `${v0.person}'s` : `${p.voice}'s`;
+    $("#se-cad-name").textContent = v0?.person ? `${v0.person}'s` : `${voiceDisplay(p.voice)}'s`; $("#se-cad").setAttribute("aria-label", `Speak with ${$("#se-cad-name").textContent} own cadence`);
     return seSummary();
   }
   $("#se-reader-out").textContent = `${p.auto ? "auto · " : ""}${p.reader}`;
@@ -164,7 +183,7 @@ function seShowPlan() {
     ? `Speaks around ${Math.round(p.target_hz)} Hz (from ${p.pitch_from}); the Reader is at ${Math.round(p.reader_hz)} Hz. Nudge it if they sound too high or low.`
     : "This voice's speaking pitch isn't known (a downloaded voice nobody checked), so the Reader's own pitch is used. Nudge it, or pick another Reader, if it sounds off.";
   const v = SE.voices.find(x => x.name === p.voice);
-  $("#se-cad-name").textContent = v?.person ? `${v.person}'s` : `${p.voice}'s`;
+  $("#se-cad-name").textContent = v?.person ? `${v.person}'s` : `${voiceDisplay(p.voice)}'s`; $("#se-cad").setAttribute("aria-label", `Speak with ${$("#se-cad-name").textContent} own cadence`);
   seSummary();
 }
 function seSummary() {
@@ -172,10 +191,12 @@ function seSummary() {
   $("#se-generate").disabled = !w || !SE.voice || !!busy;
   $("#se-generate").textContent = busy ? "Speaking…" : "Generate";
   if (!SE.voice) { $("#se-summary").textContent = "Pick a voice first."; return; }
-  const secs = w / 3.0 / sePaceFactor();
-  const cad = SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
-  const when = cad ? `with their cadence · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))} · starts playing after the first few sentences`
-    : "starts playing after the first sentence";
+  const est = SE.est && SE.est.key === seEstKey() ? SE.est : null;   // the server's, while it still matches what's on the page
+  const secs = est ? est.audio_seconds : w / 3.0 / sePaceFactor();
+  const cad = est ? est.mode === "cadence" : SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
+  const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${est.waiting ? ` (${est.waiting} ahead in the queue)` : ""}`
+    : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
+  const when = `${cad ? "with their cadence" : "read by the Reader"}${ready} · starts playing after the ${cad ? "first few sentences" : "first sentence"}`;
   $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
     : `<b>${vname(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
 }
@@ -232,7 +253,7 @@ function seStart(job, plan, estimate, resumed = false) {
       $("#se-stop").hidden = true;
       if (ev.state === "done" && ev.result) {
         SE.result = ev.result;
-        $("#se-progress").textContent = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"} · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s`;
+        $("#se-progress").innerHTML = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"}<span data-deep> · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s</span>`;
         $("#se-wav").href = ev.result.url + "?download"; $("#se-wav").removeAttribute("aria-disabled");
         $("#se-wav").textContent = `Download ${(ev.result.file || "").split(".").pop().toUpperCase() || "FLAC"}`;   // phase 24: lossless FLAC
         if (ev.result.mp3_url) { $("#se-mp3").href = ev.result.mp3_url + "?download"; $("#se-mp3").removeAttribute("aria-disabled"); }
@@ -340,13 +361,14 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”${typeof earMark === "function" ? earMark("speech", r.id) : ""}</b><small>${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
   $$("[data-rkeep]", box).forEach(b => b.onclick = () => seToggleKeep(b.dataset.rkeep, b.getAttribute("aria-pressed") === "true"));
   $$("[data-rdel]", box).forEach(b => b.onclick = async () => {
-    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); b.textContent = "Remove"; } }, 4000); return; }
+    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; } }, 4000); return; }
+    if (!armedFor(b)) return;   // a double click isn't a confirmation
     const id = b.dataset.rdel;
     seRelease(id);
     try { await api(`/api/speak/${id}`, { method: "DELETE" }); } catch (e) { return showError(e.message, "Couldn't remove it"); }
@@ -371,8 +393,8 @@ async function seToggleKeep(id, kept) {
 $("#se-keep").onclick = () => SE.result && seToggleKeep(SE.result.id, !!SE.result.kept);
 function seWhen(s) {
   const d = new Date((s || "").replace(" ", "T")); if (isNaN(d)) return s || "";
-  const days = Math.floor((Date.now() - d) / 864e5);
-  return days < 1 && d.getDate() === new Date().getDate() ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : d.toLocaleDateString();
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), days = Math.round((day(new Date()) - day(d)) / 864e5);   // calendar days
+  return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : d.toLocaleDateString();
 }
 function sePlayRecent(r) {
   if (!r) return;

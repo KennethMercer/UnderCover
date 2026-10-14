@@ -7,7 +7,7 @@ pickers for the queue: candidates (voices that can be improved) and lookup (name
 import json
 
 from ..core.config import CONFIG, path
-from ..core.voices import ModelError, slug
+from ..core.voices import ModelError, label_of, slug
 from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
@@ -39,7 +39,9 @@ def estimate(item: dict) -> dict:
     else:
         raw_min = 90.0 if item["kind"] == "improve" else 45.0   # not searched yet: typical
     prep = raw_min / PREP_RT
-    train = LENGTHS["auto"] * _sec_per_step() * EARLY_STOP / 60
+    # a queued project trains at its own length (the options are saved before this runs: a Quick item says Quick's time)
+    length = (proj.train.get("length") if item["kind"] == "project" and proj is not None else None) or "auto"
+    train = LENGTHS.get(length, LENGTHS["auto"]) * _sec_per_step() * (EARLY_STOP if length == "auto" else 1.0) / 60
     return {"prepare": round(prep), "train": round(train), "compare": round(COMPARE_MIN if item["kind"] == "improve" else 1),
             "total": round(prep + train + (COMPARE_MIN if item["kind"] == "improve" else 1))}
 
@@ -56,11 +58,16 @@ def _improve_extra_minutes(proj) -> float:
 def _project_for_item(item: dict, create: bool):
     from . import project as P
     try:
+        if item["kind"] == "project":   # a project queued from the Deep path: exactly that one
+            try:
+                return P.Project.load(item["target"])
+            except ModelError:
+                return None
         if item["kind"] == "improve":
             from ..core.voices import get_voice, is_demo
             v = get_voice(item["target"])
             if is_demo(v):
-                raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
+                raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
             name = (v.extra or {}).get("project")
             if name:
                 try:
@@ -117,7 +124,7 @@ def _person_from_voice(v) -> str:
 def candidates() -> list:
     """Voices for the "Improve my voices" picker: what each was trained on, its last measured likeness, what an
     improve would do and roughly how long it takes."""
-    from ..core.voices import list_voices, voice_info
+    from ..core.voices import listed_voices, voice_info
     from . import service
     queued = {(i["kind"], i["target"].lower()) for i in worklist._state()["queue"] if i["state"] in ("queued", "paused", "running")}
     try:
@@ -125,7 +132,7 @@ def candidates() -> list:
     except (OSError, ValueError):
         qcache = {}
     out = []
-    for v in list_voices():
+    for v in listed_voices():
         ex = v.extra or {}
         c = {"voice": v.name, **voice_info(v), "minutes": ex.get("train_minutes"),
              "singing": None if ex.get("from_speech") is None else not ex.get("from_speech"), "likeness": None}
@@ -205,7 +212,10 @@ def _new(job, item) -> dict:
             score = voicecheck.check(name, proj, gpu.MODELS.converter, SpeakerEmbedder()).score
         except Exception:   # noqa: BLE001 - only for the report
             pass
-    return {"voice": name, "after": score, "note": f"'{name}' added to your voices."}
+    from .api import pending_of, waiting_note
+    owner = pending_of(name)   # a voice of that name was there: it waits beside it
+    return {"voice": name, "after": score, "pending_for": owner,
+            "note": waiting_note(owner) if owner else f"'{name}' added to your voices."}
 
 
 def _improve(job, item) -> dict:
@@ -252,6 +262,7 @@ def _improve(job, item) -> dict:
             try:
                 P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=prog,
                                   between=control.service, cancel=lambda: job.cancel or job.pausing,
+                                  stop=lambda: job.cancel or getattr(control, "stop", False),
                                   friendly=lambda e: jobs.friendly(e, "preparing a source"))
             except P.Cancelled:
                 from ..core.jobs import Paused
@@ -264,7 +275,7 @@ def _improve(job, item) -> dict:
                 P.score(proj)
             proj.save()
             st = proj.train
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"], length="auto", voice_name=cand)
             proj.save()
@@ -295,35 +306,56 @@ def _improve(job, item) -> dict:
         before = None
     after = voicecheck.check(cand, proj, conv, emb, tests=tests).score
     kept_min = round(proj.kept_seconds() / 60, 1)
-    if before is not None and before < SAME_PERSON:
-        # the current voice doesn't sound like the clips found now: they're probably someone else's (a debate
-        # partner, an interviewer). Don't replace a working voice with that.
-        remove_voice(cand)
-        return {"voice": old.name, "before": before, "after": after, "replaced": False, "minutes_of_voice": kept_min,
-                "note": f"The clips found this time don't sound like the current voice (it scores {before} against them), "
-                        "so they may be someone else's. Kept the old voice; check the project in DoubleAgent."}
-    if before is None or after > before + 0.005:
-        proj = P.Project.load(proj.name)
-        export_voice(proj, name=old.name, overwrite=True)
-        remove_voice(cand)
-        gpu.forget_voice(old.name)
-        return {"voice": old.name, "before": before, "after": after, "replaced": True, "minutes_of_voice": kept_min,
-                "note": f"Retrained on {kept_min} min of {'singing' if proj.mode != 'speaking' else 'speech'}; the new one sounds more like them."}
-    remove_voice(cand)
+    # Internal Affairs P2-1: the ear decides, and the user's voice is never deleted. The retrained voice waits BESIDE the
+    # current one (pending), whatever the numbers say; the current one is never exported over or removed here. The
+    # user picks by ear (a blind A/B through MasterPlan); the one not kept is set aside, never deleted.
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         proj.train["exported"] = old.name   # the installed voice is still the old one
+        proj.train["voice_name"] = old.name   # the training form's name again (not the candidate's: P3-2)
         proj.save()
-    return {"voice": old.name, "before": before, "after": after, "replaced": False, "minutes_of_voice": kept_min,
-            "note": f"Retrained on {kept_min} min, but it didn't sound more like them, so the old voice stays."}
+    mark_improved_pending(old.name, cand, before, after, kept_min)
+    if before is not None and before < SAME_PERSON:
+        note = (f"The clips found this time don't sound much like the current voice (it scores {before} against them), so "
+                f"they may be someone else's. The retrained one waits beside it; compare them before keeping either.")
+    else:
+        note = (f"Retrained on {kept_min} min of {'singing' if proj.mode != 'speaking' else 'speech'}. The new one waits "
+                f"beside the current one (measured {after} against {before}); listen to both and keep the one you like.")
+    return {"voice": old.name, "candidate": cand, "before": before, "after": after, "replaced": False, "pending": True,
+            "minutes_of_voice": kept_min, "note": note}
+
+
+def mark_improved_pending(voice: str, cand: str, before, after, minutes):
+    """The current voice knows a retrained one waits beside it (extra.improved_pending), and the candidate knows whose
+    it is (extra.pending_for). Nothing is replaced or removed."""
+    import json
+    import time
+    from ..core import fsutil
+    from ..core.voices import get_voice
+    v = get_voice(voice)
+    v.extra = {**(v.extra or {}), "improved_pending": {"voice": cand, "before": before, "after": after,
+                                                       "minutes": minutes, "made": time.strftime("%Y-%m-%d %H:%M")}}
+    fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    c = get_voice(cand)
+    c.extra = {**(c.extra or {}), "pending_for": voice}
+    fsutil.write_text(c.dir / "meta.json", json.dumps(c.to_json(), indent=2))
 
 
 def _improve_target(target: str) -> str:
     from ..core.voices import get_voice, is_demo
     v = get_voice(target)   # friendly error if it doesn't exist
     if is_demo(v):
-        raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
+        raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
                          "of to improve it.")
+    if (v.extra or {}).get("pending_for"):
+        raise ModelError("That's a retrained version waiting to be compared, not a voice to improve.")
+    pending = (v.extra or {}).get("improved_pending")
+    if pending:   # never over a candidate nobody has listened to yet
+        raise ModelError(f"A retrained {label_of(v.name)} is already waiting beside it. Compare the two first.")
+    from ..core.voices import pending_candidate, voices_dir
+    if pending_candidate(f"{v.name}-next") or (voices_dir() / f"{v.name}-next").exists():
+        raise ModelError(f"A retrained {label_of(v.name)} from an earlier improve ({v.name}-next) is still in your "
+                         "voices. Remove it first (SafeHouse) if you don't want it.")
     return v.name
 
 
@@ -333,6 +365,71 @@ def shown_voice(item: dict) -> str:
     return label_of(item["target"])
 
 
+def _project(job, item) -> dict:
+    """A queued project: its own sources and choices (service.run_project)."""
+    from . import service
+    from . import voicecheck
+    from ..core.speaker import SpeakerEmbedder
+    name = service.run_project(job, item["target"], worklist.control_for(job), worklist.pusher(job))
+    proj = _project_for_item(item, create=False)
+    score = None
+    if proj is not None:
+        try:
+            score = voicecheck.check(name, proj, gpu.MODELS.converter, SpeakerEmbedder()).score
+        except Exception:   # noqa: BLE001 - only for the report
+            pass
+    from .api import pending_of, waiting_note
+    owner = pending_of(name)
+    return {"voice": name, "after": score, "pending_for": owner,
+            "note": waiting_note(owner) if owner else f"'{name}' added to your voices, from your choices in DoubleAgent."}
+
+
+def _project_target(target: str) -> str:
+    from . import project as P
+    proj = P.Project.load(target)   # friendly error if it isn't a project
+    if not any(s.selected for s in proj.sources) and not proj.phrases:
+        raise ModelError("Tick the sources to train on in DoubleAgent first.")
+    return proj.name
+
+
+def _project_options(target: str, b: dict):
+    """The choices on screen when the project was queued (voice name, length, sample rate), checked and saved onto the
+    project's training settings, which is what run_project reads: what's on screen is what runs. Nothing given keeps
+    the project's own (or the defaults). Another person's voice name is refused now, not at 3 am."""
+    from . import project as P
+    from .api import check_voice_name
+    from .trainer import LENGTHS, SR_CFG
+    from ..core.voices import slug
+    with P.lock(target):
+        proj = P.Project.load(target)
+        st = proj.train
+        vname = slug(b.get("voice_name") or st.get("voice_name") or f"{proj.name}-uc")
+        if not vname:
+            raise ModelError("Give the new voice a name.")
+        check_voice_name(proj, vname)
+        length = b.get("length") or st.get("length") or "auto"
+        if length not in LENGTHS:
+            raise ModelError(f"Pick a training length: {', '.join(LENGTHS)}.")
+        sr = int(b.get("sr") or st.get("sr") or CONFIG["training"]["sample_rate"])
+        if sr not in SR_CFG:
+            raise ModelError("Sample rate must be 32000, 40000 or 48000.")
+        if st.get("state") == "paused" and st.get("sr") and int(st["sr"]) != sr:
+            raise ModelError(f"This training is paused at {int(st['sr']) // 1000} kHz and continues at that rate. "
+                             "Keep it, or start over in DoubleAgent.")
+        st.update(voice_name=vname, length=length, sr=sr)
+        proj.save()
+
+
+def shown_project(item: dict) -> str:
+    from . import project as P
+    try:
+        return P.Project.load(item["target"]).person or item["target"]
+    except ModelError:
+        return item["target"]
+
+
+worklist.register_kind("project", run=_project, estimate=estimate, target=_project_target, shown=shown_project,
+                       label=lambda item: f"Training {shown_project(item)} (your choices)", options=_project_options)
 worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=shown_voice,
                        label=lambda item: f"Improving {shown_voice(item)}")
 worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}",

@@ -38,7 +38,7 @@ function smRow(x) {
     state = x.kind === "voice"
       ? (r.same === false ? `<span class="st warn">came out a little different</span>` : `<span class="st ok">sounds the same ✓</span>`) + `<span class="meta">saves ${gb(saved)}</span>`
       : `<span class="st ok">every clip checked ✓</span><span class="meta">saves ${gb(saved)}</span>`;
-    const hear = r.full_url || r.small_url ? `<span class="sm-hear"><span class="meta">Hear it:</span>${r.full_url ? `<button class="linkbtn" type="button" data-sm-play="${esc(r.full_url)}">Before</button>` : ""}${r.small_url ? `<button class="linkbtn" type="button" data-sm-play="${esc(r.small_url)}">After</button>` : ""}</span>` : "";   // a reading cleaned away: its button goes
+    const hear = r.full_url || r.small_url ? `<span class="sm-hear"><span class="meta">Hear it:</span>${r.full_url ? `<button class="linkbtn" type="button" data-sm-play="${esc(r.full_url)}" data-sm-label="Before">Before</button>` : ""}${r.small_url ? `<button class="linkbtn" type="button" data-sm-play="${esc(r.small_url)}" data-sm-label="After">After</button>` : ""}</span>` : "";   // a reading cleaned away: its button goes
     acts = `${hear}<button class="btn${r.same === false ? "" : " primary"}" type="button" data-sm-keep="${esc(k)}" data-pc>Keep it smaller</button><button class="${r.same === false ? "btn primary" : "linkbtn"}" type="button" data-sm-undo="${esc(k)}" data-pc>Undo</button>`;
     deep = x.kind === "voice" ? `${r.vectors_before ?? "?"} → ${r.vectors_after ?? "?"} vectors · alike ${r.alike ?? "?"}${r.likeness_full != null ? ` · likeness ${r.likeness_full} → ${r.likeness_small}` : ""} · ${gb(r.bytes_before || 0)} → ${gb(r.bytes_after || 0)}`
       : `${r.clips ?? "?"} clips · ${gb(r.clips_bytes_before || 0)} → ${gb(r.clips_bytes_after || 0)}${r.data_bytes ? ` · prepared data ${gb(r.data_bytes)} aside` : ""}`;
@@ -63,11 +63,25 @@ function smWire() {
   $$("[data-sm-keep]").forEach(b => confirmClick(b, "Delete the originals?", () => smAct("keep", parse(b.dataset.smKeep), b)));
   $$("[data-sm-play]").forEach(b => b.onclick = () => {
     const same = SM.audio && SM.audio.src.endsWith(b.dataset.smPlay) && !SM.audio.paused;
+    const at = SM.audio ? SM.audio.currentTime : 0;   // Before and After play the same phrase: the other one carries on from here
     SM.audio?.pause();
-    if (same) return;
-    SM.audio = new Audio(b.dataset.smPlay);
-    SM.audio.volume = VOL.muted ? 0 : VOL.level; SM.audio.muted = VOL.muted;   // the page's own volume
-    SM.audio.play().catch(() => {});
+    if (same) return smMarkPlaying();
+    const a = SM.audio = new Audio(b.dataset.smPlay);
+    a.volume = VOL.muted ? 0 : VOL.level; a.muted = VOL.muted;   // the page's own volume
+    a.onpause = a.onended = () => { if (SM.audio === a) smMarkPlaying(); };
+    if (at) a.addEventListener("loadedmetadata", () => { try { a.currentTime = Math.min(at, a.duration || at); } catch (e) {} }, { once: true });
+    a.play().then(smMarkPlaying, () => {});
+    smMarkPlaying();
+  });
+  smMarkPlaying();
+}
+// the button of the reading that's playing says so (aria-pressed, a pause sign); it survives a re-render
+function smMarkPlaying() {
+  const on = SM.audio && !SM.audio.paused && !SM.audio.ended ? SM.audio.src : null;
+  $$("[data-sm-play]").forEach(b => {
+    const playing = !!on && on.endsWith(b.dataset.smPlay);
+    b.setAttribute("aria-pressed", playing); b.classList.toggle("on", playing);
+    b.textContent = `${playing ? "❚❚ " : ""}${b.dataset.smLabel}`;
   });
 }
 async function smAct(how, it, b) {
@@ -92,7 +106,8 @@ onJobs(() => {
   if (!SM.o || $("#room-storage")?.hidden) return;
   for (const j of runningJobs()) {
     if (j.kind !== "smaller" || Object.values(SM.jobs).some(x => x.id === j.id)) continue;
-    const m = (j.title || "").match(/^Making (?:the )?(.+?)(?: project)? smaller$/);
-    if (m) smFollow(j.id, { kind: /project smaller$/.test(j.title) ? "project" : "voice", name: m[1] });
+    // the job says what it's making smaller (target {kind, name, display}); its title only shows the display name
+    const t = j.target;
+    if (t?.name) smFollow(j.id, { kind: t.kind, name: t.name });
   }
 });

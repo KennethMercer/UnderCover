@@ -19,7 +19,8 @@ const gb = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.rou
 const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const art = (name, big) => `<span class="art" style="background:linear-gradient(135deg,hsl(${hue(name)} 55% 45%),hsl(${(hue(name) + 70) % 360} 50% 35%))"${big ? "" : ' aria-hidden="true"'}>${esc(initialOf(name))}</span>`;
 const when = s => { if (!s) return ""; const d = new Date(typeof s === "number" ? s * 1000 : s.replace(" ", "T")); if (isNaN(d)) return s;
-  const days = Math.floor((Date.now() - d) / 864e5); return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : days < 30 ? `${days} days ago` : d.toLocaleDateString(); };
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), days = Math.round((day(new Date()) - day(d)) / 864e5);   // calendar days, not 24-hour spans
+  return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : days < 30 ? `${days} days ago` : d.toLocaleDateString(); };
 const quality = v => v.trained ? (v.undertrained ? ["warn", "under-trained"] : ["ok", "trained here"])
   : v.verdict === "good" ? ["ok", "sounds like them ✓"] : v.verdict === "weak" ? ["warn", "weak likeness"]
   : v.verdict === "bad" ? ["bad", "doesn't sound like them"] : v.verdict === "broken" ? ["bad", "won't load"] : ["", "not checked"];
@@ -101,7 +102,7 @@ function tabCounts(kf) {
 }
 function renderCats() {
   const c = tabCounts(kfNow());
-  $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
+  $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}" aria-label="${label}${c[k] != null ? `, ${c[k]}` : ""}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
   $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderCats(); loadCat(); });
 }
 function renderTools() {
@@ -113,7 +114,7 @@ function renderTools() {
     const voices = [...new Set((L.data[L.cat] || []).map(c => c.voice))].sort();
     f.hidden = voices.length < 2;
     const keep = f.value;
-    f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option${v === keep ? " selected" : ""}>${esc(v)}</option>`).join("");
+    f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option value="${esc(v)}"${v === keep ? " selected" : ""}>${esc(voiceDisplay(v))}</option>`).join("");
   } else f.hidden = true;
   renderKf();
 }
@@ -137,6 +138,7 @@ $("#lib-filter").onchange = () => renderList();
 function rows() {
   const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
   let list = (L.data[L.cat] || []).slice();
+  if (L.cat === "voices") list = list.filter(x => !x.waiting_beside);   // a retrained one waiting lives under its owner (renderList)
   const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${voiceDisplay(x.voice)} ${x.backing_voice || ""} ${voiceDisplay(x.backing_voice)}` : L.cat === "speech" ? `${x.title} ${x.text} ${x.voice} ${voiceDisplay(x.voice)}` : L.cat === "songs" ? `${x.title} ${x.source}`
     : L.cat === "voices" ? `${x.name} ${voiceDisplay(x.name)} ${x.source}` : `${x.person} ${x.name}`;
   if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
@@ -165,6 +167,17 @@ function placeDetail() {
   d.hidden = narrowQ.matches && !row;
 }
 narrowQ.addEventListener("change", placeDetail);
+// a retrained voice waiting beside this one (voice list's waiting_beside): nested under its owner, with the way to the A/B
+function waitingRow(owner, all) {
+  const w = all.find(v => v.waiting_beside === owner.name);
+  if (!w) return "";
+  return `<div class="lib-nest"><span>Retrained version waiting${w.size ? ` (${gb(w.size)})` : ""}</span>
+    <button class="linkbtn" type="button" data-lib-ab="${esc(owner.name)}">Hear it</button></div>`;
+}
+async function libOpenAb(voice) {   // DoubleAgent's card for the voice, with the blind A/B open
+  showTab("doubleagent");
+  try { await loadCandidates(); await loadImproved(); if (DA.impAb?.voice !== voice) await openImp(voice); } catch (e) { showError(e.message, "Couldn't open it"); }
+}
 function renderList() {
   const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
   if (box.contains($("#lib-detail"))) box.after($("#lib-detail"));   // the list is redrawn below; the detail lives on
@@ -180,10 +193,10 @@ function renderList() {
     const id = idOf(x), check = L.cat === "covers";
     let title, sub, side;
     if (L.cat === "covers") {
-      title = x.title; sub = [x.voice + (x.backing_voice ? ` + ${x.backing_voice}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
+      title = x.title; sub = [voiceDisplay(x.voice) + (x.backing_voice ? ` + ${voiceDisplay(x.backing_voice)}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
       side = keepTag(x) + `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "speech") {
-      title = x.title; sub = [x.voice, paceWord(x), when(x.created)].join(" · ");
+      title = x.title; sub = [voiceDisplay(x.voice), paceWord(x), when(x.created)].join(" · ");
       side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag" data-deep>${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
       title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
@@ -199,9 +212,11 @@ function renderList() {
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
-      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
+      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`
+      + (L.cat === "voices" ? waitingRow(x, all) : "");
   }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
-      : hasTray() && L.kf === "kept" ? "Nothing kept yet. Send to SafeHouse keeps one for good; until then it's under Recent." : "Nothing here."}</div>`);
+      : hasTray() && L.kf === "kept" ? `No ${L.cat === "covers" ? "covers" : "speech"} kept yet. Send to SafeHouse keeps one for good; until then it's under Recent.` : "Nothing here."}</div>`);
+  $$("[data-lib-ab]", box).forEach(b => b.onclick = () => libOpenAb(b.dataset.libAb));
   $$(".litem", box).forEach(el => {
     const pick = () => { L.sel = el.dataset.id; $$(".litem", box).forEach(x => x.setAttribute("aria-selected", x === el)); renderDetail(); placeDetail(); };
     el.addEventListener("click", e => { if (e.target.matches("input")) return; pick(); });
@@ -225,10 +240,11 @@ function confirmClick(btn, ask, run) {
   const label = btn.textContent;
   btn.onclick = async () => {
     if (!btn.classList.contains("confirm")) {
-      btn.classList.add("confirm"); btn.textContent = ask;
-      setTimeout(() => { if (btn.isConnected) { btn.classList.remove("confirm"); btn.textContent = label; } }, 4000);
+      btn.classList.add("confirm"); arm(btn); btn.textContent = ask;
+      setTimeout(() => { if (btn.isConnected) { btn.classList.remove("confirm"); disarm(btn); btn.textContent = label; } }, 4000);
       return;
     }
+    if (!armedFor(btn)) return;   // a double click isn't a confirmation
     btn.disabled = true;
     releaseAudio();
     try { await run(); } catch (e) { showError(e.message, "That didn't work"); } finally { if (btn.isConnected) btn.disabled = false; }
@@ -401,7 +417,7 @@ function voiceDetail(d, v) {
       <dt data-deep>Size</dt><dd data-deep>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep data-pc>Rename folder…</button>
-      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep data-pc>Export .zip</a><button class="btn danger" id="lib-del">Delete…</button></div>`;
+      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep data-pc>Export .zip</a><button class="btn danger" id="lib-del">Remove…</button></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");
   if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("doubleagent"); try { await openProject(v.project); } catch (e) {} };
@@ -419,7 +435,7 @@ function voiceDetail(d, v) {
     nameIn.onkeydown = e => { if (e.key === "Enter") save(); };
   }
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
-  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" }); afterChange(); });
+  confirmClick($("#lib-del"), "Click again to remove", async () => { removedVoice(v.name, await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" })); afterChange(); loadVoices(); });
   if ($("#lib-full-idx")) $("#lib-full-idx").onclick = async e => {   // the shrunk voice's full index, kept 30 days
     e.target.disabled = true;
     try { await api(`/api/library/voices/${encodeURIComponent(v.name)}/full-index`, { json: {} }); showError("The full index is back. New covers use it.", "Put back", null, true); afterChange(); }
@@ -461,18 +477,42 @@ $("#lib-clean-btn").onclick = async () => {
   let g;
   try { g = await api("/api/library/cleanup"); } catch (e) { return showError(e.message); }
   const keys = Object.keys(g).filter(k => g[k].count);
+  // a group frees space (size) or moves voices to Set aside (aside, aside_size): nothing a voice is deleted here, so its size is "moved", not "freed"
+  // two voices can share a display name (a copy with no name of its own): then the folder name, in small type, tells them apart (in Deep Cover always)
+  const rowsOf = x => {
+    const ids = new Map();   // display name -> the voices that read it
+    (x.aside || []).forEach(a => [[a.display || a.voice, a.voice], [a.keeps_display || a.keeps, a.keeps]].forEach(([d, v]) => ids.set(d, (ids.get(d) || new Set()).add(v))));
+    const same = n => ids.get(n).size > 1;
+    const tag = (d, v) => `<span class="mono"${same(d) ? "" : " data-deep"}> (${esc(v)})</span>`;
+    return (x.aside || []).map(a => `<small>${esc(a.display || a.voice)}${tag(a.display || a.voice, a.voice)} goes to Set aside: the same model as ${esc(a.keeps_display || a.keeps)}${tag(a.keeps_display || a.keeps, a.keeps)}${a.because ? `, kept because ${esc(a.because)}` : ""}</small>`).join("");
+  };
   $("#lib-clean-list").innerHTML = keys.length ? keys.map(k => `<label class="crow"><input type="checkbox" data-g="${k}" ${g[k].default ? "checked" : ""}>
-      <span><b>${esc(g[k].title)}</b><small>${esc(g[k].detail)}</small></span><span class="mono">${gb(g[k].size)}</span></label>`).join("")
+      <span><b>${esc(g[k].title)}</b>${g[k].aside?.length ? rowsOf(g[k]) : `<small>${esc(g[k].detail)}</small>`}</span>
+      <span class="mono">${g[k].aside_size ? `moved ${gb(g[k].aside_size)}` : gb(g[k].size)}</span></label>`).join("")
     : `<p class="meta">Nothing to clean up right now.</p>`;
-  const total = () => keys.filter(k => $(`[data-g=${k}]`).checked).reduce((a, k) => a + g[k].size, 0);
+  const sum = f => keys.filter(k => $(`[data-g=${k}]`).checked).reduce((a, k) => a + (g[k][f] || 0), 0);
   const go = $("#lib-clean-go");
-  const upd = () => { go.textContent = `Free ${gb(total())}`; go.disabled = !total(); };
+  const upd = () => {
+    const free = sum("size"), moved = sum("aside_size");
+    go.textContent = free && moved ? `Free ${gb(free)} and move ${gb(moved)} to Set aside` : moved ? `Move ${gb(moved)} to Set aside` : free ? `Free ${gb(free)}` : "Nothing ticked";
+    go.disabled = !free && !moved;
+  };
   $$("#lib-clean-list input").forEach(i => i.onchange = upd);
   upd(); panel.hidden = false;
   go.onclick = async () => {
     const groups = keys.filter(k => $(`[data-g=${k}]`).checked);
     go.disabled = true; go.textContent = "Freeing…";
-    try { const r = await api("/api/library/cleanup", { json: { groups } }); panel.hidden = true; showError(`Freed ${gb(r.freed)}.`, "Cleaned up", null, true); afterChange(); }
+    try {
+      const r = await api("/api/library/cleanup", { json: { groups } }); panel.hidden = true;
+      // freed: space given back. set_aside: voices moved to Set aside (nothing deleted; Bring it back is there). skipped: what was left, and why
+      const name = x => typeof x === "string" ? voiceDisplay(x) : (x.display || voiceDisplay(x.voice) || "");
+      const moved = Array.isArray(r.set_aside) ? r.set_aside : [], skipped = Array.isArray(r.skipped) ? r.skipped : [];
+      const say = [r.freed ? `Freed ${gb(r.freed)}.` : "",
+        moved.length ? `Set aside: ${moved.map(name).join(", ")}. Bring it back, or delete it for good, in Storage > Set aside.` : "",
+        skipped.length ? `Left alone: ${skipped.map(s => `${name(s)}${s.why ? ` (${s.why})` : ""}`).join("; ")}.` : ""].filter(Boolean).join(" ");
+      showError(say || "Nothing needed doing.", "Cleaned up", null, true); afterChange();
+      if (typeof asideLoad === "function") asideLoad();
+    }
     catch (e) { showError(e.message, "Couldn't clean up"); upd(); }
   };
 };

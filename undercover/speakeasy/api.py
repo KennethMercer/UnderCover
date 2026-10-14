@@ -3,6 +3,10 @@
 GET    /api/speak/voices                     every voice: group, likeness, auto Reader + pitch, cadence status
 GET    /api/speak/readers                    the Kokoro Readers (English)
 GET    /api/speak/plan?voice=&reader=&pace=&nudge=   which Reader and pitch a voice would use (pace: slower|natural|faster)
+GET    /api/speak/estimate?text=&voice=&mode=   how long making it would take, before it starts: {estimate, audio_seconds,
+                                             sentences, mode, waiting} (mode: cadence|reader; reader, pace, speed,
+                                             nudge as for /plan). POST /api/speak/estimate takes the same as a body
+                                             (long text)
 GET    /api/speak/recent                     the recent tray: the latest 15 finished speech, newest first (kept or not;
                                              each has id, kept, kept_at); older unkept ones roll off (core/tray.py)
 POST   /api/speak                            {text, voice, reader, pace, nudge, cadence} -> speech job (events: one URL per
@@ -44,12 +48,16 @@ def _route(h, method, p):
             return h._json(speak.readers())
         if rest == "recent":
             return h._json(speak.list_speech(everything=False))
+        if rest == "estimate":
+            return h._json(_estimate(q))
         if rest == "plan":
             return h._json(speak.plan(q.get("voice", ""), q.get("reader", "auto"), _num(q.get("speed"), 1.0), _num(q.get("nudge"), 0.0),
                                       False if q.get("cadence") in ("0", "false") else None, q.get("pace")))
         raise LookupError("Not found")
     if method == "POST" and rest == "":
         return _start(h, h._body())
+    if method == "POST" and rest == "estimate":
+        return h._json(_estimate(h._body()))
     if method == "POST" and rest == "cadence":
         b = h._body()
         return h._json(service.start_cadence(b.get("voice") or "", now=b.get("now", True) is not False))
@@ -66,6 +74,17 @@ def _route(h, method, p):
         speak.delete_speech(m.group(1))
         return h._json({"ok": True})
     raise LookupError("Not found")
+
+
+def _estimate(a: dict) -> dict:
+    """SpeakEasy's "ready in" before Generate, from the same measured speeds the job uses (Internal Affairs P3-5)."""
+    text = (a.get("text") or "").strip()
+    cadence = a.get("cadence")
+    cadence = False if a.get("mode") == "reader" or cadence is False or cadence in ("0", "false") else None
+    p = speak.plan(a.get("voice") or "", a.get("reader") or "auto", _num(a.get("speed"), 1.0), _num(a.get("nudge"), 0.0),
+                   cadence, a.get("pace"))
+    return {"estimate": speak.eta_seconds(text, p), "audio_seconds": round(tts.seconds_estimate(text, p["speed"]), 1),
+            "sentences": len(tts.sentences(text)) if text else 0, "mode": p["mode"], "waiting": GPU_QUEUE.qsize()}
 
 
 def _num(v, default: float) -> float:
@@ -86,6 +105,7 @@ def _start(h, body: dict):
                 cadence=False if body.get("cadence") is False else None, pace=body.get("pace"))
     p = speak.plan(args["voice"], args["reader"], args["speed"], args["nudge"], args["cadence"], args["pace"])   # a bad voice/Reader fails now
     job = Job("speech", title=f"{text[:40].strip()}{'…' if len(text) > 40 else ''} · {label_of(args['voice'])}")
+    job.voices = {args["voice"]}
     JOBS[job.id] = job
 
     def run(job: Job):
@@ -94,4 +114,4 @@ def _start(h, body: dict):
 
     GPU_QUEUE.put((job, run))
     h._json({"job": job.id, "position": GPU_QUEUE.qsize(), "plan": p, "sentences": len(tts.sentences(text)),
-             "estimate": round(tts.seconds_estimate(text, p["speed"]), 1)})
+             "estimate": speak.eta_seconds(text, p), "audio_seconds": round(tts.seconds_estimate(text, p["speed"]), 1)})

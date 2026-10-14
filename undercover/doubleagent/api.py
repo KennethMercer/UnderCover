@@ -71,7 +71,10 @@ def project_json(proj: P.Project) -> dict:
                       "available": (tdir / f"e{s['epoch']}.pth").exists()})
     real = tdir / "previews" / "real.wav"
     a = _busy(proj.name)
+    from ..core import worklist
+    queued = worklist.queued_for("project", proj.name)   # "Queued for tonight" on the Deep path
     return {
+        "queued": queued,
         **proj.summary(),
         "sources": [{**s.to_json(), "raw": files.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
         "phrases": [{"id": p.id, "source": p.source, "start": p.start, "dur": p.dur, "score": p.score, "mix": p.mix,
@@ -133,6 +136,20 @@ def _route(h, method, p):
     m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9][A-Za-z0-9_-]*)/cadence(?:/(ab|verdict|sample/current|sample/pending))?", p)
     if m:
         return _cadence_ab(h, method, unquote(m.group(1)), m.group(2))
+    m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9][A-Za-z0-9_-]*)/improved(?:/(ab|keep|undo))?", p)
+    if m:   # an overnight improve's retrained voice: the blind A/B, Keep, Undo (Internal Affairs P2-1)
+        from . import improved
+        voice, act = unquote(m.group(1)), m.group(2)
+        if act is None and method == "GET":
+            return h._json({"improved": improved.state(voice)})
+        if method != "POST" or act is None:
+            raise LookupError("Not found")
+        b = h._body()
+        if act == "ab":
+            return h._json(improved.start_samples(voice))
+        if act == "keep":
+            return h._json(improved.keep(voice, str(b.get("keep") or "")))
+        return h._json(improved.undo(voice))
     m = re.fullmatch(r"/api/train/projects/([a-z0-9-]+)(?:/(\w+))?", p)
     if not m:
         raise LookupError("Not found")
@@ -257,7 +274,7 @@ def start_prepare(name: str):
             job.push(stage="matching" if label == "finding the voice" else "prepare", fraction=f, label=label, **kw)
         try:
             failed = P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=progress,
-                                       cancel=lambda: job.cancel or job.pausing,
+                                       cancel=lambda: job.cancel or job.pausing, stop=lambda: job.cancel,
                                        friendly=lambda e: jobs.friendly(e, "preparing a source"))
         except P.Cancelled:
             if job.pausing:
@@ -328,7 +345,8 @@ def start_train(name: str, b: dict):
             vname = slug(b.get("voice_name") or f"{proj.name}-uc")
             if not vname:
                 raise ModelError("Give the new voice a name.")
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            check_voice_name(proj, vname)
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             st.update(sr=sr, length=length, voice_name=vname, epochs=None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
@@ -369,6 +387,9 @@ def start_train(name: str, b: dict):
         if st.get("state") == "paused":
             return job.finish("paused", message="Training paused. Resume continues from the same point.",
                               train_state="paused", epoch=st.get("epoch"), best=st.get("best"))
+        if st.get("state") == "stopped":
+            return job.finish("cancelled", message="Training stopped. The saves made before the stop are kept.",
+                              train_state="stopped", epoch=st.get("epoch"), best=st.get("best"), outcome="stopped")
         job.finish("done", message=f"Training {st['state']}.", train_state=st["state"], epoch=st.get("epoch"),
                    best=st.get("best"), outcome=st.get("outcome"))
 
@@ -395,6 +416,7 @@ def start_auto(name: str, b: dict):
     if not proj.sources and not proj.person:
         raise ModelError("Type a name and find clips first.")
     if b.get("voice_name"):
+        check_voice_name(proj, slug(b["voice_name"]))
         with P.lock(proj.name):
             pr = P.Project.load(proj.name)
             pr.train["voice_name"] = slug(b["voice_name"])
@@ -425,7 +447,9 @@ def start_auto(name: str, b: dict):
         finally:
             ACTIVE.pop(proj.name, None)
         gpu.forget_voice(name)
-        job.finish("done", message=f"{label_of(name)} is ready in your voices.", voice=name)
+        owner = pending_of(name)   # it landed on a voice that's there: it waits
+        job.finish("done", message=waiting_note(owner) if owner else f"{label_of(name)} is ready in your voices.",
+                   voice=name, pending_for=owner)
 
     job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}
     job.control = control
@@ -434,17 +458,73 @@ def start_auto(name: str, b: dict):
 
 
 def _pause(h, proj, b):
+    """Pause this project's work and hold it (the queue doesn't start it again by itself; Resume does)."""
+    from ..core import worklist
     a = _busy(proj.name)
-    if not a or not a["control"]:
+    if not a:
         raise ModelError("This voice isn't training right now.")
-    a["control"].pause = True
+    if a["control"]:
+        a["control"].pause = True   # (hold_one finds it through the job too; set here first for a job without one)
+        a["job"].control = a["job"].control or a["control"]
+    worklist.hold_one(a["job"])
     h._json({"ok": True})
+
+
+def pending_of(name: str) -> str | None:
+    """The voice a just-made voice waits beside (it landed on one that was there: Internal Affairs P4-1), else None."""
+    from ..core.voices import get_voice
+    try:
+        return (get_voice(name).extra or {}).get("pending_for")
+    except ModelError:
+        return None
+
+
+def waiting_note(voice: str) -> str:
+    """What a training that landed on an existing voice says: the new one waits beside it (Internal Affairs P4-1)."""
+    return (f"{label_of(voice)} was already in your voices, so the new one waits beside it. Listen to both on its "
+            "voice card (DoubleAgent) and keep the one you like; the other is set aside, not deleted.")
+
+
+def check_voice_name(proj, vname: str, replace: str | None = None):
+    """A training never writes over another person's voice: a name already taken by a voice that isn't this project's
+    is refused here, before any work (export refuses it too). replace: the one voice this run may replace on purpose
+    (an overnight improve's own voice, a downloaded one included)."""
+    from ..core.voices import label_of, pending_candidate, voices_dir
+    owner = pending_candidate(vname)
+    if owner:   # an unheard retrained voice (Internal Affairs P3-2): not even this project's own run writes over it
+        raise ModelError(f"\"{vname}\" is the retrained {label_of(owner)} waiting to be heard. Give this training its own "
+                         "name, or keep or set aside the waiting one first (DoubleAgent, its voice card).")
+    if replace and vname == replace:
+        return
+    try:
+        here = json.loads((voices_dir() / vname / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        here = {}
+    if (here.get("extra") or {}).get("improved_pending"):   # its new one would wait beside it, and one already does
+        raise ModelError(f"One is already waiting: a retrained {label_of(vname)} waits beside it. Listen to the two and "
+                         "keep one first (DoubleAgent, its voice card); a new one can join it after that.")
+    d = voices_dir() / vname
+    meta = d / "meta.json"
+    if not meta.exists():
+        if d.exists():   # a folder of that name that isn't a whole voice (an interrupted install): not ours to replace
+            raise ModelError(f"There's already a folder called \"{vname}\" in your voices. Give this one its own name.")
+        return
+    try:
+        ex = (json.loads(meta.read_text(encoding="utf-8")).get("extra") or {})
+    except (OSError, ValueError):
+        ex = {}
+    if ex.get("project") != proj.name:
+        who = ex.get("person") or "another voice"
+        raise ModelError(f"\"{vname}\" is already {who}'s voice. Give this one its own name "
+                         f"(for example {proj.name}-uc).")
 
 
 def _stop(h, proj, b):
     a = _busy(proj.name)
-    if a and a["control"]:
-        a["control"].stop = True
+    if a:   # every kind of project job stops now (prepare and transcribe have no trainer control: the job's own flag)
+        a["job"].cancel = True
+        if a["control"]:
+            a["control"].stop = True
         return h._json({"ok": True})
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
@@ -470,9 +550,15 @@ def _export(h, proj, b):
             job.push(stage="export", fraction=0.2, label="building the search index")
             with P.lock(proj.name):
                 pr = P.Project.load(proj.name)
-            v = export_voice(pr, epoch=b.get("epoch"), name=b.get("name"), overwrite=bool(b.get("overwrite")))
+            # replace: the user's "Replace my voice" confirm, just now on the page (the old one is set aside, Undo
+            # puts it back). Without it, a voice that's already there isn't replaced: the new one waits beside it
+            replace = b.get("replace") is True
+            v = export_voice(pr, epoch=b.get("epoch"), name=b.get("name"), overwrite=bool(b.get("overwrite")) or replace,
+                             confirmed=replace)
             gpu.forget_voice(v.name)   # reload if an older version was cached
-            job.finish("done", message=f"{label_of(v.name)} is ready in your voices.", voice=v.name)
+            owner = (v.extra or {}).get("pending_for")
+            job.finish("done", message=waiting_note(owner) if owner else f"{label_of(v.name)} is ready in your voices.",
+                       voice=v.name, pending_for=owner)
         except Exception as e:
             job.finish("error", message=jobs.friendly(e, "adding the voice"))
 
@@ -512,14 +598,8 @@ def _cadence_ab(h, method, voice: str, action):
     if action is None and method == "GET":
         return h._json(cadence.ab_state(voice))
     if action and action.startswith("sample/") and method == "GET":
-        body = cadence.sample_file(voice, action.split("/")[1]).read_bytes()
-        h.send_response(200)
-        h.send_header("Content-Type", "audio/wav")
-        h.send_header("Content-Length", str(len(body)))
-        h.send_header("Cache-Control", "no-store")
-        h.end_headers()
-        h.wfile.write(body)
-        return
+        # with Range (206) and Accept-Ranges like /files: a phone's player seeks (Internal Affairs P2-3)
+        return h._send_file(cadence.sample_file(voice, action.split("/")[1]), cache="no-store")
     if method != "POST":
         raise LookupError("Not found")
     b = h._body()   # always read: an unread body would be taken for the start of the next request on this connection
@@ -556,8 +636,22 @@ def start_ab(voice: str) -> dict:
 
 # Pause / Resume (core.worklist): these jobs are voice work; paused ones start again from their resume spec
 worklist.register_pausable("train", "train-prepare", "train-auto", "train-transcribe")
-worklist.register_resume("transcribe", lambda spec: start_transcribe(spec["project"]))
-worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]))
-worklist.register_resume("train", lambda spec: start_train(spec["project"], {}))
-worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}))
+def _as_project(spec: dict):
+    """Held project work as an overnight item: the project with its own choices ("Train tonight instead")."""
+    return ("project", spec["project"]) if spec.get("project") else None
+
+
+def _as_cadence(spec: dict):
+    """A held transcription as its voice's overnight cadence item (only once the project's voice exists)."""
+    try:
+        voice = P.Project.load(spec["project"]).train.get("exported")
+    except (ModelError, KeyError):
+        return None
+    return ("cadence", voice) if voice else None
+
+
+worklist.register_resume("transcribe", lambda spec: start_transcribe(spec["project"]), queue_as=_as_cadence)
+worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]), queue_as=_as_project)
+worklist.register_resume("train", lambda spec: start_train(spec["project"], {}), queue_as=_as_project)
+worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}), queue_as=_as_project)
 worklist.register_control_lookup(lambda j: next((a["control"] for a in ACTIVE.values() if a["job"] is j and a.get("control")), None))

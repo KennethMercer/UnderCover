@@ -105,21 +105,35 @@ def _ytdlp_auto(on: bool) -> dict:
     return ytdlp_info()
 
 
-def _duplicate_voices(hist: list) -> tuple[list, str]:
-    """Voice folders whose model.pth is byte-identical to another voice's (e.g. 'biden' and 'joe-biden' from two
-    sites). Keeps the copy used for more covers (then the older install); returns (folders to remove, names)."""
+def _duplicate_voices(hist: list) -> list[dict]:
+    """Voices whose model.pth is byte-identical to another voice's (e.g. 'biden' and 'joe-biden' from two sites).
+    Internal Affairs P6-1 (the clean-up deleted the original, the voice covers, the project and the cadence point to):
+    the one kept is the one with a cadence, then a project's exported voice, then a display name, then Undo/waiting
+    records, then more covers, then the older install. The others are SET ASIDE (Clean up never deletes a voice).
+    -> [{voice, display, keeps, keeps_display, because, size}] for the ones that go."""
     import hashlib
-    from ..core.voices import list_voices
+    from ..core.voices import DEMO_VOICE, display_name, is_demo, listed_voices
+    from ..doubleagent.project import list_projects
+    exported = {p["train"].get("exported") for p in list_projects()}
     by_size: dict = {}
-    for v in list_voices():
+    for v in listed_voices():
         try:
             by_size.setdefault(v.pth.stat().st_size, []).append(v)
         except OSError:
             pass
     used: dict = {}
     for h in hist:
-        used[h.get("voice")] = used.get(h.get("voice"), 0) + 1
-    drop, pairs = [], []
+        for name in {h.get("voice"), (h.get("options") or {}).get("backing_voice")} - {None}:
+            used[name] = used.get(name, 0) + 1
+
+    def why(v):   # what makes this the voice to keep, strongest first
+        ex = v.extra or {}
+        cadence = bool(ex.get("tts")) or ((v.dir / "tts").is_dir() and any((v.dir / "tts").iterdir()))   # not empty
+        records = any(ex.get(k) for k in ("improved_pending", "improved_previous", "improved_turned_down"))
+        # the demo voice the First assignment uses is always kept (a copy of it can't send it aside)
+        return (is_demo(v) and v.name == DEMO_VOICE, cadence, v.name in exported, bool((v.display or "").strip()),
+                records, used.get(v.name, 0))
+    out = []
     for group in by_size.values():
         if len(group) < 2:
             continue
@@ -127,11 +141,22 @@ def _duplicate_voices(hist: list) -> tuple[list, str]:
         for v in group:
             by_hash.setdefault(hashlib.sha1(v.pth.read_bytes()).hexdigest(), []).append(v)
         for same in by_hash.values():
-            if len(same) > 1:
-                same.sort(key=lambda v: (-used.get(v.name, 0), v.installed or ""))
-                drop += [v.dir for v in same[1:]]
-                pairs.append(" = ".join(v.name for v in same))
-    return drop, "; ".join(pairs)
+            if len(same) < 2:
+                continue
+            same.sort(key=lambda v: v.installed or "")                 # the older install wins a tie
+            same.sort(key=why, reverse=True)                            # stable: the strongest reason first
+            keep = same[0]
+            k = why(keep)
+            words = ("it's the demo voice the First assignment uses", "it has the cadence",
+                     "it's the trained project's voice", "it has your name for it",
+                     "it has an Undo or a retrained version", f"it's used for {k[5]} cover{'s' * (k[5] != 1)}")
+            for v in same[1:]:
+                w = why(v)   # the reason that decided between these two (the first where the kept one is ahead)
+                i = next((i for i in range(len(k)) if k[i] != w[i]), None)
+                out.append({"voice": v.name, "display": display_name(v), "keeps": keep.name,
+                            "keeps_display": display_name(keep), "because": words[i] if i is not None else
+                            "it was installed first", "size": _size(v.dir)})
+    return out
 
 
 # ---------------------------------------------------------------- inventories
@@ -252,6 +277,111 @@ def _full_index(vdir):
         return None
 
 
+def _aside_dir() -> Path:
+    from ..core.voices import voices_dir
+    return voices_dir() / ".aside"
+
+
+def _aside_records() -> dict:
+    """{aside folder: (voice, why)} from the Undo records: a voice in the list (its Undo would bring the folder back),
+    or None when the voice holding the record is set aside itself (removed: the record only says why)."""
+    from ..core.voices import list_voices
+    holders = [(v.name, v.extra or {}) for v in list_voices()]
+    d = _aside_dir()
+    for f in (d.iterdir() if d.is_dir() else []):
+        try:
+            holders.append((None, json.loads((f / "meta.json.aside").read_text(encoding="utf-8")).get("extra") or {}))
+        except (OSError, ValueError):
+            continue
+    out = {}
+    for name, ex in holders:
+        prev, down = ex.get("improved_previous") or {}, ex.get("improved_turned_down") or {}
+        if prev.get("aside") and (name or prev["aside"] not in out):
+            out[prev["aside"]] = (name, "replaced by a new model" if prev.get("how") == "replaced"
+                                  else "the one before the retrained voice you kept")
+        if down.get("aside") and (name or down["aside"] not in out):
+            out[down["aside"]] = (name, "the retrained voice you didn't keep")
+    return out
+
+
+def aside() -> list[dict]:
+    """Voices set aside, never deleted (Internal Affairs P4-1): a replaced voice, the one not kept after a blind A/B, a
+    replace that didn't finish. Newest first: {id, voice, display, size, at, why, undo_for}. undo_for: the voice whose
+    Undo would bring this one back (removing it ends that Undo)."""
+    import re
+    from ..core.voices import display_of_meta
+    d = _aside_dir()
+    if not d.is_dir():
+        return []
+    recs = _aside_records()
+    out = []
+    for f in d.iterdir():
+        if not f.is_dir():
+            continue
+        meta = {}
+        for m in (f / "meta.json.aside", f / "meta.json"):
+            try:
+                meta = json.loads(m.read_text(encoding="utf-8"))
+                break
+            except (OSError, ValueError):
+                continue
+        name = meta.get("name") or f.name
+        undo_for, why = recs.get(f.name, (None, None))
+        why = why or ((meta.get("extra") or {}).get("set_aside") or {}).get("why")
+        if not why:
+            why = "a replace that didn't finish" if f.name.endswith("-unfinished") else "set aside earlier"
+        # when it was set aside: the stamp in its name (a moved folder keeps its old modified time)
+        st = re.search(r"-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}(?:-\d+)?(?:-unfinished)?$", f.name)
+        at = (f"{st[1]}-{st[2]}-{st[3]} {st[4]}:{st[5]}" if st
+              else time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime)))
+        display = (((meta.get("extra") or {}).get("set_aside") or {}).get("display")   # kept when it was set aside
+                   or display_of_meta(meta) or name)
+        out.append({"id": f.name, "voice": name, "display": display, "size": _size(f),
+                    "at": at, "why": why, "undo_for": undo_for})
+    out.sort(key=lambda x: x["at"], reverse=True)
+    return out
+
+
+def remove_aside(aid: str) -> dict:
+    """The user's explicit choice: delete one set-aside voice (only a folder directly in voices/.aside; test mode: the
+    test's own folders only). A voice whose Undo pointed at it loses that Undo. -> {removed, freed}."""
+    import re
+    from ..core import fsutil, storage
+    from ..core.voices import get_voice
+    d = _aside_dir() / aid
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", aid or "") or not d.is_dir():
+        raise LookupError("That set-aside voice isn't there.")
+    owner = _aside_records().get(aid, (None,))[0]
+    freed = _size(d)
+    storage.remove_files([], within=[_aside_dir()], dirs=[d])
+    if owner:   # its Undo can't bring it back any more: the record goes too (no Undo button that can only fail)
+        v = get_voice(owner)
+        v.extra = v.extra or {}
+        for k in ("improved_previous", "improved_turned_down"):
+            if (v.extra.get(k) or {}).get("aside") == aid:
+                v.extra.pop(k)
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    return {"removed": aid, "freed": freed, "undo_ended_for": owner}
+
+
+def restore_aside(aid: str) -> dict:
+    """"Bring it back": a set-aside voice back in the voices. One that an Undo serves goes back through that Undo
+    (its voice card), so the two stay a pair."""
+    from ..core.voices import bring_back, label_of
+    from .smaller import index_back
+    try:
+        note = ((json.loads((_aside_dir() / aid / "meta.json.aside").read_text(encoding="utf-8")).get("extra") or {})
+                .get("set_aside") or {})
+    except (OSError, ValueError):
+        note = {}
+    if note.get("kind") == "full-index":   # a voice's full index, set aside when it couldn't be rebuilt
+        return index_back(aid)
+    owner = _aside_records().get(aid, (None,))[0]
+    if owner:
+        raise ModelError(f"Use Undo on {label_of(owner)}'s voice card (DoubleAgent) to bring this one back.")
+    return bring_back(aid)
+
+
 def voices() -> list[dict]:
     from ..doubleagent.service import undertrained
     from ..doubleagent.cadence import pack_of, pack_size
@@ -260,7 +390,7 @@ def voices() -> list[dict]:
     hist = history()
     q = _quality()
     out = []
-    for v in list_voices():
+    for v in list_voices():   # all of them: a retrained one waiting is listed too (waiting_beside), its storage shown
         ex = v.extra or {}
         score = verdict = None
         for k, r in q.items():   # a measured check for this voice (installed or downloaded for a check)
@@ -357,11 +487,13 @@ def _cleanup_groups() -> dict:
                        "paths": old_speech, "default": False}
     g["unused_songs"] = {"title": "Songs never used for a cover (30+ days)", "detail": "The song files and their stems",
                          "paths": unused, "default": False}
-    dupes, names = _duplicate_voices(hist)
-    g["duplicate_voices"] = {"title": "The same voice installed twice",
-                             "detail": (f"Identical models under two names ({names}); the copy used for fewer covers goes"
-                                        if dupes else "Identical models under two names"),
-                             "paths": dupes, "default": False}
+    dupes = _duplicate_voices(hist)
+    g["duplicate_voices"] = {   # set aside, never deleted (P6-1): "paths" stays empty, so nothing here is _remove'd
+        "title": "The same voice installed twice",
+        "detail": ("; ".join(f"{d['display']} ({d['voice']}) goes to Set aside: the same model as {d['keeps_display']}"
+                             f" ({d['keeps']}), kept because {d['because']}" for d in dupes)
+                   if dupes else "Identical models under two names"),
+        "paths": [], "aside": dupes, "default": False}
     done = [projects_dir() / p["name"] for p in list_projects() if p["train"].get("state") == "exported"]
     g["finished_training"] = {"title": "Training projects of finished voices",
                               "detail": f"{len(done)} projects: the voices stay, but improving or retraining them later means downloading and "
@@ -379,11 +511,41 @@ def _cleanup_groups() -> dict:
                  "paths": temp + logs, "default": True}
     for k, v in g.items():
         v["size"] = sum(_size(p) for p in v["paths"])
-        v["count"] = len(v["paths"])
+        v["count"] = len(v["paths"]) + len(v.get("aside", []))
+        if v.get("aside"):   # moved to Set aside, not freed: its space comes back when it's deleted there
+            v["aside_size"] = sum(d["size"] for d in v["aside"])
     return g
 
 
+def clean_up(groups) -> dict:
+    """Storage's Clean up, the ticked groups: files removed (_remove), duplicate voices SET ASIDE (P6-1).
+    -> {freed, set_aside: [{voice, aside}], skipped: [{voice, why}]}"""
+    from ..core import gpu
+    from ..core.voices import remove_to_aside
+    freed, moved, skipped = 0, [], []
+    for k, v in _cleanup_groups().items():
+        if k not in groups:
+            continue
+        freed += v["size"]
+        for path_ in v["paths"]:
+            _remove(path_)
+        for d in v.get("aside", []):
+            try:
+                r = remove_to_aside(d["voice"], why=f"the same model as {d['keeps_display']}")
+            except (ModelError, OSError) as e:   # in use right now, or a file held open: it stays, said so
+                skipped.append({"voice": d["voice"], "why": str(e)})
+                continue
+            gpu.forget_voice(d["voice"])
+            moved.append({"voice": d["voice"], "aside": r["aside"]})
+    return {"freed": freed, "set_aside": moved, "skipped": skipped}
+
+
 def _remove(p: Path):
+    """Clean up's delete. Never a voice: anything in the voices folder (or its Set aside) is refused (P6-1)."""
+    from ..core import storage
+    from ..core.voices import voices_dir
+    if storage._inside(Path(p), voices_dir()):
+        raise ModelError(f"{p} is in your voices: Clean up sets voices aside, it never deletes them.")
     if p.suffix == ".log" and p.is_file():   # logs are truncated, not deleted (the server may be writing to it)
         p.write_text("", encoding="utf-8")
     elif p.is_dir():

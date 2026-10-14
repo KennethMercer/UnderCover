@@ -132,6 +132,15 @@ def _eta_learn(job: "Job"):
 
 # ---------------------------------------------------------------- jobs
 
+USES_VOICES = ("cover", "speech", "auto")   # job kinds that read with a voice
+
+
+def jobs_using(voice: str) -> list:
+    """Unfinished jobs that read with this voice: covers, previews and speech say which (job.voices); a job that
+    doesn't (a one-shot still choosing its voice) counts as using any voice."""
+    return [j for j in list(JOBS.values()) if j.kind in USES_VOICES and not j.finished
+            and (getattr(j, "voices", None) is None or voice in j.voices)]
+
 ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
 
 
@@ -235,12 +244,14 @@ class Job:
                 "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
                 "retry": self.state == "error" and self.retry_req is not None,
-                "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs)}
+                "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs),
+                "target": getattr(self, "target", None)}   # what a job works on, as data ({kind, name, display}): no title parsing
         # the newest value of each progress field within the current stage (some events carry only a note)
         for ev in reversed(evs[-40:]):
             if ev.get("stage") != stage and not ev.get("final"):
                 break
-            for k in ("frac", "fraction", "epoch", "epochs", "eta", "total_left", "stage_left", "index", "of", "elapsed"):
+            for k in ("frac", "fraction", "epoch", "epochs", "eta", "total_left", "stage_left", "index", "of", "elapsed",
+                      "step", "step_n", "steps", "waits_for"):
                 if ev.get(k) is not None:
                     snap.setdefault(k, ev[k])
         frac, fraction = snap.pop("frac", None), snap.pop("fraction", None)

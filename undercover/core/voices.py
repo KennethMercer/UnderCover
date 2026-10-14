@@ -11,6 +11,7 @@ Downloaded .pth files are loaded with torch.load(weights_only=True) so a malicio
 """
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -472,6 +473,123 @@ def _pick_index(indexes: list[Path]) -> Path | None:
     return max(pool, key=lambda p: p.stat().st_size)
 
 
+def set_aside(d: Path, tag: str = "", note: dict | None = None) -> Path:
+    """A voice folder moved to voices/.aside/<name>-<stamp> (its meta.json renamed, so no list shows it), never
+    deleted (Internal Affairs P4-1). note: why, kept in its meta (extra.set_aside) for SafeHouse's list. Test mode:
+    the test's own folders only. -> where it went."""
+    from . import fsutil, storage
+    if storage.ALLOWED_ROOTS is not None:
+        why = storage.refuse([d])
+        if why:
+            raise ModelError(why)
+    base = voices_dir() / ".aside" / f"{d.name}-{time.strftime('%Y%m%d-%H%M%S')}{tag}"
+    dst, n = base, 1
+    while dst.exists():
+        dst, n = base.with_name(f"{base.name}-{n}"), n + 1
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fsutil.retry(lambda: os.replace(d, dst))
+    if (dst / "meta.json").exists():
+        os.replace(dst / "meta.json", dst / "meta.json.aside")
+    if (dst / "meta.json.aside").exists():
+        try:   # why, and the name people knew it by (out of the lists, its default display can't be worked out later)
+            meta = json.loads((dst / "meta.json.aside").read_text(encoding="utf-8"))
+            meta.setdefault("extra", {})["set_aside"] = {"display": display_of_meta(meta), **(note or {}),
+                                                         "at": time.strftime("%Y-%m-%d %H:%M")}
+            fsutil.write_text(dst / "meta.json.aside", json.dumps(meta, indent=2))
+        except (OSError, ValueError):
+            pass   # an unreadable meta: it's still set aside, just without the note
+    return dst
+
+
+def display_of_meta(meta: dict) -> str:
+    """A voice's display name from its meta alone (a voice set aside isn't in the lists): the one given, else the
+    default (the person it was trained on, or its tidied name)."""
+    if (meta.get("display") or "").strip():
+        return meta["display"].strip()
+    try:
+        return display_name(Voice(**{**meta, "dir": Path(meta.get("dir") or "."), "pth": Path(meta.get("pth") or "."),
+                                      "index": Path(meta["index"]) if meta.get("index") else None}))
+    except (TypeError, ValueError, KeyError):
+        return meta.get("name") or ""
+
+
+def remove_to_aside(name: str, why: str = "you removed it") -> dict:
+    """The user's Delete (FrontMan's Remove, SafeHouse's Delete): the voice is set aside, not deleted (Internal
+    Affairs P5-1: a double-click on Remove deleted a trained voice for good). A retrained one waiting beside it goes
+    with it. bring_back() puts them back; deleting for good is SafeHouse's Set aside section (its own control).
+    -> {aside, with}"""
+    from . import jobs
+    v = get_voice(name)
+    busy = jobs.jobs_using(v.name)
+    if busy:
+        raise ModelError(f"{busy[0].title or 'A cover or speech'} is using {label_of(v.name)} right now. Try again when "
+                         "it's done (or cancel it).")
+    cand = ((v.extra or {}).get("improved_pending") or {}).get("voice")
+    try:   # only the candidate that says it's this voice's (a folder copy carries the original's improved_pending: P7-1)
+        mine = json.loads((voices_dir() / cand / "meta.json").read_text(encoding="utf-8")).get("extra", {}).get(
+            "pending_for") == v.name if cand else False
+    except (OSError, ValueError, AttributeError):
+        mine = False
+    with_ = None
+    if mine:
+        with_ = set_aside(voices_dir() / cand, note={"why": f"waited beside {label_of(v.name)} when you removed it"}).name
+    try:
+        a = set_aside(v.dir, note={"why": why, **({"with": with_} if with_ else {})})
+    except BaseException:
+        if with_:   # the voice couldn't move (a file held open): its waiting one back beside it, as before
+            bring_back(with_)
+        raise
+    return {"aside": a.name, "with": with_}
+
+
+def bring_back(aid: str) -> dict:
+    """A voice set aside, back in the voices under its own name (and a retrained one that went aside with it).
+    Refused when that name is taken now. -> {voice, with}"""
+    d = voices_dir() / ".aside" / (aid or "")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", aid or "") or not d.is_dir():
+        raise LookupError("That set-aside voice isn't there.")
+    from . import fsutil
+    f = d / "meta.json.aside" if (d / "meta.json.aside").exists() else d / "meta.json"
+    try:
+        meta = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ModelError("That set-aside voice's details can't be read, so it can't be put back.")
+    name = slug(meta.get("name") or "")
+    target = voices_dir() / name
+    if not name or target.exists():
+        raise ModelError(f"There's a voice called {label_of(name)} in your voices now. Rename or remove it first.")
+    note = (meta.get("extra") or {}).pop("set_aside", None) or {}
+    fsutil.retry(lambda: os.replace(d, target))
+    meta.update(dir=str(target), pth=str(target / "model.pth"),
+                index=str(target / "model.index") if meta.get("index") else meta.get("index"))
+    fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
+    (target / "meta.json.aside").unlink(missing_ok=True)
+    with_ = None
+    if note.get("with") and (voices_dir() / ".aside" / note["with"]).is_dir():
+        try:
+            with_ = bring_back(note["with"])["voice"]
+        except ModelError:
+            pass   # its name is taken now: it stays aside, listed in SafeHouse
+    pending = ((meta.get("extra") or {}).get("improved_pending") or {}).get("voice")
+    if pending and pending != with_:
+        # what it was waiting on didn't come back with it: no "waiting" pointing at nothing (or at another voice)
+        meta["extra"].pop("improved_pending", None)
+        fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
+    return {"voice": name, "with": with_}
+
+
+def _put_back(aside: Path, target: Path):
+    """set_aside() undone (a replace that failed half-way): the voice as it was, the half-made one set aside."""
+    from . import fsutil
+    if target.exists():
+        if (target / "tts").is_dir() and not (aside / "tts").exists():
+            os.replace(target / "tts", aside / "tts")
+        set_aside(target, "-unfinished")
+    fsutil.retry(lambda: os.replace(aside, target))
+    if (target / "meta.json.aside").exists():
+        os.replace(target / "meta.json.aside", target / "meta.json")
+
+
 def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bool = False) -> Voice:
     """Unpack downloaded file(s), find the voice .pth/.index, validate, and register under `name`."""
     files = [files] if isinstance(files, Path) else files
@@ -481,6 +599,10 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
     target = voices_dir() / name
     if target.exists() and not overwrite:
         raise ModelError(f"A voice called '{name}' is already installed. Pick another name or remove it first.")
+    owner = pending_candidate(name)
+    if owner:   # an unheard retrained voice: never written over, whatever overwrite says
+        raise ModelError(f"\"{name}\" is the retrained {label_of(owner)} waiting to be heard. Give this one its own name, "
+                         "or keep or set aside the waiting one first.")
 
     work = Path(tempfile.mkdtemp(prefix="inst_", dir=path("cache_dir")))
     try:
@@ -500,37 +622,50 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         index = _pick_index(indexes)
 
         # a voice's cadence (tts/ + extra.tts, made from the person's clips) outlives a new model of the same voice
-        keep_tts, old_tts, old_display = None, None, ""
+        keep_tts, old_tts, old_display, old_pending, aside, old_meta = None, None, "", None, None, {}
         if target.exists():
             try:   # the name the user gave it outlives a new model of the same voice, like its cadence
                 old_meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
                 old_display = old_meta.get("display") or ""
             except (OSError, ValueError):
                 old_meta = {}
-            if (target / "tts").is_dir():
-                keep_tts = work / "_kept_tts"
-                shutil.move(str(target / "tts"), keep_tts)
+            # a retrained one waiting beside this voice keeps waiting beside the new model (else it'd be orphaned)
+            old_pending = (old_meta.get("extra") or {}).get("improved_pending")
+            # the voice being replaced is set aside, never deleted (Internal Affairs P4-1); Undo puts it back
+            aside = set_aside(target)
+            if (aside / "tts").is_dir():   # the voice's cadence is the person's: it goes on with the new model
+                keep_tts = aside / "tts"
                 old_tts = (old_meta.get("extra") or {}).get("tts")
-            shutil.rmtree(target)
-        target.mkdir(parents=True)
-        if keep_tts is not None:
-            shutil.move(str(keep_tts), target / "tts")
-        shutil.move(str(pth), target / "model.pth")
-        if index:
-            shutil.move(str(index), target / "model.index")
-            try:   # half the size on disk (fp16); exports rebuild a faiss file for other tools
-                from .engine.rvc.index import compact_in_place
-                compact_in_place(target / "model.index")
-            except Exception:
-                pass   # unreadable/unusual index: keep it as it came (loading says so later)
-        voice = Voice(name=name, dir=target, pth=target / "model.pth",
-                      index=(target / "model.index") if index else None,
-                      version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
-                      installed=time.strftime("%Y-%m-%d %H:%M"), display=old_display,
-                      extra={"original_pth": pth.name, "original_index": index.name if index else None,
-                             **({"tts": old_tts} if keep_tts is not None and old_tts else {})})
-        from . import fsutil
-        fsutil.write_text(target / "meta.json", json.dumps(voice.to_json(), indent=2))
+        try:
+            target.mkdir(parents=True)
+            if keep_tts is not None:
+                shutil.move(str(keep_tts), target / "tts")
+            shutil.move(str(pth), target / "model.pth")
+            if index:
+                shutil.move(str(index), target / "model.index")
+                try:   # half the size on disk (fp16); exports rebuild a faiss file for other tools
+                    from .engine.rvc.index import compact_in_place
+                    compact_in_place(target / "model.index")
+                except Exception:
+                    pass   # unreadable/unusual index: keep it as it came (loading says so later)
+            # Undo (DoubleAgent's improved-voice card, improved.undo) puts the old one back; the new one then waits
+            # beside it as <name>-next, like a retrained voice
+            prev = ({"improved_previous": {"at": time.strftime("%Y-%m-%d %H:%M"), "candidate": f"{name}-next",
+                                           "before": (old_meta.get("extra") or {}).get("likeness"), "after": None,
+                                           "aside": aside.name, "how": "replaced"}} if aside is not None else {})
+            voice = Voice(name=name, dir=target, pth=target / "model.pth",
+                          index=(target / "model.index") if index else None,
+                          version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
+                          installed=time.strftime("%Y-%m-%d %H:%M"), display=old_display,
+                          extra={"original_pth": pth.name, "original_index": index.name if index else None,
+                                 **({"tts": old_tts} if keep_tts is not None and old_tts else {}),
+                                 **({"improved_pending": old_pending} if old_pending else {}), **prev})
+            from . import fsutil
+            fsutil.write_text(target / "meta.json", json.dumps(voice.to_json(), indent=2))
+        except BaseException:
+            if aside is not None:   # the old voice back as it was
+                _put_back(aside, target)
+            raise
         return voice
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -565,6 +700,52 @@ def list_voices() -> list[Voice]:
         d["index"] = (here / Path(d["index"]).name if (here / Path(d["index"]).name).exists() else Path(d["index"]))             if d.get("index") else None
         out.append(Voice(**d))
     return out
+
+
+def waiting(v: "Voice", by_name: dict | None = None) -> str | None:
+    """The voice a retrained candidate (<voice>-next) waits beside, while it waits (its owner's improved_pending names
+    it); else None. A waiting candidate lives beside its voice only: no picker shows it on its own (SafeHouse lists it,
+    marked, beside its voice). by_name: the voices already loaded, by name (else the owner's meta is read)."""
+    owner = (v.extra or {}).get("pending_for")
+    if not owner:
+        return None
+    if by_name is not None:
+        o = by_name.get(owner)
+        ex = (o.extra or {}) if o else {}
+    else:
+        try:
+            ex = json.loads((voices_dir() / owner / "meta.json").read_text(encoding="utf-8")).get("extra") or {}
+        except (OSError, ValueError):
+            ex = {}
+    # its voice gone (or no longer waiting on it): the candidate is listed like any voice, the only copy left
+    return owner if (ex.get("improved_pending") or {}).get("voice") == v.name else None
+
+
+def pending_candidate(name: str) -> str | None:
+    """The voice a retrained candidate called `name` belongs to, while one waits under that name (its meta says
+    pending_for, or it's <voice>-next while <voice>'s improved_pending names it); else None. Nothing writes over it:
+    training, export and install all refuse (Internal Affairs P3-2)."""
+    def extra(n: str) -> dict:
+        try:
+            return json.loads((voices_dir() / n / "meta.json").read_text(encoding="utf-8")).get("extra") or {}
+        except (OSError, ValueError):
+            return {}
+    name = slug(name)
+    if not name:
+        return None
+    if own := extra(name).get("pending_for"):
+        return own
+    base = name.removesuffix("-next")
+    if base != name and (extra(base).get("improved_pending") or {}).get("voice") == name:
+        return base
+    return None
+
+
+def listed_voices() -> list["Voice"]:
+    """The voices people pick from: every voice but a retrained candidate waiting beside its own (list_voices has all)."""
+    vs = list_voices()
+    by_name = {v.name: v for v in vs}
+    return [v for v in vs if not waiting(v, by_name)]
 
 
 def get_voice(name: str) -> Voice:
@@ -666,6 +847,9 @@ def label_of(name: str | None, labels: dict[str, str] | None = None) -> str:
     return (labels if labels is not None else voice_labels()).get(name, name)
 
 
+DEMO_VOICE = "agent-smoke"   # the demo voice's folder (app/tutorial.py seeds it from assets/demo-voice/agent-smoke)
+
+
 def is_demo(v: Voice) -> bool:
     """The demo voice (phase 17, "Agent Smoke"): synthetic, not a real person. Nothing searches for its "person"."""
     return bool((v.extra or {}).get("demo"))
@@ -712,7 +896,7 @@ def voice_info(v: Voice) -> dict:
     FrontMan's basic voice list puts liked voices first)."""
     from . import ear
     return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v),
-            "likeness_word": likeness_word(v), "ear": ear.taste(v.name)}
+            "likeness_word": likeness_word(v), "ear": ear.taste(v.name), "waiting_beside": waiting(v)}
 
 
 def set_display(name: str, text: str) -> Voice:
@@ -729,7 +913,14 @@ def set_display(name: str, text: str) -> Voice:
 
 
 def remove_voice(name: str):
+    """The one code path that deletes a voice folder, and only for the CLI's remove and a one-shot's own
+    just-downloaded community voices (tools/smoke.py u_no_voice_deletes holds the callers). The user's Delete sets the
+    voice aside (remove_to_aside) and a replace does too (set_aside); deleting for good is SafeHouse's Set aside
+    section (safehouse/library.remove_aside)."""
     v = get_voice(name)
+    from . import storage
+    if storage.ALLOWED_ROOTS is not None and (why := storage.refuse([v.dir])):
+        raise ModelError(why)
     shutil.rmtree(v.dir)
 
 

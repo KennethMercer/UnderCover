@@ -41,8 +41,10 @@ function subjectHtml(p) {
       <div class="choices">${sj.ask.choices.map(c => { const [name, who] = split(c.label);
         return `<button class="choice" type="button" data-os-subject="${esc(c.id)}" aria-pressed="false"><b>${esc(name)}</b>${who ? `<small>${esc(who)}</small>` : ""}</button>`; }).join("")}</div></div>`;
   }
+  // a correction is offered as a question ("Is SpongeBob a real person?"), not stated back as a fact
+  const ask = l => { const m = String(l).match(/^(.+?) is (an? .+)$/); return m ? `Is ${m[1]} ${m[2]}?` : String(l); };
   return `<div id="os-subject" class="meta">${esc(sj.label)}
-    ${(sj.choices || []).map(c => `<button class="linkbtn" type="button" data-os-subject="${esc(c.id)}">${esc(`Not right? ${c.label}`)}</button>`).join(" ")}</div>`;
+    ${(sj.choices || []).map(c => `<button class="linkbtn" type="button" data-os-subject="${esc(c.id)}">${esc(`Not right? ${ask(c.label)}`)}</button>`).join(" ")}</div>`;
 }
 function bindSubject() {
   $$("#os-plan [data-os-subject]").forEach(b => b.onclick = () => { OS.subject = b.dataset.osSubject; resetGo(); previewPlan(); });
@@ -50,10 +52,15 @@ function bindSubject() {
 function voiceLine(v) {
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
-  if (v.how === "check") return `<b>${v.candidates.map(esc).join("</b> or <b>")}</b> <span class="meta">checked against real clips first (~2 min); one that sounds even somewhat like them makes a quick cover, said so; none: it trains one (~1 hour, ~2 GB while training)</span>`;
-  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~1 hour, ~2 GB while training)</span>`;
+  if (v.how === "check") return `<span class="meta">a community voice, checked against real clips first (~2 min); one that sounds even somewhat like them makes a quick cover, said so; none: it trains one (~1 hour)</span><span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b> · ~2 GB while training</span>`;
+  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~1 hour<span data-deep>, ~2 GB while training</span>)</span>`;
 }
 function planTime(p) {
+  const eta = p.eta_s;   // an installed voice: the server's own range, in seconds
+  if (eta && p.voice?.how === "installed") {
+    const lo = Math.max(1, Math.round(eta.low / 60)), hi = Math.round(eta.high / 60);
+    return hi < 1 ? "under a minute" : lo >= hi ? `about ${Math.max(1, hi)} min` : `about ${lo}–${hi} min`;
+  }
   const v = p.voice?.how;
   return v === "train" ? "about 1 hour" : v === "check" ? "about 3–5 min (an hour if it has to train)" : "about 1–3 min";
 }
@@ -169,18 +176,18 @@ function renderOS(ev) {
   const sc = card("song"), vc = card("voice"), cc = card("cover");
   $("b", sc).textContent = song ? song.title : (plan.song_query ? `“${plan.song_query}”` : "Waiting");
   const cmp = song?.compared?.length > 1
-    ? `best of ${song.compared.length} versions for this voice` + (song.compared.find(x => x.chosen)?.outside != null
-        ? ` (${Math.round(song.compared.find(x => x.chosen).outside * 100)}% of the melody outside its range)` : "")
+    ? esc(`best of ${song.compared.length} versions for this voice`) + (song.compared.find(x => x.chosen)?.outside != null
+        ? `<span data-deep> (${Math.round(song.compared.find(x => x.chosen).outside * 100)}% of the melody outside its range)</span>` : "")
     : (song?.compared ? "" : null);
-  $("small", sc).textContent = ev.stage === "song" ? ev.message : song ? [plan.went_with, song.channel, song.note, cmp].filter(Boolean).join(" · ") : (plan.went_with || "");
+  $("small", sc).innerHTML = ev.stage === "song" ? esc(ev.message) : song ? [plan.went_with, song.channel, song.note].filter(Boolean).map(esc).concat(cmp || []).join(" · ") : esc(plan.went_with || "");
   sc.title = song?.compared?.length > 1 ? song.compared.map(x => `${x.chosen ? "✓" : "·"} ${x.title}` +
     (x.outside != null ? ` · ${Math.round(x.outside * 100)}% out of range` : "") + ` · bleed ${Math.round(x.bleed)} dB`).join("\n") : "";
   $("b", vc).textContent = voice ? (voice.how === "train" && ev.stage === "voice" ? `Training ${voice.display || voice.name}` : voice.display || voiceDisplay(voice.name)) : (plan.person || "Waiting");
   $("small", vc).textContent = ev.stage === "voice" ? ev.message
     : voice ? (voice.checked || { installed: "your installed voice", online: `community voice${voice.repo ? " · " + voice.repo : ""}`, train: "trained in UnderCover" }[voice.how]) : "";
   $("b", cc).textContent = ev.stage === "cover" ? "Making the cover" : (ev.final && ev.state === "done" ? "Done" : "Waiting");
-  $("small", cc).textContent = ev.stage === "cover" && !ev.final ? ev.message
-    : set ? `Best settings · ${fitWords(set)} (${set.why})` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
+  $("small", cc).innerHTML = ev.stage === "cover" && !ev.final ? esc(ev.message)
+    : set ? esc(`Best settings · ${fitWords(set)}`) + `<span data-deep> (${esc(set.why)})</span>` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
   OS.eta = ev.total_left ?? ev.eta ?? null; OS.etaAt = performance.now();
   $("#os-foot").textContent = voice?.how === "train" && ev.stage === "voice"
     ? "Covers you start meanwhile are made right away; training waits for them. You can watch it in DoubleAgent."
@@ -238,7 +245,8 @@ function osOctAB(list, cur, item) {
       a.play().catch(() => {});
     };
     a.addEventListener("play", () => { card.classList.add("playing"); $(".play", card).textContent = "❚❚"; });
-    a.addEventListener("pause", () => { card.classList.remove("playing"); $(".play", card).textContent = "▶"; });
+    a.addEventListener("pause", () => { card.classList.remove("playing"); $(".play", card).textContent = "▶"; if (!a.ended) pos = a.currentTime; });   // the playhead is where the last one stopped, playing or paused
+    a.addEventListener("ended", () => { pos = 0; });
   });
   const done = say => { audios.forEach(a => a.pause()); $("#os-oct").innerHTML = `<p class="meta">${say}</p>`; };
   $("#os-oct-keep").onclick = () => done("Kept as it is.");
@@ -269,14 +277,16 @@ function osFollow(id, title) {
     setRunning(false);
     if (ev.state === "done") {
       $("#os-plan").innerHTML = `Done in ${fmtSecs(ev.elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with <b>${esc(plan.voice ? plan.voice.display || voiceDisplay(plan.voice.name) : "")}</b>` +
-        (plan.settings ? ` · ${esc(fitWords(plan.settings))} (${esc(plan.settings.why)})` : "") + ". Change anything below and press Convert to try a variation.";
+        (plan.settings ? ` · ${esc(fitWords(plan.settings))}<span data-deep> (${esc(plan.settings.why)})</span>` : "") + ". Change anything below and press Convert to try a variation.";
       try {
         if (plan.song?.id) { S.song = await api(`/api/songs/${plan.song.id}`); store.set("uc-song", S.song.id); renderSong(); }
         await loadVoices(plan.voice?.name);
         if (plan.settings) {
           // For this session only: your saved settings stay as they were ("Back to my settings" restores them).
           if (!OS.mine) OS.mine = { ...S.opts };
-          Object.assign(S.opts, { octave: plan.settings.octave, key: plan.settings.key || 0, backing_voice: plan.voice?.name, karaoke: true, dereverb: true, quality: "high" });
+          // the cover's exact options when the plan carries them (the original backing kept for stacked harmonies stays kept)
+          if (plan.settings.options) S.opts = { ...S.defaults, ...plan.settings.options };
+          else Object.assign(S.opts, { octave: plan.settings.octave, key: plan.settings.key || 0, backing_voice: plan.voice?.name, karaoke: true, dereverb: true, quality: "high" });
           syncControls(); refreshEstimate();
           $("#os-plan").insertAdjacentHTML("beforeend", ` <button class="linkbtn" id="os-mine" type="button">Back to my settings</button>`);
           $("#os-mine").onclick = () => { S.opts = OS.mine; OS.mine = null; syncControls(); refreshEstimate(); $("#os-mine").remove(); };
@@ -289,7 +299,7 @@ function osFollow(id, title) {
       const others = (plan.song?.compared || []).filter(x => !x.chosen && x.id);
       if (others.length) {   // the versions it compared: one click to hear the same voice on another
         $("#os-plan").insertAdjacentHTML("beforeend", `<div class="os-versions"><span class="meta">Other versions it compared:</span>` +
-          others.map(x => `<div class="srow"><div><b>${esc(x.title)}</b><p class="meta">${x.outside != null ? `${Math.round(x.outside * 100)}% of the melody outside the voice's range` : ""}</p></div>
+          others.map(x => `<div class="srow"><div><b>${esc(x.title)}</b><p class="meta" data-deep>${x.outside != null ? `${Math.round(x.outside * 100)}% of the melody outside the voice's range` : ""}</p></div>
             <button class="btn" type="button" data-ver="${esc(x.id)}">Make it with this version</button></div>`).join("") + `</div>`);
         $$("#os-plan [data-ver]").forEach(b => b.onclick = async () => {
           try {
