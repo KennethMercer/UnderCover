@@ -71,7 +71,10 @@ def project_json(proj: P.Project) -> dict:
                       "available": (tdir / f"e{s['epoch']}.pth").exists()})
     real = tdir / "previews" / "real.wav"
     a = _busy(proj.name)
+    from ..core import worklist
+    queued = worklist.queued_for("project", proj.name)   # "Queued for tonight" on the Deep path
     return {
+        "queued": queued,
         **proj.summary(),
         "sources": [{**s.to_json(), "raw": files.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
         "phrases": [{"id": p.id, "source": p.source, "start": p.start, "dur": p.dur, "score": p.score, "mix": p.mix,
@@ -257,7 +260,7 @@ def start_prepare(name: str):
             job.push(stage="matching" if label == "finding the voice" else "prepare", fraction=f, label=label, **kw)
         try:
             failed = P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=progress,
-                                       cancel=lambda: job.cancel or job.pausing,
+                                       cancel=lambda: job.cancel or job.pausing, stop=lambda: job.cancel,
                                        friendly=lambda e: jobs.friendly(e, "preparing a source"))
         except P.Cancelled:
             if job.pausing:
@@ -328,6 +331,7 @@ def start_train(name: str, b: dict):
             vname = slug(b.get("voice_name") or f"{proj.name}-uc")
             if not vname:
                 raise ModelError("Give the new voice a name.")
+            check_voice_name(proj, vname)
             for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
                 st.pop(k, None)
             st.update(sr=sr, length=length, voice_name=vname, epochs=None)
@@ -395,6 +399,7 @@ def start_auto(name: str, b: dict):
     if not proj.sources and not proj.person:
         raise ModelError("Type a name and find clips first.")
     if b.get("voice_name"):
+        check_voice_name(proj, slug(b["voice_name"]))
         with P.lock(proj.name):
             pr = P.Project.load(proj.name)
             pr.train["voice_name"] = slug(b["voice_name"])
@@ -441,10 +446,35 @@ def _pause(h, proj, b):
     h._json({"ok": True})
 
 
+def check_voice_name(proj, vname: str, replace: str | None = None):
+    """A training never writes over another person's voice: a name already taken by a voice that isn't this project's
+    is refused here, before any work (export refuses it too). replace: the one voice this run may replace on purpose
+    (an overnight improve's own voice, a downloaded one included)."""
+    from ..core.voices import voices_dir
+    if replace and vname == replace:
+        return
+    d = voices_dir() / vname
+    meta = d / "meta.json"
+    if not meta.exists():
+        if d.exists():   # a folder of that name that isn't a whole voice (an interrupted install): not ours to replace
+            raise ModelError(f"There's already a folder called \"{vname}\" in your voices. Give this one its own name.")
+        return
+    try:
+        ex = (json.loads(meta.read_text(encoding="utf-8")).get("extra") or {})
+    except (OSError, ValueError):
+        ex = {}
+    if ex.get("project") != proj.name:
+        who = ex.get("person") or "another voice"
+        raise ModelError(f"\"{vname}\" is already {who}'s voice. Give this one its own name "
+                         f"(for example {proj.name}-uc).")
+
+
 def _stop(h, proj, b):
     a = _busy(proj.name)
-    if a and a["control"]:
-        a["control"].stop = True
+    if a:   # every kind of project job stops now (prepare and transcribe have no trainer control: the job's own flag)
+        a["job"].cancel = True
+        if a["control"]:
+            a["control"].stop = True
         return h._json({"ok": True})
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
@@ -556,8 +586,22 @@ def start_ab(voice: str) -> dict:
 
 # Pause / Resume (core.worklist): these jobs are voice work; paused ones start again from their resume spec
 worklist.register_pausable("train", "train-prepare", "train-auto", "train-transcribe")
-worklist.register_resume("transcribe", lambda spec: start_transcribe(spec["project"]))
-worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]))
-worklist.register_resume("train", lambda spec: start_train(spec["project"], {}))
-worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}))
+def _as_project(spec: dict):
+    """Held project work as an overnight item: the project with its own choices ("Train tonight instead")."""
+    return ("project", spec["project"]) if spec.get("project") else None
+
+
+def _as_cadence(spec: dict):
+    """A held transcription as its voice's overnight cadence item (only once the project's voice exists)."""
+    try:
+        voice = P.Project.load(spec["project"]).train.get("exported")
+    except (ModelError, KeyError):
+        return None
+    return ("cadence", voice) if voice else None
+
+
+worklist.register_resume("transcribe", lambda spec: start_transcribe(spec["project"]), queue_as=_as_cadence)
+worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]), queue_as=_as_project)
+worklist.register_resume("train", lambda spec: start_train(spec["project"], {}), queue_as=_as_project)
+worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}), queue_as=_as_project)
 worklist.register_control_lookup(lambda j: next((a["control"] for a in ACTIVE.values() if a["job"] is j and a.get("control")), None))

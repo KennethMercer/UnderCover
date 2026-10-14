@@ -67,7 +67,7 @@ function renderBar() {
     text = [jobName(main), jobLine(main)].filter(Boolean).join(" · ");
     state = "run";
   } else if (w.held) {
-    const res = w.resume || [];
+    const res = (w.resume || []).map(r => r.label ?? r);   // entries are {id, kind, label, ...} (stop-now)
     text = "Nothing is running · voice work is paused" + (res.length ? ` · ${res.slice(0, 2).join(", ")}${res.length > 2 ? ` and ${res.length - 2} more` : ""}` : "") +
            (w.queued ? ` · ${w.queued} in the overnight queue` : "");
     state = "held";
@@ -168,7 +168,7 @@ function renderRunRoom() {
         return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[o]} · ${esc(jobLine(j) || JOB_KIND[j.kind] || j.kind)}</small></span>
           <span class="acts"><button class="linkbtn" type="button" data-goto="${o}">Open</button></span></div>`; }).join("")}</div>` : "");
   } else if (work.held) {
-    const res = work.resume || [];
+    const res = (work.resume || []).map(r => r.label ?? r);
     // held work is NOT running: no bar, no running look, a plain "not running" label, and what to do with it
     const since = work.held_at ? ` Stopped at ${hhmm(work.held_at)}.` : "";
     now = `<div class="rn-now held" data-owner="doubleagent"><div class="who">Not running</div>

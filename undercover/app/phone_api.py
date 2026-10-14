@@ -43,7 +43,7 @@ ROUTES = [
     ("GET", r"/api/status|/api/voices|/api/search|/api/jobs|/api/work", "phone", "status, voices, jobs, the queue"),
     ("GET", rf"/api/jobs/{_ID}/events", "phone", "a job's live progress"),
     ("POST", rf"/api/jobs/{_ID}/(cancel|retry)", "phone", "Cancel / Retry"),
-    ("POST", r"/api/work/(pause|resume|forget|add|remove|order|start|settings|dismiss)", "phone", "Pause / Resume and the queue"),
+    ("POST", r"/api/work/(pause|resume|forget|add|remove|order|start|settings|dismiss|to-queue)", "phone", "Pause / Resume and the queue"),
     ("POST", r"/api/voices/(install|upload)", "phone", "get a voice"),
     ("DELETE", rf"/api/voices/{_ID}", "phone", "remove a voice (the page asks twice)"),
     ("POST", r"/api/open-folder", "pc", "opens Explorer on the PC"),

@@ -58,6 +58,11 @@ def check(name):
     return deco
 
 
+def _bare(entries: list) -> list:
+    """Held-work entries without what holding adds (id, held_at), to compare with the spec that went in."""
+    return [{k: v for k, v in e.items() if k not in ("id", "held_at")} for e in entries]
+
+
 # ---------------------------------------------------------------- HTTP helpers
 
 BASE = ""
@@ -1025,7 +1030,7 @@ def u_paused():
                 raise Paused()
             jobs.run_job(job, fn)
             assert job.state == "paused", job.state
-            assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
+            assert _bare(worklist._state()["resume"]) == [job.resume_spec], worklist._state()["resume"]
             worklist.forget_paused()
             assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
             # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
@@ -3000,7 +3005,7 @@ def u_doctor_interrupted():
             crash(train)
             r = doctor.restore_interrupted(hb)
             st = worklist._state()
-            assert r["resumed"] and st["resume"] == [train] and not st["held"], (r, st)
+            assert r["resumed"] and _bare(st["resume"]) == [train] and not st["held"], (r, st)
             # it died again during the same work: held this time
             worklist._STATE = None
             (path("cache_dir") / "worklist.json").unlink(missing_ok=True)
@@ -4065,6 +4070,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/library/smaller"), ("POST", "/api/library/smaller/start"), ("POST", "/api/library/smaller/keep"),
     ("POST", "/api/library/smaller/undo"),
     ("POST", "/api/library/voices/some-voice/full-index"),
+    ("POST", "/api/work/to-queue"),
 ]
 
 
@@ -4269,6 +4275,40 @@ def a_away():
             api("/api/phone/revoke", {"id": dev["id"]})
         api("/api/phone", {"on": False})
     return f"sign-in -> approve -> ready; funnel to {port} only; the gate holds; a home link became an away pass; off and Phone access off close it"
+
+
+@check("api: Stop is a stop: a long separation (as in a training's clip preparation) ends within 2 s of Stop, nothing cached")
+def a_stop_separation():
+    import threading
+    import numpy as np
+    import soundfile as sf
+    from undercover.core import gpu
+    from undercover.core.config import path as config_path
+    from undercover.core.separate import Stopped, separate
+    f = config_path("uploads_dir") / "stop-test.wav"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    t = np.arange(44100 * 240) / 44100.0                         # 4 minutes: a separation of tens of seconds
+    y = 0.3 * np.sin(2 * np.pi * 220 * t) * (1 + np.sin(2 * np.pi * 0.5 * t)) + 0.05 * np.random.default_rng(0).standard_normal(len(t))
+    sf.write(str(f), np.stack([y, y], 1).astype(np.float32), 44100)
+    flag = {"stop": False, "at": None}
+    def working(frac, step):   # Stop 1 s after the separation is really under way (models loaded, chunks running)
+        if frac > 0 and flag["at"] is None:
+            flag["at"] = -1.0
+            threading.Timer(1.0, lambda: flag.update(stop=True, at=time.perf_counter())).start()
+    t0 = time.perf_counter()
+    try:
+        separate(f, dereverb=True, karaoke=False, separator=gpu.MODELS.separator, quality="high", stop=lambda: flag["stop"],
+                 progress=working)
+        raise AssertionError("the separation finished before Stop (make the test file longer)")
+    except Stopped:
+        ended = time.perf_counter()
+    lag = ended - flag["at"]
+    assert lag < 2.0, f"Stop took {lag:.1f} s"
+    from undercover.core.separate import file_hash
+    stems = config_path("cache_dir") / "stems" / file_hash(f)
+    assert not any(stems.rglob("*.flac")) if stems.exists() else True, "a stopped separation cached a stem"
+    f.unlink(missing_ok=True)
+    return f"stopped {lag:.2f} s after Stop (ran {flag['at'] - t0:.1f} s first)"
 
 
 @check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
@@ -4609,6 +4649,189 @@ def u_shrink_export():
         assert (vd / "model.index").read_bytes() == b"not an index" and not (vd / ri.EXPORT_ASIDE).exists()
         assert not (vd / "model.index.smaller.tmp").exists()
     return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
+
+
+@check("Train tonight instead: held work carries {id, kind, label, project, held_at, queue_as}; /api/work/to-queue moves a held project entry into the overnight queue as its project item (its own choices) and off the held list, the hold lifting when nothing else is held; a one-shot can't; an improve may replace its own voice")
+def u_to_queue():
+    from undercover.core import worklist
+    from undercover.core.voices import ModelError, voices_dir
+    from undercover.doubleagent import api as DA, night, project as P  # night registers the queue kinds
+    with isolated_data():
+        worklist._STATE = None
+        proj = P.Project.create("Donald Trump", "speaking")
+        proj.sources = [P.Source(id="v1", title="Rally", url="https://example.invalid/v1", duration=600.0, selected=True)]
+        proj.train = {"voice_name": "donald-trump-uc", "length": "quick", "sr": 48000, "state": "paused"}
+        proj.save()
+        class J:
+            resume_spec = {"kind": "train", "project": "donald-trump", "label": "Training Donald Trump"}
+        worklist.hold()
+        worklist._state()["held"] = True
+        worklist.remember(J())
+        worklist.remember(J())                                   # the same work twice: one entry
+        J.resume_spec = {"kind": "oneshot", "text": "Hold On by Agent Smoke", "label": "One-shot: Hold On"}
+        worklist.remember(J())
+        rows = worklist.status()["resume"]
+        assert [r["kind"] for r in rows] == ["train", "oneshot"], rows
+        train, one = rows
+        assert train["id"] and train["project"] == "donald-trump" and train["held_at"] and train["queue_as"] == "project", train
+        assert one["queue_as"] is None, one
+        try:
+            worklist.to_queue(one["id"])
+            raise AssertionError("a one-shot went overnight")
+        except ModelError as e:
+            assert "can't run overnight" in str(e), e
+        st = worklist.to_queue(train["id"])
+        item = next(i for i in st["queue"] if i["kind"] == "project")
+        assert item["target"] == "donald-trump" and [r["kind"] for r in st["resume"]] == ["oneshot"] and st["held"], st
+        tr = P.Project.load("donald-trump").train
+        assert (tr["length"], tr["sr"], tr["state"]) == ("quick", 48000, "paused"), tr   # its own choices, still resumable
+        worklist.forget_paused()
+        assert not worklist.status()["held"]
+        # a restart's saved entries without ids get them
+        worklist._state()["resume"] = [{"kind": "prepare", "project": "donald-trump", "label": "Preparing"}]
+        worklist._save()
+        worklist._STATE = None
+        assert worklist.status()["resume"][0]["id"]
+        # an overnight improve may replace its own voice (a downloaded one has no project); other names stay guarded
+        d = voices_dir() / "obama"
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"name": "obama", "extra": {}}), encoding="utf-8")
+        DA.check_voice_name(proj, "obama", replace="obama")
+        for bad in ("obama", "half-installed"):
+            if bad == "half-installed":
+                (voices_dir() / bad).mkdir()
+            try:
+                DA.check_voice_name(proj, bad)
+                raise AssertionError(f"{bad} was allowed")
+            except ModelError:
+                pass
+        worklist._STATE = None
+    return "held entries with ids; train -> the project item (choices kept, still paused), off the held list; one-shot refused; ids backfilled; improve replaces its own"
+
+
+@check("queue a project (the user: \"queue Trump with specific videos selected\"): /api/work/add {kind: project} takes an existing project with its own choices; nothing ticked or another person's voice name is refused when queued, not overnight; the project shows queued")
+def u_project_queue():
+    from undercover.core import worklist
+    from undercover.core.voices import ModelError, voices_dir
+    from undercover.doubleagent import api as DA, night, project as P, service
+    with isolated_data():
+        worklist._STATE = None
+        proj = P.Project.create("Donald Trump", "speaking")
+        try:
+            worklist.add("project", proj.name)
+            raise AssertionError("queued with nothing ticked")
+        except ModelError as e:
+            assert "Tick" in str(e), e
+        proj.sources = [P.Source(id="v1", title="Rally", url="https://example.invalid/v1", duration=600.0, selected=True)]
+        proj.train = {"voice_name": "barack-obama-uc", "length": "long"}
+        proj.save()
+        d = voices_dir() / "barack-obama-uc"
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"name": "barack-obama-uc", "extra": {"project": "barack-obama",
+                                                 "person": "Barack Obama"}}), encoding="utf-8")
+        try:
+            worklist.add("project", proj.name)
+            raise AssertionError("queued over Barack Obama's voice")
+        except ModelError as e:
+            assert "Barack Obama" in str(e), e
+        try:   # what's on screen when queued is what runs: the page sends its choices with the add
+            worklist.add("project", proj.name, options={"voice_name": "trump-rallies", "length": "forever", "sr": 40000})
+            raise AssertionError("an unknown length was queued")
+        except ModelError as e:
+            assert "length" in str(e), e
+        st = worklist.add("project", proj.name, options={"voice_name": "Trump Rallies", "length": "quick", "sr": 48000})
+        tr = P.Project.load(proj.name).train
+        assert (tr["voice_name"], tr["length"], tr["sr"]) == ("trump-rallies", "quick", 48000), tr
+        item = next(i for i in worklist._state()["queue"] if i["kind"] == "project")
+        assert item["target"] == "donald-trump" and item["estimate"]["total"] >= 0, item
+        assert worklist.KINDS["project"]["label"](item) == "Training Donald Trump (your choices)"
+        q = DA.project_json(P.Project.load(proj.name))["queued"]
+        assert q and q["state"] == "queued" and q["id"] == item["id"], q
+        try:
+            worklist.add("project", proj.name)
+            raise AssertionError("queued twice")
+        except ModelError as e:
+            assert "already in the queue" in str(e), e
+        worklist.remove(next(i for i in worklist._state()["queue"] if i["kind"] == "project")["id"])
+        pp = P.Project.load(proj.name)                              # a paused training continues at its own rate
+        pp.train.update(state="paused", sr=40000)
+        pp.save()
+        try:
+            worklist.add("project", proj.name, options={"sr": 32000})
+            raise AssertionError("a paused training's rate changed")
+        except ModelError as e:
+            assert "paused at 40 kHz" in str(e), e
+        pp.train.pop("state")
+        pp.save()
+        st = worklist.add("project", proj.name, options={"voice_name": "donald-trump-uc"})
+        item = next(i for i in worklist._state()["queue"] if i["kind"] == "project")
+        # the run itself refuses another person's voice name before any work (the name changed after queueing)
+        proj = P.Project.load(proj.name)
+        proj.train["voice_name"] = "barack-obama-uc"
+        proj.save()
+        class J:
+            cancel = pausing = False
+            finished = False
+        try:
+            service.run_project(J(), proj.name, object(), lambda *a, **k: None)
+            raise AssertionError("the run started over Barack Obama's voice")
+        except ModelError as e:
+            assert "Barack Obama" in str(e), e
+        assert proj.name not in DA.ACTIVE
+        worklist.remove(item["id"])
+        assert DA.project_json(P.Project.load(proj.name))["queued"] is None
+        worklist._STATE = None
+    return "nothing ticked / another person's voice refused at queue time; queued once, shown on the project; the run checks again"
+
+
+@check("a training never writes over another person's voice: a name owned by another project's voice (or a downloaded one) is refused at the start and at export; Stop reaches every kind of project job (prepare has no trainer control)")
+def u_voice_name_guard():
+    from undercover.core import jobs as J
+    from undercover.core.voices import ModelError, voices_dir
+    from undercover.doubleagent import api as DA, project as P, trainer
+    with isolated_data():
+        def voice(name, **extra):
+            d = voices_dir() / name
+            d.mkdir(parents=True)
+            (d / "meta.json").write_text(json.dumps({"name": name, "extra": extra}), encoding="utf-8")
+        voice("barack-obama-uc", project="barack-obama", person="Barack Obama")
+        voice("downloaded-voice")
+        voice("donald-trump-uc", project="donald-trump", person="Donald Trump")
+        proj = P.Project.create("Donald Trump", "speaking")
+        assert proj.name == "donald-trump"
+        DA.check_voice_name(proj, "donald-trump-uc")   # its own voice: a re-export may replace it
+        DA.check_voice_name(proj, "brand-new-name")    # nobody's yet
+        for taken in ("barack-obama-uc", "downloaded-voice"):
+            try:
+                DA.check_voice_name(proj, taken)
+                raise AssertionError(f"{taken} was allowed")
+            except ModelError as e:
+                assert "already" in str(e), e
+        tdir = proj.dir / "train"
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "e5.pth").write_bytes(b"x")
+        (tdir / "data.pt").write_bytes(b"")
+        proj.train = {"voice_name": "barack-obama-uc", "saves": [{"epoch": 5}]}   # what the stale page once stored
+        proj.save()
+        try:
+            trainer.export_voice(proj, 5)
+            raise AssertionError("exported over Barack Obama's voice")
+        except ModelError as e:
+            assert "Barack Obama" in str(e), e
+        assert json.loads((voices_dir() / "barack-obama-uc" / "meta.json").read_text(encoding="utf-8"))["extra"]["project"] == "barack-obama"
+        # Stop on a prepare job (no trainer control) sets the job's own flag
+        job = J.Job("train-prepare")
+        DA.ACTIVE["donald-trump"] = {"job": job, "control": None, "kind": "prepare"}
+        class H:
+            def _json(self, obj, status=200):
+                self.out = obj
+        try:
+            h = H()
+            DA._stop(h, proj, {})
+            assert job.cancel and h.out == {"ok": True}, "Stop didn't reach the prepare job"
+        finally:
+            DA.ACTIVE.pop("donald-trump", None)
+    return "another person's voice refused at start and export; own voice and new names fine; Stop reaches prepare"
 
 
 @check("listen-back's drawn-out word (phase 24): in a short line (up to 4 words), a one-syllable word held over 0.30 s asks for a re-read; a marked pause after it, the last word, a longer word or a long sentence don't")
@@ -5428,7 +5651,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -5450,7 +5673,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_phone, a_away, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
