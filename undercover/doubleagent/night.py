@@ -310,7 +310,7 @@ def _improve(job, item) -> dict:
                         "so they may be someone else's. Kept the old voice; check the project in DoubleAgent."}
     if before is None or after > before + 0.005:
         proj = P.Project.load(proj.name)
-        export_voice(proj, name=old.name, overwrite=True)
+        export_voice(proj, name=old.name, overwrite=True, replace=old.name)   # the voice this improve set out to replace
         remove_voice(cand)
         gpu.forget_voice(old.name)
         return {"voice": old.name, "before": before, "after": after, "replaced": True, "minutes_of_voice": kept_min,
@@ -357,13 +357,38 @@ def _project(job, item) -> dict:
 
 def _project_target(target: str) -> str:
     from . import project as P
-    from .api import check_voice_name
-    from ..core.voices import slug
     proj = P.Project.load(target)   # friendly error if it isn't a project
     if not any(s.selected for s in proj.sources) and not proj.phrases:
         raise ModelError("Tick the sources to train on in DoubleAgent first.")
-    check_voice_name(proj, slug(proj.train.get("voice_name") or f"{proj.name}-uc"))   # refused now, not at 3 am
     return proj.name
+
+
+def _project_options(target: str, b: dict):
+    """The choices on screen when the project was queued (voice name, length, sample rate), checked and saved onto the
+    project's training settings, which is what run_project reads: what's on screen is what runs. Nothing given keeps
+    the project's own (or the defaults). Another person's voice name is refused now, not at 3 am."""
+    from . import project as P
+    from .api import check_voice_name
+    from .trainer import LENGTHS, SR_CFG
+    from ..core.voices import slug
+    with P.lock(target):
+        proj = P.Project.load(target)
+        st = proj.train
+        vname = slug(b.get("voice_name") or st.get("voice_name") or f"{proj.name}-uc")
+        if not vname:
+            raise ModelError("Give the new voice a name.")
+        check_voice_name(proj, vname)
+        length = b.get("length") or st.get("length") or "auto"
+        if length not in LENGTHS:
+            raise ModelError(f"Pick a training length: {', '.join(LENGTHS)}.")
+        sr = int(b.get("sr") or st.get("sr") or CONFIG["training"]["sample_rate"])
+        if sr not in SR_CFG:
+            raise ModelError("Sample rate must be 32000, 40000 or 48000.")
+        if st.get("state") == "paused" and st.get("sr") and int(st["sr"]) != sr:
+            raise ModelError(f"This training is paused at {int(st['sr']) // 1000} kHz and continues at that rate. "
+                             "Keep it, or start over in DoubleAgent.")
+        st.update(voice_name=vname, length=length, sr=sr)
+        proj.save()
 
 
 def shown_project(item: dict) -> str:
@@ -375,7 +400,7 @@ def shown_project(item: dict) -> str:
 
 
 worklist.register_kind("project", run=_project, estimate=estimate, target=_project_target, shown=shown_project,
-                       label=lambda item: f"Training {shown_project(item)} (your choices)")
+                       label=lambda item: f"Training {shown_project(item)} (your choices)", options=_project_options)
 worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=shown_voice,
                        label=lambda item: f"Improving {shown_voice(item)}")
 worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}",
