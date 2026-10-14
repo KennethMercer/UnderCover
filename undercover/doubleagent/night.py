@@ -309,6 +309,7 @@ def _improve(job, item) -> dict:
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         proj.train["exported"] = old.name   # the installed voice is still the old one
+        proj.train["voice_name"] = old.name   # the training form's name again (not the candidate's: P3-2)
         proj.save()
     mark_improved_pending(old.name, cand, before, after, kept_min)
     if before is not None and before < SAME_PERSON:
@@ -348,6 +349,10 @@ def _improve_target(target: str) -> str:
     pending = (v.extra or {}).get("improved_pending")
     if pending:   # never over a candidate nobody has listened to yet
         raise ModelError(f"A retrained {label_of(v.name)} is already waiting beside it. Compare the two first.")
+    from ..core.voices import pending_candidate, voices_dir
+    if pending_candidate(f"{v.name}-next") or (voices_dir() / f"{v.name}-next").exists():
+        raise ModelError(f"A retrained {label_of(v.name)} from an earlier improve ({v.name}-next) is still in your "
+                         "voices. Keep it or remove it first.")
     return v.name
 
 

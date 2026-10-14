@@ -1104,6 +1104,142 @@ def u_improved_keep():
     return "keep new (old aside, cadence and name carried), undo; keep current (candidate aside), undo; nothing deleted"
 
 
+def _voice_dir(name, extra):
+    """A minimal voice folder for unit checks (a fake model; nothing loads it)."""
+    from undercover.core.voices import voices_dir
+    d = voices_dir() / name
+    d.mkdir(parents=True)
+    (d / "model.pth").write_bytes(b"m-" + name.encode())
+    (d / "meta.json").write_text(json.dumps({"name": name, "dir": str(d), "pth": str(d / "model.pth"), "version": "v2",
+                                              "sr": 40000, "f0": True, "extra": extra}), encoding="utf-8")
+    return d
+
+
+@check("an unheard retrained voice is never written over (Internal Affairs P3-2): a training's name, the export's install(overwrite=True) and an improve all refuse it; its own voice may still be retrained, and the candidate keeps waiting beside the new model")
+def u_pending_guard():
+    import inspect
+    from types import SimpleNamespace
+    from undercover.core import voices as V
+    from undercover.core.config import path
+    from undercover.core.voices import ModelError, voices_dir
+    from undercover.doubleagent import night
+    from undercover.doubleagent.api import check_voice_name
+
+    def refused(fn, word="waiting to be heard"):
+        try:
+            fn()
+        except ModelError as e:
+            assert word in str(e), e
+            return
+        raise AssertionError(f"not refused ({word})")
+    assert 'proj.train["voice_name"] = old.name' in inspect.getsource(night._improve), "the form's name stays the candidate's"
+    with isolated_data():
+        _voice_dir("morgan-freeman-uc", {"trained": True, "project": "morgan-freeman"})
+        cand = _voice_dir("morgan-freeman-uc-next", {"trained": True, "project": "morgan-freeman"})
+        night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", 0.71, 0.74, 30)
+        proj = SimpleNamespace(name="morgan-freeman")
+        refused(lambda: check_voice_name(proj, "morgan-freeman-uc-next"))                    # this project's own candidate
+        refused(lambda: check_voice_name(proj, "morgan-freeman-uc-next", replace="morgan-freeman-uc-next"))
+        refused(lambda: V.install([voices_dir() / "x.pth"], "morgan-freeman-uc-next", overwrite=True))
+        assert (cand / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the candidate was touched"
+        check_voice_name(proj, "morgan-freeman-uc")                                          # its own voice: allowed
+        refused(lambda: night._improve_target("morgan-freeman-uc"), "already waiting")
+        # a new model of the voice itself (a manual retrain): the candidate keeps waiting beside it
+        new = path("cache_dir") / "new.pth"
+        new.write_bytes(b"m-manual")
+        real = V._collect, V.inspect_pth
+        V._collect = lambda files, work: ([new], [])
+        V.inspect_pth = lambda p: {"version": "v2", "sr": 40000, "f0": True}
+        try:
+            v = V.install([new], "morgan-freeman-uc", overwrite=True)
+        finally:
+            V._collect, V.inspect_pth = real
+        assert v.extra["improved_pending"]["voice"] == "morgan-freeman-uc-next", v.extra
+        assert [x.name for x in V.listed_voices()] == ["morgan-freeman-uc"], "the candidate was orphaned"
+        # its folder away but its voice still waiting on it: the name stays refused
+        cand.rename(voices_dir() / "_away")
+        refused(lambda: check_voice_name(proj, "morgan-freeman-uc-next"))
+        (voices_dir() / "_away").rename(cand)
+        # an earlier candidate no longer marked on its voice: no improve over it either
+        meta = json.loads((voices_dir() / "morgan-freeman-uc" / "meta.json").read_text(encoding="utf-8"))
+        meta["extra"].pop("improved_pending")
+        (voices_dir() / "morgan-freeman-uc" / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        refused(lambda: night._improve_target("morgan-freeman-uc"), "earlier improve")
+        assert (cand / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next"
+    return "the candidate's name refused (even as replace, even with its folder away); install over it refused; a retrain of its voice keeps it waiting; no improve over an earlier one"
+
+
+@check("estimates that mean something (Internal Affairs P3-4, qa5): a one-shot of a song already in the library is planned from that song (narrow); the countdown blends the estimate with progress (no 20 -> 184 -> 18 s); a preview's own time is known from the start")
+def u_eta_narrow():
+    import inspect
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.config import path
+    from undercover.core.separate import SEP, file_hash
+    from undercover.frontman import api as FA, oneshot, pipeline as PL
+    with isolated_data():
+        up = path("uploads_dir")
+        up.mkdir(parents=True, exist_ok=True)
+        f = up / "abc123.flac"
+        sf.write(str(f), np.zeros(16000 * 200, dtype="float32"), 16000)
+        (up / "abc123.json").write_text(json.dumps({"id": "abc123", "title": "Britney Spears - Toxic", "file": f.name}), encoding="utf-8")
+        assert oneshot.library_song("Toxic", "Britney Spears") == f and oneshot.library_song("toxic", None) == f
+        assert oneshot.library_song("Hello", None) is None and oneshot.library_song("Toxic", "Adele") is None
+        far = oneshot.cover_eta("v")
+        fresh = oneshot.cover_eta("v", f)                       # here, not separated yet
+        root = path("cache_dir") / "stems" / file_hash(f) / Path(SEP["vocal_model"]).stem
+        for d in (root, root / ("karaoke_" + Path(SEP["karaoke_model"]).stem),
+                  root / ("karaoke_" + Path(SEP["karaoke_model"]).stem) / ("dereverb_" + Path(SEP["dereverb_model"]).stem)):
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "vocals.flac").write_bytes(b"x")
+        here = oneshot.cover_eta("v", f)
+        assert here["song_here"] and not far["song_here"] and here["low"] < fresh["low"], (here, fresh)
+        assert here["high"] <= 2 * here["low"] + 20 and here["high"] < far["high"] / 2, (here, far)
+        pe = PL.preview_estimate(f, PL.CoverOptions(voice="v", quality="high", dereverb=True, karaoke=True, fit=True), 3)
+        assert pe["separating"] == 0 and pe["rendering"] > 0, pe
+    src = inspect.getsource(FA._start_preview)
+    assert src.index("job.own_estimate") < src.index("_say_why_waiting"), "the preview's own time isn't known while it waits"
+    c = PL.Countdown({"separating": 0.0, "converting": 20.0, "mixing": 5.0})
+    t = 1000.0
+    seq = [c.left("separating", 1.0, t)[1], c.left("converting", 0.0, t)[1], c.left("converting", 0.06, t + 12)[1],
+           c.left("converting", 0.5, t + 14)[1], c.left("converting", 0.9, t + 25)[1], c.left("mixing", 0.5, t + 27)[1]]
+    assert all(b - a < 8 for a, b in zip(seq, seq[1:])) and max(seq) < 40, seq   # never 184 s from a slow first second
+    assert PL.blend_left(20, 30, 0.5) == 30.0 and PL.blend_left(20, 0, 0) == 20.0
+    return f"library song {here['low']}-{here['high']} s (not here {far['low']}-{far['high']} s); countdown {seq}"
+
+
+@check("SpeakEasy says how long before Generate (Internal Affairs P3-5): GET /api/speak/estimate?text=&voice=&mode= and POST with a body give the job's own estimate")
+def u_speak_estimate():
+    from undercover.speakeasy import api as SA, speak
+    with isolated_data():
+        _voice_dir("barack-obama-uc", {"trained": True, "project": "barack-obama", "from_speech": True})
+        text = "One two three. Four five six seven eight nine."
+
+        class H:
+            path = "/api/speak/estimate?text=One%20two%20three.%20Four%20five%20six%20seven%20eight%20nine.&voice=barack-obama-uc&mode=reader"
+            out = err = None
+            body = {"text": text, "voice": "barack-obama-uc", "mode": "reader"}
+
+            def _json(self, obj, status=200):
+                self.out = obj
+
+            def _error(self, msg, status=400):
+                self.err = msg
+
+            def _body(self):
+                return self.body
+        h = H()
+        assert SA.handle(h, "GET", "/api/speak/estimate") and h.out, h.err
+        want = speak.eta_seconds(text, speak.plan("barack-obama-uc", cadence=False))
+        assert h.out["mode"] == "reader" and h.out["estimate"] == want and h.out["sentences"] == 2, h.out
+        got = dict(h.out)
+        assert SA.handle(h, "POST", "/api/speak/estimate") and h.out == got, (h.out, got)
+        h.path, h.out = "/api/speak/estimate?voice=nobody&text=hi", None
+        SA.handle(h, "GET", "/api/speak/estimate")
+        assert h.err and h.out is None, "an unknown voice gave an estimate"
+    return f"reader estimate {want} s for 10 words; GET and POST agree; an unknown voice refused"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -4244,8 +4380,8 @@ PHONE_SAMPLES = [
     ("GET", "/api/train/voices/v-uc/cadence"), ("GET", "/api/train/voices/v-uc/cadence/sample/current"),
     ("GET", "/api/train/voices/v-uc/cadence/sample/pending"), ("POST", "/api/train/voices/v-uc/cadence/ab"),
     ("POST", "/api/train/voices/v-uc/cadence/verdict"),
-    *[("GET", f"/api/speak/{a}") for a in ("voices", "readers", "recent", "plan")],
-    ("POST", "/api/speak"), ("POST", "/api/speak/cadence"), ("POST", "/api/speak/newvoice"),
+    *[("GET", f"/api/speak/{a}") for a in ("voices", "readers", "recent", "plan", "estimate")],
+    ("POST", "/api/speak"), ("POST", "/api/speak/estimate"), ("POST", "/api/speak/cadence"), ("POST", "/api/speak/newvoice"),
     *[("POST", f"/api/speak/0123456789/{a}") for a in ("rename", "keep", "unkeep")], ("DELETE", "/api/speak/0123456789"),
     *[("GET", f"/api/library/{a}") for a in ("summary", "covers", "speech", "songs", "voices", "training")],
     ("GET", "/api/library/covers/zip"),
@@ -5492,6 +5628,8 @@ def a_speech():
     assert v, "no voices"
     plan = api(f"/api/speak/plan?voice={v['name']}&cadence=0")   # the quick Reader path (cadence: a_cadence)
     assert plan["reader"] and plan["target_hz"], f"no speaking pitch / Reader for {v['name']}"
+    est = api(f"/api/speak/estimate?voice={v['name']}&mode=reader&text=This%20is%20a%20smoke%20test.")   # before Generate
+    assert est["estimate"] > 0 and est["mode"] == "reader", est
     r = api("/api/speak", {"text": "This is a smoke test. One, two, three.", "voice": v["name"], "cadence": False})
     req = urllib.request.Request(BASE + f"/api/jobs/{r['job']}/events")
     parts, final, progress = [], None, []
@@ -5971,7 +6109,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

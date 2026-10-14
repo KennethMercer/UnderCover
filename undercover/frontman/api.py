@@ -137,33 +137,28 @@ def _start_cover(h, body: dict):
     job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}")
     job.voices = {v for v in (opts.voice, opts.backing_voice) if v}   # what it reads with (jobs.jobs_using)
     JOBS[job.id] = job
-    try:   # its own time, added to the wait for its song's preparation
+    try:   # its own time after the song's preparation (which does the separating), added to that wait
         from .pipeline import estimate
-        job.own_estimate = estimate(song, opts)["total"]
+        e = estimate(song, opts)
+        job.own_estimate = e["converting"] + e["mixing"]
     except Exception:   # noqa: BLE001 - the wait is still said, without this part
         job.own_estimate = 0
     _say_why_waiting(job, meta["id"])
 
     def run(job: Job):
-        from .pipeline import estimate
+        from .pipeline import Countdown, estimate
         est = estimate(song, opts)
-        order = ["separating", "converting", "mixing"]
+        clock = Countdown(est)
         t0 = time.perf_counter()
-        stage_start = {"stage": None, "t": t0}
 
         def progress(stage, frac, msg):
             if job.cancel:
                 raise Cancelled()
-            now = time.perf_counter()
-            if stage != stage_start["stage"]:
-                stage_start.update(stage=stage, t=now)
             if stage == "done":
                 return
-            in_stage = now - stage_start["t"]
-            left_stage = (in_stage / frac * (1 - frac)) if frac > 0.05 else max(est[stage] - in_stage, 0)
-            later = sum(est[s] for s in order[order.index(stage) + 1:])
-            job.push(stage=stage, frac=round(frac, 3), message=msg, elapsed=round(now - t0, 1),
-                     stage_left=round(left_stage, 1), total_left=round(left_stage + later, 1))
+            left = clock.left(stage, frac)
+            job.push(stage=stage, frac=round(frac, 3), message=msg, elapsed=round(time.perf_counter() - t0, 1),
+                     **({"stage_left": left[0], "total_left": left[1]} if left else {}))
 
         job.push(stage="queued", frac=0, message="Starting", estimate=est, elapsed=0)
         res = ENGINE.make_cover(song, opts, progress=progress, title=meta["title"])
@@ -234,6 +229,7 @@ def _presep(h, song_id: str, body: dict):
         from ..core.separate import separate
         steps = ["main"] + (["karaoke"] if want[3] else []) + (["dereverb"] if want[2] else [])
         song = path("uploads_dir") / meta["file"]
+        from .pipeline import blend_left
         try:
             est = estimate(song, CoverOptions(voice="", quality=want[1], dereverb=want[2], karaoke=want[3]))["separating"]
         except Exception:   # noqa: BLE001 - extrapolated from progress instead
@@ -244,7 +240,8 @@ def _presep(h, song_id: str, body: dict):
             if job.cancel:
                 raise Cancelled()
             elapsed = time.perf_counter() - t0
-            left = (elapsed / frac * (1 - frac)) if frac > 0.05 else (max((est or 0) - elapsed, 0) if est else None)
+            left = (blend_left(est, elapsed, frac) if est else
+                    (elapsed / frac * (1 - frac)) if frac > 0.05 else None)
             n = steps.index(step) + 1 if step in steps else 1
             ev = {"stage": "separating", "fraction": round(frac, 3), "label": PRESEP_LABELS.get(step, "Separating the vocal"),
                   "step": step, "step_n": n, "steps": len(steps)}
@@ -330,7 +327,7 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
            "style": req["style"], "voice": voice, "ask": False}
     if voice["how"] == "installed":   # from the measured speeds (timings.jsonl), not a fixed "1-3 min"
-        out["eta_s"] = oneshot.cover_eta(voice["name"])
+        out["eta_s"] = oneshot.cover_eta(voice["name"], oneshot.library_song(song, artist))
     if voice["how"] != "installed" or not voice["quality"]["ok"] or subject:
         # what the request names, in plain words (phase 15): a person, a singer, a character, a band; asked when it
         # can't tell ("Which Chris Evans?"), correctable either way (subject=person / character / role:<role>)
@@ -374,13 +371,23 @@ def _start_preview(h, body: dict):
     job = Job("cover", title=f"Preview: {meta['title']} · {label_of(opts.voice)}")  # same GPU queue as covers
     job.voices = {v for v in (opts.voice, opts.backing_voice) if v}
     JOBS[job.id] = job
+    from .pipeline import Countdown, preview_estimate
+    try:   # its own time from the start, so the wait behind its song's preparation doesn't jump up when it begins
+        est = preview_estimate(song, opts, len(variants))
+    except Exception:   # noqa: BLE001 - extrapolated from progress instead
+        est = None
+    job.own_estimate = est["rendering"] if est else 0
     _say_why_waiting(job, meta["id"])
 
     def run(job: Job):
+        clock = Countdown(est, ("separating", "rendering")) if est else None
+
         def progress(stage, frac, msg):
             if job.cancel:
                 raise Cancelled()
-            job.push(stage=stage, frac=round(frac, 3), message=msg)
+            left = clock.left(stage, frac) if clock else None
+            job.push(stage=stage, frac=round(frac, 3), message=msg,
+                     **({"stage_left": left[0], "total_left": left[1]} if left else {}))
         res = ENGINE.make_preview(song, opts, variants, progress=progress)
         job.finish("done", message="Previews ready",
                    previews=[{"label": r["label"], "url": file_url(r["file"]), "options": r["options"], "fit": r.get("fit")}

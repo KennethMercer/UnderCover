@@ -11,6 +11,7 @@ Steps (one GPU job, so covers started meanwhile still run between training steps
             with matching reverb put back, polish on, pitch cleanup on; octave picked from the voice's and the
             song's typical pitch when the voice's range is known (voices trained here)
 """
+import json
 import re
 import time
 from pathlib import Path
@@ -466,11 +467,15 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     # backing was converted, so a variation of a stacked-harmony song converted the harmonies after all)
     plan["settings"]["options"] = cover_options_of(opts)
     stage_w = {"separating": (0.0, 0.1), "converting": (0.1, 0.85), "mixing": (0.85, 1.0)}
+    from .pipeline import Countdown, estimate
+    est = estimate(song, opts)
+    clock = Countdown(est)   # its own estimate per stage, so the time left doesn't jump (Internal Affairs P3-4)
 
     def cprog(stage, frac, msg):
         a, b = stage_w.get(stage, (0.95, 1.0))
-        push("cover", a + (b - a) * frac, msg or stage.capitalize())
-    push("cover", 0.0, f"Making the cover with {label_of(v.name)}")
+        left = clock.left(stage, frac)
+        push("cover", a + (b - a) * frac, msg or stage.capitalize(), **({"total_left": left[1]} if left else {}))
+    push("cover", 0.0, f"Making the cover with {label_of(v.name)}", total_left=est["total"])
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
     item = next((h for h in history_items() if h["id"] == res.id), None)
     job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
@@ -481,13 +486,45 @@ TYPICAL_SONG_S = 210.0   # a one-shot's song before it's found: three and a half
 FETCH_S = 20.0           # finding and downloading it (measured 10-30 s)
 
 
-def cover_eta(voice: str) -> dict:
-    """A one-shot with an installed voice, in seconds: {low, high}. low: the song was fetched and separated before
-    (only conversion and mixing); high: a typical song fetched and separated now. From the measured speeds."""
-    from .pipeline import CoverOptions, estimate_for
+SEARCH_S = 8.0           # the YouTube search that finds a song already in the library (it isn't downloaded again)
+
+
+def library_song(song: str, artist: str | None) -> Path | None:
+    """The library's copy of a requested song (uploads/), when the request clearly names one: every word of the
+    title and of the artist in its title. A bare title counts only when it names exactly one song. None: not here."""
+    want = ambiguity._tokens(ambiguity.norm_title(song))
+    by = ambiguity._tokens(ambiguity.norm_artist(artist or ""))
+    if not want:
+        return None
+    found = []
+    for m in path("uploads_dir").glob("*.json"):
+        try:
+            meta = json.loads(m.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        words = ambiguity._tokens(f"{meta.get('title') or ''} {meta.get('name') or ''}")
+        f = path("uploads_dir") / (meta.get("file") or "")
+        if meta.get("file") and want <= words and by <= words and f.exists():
+            found.append(f)
+    return found[0] if len(found) == 1 or (found and by) else None
+
+
+def cover_eta(voice: str, song: Path | None = None) -> dict:
+    """A one-shot with an installed voice, in seconds: {low, high, song_here}. A song not in the library: low = it was
+    fetched and separated before, high = a typical song fetched and separated now. A song in the library (song): its
+    own length and whatever of it is already separated (Internal Affairs P3-4: "1-18 min" for a cached song that
+    took 27 s). From the measured speeds."""
+    from .pipeline import CoverOptions, estimate, estimate_for
     o = CoverOptions(voice=voice, quality="high", dereverb=True, karaoke=True, backing_voice=voice, polish=True)
+    if song is not None:
+        try:
+            e = estimate(song, o)
+        except Exception:   # noqa: BLE001 - an unreadable file: the general range
+            song = None
+        else:
+            return {"low": round(e["total"] + 5), "high": round((e["total"] + SEARCH_S) * 1.3 + 5), "song_here": True}
     e = estimate_for(TYPICAL_SONG_S, o)
-    return {"low": round(e["converting"] + e["mixing"] + 5), "high": round(FETCH_S + e["total"] + 10)}
+    return {"low": round(e["converting"] + e["mixing"] + 5), "high": round(FETCH_S + e["total"] + 10), "song_here": False}
 
 
 def cover_options_of(opts: "CoverOptions") -> dict:
