@@ -446,12 +446,18 @@ def _pause(h, proj, b):
     h._json({"ok": True})
 
 
-def check_voice_name(proj, vname: str):
+def check_voice_name(proj, vname: str, replace: str | None = None):
     """A training never writes over another person's voice: a name already taken by a voice that isn't this project's
-    is refused here, before any work (export refuses it too)."""
+    is refused here, before any work (export refuses it too). replace: the one voice this run may replace on purpose
+    (an overnight improve's own voice, a downloaded one included)."""
     from ..core.voices import voices_dir
-    meta = voices_dir() / vname / "meta.json"
+    if replace and vname == replace:
+        return
+    d = voices_dir() / vname
+    meta = d / "meta.json"
     if not meta.exists():
+        if d.exists():   # a folder of that name that isn't a whole voice (an interrupted install): not ours to replace
+            raise ModelError(f"There's already a folder called \"{vname}\" in your voices. Give this one its own name.")
         return
     try:
         ex = (json.loads(meta.read_text(encoding="utf-8")).get("extra") or {})
@@ -580,8 +586,22 @@ def start_ab(voice: str) -> dict:
 
 # Pause / Resume (core.worklist): these jobs are voice work; paused ones start again from their resume spec
 worklist.register_pausable("train", "train-prepare", "train-auto", "train-transcribe")
-worklist.register_resume("transcribe", lambda spec: start_transcribe(spec["project"]))
-worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]))
-worklist.register_resume("train", lambda spec: start_train(spec["project"], {}))
-worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}))
+def _as_project(spec: dict):
+    """Held project work as an overnight item: the project with its own choices ("Train tonight instead")."""
+    return ("project", spec["project"]) if spec.get("project") else None
+
+
+def _as_cadence(spec: dict):
+    """A held transcription as its voice's overnight cadence item (only once the project's voice exists)."""
+    try:
+        voice = P.Project.load(spec["project"]).train.get("exported")
+    except (ModelError, KeyError):
+        return None
+    return ("cadence", voice) if voice else None
+
+
+worklist.register_resume("transcribe", lambda spec: start_transcribe(spec["project"]), queue_as=_as_cadence)
+worklist.register_resume("prepare", lambda spec: start_prepare(spec["project"]), queue_as=_as_project)
+worklist.register_resume("train", lambda spec: start_train(spec["project"], {}), queue_as=_as_project)
+worklist.register_resume("auto", lambda spec: start_auto(spec["project"], {}), queue_as=_as_project)
 worklist.register_control_lookup(lambda j: next((a["control"] for a in ACTIVE.values() if a["job"] is j and a.get("control")), None))
