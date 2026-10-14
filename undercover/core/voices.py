@@ -490,17 +490,30 @@ def set_aside(d: Path, tag: str = "", note: dict | None = None) -> Path:
     fsutil.retry(lambda: os.replace(d, dst))
     if (dst / "meta.json").exists():
         os.replace(dst / "meta.json", dst / "meta.json.aside")
-    if note and (dst / "meta.json.aside").exists():
-        try:
+    if (dst / "meta.json.aside").exists():
+        try:   # why, and the name people knew it by (out of the lists, its default display can't be worked out later)
             meta = json.loads((dst / "meta.json.aside").read_text(encoding="utf-8"))
-            meta.setdefault("extra", {})["set_aside"] = {**note, "at": time.strftime("%Y-%m-%d %H:%M")}
+            meta.setdefault("extra", {})["set_aside"] = {"display": display_of_meta(meta), **(note or {}),
+                                                         "at": time.strftime("%Y-%m-%d %H:%M")}
             fsutil.write_text(dst / "meta.json.aside", json.dumps(meta, indent=2))
         except (OSError, ValueError):
             pass   # an unreadable meta: it's still set aside, just without the note
     return dst
 
 
-def remove_to_aside(name: str) -> dict:
+def display_of_meta(meta: dict) -> str:
+    """A voice's display name from its meta alone (a voice set aside isn't in the lists): the one given, else the
+    default (the person it was trained on, or its tidied name)."""
+    if (meta.get("display") or "").strip():
+        return meta["display"].strip()
+    try:
+        return display_name(Voice(**{**meta, "dir": Path(meta.get("dir") or "."), "pth": Path(meta.get("pth") or "."),
+                                      "index": Path(meta["index"]) if meta.get("index") else None}))
+    except (TypeError, ValueError, KeyError):
+        return meta.get("name") or ""
+
+
+def remove_to_aside(name: str, why: str = "you removed it") -> dict:
     """The user's Delete (FrontMan's Remove, SafeHouse's Delete): the voice is set aside, not deleted (Internal
     Affairs P5-1: a double-click on Remove deleted a trained voice for good). A retrained one waiting beside it goes
     with it. bring_back() puts them back; deleting for good is SafeHouse's Set aside section (its own control).
@@ -516,7 +529,7 @@ def remove_to_aside(name: str) -> dict:
     if cand and (voices_dir() / cand / "meta.json").exists():
         with_ = set_aside(voices_dir() / cand, note={"why": f"waited beside {label_of(v.name)} when you removed it"}).name
     try:
-        a = set_aside(v.dir, note={"why": "you removed it", **({"with": with_} if with_ else {})})
+        a = set_aside(v.dir, note={"why": why, **({"with": with_} if with_ else {})})
     except BaseException:
         if with_:   # the voice couldn't move (a file held open): its waiting one back beside it, as before
             bring_back(with_)
