@@ -252,6 +252,7 @@ def _improve(job, item) -> dict:
             try:
                 P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=prog,
                                   between=control.service, cancel=lambda: job.cancel or job.pausing,
+                                  stop=lambda: job.cancel or getattr(control, "stop", False),
                                   friendly=lambda e: jobs.friendly(e, "preparing a source"))
             except P.Cancelled:
                 from ..core.jobs import Paused

@@ -257,7 +257,7 @@ def start_prepare(name: str):
             job.push(stage="matching" if label == "finding the voice" else "prepare", fraction=f, label=label, **kw)
         try:
             failed = P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=progress,
-                                       cancel=lambda: job.cancel or job.pausing,
+                                       cancel=lambda: job.cancel or job.pausing, stop=lambda: job.cancel,
                                        friendly=lambda e: jobs.friendly(e, "preparing a source"))
         except P.Cancelled:
             if job.pausing:
@@ -328,6 +328,7 @@ def start_train(name: str, b: dict):
             vname = slug(b.get("voice_name") or f"{proj.name}-uc")
             if not vname:
                 raise ModelError("Give the new voice a name.")
+            check_voice_name(proj, vname)
             for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
                 st.pop(k, None)
             st.update(sr=sr, length=length, voice_name=vname, epochs=None)
@@ -395,6 +396,7 @@ def start_auto(name: str, b: dict):
     if not proj.sources and not proj.person:
         raise ModelError("Type a name and find clips first.")
     if b.get("voice_name"):
+        check_voice_name(proj, slug(b["voice_name"]))
         with P.lock(proj.name):
             pr = P.Project.load(proj.name)
             pr.train["voice_name"] = slug(b["voice_name"])
@@ -441,10 +443,29 @@ def _pause(h, proj, b):
     h._json({"ok": True})
 
 
+def check_voice_name(proj, vname: str):
+    """A training never writes over another person's voice: a name already taken by a voice that isn't this project's
+    is refused here, before any work (export refuses it too)."""
+    from ..core.voices import voices_dir
+    meta = voices_dir() / vname / "meta.json"
+    if not meta.exists():
+        return
+    try:
+        ex = (json.loads(meta.read_text(encoding="utf-8")).get("extra") or {})
+    except (OSError, ValueError):
+        ex = {}
+    if ex.get("project") != proj.name:
+        who = ex.get("person") or "another voice"
+        raise ModelError(f"\"{vname}\" is already {who}'s voice. Give this one its own name "
+                         f"(for example {proj.name}-uc).")
+
+
 def _stop(h, proj, b):
     a = _busy(proj.name)
-    if a and a["control"]:
-        a["control"].stop = True
+    if a:   # every kind of project job stops now (prepare and transcribe have no trainer control: the job's own flag)
+        a["job"].cancel = True
+        if a["control"]:
+            a["control"].stop = True
         return h._json({"ok": True})
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
