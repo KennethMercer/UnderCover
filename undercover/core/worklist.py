@@ -31,14 +31,16 @@ CONTROL_LOOKUPS: list = []    # job -> trainer Control (for jobs that don't carr
 
 
 def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda item: item["target"], follows=None,
-                  shown=lambda item: item["target"], modes: tuple = ()):
+                  shown=lambda item: item["target"], modes: tuple = (), options=None):
     """A kind of queue item. run(job, item) -> result dict; estimate(item) -> minutes per step and "total";
     target(text) -> the normalised target (raise ModelError if it's not valid); label(item) -> what the job shows;
     follows(item, other) -> True when item must run after other (a voice's cadence after that voice's training);
     shown(item) -> the target as people read it (a voice's display name; the stored target stays the id);
-    modes: the item's optional `mode` values this kind takes (a new voice: speaking / singing / both)."""
+    modes: the item's optional `mode` values this kind takes (a new voice: speaking / singing / both);
+    options(target, body): the add request's own choices for this kind, checked and kept where the run reads them
+    (a queued project's voice name, length, sample rate: what's on screen is what runs); raise ModelError to refuse."""
     KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label, "follows": follows, "shown": shown,
-                   "modes": tuple(modes)}
+                   "modes": tuple(modes), "options": options}
 
 
 def register_resume(kind: str, start):
@@ -213,7 +215,7 @@ def hold() -> dict:
 
 # ---------------------------------------------------------------- the overnight queue
 
-def add(kind: str, target: str, now: bool = False, mode: str | None = None) -> dict:
+def add(kind: str, target: str, now: bool = False, mode: str | None = None, options: dict | None = None) -> dict:
     """Add a queue item. now=True: run it as soon as the GPU is free, without starting the rest of the queue
     ("Start now" in SpeakEasy / DoubleAgent; it still waits for a training that's running). mode: kept on the item
     for kinds that take one (a new voice: speaking / singing / both); None lets the run decide."""
@@ -230,6 +232,8 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None) -> d
         if any(i["kind"] == kind and i["target"].lower() == target.lower() and i["state"] in ("queued", "paused", "running")
                for i in q):
             raise ModelError(f"That's already in the queue ({KINDS[kind]['label']({'kind': kind, 'target': target})}).")
+    if KINDS[kind].get("options"):
+        KINDS[kind]["options"](target, options or {})   # checked and kept before the item exists
     item = {"id": uuid.uuid4().hex[:8], "kind": kind, "target": target, "state": "queued",
             "added": time.strftime("%Y-%m-%d %H:%M")}
     if now:
