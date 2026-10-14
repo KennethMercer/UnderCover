@@ -119,6 +119,14 @@ def make_samples(job, voice: str) -> dict:
     return state(voice)
 
 
+def _not_busy(*voices: str):
+    """Refuse while a cover, preview, speech or one-shot reads with either voice (its folder is about to move)."""
+    busy = [j for v in voices if v for j in jobs.jobs_using(v)]
+    if busy:
+        raise ModelError(f"{busy[0].title or 'A cover or speech'} is using this voice right now. "
+                         "Try again when it's done (or cancel it).")
+
+
 def keep(voice: str, which: str) -> dict:
     """The user's pick. "new": the candidate takes the voice's name, the current one is set aside. "current": the
     candidate is set aside. Nothing is deleted; undo() puts it back."""
@@ -129,6 +137,7 @@ def keep(voice: str, which: str) -> dict:
         p = (v.extra or {}).get("improved_pending")
         if not p:
             raise ModelError(f"No retrained {label_of(voice)} is waiting.")
+        _not_busy(voice, p["voice"])
         cand_dir = voices_dir() / p["voice"]
         if not (cand_dir / "meta.json").exists():
             raise ModelError("The retrained voice isn't there any more.")
@@ -169,6 +178,7 @@ def undo(voice: str) -> dict:
     with _LOCK:
         v = get_voice(voice)
         ex = v.extra or {}
+        _not_busy(voice, (ex.get("improved_previous") or ex.get("improved_turned_down") or {}).get("candidate"))
         if ex.get("improved_previous"):
             rec = ex["improved_previous"]
             aside = _aside_dir() / rec["aside"]

@@ -132,6 +132,15 @@ def _eta_learn(job: "Job"):
 
 # ---------------------------------------------------------------- jobs
 
+USES_VOICES = ("cover", "speech", "auto")   # job kinds that read with a voice
+
+
+def jobs_using(voice: str) -> list:
+    """Unfinished jobs that read with this voice: covers, previews and speech say which (job.voices); a job that
+    doesn't (a one-shot still choosing its voice) counts as using any voice."""
+    return [j for j in list(JOBS.values()) if j.kind in USES_VOICES and not j.finished
+            and (getattr(j, "voices", None) is None or voice in j.voices)]
+
 ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
 
 

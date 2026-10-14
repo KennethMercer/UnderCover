@@ -135,6 +135,7 @@ def _start_cover(h, body: dict):
     song = path("uploads_dir") / meta["file"]
     _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice)))
     job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}")
+    job.voices = {v for v in (opts.voice, opts.backing_voice) if v}   # what it reads with (jobs.jobs_using)
     JOBS[job.id] = job
     try:   # its own time, added to the wait for its song's preparation
         from .pipeline import estimate
@@ -371,6 +372,7 @@ def _start_preview(h, body: dict):
         return h._error("Pick between 1 and 6 versions to preview.")
     song = path("uploads_dir") / meta["file"]
     job = Job("cover", title=f"Preview: {meta['title']} · {label_of(opts.voice)}")  # same GPU queue as covers
+    job.voices = {v for v in (opts.voice, opts.backing_voice) if v}
     JOBS[job.id] = job
     _say_why_waiting(job, meta["id"])
 
