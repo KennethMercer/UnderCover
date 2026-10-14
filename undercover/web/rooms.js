@@ -199,7 +199,7 @@ function renderPlaces() {
       <i class="gsw"></i>
       <div style="display:grid;gap:2px;min-width:0"><b>${esc(x.label)}</b><span class="meta">${esc(x.about)}</span></div>
       <span class="size">${gb(x.size)}</span>
-      <div class="full row spread"><span class="folder">${esc(x.folder)}</span>
+      <div class="full row spread"><span class="folder" data-deep>${esc(x.folder)}</span>
         ${R.move?.group === k || R.moving ? "" : `<button class="btn" type="button" data-change="${k}" data-pc>Change…</button>`}</div>
       <div class="full meta mono" data-deep>${Object.entries(x.keys).map(([kk, v]) => `[paths] ${esc(kk)} = ${esc(v)}`).join(" · ")} · ${x.files} files</div>
       ${R.move?.group === k ? movePanel(k, x) : ""}

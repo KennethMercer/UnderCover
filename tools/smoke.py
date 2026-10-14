@@ -3702,6 +3702,28 @@ def _fake_demo_voice(d: Path):
                                      encoding="utf-8")
 
 
+@check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
+def u_page_rules():
+    web = ROOT / "undercover" / "web"
+    tut = (web / "tutorial.js").read_text(encoding="utf-8")
+    # M1: the First assignment starts from default settings (a one-shot's backing voice / octave once rode into the cover)
+    start = tut[tut.index("async function assignStart()"):tut.index("function assignGo(")]
+    assert start.index("S.opts = { ...S.defaults }") < start.index("assignGo(1"), "assignStart must reset S.opts to the defaults before step 1"
+    # m7: Replay opens on the briefing (with Agent Smoke's greeting), not straight on step 1
+    replay = tut[tut.index('$("#set-assign-replay").onclick'):]
+    assert "assignBrief()" in replay.split("setTimeout(assignBoot")[0] and "assignStart()" not in replay.split("setTimeout(assignBoot")[0], "Replay must show the briefing"
+    # the Compare panel: one set of cards per tab, and the octave / key previews never ride with fit on (it overrides them)
+    app = (web / "app.js").read_text(encoding="utf-8")
+    assert "pv-set" in app and "fit: false" in app and "pvByHand" in app, "the Compare panel lost its per-tab sets or the fit guard"
+    # M3: result titles and library rows say display names
+    lib = (web / "library.js").read_text(encoding="utf-8")
+    assert "voiceDisplay(x.voice)" in lib and "voiceDisplay(h.voice)" in app, "voice ids are back in basic-view titles"
+    # M2: at phone width the history and Recent rows put their buttons under the title
+    assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
+    assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
+    return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"
+
+
 @check("First assignment: state once per install, the seeds (sample song, demo voice), done, reset; the demo voice is nobody to search for")
 def u_tutorial():
     import numpy as np
@@ -5407,7 +5429,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_page_rules, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

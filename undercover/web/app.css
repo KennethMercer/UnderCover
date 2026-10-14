@@ -139,6 +139,7 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .prev-top { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .prev-top .seg { flex: 1; min-width: 260px; }
 .prev-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.linkbtn.on { color: var(--accent); font-weight: 600; }   /* the playing one of a Before / After pair */
 .pv-set { display: contents; }
 .pv-set[hidden] { display: none; }
 .pcard { border: 1px solid var(--line); border-radius: 9px; padding: 12px; display: grid; gap: 10px; background: var(--panel-2); }
@@ -225,7 +226,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .alert-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .alert.info::before { background: var(--accent); }
 .alert p { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
-@media (max-width: 520px) { .hrow { grid-template-columns: 1fr auto; } .hrow .hdate { display: none; } .convert { width: 100%; } }
+@media (max-width: 520px) { .hrow { grid-template-columns: 1fr; gap: 6px; } .hrow .hdate { display: none; } .hbtns { flex-wrap: wrap; } .convert { width: 100%; } }   /* the buttons wrap under the title, which keeps its width (IA M2) */
 
 /* ---------------------------------------------------------------- DoubleAgent view (was "Train a voice") */
 .view { display: grid; gap: 18px; }

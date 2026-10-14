@@ -24,7 +24,7 @@ const ASSIGN = [
     aim: () => [$("#keep")] },
   { head: "This is SafeHouse.", say: "Everything you keep lives here, room by room. Your cover is in the Library.", tab: "safehouse",
     aim: () => [$('#lib-list .litem[data-kept="true"]')], next: "Next" },
-  { head: "Last: a voice of your own.", say: "Name someone and press Train tonight. It trains while the PC is free, and you wake up to your first voice of your own.", tab: "doubleagent",
+  { head: "Last: a voice of your own.", say: "Name someone and press Train tonight instead. It trains while the PC is free, and you wake up to your first voice of your own.", tab: "doubleagent",
     aim: () => [$("#da-person"), $("#da-tonight")], next: "Done" },
 ];
 const VOICE_KINDS = new Set(["train", "train-auto", "train-prepare", "train-export", "install", "night"]);   // "a voice of your own" started
@@ -39,6 +39,10 @@ async function assignBoot() {
   renderAssignSetting();
   if (AS.step > 0) return assignGo(AS.step, false);   // carry on where it was (a reload, a restart)
   if (AS.done) return;
+  assignBrief();
+}
+// the briefing card and Agent Smoke's greeting: on a first run, and again on Replay
+async function assignBrief() {
   const desk = await deskNow().catch(() => ({ song: null, voice: null }));
   $("#assign-brief-say").textContent = desk.song && desk.voice
     ? "A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it, see where it lives, then get a voice of your own. The song is ours and the voice isn't anyone's, so nothing you make here is anyone else's."
@@ -125,6 +129,7 @@ async function assignStart() {
     try { await api("/api/tutorial/reset", { method: "POST" }); desk = await deskNow(); } catch (e) {}
   }
   // a copy without the sample song's audio (it comes later) or the demo voice's files: step 1 asks for what's missing
+  S.opts = { ...S.defaults }; syncControls();   // clean settings for this run: a one-shot's or Deep Cover's leftovers (a backing voice, an octave) would make a cover that isn't Agent Smoke's alone; the saved ones stay for after
   try {
     if (desk.song) { S.song = await api(`/api/songs/${desk.song.id}`); store.set("uc-song", S.song.id); renderSong(); refreshEstimate(); }
     if (desk.voice) await loadVoices(desk.voice.name);
@@ -137,6 +142,7 @@ async function assignStart() {
 // ------------------------------------------------------------ a step: the strip's line, the lit edge, the right page
 function assignGo(n, move = true) {
   AS.step = n; store.set("uc-assign-step", n);
+  if (n === 2) AS.heard = false;
   if (n === 5) AS.before = new Set(runningJobs().map(j => j.id));   // voice work already running doesn't count
   const st = ASSIGN[n - 1];
   $("#assign").hidden = false; $("#assign").classList.remove("done");
@@ -173,8 +179,11 @@ async function assignShowKept() {   // SafeHouse > Library > Covers > Kept, so t
 
 // ------------------------------------------------------------ what moves it on: the real actions
 document.addEventListener("uc:jobdone", e => { if (AS.step === 1 && e.detail.kind === "cover" && (e.detail.final?.state || e.detail.state) === "done") setTimeout(() => assignGo(2), 300); });
+// step 2 teaches two things: play, then switch between the cover and the original
 $("#result").addEventListener("click", e => {
-  if (AS.step === 2 && e.target.closest("[data-ab], .play, #res-play")) setTimeout(() => assignGo(3), 400);
+  if (AS.step !== 2) return;
+  if (e.target.closest("[data-ab]")) { if (AS.heard) setTimeout(() => assignGo(3), 400); }
+  else if (e.target.closest(".play, #res-play")) AS.heard = true;
 });
 new MutationObserver(() => { if (AS.step === 3 && $("#keep").dataset.kept === "true") assignGo(4); })
   .observe($("#keep"), { attributes: true, attributeFilter: ["data-kept", "aria-pressed"] });
@@ -206,10 +215,12 @@ $("#assign-skip").onclick = () => { if (!$("#assign").classList.contains("done")
 $("#assign-take").onclick = () => { greetStop(); assignStart(); };
 $("#assign-later").onclick = () => { greetStop(); $("#assign-brief").hidden = true; assignMarkDone(); };
 $("#set-assign-replay").onclick = async () => {
+  if (S.job || S.osBusy) return showError("Wait for the cover that's being made to finish (or cancel it), then take the assignment.", "Busy");
   try { await api("/api/tutorial/reset", { method: "POST" }); } catch (e) { return showError(e.message, "Couldn't start the assignment"); }
+  greetStop(); assignClose();   // a run in progress is put away; the briefing and the greeting open again
   AS.done = null; renderAssignSetting();
   showTab("frontman"); window.scrollTo({ top: 0 });
-  assignStart();
+  assignBrief();
 };
 
 setTimeout(assignBoot, 0);

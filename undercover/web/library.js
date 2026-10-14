@@ -101,7 +101,7 @@ function tabCounts(kf) {
 }
 function renderCats() {
   const c = tabCounts(kfNow());
-  $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
+  $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}" aria-label="${label}${c[k] != null ? `, ${c[k]}` : ""}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
   $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderCats(); loadCat(); });
 }
 function renderTools() {
@@ -113,7 +113,7 @@ function renderTools() {
     const voices = [...new Set((L.data[L.cat] || []).map(c => c.voice))].sort();
     f.hidden = voices.length < 2;
     const keep = f.value;
-    f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option${v === keep ? " selected" : ""}>${esc(v)}</option>`).join("");
+    f.innerHTML = `<option value="">All voices</option>` + voices.map(v => `<option value="${esc(v)}"${v === keep ? " selected" : ""}>${esc(voiceDisplay(v))}</option>`).join("");
   } else f.hidden = true;
   renderKf();
 }
@@ -180,10 +180,10 @@ function renderList() {
     const id = idOf(x), check = L.cat === "covers";
     let title, sub, side;
     if (L.cat === "covers") {
-      title = x.title; sub = [x.voice + (x.backing_voice ? ` + ${x.backing_voice}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
+      title = x.title; sub = [voiceDisplay(x.voice) + (x.backing_voice ? ` + ${voiceDisplay(x.backing_voice)}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
       side = keepTag(x) + `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "speech") {
-      title = x.title; sub = [x.voice, paceWord(x), when(x.created)].join(" · ");
+      title = x.title; sub = [voiceDisplay(x.voice), paceWord(x), when(x.created)].join(" · ");
       side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag" data-deep>${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
       title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
@@ -201,7 +201,7 @@ function renderList() {
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
       <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
   }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
-      : hasTray() && L.kf === "kept" ? "Nothing kept yet. Send to SafeHouse keeps one for good; until then it's under Recent." : "Nothing here."}</div>`);
+      : hasTray() && L.kf === "kept" ? `No ${L.cat === "covers" ? "covers" : "speech"} kept yet. Send to SafeHouse keeps one for good; until then it's under Recent.` : "Nothing here."}</div>`);
   $$(".litem", box).forEach(el => {
     const pick = () => { L.sel = el.dataset.id; $$(".litem", box).forEach(x => x.setAttribute("aria-selected", x === el)); renderDetail(); placeDetail(); };
     el.addEventListener("click", e => { if (e.target.matches("input")) return; pick(); });

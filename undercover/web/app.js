@@ -335,12 +335,14 @@ function renderSong() {
   setDrop("loaded");
   const s = S.song;
   $("#song-name").textContent = s.name;
-  const base = `${fmtTime(s.duration)} · ${(s.sample_rate / 1000).toFixed(s.sample_rate % 1000 ? 1 : 0)} kHz · ${s.channels === 1 ? "mono" : s.channels === 2 ? "stereo" : s.channels + " ch"} · ${s.lufs} LUFS`;
-  $("#song-meta").textContent = (s.sample ? "sample song · " : "") + base;
+  // the length is for everyone; the sample rate, channels and loudness (and the key below) are Deep Cover's
+  const base = `${s.sample ? "sample song · " : ""}${fmtTime(s.duration)}`, tech = `${(s.sample_rate / 1000).toFixed(s.sample_rate % 1000 ? 1 : 0)} kHz · ${s.channels === 1 ? "mono" : s.channels === 2 ? "stereo" : s.channels + " ch"} · ${s.lufs} LUFS`;
+  const meta = key => { $("#song-meta").innerHTML = `${esc(base)}<span data-deep> · ${esc(tech)}${key ? ` · key ${esc(key)}` : ""}</span>`; };
+  meta("");
   S.songKey = null;
   api(`/api/songs/${s.id}/key`).then(k => {
     if (S.song?.id !== s.id) return;
-    S.songKey = k; $("#song-meta").textContent = `${s.sample ? "sample song · " : ""}${base} · key ${k.name}`;
+    S.songKey = k; meta(k.name);
     $("#key-o").textContent = keyLabel(S.opts.key || 0);
   }).catch(() => {});
   drawWave($("#wave-song"), s.peaks, 0);
@@ -371,7 +373,7 @@ function renderVoices() {
   if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
   else box.innerHTML = shownList.map(v => `
-    <div class="voice pick" role="option" tabindex="0" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
+    <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
       <span class="vtext"><b>${vname(v.name)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
       <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
@@ -576,7 +578,7 @@ function startProgress(job, elsewhere = false) {
   $("#progress").hidden = false; $("#progress-h").textContent = "Working"; $("#cancel").textContent = "Cancel"; $("#cancel").hidden = false;
   const est = S.estimate || {};
   ORDER.forEach(s => setStage(s, "", 0, est[s] != null ? (s === "separating" && est.stems_cached && !S.opts.karaoke && !S.opts.dereverb ? "cached" : `≈ ${fmtSecs(est[s])}`) : "—"));
-  $(".stage[data-s=converting] .sname").textContent = `Converting to ${S.voice}`;
+  $(".stage[data-s=converting] .sname").textContent = `Converting to ${voiceDisplay(S.voice)}`;
   $("#progress").scrollIntoView({ block: "nearest", behavior: "smooth" });
   jobStart = performance.now(); let totalLeft = est.total, leftAt = performance.now();
   clearInterval(elapsedTimer);
@@ -645,11 +647,18 @@ applyVolume();
 let ab = "cover", wavePeaks = { cover: null, orig: null }, playingHist = null;
 const active = () => ab === "cover" ? aCover : aOrig;
 
+// covers of the same song in the same voice(s) are told apart: the first keeps its title, the later ones say (2), (3)
+function coverName(h) {
+  const same = HIST.filter(x => x.title === h.title && x.voice === h.voice && (x.backing_voice || "") === (h.backing_voice || ""))
+    .sort((a, b) => String(a.created).localeCompare(String(b.created)) || String(a.id).localeCompare(String(b.id)));
+  const n = same.findIndex(x => x.id === h.id);
+  return `${h.title}${n > 0 ? ` (${n + 1})` : ""} · ${voiceDisplay(h.voice)}${h.backing_voice ? " + " + voiceDisplay(h.backing_voice) : ""}`;
+}
 async function showResult(item, seconds) {
   S.result = item; playingHist = item.id;
   $("#result").hidden = false;
   if (typeof earShow === "function") earShow($("#ear-cover"), "cover", item);   // How did it come out? (ear.js)
-  $("#result-h").textContent = `${item.title} · ${item.voice}${item.backing_voice ? " + " + item.backing_voice : ""}`;
+  $("#result-h").textContent = coverName(item);
   renderKeep();
   stopAll();
   aCover.src = item.output; aOrig.src = item.original || "";
@@ -842,7 +851,7 @@ async function loadHistory() {
   let ok = true;
   try { HIST = await api("/api/history"); } catch (e) { HIST = []; ok = false; }
   const mine = S.result && HIST.find(x => x.id === S.result.id);
-  if (mine) { S.result.kept = mine.kept; renderKeep(); }
+  if (mine) { S.result.kept = mine.kept; renderKeep(); $("#result-h").textContent = coverName(S.result); }
   else if (ok && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // it rolled off the tray (or was deleted)
   renderHistory();
 }
@@ -854,7 +863,7 @@ function renderHistory() {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
-    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(h.title)} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
+    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(coverName(h).split(" · ")[0])} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
       <small class="hdate">${esc((h.created || "").slice(0, 16))}</small>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("");
