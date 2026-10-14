@@ -38,6 +38,24 @@ function seCount() {
   const w = seWords(), secs = w / 3.0 / sePaceFactor();
   $("#se-count").textContent = w ? `${w.toLocaleString()} word${w === 1 ? "" : "s"} · about ${fmtTime(Math.max(1, secs))}` : "0 words";
   seSummary();
+  seEstimate();
+}
+// "Ready in about …" before Generate: the server's own estimate (GET/POST /api/speak/estimate: the engine's measured speed, the
+// listen-back, a cold start, and how many jobs wait), asked a moment after the text, voice, Reader, pace, nudge or cadence changes
+let seEstTimer = null, seEstSeq = 0;
+const seEstKey = () => [SE.voice, $("#se-reader").value, SE.pace, $("#se-nudge").value, $("#se-cad").checked ? 1 : 0, seText.value.trim()].join("\u0001");
+function seEstimate() {
+  clearTimeout(seEstTimer);
+  const text = seText.value.trim();
+  if (!text || !SE.voice) { SE.est = null; return; }
+  seEstTimer = setTimeout(async () => {
+    const key = seEstKey(), seq = ++seEstSeq;
+    try {
+      const r = await api("/api/speak/estimate", { json: { text, voice: SE.voice, reader: $("#se-reader").value || "auto", pace: SE.pace,
+                                                          nudge: +$("#se-nudge").value, mode: $("#se-cad").checked ? undefined : "reader" } });
+      if (seq === seEstSeq) { SE.est = { ...r, key }; seSummary(); }
+    } catch (e) { /* the page's own guess stands */ }
+  }, 600);
 }
 let seSave = null;
 seText.addEventListener("input", () => { seCount(); clearTimeout(seSave); seSave = setTimeout(() => store.set("uc-se-text", seText.value.slice(0, 200000)), 400); });
@@ -139,6 +157,7 @@ function sePlan(soon) {
 $("#se-cad").checked = store.get("uc-se-cad", true);
 $("#se-cad").onchange = () => { store.set("uc-se-cad", $("#se-cad").checked); sePlan(); };
 function seShowPlan() {
+  seEstimate();
   const p = SE.plan, st = v => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v)} st`;
   const v0 = SE.voices.find(x => x.name === p.voice), c = v0?.cadence || {};
   const cadOn = p.mode === "cadence";
@@ -172,10 +191,12 @@ function seSummary() {
   $("#se-generate").disabled = !w || !SE.voice || !!busy;
   $("#se-generate").textContent = busy ? "Speaking…" : "Generate";
   if (!SE.voice) { $("#se-summary").textContent = "Pick a voice first."; return; }
-  const secs = w / 3.0 / sePaceFactor();
-  const cad = SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
-  const when = cad ? `with their cadence · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))} · starts playing after the first few sentences`
-    : "starts playing after the first sentence";
+  const est = SE.est && SE.est.key === seEstKey() ? SE.est : null;   // the server's, while it still matches what's on the page
+  const secs = est ? est.audio_seconds : w / 3.0 / sePaceFactor();
+  const cad = est ? est.mode === "cadence" : SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
+  const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${est.waiting ? ` (${est.waiting} ahead in the queue)` : ""}`
+    : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
+  const when = `${cad ? "with their cadence" : "read by the Reader"}${ready} · starts playing after the ${cad ? "first few sentences" : "first sentence"}`;
   $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
     : `<b>${vname(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
 }
