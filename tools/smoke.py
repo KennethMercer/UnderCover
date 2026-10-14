@@ -1037,6 +1037,148 @@ def u_improve_pending():
     return "pending beside, nothing replaced or removed; no improve of a pending voice or its candidate"
 
 
+@check("an improved voice waiting (Internal Affairs P2-1): Keep the new one -> it takes the name, the old one set aside (not listed, not deleted), the cadence and display name carried over; Undo puts both back; Keep the current one -> the candidate set aside; Undo again")
+def u_improved_keep():
+    from undercover.core.voices import get_voice, list_voices, voices_dir
+    from undercover.doubleagent import improved, night
+    with isolated_data():
+        def voice(name, extra, display=""):
+            d = voices_dir() / name
+            d.mkdir(parents=True)
+            (d / "model.pth").write_bytes(b"m-" + name.encode())
+            (d / "meta.json").write_text(json.dumps({"name": name, "dir": str(d), "pth": str(d / "model.pth"), "version": "v2",
+                                                      "sr": 40000, "f0": True, "display": display, "extra": extra}), encoding="utf-8")
+            return d
+        cur = voice("morgan-freeman-uc", {"trained": True, "project": "morgan-freeman", "tts": {"ref": "ref.wav"}}, "Morgan")
+        (cur / "tts").mkdir()
+        (cur / "tts" / "ref.wav").write_bytes(b"cadence")
+        voice("morgan-freeman-uc-next", {"trained": True, "project": "morgan-freeman"})
+        night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", 0.71, 0.74, 30)
+        st = improved.state("morgan-freeman-uc")
+        assert st["candidate"] == "morgan-freeman-uc-next" and st["after"] == 0.74 and not st["undo"], st
+        improved.keep("morgan-freeman-uc", "new")
+        v = get_voice("morgan-freeman-uc")
+        assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the new one didn't take the name"
+        assert v.display == "Morgan" and (v.dir / "tts" / "ref.wav").read_bytes() == b"cadence" and v.extra["tts"], v.extra
+        names = {x.name for x in list_voices()}
+        assert names == {"morgan-freeman-uc"}, names                               # the old one isn't listed...
+        aside = voices_dir() / ".aside" / v.extra["improved_previous"]["aside"]
+        assert (aside / "model.pth").read_bytes() == b"m-morgan-freeman-uc"        # ...and isn't deleted
+        improved.undo("morgan-freeman-uc")
+        v, c = get_voice("morgan-freeman-uc"), get_voice("morgan-freeman-uc-next")
+        assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc" and (c.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next"
+        assert (v.dir / "tts" / "ref.wav").exists() and v.extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+        improved.keep("morgan-freeman-uc", "current")                              # the other way
+        assert {x.name for x in list_voices()} == {"morgan-freeman-uc"} and not get_voice("morgan-freeman-uc").extra.get("improved_pending")
+        improved.undo("morgan-freeman-uc")
+        assert {x.name for x in list_voices()} == {"morgan-freeman-uc", "morgan-freeman-uc-next"}
+        assert get_voice("morgan-freeman-uc").extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+    return "keep new (old aside, cadence and name carried), undo; keep current (candidate aside), undo; nothing deleted"
+
+
+@check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
+def u_project_pause_holds():
+    from undercover.core import jobs as J, worklist
+    from undercover.doubleagent import api as DA, project as P
+    with isolated_data():
+        worklist._STATE = None
+        proj = P.Project.create("Pause Test", "speaking")
+        class Ctl:
+            pause = stop = False
+        for kind, ctl in (("train-auto", Ctl()), ("train-prepare", None)):
+            job = J.Job(kind)
+            DA.ACTIVE[proj.name] = {"job": job, "control": ctl, "kind": "auto" if ctl else "prepare"}
+            class H:
+                def _json(self, obj, status=200):
+                    self.out = obj
+            try:
+                worklist._state()["held"] = False
+                DA._pause(H(), proj, {})
+                assert job.pausing and worklist.held() and worklist.hold()["held_by"] == "you", kind
+                if ctl:
+                    assert ctl.pause
+            finally:
+                DA.ACTIVE.pop(proj.name, None)
+        worklist._STATE = None
+    return "the trained job and the prepare job both pause and hold"
+
+
+@check("the cadence A/B samples are served with Range like /files (Internal Affairs P2-3): through the server's _send_file (206, Accept-Ranges)")
+def u_cadence_sample_range():
+    import tempfile
+    from undercover.doubleagent import api as DA, cadence
+    f = Path(tempfile.mkdtemp()) / "sample.wav"
+    f.write_bytes(b"RIFF....WAVE")
+    real = cadence.sample_file
+    cadence.sample_file = lambda voice, which: f
+    sent = []
+    class H:
+        def _send_file(self, path, download=False, cache=None):
+            sent.append((path, cache))
+    try:
+        DA._cadence_ab(H(), "GET", "some-voice", "sample/current")
+    finally:
+        cadence.sample_file = real
+        f.unlink(missing_ok=True)
+    assert sent == [(f, "no-store")], sent
+    return "served by _send_file (Range, 206)"
+
+
+@check("Stop during a model download aborts it within a chunk (Internal Affairs P2-4); a stopped training says stopped and keeps the project's exported voice (P2-5); in test mode a model download never writes outside the test's folders (the 48k base models once landed in the real models folder)")
+def u_stop_download():
+    import inspect
+    import threading
+    import http.server
+    from undercover.core import setup_models
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import api as DA, night, service, trainer
+    with isolated_data() as box:
+        # a slow local server: 64 MB in 1 MB chunks, so a Stop after the first chunks must end it early
+        class Slow(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(64 << 20))
+                self.end_headers()
+                try:
+                    for _ in range(64):
+                        self.wfile.write(b"\0" * (1 << 20))
+                        time.sleep(0.05)
+                except OSError:
+                    pass
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            got = {"n": 0}
+            def stop_soon():
+                got["n"] += 1
+                return got["n"] > 3
+            t0 = time.time()
+            try:
+                setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", None, "big.bin", cancel=stop_soon)
+                raise AssertionError("the download ran to the end")
+            except setup_models.DownloadStopped:
+                pass
+            assert time.time() - t0 < 3 and not (box / "big.bin").exists(), "Stop didn't end the download early"
+        finally:
+            srv.shutdown()
+        # test mode: a missing model under the real models folder is refused, nothing written there
+        real = real_dirs()["models_dir"] / "smoke-never-here.bin"   # the user's models folder, outside the test roots
+        try:
+            setup_models.ensure(files={str(real): "file:///nonexistent"})
+            raise AssertionError("a test downloaded into the real models folder")
+        except ModelError as e:
+            assert "Test mode" in str(e) or "outside" in str(e), e
+        assert not real.exists()
+    # P2-5: no reset clears the project's exported voice; a stopped run is "stopped"
+    for fn in (DA.start_train, night._improve, service.train_new_voice, service.run_project):
+        src = inspect.getsource(fn)
+        assert '"exported", "exported_epoch"' not in src, f"{fn.__name__} still clears exported"
+    assert 'st["state"] = "stopped" if outcome == "stopped"' in inspect.getsource(trainer.Trainer.run)
+    return "a download stops within a chunk; test mode refuses the real models folder; exported kept; stopped said"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -1460,11 +1602,11 @@ def u_rolloff_covers():
     # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
     # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
-    # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and
+    # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and (improved.py) an improved voice's listening copies;
     # expired after its 30 days); a new caller must be added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 4, "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
-                                                                        "core/vault.py", "core/vault.py", "core/ytdlp.py",
+                                                                        "core/vault.py", "core/vault.py", "core/ytdlp.py", "doubleagent/improved.py",
                                                                         "frontman/history.py", *["safehouse/smaller.py"] * 8,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
@@ -4102,6 +4244,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/library/smaller/undo"),
     ("POST", "/api/library/voices/some-voice/full-index"),
     ("POST", "/api/work/to-queue"),
+    ("GET", "/api/train/voices/some-voice/improved"), ("POST", "/api/train/voices/some-voice/improved/keep"),
 ]
 
 
@@ -4340,6 +4483,52 @@ def a_stop_separation():
     assert not any(stems.rglob("*.flac")) if stems.exists() else True, "a stopped separation cached a stem"
     f.unlink(missing_ok=True)
     return f"stopped {lag:.2f} s after Stop (ran {flag['at'] - t0:.1f} s first)"
+
+
+@check("api: a song's preparation says what it's doing (Separating the vocal / Removing reverb, step n of m, time left), and a preview queued behind it says \"Preparing the song first (n of m)\" with waits_for, never a bare \"starting\"")
+def a_presep_progress():
+    import io
+    import numpy as np
+    import soundfile as sf
+    t = np.arange(44100 * 90) / 44100.0
+    y = 0.3 * np.sin(2 * np.pi * 196 * t) * (1 + np.sin(2 * np.pi * 0.3 * t)) + 0.03 * np.random.default_rng(5).standard_normal(len(t))
+    buf = io.BytesIO()
+    sf.write(buf, np.stack([y, y], 1).astype(np.float32), 44100, format="WAV")
+    req = urllib.request.Request(BASE + "/api/upload", data=buf.getvalue(), method="POST",
+                                 headers={"X-Filename": "presep-test.wav", "Origin": BASE, "Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        song = json.loads(r.read())
+    sid = song.get("id") or song.get("song", {}).get("id")
+    try:
+        wait_for(lambda: not any(j["state"] in ("queued", "running") for j in api("/api/jobs")), 300, every=2, what="an idle GPU")
+        r = api(f"/api/songs/{sid}/presep", {"options": {"quality": "high", "dereverb": True}})
+        assert r.get("started"), r
+        pre = r["job"]
+        voice = next(v["name"] for v in api("/api/voices") if not v.get("demo"))
+        prev = api("/api/preview", {"song": sid, "voice": voice, "variants": [{"label": "A", "options": {}}]})["job"]
+        seen = {"pre": None, "prev": None}
+
+        def look():
+            js = {j["id"]: j for j in api("/api/jobs")}
+            p, q = js.get(pre), js.get(prev)
+            if p and p.get("stage") == "separating" and p.get("steps"):
+                seen["pre"] = p
+            if q and q.get("stage") == "preparing":
+                seen["prev"] = q
+            return seen["pre"] and seen["prev"] and seen["prev"].get("step_n")
+        wait_for(look, 300, every=0.5, what="both jobs reporting")
+        p, q = seen["pre"], seen["prev"]
+        assert p["steps"] == 2 and p["message"] in ("Separating the vocal", "Removing reverb"), p
+        assert q["waits_for"] == pre and q["message"].startswith("Preparing the song first (") and "starting" not in q["message"].lower(), q
+        api(f"/api/jobs/{prev}/cancel", {})
+        wait_for(lambda: next((j for j in api("/api/jobs") if j["id"] == pre), {}).get("state") in ("done", "error", "cancelled"),
+                 600, every=2, what="the preparation finished")
+    finally:
+        try:
+            api(f"/api/library/songs/{sid}", method="DELETE")
+        except Exception:
+            pass
+    return f"presep: {p['message']} (step {p['step_n']} of {p['steps']}); the preview: {q['message']}"
 
 
 @check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
@@ -4682,6 +4871,68 @@ def u_shrink_export():
     return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
 
 
+@check("estimates (Internal Affairs m10): SpeakEasy gives the time to make it (one cold sentence with listen-back near the 39 s measured, not its 5 s of audio), and a one-shot with an installed voice a measured range")
+def u_estimates():
+    from undercover.frontman import oneshot
+    from undercover.speakeasy import speak, tts
+    text = "Good evening, the rain came in sideways that night."
+    audio = tts.seconds_estimate(text, 1.0)
+    cold = speak.eta_seconds(text, {"mode": "cadence", "rtf": 1.0, "speed": 1.0})
+    assert audio < 8 and 25 <= cold <= 60, (audio, cold)            # Internal Affairs: 39 s on an idle GPU, cold
+    reader = speak.eta_seconds(text, {"mode": "reader", "rtf": 3.0, "speed": 1.0})
+    assert reader < cold and reader >= audio / 3, (reader, cold)
+    with isolated_data():
+        r = oneshot.cover_eta("some-voice")
+    assert 0 < r["low"] < r["high"] < 900, r
+    return f"one sentence: {audio:.0f} s of audio, about {cold:.0f} s to make cold (reader {reader:.0f} s); one-shot {r['low']}-{r['high']} s"
+
+
+@check("a one-shot's variation starts from what it used (Internal Affairs m1): plan.settings.options carries the cover's exact options, the original backing kept for stacked harmonies")
+def u_oneshot_options():
+    from undercover.frontman.oneshot import cover_options_of
+    from undercover.frontman.pipeline import CoverOptions
+    chordal = cover_options_of(CoverOptions(voice="v", key=2, octave=-1, quality="high", dereverb=True, karaoke=True,
+                                            backing_voice=None, backing_octave=-1, backing_db=-3.0, polish=True))
+    assert chordal["backing_db"] == -3.0 and "backing_voice" not in chordal and "voice" not in chordal, chordal
+    assert (chordal["octave"], chordal["key"], chordal["karaoke"]) == (-1, 2, True), chordal
+    plain = cover_options_of(CoverOptions(voice="v", backing_voice="v", karaoke=True))
+    assert plain["backing_voice"] == "v", plain
+    return "the stacked-harmony cover's variation keeps the original backing; a plain one converts it"
+
+
+@check("Compare with Fit on (Internal Affairs): the fit is worked out once on the full stems; octave / key versions are read relative to the page's setting and land around the fit's pick, so they differ; with Fit off they're as sent")
+def u_preview_fit():
+    from dataclasses import replace
+    from undercover.frontman import pipeline as PL
+    opts = PL.CoverOptions(voice="v", octave=0, key=0, fit=True)
+    calls = []
+
+    class Engine:
+        def _fit(self, o, voice, stems, notes, bvoice):
+            calls.append(1)
+            notes.append("Fit to voice: octave -1, key +2")
+            return replace(o, octave=-1, key=2)
+    from undercover.core import voices
+    real = voices.get_voice
+    voices.get_voice = lambda name: type("V", (), {"name": name, "extra": {}})()
+    try:
+        base, note = PL.preview_fit(Engine(), opts, {"vocals": "x"})
+    finally:
+        voices.get_voice = real
+    assert (base.octave, base.key) == (-1, 2) and note.startswith("Fit to voice") and len(calls) == 1
+    octs = [PL.variant_overrides(opts, base, {"octave": x, "label": "?"})["octave"] for x in (-1, 0, 1)]
+    assert octs == [-2, -1, 0], octs                      # around the fit's pick, all different
+    keys = [PL.variant_overrides(opts, base, {"key": x})["key"] for x in (-2, 0, 2)]
+    assert keys == [0, 2, 4], keys
+    assert PL.variant_overrides(opts, base, {"octave": 2})["octave"] == 1     # clamped to the page's range
+    assert PL.variant_overrides(opts, base, {"polish": False}) == {"polish": False}   # other kinds untouched
+    off = replace(opts, fit=False)
+    base_off, note_off = PL.preview_fit(Engine(), off, {})
+    assert base_off is off and note_off is None and len(calls) == 1         # Fit off: no fit, versions as sent
+    assert PL.variant_overrides(off, base_off, {"octave": 1})["octave"] == 1
+    return "one fit; octaves -2/-1/0 and keys 0/2/4 around it; clamped; Fit off as sent"
+
+
 @check("Train tonight instead: held work carries {id, kind, label, project, held_at, queue_as}; /api/work/to-queue moves a held project entry into the overnight queue as its project item (its own choices) and off the held list, the hold lifting when nothing else is held; a one-shot can't; an improve may replace its own voice")
 def u_to_queue():
     from undercover.core import worklist
@@ -4773,6 +5024,9 @@ def u_project_queue():
         st = worklist.add("project", proj.name, options={"voice_name": "Trump Rallies", "length": "quick", "sr": 48000})
         tr = P.Project.load(proj.name).train
         assert (tr["voice_name"], tr["length"], tr["sr"]) == ("trump-rallies", "quick", 48000), tr
+        quick = next(i for i in worklist._state()["queue"] if i["kind"] == "project")["estimate"]["train"]
+        auto = night.estimate({"kind": "new", "target": "nobody"})["train"]
+        assert quick < auto, (quick, auto)   # the item's estimate is Quick's, not the auto length's
         item = next(i for i in worklist._state()["queue"] if i["kind"] == "project")
         assert item["target"] == "donald-trump" and item["estimate"]["total"] >= 0, item
         assert worklist.KINDS["project"]["label"](item) == "Training Donald Trump (your choices)"
@@ -5682,7 +5936,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -5704,7 +5958,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_phone, a_away, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()

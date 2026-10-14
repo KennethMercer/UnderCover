@@ -70,7 +70,11 @@ def base_model_files(sr: int) -> dict:
             f"rvc/pretrained_v2/f0D{k}.pth": f"{SOURCE}/pretrained_v2/f0D{k}.pth"}
 
 
-def ensure(progress=None, files: dict | None = None, sha256: dict | None = None) -> list[str]:
+class DownloadStopped(ModelError):
+    """A download stopped part-way because Stop was pressed (its .part stays: a later try resumes it)."""
+
+
+def ensure(progress=None, files: dict | None = None, sha256: dict | None = None, cancel=None) -> list[str]:
     """Fetch any missing model files (default: the shared conversion models); returns the ones downloaded.
     `files` maps a path under models_dir to a full URL (file:// works too, for tests); `sha256` maps a path under
     models_dir (or the URL's file part) to its SHA-256, checked after the download."""
@@ -81,7 +85,11 @@ def ensure(progress=None, files: dict | None = None, sha256: dict | None = None)
         if dest.exists() and dest.stat().st_size > 0:
             continue
         want = (sha256 or {}).get(local) or _expected(url, sha256) or (PINNED.get(local) or {}).get("sha256")
-        fetch(url, dest, want, local, progress)
+        from . import storage
+        if storage.ALLOWED_ROOTS is not None and storage.refuse([dest]):   # a test never fills the real models folder
+            raise ModelError(f"Test mode: {local} is missing, and downloading it would write outside the test's folders "
+                             f"({storage.refuse([dest])}).")
+        fetch(url, dest, want, local, progress, cancel=cancel)
         got.append(local)
         if want:
             _record(local, dest, want)
@@ -96,7 +104,7 @@ def _record(local: str, dest, want: str):
         pass
 
 
-def fetch(url: str, dest, want: str | None, local: str = "", progress=None, tries: int = 3):
+def fetch(url: str, dest, want: str | None, local: str = "", progress=None, tries: int = 3, cancel=None):
     """Download url into dest through dest.part: resumed from where an earlier try stopped (an HTTP Range request),
     checked against want (SHA-256) and only then swapped in, so dest is never a half-written or wrong file."""
     import time
@@ -124,6 +132,8 @@ def fetch(url: str, dest, want: str | None, local: str = "", progress=None, trie
                     total = done + int(r.headers.get("content-length") or 0)
                     with open(tmp, "ab" if resumed else "wb") as f:
                         for chunk in r.iter_content(1 << 20):
+                            if cancel is not None and cancel():   # Stop: within one megabyte (Internal Affairs P2-4)
+                                raise DownloadStopped(f"Stopped while downloading {local}.")
                             f.write(chunk)
                             done += len(chunk)
                             if progress:
