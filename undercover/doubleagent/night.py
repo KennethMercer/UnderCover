@@ -352,7 +352,7 @@ def _improve_target(target: str) -> str:
     from ..core.voices import pending_candidate, voices_dir
     if pending_candidate(f"{v.name}-next") or (voices_dir() / f"{v.name}-next").exists():
         raise ModelError(f"A retrained {label_of(v.name)} from an earlier improve ({v.name}-next) is still in your "
-                         "voices. Keep it or remove it first.")
+                         "voices. Remove it first (SafeHouse) if you don't want it.")
     return v.name
 
 

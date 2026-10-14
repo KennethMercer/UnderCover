@@ -327,7 +327,8 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
            "style": req["style"], "voice": voice, "ask": False}
     if voice["how"] == "installed":   # from the measured speeds (timings.jsonl), not a fixed "1-3 min"
-        out["eta_s"] = oneshot.cover_eta(voice["name"], oneshot.library_song(song, artist))
+        here = None if req["style"] else oneshot.library_song(song, artist)   # a version is someone else's cover
+        out["eta_s"] = oneshot.cover_eta(voice["name"], here)
     if voice["how"] != "installed" or not voice["quality"]["ok"] or subject:
         # what the request names, in plain words (phase 15): a person, a singer, a character, a band; asked when it
         # can't tell ("Which Chris Evans?"), correctable either way (subject=person / character / role:<role>)

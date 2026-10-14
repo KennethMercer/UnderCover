@@ -178,7 +178,11 @@ def undo(voice: str) -> dict:
     with _LOCK:
         v = get_voice(voice)
         ex = v.extra or {}
-        _not_busy(voice, (ex.get("improved_previous") or ex.get("improved_turned_down") or {}).get("candidate"))
+        last = ex.get("improved_previous") or ex.get("improved_turned_down") or {}
+        _not_busy(voice, last.get("candidate"))
+        if last.get("candidate") and (voices_dir() / last["candidate"]).exists():   # checked before anything moves
+            raise ModelError(f"A newer retrained {label_of(voice)} ({last['candidate']}) is in your voices now. Decide on "
+                             "that one first, then Undo.")
         if ex.get("improved_previous"):
             rec = ex["improved_previous"]
             aside = _aside_dir() / rec["aside"]

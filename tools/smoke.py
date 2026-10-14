@@ -1091,6 +1091,15 @@ def u_improved_keep():
         assert names == {"morgan-freeman-uc"}, names                               # the old one isn't listed...
         aside = voices_dir() / ".aside" / v.extra["improved_previous"]["aside"]
         assert (aside / "model.pth").read_bytes() == b"m-morgan-freeman-uc"        # ...and isn't deleted
+        newer = voices_dir() / "morgan-freeman-uc-next"                          # a newer improve's candidate: Undo waits
+        newer.mkdir()
+        try:
+            improved.undo("morgan-freeman-uc")
+            raise AssertionError("undo over a newer candidate")
+        except Exception as e:
+            assert "newer retrained" in str(e), e
+        assert (v.dir / "tts" / "ref.wav").exists() and not get_voice("morgan-freeman-uc").extra.get("pending_for"), "a refused undo moved something"
+        newer.rmdir()
         improved.undo("morgan-freeman-uc")
         v, c = get_voice("morgan-freeman-uc"), get_voice("morgan-freeman-uc-next")
         assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc" and (c.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next"
@@ -1185,6 +1194,8 @@ def u_eta_narrow():
         (up / "abc123.json").write_text(json.dumps({"id": "abc123", "title": "Britney Spears - Toxic", "file": f.name}), encoding="utf-8")
         assert oneshot.library_song("Toxic", "Britney Spears") == f and oneshot.library_song("toxic", None) == f
         assert oneshot.library_song("Hello", None) is None and oneshot.library_song("Toxic", "Adele") is None
+        import inspect as _i
+        assert 'None if req["style"]' in _i.getsource(FA._auto_plan), "a version request planned from the library's song"
         far = oneshot.cover_eta("v")
         fresh = oneshot.cover_eta("v", f)                       # here, not separated yet
         root = path("cache_dir") / "stems" / file_hash(f) / Path(SEP["vocal_model"]).stem
