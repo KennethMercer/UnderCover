@@ -84,6 +84,14 @@ const fmtTime = s => { s = Math.max(0, Math.round(s || 0)); return `${Math.floor
 const fmtSecs = s => s >= 90 ? `${Math.round(s / 60)} min` : `${Math.max(1, Math.round(s))} s`;
 // the one way every bar says how long is left (phase 4c): "about 3 min left", "about 40 s left", "almost done"
 const leftText = s => s == null ? "" : s < 5 ? "almost done" : `about ${fmtSecs(s)} left`;
+// a job event as one line: what it's doing (the step, "n of m"), and the time left; a queued job says what it waits for
+function progressSay(ev) {
+  const base = ev.label || ev.message || "";
+  if (!base) return "";
+  const step = ev.steps > 1 && ev.step_n && !/\d+ of \d+/.test(base) ? ` (step ${ev.step_n} of ${ev.steps})` : "";
+  const left = ev.total_left != null && ev.total_left > 0 ? ` · ${leftText(ev.total_left)}` : "";
+  return base + step + left;
+}
 const fmtPitch = v => { v = +v; return (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v); };
 const fmtMB = b => b ? `${Math.round(b / 1e6)} MB` : "";
 
@@ -603,14 +611,22 @@ function startProgress(job, elsewhere = false) {
   const stop = S.es = watchJob(job, ev => {   // jobs.js: the live stream, or progress polled while it's quiet
     if (ev.estimate) { S.estimate = ev.estimate; totalLeft = ev.estimate.total; leftAt = performance.now(); }
     if (ev.elapsed != null && !ev.final) jobStart = performance.now() - ev.elapsed * 1000;   // right after a reload too
+    // queued behind the song's preparation (or other work): it says what it waits for, with the step and the time left
+    if (!ORDER.includes(ev.stage) && !ev.final && (ev.stage === "preparing" || ev.state === "queued") && (ev.label || ev.message)) {
+      $("#progress-h").textContent = progressSay(ev); $("#sr-live").textContent = ev.label || ev.message;
+      const f = ev.fraction ?? ev.frac;
+      if (f != null) setStage("separating", "active", f, ev.total_left != null ? `${fmtSecs(Math.max(1, ev.total_left))} left` : null);
+      if (ev.total_left != null) { totalLeft = ev.total_left; leftAt = performance.now(); }
+    }
     if (ORDER.includes(ev.stage)) {
+      $("#progress-h").textContent = "Working";
       if (ev.stage !== current) {
         ORDER.slice(0, ORDER.indexOf(ev.stage)).forEach(s => { const el = $(`.stage[data-s=${s}]`); if (!el.classList.contains("done")) setStage(s, "done", 1, el.dataset.took || "done"); });
         if (current) $(`.stage[data-s=${current}]`).dataset.took = `${(ev.elapsed - lastStageStart).toFixed(1)} s`;
         current = ev.stage; lastStageStart = ev.elapsed;
         $("#sr-live").textContent = $(`.stage[data-s=${ev.stage}] .sname`).textContent + "…";
       }
-      $(`.stage[data-s=${ev.stage}] .sname`).textContent = ev.message;
+      $(`.stage[data-s=${ev.stage}] .sname`).textContent = ev.steps > 1 && ev.step_n && !/\d+ of \d+/.test(ev.message) ? `${ev.message} (${ev.step_n} of ${ev.steps})` : ev.message;
       setStage(ev.stage, ev.frac >= 1 ? "done" : "active", ev.frac, ev.frac >= 1 ? `${(ev.elapsed - lastStageStart).toFixed(1)} s` : `${fmtSecs(Math.max(1, ev.stage_left))} left`);
       totalLeft = ev.total_left; leftAt = performance.now();
     }
@@ -764,11 +780,11 @@ function previewVariants() {
   if (previewKind === "octave") {
     const cur = +(o.octave || 0);
     return uniq([cur - 1, cur, cur + 1].map(x => clamp(x, -2, 2))).map(x => ({
-      octave: x, label: x === 0 ? "Same octave" : `Voice ${x > 0 ? "+" : "−"}${Math.abs(x)} octave` }));
+      octave: x, label: x === 0 ? (o.fit ? "Fit's pick" : "Same octave") : `Voice ${x > 0 ? "+" : "−"}${Math.abs(x)} octave` }));
   }
   if (previewKind === "key") {
     const cur = +(o.key || 0);
-    return uniq([cur - 2, cur, cur + 2].map(x => clamp(x, -6, 6))).map(x => ({ key: x, label: keyLabel(x) }));
+    return uniq([cur - 2, cur, cur + 2].map(x => clamp(x, -6, 6))).map(x => ({ key: x, label: x === 0 && o.fit ? "Fit's pick" : keyLabel(x) }));
   }
   if (previewKind === "correction")
     return [{ pitch_correction: 0, label: "No correction" }, { pitch_correction: 0.4, label: "Gentle (0.4)" }, { pitch_correction: 1, label: "Full autotune" }];
@@ -795,7 +811,7 @@ function previewSync() {
   const set = $(`.pv-set[data-kind="${previewKind}"]`, box);
   $("#preview-status").textContent = (set ? "Switch between versions while playing: they stay in sync. Pick one with “Use this”."
     : "Renders 15 seconds of the song (the part with the most singing) a few ways, so you can pick by ear. The first preview of a new song takes about a minute (it separates the song once); after that, a few seconds each.")
-    + (pvByHand(previewKind) ? " “Fit pitch to the voice” is on and sets the octave and key itself, so these versions set them by hand; Use this turns the fit off." : "");
+    + (pvByHand(previewKind) ? " “Fit pitch to the voice” is on: the middle one is the fit's pick, the others are around it. Use this keeps that choice and turns the fit off." : "");
 }
 function showPreviewKind() { $$("#preview-list audio").forEach(a => a.pause()); previewSync(); }
 $("#preview-kind").addEventListener("click", e => {
@@ -810,22 +826,24 @@ $("#preview-close").onclick = () => { $$("#preview-list audio").forEach(a => a.p
 
 $("#preview-go").onclick = async () => {
   if (!S.song || !S.voice || S.job || S.osBusy) return;
-  const variants = previewVariants(), kind = previewKind, byHand = pvByHand(kind), made = { song: S.song.id, voice: S.voice, title: S.song.title };
+  const variants = previewVariants(), kind = previewKind, made = { song: S.song.id, voice: S.voice, title: S.song.title };
   $$("#preview-list audio").forEach(a => a.pause());
   $$(`#preview-list .pv-set[data-kind="${kind}"]`).forEach(el => el.remove());
   $("#preview-go").disabled = true;
   $("#preview-bar").hidden = false; $("#preview-bar i").style.width = "0%";
-  $("#preview-status").textContent = "Starting…";
+  $("#preview-status").textContent = "Sending it to the queue…";
   try {
-    const { job } = await api("/api/preview", { json: { song: S.song.id, voice: S.voice, options: byHand ? { ...S.opts, fit: false } : S.opts, variants } });
+    const { job } = await api("/api/preview", { json: { song: S.song.id, voice: S.voice, options: S.opts, variants } });
     S.job = job; summary();
+    $("#preview-status").textContent = "Waiting for the first word…";
     const stop = watchJob(job, ev => {
-      if (ev.message) $("#preview-status").textContent = ev.message;
-      if (ev.frac != null) $("#preview-bar i").style.width = Math.round((ev.stage === "rendering" ? 0.3 + 0.7 * ev.frac : 0.3 * ev.frac) * 100) + "%";
+      const say = progressSay(ev); if (say) $("#preview-status").textContent = say;   // the step, and the time left
+      const f = ev.frac ?? ev.fraction;
+      if (f != null) $("#preview-bar i").style.width = Math.round((ev.stage === "rendering" ? 0.3 + 0.7 * f : 0.3 * f) * 100) + "%";
       if (!ev.final) return;
       stop(); S.job = null; summary(); $("#preview-go").disabled = false; $("#preview-bar").hidden = true;
       if (ev.state === "done" && (S.song?.id !== made.song || S.voice !== made.voice)) $("#preview-status").textContent = "The song or the voice changed while it rendered, so those versions were put away. Render again.";
-      else if (ev.state === "done") { renderPreviews(ev.previews, kind, byHand, made); refreshEstimate(); }
+      else if (ev.state === "done") { renderPreviews(ev.previews, kind, made, variants); refreshEstimate(); }
       else if (ev.state === "cancelled") $("#preview-status").textContent = "Cancelled.";
       else { $("#preview-status").textContent = ""; showError(ev.message, "Preview failed"); }
     });
@@ -835,11 +853,14 @@ $("#preview-go").onclick = async () => {
   }
 };
 
-function renderPreviews(list, kind, byHand, made) {
+function renderPreviews(list, kind, made, variants) {
+  // the server's options carry the octave and key it settled on (the fit's pick, with the offset); keep what each variant asked for
+  list = list.map((p, i) => ({ ...p, options: Object.fromEntries(Object.keys(variants[i] || {}).filter(k => k !== "label" && p.options && k in p.options).map(k => [k, p.options[k]])) }));
+  const fitNote = list.find(p => p.fit)?.fit;   // "Fit to voice: octave -1, key +3 (…)"
   const box = document.createElement("div");   // this tab's cards; display: contents keeps them in the grid
   box.className = "pv-set"; box.dataset.kind = kind; box.dataset.song = made.song; box.dataset.voice = made.voice;
   $("#preview-list").append(box);
-  box.innerHTML = `<p class="meta pv-for">${esc(made.title)} · ${esc(voiceDisplay(made.voice))}</p>` + list.map((p, i) => `
+  box.innerHTML = `<p class="meta pv-for">${esc(made.title)} · ${esc(voiceDisplay(made.voice))}${fitNote ? `<span data-deep> · ${esc(fitNote)}</span>` : ""}</p>` + list.map((p, i) => `
     <div class="pcard" data-i="${i}" data-opts="${esc(JSON.stringify(list[i].options || {}))}">
       <div class="ptitle"><button class="play" aria-label="Play ${esc(p.label)}">▶</button><b>${esc(p.label)}</b></div>
       <button class="btn use">Use this</button>

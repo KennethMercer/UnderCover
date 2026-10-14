@@ -396,6 +396,7 @@ async function loadCandidates() {
   pickSummary();
   renderCadPicker();
   renderVoiceCards(PICK.cands);   // doubleagent.js
+  if (typeof loadImproved === "function") loadImproved();   // a retrained voice waiting beside a current one
 }
 // "Cadence": voices that can get one (or a better one), ticked and added to tonight's queue
 const CADPICK = new Set();

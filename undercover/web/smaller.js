@@ -106,10 +106,8 @@ onJobs(() => {
   if (!SM.o || $("#room-storage")?.hidden) return;
   for (const j of runningJobs()) {
     if (j.kind !== "smaller" || Object.values(SM.jobs).some(x => x.id === j.id)) continue;
-    // the job says what it's making smaller (target {kind, name, display}); the title only shows a display name
+    // the job says what it's making smaller (target {kind, name, display}); its title only shows the display name
     const t = j.target;
-    if (t?.name) { smFollow(j.id, { kind: t.kind, name: t.name }); continue; }
-    const m = (j.title || "").match(/^Making (?:the )?(.+?)(?: project)? smaller$/);   // an older server: no target on the job
-    if (m) smFollow(j.id, { kind: /project smaller$/.test(j.title) ? "project" : "voice", name: m[1] });
+    if (t?.name) smFollow(j.id, { kind: t.kind, name: t.name });
   }
 });
