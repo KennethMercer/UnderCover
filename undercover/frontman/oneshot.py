@@ -477,6 +477,19 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
                plan=plan, seconds=res.seconds, notes=res.notes, elapsed=round(time.perf_counter() - t0, 1), quality=q)
 
 
+TYPICAL_SONG_S = 210.0   # a one-shot's song before it's found: three and a half minutes
+FETCH_S = 20.0           # finding and downloading it (measured 10-30 s)
+
+
+def cover_eta(voice: str) -> dict:
+    """A one-shot with an installed voice, in seconds: {low, high}. low: the song was fetched and separated before
+    (only conversion and mixing); high: a typical song fetched and separated now. From the measured speeds."""
+    from .pipeline import CoverOptions, estimate_for
+    o = CoverOptions(voice=voice, quality="high", dereverb=True, karaoke=True, backing_voice=voice, polish=True)
+    e = estimate_for(TYPICAL_SONG_S, o)
+    return {"low": round(e["converting"] + e["mixing"] + 5), "high": round(FETCH_S + e["total"] + 10)}
+
+
 def cover_options_of(opts: "CoverOptions") -> dict:
     """A cover's options as the Convert form takes them (the voice is the plan's; unset options left out)."""
     from dataclasses import asdict

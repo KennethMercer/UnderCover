@@ -94,4 +94,4 @@ def _start(h, body: dict):
 
     GPU_QUEUE.put((job, run))
     h._json({"job": job.id, "position": GPU_QUEUE.qsize(), "plan": p, "sentences": len(tts.sentences(text)),
-             "estimate": round(tts.seconds_estimate(text, p["speed"]), 1)})
+             "estimate": speak.eta_seconds(text, p), "audio_seconds": round(tts.seconds_estimate(text, p["speed"]), 1)})
