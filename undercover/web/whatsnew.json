@@ -2,15 +2,6 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
-      "id": "2026-10-14-turbo-speech",
-      "date": "2026-10-14",
-      "title": "A faster, cleaner speech engine",
-      "lines": [
-        "SpeakEasy now reads in the person's own cadence with Chatterbox Turbo: about twice as fast, and cleaner on hard words.",
-        "Voices you've already trained carry over as they are. The old Pace choice is now \"Pause between sentences\" (Shorter / Natural / Longer), in Deep Cover."
-      ]
-    },
-    {
       "id": "2026-10-13-full-index",
       "date": "2026-10-13",
       "title": "A new voice sounds off? Put the full index back",
