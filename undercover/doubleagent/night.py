@@ -7,7 +7,7 @@ pickers for the queue: candidates (voices that can be improved) and lookup (name
 import json
 
 from ..core.config import CONFIG, path
-from ..core.voices import ModelError, slug
+from ..core.voices import ModelError, label_of, slug
 from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
@@ -301,27 +301,38 @@ def _improve(job, item) -> dict:
         before = None
     after = voicecheck.check(cand, proj, conv, emb, tests=tests).score
     kept_min = round(proj.kept_seconds() / 60, 1)
-    if before is not None and before < SAME_PERSON:
-        # the current voice doesn't sound like the clips found now: they're probably someone else's (a debate
-        # partner, an interviewer). Don't replace a working voice with that.
-        remove_voice(cand)
-        return {"voice": old.name, "before": before, "after": after, "replaced": False, "minutes_of_voice": kept_min,
-                "note": f"The clips found this time don't sound like the current voice (it scores {before} against them), "
-                        "so they may be someone else's. Kept the old voice; check the project in DoubleAgent."}
-    if before is None or after > before + 0.005:
-        proj = P.Project.load(proj.name)
-        export_voice(proj, name=old.name, overwrite=True, replace=old.name)   # the voice this improve set out to replace
-        remove_voice(cand)
-        gpu.forget_voice(old.name)
-        return {"voice": old.name, "before": before, "after": after, "replaced": True, "minutes_of_voice": kept_min,
-                "note": f"Retrained on {kept_min} min of {'singing' if proj.mode != 'speaking' else 'speech'}; the new one sounds more like them."}
-    remove_voice(cand)
+    # Internal Affairs P2-1: the ear decides, and the user's voice is never deleted. The retrained voice waits BESIDE the
+    # current one (pending), whatever the numbers say; the current one is never exported over or removed here. The
+    # user picks by ear (a blind A/B through MasterPlan); the one not kept is set aside, never deleted.
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         proj.train["exported"] = old.name   # the installed voice is still the old one
         proj.save()
-    return {"voice": old.name, "before": before, "after": after, "replaced": False, "minutes_of_voice": kept_min,
-            "note": f"Retrained on {kept_min} min, but it didn't sound more like them, so the old voice stays."}
+    mark_improved_pending(old.name, cand, before, after, kept_min)
+    if before is not None and before < SAME_PERSON:
+        note = (f"The clips found this time don't sound much like the current voice (it scores {before} against them), so "
+                f"they may be someone else's. The retrained one waits beside it; compare them before keeping either.")
+    else:
+        note = (f"Retrained on {kept_min} min of {'singing' if proj.mode != 'speaking' else 'speech'}. The new one waits "
+                f"beside the current one (measured {after} against {before}); listen to both and keep the one you like.")
+    return {"voice": old.name, "candidate": cand, "before": before, "after": after, "replaced": False, "pending": True,
+            "minutes_of_voice": kept_min, "note": note}
+
+
+def mark_improved_pending(voice: str, cand: str, before, after, minutes):
+    """The current voice knows a retrained one waits beside it (extra.improved_pending), and the candidate knows whose
+    it is (extra.pending_for). Nothing is replaced or removed."""
+    import json
+    import time
+    from ..core import fsutil
+    from ..core.voices import get_voice
+    v = get_voice(voice)
+    v.extra = {**(v.extra or {}), "improved_pending": {"voice": cand, "before": before, "after": after,
+                                                       "minutes": minutes, "made": time.strftime("%Y-%m-%d %H:%M")}}
+    fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    c = get_voice(cand)
+    c.extra = {**(c.extra or {}), "pending_for": voice}
+    fsutil.write_text(c.dir / "meta.json", json.dumps(c.to_json(), indent=2))
 
 
 def _improve_target(target: str) -> str:
@@ -330,6 +341,11 @@ def _improve_target(target: str) -> str:
     if is_demo(v):
         raise ModelError(f"{v.name} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips "
                          "of to improve it.")
+    if (v.extra or {}).get("pending_for"):
+        raise ModelError("That's a retrained version waiting to be compared, not a voice to improve.")
+    pending = (v.extra or {}).get("improved_pending")
+    if pending:   # never over a candidate nobody has listened to yet
+        raise ModelError(f"A retrained {label_of(v.name)} is already waiting beside it. Compare the two first.")
     return v.name
 
 
