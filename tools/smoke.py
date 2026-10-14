@@ -4315,6 +4315,7 @@ def u_page_rules():
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
     assert "waiting_beside" in lib and "data-lib-ab" in lib, "SafeHouse lost the nested retrained-voice line"
     assert "/api/speak/estimate" in (web / "speakeasy.js").read_text(encoding="utf-8"), "SpeakEasy lost the server's estimate before Generate"
+    assert "replace-dlg" in (web / "index.html").read_text(encoding="utf-8") and "askReplace" in (web / "train.js").read_text(encoding="utf-8"), "Use this one lost its Replace / wait side by side question"
     assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
     assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"

@@ -142,6 +142,11 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .linkbtn.on { color: var(--accent); font-weight: 600; }   /* the playing one of a Before / After pair */
 .pv-set { display: contents; }
 .pv-for { grid-column: 1 / -1; margin: 0; }
+.confirm-dlg { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r); padding: 20px 22px; max-width: min(460px, calc(100vw - 32px)); }
+.confirm-dlg::backdrop { background: rgb(0 0 0 / .5); }
+.confirm-dlg h3 { margin: 0 0 8px; }
+.confirm-dlg p { margin: 0 0 16px; color: var(--muted); }
+.dlg-btns { flex-wrap: wrap; gap: 10px; }
 .lib-nest { display: flex; align-items: baseline; gap: 12px; margin: -4px 0 6px 56px; padding: 6px 12px; color: var(--muted); font-size: 13.5px; border-left: 2px solid var(--warn); }   /* a retrained voice waiting, under its owner */
 .pv-set[hidden] { display: none; }
 .pcard { border: 1px solid var(--line); border-radius: 9px; padding: 12px; display: grid; gap: 10px; background: var(--panel-2); }
