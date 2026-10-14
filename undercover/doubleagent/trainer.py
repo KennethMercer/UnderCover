@@ -664,6 +664,8 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     if not pth.exists():
         raise ModelError(f"There's no save from epoch {epoch}. Pick one of the saves listed.")
     name = slug(name or st.get("voice_name") or proj.name)
+    from .api import check_voice_name
+    check_voice_name(proj, name)   # never over another person's voice, whatever overwrite says
     data_pt = tdir / "data.pt"
     if not data_pt.exists() and (proj.dir / "before-smaller" / "train" / "data.pt").exists():
         data_pt = proj.dir / "before-smaller" / "train" / "data.pt"   # Make smaller set it aside (phase 24): still there

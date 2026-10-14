@@ -253,6 +253,7 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
         push("voice", 0.04, f"Getting real clips of {person} to check voices against")
         try:
             P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, cancel=lambda: job.cancel or job.pausing,
+                              stop=lambda: job.cancel or getattr(control, "stop", False),
                               progress=lambda f, label, **kw: push("voice", 0.04 + 0.1 * f, f"Getting real clips of {person}: {label}"),
                               between=control.service,
                               friendly=lambda e: jobs.friendly(e, "preparing a source"))
@@ -666,6 +667,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                 try:
                     P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, progress=prog, between=control.service,
                                       cancel=lambda: job.cancel or job.pausing,
+                                      stop=lambda: job.cancel or getattr(control, "stop", False),
                                       friendly=lambda e: jobs.friendly(e, "preparing a source"))
                 except P.Cancelled:
                     raise Paused() if job.pausing else jobs.Cancelled()
@@ -776,6 +778,76 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         push("voice", 0.98, "Adding the new voice")
         v = export_voice(P.Project.load(proj.name), overwrite=True)
         return v.name
+    finally:
+        train_api.ACTIVE.pop(proj.name, None)
+
+
+def run_project(job, name: str, control, push) -> str:
+    """A project queued from DoubleAgent's Deep path (the user's "queue Trump with specific videos selected"): its own
+    steps with its own choices, overnight. The sources ticked there (no new search, no source changes), its mode,
+    length, sample rate and voice name (another person's voice name is refused: train_api.check_voice_name). Prepare
+    what isn't prepared, confirm the main voice only if nobody did, train (a paused training continues), add the
+    voice. -> the voice name."""
+    from . import api as train_api
+    from . import project as P
+    from ..core.speaker import SpeakerEmbedder
+    from .trainer import LENGTHS, Trainer, export_voice
+    proj = P.Project.load(name)
+    busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
+                 and (n == proj.name or a["kind"] in ("train", "auto"))), None)
+    if busy:
+        raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time.")
+    vname = slug(proj.train.get("voice_name") or f"{proj.name}-uc")
+    train_api.check_voice_name(proj, vname)   # before any work: never another person's voice
+    train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
+    try:
+        todo = [s.id for s in proj.sources if s.selected and s.status not in ("ready", "failed")]
+        if todo:
+            def prog(f, label, **kw):
+                push("voice", 0.02 + 0.1 * f, f"Preparing clips: {label}" + (f" ({kw['index']}/{kw['count']})" if kw.get("count") else ""))
+            try:
+                P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=prog,
+                                  between=control.service, cancel=lambda: job.cancel or job.pausing,
+                                  stop=lambda: job.cancel or getattr(control, "stop", False),
+                                  friendly=lambda e: jobs.friendly(e, "preparing a source"))
+            except P.Cancelled:
+                raise Paused() if job.pausing else jobs.Cancelled()
+        with P.lock(proj.name):
+            proj = P.Project.load(proj.name)
+            if proj.speakers and not proj.reference.get("confirmed"):
+                P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)   # nobody picked: the dominant voice
+                proj.save()
+        mins = proj.kept_seconds() / 60
+        if mins < 3:
+            raise ModelError(f"Only {mins:.1f} minutes of {proj.person or proj.name}'s voice are ready from the sources "
+                             "ticked (3+ needed). Tick more sources in DoubleAgent, then queue it again.")
+        st = proj.train
+        if st.get("state") != "paused":
+            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+                st.pop(k, None)
+            (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
+        st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"],
+                  length=st.get("length") if st.get("length") in LENGTHS else "auto", voice_name=vname)
+        proj.save_train()
+        push("voice", 0.12, f"Training a voice from {mins:.1f} min of {proj.person or proj.name}")
+        conv = gpu.MODELS.converter
+        tr = Trainer(proj, conv.hubert, conv.rmvpe, device=str(conv.device), half=conv.half, converter=conv)
+
+        def tprog(**ev):
+            if job.cancel:
+                control.stop = True
+            if ev.get("stage") == "training" and ev.get("epochs"):
+                push("voice", 0.12 + 0.85 * ev.get("fraction", 0),
+                     f"Training: epoch {ev.get('epoch', 0)} of {ev['epochs']}", eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"])
+        st = tr.run(control, progress=tprog)
+        if job.cancel:
+            raise jobs.Cancelled()
+        if st.get("state") == "paused":
+            raise Paused()
+        push("voice", 0.975, "Checking it against real clips")
+        tr.check_last(st)
+        push("voice", 0.98, "Adding the new voice")
+        return export_voice(P.Project.load(proj.name), name=vname, overwrite=True).name
     finally:
         train_api.ACTIVE.pop(proj.name, None)
 
