@@ -85,6 +85,8 @@ ROUTES = [
     ("GET", rf"/api/library/voices/{_ID}/export", "pc", "Export .zip (Deep Cover)"),
     ("DELETE", rf"/api/library/voices/{_ID}/cadence", "pc", "Delete cadence (Deep Cover)"),
     ("GET|POST", r"/api/library/cleanup", "pc", "Storage: Clean up"),
+    ("GET", r"/api/library/aside", "pc", "Storage: voices set aside"),
+    ("DELETE", r"/api/library/aside/[a-z0-9-]+", "pc", "delete a set-aside voice (the page asks twice)"),
     ("GET", r"/api/library/smaller", "pc", "Make smaller: what each voice and project would save"),
     ("POST", r"/api/library/smaller/(start|keep|undo)", "pc", "Make smaller, Keep, Undo"),
     ("POST", rf"/api/library/voices/{_ID}/full-index", "pc", "a new voice's full index back (Deep Cover)"),
