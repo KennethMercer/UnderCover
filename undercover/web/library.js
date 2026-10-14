@@ -240,10 +240,11 @@ function confirmClick(btn, ask, run) {
   const label = btn.textContent;
   btn.onclick = async () => {
     if (!btn.classList.contains("confirm")) {
-      btn.classList.add("confirm"); btn.textContent = ask;
-      setTimeout(() => { if (btn.isConnected) { btn.classList.remove("confirm"); btn.textContent = label; } }, 4000);
+      btn.classList.add("confirm"); arm(btn); btn.textContent = ask;
+      setTimeout(() => { if (btn.isConnected) { btn.classList.remove("confirm"); disarm(btn); btn.textContent = label; } }, 4000);
       return;
     }
+    if (!armedFor(btn)) return;   // a double click isn't a confirmation
     btn.disabled = true;
     releaseAudio();
     try { await run(); } catch (e) { showError(e.message, "That didn't work"); } finally { if (btn.isConnected) btn.disabled = false; }

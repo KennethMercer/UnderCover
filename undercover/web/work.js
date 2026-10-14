@@ -125,8 +125,9 @@ async function pauseWork() {
 $("#wb-pause").onclick = async () => { $("#wb-pause").disabled = true; await pauseWork(); $("#wb-pause").disabled = false; };
 $("#wb-forget").onclick = () => forgetWork($("#wb-forget"));
 async function forgetWork(b) {   // Dismiss, in the bar and in the Running room's card: two clicks
-  if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Forget it?"; setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Dismiss"; }, 4000); return; }
-  b.classList.remove("confirm"); b.textContent = "Dismiss";
+  if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Forget it?"; setTimeout(() => { b.classList.remove("confirm"); disarm(b); b.textContent = "Dismiss"; }, 4000); return; }
+  if (!armedFor(b)) return;   // a double click isn't a confirmation
+  b.classList.remove("confirm"); disarm(b); b.textContent = "Dismiss";
   try { const r = await api("/api/work/forget", { json: {} }); renderWorkBar({ ...r, queued: r.queue.filter(i => ["queued", "paused"].includes(i.state)).length }); }
   catch (e) { showError(e.message, "Couldn't dismiss it"); }
   if (W.open) loadQueue();
@@ -195,9 +196,10 @@ function renderRunRoom() {
       const id = b.dataset.jcancel;
       clearTimeout(W.cancelTimer);
       if (W.cancelAsk !== id) {
-        W.cancelAsk = id; W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000);
+        W.cancelAsk = id; W.cancelAskAt = Date.now(); W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000);
         return renderRunRoom();
       }
+      if (Date.now() - (W.cancelAskAt || 0) < CONFIRM_MS) { W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000); return; }   // a double click isn't a confirmation
       W.cancelAsk = null; b.disabled = true; b.textContent = "Cancelling…";
       try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't cancel that"); }
       refreshJobs(true);
