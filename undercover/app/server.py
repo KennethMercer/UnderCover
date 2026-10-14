@@ -468,7 +468,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._gate("DELETE"):
             return
-        from ..core.voices import ModelError, remove_voice
+        from ..core.voices import ModelError, remove_to_aside
         p = urlparse(self.path).path
         try:
             if (train_api.handle(self, "DELETE", p) or safehouse_api.handle(self, "DELETE", p)
@@ -477,9 +477,12 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/voices/([a-z0-9-]+)", p)
             if not m:
                 return self._error("Not found", 404)
-            remove_voice(m.group(1))
+            # set aside, not deleted (Internal Affairs P5-1): POST /api/library/aside/<aside>/restore brings it back
+            r = remove_to_aside(m.group(1))
             gpu.forget_voice(m.group(1))
-            self._json({"ok": True})
+            if r.get("with"):
+                gpu.forget_voice(r["with"])
+            self._json({"ok": True, **r})
         except ModelError as e:
             self._error(str(e))
         except LookupError as e:

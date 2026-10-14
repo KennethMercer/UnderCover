@@ -94,7 +94,9 @@ def state(voice: str) -> dict | None:
     v = get_voice(voice)
     ex = v.extra or {}
     p = ex.get("improved_pending")
-    undo = bool(ex.get("improved_previous") or ex.get("improved_turned_down"))
+    # Undo only while what it would bring back is still set aside (Internal Affairs pass 5: undo stayed true after one)
+    last = ex.get("improved_previous") or ex.get("improved_turned_down") or {}
+    undo = bool(last.get("aside") and (_aside_dir() / last["aside"]).is_dir())
     if not p:
         return {"voice": v.name, "display": label_of(v.name), "candidate": None, "undo": undo} if undo else None
     s = _samples(v.name)
@@ -209,8 +211,10 @@ def undo(voice: str) -> dict:
             _move_voice(cur, voices_dir() / rec["candidate"], rec["candidate"], listed=True)
             _move_voice(aside, voices_dir() / voice, voice, listed=True)
             old = _meta(voices_dir() / voice)
-            old.setdefault("extra", {})["improved_pending"] = {"voice": rec["candidate"], "before": rec.get("before"),
-                                                               "after": rec.get("after"), "made": rec.get("at")}
+            for k in ("improved_previous", "improved_turned_down"):   # its own older records: that Undo is spent
+                old.setdefault("extra", {}).pop(k, None)
+            old["extra"]["improved_pending"] = {"voice": rec["candidate"], "before": rec.get("before"),
+                                                "after": rec.get("after"), "made": rec.get("at")}
             _write_meta(voices_dir() / voice, old)
         elif ex.get("improved_turned_down"):
             rec = ex["improved_turned_down"]
@@ -220,6 +224,7 @@ def undo(voice: str) -> dict:
             _move_voice(aside, voices_dir() / rec["candidate"], rec["candidate"], listed=True)
             meta = _meta(v.dir)
             meta["extra"].pop("improved_turned_down", None)
+            meta["extra"].pop("improved_previous", None)
             meta["extra"]["improved_pending"] = {"voice": rec["candidate"], "before": rec.get("before"),
                                                  "after": rec.get("after"), "made": rec.get("at")}
             _write_meta(v.dir, meta)
