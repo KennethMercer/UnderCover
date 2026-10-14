@@ -1119,6 +1119,8 @@ def u_cadence():
     assert R.octave_shift(x, _Rm(240.0), 235.0) == 0.0 and R.octave_shift(x, _Rm(120.0), 235.0) == 12.0   # octaves only, as before
     assert R.octave_shift(x, _Rm(138.0), 235.0, fine=True) == 9.0 and R.octave_shift(x, _Rm(235.0), 235.0, fine=True) == 0.0
     assert R.octave_shift(x, _Rm(30.0), 235.0, fine=True) == 12.0 and R.octave_shift(x, _Rm(900.0), 235.0, fine=True) == -12.0
+    hist = []   # the running median: a higher sentence (a question) among lower ones isn't pulled onto the median
+    assert [R.octave_shift(x, _Rm(hz), 235.0, fine=True, history=hist) for hz in (138.0, 138.0, 200.0)] == [9.0, 9.0, 9.0], hist
     assert ENGINES["chatterbox-turbo"]["pitch_to_target"] and not ENGINES["chatterbox"].get("pitch_to_target")
     with isolated_data():
         ref = Path(tempfile.mkdtemp()) / "ref.wav"
