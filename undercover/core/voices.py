@@ -481,6 +481,10 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
     target = voices_dir() / name
     if target.exists() and not overwrite:
         raise ModelError(f"A voice called '{name}' is already installed. Pick another name or remove it first.")
+    owner = pending_candidate(name)
+    if owner:   # an unheard retrained voice: never written over, whatever overwrite says
+        raise ModelError(f"\"{name}\" is the retrained {label_of(owner)} waiting to be heard. Give this one its own name, "
+                         "or keep or set aside the waiting one first.")
 
     work = Path(tempfile.mkdtemp(prefix="inst_", dir=path("cache_dir")))
     try:
@@ -500,13 +504,15 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         index = _pick_index(indexes)
 
         # a voice's cadence (tts/ + extra.tts, made from the person's clips) outlives a new model of the same voice
-        keep_tts, old_tts, old_display = None, None, ""
+        keep_tts, old_tts, old_display, old_pending = None, None, "", None
         if target.exists():
             try:   # the name the user gave it outlives a new model of the same voice, like its cadence
                 old_meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
                 old_display = old_meta.get("display") or ""
             except (OSError, ValueError):
                 old_meta = {}
+            # a retrained one waiting beside this voice keeps waiting beside the new model (else it'd be orphaned)
+            old_pending = (old_meta.get("extra") or {}).get("improved_pending")
             if (target / "tts").is_dir():
                 keep_tts = work / "_kept_tts"
                 shutil.move(str(target / "tts"), keep_tts)
@@ -528,7 +534,8 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
                       version=meta["version"], sr=meta["sr"], f0=meta["f0"], source=source,
                       installed=time.strftime("%Y-%m-%d %H:%M"), display=old_display,
                       extra={"original_pth": pth.name, "original_index": index.name if index else None,
-                             **({"tts": old_tts} if keep_tts is not None and old_tts else {})})
+                             **({"tts": old_tts} if keep_tts is not None and old_tts else {}),
+                             **({"improved_pending": old_pending} if old_pending else {})})
         from . import fsutil
         fsutil.write_text(target / "meta.json", json.dumps(voice.to_json(), indent=2))
         return voice
@@ -584,6 +591,26 @@ def waiting(v: "Voice", by_name: dict | None = None) -> str | None:
             ex = {}
     # its voice gone (or no longer waiting on it): the candidate is listed like any voice, the only copy left
     return owner if (ex.get("improved_pending") or {}).get("voice") == v.name else None
+
+
+def pending_candidate(name: str) -> str | None:
+    """The voice a retrained candidate called `name` belongs to, while one waits under that name (its meta says
+    pending_for, or it's <voice>-next while <voice>'s improved_pending names it); else None. Nothing writes over it:
+    training, export and install all refuse (Internal Affairs P3-2)."""
+    def extra(n: str) -> dict:
+        try:
+            return json.loads((voices_dir() / n / "meta.json").read_text(encoding="utf-8")).get("extra") or {}
+        except (OSError, ValueError):
+            return {}
+    name = slug(name)
+    if not name:
+        return None
+    if own := extra(name).get("pending_for"):
+        return own
+    base = name.removesuffix("-next")
+    if base != name and (extra(base).get("improved_pending") or {}).get("voice") == name:
+        return base
+    return None
 
 
 def listed_voices() -> list["Voice"]:
