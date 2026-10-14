@@ -23,8 +23,9 @@ F5_REV, VOCOS_REV = "84e5a410d9cead4de2f847e7c9369a6440bdfaca", "0feb3fdd929bcd6
 F5_FILES = {"tts/f5/model_1250000.safetensors": f"{HF}/SWivid/F5-TTS/resolve/{F5_REV}/F5TTS_v1_Base/model_1250000.safetensors",
             "tts/f5/vocos/config.yaml": f"{HF}/charactr/vocos-mel-24khz/resolve/{VOCOS_REV}/config.yaml",
             "tts/f5/vocos/pytorch_model.bin": f"{HF}/charactr/vocos-mel-24khz/resolve/{VOCOS_REV}/pytorch_model.bin"}
-# Chatterbox-Turbo (phase 23, the default): the same chatterbox-tts package, its own weights, pinned (9 of the repo's 12
-# files: s3gen.safetensors, the plain decoder, isn't read by Turbo) -> models/tts/chatterbox-turbo/
+# Chatterbox-Turbo (phase 23, an optional engine: the user's ear kept Chatterbox as the default, docs/research/phase23-outcome.md):
+# the same chatterbox-tts package, its own weights, pinned (9 of the repo's 12 files: s3gen.safetensors, the plain decoder,
+# isn't read by Turbo) -> models/tts/chatterbox-turbo/ (downloaded only when [cadence] engine says so)
 TURBO_REV = "749d1c1a46eb10492095d68fbcf55691ccf137cd"
 TURBO_FILES = {f"tts/chatterbox-turbo/{f}": f"{HF}/ResembleAI/chatterbox-turbo/resolve/{TURBO_REV}/{f}"
                for f in ("ve.safetensors", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors", "conds.pt", "added_tokens.json",
@@ -53,26 +54,26 @@ MODEL_SHA256 = {
 }
 
 setup_models.register_pinned(CHATTERBOX_FILES, MODEL_SHA256, "chatterbox")   # the Doctor's list (phase 10)
-setup_models.register_pinned(TURBO_FILES, MODEL_SHA256, "chatterbox-turbo")
 setup_models.register_pinned({"whisper/large-v3-turbo.pt": WHISPER_URL}, MODEL_SHA256, "whisper")
 setup_models.register_pinned(F5_FILES, MODEL_SHA256, "f5")
 
 # The engines that read a person's cadence from a reference clip alone, so a pack made with one is as good for the other
-# (phase 23: packs stay valid when the engine they were made with isn't installed). Best first.
-FAMILY = ("chatterbox-turbo", "chatterbox")
+# (phase 23: packs stay valid when the engine they were made with isn't installed). The default first.
+FAMILY = ("chatterbox", "chatterbox-turbo")
+DEFAULT = "chatterbox"
 
 ENGINES = {
     "chatterbox-turbo": {"name": "Chatterbox Turbo", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 2.5,
                          "vram_gb": 3.6, "size_mb": 2830, "module": "chatterbox",
                          # Turbo ignores cfg_weight / exaggeration (they made Slower / Faster, phase 4c): with it the pace control
-                         # only moves the gaps between sentences, and the page calls it that (user, 2026-10-14). Its natural pace
-                         # follows its reference clip's, so each pack is calibrated once (doubleagent/cadence.py: calibrate_pack)
-                         "pace_by_ref": True,
+                         # only moves the gaps between sentences. Its natural pace follows its reference clip's; calibrating that
+                         # (doubleagent/cadence.py: calibrate_pack, switched on by "pace_by_ref": True) read slurred by the user's ear
+                         # (2026-10-14), so it is off
                          # Turbo's reading sits lower than the person's (Obama's 9 semitones under, golden run 2026-10-13): finish moves
                          # its median onto the voice's own, not just by octaves
                          "pitch_to_target": True,
                          "about": "Resemble AI's open model (MIT code and weights), the faster successor: about twice as fast as "
-                                  "Chatterbox, cleaner on hard words, same cadence. Every output carries Resemble's inaudible watermark."},
+                                  "Chatterbox and cleaner on hard words, but less natural in tone by the user's ear (2026-10-14); optional."},
     "chatterbox": {"name": "Chatterbox", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 1.0,   # with RVC, measured phase 4
                    "vram_gb": 3.6, "size_mb": 3200, "module": "chatterbox",
                    "about": "Resemble AI's open model (MIT code and weights); closest to each person's cadence in our tests. "
@@ -115,15 +116,9 @@ def engine_ready(engine: str) -> bool:
 
 
 def default_engine() -> str:
-    """[cadence] engine if it's usable here, else the open default (Chatterbox-Turbo). A setup that has Chatterbox's
-    files but not Turbo's yet keeps reading with Chatterbox rather than starting a 2.8 GB download unasked (the
-    Doctor / setup add Turbo's files)."""
-    want = (CONFIG.get("cadence") or {}).get("engine", "chatterbox-turbo")
-    if want not in ENGINES or not engine_ready(want):
-        want = "chatterbox-turbo"
-    if want == "chatterbox-turbo" and not weights_present(want) and weights_present("chatterbox") and engine_ready("chatterbox"):
-        return "chatterbox"
-    return want if engine_ready(want) else "chatterbox"
+    """[cadence] engine if it's usable here, else the open default (Chatterbox)."""
+    want = (CONFIG.get("cadence") or {}).get("engine", DEFAULT)
+    return want if engine_ready(want) else DEFAULT
 
 
 def reading_engine(pack_engine: str | None) -> str:
@@ -135,7 +130,7 @@ def reading_engine(pack_engine: str | None) -> str:
     if d in FAMILY:
         return d
     ready = [e for e in FAMILY if engine_ready(e)]   # another engine is the default: the member that's already there
-    return next((e for e in ready if weights_present(e)), ready[0] if ready else FAMILY[0])
+    return next((e for e in ready if weights_present(e)), ready[0] if ready else DEFAULT)
 
 
 def pack_ready(pack_engine: str | None) -> bool:
@@ -172,12 +167,6 @@ addons.register(addons.Addon(
     licence="MIT", licence_url="https://github.com/resemble-ai/chatterbox",
     licence_summary=addons.OPEN.format("MIT") + " Code and weights. Everything it makes carries Resemble AI's inaudible watermark.",
     size_mb=3200, paths=["tts/chatterbox"], check=lambda: weights_present("chatterbox")))
-addons.register(addons.Addon(
-    id="chatterbox-turbo", name="Chatterbox Turbo", included=True, modules=["speakeasy", "doubleagent"],
-    adds="Reads text in a person's own cadence (SpeakEasy) from a short clip of them; the default cadence engine.",
-    licence="MIT", licence_url="https://github.com/resemble-ai/chatterbox",
-    licence_summary=addons.OPEN.format("MIT") + " Code and weights. Everything it makes carries Resemble AI's inaudible watermark.",
-    size_mb=2830, paths=["tts/chatterbox-turbo"], check=lambda: weights_present("chatterbox-turbo")))
 addons.register(addons.Addon(
     id="whisper", name="Whisper", included=True, modules=["doubleagent"],
     adds="Writes down what's said in a voice's clips, so its cadence can be learned.",

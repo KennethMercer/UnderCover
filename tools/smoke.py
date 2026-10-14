@@ -1081,19 +1081,18 @@ def u_cadence():
     assert cadence.wer(["it was not easy"], ["it was not easy."]) == 0.0
     assert cadence._plain("We did it together.") and not cadence._plain("In 2008, etc.")
     assert {"chatterbox", "chatterbox-turbo", "f5"} <= set(ENGINES) and default_engine() in ENGINES
-    # phase 23: the Chatterbox family reads each other's packs, so a pack outlives the engine it was made with; Turbo is the
-    # default, but a setup that only has Chatterbox's files keeps reading with it (no 2.8 GB download unasked)
+    # phase 23: the Chatterbox family reads each other's packs, so a pack outlives the engine it was made with; Chatterbox stays
+    # the default (the user's ear), Turbo is opt-in through [cadence] engine
     from undercover.core.cadence import engines as E
-    have = set()
+    have = {"chatterbox"}
     saved = (E.weights_present, E.engine_ready, E.CONFIG)
     E.weights_present = lambda e: e in have
     E.engine_ready = lambda e: e in ENGINES and ENGINES[e].get("addon") is None
     try:
-        E.CONFIG = {"cadence": {"engine": "chatterbox-turbo"}}
-        assert E.default_engine() == "chatterbox-turbo" and E.reading_engine("chatterbox") == "chatterbox-turbo"   # a fresh install
-        have.add("chatterbox")
-        assert E.default_engine() == "chatterbox" and E.reading_engine("chatterbox-turbo") == "chatterbox"   # only the old files
-        have.add("chatterbox-turbo")
+        for cfg in ({"cadence": {"engine": "chatterbox"}}, {"cadence": {}}, {}):
+            E.CONFIG = cfg
+            assert E.default_engine() == "chatterbox" and E.reading_engine("chatterbox-turbo") == "chatterbox", cfg   # a Turbo pack
+        E.CONFIG = {"cadence": {"engine": "chatterbox-turbo"}}   # opted in
         assert E.default_engine() == "chatterbox-turbo" and E.reading_engine("chatterbox") == "chatterbox-turbo"
         assert E.pack_ready("chatterbox") and E.reading_engine("f5") == "f5"
         E.CONFIG = {"cadence": {"engine": "f5"}}   # another engine is the default: a Chatterbox pack still reads with the family
@@ -1101,6 +1100,7 @@ def u_cadence():
         assert E.default_engine() == "f5" and E.reading_engine("chatterbox-turbo") == "chatterbox"
     finally:
         E.weights_present, E.engine_ready, E.CONFIG = saved
+    assert not ENGINES["chatterbox-turbo"].get("pace_by_ref")   # the pace calibration is off (it read slurred)
     # phase 23: Turbo's reading sits lower than the person's (fine: the median onto theirs, half semitones, an octave at most)
     import numpy as np
     from undercover.core.cadence import render as R

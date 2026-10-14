@@ -1,6 +1,6 @@
 """Cadence engines: text + a short clip of a person -> speech with that person's delivery (phase 4).
 
-The engines (Chatterbox-Turbo by default, Chatterbox as the fallback; F5-TTS as an add-on) and Whisper (transcripts) run in a separate worker process
+The engines (Chatterbox by default, Chatterbox-Turbo optional; F5-TTS as an add-on) and Whisper (transcripts) run in a separate worker process
 (`worker.py`), started on first use and stopped after [cadence] idle_minutes unused. That keeps their import
 stand-ins, crashes and VRAM out of the server: if the worker dies, the next request starts a new one.
 
