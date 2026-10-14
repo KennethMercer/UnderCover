@@ -1028,6 +1028,10 @@ def u_improve_pending():
         old, new = get_voice("morgan-freeman-uc"), get_voice("morgan-freeman-uc-next")
         assert old.extra["improved_pending"]["voice"] == "morgan-freeman-uc-next" and new.extra["pending_for"] == "morgan-freeman-uc"
         assert (old.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc", "the current voice changed"
+        from undercover.core.voices import list_voices, listed_voices, voice_info
+        assert [v.name for v in listed_voices()] == ["morgan-freeman-uc"], "the waiting candidate is listed as its own voice"
+        assert len(list_voices()) == 2 and voice_info(new)["waiting_beside"] == "morgan-freeman-uc"
+        assert voice_info(old)["waiting_beside"] is None
         for target, word in (("morgan-freeman-uc", "already waiting"), ("morgan-freeman-uc-next", "waiting to be compared")):
             try:
                 night._improve_target(target)
@@ -1039,7 +1043,7 @@ def u_improve_pending():
 
 @check("an improved voice waiting (Internal Affairs P2-1): Keep the new one -> it takes the name, the old one set aside (not listed, not deleted), the cadence and display name carried over; Undo puts both back; Keep the current one -> the candidate set aside; Undo again")
 def u_improved_keep():
-    from undercover.core.voices import get_voice, list_voices, voices_dir
+    from undercover.core.voices import get_voice, list_voices, listed_voices, voices_dir
     from undercover.doubleagent import improved, night
     with isolated_data():
         def voice(name, extra, display=""):
@@ -1075,6 +1079,7 @@ def u_improved_keep():
         other.finish("done")
         v = get_voice("morgan-freeman-uc")
         assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the new one didn't take the name"
+        assert [x.name for x in listed_voices()] == ["morgan-freeman-uc"], "the kept voice isn't listed"
         assert v.display == "Morgan" and (v.dir / "tts" / "ref.wav").read_bytes() == b"cadence" and v.extra["tts"], v.extra
         names = {x.name for x in list_voices()}
         assert names == {"morgan-freeman-uc"}, names                               # the old one isn't listed...
@@ -1089,6 +1094,7 @@ def u_improved_keep():
         improved.undo("morgan-freeman-uc")
         assert {x.name for x in list_voices()} == {"morgan-freeman-uc", "morgan-freeman-uc-next"}
         assert get_voice("morgan-freeman-uc").extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+        assert [x.name for x in listed_voices()] == ["morgan-freeman-uc"], "the candidate waiting again is listed"
     return "keep new (old aside, cadence and name carried), undo; keep current (candidate aside), undo; nothing deleted"
 
 
@@ -2529,8 +2535,8 @@ def u_display_names():
         got = {v.name: V.display_name(v) for v in V.list_voices()}
         assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
                        "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
-        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "likeness_word": None, "ear": None}
-        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "likeness_word": None, "ear": None}
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "likeness_word": None, "ear": None, "waiting_beside": None}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "likeness_word": None, "ear": None, "waiting_beside": None}
         # the route: set, read back through the APIs, clear
         h = _FakeHandler(body={"display": "  Barry   O  "})
         assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
@@ -4949,7 +4955,10 @@ def u_preview_fit():
     base_off, note_off = PL.preview_fit(Engine(), off, {})
     assert base_off is off and note_off is None and len(calls) == 1         # Fit off: no fit, versions as sent
     assert PL.variant_overrides(off, base_off, {"octave": 1})["octave"] == 1
-    return "one fit; octaves -2/-1/0 and keys 0/2/4 around it; clamped; Fit off as sent"
+    import inspect
+    from undercover.frontman import api as FA
+    assert '"fit": r.get("fit")' in inspect.getsource(FA._start_preview), "POST /api/preview drops the fit note"
+    return "one fit; octaves -2/-1/0 and keys 0/2/4 around it; clamped; Fit off as sent; the results carry the note"
 
 
 @check("Train tonight instead: held work carries {id, kind, label, project, held_at, queue_as}; /api/work/to-queue moves a held project entry into the overnight queue as its project item (its own choices) and off the held list, the hold lifting when nothing else is held; a one-shot can't; an improve may replace its own voice")

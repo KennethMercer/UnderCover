@@ -44,7 +44,7 @@ def undertrained(v, min_steps: int = 900) -> bool:
 def installed_for(person: str) -> list:
     """Installed voices for this person: exact name, or a name built from it (morgan-freeman-uc, ...).
     Voices trained in UnderCover first, then the newest."""
-    from ..core.voices import list_voices
+    from ..core.voices import listed_voices
     key = slug(person)
     if not key:
         return None
@@ -58,7 +58,7 @@ def installed_for(person: str) -> list:
         # all the person's words in the voice name, or a voice named by part of the name incl. the surname
         return bool(vt) and (all(t in vt for t in toks) or (set(vt) <= set(toks) and toks[-1] in vt))
     from ..core import ear
-    cands = [v for v in list_voices() if matches(v.name) and not undertrained(v)]
+    cands = [v for v in listed_voices() if matches(v.name) and not undertrained(v)]
     # trained first; then the one the user's thumbs like (the ear everywhere), the exact name, the newest
     cands.sort(key=lambda v: (bool(v.extra.get("trained")), ear.liking(v.name), v.name == key, v.installed), reverse=True)
     return cands

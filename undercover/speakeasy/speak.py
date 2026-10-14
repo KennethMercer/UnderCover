@@ -101,9 +101,9 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
 
 def voices() -> list[dict]:
     """Every voice with what SpeakEasy needs to list it (group, likeness, kind, auto Reader, cadence status)."""
-    from ..core.voices import list_voices, voice_info
+    from ..core.voices import listed_voices, voice_info
     out = []
-    for v in list_voices():
+    for v in listed_voices():
         ex = v.extra or {}
         try:
             p = plan(v.name)
