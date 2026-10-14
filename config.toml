@@ -120,10 +120,12 @@ holdout_phrases = 3              # phrases kept out of training for the loss cha
 
 [cadence]
 # SpeakEasy reads with the person's own cadence (phase 4): a cloning text-to-speech engine, given a short clip of the
-# person, reads the text; their RVC voice goes on top. Engines: "chatterbox" (MIT; the default and the best measured,
-# docs/research/cadence.md) or an add-on (python -m undercover.addons): "f5" (CC-BY-NC, ~3-4x faster).
-engine = "chatterbox"
-cfg_weight = 0.3                 # Chatterbox: lower = slower, more deliberate delivery (0.3 measured closest to both people)
-exaggeration = 0.5               # Chatterbox: expressiveness (0.5 = its default)
+# person, reads the text; their RVC voice goes on top. Engines: "chatterbox-turbo" (MIT; the default since phase 23: cleaner
+# and about twice as fast as Chatterbox, docs/research/phase23-outcome.md), "chatterbox" (MIT, the fallback while its
+# files are there) or an add-on (python -m undercover.addons): "f5" (CC-BY-NC, ~3-4x faster). A voice can be kept on one
+# engine by the user's ear: the pack's engine_pin.
+engine = "chatterbox-turbo"
+cfg_weight = 0.3                 # Chatterbox only (Turbo ignores it): lower = slower, more deliberate delivery (0.3 measured closest to both people)
+exaggeration = 0.5               # Chatterbox only (Turbo ignores it): expressiveness (0.5 = its default)
 transcribe_model = "large-v3-turbo"   # Whisper, on the GPU (13-17x realtime here)
 idle_minutes = 10                # the engine's worker process quits after this long unused (frees ~4-8 GB of VRAM)

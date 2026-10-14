@@ -1954,7 +1954,77 @@ def u_cadence():
     assert cadence.syllables("Is that the kind of country we want to leave to our children?") == 15
     assert cadence.wer(["it was not easy"], ["it was not easy."]) == 0.0
     assert cadence._plain("We did it together.") and not cadence._plain("In 2008, etc.")
-    assert {"chatterbox", "f5"} <= set(ENGINES) and default_engine() in ENGINES
+    assert {"chatterbox", "chatterbox-turbo", "f5"} <= set(ENGINES) and default_engine() in ENGINES
+    # phase 23: the Chatterbox family reads each other's packs, so a pack outlives the engine it was made with; Turbo is the
+    # default, a setup that only has Chatterbox's files keeps reading with it (no 2.8 GB download unasked), and a voice can
+    # be pinned to one engine by the user's ear (the pack's engine_pin)
+    from undercover.core.cadence import engines as E
+    have = set()
+    saved = (E.weights_present, E.engine_ready, E.CONFIG)
+    E.weights_present = lambda e: e in have
+    E.engine_ready = lambda e: e in ENGINES and ENGINES[e].get("addon") is None
+    try:
+        E.CONFIG = {"cadence": {"engine": "chatterbox-turbo"}}
+        assert E.default_engine() == "chatterbox-turbo" and E.reading_engine("chatterbox") == "chatterbox-turbo"   # a fresh install
+        have.add("chatterbox")
+        assert E.default_engine() == "chatterbox" and E.reading_engine("chatterbox-turbo") == "chatterbox"   # only the old files
+        have.add("chatterbox-turbo")
+        assert E.default_engine() == "chatterbox-turbo" and E.reading_engine("chatterbox") == "chatterbox-turbo"
+        assert E.pack_ready("chatterbox") and E.reading_engine("f5") == "f5"
+        assert E.pack_engine({"engine": "chatterbox", "engine_pin": "chatterbox"}) == "chatterbox"   # a voice pinned to the old engine
+        assert E.pack_engine({"engine": "chatterbox"}) == "chatterbox-turbo" and E.pack_engine(None) == "chatterbox-turbo"
+        assert E.pack_engine({"engine_pin": "f5"}) == "chatterbox-turbo"   # a pin only names a family member
+        E.CONFIG = {"cadence": {"engine": "f5"}}   # another engine is the default: a Chatterbox pack still reads with the family
+        E.engine_ready = lambda e: e in ("f5", "chatterbox")
+        assert E.default_engine() == "f5" and E.reading_engine("chatterbox-turbo") == "chatterbox"
+        assert E.pack_engine({"engine_pin": "chatterbox-turbo"}) == "chatterbox"   # a pin to an engine that isn't there is ignored
+    finally:
+        E.weights_present, E.engine_ready, E.CONFIG = saved
+    assert not ENGINES["chatterbox-turbo"].get("pace_by_ref")   # the pace calibration is off (it read slurred)
+    # phase 23: Turbo's reading sits lower than the person's (fine: the median onto theirs, half semitones, an octave at most)
+    import numpy as np
+    from undercover.core.cadence import render as R
+
+    class _Rm:
+        def __init__(self, hz):
+            self.hz = hz
+
+        def infer_from_audio(self, x, thred=0.03):
+            return np.full(100, self.hz, np.float32)
+    x = np.zeros(16000, np.float32)
+    assert R.octave_shift(x, _Rm(240.0), 235.0) == 0.0 and R.octave_shift(x, _Rm(120.0), 235.0) == 12.0   # octaves only, as before
+    assert R.octave_shift(x, _Rm(138.0), 235.0, fine=True) == 9.0 and R.octave_shift(x, _Rm(235.0), 235.0, fine=True) == 0.0
+    assert R.octave_shift(x, _Rm(30.0), 235.0, fine=True) == 12.0 and R.octave_shift(x, _Rm(900.0), 235.0, fine=True) == -12.0
+    hist = []   # the running median: a higher sentence (a question) among lower ones isn't pulled onto the median
+    assert [R.octave_shift(x, _Rm(hz), 235.0, fine=True, history=hist) for hz in (138.0, 138.0, 200.0)] == [9.0, 9.0, 9.0], hist
+    assert ENGINES["chatterbox-turbo"]["pitch_to_target"] and not ENGINES["chatterbox"].get("pitch_to_target")
+    # phase 23: a pack's pace is calibrated once per engine (the reference clip read at a speed that lands the natural pace
+    # near the person's own); the search, with a made-up engine whose pace follows the reference's speed to the power 0.5
+    from undercover.doubleagent import cadence as DK
+    calls = []
+
+    def fake(target_at_1):
+        def read(r):
+            calls.append(r)
+            return target_at_1 * r ** 0.5
+        return read
+    r, tried = DK.choose_rate(fake(5.4), 3.6)   # 1.5x too fast (Freeman's case): about 0.44 wanted, the range stops at 0.5
+    assert r == 0.5 and len(tried) <= DK.PACE_READS and abs(tried[r] / 3.6 - 1) < 0.30, (r, tried)
+    r, tried = DK.choose_rate(fake(4.2), 3.6)   # 17% fast: one jump lands it
+    assert 0.6 < r < 0.85 and abs(tried[r] / 3.6 - 1) <= DK.PACE_TOL, (r, tried)
+    calls.clear()
+    r, tried = DK.choose_rate(fake(3.8), 3.6)   # already within 10%: one reading, the clip as it is
+    assert r == 1.0 and calls == [1.0], (r, calls)
+    r, tried = DK.choose_rate(fake(3.0), 3.6)   # slow: a faster reference, but not past the range
+    assert 1.0 < r <= DK.PACE_RATE_HI, (r, tried)
+    eng = DK.C.reading_engine("chatterbox")
+    assert DK.pace_needs_calibration(None) is False
+    assert DK.pace_needs_calibration({"engine": "chatterbox", "pace_cal": {"engine": eng}}) is False   # done once per engine
+    assert DK.pace_needs_calibration({"engine": "chatterbox"}) is bool(DK.C.engine_info(eng).get("pace_by_ref"))
+    x = np.zeros(32000, np.float32)
+    x[8000:24000] = np.random.RandomState(1).randn(16000).astype(np.float32) * 0.1
+    st = DK._speech_stats(x, "one two three four")
+    assert st and abs(st["dur"] - 1.0) < 0.1 and st["rate"] == st["syl"] / st["dur"] and DK._speech_stats(x[:100], "a") == {}, st
     ids = {a["id"] for a in addons.status()}
     assert {"f5", "xtts"} <= ids, ids
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
@@ -2545,11 +2615,11 @@ def u_pace_pitch():
         meta = json.loads((v.dir / "meta.json").read_text(encoding="utf-8"))
         meta["extra"]["tts"] = {**json.loads((v.dir / "tts" / "cadence.json").read_text(encoding="utf-8")), "pitch_nudge": -4.5}
         (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-        ready, speak.engine_ready = speak.engine_ready, lambda e: True
+        ready, speak.pack_ready = speak.pack_ready, lambda e, pin=None: True
         try:
             p = speak.plan("zz-nudge-uc", nudge=1.0)
         finally:
-            speak.engine_ready = ready
+            speak.pack_ready = ready
         assert p["mode"] == "cadence" and p["pack_nudge"] == -4.5 and p["nudge"] == 1.0, p
     assert len(K.PACE_TEST) == 6 and K.PACE_TEST[0] == K.AB_LINE
     return (f"target {K.pace_target(prof)} syl/s, fast x{fast['pace_ratio']}; +{fast['pitch_st']} st from the median is "
@@ -2838,6 +2908,8 @@ def u_golden():
                            {"cover:a__v1": {"likeness": 0.1}, "cover:a__v2": {"likeness": 0.21}, "cover:b__v1": {"likeness": 0.3}}], {"v2", "b"})
     assert m["scores"]["cover:a__v1"] == {"likeness": 0.7} and m["scores"]["cover:a__v2"] == {"likeness": 0.2}, m
     assert m["bands"]["cover:a__v2"] == {"likeness": 0.05} and G.render_run(m, "cover:b__v1") == "r5" and G.render_run(m, "cover:a__v1") == "r0"
+    old["retired"] = {"s": {"scores": {"cover:s__v1": {"likeness": 0.5}}}}   # a retired song's scores outlive a make
+    assert G.merged_baseline(old, ("r6", {"cover:a__v1": {"likeness": 0.1}}), [], set())["retired"] == old["retired"]
     spec = {"voices": [{"name": "v1"}, {"name": "morgan-freeman-uc"}], "covers": {"a": ["v1", "gone"]}}
     its = G.items_of(spec)
     assert its[0] == "cover:a__v1" and "cover:a__gone" not in its and "speech:rain__morgan-freeman-uc:reader" in its, its

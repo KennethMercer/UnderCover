@@ -182,8 +182,9 @@ def transcribe(proj_name: str, push, check) -> dict:
 KEYS = ["rate", "artic", "pauses", "pause_ms", "range_st", "sd_st", "move_st", "slope"]
 
 
-def features(x16: np.ndarray, text: str, rmvpe) -> dict:
-    """One utterance's cadence numbers (16 kHz audio and what it says)."""
+def _speech_stats(x16: np.ndarray, text: str) -> dict:
+    """The timing numbers of one utterance (no pitch: no GPU): its duration, syllables, rate and pauses; a (start, end)
+    in 10 ms frames for the pitch part of `features`."""
     hop = 160
     n = len(x16) // hop
     if n < 20:
@@ -207,8 +208,16 @@ def features(x16: np.ndarray, text: str, rmvpe) -> dict:
     dur = (b - a) / 100
     ptot = sum(pauses) / 100
     syl = syllables(text)
-    out = {"dur": round(dur, 2), "syl": syl, "rate": syl / dur, "artic": syl / max(0.3, dur - ptot),
-           "pauses": 10 * len(pauses) / max(1, syl), "plist": [10 * p for p in pauses]}
+    return {"dur": round(dur, 2), "syl": syl, "rate": syl / dur, "artic": syl / max(0.3, dur - ptot),
+            "pauses": 10 * len(pauses) / max(1, syl), "plist": [10 * p for p in pauses], "span": (a, b)}
+
+
+def features(x16: np.ndarray, text: str, rmvpe) -> dict:
+    """One utterance's cadence numbers (16 kHz audio and what it says)."""
+    out = _speech_stats(x16, text)
+    if not out:
+        return {}
+    a, b = out.pop("span")
     f0 = rmvpe.infer_from_audio(x16, thred=0.03)
     f0 = f0[a:min(b, len(f0))]
     t = np.arange(len(f0)) / 100
@@ -498,7 +507,7 @@ class Tester:
         rows, sims, outs, everyday, f0s = [], [], [], [], []
         for i, (s, w) in enumerate(zip(TEST + PACE_TEST, wavs)):
             self.check()
-            y, sr = render.finish(w, self.lv, self.conv, self.hz, tempo=tempo, nudge=nudge, keep_wav=True)
+            y, sr = render.finish(w, self.lv, self.conv, self.hz, tempo=tempo, nudge=nudge, keep_wav=True, engine=C.reading_engine(None))
             g = np.gcd(sr, 16000)
             y16 = resample_poly(y, 16000 // g, sr // g).astype(np.float32)
             r = features(y16, s, self.conv.rmvpe)
@@ -686,7 +695,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
         # is replaced at once, and even then it's moved aside (tts/previous/), never deleted.
         gaps = person.get("sentence_gap_s") or [0.3, 0.45, 0.8]
         gap = float(np.clip(gaps[1], 0.25, 1.0))
-        waits = old is not None and C.engine_ready(old.get("engine") or engine)
+        waits = old is not None and C.pack_ready(old.get("engine") or engine, old.get("engine_pin"))   # engine-agnostic inside the Chatterbox family
         pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins,
@@ -699,6 +708,14 @@ def train(job, voice_name: str, push, control=None) -> dict:
                                                                  "heard", "pace", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
                                                                  "pitch_raw_st", "pitch_off_st")},
                 "made": time.strftime("%Y-%m-%d %H:%M"), "verdicts": []}
+        if C.engine_info(C.reading_engine(pack.get("engine"))).get("pace_by_ref"):   # phase 23: off for every engine today (it read slurred)
+            push("testing", 0.97, f"Matching {proj.person}'s own pace")
+            try:
+                apply_pace(pack, calibrate_pack(pack, work / f"{win['clip']}.wav", check))
+            except (Cancelled, Paused):
+                raise
+            except Exception:   # noqa: BLE001 - the pack is fine without it; the first speech calibrates it
+                pass
         new = work / "pack"
         new.mkdir(exist_ok=True)
         shutil.copyfile(work / f"{win['clip']}.wav", new / "ref.wav")
@@ -716,6 +733,122 @@ def train(job, voice_name: str, push, control=None) -> dict:
         return result
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- pace calibration (phase 23)
+# Turbo ignores cfg_weight / exaggeration and copies the pace of its reference clip, so its natural pace differs from
+# Chatterbox's per voice (Freeman: about 1.5x his measured pace on Chatterbox, 1.7x on Turbo). Each pack is calibrated once
+# per engine: the everyday lines are read with the reference clip played at a few speeds (made once, pitch kept, never
+# the finished reading stretched) until the natural pace is within PACE_TOL of the person's own (phase 12's target).
+PACE_TOL = 0.10
+PACE_RATE_LO, PACE_RATE_HI = 0.5, 1.25   # the reference clip is read at this many times its speed
+PACE_AIM = 0.05    # aim this far inside the person's pace (on the side the first reading was): the smallest change that lands
+PACE_K = 0.5       # measured (tools/research/turbo_pace.py): pace follows the reference's speed to about the power 0.5
+PACE_READS = 4     # readings of the six lines at most (the first is at the clip's own speed)
+
+
+def choose_rate(read, target: float, tol: float = PACE_TOL) -> tuple[float, dict]:
+    """The reference speed whose pace lands within tol of target: read(rate) -> pace (syllables per second). Starts at
+    1.0, then jumps by the pace-follows-rate-to-the-k model (k refitted from two readings), aiming PACE_AIM inside the
+    target on the side it started (a pace within the tolerance already is left alone, and one just outside isn't pushed
+    past the person's: Obama at +12% went to -7% when aimed at the target itself). -> (rate, {rate: pace})."""
+    err = lambda r: abs(tried[r] / target - 1)   # noqa: E731
+    tried = {1.0: read(1.0)}
+    goal = target * (1 + PACE_AIM * (1 if tried[1.0] > target else -1))
+    while len(tried) < PACE_READS:
+        best = min(tried, key=err)
+        if err(best) <= tol:
+            break
+        k = PACE_K
+        pts = sorted(tried.items())
+        if len(pts) >= 2 and pts[0][0] != pts[-1][0] and pts[0][1] > 0 and pts[-1][1] > 0:
+            fit = math.log(pts[-1][1] / pts[0][1]) / math.log(pts[-1][0] / pts[0][0])
+            k = fit if 0.1 <= fit <= 2.0 else PACE_K
+        nxt = round(float(np.clip(best * (goal / tried[best]) ** (1 / k), PACE_RATE_LO, PACE_RATE_HI)), 3)
+        if any(abs(nxt - r) < 0.02 for r in tried):
+            break   # the range's edge, or already read
+        tried[nxt] = read(nxt)
+    return min(tried, key=err), tried
+
+
+def pace_needs_calibration(pack: dict | None) -> bool:
+    """A pack whose engine paces by its reference and hasn't been calibrated for the engine that reads it now."""
+    if not pack:
+        return False
+    eng = C.reading_engine(pack.get("engine"))
+    return bool(C.engine_info(eng).get("pace_by_ref")) and (pack.get("pace_cal") or {}).get("engine") != eng
+
+
+def calibrate_pack(pack: dict, ref: Path, check=None) -> dict:
+    """The pace fields for a pack (to merge into it): pace_cal (what was measured), pace_ref_rate (the reference speed;
+    absent at 1.0). Reads the six everyday lines a few times through the worker."""
+    eng = C.reading_engine(pack.get("engine"))
+    base = {"engine": eng, "at": time.strftime("%Y-%m-%d %H:%M")}
+    if not C.engine_info(eng).get("pace_by_ref"):
+        return {"pace_cal": {**base, "note": "the engine paces itself"}, "pace_ref_rate": None}
+    target = pace_target(pack.get("person") or {})
+    if not target:
+        return {"pace_cal": {**base, "note": "no measured pace for this person"}, "pace_ref_rate": None}
+
+    def read(rate: float) -> float:
+        rp = render.paced_ref(ref, rate)
+        futs = [render.request(s, pack, rp, seed=SEED) for s in PACE_TEST]
+        rows = []
+        for (fut, wav), s in zip(futs, PACE_TEST):
+            render.client.wait(fut, cancel=lambda: (check(), False)[1] if check else False)
+            rows.append(_speech_stats(render.load16(wav), s))
+            Path(wav).unlink(missing_ok=True)
+        return _pace([r for r in rows if r]) or 0.0
+    rate, tried = choose_rate(read, target)
+    return {"pace_cal": {**base, "target": target, "before": tried[1.0], "after": tried[rate], "rate": rate,
+                         "within": round(abs(tried[rate] / target - 1), 3), "tried": {str(r): p for r, p in tried.items()}},
+            "pace_ref_rate": None if rate == 1.0 else rate}
+
+
+def apply_pace(pack: dict, fields: dict) -> dict:
+    """fields (calibrate_pack's) into the pack; a rate of None removes the key."""
+    pack.update({k: v for k, v in fields.items() if v is not None})
+    if fields.get("pace_ref_rate") is None:
+        pack.pop("pace_ref_rate", None)
+    return pack
+
+
+def calibrate_voice_pace(voice_name: str, check=None, force: bool = False) -> dict | None:
+    """The live pack's pace, calibrated once for the engine that reads it (SpeakEasy calls this on first use; logs
+    logs/pacecal.jsonl). Never replaces the pack: it adds pace_cal / pace_ref_rate to it. -> what was measured, or None
+    when there was nothing to do."""
+    v = get_voice(voice_name)
+    pack = (v.extra or {}).get("tts")
+    if not pack or not (force or pace_needs_calibration(pack)):
+        return None
+    eng = C.reading_engine(pack.get("engine"))
+    try:
+        fields = calibrate_pack(pack, v.dir / "tts" / pack.get("ref", "ref.wav"), check)
+    except (Cancelled, Paused):
+        raise
+    except Exception as e:   # noqa: BLE001 - noted, not retried on every sentence; Deep Cover's repair can force it
+        fields = {"pace_cal": {"engine": eng, "at": time.strftime("%Y-%m-%d %H:%M"), "error": f"{type(e).__name__}: {e}"[:200]},
+                  "pace_ref_rate": None}
+    with _LOCK:
+        fresh = get_voice(voice_name)
+        cur = (fresh.extra or {}).get("tts")
+        if cur and cur.get("clip") == pack.get("clip"):   # the pack may have been replaced meanwhile: then not this one
+            apply_pace(cur, fields)
+            fsutil.write_text(fresh.dir / "meta.json", json.dumps(fresh.to_json(), indent=2))
+            try:
+                fsutil.write_text(fresh.dir / "tts" / "cadence.json", json.dumps({**cur, "tried": json.loads(
+                    (fresh.dir / "tts" / "cadence.json").read_text(encoding="utf-8")).get("tried")}, indent=1))
+            except (OSError, ValueError):
+                pass
+    log = {"voice": voice_name, **fields["pace_cal"]}
+    try:
+        f = path("logs_dir") / "pacecal.jsonl"
+        fsutil.guard(f)
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(log) + "\n")
+    except OSError:
+        pass
+    return fields["pace_cal"]
 
 
 def pack_id(pack: dict) -> str:
@@ -888,7 +1021,7 @@ def make_samples(job, voice_name: str) -> dict:
         fut, wav = render.request(AB_LINE, pack, d / pack.get("ref", "ref.wav"), seed=AB_SEED)
         render.client.wait(fut, cancel=lambda: job.cancel)
         y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)),
-                              nudge=float(pack.get("pitch_nudge") or 0))
+                              nudge=float(pack.get("pitch_nudge") or 0), engine=C.pack_engine(pack))
         y = render.level(y)   # SpeakEasy's loudness, so both sound as they would there
         with _LOCK:
             fresh = get_voice(v.name)
