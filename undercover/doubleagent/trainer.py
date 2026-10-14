@@ -400,7 +400,8 @@ class Trainer:
         # train in fp32: slower, but no loss scaling needed and nothing to destabilise.
         bf16 = torch.version.hip is not None or torch.cuda.is_bf16_supported(including_emulation=False)
         ac = dict(device_type="cuda", dtype=torch.bfloat16, enabled=self.half and dev.type == "cuda" and bf16)
-        t_start = time.time()
+        prior_step = st.get("sec_per_step") or _speed_prior(sr, bs)
+        warm, steps_run = None, 0   # measured from the end of the first batch (its kernel set-up isn't the speed)
         epoch = epoch0
         outcome = "done"
         with timed("train.run", project=proj.name, from_epoch=epoch0, pieces=len(items), batch=bs) as rec:
@@ -444,13 +445,16 @@ class Trainer:
                     opt_g.step()
                     for k, v in (("mel", loss_mel), ("kl", loss_kl), ("fm", loss_fm), ("gen", loss_gen), ("disc", loss_disc)):
                         sums[k] += float(v.detach())
+                    if warm is None:
+                        warm = time.time()
+                    else:
+                        steps_run += 1
                     if bi % 5 == 0:
                         left = max_epochs - epoch + 1 - (bi + 1) / len(batches)   # epochs still to run
                         if st.get("sec_per_epoch") and epoch - epoch0 > 1:
                             eta = st["sec_per_epoch"] * left                   # recent epochs: no warm-up skew
                         else:
-                            done = epoch - 1 - epoch0 + (bi + 1) / len(batches)
-                            eta = (time.time() - t_start) / max(done, 1e-6) * left
+                            eta = train_eta(left * len(batches), steps_run, time.time() - warm, prior_step)
                         report(stage="training", epoch=epoch, epochs=max_epochs,
                                fraction=(epoch - 1 + (bi + 1) / len(batches)) / max_epochs, eta=eta,
                                sec_per_epoch=st.get("sec_per_epoch"))
@@ -471,6 +475,8 @@ class Trainer:
                 st["epoch"] = epoch
                 st["sec_per_epoch"] = round(float(np.median([x["secs"] for x in hist[-10:]])), 2)
                 st["sec_per_step"] = round(st["sec_per_epoch"] / steps_per_epoch, 3)
+                if epoch - epoch0 >= 2:   # a speed past the warm-up: the next training's first estimate
+                    _speed_record(sr, bs, st["sec_per_step"])
                 saved = epoch % save_every == 0 or epoch == max_epochs
                 if saved:
                     _export_weights(net_g, sr, epoch, self.tdir / f"e{epoch}.pth")
@@ -656,6 +662,40 @@ def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None =
         return None
     finally:
         tmp.unlink(missing_ok=True)
+
+
+SPEED_FILE = "train_speed.json"   # cache/: the last training's seconds per step, by sample rate and batch size
+
+
+def train_eta(left_steps: float, steps_done: int, secs: float, prior_step: float | None) -> float | None:
+    """Seconds left in a training before its own epoch speed is known (Internal Affairs pass 5: the first report
+    extrapolated one warm-up batch to 4993 s for an 8-minute run). steps_done / secs: measured after the first batch
+    (kernel set-up isn't counted). prior_step: a known speed (this project's last run, else the last training's); it
+    leads until about 50 steps are measured. None: nothing to go on yet."""
+    measured = secs / steps_done if steps_done > 0 else None
+    if measured is None:
+        return prior_step * left_steps if prior_step else None
+    if not prior_step:
+        return measured * left_steps if steps_done >= 5 else None
+    w = min(1.0, steps_done / 50)
+    return (w * measured + (1 - w) * prior_step) * left_steps
+
+
+def _speed_prior(sr, bs) -> float | None:
+    try:
+        return json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(f"{sr}-{bs}")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _speed_record(sr, bs, sec_per_step: float):
+    f = path("cache_dir") / SPEED_FILE
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    d[f"{sr}-{bs}"] = sec_per_step
+    fsutil.write_text(f, json.dumps(d))
 
 
 def export_voice(proj: Project, epoch: int | None = None, name: str | None = None, overwrite: bool = False,
