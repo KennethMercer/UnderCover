@@ -3727,6 +3727,7 @@ def u_page_rules():
     assert "previewSync" in app and "pv-for" in app and "keyName" in app, "the Compare panel lost its song / voice tagging or the key spelling"
     work = (web / "work.js").read_text(encoding="utf-8")
     assert 'id="rn-finish-time"' in (web / "index.html").read_text(encoding="utf-8") and "rn-finish-time" in work and "startTime()" in work, "the Running room's Start at / Finish by lost their time fields"
+    assert "tr-tonight" in (web / "train.js").read_text(encoding="utf-8") and 'id="tr-tonight"' in (web / "index.html").read_text(encoding="utf-8"), "step 4 lost its Train tonight"
     assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
     assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"

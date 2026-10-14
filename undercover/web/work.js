@@ -168,11 +168,13 @@ function renderRunRoom() {
         return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[o]} · ${esc(jobLine(j) || JOB_KIND[j.kind] || j.kind)}</small></span>
           <span class="acts"><button class="linkbtn" type="button" data-goto="${o}">Open</button></span></div>`; }).join("")}</div>` : "");
   } else if (work.held) {
-    const res = (work.resume || []).map(r => r.label ?? r);
+    const res = (work.resume || []).map(r => typeof r === "string" ? { label: r } : r);   // {id, kind, label, held_at, queue_as}
     // held work is NOT running: no bar, no running look, a plain "not running" label, and what to do with it
-    const since = work.held_at ? ` Stopped at ${hhmm(work.held_at)}.` : "";
+    const when = t => { if (!t) return ""; const [d, h] = String(t).split(" "); return d === new Date().toLocaleDateString("sv") ? `stopped at ${h}` : `stopped ${d} ${h}`; };
     now = `<div class="rn-now held" data-owner="doubleagent"><div class="who">Not running</div>
-      <p><b>Nothing is running.</b> This work was stopped (you paused it, or UnderCover closed)${res.length ? `: ${esc(res.slice(0, 3).join(", "))}${res.length > 3 ? ` and ${res.length - 3} more` : ""}` : ""}. Where it stopped is saved.${esc(since)}</p>
+      <p><b>Nothing is running.</b> This work was stopped (you paused it, or UnderCover closed). Where it stopped is saved.</p>
+      ${res.length ? `<div class="rn-list">${res.map(r => `<div class="rn-li"><span><b>${esc(r.label)}</b>${r.held_at ? `<small>${esc(when(r.held_at))}</small>` : ""}</span>
+        <span class="acts">${r.queue_as && r.id ? `<button class="linkbtn" type="button" data-rn-toq="${esc(r.id)}">Train tonight instead</button>` : ""}</span></div>`).join("")}</div>` : ""}
       <div class="row"><button class="btn primary" type="button" data-rn-resume>Resume now</button>
         ${res.length ? `<button class="linkbtn" type="button" data-rn-forget>Dismiss</button>` : ""}</div></div>`;
   }
@@ -180,6 +182,15 @@ function renderRunRoom() {
     $$("[data-rn-pause]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await pauseWork(); b.disabled = false; });
     $$("[data-rn-resume]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
     $$("[data-rn-forget]", $("#rn-now")).forEach(b => b.onclick = () => forgetWork(b));   // two clicks, then forgotten
+    $$("[data-rn-toq]", $("#rn-now")).forEach(b => b.onclick = async () => {   // this held work moves to tonight's queue
+      b.disabled = true;
+      try {
+        const r = await api("/api/work/to-queue", { json: { id: b.dataset.rnToq } });
+        W.last = r; renderWorkBar({ ...r, queued: r.queue.filter(i => ["queued", "paused"].includes(i.state)).length });
+        showError("It's in tonight's queue now. It runs while the PC is free.", "Moved", null, true);
+        refreshJobs(true); renderQueue();
+      } catch (e) { b.disabled = false; showError(e.message, "Couldn't move it to tonight"); }
+    });
     $$("[data-jcancel]", $("#rn-now")).forEach(b => b.onclick = async () => {   // two clicks; the first is remembered across redraws
       const id = b.dataset.jcancel;
       clearTimeout(W.cancelTimer);
@@ -254,8 +265,9 @@ async function loadQueue() {
   renderQueue();
 }
 const jobWhat = i => ({ improve: `Improve ${esc(i.display || i.target)}`, cadence: `Cadence for ${esc(i.display || i.target)}`,
-                        newcad: `New voice with cadence: ${esc(i.target)}` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
-const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence" })[i.kind] || esc(i.kind);
+                        newcad: `New voice with cadence: ${esc(i.target)}`,
+                        project: `Training ${esc(i.display || i.target)} (your choices)` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
+const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence", project: "voice · your choices" })[i.kind] || esc(i.kind);
 // the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
 function renderDrawer() {
   renderRunning($("#qd-run"), { heading: "Running now" });
