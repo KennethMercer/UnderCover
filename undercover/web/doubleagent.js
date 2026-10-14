@@ -322,9 +322,10 @@ function renderDaWork() {
     const id = b.dataset.daStop;
     clearTimeout(DA.stopTimer);
     if (DA.stopAsk !== id) {
-      DA.stopAsk = id; DA.stopTimer = setTimeout(() => { DA.stopAsk = null; renderDaWork(); }, 4000);
+      DA.stopAsk = id; DA.stopAskAt = Date.now(); DA.stopTimer = setTimeout(() => { DA.stopAsk = null; renderDaWork(); }, 4000);
       return renderDaWork();
     }
+    if (Date.now() - (DA.stopAskAt || 0) < CONFIRM_MS) { DA.stopTimer = setTimeout(() => { DA.stopAsk = null; renderDaWork(); }, 4000); return; }   // a double click isn't a confirmation
     DA.stopAsk = null; b.disabled = true; b.textContent = "Stopping…";
     try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't stop it"); }
     refreshJobs(true);

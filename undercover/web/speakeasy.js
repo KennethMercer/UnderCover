@@ -367,7 +367,8 @@ function seRecent() {
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
   $$("[data-rkeep]", box).forEach(b => b.onclick = () => seToggleKeep(b.dataset.rkeep, b.getAttribute("aria-pressed") === "true"));
   $$("[data-rdel]", box).forEach(b => b.onclick = async () => {
-    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); b.textContent = "Remove"; } }, 4000); return; }
+    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; } }, 4000); return; }
+    if (!armedFor(b)) return;   // a double click isn't a confirmation
     const id = b.dataset.rdel;
     seRelease(id);
     try { await api(`/api/speak/${id}`, { method: "DELETE" }); } catch (e) { return showError(e.message, "Couldn't remove it"); }
