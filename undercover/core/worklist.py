@@ -25,6 +25,7 @@ _STATE: dict | None = None
 
 KINDS: dict = {}          # queue item kind -> {"run", "estimate", "target", "label"}
 RESUMERS: dict = {}       # resume spec kind -> start(spec) -> Job
+QUEUE_AS: dict = {}       # resume spec kind -> spec -> (queue item kind, target) | None: "Train tonight instead"
 PAUSABLE: set = {"night"}   # job kinds that Pause stops (and that count as voice work)
 PARTLY_PAUSABLE: set = set()   # job kinds that keep running when held, but set their voice training aside
 CONTROL_LOOKUPS: list = []    # job -> trainer Control (for jobs that don't carry their own job.control)
@@ -43,8 +44,24 @@ def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda ite
                    "modes": tuple(modes), "options": options}
 
 
-def register_resume(kind: str, start):
+def register_resume(kind: str, start, queue_as=None):
+    """start(spec) -> Job: Resume. queue_as(spec) -> (queue kind, target) | None: the same work as an overnight queue
+    item instead ("Train tonight instead"); None = it can't run overnight."""
     RESUMERS[kind] = start
+    if queue_as:
+        QUEUE_AS[kind] = queue_as
+
+
+_SPEC_EXTRA = ("id", "held_at")   # added to a held entry; not part of what the work is
+
+
+def _same(a: dict, b: dict) -> bool:
+    return {k: v for k, v in a.items() if k not in _SPEC_EXTRA} == {k: v for k, v in b.items() if k not in _SPEC_EXTRA}
+
+
+def _held(spec: dict) -> dict:
+    """A resume entry as kept: the spec plus an id (the page targets it) and when it was held."""
+    return {**spec, "id": spec.get("id") or uuid.uuid4().hex[:8], "held_at": spec.get("held_at") or time.strftime("%Y-%m-%d %H:%M")}
 
 
 def register_pausable(*kinds: str, partly: bool = False):
@@ -81,6 +98,7 @@ def _state() -> dict:
         _STATE.setdefault("armed", False)
         _STATE.setdefault("settings", {"start_at": None, "finish_by": "07:00", "keep_awake": True})
         _STATE.setdefault("report", None)
+        _STATE["resume"] = [_held(s) for s in _STATE["resume"]]   # entries saved before they had an id
         for it in _STATE["queue"]:   # a crash or restart mid-item: run it again (it continues where it was)
             if it.get("state") == "running":
                 it["state"] = "queued"
@@ -137,8 +155,8 @@ def remember(job):
             for it in st["queue"]:
                 if it["id"] == spec.get("item"):
                     it["state"] = "paused"
-        elif spec not in st["resume"]:
-            st["resume"].append(spec)
+        elif not any(_same(spec, s) for s in st["resume"]):
+            st["resume"].append(_held(spec))
         _save()
         _log(f"remembered {spec.get('label')}; held={st['held']} resume={len(st['resume'])}")
 
@@ -167,6 +185,39 @@ def resume_all() -> dict:
     return out
 
 
+def to_queue(entry_id: str) -> dict:
+    """"Train tonight instead": a held entry becomes an overnight queue item (a project's prepare / training / do-it-all
+    -> its "project" item with the project's own choices; a paused training continues from its resume point when the
+    queue runs it) and leaves the held list. The hold lifts when nothing else is held, as with Dismiss."""
+    with _LOCK:
+        spec = next((s for s in _state()["resume"] if s.get("id") == entry_id), None)
+    if spec is None:
+        raise ModelError("That paused work isn't there any more.")
+    mapped = QUEUE_AS[spec["kind"]](spec) if spec["kind"] in QUEUE_AS else None
+    if not mapped:
+        raise ModelError("This one can't run overnight. Resume it, or dismiss it.")
+    add(*mapped)   # checked as any add is (the voice name guard, nothing ticked, already queued)
+    with _LOCK:
+        st = _state()
+        st["resume"] = [s for s in st["resume"] if s.get("id") != entry_id]
+        if not st["resume"] and not any(i.get("state") == "paused" for i in st["queue"]):
+            st["held"] = False
+            st.pop("held_by", None)
+        _save()
+        _log(f"to the queue: {spec.get('label')} as {mapped[0]} {mapped[1]}")
+    return status()
+
+
+def _resume_row(s: dict) -> dict:
+    q = QUEUE_AS.get(s["kind"])
+    try:
+        as_ = q(s) if q else None
+    except Exception:   # noqa: BLE001 - shown as "can't go overnight"
+        as_ = None
+    return {"id": s.get("id"), "kind": s["kind"], "label": s.get("label", s["kind"]), "project": s.get("project"),
+            "held_at": s.get("held_at"), "queue_as": as_[0] if as_ else None}
+
+
 def forget_paused() -> dict:
     """Dismiss: drop the paused work Resume would start again (its files stay: a training project keeps its resume
     point and can be continued from DoubleAgent). The hold is lifted unless queue items are still paused."""
@@ -186,8 +237,8 @@ def restore(specs: list, start: bool) -> dict:
     with _LOCK:
         st = _state()
         for s in specs:
-            if s not in st["resume"]:
-                st["resume"].append(s)
+            if not any(_same(s, x) for x in st["resume"]):
+                st["resume"].append(_held(s))
         if not start:
             st["held"] = True
         _save()
@@ -330,7 +381,7 @@ def status() -> dict:
     start = now
     if st["armed"] and st["settings"].get("start_at"):
         start = _next_time(st["settings"]["start_at"], now)
-    return {"held": st["held"], "resume": [s.get("label", s["kind"]) for s in st["resume"]], "running": running,
+    return {"held": st["held"], "resume": [_resume_row(s) for s in st["resume"]], "running": running,
             "queue": [{**i, "display": _shown(i)} for i in st["queue"]], "armed": st["armed"], "settings": st["settings"], "report": st["report"],
             "total_min": total, "start": start.strftime("%H:%M") if left else None,
             "done_by": (start + timedelta(minutes=total)).strftime("%H:%M") if left else None}

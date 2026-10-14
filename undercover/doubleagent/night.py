@@ -310,7 +310,7 @@ def _improve(job, item) -> dict:
                         "so they may be someone else's. Kept the old voice; check the project in DoubleAgent."}
     if before is None or after > before + 0.005:
         proj = P.Project.load(proj.name)
-        export_voice(proj, name=old.name, overwrite=True)
+        export_voice(proj, name=old.name, overwrite=True, replace=old.name)   # the voice this improve set out to replace
         remove_voice(cand)
         gpu.forget_voice(old.name)
         return {"voice": old.name, "before": before, "after": after, "replaced": True, "minutes_of_voice": kept_min,

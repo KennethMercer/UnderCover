@@ -605,6 +605,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(worklist.pause_all())
             if action == "resume":
                 return self._json(worklist.resume_all())
+            if action == "to-queue":   # "Train tonight instead": a held entry becomes an overnight queue item
+                return self._json(worklist.to_queue(str(b.get("id") or "")))
             if action == "forget":   # Dismiss the paused work instead of resuming it
                 return self._json(worklist.forget_paused())
             if action == "add":
@@ -705,7 +707,7 @@ class Handler(BaseHTTPRequestHandler):
                 RESTART.set()
                 SERVER.shutdown()
             threading.Thread(target=when_paused, daemon=True).start()
-            return self._json({"ok": True, "pausing": True})
+            return self._json({"ok": True, "pausing": True, "busy": [j.title or j.kind for j in running], "now_ok": True})
         self._json({"ok": True})
         RESTART.set()
         threading.Thread(target=SERVER.shutdown, daemon=True).start()  # makes serve_forever() return in main()
