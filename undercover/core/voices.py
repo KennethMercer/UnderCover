@@ -513,7 +513,7 @@ def display_of_meta(meta: dict) -> str:
         return meta.get("name") or ""
 
 
-def remove_to_aside(name: str) -> dict:
+def remove_to_aside(name: str, why: str = "you removed it") -> dict:
     """The user's Delete (FrontMan's Remove, SafeHouse's Delete): the voice is set aside, not deleted (Internal
     Affairs P5-1: a double-click on Remove deleted a trained voice for good). A retrained one waiting beside it goes
     with it. bring_back() puts them back; deleting for good is SafeHouse's Set aside section (its own control).
@@ -529,7 +529,7 @@ def remove_to_aside(name: str) -> dict:
     if cand and (voices_dir() / cand / "meta.json").exists():
         with_ = set_aside(voices_dir() / cand, note={"why": f"waited beside {label_of(v.name)} when you removed it"}).name
     try:
-        a = set_aside(v.dir, note={"why": "you removed it", **({"with": with_} if with_ else {})})
+        a = set_aside(v.dir, note={"why": why, **({"with": with_} if with_ else {})})
     except BaseException:
         if with_:   # the voice couldn't move (a file held open): its waiting one back beside it, as before
             bring_back(with_)
