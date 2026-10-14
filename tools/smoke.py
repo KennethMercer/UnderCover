@@ -1032,6 +1032,12 @@ def u_improve_pending():
         assert [v.name for v in listed_voices()] == ["morgan-freeman-uc"], "the waiting candidate is listed as its own voice"
         assert len(list_voices()) == 2 and voice_info(new)["waiting_beside"] == "morgan-freeman-uc"
         assert voice_info(old)["waiting_beside"] is None
+        from undercover.app import server
+        from undercover.safehouse import library
+        assert [v["name"] for v in server.voices_json()] == ["morgan-freeman-uc"], "/api/voices lists the candidate"
+        assert "morgan-freeman-uc-next" not in {c["voice"] for c in night.candidates()}, "the improve picker lists the candidate"
+        lib = {v["name"]: v for v in library.voices()}                 # the library shows it, beside its voice
+        assert lib["morgan-freeman-uc-next"]["waiting_beside"] == "morgan-freeman-uc" and lib["morgan-freeman-uc"]["waiting_beside"] is None
         for target, word in (("morgan-freeman-uc", "already waiting"), ("morgan-freeman-uc-next", "waiting to be compared")):
             try:
                 night._improve_target(target)

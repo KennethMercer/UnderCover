@@ -255,12 +255,12 @@ def _full_index(vdir):
 def voices() -> list[dict]:
     from ..doubleagent.service import undertrained
     from ..doubleagent.cadence import pack_of, pack_size
-    from ..core.voices import listed_voices, voice_info
+    from ..core.voices import list_voices, voice_info
     from ..frontman.pipeline import history
     hist = history()
     q = _quality()
     out = []
-    for v in listed_voices():
+    for v in list_voices():   # all of them: a retrained one waiting is listed too (waiting_beside), its storage shown
         ex = v.extra or {}
         score = verdict = None
         for k, r in q.items():   # a measured check for this voice (installed or downloaded for a check)
