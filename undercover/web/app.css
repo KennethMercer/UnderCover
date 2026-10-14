@@ -398,6 +398,7 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .rn-now[data-owner="speakeasy"] { --jc: var(--c-speakeasy); }
 .rn-now[data-owner="safehouse"] { --jc: var(--c-safehouse); }
 .rn-now.held { --jc: var(--warn); }
+.rn-now.held .who::before { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }   /* a ring, not a lit dot: it isn't running */
 .rn-now p { margin: 0; }
 .rn-now .who { display: flex; align-items: center; gap: 8px; color: var(--jc); font-weight: 600; font-size: 13.5px; }
 .rn-now .who::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
