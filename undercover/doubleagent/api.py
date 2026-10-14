@@ -561,14 +561,8 @@ def _cadence_ab(h, method, voice: str, action):
     if action is None and method == "GET":
         return h._json(cadence.ab_state(voice))
     if action and action.startswith("sample/") and method == "GET":
-        body = cadence.sample_file(voice, action.split("/")[1]).read_bytes()
-        h.send_response(200)
-        h.send_header("Content-Type", "audio/wav")
-        h.send_header("Content-Length", str(len(body)))
-        h.send_header("Cache-Control", "no-store")
-        h.end_headers()
-        h.wfile.write(body)
-        return
+        # with Range (206) and Accept-Ranges like /files: a phone's player seeks (Internal Affairs P2-3)
+        return h._send_file(cadence.sample_file(voice, action.split("/")[1]), cache="no-store")
     if method != "POST":
         raise LookupError("Not found")
     b = h._body()   # always read: an unread body would be taken for the start of the next request on this connection
