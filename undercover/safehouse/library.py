@@ -284,7 +284,7 @@ def aside() -> list[dict]:
     replace that didn't finish. Newest first: {id, voice, display, size, at, why, undo_for}. undo_for: the voice whose
     Undo would bring this one back (removing it ends that Undo)."""
     import re
-    from ..core.voices import label_of
+    from ..core.voices import display_of_meta
     d = _aside_dir()
     if not d.is_dir():
         return []
@@ -309,7 +309,9 @@ def aside() -> list[dict]:
         st = re.search(r"-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}(?:-\d+)?(?:-unfinished)?$", f.name)
         at = (f"{st[1]}-{st[2]}-{st[3]} {st[4]}:{st[5]}" if st
               else time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime)))
-        out.append({"id": f.name, "voice": name, "display": meta.get("display") or label_of(name), "size": _size(f),
+        display = (((meta.get("extra") or {}).get("set_aside") or {}).get("display")   # kept when it was set aside
+                   or display_of_meta(meta) or name)
+        out.append({"id": f.name, "voice": name, "display": display, "size": _size(f),
                     "at": at, "why": why, "undo_for": undo_for})
     out.sort(key=lambda x: x["at"], reverse=True)
     return out
