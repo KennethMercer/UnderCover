@@ -27,10 +27,11 @@ function renderAside() {
 // two clicks within 4 s; the first one says what it will cost (an Undo that would no longer work)
 async function asideDelete(id, btn) {
   if (AS.ask !== id) {
-    AS.ask = id; renderAside();
+    AS.ask = id; AS.askAt = Date.now(); renderAside();
     clearTimeout(AS.timer); AS.timer = setTimeout(() => { if (AS.ask === id) { AS.ask = null; renderAside(); } }, 4000);
     return;
   }
+  if (Date.now() - (AS.askAt || 0) < CONFIRM_MS) return;   // a double click isn't a confirmation
   clearTimeout(AS.timer); AS.ask = null; btn.disabled = true;
   try {
     const r = await api(`/api/library/aside/${encodeURIComponent(id)}`, { method: "DELETE" });

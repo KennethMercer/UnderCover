@@ -217,10 +217,11 @@ function renderSources() {
     e.preventDefault();
     const src = T.proj.sources.find(s => s.id === b.dataset.rm);
     if (src && src.status === "ready" && !b.classList.contains("confirm")) {   // deletes its prepared phrases: confirm
-      b.classList.add("confirm"); b.textContent = `Remove ${src.extra?.phrases ?? ""} phrases?`.replace("  ", " ");
-      setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Remove"; }, 4000);
+      b.classList.add("confirm"); arm(b); b.textContent = `Remove ${src.extra?.phrases ?? ""} phrases?`.replace("  ", " ");
+      setTimeout(() => { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; }, 4000);
       return;
     }
+    if (src && src.status === "ready" && !armedFor(b)) return;   // a double click isn't a confirmation
     try { await openProject(T.proj.name, await P("sources", { id: b.dataset.rm, remove: true })); }
     catch (err) { showError(err.message, "Couldn't remove that source"); }
   });
