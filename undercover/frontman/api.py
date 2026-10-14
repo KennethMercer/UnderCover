@@ -136,6 +136,7 @@ def _start_cover(h, body: dict):
     _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice)))
     job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}")
     JOBS[job.id] = job
+    _say_why_waiting(job, meta["id"])
 
     def run(job: Job):
         from .pipeline import estimate
@@ -217,21 +218,67 @@ def _presep(h, song_id: str, body: dict):
     busy = GPU_QUEUE.qsize() or any(not j.finished for j in JOBS.values() if j.kind != "presep")
     if busy or any(not j.finished and getattr(j, "presep", None) == want for j in JOBS.values()):
         return h._json({"started": False})
-    job = Job("presep")
+    job = Job("presep", title=f"Preparing {meta['title']}")
     job.presep = want
+    job.followers = []   # covers / previews of this song queued behind it: they show its steps
     JOBS[job.id] = job
 
     def run(job: Job):
+        from .pipeline import CoverOptions, estimate
         from ..core.separate import separate
+        steps = ["main"] + (["karaoke"] if want[3] else []) + (["dereverb"] if want[2] else [])
+        song = path("uploads_dir") / meta["file"]
+        try:
+            est = estimate(song, CoverOptions(voice="", quality=want[1], dereverb=want[2], karaoke=want[3]))["separating"]
+        except Exception:   # noqa: BLE001 - extrapolated from progress instead
+            est = None
+        t0 = time.perf_counter()
 
         def progress(frac, step):
             if job.cancel:
                 raise Cancelled()
-        separate(path("uploads_dir") / meta["file"], dereverb=want[2], karaoke=want[3],
-                 separator=ENGINE.separator, quality=want[1], progress=progress, one_voice_if_no_lead=True)
+            elapsed = time.perf_counter() - t0
+            left = (elapsed / frac * (1 - frac)) if frac > 0.05 else (max((est or 0) - elapsed, 0) if est else None)
+            n = steps.index(step) + 1 if step in steps else 1
+            ev = {"stage": "separating", "fraction": round(frac, 3), "label": PRESEP_LABELS.get(step, "Separating the vocal"),
+                  "step": step, "step_n": n, "steps": len(steps)}
+            if left is not None:
+                ev["total_left"] = round(left, 1)
+            job.push(**ev)
+            for f in list(getattr(job, "followers", [])):
+                if not f.finished and f.state == "queued":
+                    f.push(stage="preparing", fraction=ev["fraction"], step_n=n, steps=len(steps), waits_for=job.id,
+                           label=f"Preparing the song first ({n} of {len(steps)})…",
+                           **({"total_left": round(left + (getattr(f, "own_estimate", 0) or 0), 1)} if left is not None else {}))
+        progress(0.0, steps[0])
+        separate(song, dereverb=want[2], karaoke=want[3], separator=ENGINE.separator, quality=want[1],
+                 progress=progress, one_voice_if_no_lead=True)
         job.finish("done", message="Stems ready")
     GPU_QUEUE.put((job, run))
     h._json({"started": True, "job": job.id})
+
+
+PRESEP_LABELS = {"main": "Separating the vocal", "karaoke": "Splitting lead and backing", "dereverb": "Removing reverb"}
+
+
+def _say_why_waiting(job: Job, song_id: str):
+    """A cover or preview that has to wait says why: behind its own song's preparation (and follows its steps: the
+    presep pushes them on), or behind other work by name. Never a bare "starting" when the reason is known."""
+    from ..core import jobs as J
+    pre = next((j for j in list(JOBS.values()) if j.kind == "presep" and not j.finished and not j.cancel
+                and (getattr(j, "presep", None) or (None,))[0] == song_id), None)
+    if pre is not None:
+        pre.followers = getattr(pre, "followers", [])
+        pre.followers.append(job)
+        last = next((e for e in reversed(pre.events) if e.get("stage") == "separating"), {})
+        n, steps = last.get("step_n", 1), last.get("steps", 1)
+        job.push(stage="preparing", fraction=last.get("fraction", 0), step_n=n, steps=steps, waits_for=pre.id,
+                 label=f"Preparing the song first ({n} of {steps})…",
+                 **({"total_left": last["total_left"]} if last.get("total_left") is not None else {}))
+        return
+    cur = J.CURRENT[0]
+    if cur is not None and not cur.finished:
+        job.push(stage="queued", fraction=0, waits_for=cur.id, label=f"Waiting for: {cur.title or cur.kind}")
 
 
 def _song_from_youtube(h, body: dict):
@@ -317,6 +364,7 @@ def _start_preview(h, body: dict):
     song = path("uploads_dir") / meta["file"]
     job = Job("cover", title=f"Preview: {meta['title']} · {label_of(opts.voice)}")  # same GPU queue as covers
     JOBS[job.id] = job
+    _say_why_waiting(job, meta["id"])
 
     def run(job: Job):
         def progress(stage, frac, msg):
