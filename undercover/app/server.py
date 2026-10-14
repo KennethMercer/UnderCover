@@ -605,11 +605,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(worklist.pause_all())
             if action == "resume":
                 return self._json(worklist.resume_all())
+            if action == "to-queue":   # "Train tonight instead": a held entry becomes an overnight queue item
+                return self._json(worklist.to_queue(str(b.get("id") or "")))
             if action == "forget":   # Dismiss the paused work instead of resuming it
                 return self._json(worklist.forget_paused())
             if action == "add":
-                return self._json(worklist.add(b.get("kind", ""), b.get("target", ""), now=bool(b.get("now")),
-                                               mode=b.get("mode") or None))
+                # a project queued from the Deep path names it as "project" (the target is the project's id)
+                return self._json(worklist.add(b.get("kind", ""), b.get("target") or b.get("project") or "", now=bool(b.get("now")),
+                                               mode=b.get("mode") or None,
+                                               options={k: b[k] for k in ("voice_name", "length", "sr") if k in b}))
             if action == "remove":
                 return self._json(worklist.remove(b.get("id", "")))
             if action == "order":
@@ -667,9 +671,30 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"job": job.id})
 
     def _restart(self):
-        """Restart the server process to load updated code. Refused while a cover is running or queued."""
+        """Restart the server process to load updated code. {"now": true}: stop whatever is running (Stop, not Pause:
+        the user's "the stop has to be a stop") and restart at once. Without it, a running cover is refused with what's
+        running and "now_ok" (the page offers "Restart now (stops running work)"); voice work pauses first as before."""
+        now = bool(self._body().get("now"))
+        running = [j for j in JOBS.values() if not j.finished]
+        if now and running:
+            for j in running:
+                j.cancel = True
+                if j.control is not None:
+                    j.control.stop = True
+            try:
+                from ..doubleagent.api import ACTIVE
+                for a in list(ACTIVE.values()):
+                    if a.get("control") is not None:
+                        a["control"].stop = True
+            except Exception:   # noqa: BLE001 - the restart ends them anyway
+                pass
+            self._json({"ok": True, "stopped": [j.title or j.kind for j in running]})
+            RESTART.set()
+            threading.Thread(target=SERVER.shutdown, daemon=True).start()
+            return
         if any(j.kind == "cover" and not j.finished for j in JOBS.values()):
-            return self._error("A cover is still being made. Wait for it to finish (or cancel it), then restart.", 409)
+            return self._json({"error": "A cover is still being made. Wait for it to finish, or restart now (it stops).",
+                               "busy": [j.title or j.kind for j in running], "now_ok": True}, 409)
         from ..core import worklist
         if worklist.active():
             # Voice work: pause it (training keeps its place), restart, and resume it automatically after
@@ -682,7 +707,7 @@ class Handler(BaseHTTPRequestHandler):
                 RESTART.set()
                 SERVER.shutdown()
             threading.Thread(target=when_paused, daemon=True).start()
-            return self._json({"ok": True, "pausing": True})
+            return self._json({"ok": True, "pausing": True, "busy": [j.title or j.kind for j in running], "now_ok": True})
         self._json({"ok": True})
         RESTART.set()
         threading.Thread(target=SERVER.shutdown, daemon=True).start()  # makes serve_forever() return in main()

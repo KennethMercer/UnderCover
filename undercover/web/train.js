@@ -225,8 +225,11 @@ $("#tr-prepare").onclick = async () => {
   try { const r = await P("prepare"); follow(r.job, "prepare"); }
   catch (e) { showError(e.message, "Can't prepare yet"); }
 };
+// the voice name only when the field is this project's (it keeps the last project's name while this one has no clips:
+// a new Donald Trump project once sent "barack-obama-uc"; the server refuses another person's voice name too)
+const ownName = () => ($("#tr-name").dataset.proj === T.proj?.name && $("#tr-name").value) || undefined;
 $("#tr-auto").onclick = async () => {
-  try { const r = await P("auto", { voice_name: $("#tr-name").value || undefined }); follow(r.job, "auto"); }
+  try { const r = await P("auto", { voice_name: ownName() }); follow(r.job, "auto"); }
   catch (e) { showError(e.message, "Can't start"); }
 };
 function onAutoEvent(ev) {
@@ -358,7 +361,7 @@ async function startTraining(fresh) {
   const st = T.proj.train || {};
   if (!fresh && st.epoch && st.state !== "paused" && !confirm("Train again from scratch? The saves from the last run are replaced.")) return;
   try {
-    const r = await P("train", { voice_name: $("#tr-name").value, length: $("#tr-length").value, sr: +$("#tr-sr").value, fresh });
+    const r = await P("train", { voice_name: ownName(), length: $("#tr-length").value, sr: +$("#tr-sr").value, fresh });
     T.trainEv = null;
     follow(r.job, "train");
     refresh();
