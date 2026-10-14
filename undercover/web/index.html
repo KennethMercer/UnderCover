@@ -100,6 +100,17 @@
     <div class="wn-body" id="wn-body"></div>
     <div class="row"><button class="btn" id="wn-ok" type="button">Got it</button><button class="linkbtn" id="wn-all" type="button">Every change, in SafeHouse</button></div>
   </section>
+  <dialog class="confirm-dlg" id="replace-dlg" aria-labelledby="replace-q">
+    <form method="dialog">
+      <h3 id="replace-q">Replace this voice?</h3>
+      <p id="replace-say"></p>
+      <div class="row dlg-btns">
+        <button class="btn" type="button" id="replace-yes">Replace my voice</button>
+        <button class="btn primary" type="button" id="replace-wait">Let them wait side by side</button>
+        <button class="linkbtn" type="button" id="replace-no">Cancel</button>
+      </div>
+    </form>
+  </dialog>
   <div class="alert" id="err" hidden role="alert">
     <div><b id="err-title">Something went wrong</b><p id="err-msg"></p></div>
     <div class="alert-btns"><button class="btn primary" id="err-action" hidden></button><button class="icon-btn" id="err-x">Dismiss</button></div>
