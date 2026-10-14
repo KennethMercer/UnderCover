@@ -1037,6 +1037,45 @@ def u_improve_pending():
     return "pending beside, nothing replaced or removed; no improve of a pending voice or its candidate"
 
 
+@check("an improved voice waiting (Internal Affairs P2-1): Keep the new one -> it takes the name, the old one set aside (not listed, not deleted), the cadence and display name carried over; Undo puts both back; Keep the current one -> the candidate set aside; Undo again")
+def u_improved_keep():
+    from undercover.core.voices import get_voice, list_voices, voices_dir
+    from undercover.doubleagent import improved, night
+    with isolated_data():
+        def voice(name, extra, display=""):
+            d = voices_dir() / name
+            d.mkdir(parents=True)
+            (d / "model.pth").write_bytes(b"m-" + name.encode())
+            (d / "meta.json").write_text(json.dumps({"name": name, "dir": str(d), "pth": str(d / "model.pth"), "version": "v2",
+                                                      "sr": 40000, "f0": True, "display": display, "extra": extra}), encoding="utf-8")
+            return d
+        cur = voice("morgan-freeman-uc", {"trained": True, "project": "morgan-freeman", "tts": {"ref": "ref.wav"}}, "Morgan")
+        (cur / "tts").mkdir()
+        (cur / "tts" / "ref.wav").write_bytes(b"cadence")
+        voice("morgan-freeman-uc-next", {"trained": True, "project": "morgan-freeman"})
+        night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", 0.71, 0.74, 30)
+        st = improved.state("morgan-freeman-uc")
+        assert st["candidate"] == "morgan-freeman-uc-next" and st["after"] == 0.74 and not st["undo"], st
+        improved.keep("morgan-freeman-uc", "new")
+        v = get_voice("morgan-freeman-uc")
+        assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the new one didn't take the name"
+        assert v.display == "Morgan" and (v.dir / "tts" / "ref.wav").read_bytes() == b"cadence" and v.extra["tts"], v.extra
+        names = {x.name for x in list_voices()}
+        assert names == {"morgan-freeman-uc"}, names                               # the old one isn't listed...
+        aside = voices_dir() / ".aside" / v.extra["improved_previous"]["aside"]
+        assert (aside / "model.pth").read_bytes() == b"m-morgan-freeman-uc"        # ...and isn't deleted
+        improved.undo("morgan-freeman-uc")
+        v, c = get_voice("morgan-freeman-uc"), get_voice("morgan-freeman-uc-next")
+        assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc" and (c.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next"
+        assert (v.dir / "tts" / "ref.wav").exists() and v.extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+        improved.keep("morgan-freeman-uc", "current")                              # the other way
+        assert {x.name for x in list_voices()} == {"morgan-freeman-uc"} and not get_voice("morgan-freeman-uc").extra.get("improved_pending")
+        improved.undo("morgan-freeman-uc")
+        assert {x.name for x in list_voices()} == {"morgan-freeman-uc", "morgan-freeman-uc-next"}
+        assert get_voice("morgan-freeman-uc").extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+    return "keep new (old aside, cadence and name carried), undo; keep current (candidate aside), undo; nothing deleted"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -4102,6 +4141,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/library/smaller/undo"),
     ("POST", "/api/library/voices/some-voice/full-index"),
     ("POST", "/api/work/to-queue"),
+    ("GET", "/api/train/voices/some-voice/improved"), ("POST", "/api/train/voices/some-voice/improved/keep"),
 ]
 
 
@@ -5793,7 +5833,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

@@ -136,6 +136,20 @@ def _route(h, method, p):
     m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9][A-Za-z0-9_-]*)/cadence(?:/(ab|verdict|sample/current|sample/pending))?", p)
     if m:
         return _cadence_ab(h, method, unquote(m.group(1)), m.group(2))
+    m = re.fullmatch(r"/api/train/voices/([A-Za-z0-9][A-Za-z0-9_-]*)/improved(?:/(ab|keep|undo))?", p)
+    if m:   # an overnight improve's retrained voice: the blind A/B, Keep, Undo (Internal Affairs P2-1)
+        from . import improved
+        voice, act = unquote(m.group(1)), m.group(2)
+        if act is None and method == "GET":
+            return h._json({"improved": improved.state(voice)})
+        if method != "POST" or act is None:
+            raise LookupError("Not found")
+        b = h._body()
+        if act == "ab":
+            return h._json(improved.start_samples(voice))
+        if act == "keep":
+            return h._json(improved.keep(voice, str(b.get("keep") or "")))
+        return h._json(improved.undo(voice))
     m = re.fullmatch(r"/api/train/projects/([a-z0-9-]+)(?:/(\w+))?", p)
     if not m:
         raise LookupError("Not found")
