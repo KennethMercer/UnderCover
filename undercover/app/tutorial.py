@@ -370,8 +370,9 @@ def undo_demo() -> dict:
             raise ModelError("There's no earlier Agent Smoke to go back to.")
         if storage.ALLOWED_ROOTS is not None and storage.refuse([dest, prev]):
             raise ModelError(storage.refuse([dest, prev]))
-        if dest.exists():
-            storage.remove_files([], [vd], dirs=[dest])
+        if dest.exists():   # the newer one is set aside (Set aside lists it; Update brings it again anyway)
+            from ..core.voices import set_aside
+            set_aside(dest, note={"why": "the newer Agent Smoke, after Undo of its update"})
         fsutil.retry(lambda: (prev / "meta.json.previous").replace(prev / "meta.json"))
         fsutil.retry(lambda: prev.replace(dest))
         gpu.forget_voice(DEMO.name)

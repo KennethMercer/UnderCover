@@ -1282,14 +1282,14 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "core/storage.py::remove_files::rmtree::p", "core/storage.py::move::rmtree::c",
     "core/storage.py::remove_tree::remove_tree::child", "core/storage.py::move::remove_tree::now",
     "app/tutorial.py::seed_voice::remove_files", "app/tutorial.py::update_demo::remove_files",
-    "app/tutorial.py::undo_demo::remove_files", "core/doctor.py::clear_stale::remove_files",
+    "core/doctor.py::clear_stale::remove_files",
     "core/tailnet.py::fetch_binaries::remove_files", "core/tailnet.py::forget::remove_files",
     "core/themes.py::_drop::remove_files", "core/vault.py::prune::remove_files", "core/ytdlp.py::_drop::remove_files",
     "doubleagent/improved.py::_drop_samples::remove_files", "frontman/history.py::roll_off::remove_files",
     "safehouse/smaller.py::keep_voice::remove_files", "safehouse/smaller.py::_drop_readings::remove_files",
     "safehouse/smaller.py::undo_voice::remove_files", "safehouse/smaller.py::keep_project::remove_files",
     "safehouse/smaller.py::undo_project::remove_files", "safehouse/smaller.py::restore_full_index::remove_files",
-    "safehouse/smaller.py::expire_full_indexes::remove_files", "speakeasy/speak.py::roll_off::remove_files",
+    "safehouse/smaller.py::expire_full_indexes::remove_files", "safehouse/smaller.py::index_back::remove_files", "speakeasy/speak.py::roll_off::remove_files",
 }
 
 
@@ -1595,7 +1595,16 @@ def u_duplicate_aside():
         a = _voice_dir("ann-uc", {})
         b = _voice_dir("ann-two", {})
         (b / "tts").mkdir()
+        (b / "tts" / "ref.wav").write_bytes(b"cadence")
         (b / "model.pth").write_bytes((a / "model.pth").read_bytes())
+        # and an empty tts/ folder isn't a cadence (pass 7): the older install is kept over it
+        for name, when in (("bea-uc", "2026-01-01 10:00"), ("bea-two", "2026-02-01 10:00")):
+            vd = _voice_dir(name, {})
+            m = json.loads((vd / "meta.json").read_text(encoding="utf-8"))
+            m["installed"] = when
+            (vd / "meta.json").write_text(json.dumps(m), encoding="utf-8")
+        (voices_dir() / "bea-two" / "tts").mkdir()
+        (voices_dir() / "bea-two" / "model.pth").write_bytes((voices_dir() / "bea-uc" / "model.pth").read_bytes())
         # the demo voice is always kept, even against a named copy of it with a cadence
         from undercover.app import tutorial
         from undercover.core.voices import DEMO_VOICE
@@ -1615,6 +1624,10 @@ def u_duplicate_aside():
         (mine / "model.pth").write_bytes(b"its own now")                 # (out of the way for the rest)
         g = library._cleanup_groups()
         d = {x["voice"]: x for x in g["duplicate_voices"]["aside"]}
+        assert d.get("bea-two", {}).get("because") == "it was installed first", d
+        d.pop("bea-two")
+        (voices_dir() / "bea-two" / "model.pth").write_bytes(b"its own")
+        g = library._cleanup_groups()                                   # (without that pair)
         assert set(d) == {"spongebob-copy", "ann-uc"}, d
         assert d["spongebob-copy"]["keeps"] == "spongebob-uc" and "project" in d["spongebob-copy"]["because"], d
         assert d["ann-uc"]["keeps"] == "ann-two" and "cadence" in d["ann-uc"]["because"], d
@@ -1631,7 +1644,7 @@ def u_duplicate_aside():
         r = library.clean_up({"duplicate_voices"})
         r["set_aside"].append({"voice": "spongebob-copy"})
         assert r["freed"] == 0 and {x["voice"] for x in r["set_aside"]} == {"spongebob-copy", "ann-uc"}, r
-        assert {v.name for v in listed_voices()} == {"spongebob-uc", "ann-two", "agent-smoke", "my-smoke"}
+        assert {v.name for v in listed_voices()} == {"spongebob-uc", "ann-two", "agent-smoke", "my-smoke", "bea-uc", "bea-two"}
         assert (get_voice("spongebob-uc").dir / "tts").is_dir(), "the original was touched"
         items = {x["voice"]: x for x in library.aside()}
         assert items["spongebob-copy"]["why"] == "the same model as Spongebob", items["spongebob-copy"]
@@ -1644,6 +1657,122 @@ def u_duplicate_aside():
                 assert "never deletes" in str(e), e
         assert get_voice("spongebob-uc").dir.exists() and (voices_dir() / ".aside").is_dir()
     return "the project's voice kept over a named copy; a cadence kept over an older install; copies set aside; _remove refuses voices"
+
+
+@check("Storage's folder move is transactional (Internal Affairs pass 7): a failure after the setting switched puts the setting back FIRST, then drops the new copy (or moves the folders back on the same drive); nothing the setting points at is removed")
+def u_move_rollback():
+    from undercover.core import config, relocate, storage
+
+    class FakeJob:
+        id, cancel = "smoke", False
+
+        def push(self, **ev):
+            pass
+    with isolated_data() as t:
+        app = t / "app"
+        for d in ("uploads", "output", "models/voices/v1"):
+            (app / d).mkdir(parents=True, exist_ok=True)
+        (app / "uploads/s.mp3").write_bytes(b"s" * 3000)
+        (app / "models/voices/v1/meta.json").write_text(json.dumps({"dir": str(app / "models/voices/v1")}), encoding="utf-8")
+        before = {k: str(config.path(k)) for k in ("uploads_dir", "output_dir", "voices_dir")}
+        real_rw, real_check = relocate.rewrite, storage.check
+
+        def boom(old, new, **kw):   # the switch happened; rewriting the stored paths fails
+            if Path(new).is_relative_to(t / "lib2") or Path(new).is_relative_to(t / "lib3"):
+                raise OSError("disk full")
+            return real_rw(old, new, **kw)
+        relocate.rewrite = boom
+        try:
+            for dest, other_drive in ((t / "lib2", True), (t / "lib3", False)):
+                storage.check = (lambda g, f: {**real_check(g, f), "same_drive": False}) if other_drive else real_check
+                try:
+                    storage.move("library", str(dest), FakeJob())
+                    raise AssertionError("the injected failure didn't fail the move")
+                except OSError:
+                    pass
+                after = {k: str(config.path(k)) for k in before}
+                assert after == before, (other_drive, after, before)          # the setting is back
+                assert (app / "uploads/s.mp3").read_bytes() == b"s" * 3000, "the original went"
+                assert json.loads((app / "models/voices/v1/meta.json").read_text(encoding="utf-8"))["dir"] == str(app / "models/voices/v1")
+                assert not (dest / "uploads").exists(), f"the new place kept files ({other_drive})"
+        finally:
+            relocate.rewrite, storage.check = real_rw, real_check
+        # a failure after the switch completed (removing the old copy): the new place is kept, nothing undone
+        real_rt = storage.remove_tree
+        storage.check = lambda g, f: {**real_check(g, f), "same_drive": False}
+        storage.remove_tree = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("late"))
+        try:
+            try:
+                storage.move("library", str(t / "lib5"), FakeJob())
+                raise AssertionError("the late failure didn't fail the move")
+            except RuntimeError:
+                pass
+        finally:
+            storage.remove_tree, storage.check = real_rt, real_check
+        assert (t / "lib5/uploads/s.mp3").exists() and storage._inside(config.path("uploads_dir"), t / "lib5"), "the new copy went"
+        storage.move("library", str(t / "lib4"), FakeJob())                    # and it still moves when nothing fails
+        assert (t / "lib4/uploads/s.mp3").exists() and storage._inside(config.path("uploads_dir"), t / "lib4")
+    return "copy (other drive) and move (same drive): setting back first, the original whole, the new place empty"
+
+
+@check("the last set-aside gaps (Internal Affairs pass 7): Undo of a demo update sets the newer Agent Smoke aside; a 30-day full index goes only when its project can rebuild it, else to Set aside (and back)")
+def u_aside_gaps():
+    import time as _t
+    from undercover.app import tutorial
+    from undercover.core.engine.rvc.index import EXPORT_ASIDE, EXPORT_RECORD
+    from undercover.core.voices import DEMO_VOICE, get_voice, voices_dir
+    from undercover.safehouse import library, smaller
+    with isolated_data():
+        # Undo of a demo update: the newer one is set aside, not deleted
+        cur = _voice_dir(DEMO_VOICE, {"demo": True})
+        prev = voices_dir() / tutorial.PREVIOUS
+        prev.mkdir(parents=True)
+        (prev / "model.pth").write_bytes(b"older")
+        (prev / "meta.json.previous").write_text(json.dumps({"name": DEMO_VOICE, "dir": str(cur), "pth": str(cur / "model.pth"),
+                                                             "version": "v2", "sr": 40000, "f0": True, "extra": {"demo": True}}), encoding="utf-8")
+        tutorial.undo_demo()
+        assert (get_voice(DEMO_VOICE).dir / "model.pth").read_bytes() == b"older"
+        rows = [x for x in library.aside() if x["voice"] == DEMO_VOICE]
+        assert rows and (voices_dir() / ".aside" / rows[0]["id"] / "model.pth").read_bytes() == b"m-" + DEMO_VOICE.encode(), rows
+        # a full index past its 30 days: its project is gone -> set aside, listed, and Bring it back restores it
+        v = _voice_dir("zed-uc", {"trained": True, "project": "zed"})
+        (v / "model.index").write_bytes(b"10k")
+        (v / EXPORT_ASIDE).write_bytes(b"full")
+        (v / EXPORT_RECORD).write_text(json.dumps({"until": _t.time() - 10}), encoding="utf-8")
+        assert smaller.expire_full_indexes() == ["zed-uc"]
+        assert not (v / EXPORT_ASIDE).exists() and (v / "model.index").read_bytes() == b"10k"
+        row = next(x for x in library.aside() if x["voice"] == "zed-uc")
+        assert "full search index" in row["display"] and "project is gone" in row["why"], row
+        assert library.restore_aside(row["id"]) == {"voice": "zed-uc", "with": None}
+        assert (v / "model.index").read_bytes() == b"full" and not (voices_dir() / ".aside" / row["id"]).exists()
+        # with its project still able to rebuild it, it's removed as before
+        from undercover.doubleagent.project import projects_dir
+        (projects_dir() / "zed" / "train").mkdir(parents=True)
+        (projects_dir() / "zed" / "train" / "data.pt").write_bytes(b"d")
+        (v / EXPORT_ASIDE).write_bytes(b"full2")
+        (v / EXPORT_RECORD).write_text(json.dumps({"until": _t.time() - 10}), encoding="utf-8")
+        assert smaller.expire_full_indexes() == ["zed-uc"] and not (v / EXPORT_ASIDE).exists()
+        assert not [x for x in library.aside() if x["voice"] == "zed-uc"]
+    return "demo Undo -> newer one aside; full index: project gone -> aside + back; project there -> removed"
+
+
+@check("a folder copy of a voice doesn't take the original's waiting candidate when it's set aside (Internal Affairs P7-1)")
+def u_p7_1():
+    from undercover.core.voices import get_voice, remove_to_aside, voices_dir
+    from undercover.doubleagent import night
+    with isolated_data():
+        _voice_dir("morgan-freeman-uc", {"trained": True, "project": "morgan-freeman"})
+        _voice_dir("morgan-freeman-uc-next", {"trained": True, "project": "morgan-freeman"})
+        night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", 0.71, 0.74, 30)
+        meta = json.loads((voices_dir() / "morgan-freeman-uc" / "meta.json").read_text(encoding="utf-8"))
+        cp = voices_dir() / "morgan-copy"
+        cp.mkdir()
+        (cp / "model.pth").write_bytes(b"m")
+        (cp / "meta.json").write_text(json.dumps({**meta, "name": "morgan-copy", "dir": str(cp), "pth": str(cp / "model.pth")}), encoding="utf-8")
+        r = remove_to_aside("morgan-copy")
+        assert r["with"] is None and (voices_dir() / "morgan-freeman-uc-next" / "meta.json").exists(), r
+        assert get_voice("morgan-freeman-uc").extra["improved_pending"]["voice"] == "morgan-freeman-uc-next"
+    return "the copy went aside alone; the original's candidate still waits beside it"
 
 
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
@@ -2174,10 +2303,10 @@ def u_rolloff_covers():
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
     # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and (improved.py) an improved voice's listening copies;
     # expired after its 30 days); a new caller must be added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 4, "core/doctor.py", "core/tailnet.py",
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 3, "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py", "doubleagent/improved.py",
-                                                                        "frontman/history.py", "safehouse/library.py", *["safehouse/smaller.py"] * 8,
+                                                                        "frontman/history.py", "safehouse/library.py", *["safehouse/smaller.py"] * 10,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
@@ -6525,7 +6654,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
