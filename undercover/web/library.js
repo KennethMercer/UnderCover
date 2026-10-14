@@ -19,7 +19,8 @@ const gb = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.rou
 const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const art = (name, big) => `<span class="art" style="background:linear-gradient(135deg,hsl(${hue(name)} 55% 45%),hsl(${(hue(name) + 70) % 360} 50% 35%))"${big ? "" : ' aria-hidden="true"'}>${esc(initialOf(name))}</span>`;
 const when = s => { if (!s) return ""; const d = new Date(typeof s === "number" ? s * 1000 : s.replace(" ", "T")); if (isNaN(d)) return s;
-  const days = Math.floor((Date.now() - d) / 864e5); return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : days < 30 ? `${days} days ago` : d.toLocaleDateString(); };
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), days = Math.round((day(new Date()) - day(d)) / 864e5);   // calendar days, not 24-hour spans
+  return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : days < 30 ? `${days} days ago` : d.toLocaleDateString(); };
 const quality = v => v.trained ? (v.undertrained ? ["warn", "under-trained"] : ["ok", "trained here"])
   : v.verdict === "good" ? ["ok", "sounds like them ✓"] : v.verdict === "weak" ? ["warn", "weak likeness"]
   : v.verdict === "bad" ? ["bad", "doesn't sound like them"] : v.verdict === "broken" ? ["bad", "won't load"] : ["", "not checked"];
