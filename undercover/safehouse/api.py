@@ -253,7 +253,7 @@ def _addons_route(h, method, p):
         r = addons.remove(aid)
         from ..core.config import CONFIG
         if eng and (CONFIG.get("cadence") or {}).get("engine") == eng:
-            _set_engine("chatterbox")   # back to the open default
+            _set_engine("chatterbox-turbo")   # back to the open default
         return h._json(_addon_row(r))
     eng = _engine_of(aid)
     if not eng:
@@ -262,7 +262,7 @@ def _addons_route(h, method, p):
     if on and not addons.available(aid):
         raise ModelError(f"Install {a.name} (and accept its licence) first.")
     _guard(SPEECH_WORK)
-    _set_engine(eng if on else "chatterbox")
+    _set_engine(eng if on else "chatterbox-turbo")
     gpu.free()   # the worker reloads with the new engine on next use
     return h._json(_addon_row(addons.info(a)))
 
