@@ -762,7 +762,7 @@ const PV_BYHAND = " “Fit pitch to the voice” is on and sets the octave and k
 function showPreviewKind() {
   $$("#preview-list audio").forEach(a => a.pause());
   $$("#preview-list .pv-set").forEach(el => { el.hidden = el.dataset.kind !== previewKind; });
-  if (S.job) return;   // a render is running: its own progress line owns the status
+  if (!$("#preview-bar").hidden) return;   // a preview is rendering: its own progress line owns the status
   const set = $(`#preview-list .pv-set[data-kind="${previewKind}"]`);
   $("#preview-status").textContent = (set ? PV_PICK : PV_INTRO) + (pvByHand(previewKind) ? PV_BYHAND : "");
 }
