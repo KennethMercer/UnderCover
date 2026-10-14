@@ -252,6 +252,83 @@ def _full_index(vdir):
         return None
 
 
+def _aside_dir() -> Path:
+    from ..core.voices import voices_dir
+    return voices_dir() / ".aside"
+
+
+def _aside_records() -> dict:
+    """{aside folder: (voice, why)} for the set-aside voices an Undo still points at."""
+    from ..core.voices import list_voices
+    out = {}
+    for v in list_voices():
+        ex = v.extra or {}
+        prev, down = ex.get("improved_previous") or {}, ex.get("improved_turned_down") or {}
+        if prev.get("aside"):
+            out[prev["aside"]] = (v.name, "replaced by a new model" if prev.get("how") == "replaced"
+                                  else "the one before the retrained voice you kept")
+        if down.get("aside"):
+            out[down["aside"]] = (v.name, "the retrained voice you didn't keep")
+    return out
+
+
+def aside() -> list[dict]:
+    """Voices set aside, never deleted (Internal Affairs P4-1): a replaced voice, the one not kept after a blind A/B, a
+    replace that didn't finish. Newest first: {id, voice, display, size, at, why, undo_for}. undo_for: the voice whose
+    Undo would bring this one back (removing it ends that Undo)."""
+    import re
+    from ..core.voices import label_of
+    d = _aside_dir()
+    if not d.is_dir():
+        return []
+    recs = _aside_records()
+    out = []
+    for f in d.iterdir():
+        if not f.is_dir():
+            continue
+        meta = {}
+        for m in (f / "meta.json.aside", f / "meta.json"):
+            try:
+                meta = json.loads(m.read_text(encoding="utf-8"))
+                break
+            except (OSError, ValueError):
+                continue
+        name = meta.get("name") or f.name
+        undo_for, why = recs.get(f.name, (None, None))
+        if not why:
+            why = "a replace that didn't finish" if f.name.endswith("-unfinished") else "set aside earlier"
+        # when it was set aside: the stamp in its name (a moved folder keeps its old modified time)
+        st = re.search(r"-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}(?:-\d+)?(?:-unfinished)?$", f.name)
+        at = (f"{st[1]}-{st[2]}-{st[3]} {st[4]}:{st[5]}" if st
+              else time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime)))
+        out.append({"id": f.name, "voice": name, "display": meta.get("display") or label_of(name), "size": _size(f),
+                    "at": at, "why": why, "undo_for": undo_for})
+    out.sort(key=lambda x: x["at"], reverse=True)
+    return out
+
+
+def remove_aside(aid: str) -> dict:
+    """The user's explicit choice: delete one set-aside voice (only a folder directly in voices/.aside; test mode: the
+    test's own folders only). A voice whose Undo pointed at it loses that Undo. -> {removed, freed}."""
+    import re
+    from ..core import fsutil, storage
+    from ..core.voices import get_voice
+    d = _aside_dir() / aid
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", aid or "") or not d.is_dir():
+        raise LookupError("That set-aside voice isn't there.")
+    owner = _aside_records().get(aid, (None,))[0]
+    freed = _size(d)
+    storage.remove_files([], within=[_aside_dir()], dirs=[d])
+    if owner:   # its Undo can't bring it back any more: the record goes too (no Undo button that can only fail)
+        v = get_voice(owner)
+        v.extra = v.extra or {}
+        for k in ("improved_previous", "improved_turned_down"):
+            if (v.extra.get(k) or {}).get("aside") == aid:
+                v.extra.pop(k)
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    return {"removed": aid, "freed": freed, "undo_ended_for": owner}
+
+
 def voices() -> list[dict]:
     from ..doubleagent.service import undertrained
     from ..doubleagent.cadence import pack_of, pack_size
