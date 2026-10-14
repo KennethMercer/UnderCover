@@ -346,7 +346,7 @@ def start_train(name: str, b: dict):
             if not vname:
                 raise ModelError("Give the new voice a name.")
             check_voice_name(proj, vname)
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             st.update(sr=sr, length=length, voice_name=vname, epochs=None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
@@ -387,6 +387,9 @@ def start_train(name: str, b: dict):
         if st.get("state") == "paused":
             return job.finish("paused", message="Training paused. Resume continues from the same point.",
                               train_state="paused", epoch=st.get("epoch"), best=st.get("best"))
+        if st.get("state") == "stopped":
+            return job.finish("cancelled", message="Training stopped. The saves made before the stop are kept.",
+                              train_state="stopped", epoch=st.get("epoch"), best=st.get("best"), outcome="stopped")
         job.finish("done", message=f"Training {st['state']}.", train_state=st["state"], epoch=st.get("epoch"),
                    best=st.get("best"), outcome=st.get("outcome"))
 
