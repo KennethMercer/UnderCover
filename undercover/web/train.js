@@ -340,7 +340,10 @@ function renderTrainForm() {
   $("#tr-train").hidden = !p.reference?.clip || !p.phrases.length;
   if ($("#tr-train").hidden) return;
   if (!$("#tr-name").value || $("#tr-name").dataset.proj !== p.name) {
-    $("#tr-name").value = st.voice_name || `${p.name}-uc`; $("#tr-name").dataset.proj = p.name;
+    // a retrained voice waiting beside its voice is named <voice>-next: a training must not be pointed at it (its export would replace
+    // a candidate nobody has heard), so that name is never the default
+    const own = st.voice_name && !/-next$/.test(st.voice_name) ? st.voice_name : `${p.name}-uc`;
+    $("#tr-name").value = own; $("#tr-name").dataset.proj = p.name;
     $("#tr-length").value = st.length || "auto"; $("#tr-sr").value = String(st.sr || p.defaults.sr);
   }
   const running = T.live?.kind === "train";
