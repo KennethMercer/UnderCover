@@ -93,6 +93,7 @@ function follow(id, kind) {
       closeStream();
       if (ev.state === "error" || ev.state === "lost") showError(ev.message, kind === "train" ? "Training stopped" : "That didn't work");
       else if (ev.state === "paused") { /* the Pause bar at the top says so, with Resume */ }
+      else if (ev.state === "cancelled" && kind === "train" && ev.message) showError(ev.message, "Training stopped", null, true);   // "The saves made before the stop are kept."
       else if (ev.message && kind === "prepare" && ev.message.length) showError(ev.message, "Some sources were skipped", null, true);
       if (kind === "auto") {
         clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true;
@@ -409,7 +410,7 @@ function onTrainEvent(ev) {
 function renderRun() {
   const p = T.proj, st = p.train || {}, ev = T.trainEv;
   const running = T.live?.kind === "train";
-  const show = running || (p.history?.length || 0) > 0 || st.state === "paused";
+  const show = running || (p.history?.length || 0) > 0 || st.state === "paused" || st.state === "stopped";
   $("#tr-run").hidden = !show || $("#tr-train").hidden;
   if ($("#tr-run").hidden) return;
   const auto = T.live?.kind === "auto";
@@ -419,7 +420,7 @@ function renderRun() {
   if (running && ev?.stage === "preparing") h.textContent = `Getting ready: ${ev.note || ""}`;
   else if (running && ev?.note === "paused for a cover") h.textContent = "Making your cover first…";
   else if (running) h.textContent = "Training…";
-  else h.textContent = { paused: "Paused", trained: "Training finished", exported: "Training finished", failed: "Training failed" }[st.state] || "Training";
+  else h.textContent = { paused: "Paused", stopped: "Stopped", trained: "Training finished", exported: "Training finished", failed: "Training failed" }[st.state] || "Training";
   $("#tr-bar").style.width = (running && ev ? (ev.fraction || 0) : total ? epoch / total : 0) * 100 + "%";
   $("#tr-epoch").innerHTML = `${epoch}<span class="meta"> / ${total || "—"}</span>`;
   $("#tr-eta").textContent = running && ev?.eta ? fmtTime(ev.eta) : "—";
@@ -490,6 +491,10 @@ function renderDone() {
       <p class="meta">Listen to the saves above, then add the one you like. The best-scoring save is ${st.best ? "epoch " + st.best : "the last one"}.</p></div>
       <button class="btn primary" id="tr-add-best">Add the best one to my voices</button></div>`;
     $("#tr-add-best").onclick = () => exportVoice(st.best || st.epoch);
+  } else if (st.state === "stopped") {   // stopped on purpose: the saves are kept, nothing is offered as "the best one"
+    d.hidden = false;
+    d.innerHTML = `<div class="row spread"><div><h3 class="tr-h3">Training stopped</h3>
+      <p class="meta">The saves made before the stop are kept.</p></div></div>`;
   } else d.hidden = true;
 }
 
