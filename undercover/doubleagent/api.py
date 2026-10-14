@@ -71,7 +71,10 @@ def project_json(proj: P.Project) -> dict:
                       "available": (tdir / f"e{s['epoch']}.pth").exists()})
     real = tdir / "previews" / "real.wav"
     a = _busy(proj.name)
+    from ..core import worklist
+    queued = worklist.queued_for("project", proj.name)   # "Queued for tonight" on the Deep path
     return {
+        "queued": queued,
         **proj.summary(),
         "sources": [{**s.to_json(), "raw": files.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
         "phrases": [{"id": p.id, "source": p.source, "start": p.start, "dur": p.dur, "score": p.score, "mix": p.mix,

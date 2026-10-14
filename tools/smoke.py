@@ -4620,6 +4620,63 @@ def u_shrink_export():
     return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
 
 
+@check("queue a project (the user: \"queue Trump with specific videos selected\"): /api/work/add {kind: project} takes an existing project with its own choices; nothing ticked or another person's voice name is refused when queued, not overnight; the project shows queued")
+def u_project_queue():
+    from undercover.core import worklist
+    from undercover.core.voices import ModelError, voices_dir
+    from undercover.doubleagent import api as DA, night, project as P, service
+    with isolated_data():
+        worklist._STATE = None
+        proj = P.Project.create("Donald Trump", "speaking")
+        try:
+            worklist.add("project", proj.name)
+            raise AssertionError("queued with nothing ticked")
+        except ModelError as e:
+            assert "Tick" in str(e), e
+        proj.sources = [P.Source(id="v1", title="Rally", url="https://example.invalid/v1", duration=600.0, selected=True)]
+        proj.train = {"voice_name": "barack-obama-uc", "length": "long"}
+        proj.save()
+        d = voices_dir() / "barack-obama-uc"
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"name": "barack-obama-uc", "extra": {"project": "barack-obama",
+                                                 "person": "Barack Obama"}}), encoding="utf-8")
+        try:
+            worklist.add("project", proj.name)
+            raise AssertionError("queued over Barack Obama's voice")
+        except ModelError as e:
+            assert "Barack Obama" in str(e), e
+        proj.train["voice_name"] = "donald-trump-uc"
+        proj.save()
+        st = worklist.add("project", proj.name)
+        item = next(i for i in worklist._state()["queue"] if i["kind"] == "project")
+        assert item["target"] == "donald-trump" and item["estimate"]["total"] >= 0, item
+        assert worklist.KINDS["project"]["label"](item) == "Training Donald Trump (your choices)"
+        q = DA.project_json(P.Project.load(proj.name))["queued"]
+        assert q and q["state"] == "queued" and q["id"] == item["id"], q
+        try:
+            worklist.add("project", proj.name)
+            raise AssertionError("queued twice")
+        except ModelError as e:
+            assert "already in the queue" in str(e), e
+        # the run itself refuses another person's voice name before any work (the name changed after queueing)
+        proj = P.Project.load(proj.name)
+        proj.train["voice_name"] = "barack-obama-uc"
+        proj.save()
+        class J:
+            cancel = pausing = False
+            finished = False
+        try:
+            service.run_project(J(), proj.name, object(), lambda *a, **k: None)
+            raise AssertionError("the run started over Barack Obama's voice")
+        except ModelError as e:
+            assert "Barack Obama" in str(e), e
+        assert proj.name not in DA.ACTIVE
+        worklist.remove(item["id"])
+        assert DA.project_json(P.Project.load(proj.name))["queued"] is None
+        worklist._STATE = None
+    return "nothing ticked / another person's voice refused at queue time; queued once, shown on the project; the run checks again"
+
+
 @check("a training never writes over another person's voice: a name owned by another project's voice (or a downloaded one) is refused at the start and at export; Stop reaches every kind of project job (prepare has no trainer control)")
 def u_voice_name_guard():
     from undercover.core import jobs as J
@@ -5487,7 +5544,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

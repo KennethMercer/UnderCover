@@ -252,6 +252,13 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None) -> d
     return status()
 
 
+def queued_for(kind: str, target: str) -> dict | None:
+    """The queue item of this kind for this target that hasn't run yet (queued, paused or running), else None."""
+    with _LOCK:
+        return next(({k: i.get(k) for k in ("id", "state", "now", "added")} for i in _state()["queue"]
+                     if i["kind"] == kind and i["target"] == target and i["state"] in ("queued", "paused", "running")), None)
+
+
 def remove(item_id: str) -> dict:
     with _LOCK:
         st = _state()

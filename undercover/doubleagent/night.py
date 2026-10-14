@@ -56,6 +56,11 @@ def _improve_extra_minutes(proj) -> float:
 def _project_for_item(item: dict, create: bool):
     from . import project as P
     try:
+        if item["kind"] == "project":   # a project queued from the Deep path: exactly that one
+            try:
+                return P.Project.load(item["target"])
+            except ModelError:
+                return None
         if item["kind"] == "improve":
             from ..core.voices import get_voice, is_demo
             v = get_voice(item["target"])
@@ -334,6 +339,43 @@ def shown_voice(item: dict) -> str:
     return label_of(item["target"])
 
 
+def _project(job, item) -> dict:
+    """A queued project: its own sources and choices (service.run_project)."""
+    from . import service
+    from . import voicecheck
+    from ..core.speaker import SpeakerEmbedder
+    name = service.run_project(job, item["target"], worklist.control_for(job), worklist.pusher(job))
+    proj = _project_for_item(item, create=False)
+    score = None
+    if proj is not None:
+        try:
+            score = voicecheck.check(name, proj, gpu.MODELS.converter, SpeakerEmbedder()).score
+        except Exception:   # noqa: BLE001 - only for the report
+            pass
+    return {"voice": name, "after": score, "note": f"'{name}' added to your voices, from your choices in DoubleAgent."}
+
+
+def _project_target(target: str) -> str:
+    from . import project as P
+    from .api import check_voice_name
+    from ..core.voices import slug
+    proj = P.Project.load(target)   # friendly error if it isn't a project
+    if not any(s.selected for s in proj.sources) and not proj.phrases:
+        raise ModelError("Tick the sources to train on in DoubleAgent first.")
+    check_voice_name(proj, slug(proj.train.get("voice_name") or f"{proj.name}-uc"))   # refused now, not at 3 am
+    return proj.name
+
+
+def shown_project(item: dict) -> str:
+    from . import project as P
+    try:
+        return P.Project.load(item["target"]).person or item["target"]
+    except ModelError:
+        return item["target"]
+
+
+worklist.register_kind("project", run=_project, estimate=estimate, target=_project_target, shown=shown_project,
+                       label=lambda item: f"Training {shown_project(item)} (your choices)")
 worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=shown_voice,
                        label=lambda item: f"Improving {shown_voice(item)}")
 worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}",

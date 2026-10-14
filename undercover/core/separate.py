@@ -59,14 +59,30 @@ _register_pins()
 
 
 def _quiet_tqdm(iterable, *args, **kwargs):
-    """Stand-in for tqdm inside audio-separator: no console bar, reports chunk progress instead."""
+    """Stand-in for tqdm inside audio-separator: no console bar, reports chunk progress instead. Each chunk's GPU work
+    is waited for before the next is queued: otherwise the loop queues every chunk in a second or two, the GPU works
+    through the queue afterwards, and neither Stop (queued kernels can't be called back) nor the progress is true
+    (a Stop measured 11.6 s late on a 4-minute file, 2026-10-14)."""
     n = len(iterable) if hasattr(iterable, "__len__") else 0
+    sync = _sync()
     for i, item in enumerate(iterable, 1):
         if _stop is not None and _stop():
             raise Stopped()
         yield item
+        sync()
         if _progress and n:
             _progress(i / n)
+
+
+def _sync():
+    """Wait for the GPU's queued work (no-op on the CPU)."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.cuda.synchronize
+    except ImportError:
+        pass
+    return lambda: None
 QUALITY = {"fast": 2, "high": 4, "max": 8}  # preset -> Roformer overlap
 
 
