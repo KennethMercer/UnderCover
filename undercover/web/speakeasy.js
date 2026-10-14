@@ -340,7 +340,7 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”${typeof earMark === "function" ? earMark("speech", r.id) : ""}</b><small>${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
@@ -371,8 +371,8 @@ async function seToggleKeep(id, kept) {
 $("#se-keep").onclick = () => SE.result && seToggleKeep(SE.result.id, !!SE.result.kept);
 function seWhen(s) {
   const d = new Date((s || "").replace(" ", "T")); if (isNaN(d)) return s || "";
-  const days = Math.floor((Date.now() - d) / 864e5);
-  return days < 1 && d.getDate() === new Date().getDate() ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : d.toLocaleDateString();
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), days = Math.round((day(new Date()) - day(d)) / 864e5);   // calendar days
+  return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : d.toLocaleDateString();
 }
 function sePlayRecent(r) {
   if (!r) return;
