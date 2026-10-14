@@ -1263,7 +1263,7 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "core/voices.py::remove_voice::rmtree::v.dir",
     "core/voices.py::main::remove_voice::a.name",                                # the CLI's remove
     "doubleagent/service.py::resolve_voice.drop_downloads::remove_voice::name",  # a one-shot's own fresh downloads
-    "safehouse/library.py::_remove::rmtree::p",                                  # Storage clean-up the user ticks
+    "safehouse/library.py::_remove::rmtree::p",                                  # Clean up's files; refuses voices/ (P6-1)
     "safehouse/library.py::remove_aside::remove_files",                          # a set-aside voice the user deletes
     "doubleagent/cadence.py::remove_pack::rmtree::v.dir / 'tts'",                # a cadence the user deletes
     # temp and work folders, caches, projects, speech parts
@@ -1571,6 +1571,55 @@ def u_remove_aside():
         SA.handle(h, "POST", "/api/library/aside/nope/restore")
         assert h.err, "an unknown id restored"
     return "Remove -> aside (with its waiting one); Bring it back -> both; busy / name taken / unknown refused"
+
+
+@check("Clean up's 'the same voice installed twice' never deletes a voice (Internal Affairs P6-1): the copy goes to Set aside, and the one kept is the one with a cadence, the project's voice, a display name, records, more covers; _remove refuses anything in the voices folder; no group lists a voice path")
+def u_duplicate_aside():
+    from undercover.core import storage
+    from undercover.core.voices import ModelError, get_voice, listed_voices, voices_dir
+    from undercover.doubleagent import project as P
+    from undercover.safehouse import library
+    with isolated_data():
+        orig = _voice_dir("spongebob-uc", {"trained": True, "project": "spongebob"})
+        (orig / "tts").mkdir()
+        copy = _voice_dir("spongebob-copy", {})
+        (copy / "tts").mkdir()                                     # the copy has a cadence marker and a name too
+        meta = json.loads((copy / "meta.json").read_text(encoding="utf-8"))
+        meta["display"] = "SpongeBob (my cadence copy)"
+        (copy / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        (copy / "model.pth").write_bytes((orig / "model.pth").read_bytes())
+        proj = P.Project.create("SpongeBob", "speaking")
+        proj.train["exported"] = "spongebob-uc"
+        proj.save()
+        # a pair where only the newer one has a cadence: it's the one kept
+        a = _voice_dir("ann-uc", {})
+        b = _voice_dir("ann-two", {})
+        (b / "tts").mkdir()
+        (b / "model.pth").write_bytes((a / "model.pth").read_bytes())
+        g = library._cleanup_groups()
+        for k, v in g.items():
+            assert not any(storage._inside(Path(x), voices_dir()) for x in v["paths"]), f"{k} lists a voice path"
+        d = {x["voice"]: x for x in g["duplicate_voices"]["aside"]}
+        assert set(d) == {"spongebob-copy", "ann-uc"}, d
+        assert d["spongebob-copy"]["keeps"] == "spongebob-uc" and "project" in d["spongebob-copy"]["because"], d
+        assert d["ann-uc"]["keeps"] == "ann-two" and "cadence" in d["ann-uc"]["because"], d
+        assert "SpongeBob (my cadence copy) (spongebob-copy) goes to Set aside" in g["duplicate_voices"]["detail"]
+        assert g["duplicate_voices"]["count"] == 2 and g["duplicate_voices"]["size"] == 0 and g["duplicate_voices"]["aside_size"] > 0
+        r = library.clean_up({"duplicate_voices"})
+        assert r["freed"] == 0 and {x["voice"] for x in r["set_aside"]} == {"spongebob-copy", "ann-uc"}, r
+        assert {v.name for v in listed_voices()} == {"spongebob-uc", "ann-two"}
+        assert (get_voice("spongebob-uc").dir / "tts").is_dir(), "the original was touched"
+        items = {x["voice"]: x for x in library.aside()}
+        assert items["spongebob-copy"]["why"] == "the same model as Spongebob", items["spongebob-copy"]
+        assert items["spongebob-copy"]["display"] == "SpongeBob (my cadence copy)"
+        for p_ in (voices_dir() / "spongebob-uc", voices_dir() / ".aside"):
+            try:
+                library._remove(p_)
+                raise AssertionError(f"_remove took {p_}")
+            except ModelError as e:
+                assert "never deletes" in str(e), e
+        assert get_voice("spongebob-uc").dir.exists() and (voices_dir() / ".aside").is_dir()
+    return "the project's voice kept over a named copy; a cadence kept over an older install; copies set aside; _remove refuses voices"
 
 
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
@@ -6451,7 +6500,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
