@@ -1101,13 +1101,9 @@ def u_cadence():
         assert E.default_engine() == "f5" and E.reading_engine("chatterbox-turbo") == "chatterbox"
     finally:
         E.weights_present, E.engine_ready, E.CONFIG = saved
-    # phase 23: Turbo's reading sits lower than the person's (fine: the median onto theirs, half semitones, an octave at most);
-    # Slower reads from a slowed reference (made once, kept), Faster moves the gaps only
-    import tempfile
+    # phase 23: Turbo's reading sits lower than the person's (fine: the median onto theirs, half semitones, an octave at most)
     import numpy as np
-    import soundfile as sf
     from undercover.core.cadence import render as R
-    from undercover.speakeasy import speak as SP
 
     class _Rm:
         def __init__(self, hz):
@@ -1122,16 +1118,6 @@ def u_cadence():
     hist = []   # the running median: a higher sentence (a question) among lower ones isn't pulled onto the median
     assert [R.octave_shift(x, _Rm(hz), 235.0, fine=True, history=hist) for hz in (138.0, 138.0, 200.0)] == [9.0, 9.0, 9.0], hist
     assert ENGINES["chatterbox-turbo"]["pitch_to_target"] and not ENGINES["chatterbox"].get("pitch_to_target")
-    with isolated_data():
-        ref = Path(tempfile.mkdtemp()) / "ref.wav"
-        t = np.linspace(0, 2, 2 * 24000, dtype=np.float32)
-        sf.write(str(ref), 0.3 * np.sin(2 * np.pi * 150 * t), 24000)
-        assert R.paced_ref(ref, None) == ref and R.paced_ref(ref, 1.0) == ref
-        slow = R.paced_ref(ref, 0.75)
-        n = sf.info(str(slow)).frames
-        assert slow != ref and abs(n / 24000 - 2 / 0.75) < 0.1, n   # a slowed reference is longer
-        assert R.paced_ref(ref, 0.75) == slow   # kept, made once
-    assert ENGINES["chatterbox-turbo"]["pace_ref_rate"] == {"slower": 0.75} and "faster" not in ENGINES["chatterbox-turbo"]["pace_ref_rate"]
     ids = {a["id"] for a in addons.status()}
     assert {"f5", "xtts"} <= ids, ids
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders

@@ -64,10 +64,8 @@ FAMILY = ("chatterbox-turbo", "chatterbox")
 ENGINES = {
     "chatterbox-turbo": {"name": "Chatterbox Turbo", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 2.5,
                          "vram_gb": 3.6, "size_mb": 2830, "module": "chatterbox",
-                         # Turbo ignores cfg_weight / exaggeration, which made Slower and Faster (phase 4c). Measured (tools/research/
-                         # turbo_pace.py, 3 voices x 3 seeds): a reference clip slowed to 0.75x reads 14% slower (Chatterbox's Slower
-                         # was -11..-15%); a sped-up one is unreliable (+13/+2/+2% at 1.4x), so Faster moves the gaps only.
-                         "pace_ref_rate": {"slower": 0.75},
+                         # Turbo ignores cfg_weight / exaggeration (they made Slower / Faster, phase 4c): with it the pace control
+                         # only moves the gaps between sentences, and the page calls it that (user, 2026-10-14)
                          # Turbo's reading sits lower than the person's (Obama's 9 semitones under, golden run 2026-10-13): finish moves
                          # its median onto the voice's own, not just by octaves
                          "pitch_to_target": True,
