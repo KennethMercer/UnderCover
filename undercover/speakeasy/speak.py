@@ -23,7 +23,7 @@ from ..core import fsutil, jobs, tray
 from ..core.config import CONFIG, path
 from ..core.files import file_url
 from ..core.jobs import Cancelled
-from ..core.cadence import engine_info, engine_ready
+from ..core.cadence import engine_info, pack_ready, reading_engine
 from ..core.voices import ModelError, get_voice
 from ..doubleagent import service
 from . import tts
@@ -76,9 +76,10 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
     pack = service.cadence_pack(v)
     pace = pace_of(pace, speed)
     pc = PACES[pace]
-    if pack and cadence is not False and engine_ready(pack.get("engine", "chatterbox")):
-        info = engine_info(pack.get("engine", "chatterbox"))
-        return {"voice": v.name, "mode": "cadence", "engine": pack.get("engine"), "engine_name": info["name"],
+    if pack and cadence is not False and pack_ready(pack.get("engine", "chatterbox")):
+        eng = reading_engine(pack.get("engine", "chatterbox"))   # a Chatterbox-family pack reads with the default of them
+        info = engine_info(eng)
+        return {"voice": v.name, "mode": "cadence", "engine": eng, "engine_name": info["name"],
                 "rtf": info["rtf"], "person": (v.extra or {}).get("person") or pack.get("project"),
                 "reader": None, "auto": True, "reader_label": None, "reader_hz": None,
                 "target_hz": sp and sp["hz"], "target_low": sp and sp["low"], "pitch_from": sp and sp["how"],

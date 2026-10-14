@@ -686,7 +686,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
         # is replaced at once, and even then it's moved aside (tts/previous/), never deleted.
         gaps = person.get("sentence_gap_s") or [0.3, 0.45, 0.8]
         gap = float(np.clip(gaps[1], 0.25, 1.0))
-        waits = old is not None and C.engine_ready(old.get("engine") or engine)
+        waits = old is not None and C.pack_ready(old.get("engine") or engine)   # engine-agnostic inside the Chatterbox family
         pack = {**base, "v": VERSION, "ref": "ref.wav", "ref_text": win["text"], "clip": win["clip"], "project": proj.name,
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins,
