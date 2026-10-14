@@ -58,6 +58,11 @@ def check(name):
     return deco
 
 
+def _bare(entries: list) -> list:
+    """Held-work entries without what holding adds (id, held_at), to compare with the spec that went in."""
+    return [{k: v for k, v in e.items() if k not in ("id", "held_at")} for e in entries]
+
+
 # ---------------------------------------------------------------- HTTP helpers
 
 BASE = ""
@@ -1025,7 +1030,7 @@ def u_paused():
                 raise Paused()
             jobs.run_job(job, fn)
             assert job.state == "paused", job.state
-            assert worklist._state()["resume"] == [job.resume_spec], worklist._state()["resume"]
+            assert _bare(worklist._state()["resume"]) == [job.resume_spec], worklist._state()["resume"]
             worklist.forget_paused()
             assert worklist._state()["resume"] == [], "Dismiss didn't forget it"
             # the one-shot pins what it chose before pausing (oneshot.run's except Paused)
@@ -3000,7 +3005,7 @@ def u_doctor_interrupted():
             crash(train)
             r = doctor.restore_interrupted(hb)
             st = worklist._state()
-            assert r["resumed"] and st["resume"] == [train] and not st["held"], (r, st)
+            assert r["resumed"] and _bare(st["resume"]) == [train] and not st["held"], (r, st)
             # it died again during the same work: held this time
             worklist._STATE = None
             (path("cache_dir") / "worklist.json").unlink(missing_ok=True)
