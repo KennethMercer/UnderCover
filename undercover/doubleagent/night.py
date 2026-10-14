@@ -39,7 +39,9 @@ def estimate(item: dict) -> dict:
     else:
         raw_min = 90.0 if item["kind"] == "improve" else 45.0   # not searched yet: typical
     prep = raw_min / PREP_RT
-    train = LENGTHS["auto"] * _sec_per_step() * EARLY_STOP / 60
+    # a queued project trains at its own length (the options are saved before this runs: a Quick item says Quick's time)
+    length = (proj.train.get("length") if item["kind"] == "project" and proj is not None else None) or "auto"
+    train = LENGTHS.get(length, LENGTHS["auto"]) * _sec_per_step() * (EARLY_STOP if length == "auto" else 1.0) / 60
     return {"prepare": round(prep), "train": round(train), "compare": round(COMPARE_MIN if item["kind"] == "improve" else 1),
             "total": round(prep + train + (COMPARE_MIN if item["kind"] == "improve" else 1))}
 

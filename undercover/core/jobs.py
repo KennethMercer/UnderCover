@@ -240,7 +240,8 @@ class Job:
         for ev in reversed(evs[-40:]):
             if ev.get("stage") != stage and not ev.get("final"):
                 break
-            for k in ("frac", "fraction", "epoch", "epochs", "eta", "total_left", "stage_left", "index", "of", "elapsed"):
+            for k in ("frac", "fraction", "epoch", "epochs", "eta", "total_left", "stage_left", "index", "of", "elapsed",
+                      "step", "step_n", "steps", "waits_for"):
                 if ev.get(k) is not None:
                     snap.setdefault(k, ev[k])
         frac, fraction = snap.pop("frac", None), snap.pop("fraction", None)

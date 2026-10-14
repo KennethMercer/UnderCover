@@ -4311,6 +4311,52 @@ def a_stop_separation():
     return f"stopped {lag:.2f} s after Stop (ran {flag['at'] - t0:.1f} s first)"
 
 
+@check("api: a song's preparation says what it's doing (Separating the vocal / Removing reverb, step n of m, time left), and a preview queued behind it says \"Preparing the song first (n of m)\" with waits_for, never a bare \"starting\"")
+def a_presep_progress():
+    import io
+    import numpy as np
+    import soundfile as sf
+    t = np.arange(44100 * 90) / 44100.0
+    y = 0.3 * np.sin(2 * np.pi * 196 * t) * (1 + np.sin(2 * np.pi * 0.3 * t)) + 0.03 * np.random.default_rng(5).standard_normal(len(t))
+    buf = io.BytesIO()
+    sf.write(buf, np.stack([y, y], 1).astype(np.float32), 44100, format="WAV")
+    req = urllib.request.Request(BASE + "/api/upload", data=buf.getvalue(), method="POST",
+                                 headers={"X-Filename": "presep-test.wav", "Origin": BASE, "Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        song = json.loads(r.read())
+    sid = song.get("id") or song.get("song", {}).get("id")
+    try:
+        wait_for(lambda: not any(j["state"] in ("queued", "running") for j in api("/api/jobs")), 300, every=2, what="an idle GPU")
+        r = api(f"/api/songs/{sid}/presep", {"options": {"quality": "high", "dereverb": True}})
+        assert r.get("started"), r
+        pre = r["job"]
+        voice = next(v["name"] for v in api("/api/voices") if not v.get("demo"))
+        prev = api("/api/preview", {"song": sid, "voice": voice, "variants": [{"label": "A", "options": {}}]})["job"]
+        seen = {"pre": None, "prev": None}
+
+        def look():
+            js = {j["id"]: j for j in api("/api/jobs")}
+            p, q = js.get(pre), js.get(prev)
+            if p and p.get("stage") == "separating" and p.get("steps"):
+                seen["pre"] = p
+            if q and q.get("stage") == "preparing":
+                seen["prev"] = q
+            return seen["pre"] and seen["prev"] and seen["prev"].get("step_n")
+        wait_for(look, 300, every=0.5, what="both jobs reporting")
+        p, q = seen["pre"], seen["prev"]
+        assert p["steps"] == 2 and p["message"] in ("Separating the vocal", "Removing reverb"), p
+        assert q["waits_for"] == pre and q["message"].startswith("Preparing the song first (") and "starting" not in q["message"].lower(), q
+        api(f"/api/jobs/{prev}/cancel", {})
+        wait_for(lambda: next((j for j in api("/api/jobs") if j["id"] == pre), {}).get("state") in ("done", "error", "cancelled"),
+                 600, every=2, what="the preparation finished")
+    finally:
+        try:
+            api(f"/api/library/songs/{sid}", method="DELETE")
+        except Exception:
+            pass
+    return f"presep: {p['message']} (step {p['step_n']} of {p['steps']}); the preview: {q['message']}"
+
+
 @check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
        "phone; Revoke; switching off closes it; this PC's own requests unchanged)")
 def a_phone():
@@ -4742,6 +4788,9 @@ def u_project_queue():
         st = worklist.add("project", proj.name, options={"voice_name": "Trump Rallies", "length": "quick", "sr": 48000})
         tr = P.Project.load(proj.name).train
         assert (tr["voice_name"], tr["length"], tr["sr"]) == ("trump-rallies", "quick", 48000), tr
+        quick = next(i for i in worklist._state()["queue"] if i["kind"] == "project")["estimate"]["train"]
+        auto = night.estimate({"kind": "new", "target": "nobody"})["train"]
+        assert quick < auto, (quick, auto)   # the item's estimate is Quick's, not the auto length's
         item = next(i for i in worklist._state()["queue"] if i["kind"] == "project")
         assert item["target"] == "donald-trump" and item["estimate"]["total"] >= 0, item
         assert worklist.KINDS["project"]["label"](item) == "Training Donald Trump (your choices)"
@@ -5673,7 +5722,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_phone, a_away, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
