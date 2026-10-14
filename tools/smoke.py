@@ -3931,6 +3931,7 @@ def u_page_rules():
     da = (web / "doubleagent.js").read_text(encoding="utf-8")
     assert "impHtml" in da and 'data-imp-keep' in da and '"/keep"' in da, "DoubleAgent lost the retrained voice's blind A/B"
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
+    assert "waiting_beside" in lib and "data-lib-ab" in lib, "SafeHouse lost the nested retrained-voice line"
     assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
     assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"
