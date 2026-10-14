@@ -659,9 +659,13 @@ def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None =
 
 
 def export_voice(proj: Project, epoch: int | None = None, name: str | None = None, overwrite: bool = False,
-                 replace: str | None = None):
-    """Install a saved epoch (default: best) plus a freshly built index as a normal UnderCover voice."""
-    from ..core.voices import install
+                 replace: str | None = None, confirmed: bool = False):
+    """Install a saved epoch (default: best) plus a freshly built index as a normal UnderCover voice.
+    A voice of that name already there is never replaced by a run (Internal Affairs P4-1): with overwrite the new one
+    waits beside it as <name>-next for the blind A/B (the improve route: queued, overnight, Do it all, Use this one).
+    Only confirmed (the user's "Replace my voice", just now on the page) replaces it, and the old one is set aside,
+    not deleted. -> the voice installed (the candidate when it waits: extra.pending_for)."""
+    from ..core.voices import install, label_of, pending_candidate, voices_dir
     from ..core.engine.rvc.index import write_ivf_flat
     st = proj.train
     epoch = int(epoch or st.get("best") or st.get("epoch") or 0)
@@ -672,6 +676,18 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     name = slug(name or st.get("voice_name") or proj.name)
     from .api import check_voice_name
     check_voice_name(proj, name, replace)   # never over another person's voice (replace: the one improved on purpose)
+    owner = None
+    if overwrite and not confirmed and (voices_dir() / name / "meta.json").exists():
+        owner, name = name, f"{name}-next"   # it waits beside the voice, unheard voices never replace one
+        if pending_candidate(name) or (voices_dir() / name).exists():
+            raise ModelError(f"A retrained {label_of(owner)} ({name}) is already in your voices. Decide on that one first "
+                             "(DoubleAgent, its voice card); this training stays in its project, to add later.")
+    elif confirmed and (voices_dir() / name / "meta.json").exists():
+        from ..core import jobs
+        busy = jobs.jobs_using(name)   # its folder is about to be set aside
+        if busy:
+            raise ModelError(f"{busy[0].title or 'A cover or speech'} is using {label_of(name)} right now. Try again when "
+                             "it's done (or cancel it).")
     data_pt = tdir / "data.pt"
     if not data_pt.exists() and (proj.dir / "before-smaller" / "train" / "data.pt").exists():
         data_pt = proj.dir / "before-smaller" / "train" / "data.pt"   # Make smaller set it aside (phase 24): still there
@@ -688,7 +704,7 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
         write_ivf_flat(idx, feats)
     mins = st.get("train_minutes", 0)
     v = install([pth, idx], name, source=f"trained in UnderCover: {proj.person}, {mins:.1f} min, epoch {epoch}",
-                overwrite=overwrite)
+                overwrite=confirmed)
     likeness = next((s.get("identity") for s in st.get("saves", []) if s["epoch"] == epoch), None)
     v.extra.update(trained=True, project=proj.name, epoch=epoch, train_minutes=mins, likeness=likeness,
                    f0_median=f0_median(data), f0_range=f0_range(data), from_speech=proj.from_speech())
@@ -698,7 +714,15 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     idx.unlink(missing_ok=True)
     fsutil.link_duplicate(v.pth, pth)   # the exported save is the voice's own model.pth: one copy on disk (phase 24)
     shrink_exported_index(v.dir)        # 10k centres; the full index aside (the user's ear, phase 24 follow-up)
-    st.update(exported=name, exported_epoch=epoch, state="exported")
+    if owner:
+        from ..core.voices import get_voice
+        from .night import mark_improved_pending
+        mark_improved_pending(owner, name, (get_voice(owner).extra or {}).get("likeness"), likeness, mins)
+        v = get_voice(name)
+        st.update(exported=owner, state="exported", waiting={"voice": owner, "candidate": name, "epoch": epoch})
+    else:
+        st.pop("waiting", None)
+        st.update(exported=name, exported_epoch=epoch, state="exported")
     (tdir / "resume.pt").unlink(missing_ok=True)   # 1.3 GB; a finished voice doesn't need it (retraining starts fresh)
     # keep the exported save and the two best alternatives (to try another on the Train tab); the rest are 55 MB each
     alts = sorted([s for s in st.get("saves", []) if s["epoch"] != epoch and s.get("identity") is not None],

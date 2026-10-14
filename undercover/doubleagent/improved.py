@@ -37,6 +37,15 @@ def _aside_dir() -> Path:
     return voices_dir() / ".aside"
 
 
+def _aside_for(name: str) -> Path:
+    """A free place in voices/.aside for this voice, stamped now."""
+    base = _aside_dir() / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
+    dst, n = base, 1
+    while dst.exists():
+        dst, n = base.with_name(f"{base.name}-{n}"), n + 1
+    return dst
+
+
 def _move_voice(src: Path, dst: Path, name: str | None, listed: bool):
     """A voice folder moved within the voices folder (never over anything, never out of it; test mode: the test roots
     only). name: the voice's new name (its meta's paths follow). listed: False = set aside (meta.json renamed, so no
@@ -141,10 +150,9 @@ def keep(voice: str, which: str) -> dict:
         cand_dir = voices_dir() / p["voice"]
         if not (cand_dir / "meta.json").exists():
             raise ModelError("The retrained voice isn't there any more.")
-        stamp = time.strftime("%Y%m%d-%H%M%S")
         rec = {"at": time.strftime("%Y-%m-%d %H:%M"), "candidate": p["voice"], "before": p.get("before"), "after": p.get("after")}
         if which == "current":
-            aside = _aside_dir() / f"{p['voice']}-{stamp}"
+            aside = _aside_for(p["voice"])
             _move_voice(cand_dir, aside, None, listed=False)
             meta = _meta(v.dir)
             meta["extra"].pop("improved_pending", None)
@@ -152,7 +160,7 @@ def keep(voice: str, which: str) -> dict:
             _write_meta(v.dir, meta)
         else:
             old_meta = _meta(v.dir)
-            aside = _aside_dir() / f"{voice}-{stamp}"
+            aside = _aside_for(voice)
             _move_voice(v.dir, aside, None, listed=False)           # the current one, set aside (never deleted)
             _move_voice(cand_dir, voices_dir() / voice, voice, listed=True)
             new_dir = voices_dir() / voice
