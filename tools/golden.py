@@ -347,7 +347,7 @@ def _render(src: Path, dest: Path):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), str(dest)], check=True)
 
 
-def run_set(stamp: str, spec: dict) -> dict:
+def run_set(stamp: str, spec: dict, speech_only: bool = False) -> dict:
     """Every item of the set with the current code -> {item: scores}; renders in runs/<stamp>/renders/."""
     import numpy as np
     import soundfile as sf
@@ -373,7 +373,7 @@ def run_set(stamp: str, spec: dict) -> dict:
     refs = {v["name"]: (np.load(GOLDEN / "voices" / v["name"] / "reference.npy") if v["reference"] else None)
             for v in spec["voices"]}
     scores, to_hear = {}, []
-    for s in spec["songs"]:
+    for s in ([] if speech_only else spec["songs"]):   # speech_only: a phase that touches speech, not covers (a few minutes)
         if not spec["covers"].get(s["name"]):
             continue   # retired (or no voices): not run
         song = GOLDEN / "work" / "uploads" / f"{s['name']}.flac"
@@ -520,6 +520,7 @@ def main():
     m.add_argument("--voice", action="append", default=[])
     r = sub.add_parser("run")
     r.add_argument("--force", action="store_true")
+    r.add_argument("--speech", action="store_true", help="only the speech items (the covers' renders and scores stay as they were)")
     sub.add_parser("compare").add_argument("run", nargs="?")
     pp = sub.add_parser("pairs")
     pp.add_argument("run", nargs="?")
@@ -577,7 +578,7 @@ def main():
             raise SystemExit("the user's UnderCover is busy on the GPU: run again when it's idle (or --force)")
         _check_frozen(spec)
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        run_set(stamp, spec)
+        run_set(stamp, spec, speech_only=a.speech)
         _prune()
         print(f"run {stamp}: python tools/golden.py compare {stamp}")
     elif a.cmd == "compare":
