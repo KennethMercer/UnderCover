@@ -1605,7 +1605,16 @@ def u_duplicate_aside():
         assert d["ann-uc"]["keeps"] == "ann-two" and "cadence" in d["ann-uc"]["because"], d
         assert "SpongeBob (my cadence copy) (spongebob-copy) goes to Set aside" in g["duplicate_voices"]["detail"]
         assert g["duplicate_voices"]["count"] == 2 and g["duplicate_voices"]["size"] == 0 and g["duplicate_voices"]["aside_size"] > 0
+        from undercover.core import jobs as J
+        busy = J.Job("cover", title="Hold On · Ann")                       # one in use stays, said so
+        busy.voices = {"ann-uc"}
+        J.JOBS[busy.id] = busy
         r = library.clean_up({"duplicate_voices"})
+        busy.finish("done")
+        assert [x["voice"] for x in r["skipped"]] == ["ann-uc"] and "using" in r["skipped"][0]["why"], r
+        assert [x["voice"] for x in r["set_aside"]] == ["spongebob-copy"], r
+        r = library.clean_up({"duplicate_voices"})
+        r["set_aside"].append({"voice": "spongebob-copy"})
         assert r["freed"] == 0 and {x["voice"] for x in r["set_aside"]} == {"spongebob-copy", "ann-uc"}, r
         assert {v.name for v in listed_voices()} == {"spongebob-uc", "ann-two"}
         assert (get_voice("spongebob-uc").dir / "tts").is_dir(), "the original was touched"
