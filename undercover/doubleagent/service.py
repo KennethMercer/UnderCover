@@ -747,7 +747,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         push("voice", 0.12, f"Training a voice from {mins:.1f} min of {person}")
         st = proj.train
         if st.get("state") != "paused":
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
         st.update(sr=st.get("sr") or TC["sample_rate"], length="auto", voice_name=st.get("voice_name") or f"{key}-uc")
@@ -823,7 +823,7 @@ def run_project(job, name: str, control, push) -> str:
                              "ticked (3+ needed). Tick more sources in DoubleAgent, then queue it again.")
         st = proj.train
         if st.get("state") != "paused":
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
         st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"],

@@ -1124,6 +1124,61 @@ def u_cadence_sample_range():
     return "served by _send_file (Range, 206)"
 
 
+@check("Stop during a model download aborts it within a chunk (Internal Affairs P2-4); a stopped training says stopped and keeps the project's exported voice (P2-5); in test mode a model download never writes outside the test's folders (the 48k base models once landed in the real models folder)")
+def u_stop_download():
+    import inspect
+    import threading
+    import http.server
+    from undercover.core import setup_models
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import api as DA, night, service, trainer
+    with isolated_data() as box:
+        # a slow local server: 64 MB in 1 MB chunks, so a Stop after the first chunks must end it early
+        class Slow(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(64 << 20))
+                self.end_headers()
+                try:
+                    for _ in range(64):
+                        self.wfile.write(b"\0" * (1 << 20))
+                        time.sleep(0.05)
+                except OSError:
+                    pass
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            got = {"n": 0}
+            def stop_soon():
+                got["n"] += 1
+                return got["n"] > 3
+            t0 = time.time()
+            try:
+                setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", None, "big.bin", cancel=stop_soon)
+                raise AssertionError("the download ran to the end")
+            except setup_models.DownloadStopped:
+                pass
+            assert time.time() - t0 < 3 and not (box / "big.bin").exists(), "Stop didn't end the download early"
+        finally:
+            srv.shutdown()
+        # test mode: a missing model under the real models folder is refused, nothing written there
+        real = real_dirs()["models_dir"] / "smoke-never-here.bin"   # the user's models folder, outside the test roots
+        try:
+            setup_models.ensure(files={str(real): "file:///nonexistent"})
+            raise AssertionError("a test downloaded into the real models folder")
+        except ModelError as e:
+            assert "Test mode" in str(e) or "outside" in str(e), e
+        assert not real.exists()
+    # P2-5: no reset clears the project's exported voice; a stopped run is "stopped"
+    for fn in (DA.start_train, night._improve, service.train_new_voice, service.run_project):
+        src = inspect.getsource(fn)
+        assert '"exported", "exported_epoch"' not in src, f"{fn.__name__} still clears exported"
+    assert 'st["state"] = "stopped" if outcome == "stopped"' in inspect.getsource(trainer.Trainer.run)
+    return "a download stops within a chunk; test mode refuses the real models folder; exported kept; stopped said"
+
+
 # ---------------------------------------------------------------- API checks (test server)
 
 @check("jobs: a paused job saves its resume point; a paused one-shot resumes its own song and training")
@@ -1547,11 +1602,11 @@ def u_rolloff_covers():
     # pruning (two calls: old snapshots, then unreferenced objects, only inside the vault folder); away from home's
     # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
-    # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and
+    # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and (improved.py) an improved voice's listening copies;
     # expired after its 30 days); a new caller must be added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/tutorial.py"] * 4, "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
-                                                                        "core/vault.py", "core/vault.py", "core/ytdlp.py",
+                                                                        "core/vault.py", "core/vault.py", "core/ytdlp.py", "doubleagent/improved.py",
                                                                         "frontman/history.py", *["safehouse/smaller.py"] * 8,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
@@ -5881,7 +5936,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_project_pause_holds, u_cadence_sample_range, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

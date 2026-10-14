@@ -272,7 +272,7 @@ def _improve(job, item) -> dict:
                 P.score(proj)
             proj.save()
             st = proj.train
-            for k in ("epoch", "best", "saves", "state", "outcome", "exported", "exported_epoch", "epochs"):
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
                 st.pop(k, None)
             st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"], length="auto", voice_name=cand)
             proj.save()
