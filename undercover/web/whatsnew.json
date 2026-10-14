@@ -2,6 +2,14 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-14-set-aside-names",
+      "date": "2026-10-14",
+      "title": "Set-aside copies tell themselves apart",
+      "lines": [
+        "Two set-aside voices with the same name now show their folder name beside it. Clean up's button says \"Nothing ticked\" when nothing is ticked."
+      ]
+    },
+    {
       "id": "2026-10-14-set-aside",
       "date": "2026-10-14",
       "title": "See what's set aside",

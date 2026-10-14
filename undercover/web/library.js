@@ -478,7 +478,14 @@ $("#lib-clean-btn").onclick = async () => {
   try { g = await api("/api/library/cleanup"); } catch (e) { return showError(e.message); }
   const keys = Object.keys(g).filter(k => g[k].count);
   // a group frees space (size) or moves voices to Set aside (aside, aside_size): nothing a voice is deleted here, so its size is "moved", not "freed"
-  const rowsOf = x => (x.aside || []).map(a => `<small>${esc(a.display || a.voice)}<span data-deep> (${esc(a.voice)})</span> goes to Set aside: the same model as ${esc(a.keeps_display || a.keeps)}${a.because ? `, kept because ${esc(a.because)}` : ""}</small>`).join("");
+  // two voices can share a display name (a copy with no name of its own): then the folder name, in small type, tells them apart (in Deep Cover always)
+  const rowsOf = x => {
+    const ids = new Map();   // display name -> the voices that read it
+    (x.aside || []).forEach(a => [[a.display || a.voice, a.voice], [a.keeps_display || a.keeps, a.keeps]].forEach(([d, v]) => ids.set(d, (ids.get(d) || new Set()).add(v))));
+    const same = n => ids.get(n).size > 1;
+    const tag = (d, v) => `<span class="mono"${same(d) ? "" : " data-deep"}> (${esc(v)})</span>`;
+    return (x.aside || []).map(a => `<small>${esc(a.display || a.voice)}${tag(a.display || a.voice, a.voice)} goes to Set aside: the same model as ${esc(a.keeps_display || a.keeps)}${tag(a.keeps_display || a.keeps, a.keeps)}${a.because ? `, kept because ${esc(a.because)}` : ""}</small>`).join("");
+  };
   $("#lib-clean-list").innerHTML = keys.length ? keys.map(k => `<label class="crow"><input type="checkbox" data-g="${k}" ${g[k].default ? "checked" : ""}>
       <span><b>${esc(g[k].title)}</b>${g[k].aside?.length ? rowsOf(g[k]) : `<small>${esc(g[k].detail)}</small>`}</span>
       <span class="mono">${g[k].aside_size ? `moved ${gb(g[k].aside_size)}` : gb(g[k].size)}</span></label>`).join("")
@@ -487,7 +494,7 @@ $("#lib-clean-btn").onclick = async () => {
   const go = $("#lib-clean-go");
   const upd = () => {
     const free = sum("size"), moved = sum("aside_size");
-    go.textContent = free && moved ? `Free ${gb(free)} and move ${gb(moved)} to Set aside` : moved ? `Move ${gb(moved)} to Set aside` : `Free ${gb(free)}`;
+    go.textContent = free && moved ? `Free ${gb(free)} and move ${gb(moved)} to Set aside` : moved ? `Move ${gb(moved)} to Set aside` : free ? `Free ${gb(free)}` : "Nothing ticked";
     go.disabled = !free && !moved;
   };
   $$("#lib-clean-list input").forEach(i => i.onchange = upd);
