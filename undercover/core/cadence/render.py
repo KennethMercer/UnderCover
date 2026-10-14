@@ -67,7 +67,8 @@ def request(text: str, pack: dict, ref: Path, seed: int = 1234, progress=None):
     """Ask the worker for the engine's reading (doesn't wait): -> (future, wav path)."""
     out = scratch() / f"{uuid.uuid4().hex[:12]}.wav"
     opts = {k: pack[k] for k in ("cfg_weight", "exaggeration") if pack.get(k) is not None}
-    fut = client.speak(text, ref, out, pack.get("engine", "chatterbox"), ref_text=pack.get("ref_text", ""), seed=seed,
+    from .engines import reading_engine
+    fut = client.speak(text, ref, out, reading_engine(pack.get("engine", "chatterbox")), ref_text=pack.get("ref_text", ""), seed=seed,
                        wait_for=False, progress=progress, **opts)
     return fut, out
 

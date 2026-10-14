@@ -1080,7 +1080,27 @@ def u_cadence():
     assert cadence.syllables("Is that the kind of country we want to leave to our children?") == 15
     assert cadence.wer(["it was not easy"], ["it was not easy."]) == 0.0
     assert cadence._plain("We did it together.") and not cadence._plain("In 2008, etc.")
-    assert {"chatterbox", "f5"} <= set(ENGINES) and default_engine() in ENGINES
+    assert {"chatterbox", "chatterbox-turbo", "f5"} <= set(ENGINES) and default_engine() in ENGINES
+    # phase 23: the Chatterbox family reads each other's packs, so a pack outlives the engine it was made with; Turbo is the
+    # default, but a setup that only has Chatterbox's files keeps reading with it (no 2.8 GB download unasked)
+    from undercover.core.cadence import engines as E
+    have = set()
+    saved = (E.weights_present, E.engine_ready, E.CONFIG)
+    E.weights_present = lambda e: e in have
+    E.engine_ready = lambda e: e in ENGINES and ENGINES[e].get("addon") is None
+    try:
+        E.CONFIG = {"cadence": {"engine": "chatterbox-turbo"}}
+        assert E.default_engine() == "chatterbox-turbo" and E.reading_engine("chatterbox") == "chatterbox-turbo"   # a fresh install
+        have.add("chatterbox")
+        assert E.default_engine() == "chatterbox" and E.reading_engine("chatterbox-turbo") == "chatterbox"   # only the old files
+        have.add("chatterbox-turbo")
+        assert E.default_engine() == "chatterbox-turbo" and E.reading_engine("chatterbox") == "chatterbox-turbo"
+        assert E.pack_ready("chatterbox") and E.reading_engine("f5") == "f5"
+        E.CONFIG = {"cadence": {"engine": "f5"}}   # another engine is the default: a Chatterbox pack still reads with the family
+        E.engine_ready = lambda e: e in ("f5", "chatterbox")
+        assert E.default_engine() == "f5" and E.reading_engine("chatterbox-turbo") == "chatterbox"
+    finally:
+        E.weights_present, E.engine_ready, E.CONFIG = saved
     ids = {a["id"] for a in addons.status()}
     assert {"f5", "xtts"} <= ids, ids
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
@@ -1671,11 +1691,11 @@ def u_pace_pitch():
         meta = json.loads((v.dir / "meta.json").read_text(encoding="utf-8"))
         meta["extra"]["tts"] = {**json.loads((v.dir / "tts" / "cadence.json").read_text(encoding="utf-8")), "pitch_nudge": -4.5}
         (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-        ready, speak.engine_ready = speak.engine_ready, lambda e: True
+        ready, speak.pack_ready = speak.pack_ready, lambda e: True
         try:
             p = speak.plan("zz-nudge-uc", nudge=1.0)
         finally:
-            speak.engine_ready = ready
+            speak.pack_ready = ready
         assert p["mode"] == "cadence" and p["pack_nudge"] == -4.5 and p["nudge"] == 1.0, p
     assert len(K.PACE_TEST) == 6 and K.PACE_TEST[0] == K.AB_LINE
     return (f"target {K.pace_target(prof)} syl/s, fast x{fast['pace_ratio']}; +{fast['pitch_st']} st from the median is "
