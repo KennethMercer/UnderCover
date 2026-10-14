@@ -4404,6 +4404,7 @@ def u_page_rules():
     for f in ("app.js", "speakeasy.js", "train.js", "work.js", "library.js", "aside.js", "doubleagent.js"):   # IA P5-1: no two-click confirm without the delay
         src = (web / f).read_text(encoding="utf-8")
         assert f == "app.js" or "armedFor(" in src or "CONFIRM_MS" in src, f"{f} has a two-click confirm that a double click could confirm"
+    assert "asideRestore" in (web / "aside.js").read_text(encoding="utf-8") and "removedVoice" in app, "Remove lost its Bring it back"
     assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
     assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"
