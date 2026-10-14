@@ -112,7 +112,7 @@ def _duplicate_voices(hist: list) -> list[dict]:
     records, then more covers, then the older install. The others are SET ASIDE (Clean up never deletes a voice).
     -> [{voice, display, keeps, keeps_display, because, size}] for the ones that go."""
     import hashlib
-    from ..core.voices import display_name, listed_voices
+    from ..core.voices import DEMO_VOICE, display_name, is_demo, listed_voices
     from ..doubleagent.project import list_projects
     exported = {p["train"].get("exported") for p in list_projects()}
     by_size: dict = {}
@@ -130,7 +130,9 @@ def _duplicate_voices(hist: list) -> list[dict]:
         ex = v.extra or {}
         cadence = (v.dir / "tts").is_dir() or bool(ex.get("tts"))
         records = any(ex.get(k) for k in ("improved_pending", "improved_previous", "improved_turned_down"))
-        return (cadence, v.name in exported, bool((v.display or "").strip()), records, used.get(v.name, 0))
+        # the demo voice the First assignment uses is always kept (a copy of it can't send it aside)
+        return (is_demo(v) and v.name == DEMO_VOICE, cadence, v.name in exported, bool((v.display or "").strip()),
+                records, used.get(v.name, 0))
     out = []
     for group in by_size.values():
         if len(group) < 2:
@@ -145,8 +147,9 @@ def _duplicate_voices(hist: list) -> list[dict]:
             same.sort(key=why, reverse=True)                            # stable: the strongest reason first
             keep = same[0]
             k = why(keep)
-            words = ("it has the cadence", "it's the trained project's voice", "it has your name for it",
-                     "it has an Undo or a retrained version", f"it's used for {k[4]} cover{'s' * (k[4] != 1)}")
+            words = ("it's the demo voice the First assignment uses", "it has the cadence",
+                     "it's the trained project's voice", "it has your name for it",
+                     "it has an Undo or a retrained version", f"it's used for {k[5]} cover{'s' * (k[5] != 1)}")
             for v in same[1:]:
                 w = why(v)   # the reason that decided between these two (the first where the kept one is ahead)
                 i = next((i for i in range(len(k)) if k[i] != w[i]), None)
