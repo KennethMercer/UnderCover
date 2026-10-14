@@ -60,7 +60,7 @@ function renderVoiceCards(cands) {
     const c = DA.cands.find(x => x.voice === b.dataset.improve);
     b.disabled = true;
     try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); renderQueue(); loadCandidates(); }
-    catch (e) { b.disabled = false; showError(e.message, `Couldn't add ${c.voice}`); }
+    catch (e) { b.disabled = false; showError(e.message, `Couldn't add ${voiceDisplay(c.voice)}`); }
   });
   $$("[data-cad]", box).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
@@ -72,16 +72,24 @@ function renderVoiceCards(cands) {
   if (fresh && kept && kept.dataset.key && fresh.dataset.key === kept.dataset.key) fresh.replaceWith(kept);
   const ab = $("#cad-ab", box);
   if (ab) {
+    let pos = 0;   // one playhead: switching to the other reading carries on at the same place
     $$(".ab-side", ab).forEach(sd => {   // one at a time, at the page's volume (muted stays silent)
       const a = $("audio", sd), bar = $(".ab-bar i", sd);
-      $(".ab-play", sd).onclick = () => { if (a.paused) a.play().catch(() => showError("The browser couldn't play this reading.", "Playback failed")); else a.pause(); };
+      $(".ab-play", sd).onclick = () => {
+        if (!a.paused) return a.pause();
+        const other = $$("audio", ab).find(o => o !== a && !o.paused);
+        if (other) pos = other.currentTime;
+        try { a.currentTime = Math.min(pos, a.duration || pos); } catch (e) {}
+        a.play().catch(() => showError("The browser couldn't play this reading.", "Playback failed"));
+      };
       a.onplay = () => {
         a.volume = VOL.muted ? 0 : VOL.level * VOL.level;
         $$("audio", ab).forEach(o => { if (o !== a) o.pause(); });
         if (DA.playing) { DA.audio.pause(); DA.playing = null; }
         sd.classList.add("playing");
       };
-      a.onpause = a.onended = () => sd.classList.remove("playing");
+      a.onpause = () => { sd.classList.remove("playing"); if (!a.ended) pos = a.currentTime; };
+      a.onended = () => { sd.classList.remove("playing"); pos = 0; };
       a.ontimeupdate = () => { bar.style.width = `${Math.min(100, a.currentTime / (a.duration || 1) * 100)}%`; };
     });
     const why = $("#cad-ab-why", ab);
