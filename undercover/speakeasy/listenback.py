@@ -37,11 +37,17 @@ NUMBERS.update({"30": "thirty", "40": "forty", "50": "fifty", "60": "sixty", "70
                 "90": "ninety", "100": "hundred"})
 MIN_COMMA_PAUSE = 0.08
 LOW_CONFIDENCE = 0.5
+DRAWL_S = 0.30         # a one-syllable word held this long, not the last and with no pause marked after it, is drawn out
+                       # ("GOOD......morning": 0.36 s against 0.12-0.20 s natural; the user's ear, phase 24)
+DRAWL_LINE = 4         # ...in a short line only: in flowing speech Whisper's word edges can't tell a held word from a
+                       # stressed one (on the golden set's 18 speech readings, every line flagged a word at 0.30 s)
+PAUSE_MARKS = ",.;:!?…—–-"
 FADE_S = 0.015
 
 
 LOW_VRAM_GB = 12        # under this, the worker's own Whisper is freed before the listen-back loads one here
-_ASR = {"model": None, "failed": ""}
+_ASR = {"model": None, "failed": "", "fetching": None, "fetch_failed": 0.0}
+FETCH_RETRY_S = 600     # a failed Whisper download (offline, a wrong file) waits this long: never 1.6 GB per speech
 _ASR_LOCK = threading.Lock()
 
 
@@ -64,12 +70,34 @@ def _asr():
                     except Exception:   # noqa: BLE001 - no worker yet, nothing to free
                         pass
                 f = path("models_dir") / "whisper" / "large-v3-turbo.pt"
-                if not f.is_file():
-                    raise FileNotFoundError("the speech recogniser isn't downloaded yet")
+                if not f.is_file():   # a fresh install (phase 25): fetched in the background, this speech goes on
+                    _fetch_in_background()
+                    _ASR["why"] = "the speech recogniser is downloading (once, about 1.6 GB): re-reads start after"
+                    return None
                 _ASR["model"] = whisper.load_model(str(f), device=dev)
-            except Exception as e:   # noqa: BLE001 - out of memory, not downloaded: reading goes on without re-reads
+            except Exception as e:   # noqa: BLE001 - out of memory, can't load: reading goes on without re-reads
                 _ASR["failed"] = f"{type(e).__name__}: {e}"[:200]
     return _ASR["model"]
+
+
+def _fetch_in_background():
+    """The pinned Whisper file (the same one the cadence worker uses, SHA-256 checked), once, without holding up the
+    speech that asked: listen-back is on by default, so a fresh install needs it without anyone training a cadence."""
+    t = _ASR["fetching"]
+    if (t is not None and t.is_alive()) or time.time() - _ASR["fetch_failed"] < FETCH_RETRY_S:
+        return
+
+    def go():
+        try:
+            from ..core import setup_models
+            from ..core.cadence.engines import MODEL_SHA256, WHISPER_URL
+            setup_models.ensure(files={"whisper/large-v3-turbo.pt": WHISPER_URL}, sha256=MODEL_SHA256)
+        except Exception as e:   # noqa: BLE001 - offline, disk full, a wrong file: tried again after a pause
+            _ASR["fetch_failed"] = time.time()
+            print(f"Listen-back: the speech recogniser couldn't be downloaded ({e}); trying again in a few minutes.",
+                  flush=True)
+    _ASR["fetching"] = threading.Thread(target=go, daemon=True, name="listenback-whisper")
+    _ASR["fetching"].start()
 
 
 def hear(files: list) -> list:
@@ -77,7 +105,7 @@ def hear(files: list) -> list:
     from ..core.cadence.engines import WHISPER_PROMPT
     m = _asr()
     if m is None:
-        raise RuntimeError(f"no speech recogniser for the listen-back ({_ASR['failed']})")
+        raise RuntimeError(f"no speech recogniser for the listen-back ({_ASR['failed'] or _ASR.get('why') or 'not loaded'})")
     out = []
     with _ASR_LOCK:
         for f in files:
@@ -126,14 +154,32 @@ def _align(want: list, heard: list) -> list:
     return out
 
 
+def syllables(word: str) -> int:
+    """About how many syllables (vowel groups, a silent final e dropped): enough to tell a one-syllable word."""
+    n = len(re.findall(r"[aeiouy]+", word.lower()))
+    if n > 1 and word.lower().endswith("e") and not word.lower().endswith(("le", "ee")):
+        n -= 1
+    return max(1, n)
+
+
+def _pause_after(text: str) -> list[bool]:
+    """For each word (text_words' order): does the text mark a pause after it (a comma, a full stop...)?"""
+    return [tok.rstrip("\"')”’").endswith(tuple(PAUSE_MARKS)) for tok in text.split() if _clean(tok)]
+
+
 def problems(text: str, words: list) -> list[str]:
-    """What the ear would catch in a take: missing / misheard words and low-confidence ones (Whisper's words with
-    confidence: [word, start, end, probability])."""
+    """What the ear would catch in a take: missing / misheard words, low-confidence ones, and a one-syllable word
+    drawn out mid-phrase (Whisper's words with timing and confidence: [word, start, end, probability])."""
     want = [w for w, _ in text_words(text)]
     idx = _align(want, words)
     out = [f"missing {w!r}" for w, k in zip(want, idx) if k is None]
     out += [f"unsure {words[k][0].strip()!r} ({words[k][3]:.2f})" for k in idx
             if k is not None and len(words[k]) > 3 and words[k][3] < LOW_CONFIDENCE]
+    pause = _pause_after(text)
+    for i, (w, k) in enumerate(zip(want, idx)):   # Whisper's word end takes in a pause after it: not when one is marked
+        if (len(want) <= DRAWL_LINE and k is not None and i < len(want) - 1 and not pause[i] and len(words[k]) > 2
+                and syllables(w) == 1 and words[k][2] - words[k][1] > DRAWL_S):
+            out.append(f"drawn-out {w!r} ({words[k][2] - words[k][1]:.2f} s)")
     extra = len(words) - sum(k is not None for k in idx)
     if extra > 0:
         out.append(f"{extra} extra word(s)")

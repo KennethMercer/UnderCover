@@ -316,10 +316,10 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
     stem = _safe(f"{title.rstrip('…')} ({p['voice']})") or sid
     base = stem
     for k in range(2, 1000):
-        if not (d / f"{stem}.wav").exists() and not (d / f"{stem}.mp3").exists():
+        if not any((d / f"{stem}{ext}").exists() for ext in (".flac", ".wav", ".mp3")):
             break
         stem = f"{base} {k}"
-    wav = d / f"{stem}.wav"
+    wav = d / f"{stem}.flac"   # lossless (phase 24: about half a WAV); older speech keeps its .wav
     sf.write(str(wav), y, sr, subtype="PCM_16")
     mp3 = _mp3(wav)
     meta = {"id": sid, "title": title, "file": wav.name, "mp3": mp3.name if mp3 else None, "text": text,
@@ -358,7 +358,7 @@ def _item(m: dict) -> dict:
     return {**{k: m.get(k) for k in ("id", "title", "text", "voice", "reader", "reader_auto", "speed", "pitch", "created",
                                       "duration", "seconds", "file", "mp3", "mode", "engine", "pace", "kept_at")},
             "kept": bool(m.get("kept")), "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
-            "format": "WAV" + (" + MP3" if mp3 and mp3.exists() else "")}
+            "format": wav.suffix[1:].upper() + (" + MP3" if mp3 and mp3.exists() else "")}
 
 
 def _meta(sid: str) -> tuple[Path, dict]:
@@ -455,7 +455,7 @@ def rename_speech(sid: str, name: str) -> dict:
         for old, new in moves:
             if old.exists():
                 fsutil.retry(lambda old=old, new=new: old.rename(new))
-        m["file"] = name + ".wav"
+        m["file"] = name + Path(m["file"]).suffix
         if m.get("mp3"):
             m["mp3"] = name + ".mp3"
         m["title"] = name

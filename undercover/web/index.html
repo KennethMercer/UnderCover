@@ -111,7 +111,10 @@
 
   <section class="panel assign-brief" id="assign-brief" hidden>
     <span class="mark"><svg class="ico" aria-hidden="true"><use href="#g-file"/></svg></span>
-    <div><h2>Your first assignment</h2><p id="assign-brief-say">A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it,
+    <div><h2>Your first assignment</h2>
+      <div class="assign-greet" id="assign-greet" hidden><button class="play" type="button" id="assign-greet-play" aria-label="Play Agent Smoke's greeting">▶</button>
+        <span><b>Agent Smoke</b><small id="assign-greet-say"></small></span></div>
+      <p id="assign-brief-say">A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it,
       see where it lives, then get a voice of your own. The song is ours and the voice isn't anyone's, so nothing you make here is anyone else's.</p>
       <ol class="assign-steps"><li>Make the cover</li><li>Listen</li><li>Keep it</li><li>SafeHouse</li><li>A voice of your own</li></ol></div>
     <div class="row"><button class="btn primary" id="assign-take" type="button">Take the assignment</button><button class="linkbtn quiet" id="assign-later" type="button">Not now</button>
@@ -548,6 +551,10 @@
       <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
         <span class="meta">Can't be undone, but anything here is re-made automatically if it's needed again.</span></div>
     </section>
+    <section class="panel" id="smaller" hidden>
+      <div class="row spread"><h2>Make it smaller</h2><span class="meta" id="sm-say"></span></div>
+      <div class="vt-body" id="sm-body"></div>
+    </section>
     <section class="panel">
       <div class="row spread"><h2>Where your files live</h2><span class="meta">Keep UnderCover on C: and its files somewhere roomier</span></div>
       <div class="places" id="st-places"></div>
@@ -673,7 +680,8 @@
       <div class="setting" id="set-ear-row" hidden><span><b>Your ear</b><small id="set-ear-say"></small></span>
         <button class="linkbtn quiet" id="set-ear-forget" type="button" hidden>Forget my thumbs</button>
         <div class="ear-deep" id="set-ear-deep" data-deep></div></div>
-      <div class="setting" id="set-assign-row"><span><b>First assignment</b><small id="set-assign-say">The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small></span>
+      <div class="setting" id="set-assign-row"><span><b>First assignment</b><small id="set-assign-say">The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small>
+        <small class="set-demo" id="set-demo" hidden></small></span>
         <button class="btn" id="set-assign-replay" type="button" disabled>Replay</button></div>
       <div class="setting" id="set-phone-row" data-pc><span><b>Phone access</b><small id="set-phone-say">Use UnderCover from your phone on your home Wi-Fi. Off until you switch it on; each phone pairs once with a code from here.</small></span>
         <button class="switch" id="set-phone" type="button" role="switch" aria-checked="false" aria-label="Phone access"></button></div>
@@ -687,8 +695,19 @@
           <p class="meta"><span id="phone-left"></span> · <button class="linkbtn" id="phone-pair-x" type="button">Cancel</button></p>
         </div>
         <div class="rn-list" id="phone-devices"></div>
+        <div class="setting" id="set-away-row" hidden><span><b>Away from home</b><small id="set-away-say">Reach UnderCover from anywhere through a private link (Tailscale: free, nothing to install on the phone). Phones still pair here, at home.</small></span>
+          <button class="switch" id="set-away" type="button" role="switch" aria-checked="false" aria-label="Away from home"></button></div>
+        <div class="phone-box" id="away-box" hidden>
+          <p class="meta" id="away-step"></p>
+          <div class="row"><a class="btn" id="away-signin" target="_blank" rel="noopener noreferrer" hidden>Sign in to Tailscale</a><a class="btn" id="away-approve" target="_blank" rel="noopener noreferrer" hidden>Approve the private link</a></div>
+          <p class="meta" id="away-ct" hidden>Approving lists this PC's link name (a random uc-… name, nothing about you) in the public certificate logs every HTTPS site appears in.</p>
+          <p id="away-link" hidden></p>
+          <p class="meta" data-deep><button class="linkbtn" id="away-forget" type="button">Forget this PC's Tailscale sign-in</button></p>
+        </div>
       </div>
       <div class="setting" data-phone><span><b>Phone access</b><small id="set-phone-me">This phone is paired. Phone access is managed on the PC.</small></span></div>
+      <div class="setting" data-phone id="set-away-me-row" hidden><span><b>Away from home</b><small>When the PC has it on: one tap here, on the home Wi-Fi, and this phone reaches UnderCover from anywhere.</small></span>
+        <button class="btn" id="away-me" type="button">Use this phone away from home</button></div>
     </div>
     </div>
 
@@ -765,7 +784,7 @@
       </div>
       <div class="se-reading" id="se-reading"></div>
       <div class="ear" id="se-ear" hidden></div>
-      <div class="row"><a class="btn" id="se-wav" aria-disabled="true" data-deep>Download WAV</a><a class="btn" id="se-mp3" aria-disabled="true">Download MP3</a><button class="btn" id="se-keep" type="button" aria-pressed="false" data-kept="false" hidden>Send to SafeHouse</button><span class="meta" id="se-dl-note">downloads unlock when the last sentence is made</span></div>
+      <div class="row"><a class="btn" id="se-wav" aria-disabled="true" data-deep>Download FLAC</a><a class="btn" id="se-mp3" aria-disabled="true">Download MP3</a><button class="btn" id="se-keep" type="button" aria-pressed="false" data-kept="false" hidden>Send to SafeHouse</button><span class="meta" id="se-dl-note">downloads unlock when the last sentence is made</span></div>
     </section>
 
     <section class="panel">
@@ -795,6 +814,7 @@
 <script src="/static/library.js"></script>
 <script src="/static/rooms.js"></script>
 <script src="/static/vault.js"></script>
+<script src="/static/smaller.js"></script>
 <script src="/static/themes.js"></script>
 <script src="/static/work.js"></script>
 <script src="/static/doubleagent.js"></script>
