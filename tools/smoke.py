@@ -1118,6 +1118,33 @@ def u_cadence():
     hist = []   # the running median: a higher sentence (a question) among lower ones isn't pulled onto the median
     assert [R.octave_shift(x, _Rm(hz), 235.0, fine=True, history=hist) for hz in (138.0, 138.0, 200.0)] == [9.0, 9.0, 9.0], hist
     assert ENGINES["chatterbox-turbo"]["pitch_to_target"] and not ENGINES["chatterbox"].get("pitch_to_target")
+    # phase 23: a pack's pace is calibrated once per engine (the reference clip read at a speed that lands the natural pace
+    # near the person's own); the search, with a made-up engine whose pace follows the reference's speed to the power 0.5
+    from undercover.doubleagent import cadence as DK
+    calls = []
+
+    def fake(target_at_1):
+        def read(r):
+            calls.append(r)
+            return target_at_1 * r ** 0.5
+        return read
+    r, tried = DK.choose_rate(fake(5.4), 3.6)   # 1.5x too fast (Freeman's case): about 0.44 wanted, the range stops at 0.5
+    assert r == 0.5 and len(tried) <= DK.PACE_READS and abs(tried[r] / 3.6 - 1) < 0.30, (r, tried)
+    r, tried = DK.choose_rate(fake(4.2), 3.6)   # 17% fast: one jump lands it
+    assert 0.6 < r < 0.85 and abs(tried[r] / 3.6 - 1) <= DK.PACE_TOL, (r, tried)
+    calls.clear()
+    r, tried = DK.choose_rate(fake(3.8), 3.6)   # already within 10%: one reading, the clip as it is
+    assert r == 1.0 and calls == [1.0], (r, calls)
+    r, tried = DK.choose_rate(fake(3.0), 3.6)   # slow: a faster reference, but not past the range
+    assert 1.0 < r <= DK.PACE_RATE_HI, (r, tried)
+    eng = DK.C.reading_engine("chatterbox")
+    assert DK.pace_needs_calibration(None) is False
+    assert DK.pace_needs_calibration({"engine": "chatterbox", "pace_cal": {"engine": eng}}) is False   # done once per engine
+    assert DK.pace_needs_calibration({"engine": "chatterbox"}) is bool(DK.C.engine_info(eng).get("pace_by_ref"))
+    x = np.zeros(32000, np.float32)
+    x[8000:24000] = np.random.RandomState(1).randn(16000).astype(np.float32) * 0.1
+    st = DK._speech_stats(x, "one two three four")
+    assert st and abs(st["dur"] - 1.0) < 0.1 and st["rate"] == st["syl"] / st["dur"] and DK._speech_stats(x[:100], "a") == {}, st
     ids = {a["id"] for a in addons.status()}
     assert {"f5", "xtts"} <= ids, ids
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
