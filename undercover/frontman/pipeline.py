@@ -202,7 +202,7 @@ class CoverEngine:
                 setattr(ms, k, getattr(opts, k))
         # the file people download says who sings, as the pages name them (the voice ids stay in the history)
         names = label_of(voice.name) + (f" + {label_of(bvoice.name)}" if bvoice and bvoice.name != voice.name else "")
-        out = out or _unique(path("output_dir") / f"{_safe(title)} ({names})", ms.format)
+        out = out or _unique(path("output_dir") / f"{_safe(title)} ({_safe(names)})", ms.format)   # "AC/DC" is a name, not a path
         final = remix(cstems["instrumental"], conv_path, cstems["vocals"], out, song=song,
                       backing=conv_backing or cstems.get("backing"), s=ms,
                       backing_ref=cstems.get("backing") if conv_backing else None,

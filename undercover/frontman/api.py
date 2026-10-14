@@ -136,6 +136,11 @@ def _start_cover(h, body: dict):
     _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice)))
     job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}")
     JOBS[job.id] = job
+    try:   # its own time, added to the wait for its song's preparation
+        from .pipeline import estimate
+        job.own_estimate = estimate(song, opts)["total"]
+    except Exception:   # noqa: BLE001 - the wait is still said, without this part
+        job.own_estimate = 0
     _say_why_waiting(job, meta["id"])
 
     def run(job: Job):
@@ -274,7 +279,8 @@ def _say_why_waiting(job: Job, song_id: str):
         n, steps = last.get("step_n", 1), last.get("steps", 1)
         job.push(stage="preparing", fraction=last.get("fraction", 0), step_n=n, steps=steps, waits_for=pre.id,
                  label=f"Preparing the song first ({n} of {steps})…",
-                 **({"total_left": last["total_left"]} if last.get("total_left") is not None else {}))
+                 **({"total_left": round(last["total_left"] + (getattr(job, "own_estimate", 0) or 0), 1)}
+                    if last.get("total_left") is not None else {}))
         return
     cur = J.CURRENT[0]
     if cur is not None and not cur.finished:
