@@ -1545,6 +1545,14 @@ def u_remove_aside():
         h.err = None
         SA.handle(h, "POST", f"/api/library/aside/{r['aside']}/restore")
         assert h.err and "in your voices now" in h.err and (voices_dir() / ".aside" / r["aside"]).is_dir(), h.err
+        # its waiting one can't come back (its name taken): the voice comes back without a "waiting" pointing at it
+        _voice_dir("bo-uc", {"trained": True, "project": "bo"})
+        _voice_dir("bo-uc-next", {"trained": True, "project": "bo"})
+        night.mark_improved_pending("bo-uc", "bo-uc-next", 0.7, 0.7, 10)
+        rb = remove_to_aside("bo-uc")
+        _voice_dir("bo-uc-next", {"trained": True, "project": "someone-else"})        # the name taken meanwhile
+        assert library.restore_aside(rb["aside"]) == {"voice": "bo-uc", "with": None}
+        assert not get_voice("bo-uc").extra.get("improved_pending"), "waiting on a voice that isn't its candidate"
         held = next(x for x in library.aside() if x["id"] != r["aside"] and "didn't keep" in x["why"])
         assert held["undo_for"] is None, held   # its voice was removed: the record (in .aside) still says why
         # one an Undo serves goes back through that Undo

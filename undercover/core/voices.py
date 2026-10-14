@@ -515,7 +515,12 @@ def remove_to_aside(name: str) -> dict:
     with_ = None
     if cand and (voices_dir() / cand / "meta.json").exists():
         with_ = set_aside(voices_dir() / cand, note={"why": f"waited beside {label_of(v.name)} when you removed it"}).name
-    a = set_aside(v.dir, note={"why": "you removed it", **({"with": with_} if with_ else {})})
+    try:
+        a = set_aside(v.dir, note={"why": "you removed it", **({"with": with_} if with_ else {})})
+    except BaseException:
+        if with_:   # the voice couldn't move (a file held open): its waiting one back beside it, as before
+            bring_back(with_)
+        raise
     return {"aside": a.name, "with": with_}
 
 
@@ -547,6 +552,11 @@ def bring_back(aid: str) -> dict:
             with_ = bring_back(note["with"])["voice"]
         except ModelError:
             pass   # its name is taken now: it stays aside, listed in SafeHouse
+    pending = ((meta.get("extra") or {}).get("improved_pending") or {}).get("voice")
+    if pending and pending != with_:
+        # what it was waiting on didn't come back with it: no "waiting" pointing at nothing (or at another voice)
+        meta["extra"].pop("improved_pending", None)
+        fsutil.write_text(target / "meta.json", json.dumps(meta, indent=2))
     return {"voice": name, "with": with_}
 
 
