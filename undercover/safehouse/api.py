@@ -20,6 +20,9 @@ POST   /api/library/voices/<name>/full-index   a new voice's full index back (ke
 GET    /api/library/voices/<name>/export    zip download
 GET    /api/library/smaller                 Make smaller (phase 24): each voice and project, what it would save
 POST   /api/library/smaller/start | keep | undo   {kind: voice|project, name} (safehouse/smaller.py)
+GET    /api/library/aside                   voices set aside, never deleted (a replaced voice, the one not kept after
+                                            the blind A/B): {id, voice, display, size, at, why, undo_for}, newest first
+DELETE /api/library/aside/<id>              the user's explicit choice: delete one (ends undo_for's Undo) -> {freed}
 GET    /api/library/cleanup                 what can be freed, per group
 POST   /api/library/cleanup                 {groups: [...]}
 (voices and training projects are deleted through the existing /api/voices/<name> and /api/train/projects/<p>)
@@ -76,8 +79,11 @@ def _route(h, method, p):
         if smaller.handle(h, method, rest):
             return
         raise LookupError("Not found")
-    if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training"):
+    if method == "GET" and rest in ("summary", "covers", "speech", "songs", "voices", "training", "aside"):
         return h._json(getattr(library, rest)())
+    m = re.fullmatch(r"aside/([a-z0-9-]+)", rest)
+    if m and method == "DELETE":
+        return h._json(library.remove_aside(m.group(1)))
     if rest == "tools/ytdlp-update" and method == "POST":
         h._body()
         return h._json(_update_ytdlp())
