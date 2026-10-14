@@ -68,7 +68,7 @@ function renderBar() {
     state = "run";
   } else if (w.held) {
     const res = w.resume || [];
-    text = "Voice work is paused" + (res.length ? ` · ${res.slice(0, 2).join(", ")}${res.length > 2 ? ` and ${res.length - 2} more` : ""}` : "") +
+    text = "Nothing is running · voice work is paused" + (res.length ? ` · ${res.slice(0, 2).join(", ")}${res.length > 2 ? ` and ${res.length - 2} more` : ""}` : "") +
            (w.queued ? ` · ${w.queued} in the overnight queue` : "");
     state = "held";
   } else if (w.armed && w.queued) {
@@ -123,14 +123,14 @@ async function pauseWork() {
   if (W.open) loadQueue();
 }
 $("#wb-pause").onclick = async () => { $("#wb-pause").disabled = true; await pauseWork(); $("#wb-pause").disabled = false; };
-$("#wb-forget").onclick = async () => {
-  const b = $("#wb-forget");
+$("#wb-forget").onclick = () => forgetWork($("#wb-forget"));
+async function forgetWork(b) {   // Dismiss, in the bar and in the Running room's card: two clicks
   if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Forget it?"; setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Dismiss"; }, 4000); return; }
   b.classList.remove("confirm"); b.textContent = "Dismiss";
   try { const r = await api("/api/work/forget", { json: {} }); renderWorkBar({ ...r, queued: r.queue.filter(i => ["queued", "paused"].includes(i.state)).length }); }
   catch (e) { showError(e.message, "Couldn't dismiss it"); }
   if (W.open) loadQueue();
-};
+}
 async function resumeWork() {
   try {
     const r = await api("/api/work/resume", { json: {} });
@@ -169,13 +169,17 @@ function renderRunRoom() {
           <span class="acts"><button class="linkbtn" type="button" data-goto="${o}">Open</button></span></div>`; }).join("")}</div>` : "");
   } else if (work.held) {
     const res = work.resume || [];
-    now = `<div class="rn-now held" data-owner="doubleagent"><div class="who">Paused</div>
-      <p>Voice work is paused${res.length ? `: ${esc(res.slice(0, 3).join(", "))}${res.length > 3 ? ` and ${res.length - 3} more` : ""}` : ""}. It carries on where it stopped.</p>
-      <div class="row"><button class="btn primary" type="button" data-rn-resume>Resume</button></div></div>`;
+    // held work is NOT running: no bar, no running look, a plain "not running" label, and what to do with it
+    const since = work.held_at ? ` Stopped at ${hhmm(work.held_at)}.` : "";
+    now = `<div class="rn-now held" data-owner="doubleagent"><div class="who">Not running</div>
+      <p><b>Nothing is running.</b> This work was stopped (you paused it, or UnderCover closed)${res.length ? `: ${esc(res.slice(0, 3).join(", "))}${res.length > 3 ? ` and ${res.length - 3} more` : ""}` : ""}. Where it stopped is saved.${esc(since)}</p>
+      <div class="row"><button class="btn primary" type="button" data-rn-resume>Resume now</button>
+        ${res.length ? `<button class="linkbtn" type="button" data-rn-forget>Dismiss</button>` : ""}</div></div>`;
   }
   if (put($("#rn-now"), now)) {
     $$("[data-rn-pause]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await pauseWork(); b.disabled = false; });
     $$("[data-rn-resume]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
+    $$("[data-rn-forget]", $("#rn-now")).forEach(b => b.onclick = () => forgetWork(b));   // two clicks, then forgotten
     $$("[data-jcancel]", $("#rn-now")).forEach(b => b.onclick = async () => {   // two clicks; the first is remembered across redraws
       const id = b.dataset.jcancel;
       clearTimeout(W.cancelTimer);
