@@ -4697,6 +4697,19 @@ def u_shrink_export():
     return "300 -> 50 quietly (not pending), full kept 30 days with its date, put back, expired guarded; bad index left alone"
 
 
+@check("a one-shot's variation starts from what it used (Internal Affairs m1): plan.settings.options carries the cover's exact options, the original backing kept for stacked harmonies")
+def u_oneshot_options():
+    from undercover.frontman.oneshot import cover_options_of
+    from undercover.frontman.pipeline import CoverOptions
+    chordal = cover_options_of(CoverOptions(voice="v", key=2, octave=-1, quality="high", dereverb=True, karaoke=True,
+                                            backing_voice=None, backing_octave=-1, backing_db=-3.0, polish=True))
+    assert chordal["backing_db"] == -3.0 and "backing_voice" not in chordal and "voice" not in chordal, chordal
+    assert (chordal["octave"], chordal["key"], chordal["karaoke"]) == (-1, 2, True), chordal
+    plain = cover_options_of(CoverOptions(voice="v", backing_voice="v", karaoke=True))
+    assert plain["backing_voice"] == "v", plain
+    return "the stacked-harmony cover's variation keeps the original backing; a plain one converts it"
+
+
 @check("Compare with Fit on (Internal Affairs): the fit is worked out once on the full stems; octave / key versions are read relative to the page's setting and land around the fit's pick, so they differ; with Fit off they're as sent")
 def u_preview_fit():
     from dataclasses import replace
@@ -5733,7 +5746,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

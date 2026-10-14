@@ -462,6 +462,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     opts = CoverOptions(voice=v.name, key=key, octave=octave, quality="high", dereverb=True, karaoke=True,
                         backing_voice=None if chordal else v.name, backing_octave=octave,
                         backing_db=-3.0 if chordal else None, polish=True, pitch_cleanup=True)
+    # the exact options this cover used, for "Convert to try a variation" (Internal Affairs m1: the page assumed the
+    # backing was converted, so a variation of a stacked-harmony song converted the harmonies after all)
+    plan["settings"]["options"] = cover_options_of(opts)
     stage_w = {"separating": (0.0, 0.1), "converting": (0.1, 0.85), "mixing": (0.85, 1.0)}
 
     def cprog(stage, frac, msg):
@@ -472,6 +475,12 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     item = next((h for h in history_items() if h["id"] == res.id), None)
     job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
                plan=plan, seconds=res.seconds, notes=res.notes, elapsed=round(time.perf_counter() - t0, 1), quality=q)
+
+
+def cover_options_of(opts: "CoverOptions") -> dict:
+    """A cover's options as the Convert form takes them (the voice is the plan's; unset options left out)."""
+    from dataclasses import asdict
+    return {k: v for k, v in asdict(opts).items() if k != "voice" and v is not None}
 
 
 def start_oneshot(body: dict):
