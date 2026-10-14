@@ -331,6 +331,7 @@ function upload(file) {
   xhr.send(file);
 }
 function renderSong() {
+  previewSync();   // versions made for another song are put away
   if (!S.song) return setDrop("empty");
   setDrop("loaded");
   const s = S.song;
@@ -342,7 +343,7 @@ function renderSong() {
   S.songKey = null;
   api(`/api/songs/${s.id}/key`).then(k => {
     if (S.song?.id !== s.id) return;
-    S.songKey = k; meta(k.name);
+    S.songKey = k; meta(keyName(k.tonic, k.mode));
     $("#key-o").textContent = keyLabel(S.opts.key || 0);
   }).catch(() => {});
   drawWave($("#wave-song"), s.peaks, 0);
@@ -507,6 +508,7 @@ $("#reset").onclick = () => { store.set("uc-opts", {}); loadOpts(); refreshEstim
 
 function summary() {
   const o = S.opts;
+  previewSync();
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
     (o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
@@ -520,7 +522,7 @@ function summary() {
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals` : "";
-    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta" data-deep>· ${pitchText(o)}</span><span class="meta">${est}</span>`;
+    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }
 }
 function pitchText(o) {
@@ -530,11 +532,14 @@ function pitchText(o) {
   return parts.join(", ");
 }
 const NOTES = "C C# D D# E F F# G G# A A# B".split(" ");
+// the conventional spelling of a key: minor keys say Eb and Bb (not D# and A#), C#, F# and G#; major keys say Db, Eb, Ab, Bb and F#
+const KEY_MINOR = "C C# D Eb E F F# G G# A Bb B".split(" "), KEY_MAJOR = "C Db D Eb E F F# G Ab A Bb B".split(" ");
+const keyName = (tonic, mode) => `${(mode === "minor" ? KEY_MINOR : KEY_MAJOR)[((tonic % 12) + 12) % 12]} ${mode}`;
 function keyLabel(k) {
   const shift = k ? `${fmtPitch(k)} st` : "original";
   if (!S.songKey) return shift;
-  const to = `${NOTES[((S.songKey.tonic + k) % 12 + 12) % 12]} ${S.songKey.mode}`;
-  return k ? `${shift} (${S.songKey.name} → ${to})` : `original (${S.songKey.name})`;
+  const to = keyName(S.songKey.tonic + k, S.songKey.mode), from = keyName(S.songKey.tonic, S.songKey.mode);
+  return k ? `${shift} (${from} → ${to})` : `original (${from})`;
 }
 function infoChips(r) {
   const c = [r.version, r.sr, r.epochs ? `${r.epochs >= 1000 ? r.epochs / 1000 + "k" : r.epochs} epochs` : null,
@@ -763,19 +768,29 @@ function previewVariants() {
   return [{ polish: false, label: "Polish off" }, { polish: true, label: "Polish on" }];
 }
 function syncPreviewKind() { $$("#preview-kind button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === previewKind)); }
-// each tab keeps its own renders (one set of cards per kind), so a tab never shows another tab's versions
-const PV_INTRO = "Renders 15 seconds of the song (the part with the most singing) a few ways, so you can pick by ear. The first preview of a new song takes about a minute (it separates the song once); after that, a few seconds each.";
-const PV_PICK = "Switch between versions while playing: they stay in sync. Pick one with “Use this”.";
+// each tab keeps its own renders (one set of cards per kind), so a tab never shows another tab's versions; a set belongs to
+// the song and voice it was made for and goes when either changes
 // "Fit pitch to the voice" picks the octave and key itself, which would make every octave or key version the same
-const pvByHand = kind => !!S.opts.fit && (kind === "octave" || kind === "key");
-const PV_BYHAND = " “Fit pitch to the voice” is on and sets the octave and key itself, so these versions set them by hand; Use this turns the fit off.";
-function showPreviewKind() {
-  $$("#preview-list audio").forEach(a => a.pause());
-  $$("#preview-list .pv-set").forEach(el => { el.hidden = el.dataset.kind !== previewKind; });
+function pvByHand(kind) { return !!S.opts.fit && (kind === "octave" || kind === "key"); }
+// brings the sets in line with the page (the song, the voice, the fit, the settings in use) without touching playback
+function previewSync() {
+  const box = $("#preview-list"); if (!box) return;
+  $$(".pv-set", box).forEach(el => {
+    if (el.dataset.song !== String(S.song?.id) || el.dataset.voice !== String(S.voice)) { $$("audio", el).forEach(a => a.pause()); el.remove(); }
+    else el.hidden = el.dataset.kind !== previewKind;
+  });
+  $$(".pcard", box).forEach(c => {   // ✓ marks the version whose settings are the ones in use now
+    const set = c.closest(".pv-set"), o = JSON.parse(c.dataset.opts || "{}");
+    const used = Object.keys(o).length > 0 && !(pvByHand(set.dataset.kind) || S.opts.fit && ("octave" in o || "key" in o)) && Object.entries(o).every(([k, v]) => S.opts[k] === v);
+    $(".use", c).textContent = used ? "✓ Using this" : "Use this";
+  });
   if (!$("#preview-bar").hidden) return;   // a preview is rendering: its own progress line owns the status
-  const set = $(`#preview-list .pv-set[data-kind="${previewKind}"]`);
-  $("#preview-status").textContent = (set ? PV_PICK : PV_INTRO) + (pvByHand(previewKind) ? PV_BYHAND : "");
+  const set = $(`.pv-set[data-kind="${previewKind}"]`, box);
+  $("#preview-status").textContent = (set ? "Switch between versions while playing: they stay in sync. Pick one with “Use this”."
+    : "Renders 15 seconds of the song (the part with the most singing) a few ways, so you can pick by ear. The first preview of a new song takes about a minute (it separates the song once); after that, a few seconds each.")
+    + (pvByHand(previewKind) ? " “Fit pitch to the voice” is on and sets the octave and key itself, so these versions set them by hand; Use this turns the fit off." : "");
 }
+function showPreviewKind() { $$("#preview-list audio").forEach(a => a.pause()); previewSync(); }
 $("#preview-kind").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   previewKind = b.dataset.v; store.set("uc-preview-kind", previewKind); syncPreviewKind(); showPreviewKind();
@@ -788,7 +803,7 @@ $("#preview-close").onclick = () => { $$("#preview-list audio").forEach(a => a.p
 
 $("#preview-go").onclick = async () => {
   if (!S.song || !S.voice || S.job || S.osBusy) return;
-  const variants = previewVariants(), kind = previewKind, byHand = pvByHand(kind);
+  const variants = previewVariants(), kind = previewKind, byHand = pvByHand(kind), made = { song: S.song.id, voice: S.voice, title: S.song.title };
   $$("#preview-list audio").forEach(a => a.pause());
   $$(`#preview-list .pv-set[data-kind="${kind}"]`).forEach(el => el.remove());
   $("#preview-go").disabled = true;
@@ -802,7 +817,8 @@ $("#preview-go").onclick = async () => {
       if (ev.frac != null) $("#preview-bar i").style.width = Math.round((ev.stage === "rendering" ? 0.3 + 0.7 * ev.frac : 0.3 * ev.frac) * 100) + "%";
       if (!ev.final) return;
       stop(); S.job = null; summary(); $("#preview-go").disabled = false; $("#preview-bar").hidden = true;
-      if (ev.state === "done") { renderPreviews(ev.previews, kind, byHand); refreshEstimate(); }
+      if (ev.state === "done" && (S.song?.id !== made.song || S.voice !== made.voice)) $("#preview-status").textContent = "The song or the voice changed while it rendered, so those versions were put away. Render again.";
+      else if (ev.state === "done") { renderPreviews(ev.previews, kind, byHand, made); refreshEstimate(); }
       else if (ev.state === "cancelled") $("#preview-status").textContent = "Cancelled.";
       else { $("#preview-status").textContent = ""; showError(ev.message, "Preview failed"); }
     });
@@ -812,12 +828,12 @@ $("#preview-go").onclick = async () => {
   }
 };
 
-function renderPreviews(list, kind, byHand) {
+function renderPreviews(list, kind, byHand, made) {
   const box = document.createElement("div");   // this tab's cards; display: contents keeps them in the grid
-  box.className = "pv-set"; box.dataset.kind = kind;
+  box.className = "pv-set"; box.dataset.kind = kind; box.dataset.song = made.song; box.dataset.voice = made.voice;
   $("#preview-list").append(box);
-  box.innerHTML = list.map((p, i) => `
-    <div class="pcard" data-i="${i}">
+  box.innerHTML = `<p class="meta pv-for">${esc(made.title)} · ${esc(voiceDisplay(made.voice))}</p>` + list.map((p, i) => `
+    <div class="pcard" data-i="${i}" data-opts="${esc(JSON.stringify(list[i].options || {}))}">
       <div class="ptitle"><button class="play" aria-label="Play ${esc(p.label)}">▶</button><b>${esc(p.label)}</b></div>
       <button class="btn use">Use this</button>
       <audio preload="auto" src="${esc(p.url)}"></audio>
@@ -841,7 +857,7 @@ function renderPreviews(list, kind, byHand) {
     a.addEventListener("ended", () => { pos = 0; });
     $(".use", card).onclick = () => {
       Object.assign(S.opts, list[i].options); if (byHand) S.opts.fit = false; store.set("uc-opts", S.opts); syncControls(); summary(); refreshEstimate();
-      $$(".use", box).forEach(b => b.textContent = "Use this"); $(".use", card).textContent = "✓ Using this";
+      previewSync();
     };
   });
 }

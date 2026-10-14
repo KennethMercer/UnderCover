@@ -141,6 +141,7 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .prev-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .linkbtn.on { color: var(--accent); font-weight: 600; }   /* the playing one of a Before / After pair */
 .pv-set { display: contents; }
+.pv-for { grid-column: 1 / -1; margin: 0; }
 .pv-set[hidden] { display: none; }
 .pcard { border: 1px solid var(--line); border-radius: 9px; padding: 12px; display: grid; gap: 10px; background: var(--panel-2); }
 .pcard.playing { border-color: var(--accent); }
@@ -757,7 +758,7 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .qtotal b { font-size: 20px; }
 .qadd { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; }
 .qadd input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; color: inherit; font: inherit; }
-.qat input[type=time] { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: inherit; font: inherit; }
+.qat input[type=time], #rn-at-time, #rn-finish-time, #q-finish-time { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: inherit; font: inherit; }
 .qlist { display: grid; gap: 8px; }
 .qjob { display: grid; grid-template-columns: 18px 1fr auto; gap: 12px; align-items: start; background: var(--panel-2);
   border: 1px solid var(--line); border-radius: 9px; padding: 12px; }
