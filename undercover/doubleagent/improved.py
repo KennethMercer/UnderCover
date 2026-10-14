@@ -68,6 +68,8 @@ def _move_voice(src: Path, dst: Path, name: str | None, listed: bool):
     if name:
         meta.update(name=name, dir=str(dst), pth=str(dst / "model.pth"),
                     index=str(dst / "model.index") if meta.get("index") else meta.get("index"))
+    if listed:   # back in the lists: the note from its time aside (core.voices.set_aside) is done
+        (meta.get("extra") or {}).pop("set_aside", None)
     want = meta_on if listed else meta_off
     fsutil.write_text(want, json.dumps(meta, indent=2))
     if cur != want:
