@@ -610,7 +610,8 @@ class Handler(BaseHTTPRequestHandler):
             if action == "add":
                 # a project queued from the Deep path names it as "project" (the target is the project's id)
                 return self._json(worklist.add(b.get("kind", ""), b.get("target") or b.get("project") or "", now=bool(b.get("now")),
-                                               mode=b.get("mode") or None))
+                                               mode=b.get("mode") or None,
+                                               options={k: b[k] for k in ("voice_name", "length", "sr") if k in b}))
             if action == "remove":
                 return self._json(worklist.remove(b.get("id", "")))
             if action == "order":

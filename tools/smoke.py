@@ -4645,9 +4645,14 @@ def u_project_queue():
             raise AssertionError("queued over Barack Obama's voice")
         except ModelError as e:
             assert "Barack Obama" in str(e), e
-        proj.train["voice_name"] = "donald-trump-uc"
-        proj.save()
-        st = worklist.add("project", proj.name)
+        try:   # what's on screen when queued is what runs: the page sends its choices with the add
+            worklist.add("project", proj.name, options={"voice_name": "trump-rallies", "length": "forever", "sr": 40000})
+            raise AssertionError("an unknown length was queued")
+        except ModelError as e:
+            assert "length" in str(e), e
+        st = worklist.add("project", proj.name, options={"voice_name": "Trump Rallies", "length": "quick", "sr": 48000})
+        tr = P.Project.load(proj.name).train
+        assert (tr["voice_name"], tr["length"], tr["sr"]) == ("trump-rallies", "quick", 48000), tr
         item = next(i for i in worklist._state()["queue"] if i["kind"] == "project")
         assert item["target"] == "donald-trump" and item["estimate"]["total"] >= 0, item
         assert worklist.KINDS["project"]["label"](item) == "Training Donald Trump (your choices)"
@@ -4658,6 +4663,19 @@ def u_project_queue():
             raise AssertionError("queued twice")
         except ModelError as e:
             assert "already in the queue" in str(e), e
+        worklist.remove(next(i for i in worklist._state()["queue"] if i["kind"] == "project")["id"])
+        pp = P.Project.load(proj.name)                              # a paused training continues at its own rate
+        pp.train.update(state="paused", sr=40000)
+        pp.save()
+        try:
+            worklist.add("project", proj.name, options={"sr": 32000})
+            raise AssertionError("a paused training's rate changed")
+        except ModelError as e:
+            assert "paused at 40 kHz" in str(e), e
+        pp.train.pop("state")
+        pp.save()
+        st = worklist.add("project", proj.name, options={"voice_name": "donald-trump-uc"})
+        item = next(i for i in worklist._state()["queue"] if i["kind"] == "project")
         # the run itself refuses another person's voice name before any work (the name changed after queueing)
         proj = P.Project.load(proj.name)
         proj.train["voice_name"] = "barack-obama-uc"
