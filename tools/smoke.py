@@ -4473,6 +4473,9 @@ def u_page_rules():
     da = (web / "doubleagent.js").read_text(encoding="utf-8")
     assert "impHtml" in da and 'data-imp-keep' in da and '"/keep"' in da, "DoubleAgent lost the retrained voice's blind A/B"
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
+    # IA pass 7: two Set aside / Clean up rows that read the same carry their folder name; nothing ticked never reads "Free 1 kB"
+    asd = (web / "aside.js").read_text(encoding="utf-8")
+    assert "same(x)" in asd and '"Nothing ticked"' in lib and "const same = n =>" in lib, "identical Set aside / Clean up rows lost their folder name, or the empty Clean up button its words"
     assert "waiting_beside" in lib and "data-lib-ab" in lib, "SafeHouse lost the nested retrained-voice line"
     assert "/api/speak/estimate" in (web / "speakeasy.js").read_text(encoding="utf-8"), "SpeakEasy lost the server's estimate before Generate"
     assert "replace-dlg" in (web / "index.html").read_text(encoding="utf-8") and "askReplace" in (web / "train.js").read_text(encoding="utf-8"), "Use this one lost its Replace / wait side by side question"
