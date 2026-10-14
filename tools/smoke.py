@@ -1056,7 +1056,23 @@ def u_improved_keep():
         night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", 0.71, 0.74, 30)
         st = improved.state("morgan-freeman-uc")
         assert st["candidate"] == "morgan-freeman-uc-next" and st["after"] == 0.74 and not st["undo"], st
+        from undercover.core import jobs as J
+        busy = J.Job("cover", title="Hold On · Morgan")         # a cover reading with the candidate: Keep waits
+        busy.voices = {"morgan-freeman-uc-next"}
+        J.JOBS[busy.id] = busy
+        other = J.Job("speech", title="Hello · Someone")         # another voice's work doesn't block it
+        other.voices = {"someone-else"}
+        J.JOBS[other.id] = other
+        try:
+            improved.keep("morgan-freeman-uc", "new")
+            raise AssertionError("kept while a cover used the voice")
+        except Exception as e:
+            assert "using this voice" in str(e), e
+        finally:
+            busy.finish("done")
+        assert (cur / "model.pth").read_bytes() == b"m-morgan-freeman-uc", "a refused keep moved something"
         improved.keep("morgan-freeman-uc", "new")
+        other.finish("done")
         v = get_voice("morgan-freeman-uc")
         assert (v.dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the new one didn't take the name"
         assert v.display == "Morgan" and (v.dir / "tts" / "ref.wav").read_bytes() == b"cadence" and v.extra["tts"], v.extra
