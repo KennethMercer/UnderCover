@@ -3,6 +3,13 @@
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+// A voice's Remove sets it aside (DELETE /api/voices/<v> -> {ok, aside, with}): say so, with the way back and where to delete it for good
+function removedVoice(name, r) {
+  const who = voiceDisplay(name);
+  if (!r?.aside) return;
+  showError(`${who} is set aside, not deleted${r.with ? `, with the retrained one that waited beside it` : ""}. To delete it for good, use SafeHouse > Storage > Set aside.`,
+            "Removed", { label: "Bring it back", run: () => asideRestore(r.aside) }, true);
+}
 // "Click again to confirm" (one helper for every destructive two-click button): the second click counts only once the first has stood for
 // CONFIRM_MS, so a double click (two clicks 100 ms apart on a button that turns into "Confirm") can never confirm by accident (IA P5-1)
 const CONFIRM_MS = 600;
@@ -77,6 +84,7 @@ async function api(path, opts = {}) {
 }
 // action: optional { label, run } shown as a button in the banner; info: accent stripe instead of red
 function showError(msg, title = "Something went wrong", action = null, info = false) {
+  if (/^One is already waiting/.test(msg || "")) title = "One is already waiting";   // a retrained voice waits to be heard first
   $("#err-title").textContent = title; $("#err-msg").textContent = msg; $("#err").hidden = false;
   $("#err").classList.toggle("info", info);
   const b = $("#err-action");
@@ -410,7 +418,7 @@ function renderVoices() {
     e.stopPropagation();
     if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Confirm remove"; setTimeout(() => { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; }, 4000); return; }
     if (!armedFor(b)) return;   // a double click isn't a confirmation
-    try { await api(`/api/voices/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); await loadVoices(); }
+    try { removedVoice(b.dataset.rm, await api(`/api/voices/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" })); await loadVoices(); }
     catch (err) { showError(err.message, "Couldn't remove the voice"); }
   });
   renderOnline(q, isLink);
