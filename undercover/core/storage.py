@@ -365,6 +365,9 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
     skips = {k: _skips(k) for k, _, _ in moves}
     MOVING.update(group=group, job=job.id)
     done_keys, copied = [], []
+    defaults = {k: d for g in GROUPS.values() for k, _, d in g}
+    switched = False   # once the setting points at the new place, a failure switches it back before removing anything
+    committed = False  # the new place is in use for good: nothing after this undoes the move or removes the new copy
     try:
         _release(group)
         total, base = max(plan["need"], 1), 0
@@ -376,6 +379,7 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
                 new.parent.mkdir(parents=True, exist_ok=True)
                 if new.exists():
                     new.rmdir()   # empty (checked)
+                done_keys.append(key)   # (before the move: a half-moved folder is moved back too)
                 if skips[key]:   # another group's folder lives inside: move the rest piece by piece
                     new.mkdir(parents=True, exist_ok=True)
                     for child in now.iterdir():
@@ -383,7 +387,6 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
                             fsutil.retry(lambda: os.replace(child, new / child.name))
                 else:
                     fsutil.retry(lambda: os.replace(now, new))
-                done_keys.append(key)
         else:
             last = [0.0]
             for key, now, new in moves:
@@ -409,14 +412,15 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
                     raise ModelError(f"{len(bad)} files didn't copy correctly (first: {bad[0]}). Nothing was changed; "
                                      "the copy was removed.")
         # switch the setting (in memory and in config.toml), then fix stored absolute paths
-        defaults = {k: d for g in GROUPS.values() for k, _, d in g}
         vals = {k: _toml_value(k, defaults[k], new) for k, _, new in moves}
         if group == "models" and "voices_dir" not in CONFIG["paths"]:   # voices are the library's: they stay put
             vals["voices_dir"] = _toml_value("voices_dir", "models/voices", path("voices_dir"))
+        switched = True
         write_paths(vals)
         fixed = {}
         for key, now, new in moves:
             fixed.update(relocate.rewrite(str(now), str(new), keep=tuple(str(s) for s in skips[key])))
+        committed = True   # done: from here on the old copy goes, and the new place stays whatever happens
         # the old copies go last, once everything points at the new place
         left = []
         if not plan["same_drive"]:
@@ -433,11 +437,36 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
             msg += f" The old copy couldn't be removed (a file is in use): delete {left[0]} yourself."
         return {"message": msg, "folder": plan["folder"], "fixed": len(fixed), "left": left}
     except BaseException:
-        for c in copied:   # a failed or cancelled copy: the original is untouched, drop the partial copy
-            try:
-                shutil.rmtree(c, ignore_errors=True)
-            except Exception:
-                pass
+        if committed:   # the setting and the files already say the new place: keep it all, report the error
+            raise
+        # Back to how it was, in this order (Internal Affairs pass 7): the setting first, then the files. Nothing is
+        # removed while the setting may still point at it.
+        try:
+            if switched:
+                write_paths({k: _toml_value(k, defaults[k], now) for k, now, _ in moves})
+                for key, now, new in moves:   # stored paths that already say the new place (best effort)
+                    relocate.rewrite(str(new), str(now), keep=tuple(str(s) for s in skips[key]))
+            if plan["same_drive"]:   # the folders were moved, not copied: back where the setting says
+                for key, now, new in moves:
+                    if key not in done_keys or not new.exists():
+                        continue
+                    if now.is_dir() and not any(now.iterdir()):
+                        now.rmdir()   # an empty folder made meanwhile (looking the old place up creates it)
+                    if skips[key] or now.exists():   # put back piece by piece, never over anything
+                        now.mkdir(parents=True, exist_ok=True)
+                        for child in list(new.iterdir()):
+                            if (now / child.name).exists():
+                                raise ModelError(f"{now / child.name} is in the way")
+                            fsutil.retry(lambda c=child: os.replace(c, now / c.name))
+                        new.rmdir()
+                    else:
+                        fsutil.retry(lambda now=now, new=new: os.replace(new, now))
+            else:
+                for c in copied:   # the original is untouched and in use again: drop the new copy
+                    shutil.rmtree(c, ignore_errors=True)
+        except Exception as undo_err:   # couldn't put it all back: keep both copies, never remove one in doubt
+            raise ModelError(f"The move failed and couldn't be fully undone ({undo_err}). Nothing was deleted: both "
+                             f"copies are kept. {LABELS[group]} is set to {path(moves[0][0])}.") from undo_err
         raise
     finally:
         MOVING.clear()
