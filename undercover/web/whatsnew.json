@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-14-set-aside",
+      "date": "2026-10-14",
+      "title": "See what's set aside",
+      "lines": [
+        "When a voice is replaced or you keep the other one, the old one is set aside, never deleted. SafeHouse's Storage room now lists them with why, when and how much room each takes.",
+        "Delete asks twice, and says when it ends an Undo."
+      ]
+    },
+    {
       "id": "2026-10-14-retrained",
       "date": "2026-10-14",
       "title": "A retrained voice waits for your ear",
