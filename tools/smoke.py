@@ -1596,9 +1596,24 @@ def u_duplicate_aside():
         b = _voice_dir("ann-two", {})
         (b / "tts").mkdir()
         (b / "model.pth").write_bytes((a / "model.pth").read_bytes())
+        # the demo voice is always kept, even against a named copy of it with a cadence
+        from undercover.app import tutorial
+        from undercover.core.voices import DEMO_VOICE
+        assert tutorial.DEMO.name == DEMO_VOICE
+        demo = _voice_dir(DEMO_VOICE, {"demo": True})
+        mine = _voice_dir("my-smoke", {"demo": True})
+        (mine / "tts").mkdir()
+        meta = json.loads((mine / "meta.json").read_text(encoding="utf-8"))
+        meta["display"] = "My Smoke"
+        (mine / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        (mine / "model.pth").write_bytes((demo / "model.pth").read_bytes())
         g = library._cleanup_groups()
         for k, v in g.items():
             assert not any(storage._inside(Path(x), voices_dir()) for x in v["paths"]), f"{k} lists a voice path"
+        d = {x["voice"]: x for x in g["duplicate_voices"]["aside"]}
+        assert d.pop("my-smoke")["keeps"] == DEMO_VOICE and DEMO_VOICE not in d, d
+        (mine / "model.pth").write_bytes(b"its own now")                 # (out of the way for the rest)
+        g = library._cleanup_groups()
         d = {x["voice"]: x for x in g["duplicate_voices"]["aside"]}
         assert set(d) == {"spongebob-copy", "ann-uc"}, d
         assert d["spongebob-copy"]["keeps"] == "spongebob-uc" and "project" in d["spongebob-copy"]["because"], d
@@ -1616,7 +1631,7 @@ def u_duplicate_aside():
         r = library.clean_up({"duplicate_voices"})
         r["set_aside"].append({"voice": "spongebob-copy"})
         assert r["freed"] == 0 and {x["voice"] for x in r["set_aside"]} == {"spongebob-copy", "ann-uc"}, r
-        assert {v.name for v in listed_voices()} == {"spongebob-uc", "ann-two"}
+        assert {v.name for v in listed_voices()} == {"spongebob-uc", "ann-two", "agent-smoke", "my-smoke"}
         assert (get_voice("spongebob-uc").dir / "tts").is_dir(), "the original was touched"
         items = {x["voice"]: x for x in library.aside()}
         assert items["spongebob-copy"]["why"] == "the same model as Spongebob", items["spongebob-copy"]
