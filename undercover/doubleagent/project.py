@@ -260,7 +260,7 @@ def _resample16(x: np.ndarray, sr: int) -> np.ndarray:
 
 # ================================================================ processing a source
 
-def process_source(proj: Project, src: Source, separator, embedder, progress=None, cancel=None) -> int:
+def process_source(proj: Project, src: Source, separator, embedder, progress=None, cancel=None, stop=None) -> int:
     """Download (if needed) -> separate voice from music/noise -> de-reverb -> split into phrases -> checks
     and speaker embeddings. Returns the number of phrases added. progress(fraction, label)."""
     import soundfile as sf
@@ -278,9 +278,13 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
     report(0.25, "removing music and noise")
     # sung sources: lead only (harmonies are another pitch line; unison double-tracking stays with the lead)
     from .sources import is_sung
-    stems = separate(raw, dereverb=TCFG["dereverb"], karaoke=(proj.mode == "singing" or is_sung(src)), separator=separator,
-                     quality=TCFG["separation_quality"],
-                     progress=lambda f, name: report(0.25 + 0.5 * f, "removing music and noise"))
+    from ..core.separate import Stopped
+    try:   # stop (Stop, never Pause) ends the separation within one chunk
+        stems = separate(raw, dereverb=TCFG["dereverb"], karaoke=(proj.mode == "singing" or is_sung(src)),
+                         separator=separator, quality=TCFG["separation_quality"], stop=stop,
+                         progress=lambda f, name: report(0.25 + 0.5 * f, "removing music and noise"))
+    except Stopped:
+        return 0
     if cancel and cancel():
         return 0
     report(0.75, "splitting into phrases")
@@ -352,7 +356,7 @@ class Cancelled(Exception):
 
 
 def prepare_sources(name: str, ids: list[str], separator, embedder, progress=None, cancel=None,
-                    friendly=str, between=None) -> list[str]:
+                    friendly=str, between=None, stop=None) -> list[str]:
     """Process several sources of project `name`, downloading ahead (network) while the GPU separates the
     current one. Each finished source is merged into the saved project right away (the web page may be
     editing the same project). Re-scores at the end. Returns titles that failed."""
@@ -385,7 +389,7 @@ def prepare_sources(name: str, ids: list[str], separator, embedder, progress=Non
                 if src.id in fut:
                     step(0.0, "downloading")
                     fut[src.id].result()   # raises the download's ModelError
-                process_source(pr, src, separator, embedder, progress=step, cancel=cancel)
+                process_source(pr, src, separator, embedder, progress=step, cancel=cancel, stop=stop)
                 src.error = ""
             except srcmod.YouTubeBlocked:
                 raise   # stop here: the rest would fail the same way; nothing is marked failed, so it's retried later

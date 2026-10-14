@@ -12,6 +12,7 @@ from typing import Callable
 
 from ..core import tray
 from ..core.config import CONFIG, path
+from ..core.voices import label_of
 from . import history as hstore
 
 
@@ -95,14 +96,14 @@ class CoverEngine:
         ex = voice.extra or {}
         rng = ex.get("f0_range") or ex.get("person_range")   # trained here, or the checked person's range
         if not rng:
-            notes.append(f"Fit to voice: {voice.name} has no measured range yet (voices trained in UnderCover have one, "
+            notes.append(f"Fit to voice: {label_of(voice.name)} has no measured range yet (voices trained in UnderCover have one, "
                          "and voices a one-shot cover checked against a person), so your octave and key were used.")
             return opts
         f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
         speech = ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")
         fit = pick_fit(rng, bool(speech), f0)
         notes.append(f"Fit to voice: octave {fit['octave']:+d}, key {fit['key']:+d} "
-                     f"({fit['outside']:.0%} of the melody outside {voice.name}'s range {rng[0]:.0f}-{rng[2]:.0f} Hz).")
+                     f"({fit['outside']:.0%} of the melody outside {label_of(voice.name)}'s range {rng[0]:.0f}-{rng[2]:.0f} Hz).")
         same_backing = bvoice is not None and bvoice.name == voice.name
         return replace(opts, octave=fit["octave"], key=fit["key"], pitch=None,
                        backing_octave=fit["octave"] if same_backing else opts.backing_octave)
@@ -139,7 +140,7 @@ class CoverEngine:
         if opts.fit:
             opts = self._fit(opts, voice, stems, notes, bvoice)
 
-        report("converting", 0.0, f"Converting the vocal to {voice.name}")
+        report("converting", 0.0, f"Converting the vocal to {label_of(voice.name)}")
         t = time.perf_counter()
         s = Settings()
         for k in ("index_ratio", "protect", "volume_envelope", "pitch_cleanup", "pitch_correction"):
@@ -175,7 +176,7 @@ class CoverEngine:
             bvoice = None
         lead_share = 0.5 if bvoice else 1.0
         audio, sr = self.converter.convert(load_16k(cstems["vocals"]), voice.name, s,
-                                           progress=lambda f: report("converting", f * lead_share, f"Converting the lead vocal to {voice.name}"))
+                                           progress=lambda f: report("converting", f * lead_share, f"Converting the lead vocal to {label_of(voice.name)}"))
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
         # 24-bit FLAC: ~half the size of float WAV, far below audible precision (kept for "vocal only" downloads)
@@ -187,7 +188,7 @@ class CoverEngine:
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
             bs = replace(s, pitch=key + 12 * boct)
             baudio, bsr = self.converter.convert(load_16k(cstems["backing"]), bvoice.name, bs,
-                                                 progress=lambda f: report("converting", 0.5 + 0.5 * f, f"Converting the backing vocals to {bvoice.name}"))
+                                                 progress=lambda f: report("converting", 0.5 + 0.5 * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
@@ -199,8 +200,9 @@ class CoverEngine:
         for k in ("reverb", "vocal_db", "backing_db", "format", "polish"):
             if getattr(opts, k) is not None:
                 setattr(ms, k, getattr(opts, k))
-        names = voice.name + (f" + {bvoice.name}" if bvoice and bvoice.name != voice.name else "")
-        out = out or _unique(path("output_dir") / f"{_safe(title)} ({names})", ms.format)
+        # the file people download says who sings, as the pages name them (the voice ids stay in the history)
+        names = label_of(voice.name) + (f" + {label_of(bvoice.name)}" if bvoice and bvoice.name != voice.name else "")
+        out = out or _unique(path("output_dir") / f"{_safe(title)} ({_safe(names)})", ms.format)   # "AC/DC" is a name, not a path
         final = remix(cstems["instrumental"], conv_path, cstems["vocals"], out, song=song,
                       backing=conv_backing or cstems.get("backing"), s=ms,
                       backing_ref=cstems.get("backing") if conv_backing else None,
@@ -243,16 +245,44 @@ class CoverEngine:
             return dst
         sliced = {k: cut(Path(v), k) for k, v in stems.items()}
         song_cut = cut(song, "song")
+        base, fit_note = preview_fit(self, opts, stems)
         out = []
         for i, v in enumerate(variants):
             report("rendering", i / len(variants), f"Rendering {v.get('label', i + 1)}")
-            overrides = {k: v[k] for k in v if k != "label" and hasattr(opts, k)}
-            o = replace(opts, **overrides, format="mp3")
+            overrides = variant_overrides(opts, base, v)
+            o = replace(base, **overrides, format="mp3", fit=False)   # the fit is settled once, above
             r = self.make_cover(song_cut, o, out=work / f"variant_{i}", stems=sliced, record=False,
                                 key_song=song, title="preview")
-            out.append({"label": v.get("label", str(i + 1)), "file": r.output, "options": overrides})
+            out.append({"label": v.get("label", str(i + 1)), "file": r.output,
+                        "options": {**overrides, "octave": o.octave, "key": o.key}, "fit": fit_note})
         report("rendering", 1.0, "Previews ready")
         return out
+
+
+def preview_fit(engine, opts: "CoverOptions", stems: dict) -> tuple["CoverOptions", str | None]:
+    """With "Fit pitch to the voice" on, the fit is worked out ONCE, on the full stems (the same melody the full cover
+    fits), not inside each 15 s variant: there it overwrote each variant's octave and key, so every octave or key
+    preview came out the same (Internal Affairs, Compare). -> (the options with the fitted octave / key, its note)."""
+    if not opts.fit:
+        return opts, None
+    from ..core.voices import get_voice
+    notes: list = []
+    voice = get_voice(opts.voice)
+    bvoice = get_voice(opts.backing_voice) if opts.backing_voice else None
+    fitted = engine._fit(opts, voice, stems, notes, bvoice)
+    return fitted, (notes[0] if notes else None)
+
+
+def variant_overrides(opts: "CoverOptions", base: "CoverOptions", v: dict) -> dict:
+    """A variant's option overrides. With the fit on, an octave or key is read relative to the page's own setting and
+    applied to the fitted one ("Same octave" = the fit's pick, +1 / -1 around it), clamped to the page's ranges."""
+    ov = {k: v[k] for k in v if k not in ("label", "fit") and hasattr(opts, k)}
+    if opts.fit:
+        if "octave" in ov:
+            ov["octave"] = max(-2, min(2, int(base.octave or 0) + int(ov["octave"]) - int(opts.octave or 0)))
+        if "key" in ov:
+            ov["key"] = max(-6, min(6, float(base.key or 0) + float(ov["key"]) - float(opts.key or 0)))
+    return ov
 
 
 def busiest_window(vocals: Path, seconds: float) -> tuple[float, float]:
@@ -373,14 +403,57 @@ def cancel_presep(keep=None):
         if j.kind == "presep" and not j.finished and getattr(j, "presep", None) != keep:
             j.cancel = True
 
+def blend_left(planned: float, elapsed: float, frac: float) -> float:
+    """Seconds left in a step from its estimate (planned) and its own progress: the estimate at first, the measured
+    rate taking over as the step gets going. Internal Affairs P3-4: a convert's slow first second extrapolated alone
+    read 20 s -> 184 s -> 18 s left."""
+    plan_left = max(planned * (1 - frac), planned - elapsed, 0.0)
+    if frac <= 0.05 or elapsed <= 0:
+        return plan_left
+    w = min(1.0, (frac - 0.05) / 0.25)
+    return w * (elapsed / frac * (1 - frac)) + (1 - w) * plan_left
+
+
+class Countdown:
+    """A job's time left from its estimate per stage ({stage: seconds}, stages in order): this stage's blend_left
+    plus the later stages' estimates. left(stage, frac) -> (stage_left, total_left), or None for a stage it doesn't
+    know."""
+
+    def __init__(self, est: dict, order: tuple = ("separating", "converting", "mixing")):
+        self.est, self.order, self.stage, self.t = est, order, None, time.perf_counter()
+
+    def left(self, stage: str, frac: float, now: float | None = None):
+        now = time.perf_counter() if now is None else now
+        if stage != self.stage:
+            self.stage, self.t = stage, now
+        if stage not in self.order:
+            return None
+        here = blend_left(float(self.est.get(stage) or 0), now - self.t, frac)
+        later = sum(float(self.est.get(s) or 0) for s in self.order[self.order.index(stage) + 1:])
+        return round(here, 1), round(here + later, 1)
+
+
+def preview_estimate(song: Path, opts: CoverOptions, variants: int, seconds: float = 15.0) -> dict:
+    """Expected seconds for a preview: the song's separation (0 when cached) and the versions' rendering (a short
+    excerpt each, plus cutting and the fit)."""
+    full = estimate(song, opts)
+    clip = estimate_for(seconds, opts)
+    render = variants * (clip["converting"] + clip["mixing"]) + 2.0 + (3.0 if opts.fit else 0.0)
+    return {"separating": full["separating"], "rendering": round(render, 1), "total": round(full["separating"] + render, 1)}
+
+
 def estimate(song: Path, opts: CoverOptions) -> dict:
     """Expected seconds per stage for this song, from measured speeds in logs/timings.jsonl
     (falls back to Phase 5 measurements). Separation is 0 when stems are cached."""
+    from ..core.separate import audio_seconds
+    return estimate_for(audio_seconds(Path(song)), opts, song=Path(song))
+
+
+def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> dict:
+    """estimate() for `dur` seconds of song; song=None: nothing is cached yet (the one-shot plan, before the song)."""
     import statistics
     from ..core.config import CONFIG
-    from ..core.separate import QUALITY, SEP, audio_seconds, file_hash
-    song = Path(song)
-    dur = audio_seconds(song)
+    from ..core.separate import QUALITY, SEP, file_hash
     quality = opts.quality or SEP["quality"]
     ov = QUALITY[quality]
     speeds = {"sep": [], "synth": [], "f0": []}
@@ -401,7 +474,8 @@ def estimate(song: Path, opts: CoverOptions) -> dict:
                 speeds["f0"].append(r["seconds_audio"] / max(r["seconds"], 1e-3))
     med = lambda xs, d: statistics.median(xs[-10:]) if xs else d
     sep_rt = med(speeds["sep"], {2: 10.6, 4: 5.1, 8: 2.7}[ov])
-    stem_dir = path("cache_dir") / "stems" / file_hash(song) / (Path(SEP["vocal_model"]).stem + ("" if quality == "high" else f"_{quality}"))
+    stem_dir = (path("cache_dir") / "stems" / (file_hash(song) if song is not None else "none-yet")
+                / (Path(SEP["vocal_model"]).stem + ("" if quality == "high" else f"_{quality}")))
     from ..core.separate import stem_files
     cached = stem_dir.exists() and bool(stem_files(stem_dir))
     sep = 0.0 if cached else dur / sep_rt

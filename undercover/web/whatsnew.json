@@ -2,6 +2,81 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-14-set-aside-names",
+      "date": "2026-10-14",
+      "title": "Set-aside copies tell themselves apart",
+      "lines": [
+        "Two set-aside voices with the same name now show their folder name beside it. Clean up's button says \"Nothing ticked\" when nothing is ticked."
+      ]
+    },
+    {
+      "id": "2026-10-14-set-aside",
+      "date": "2026-10-14",
+      "title": "See what's set aside",
+      "lines": [
+        "When a voice is replaced or you keep the other one, the old one is set aside, never deleted. SafeHouse's Storage room now lists them with why, when and how much room each takes.",
+        "Delete asks twice, and says when it ends an Undo."
+      ]
+    },
+    {
+      "id": "2026-10-14-retrained",
+      "date": "2026-10-14",
+      "title": "A retrained voice waits for your ear",
+      "lines": [
+        "When Improve tonight retrains a voice, the new one waits beside the old. Hear both read the same line, blind, and keep the one you like.",
+        "Nothing is deleted: the other is set aside, and Undo brings it back.",
+        "Preview and cover progress now says what it's doing (the vocal split, lead and backing, reverb) and how long is left."
+      ]
+    },
+    {
+      "id": "2026-10-14-qa2",
+      "date": "2026-10-14",
+      "title": "Small fixes from Internal Affairs",
+      "lines": [
+        "The Library says \"yesterday\" for yesterday, even a few hours ago.",
+        "SpeakEasy's Recent keeps your thumb mark in view on a phone.",
+        "In Preview, Use this turns the fit off when it should, even if the fit was switched on after the versions were made."
+      ]
+    },
+    {
+      "id": "2026-10-14-train-tonight-deep",
+      "date": "2026-10-14",
+      "title": "Train tonight, step by step",
+      "lines": [
+        "In Deep Cover, with sources picked, step 4 can queue that very project for tonight: Train tonight instead.",
+        "The project shows Queued for tonight, with a Remove."
+      ]
+    },
+    {
+      "id": "2026-10-14-queue-times",
+      "date": "2026-10-14",
+      "title": "Tonight's queue: real times",
+      "lines": [
+        "In SafeHouse's Running room, Start at and Finish by are time fields that show what's saved.",
+        "Previews made for another song or voice are put away, and each set says which voice it's for."
+      ]
+    },
+    {
+      "id": "2026-10-14-qa1",
+      "date": "2026-10-14",
+      "title": "Names, phones and a cleaner first run",
+      "lines": [
+        "Voices show their names, not their folder names, in covers, the Library and messages.",
+        "On a phone, titles in History and Recent keep their room and the buttons sit under them.",
+        "The First assignment starts from clean settings and Replay opens on the briefing, with Agent Smoke's greeting.",
+        "Make smaller's Before and After show which one is playing and pick up where the other left off."
+      ]
+    },
+    {
+      "id": "2026-10-13-preview-compare",
+      "date": "2026-10-13",
+      "title": "Preview's Compare panel, fixed",
+      "lines": [
+        "Each tab (Voice octave, Song key, Pitch correction, Polish) now keeps its own versions, so one tab never shows another's.",
+        "With “Fit pitch to the voice” on, the octave and key previews used to sound identical. They now set the pitch by hand, and Use this turns the fit off."
+      ]
+    },
+    {
       "id": "2026-10-13-full-index",
       "date": "2026-10-13",
       "title": "A new voice sounds off? Put the full index back",

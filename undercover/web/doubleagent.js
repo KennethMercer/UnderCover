@@ -30,16 +30,20 @@ function renderVoiceCards(cands) {
   const kept = $("#cad-ab", box);   // the open A/B survives a redraw (a reading playing, the why text)
   box.innerHTML = shown.map(c => {
     const busy = running.has(c.target), cd = c.cadence || {};
+    const im = DA.imp[c.voice];
     // basic: the likeness in a word (the server's; the page never sets the cut-offs), where it came from, what it's doing
     const origin = c.demo ? "demo voice · not a real person"
       : [likeWord(c.likeness_word, "likeness"), c.trained ? "trained here" : "downloaded"].filter(Boolean).join(" · ");
     const state = cd.queue === "running" ? "learning to speak" : cd.queue ? "learning to speak tonight" : "";
-    const status = [state && `<span class="st now">${state}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`].filter(Boolean).join("");
+    const status = [state && `<span class="st now">${state}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
     const speaks = cd.has ? `<svg class="ico vc-speaks" role="img" aria-label="Can speak in SpeakEasy"><title>Can speak in SpeakEasy</title><use href="#g-speakeasy"/></svg>` : "";
     const facts = [c.trained ? (c.singing ? "singing" : c.singing === false ? "speech" : "") : c.person ? `downloaded · ${esc(c.person)}` : "",
                    c.minutes ? `${Math.round(c.minutes)} min` : "", c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : ""].filter(Boolean).join(" · ");
     const improve = c.demo ? "" : !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}">Train my own</button>`
-      : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy ? "disabled" : ""}>${busy ? "Improving now" : c.queued ? "In tonight's queue" : "Improve tonight"}</button>`;
+      : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy || im?.candidate ? "disabled" : ""}>${busy ? "Improving now" : c.queued ? "In tonight's queue" : im?.candidate ? "Retrained one waiting" : "Improve tonight"}</button>`;
+    const impOpen = DA.impAb?.voice === c.voice;
+    const impBtn = im?.candidate ? `<button class="mini" type="button" data-imp-ab="${esc(c.voice)}" aria-expanded="${impOpen}">${impOpen ? "Close" : "Hear the retrained one"}</button>`
+      : im?.undo ? `<button class="mini" type="button" data-imp-undo="${esc(c.voice)}">Undo my last choice</button>` : "";
     const abOpen = DA.ab?.voice === c.voice;
     const abBtn = cd.pending ? `<button class="mini" type="button" data-cad-ab="${esc(c.voice)}" aria-expanded="${abOpen}">${abOpen ? "Close" : "Listen and choose"}</button>` : "";
     const cadDeep = cd.has ? `<small class="meta" data-deep>cadence: ${esc(cd.engine || "")} · ${cd.data_minutes ?? "?"} min · likeness ${cd.scores?.likeness ?? "?"} · gap ${cd.scores?.cadence_gap ?? "?"}</small>` : "";
@@ -50,7 +54,7 @@ function renderVoiceCards(cands) {
       ${status ? `<div class="vc-status">${status}</div>` : ""}${facts ? `<small class="meta" data-deep>${facts}</small>` : ""}${cadDeep}
       <div class="vc-acts">${DA.samples[c.voice] ? `<button class="mini" type="button" data-listen="${esc(c.voice)}" aria-pressed="${DA.playing === c.voice}">${DA.playing === c.voice ? "Stop" : "Listen"}</button>` : ""}
         <button class="mini" type="button" data-use="${esc(c.voice)}">Use in FrontMan</button>${improve}
-        ${cadBtn}${abBtn}</div>${abOpen ? abHtml() : ""}</div>`;
+        ${cadBtn}${abBtn}${impBtn}</div>${abOpen ? abHtml() : ""}${impOpen ? impHtml(c.voice) : ""}</div>`;
   }).join("");
   $("#da-more").hidden = list.length <= 6;
   $("#da-more").textContent = DA.all ? "Show fewer" : `Show all ${list.length} voices`;
@@ -60,7 +64,7 @@ function renderVoiceCards(cands) {
     const c = DA.cands.find(x => x.voice === b.dataset.improve);
     b.disabled = true;
     try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); renderQueue(); loadCandidates(); }
-    catch (e) { b.disabled = false; showError(e.message, `Couldn't add ${c.voice}`); }
+    catch (e) { b.disabled = false; showError(e.message, `Couldn't add ${voiceDisplay(c.voice)}`); }
   });
   $$("[data-cad]", box).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
@@ -70,20 +74,13 @@ function renderVoiceCards(cands) {
   $$("[data-cad-ab]", box).forEach(b => b.onclick = () => openAb(b.dataset.cadAb));
   const fresh = $("#cad-ab", box);
   if (fresh && kept && kept.dataset.key && fresh.dataset.key === kept.dataset.key) fresh.replaceWith(kept);
+  $$("[data-imp-ab]", box).forEach(b => b.onclick = () => openImp(b.dataset.impAb));
+  $$("[data-imp-undo]", box).forEach(b => b.onclick = () => undoImp(b.dataset.impUndo));
+  const impAb = $("#imp-ab", box);
+  if (impAb) { wireAbPlayers(impAb); $$("[data-imp-keep]", impAb).forEach(b => b.onclick = () => keepImp(b.dataset.impKeep)); }
   const ab = $("#cad-ab", box);
   if (ab) {
-    $$(".ab-side", ab).forEach(sd => {   // one at a time, at the page's volume (muted stays silent)
-      const a = $("audio", sd), bar = $(".ab-bar i", sd);
-      $(".ab-play", sd).onclick = () => { if (a.paused) a.play().catch(() => showError("The browser couldn't play this reading.", "Playback failed")); else a.pause(); };
-      a.onplay = () => {
-        a.volume = VOL.muted ? 0 : VOL.level * VOL.level;
-        $$("audio", ab).forEach(o => { if (o !== a) o.pause(); });
-        if (DA.playing) { DA.audio.pause(); DA.playing = null; }
-        sd.classList.add("playing");
-      };
-      a.onpause = a.onended = () => sd.classList.remove("playing");
-      a.ontimeupdate = () => { bar.style.width = `${Math.min(100, a.currentTime / (a.duration || 1) * 100)}%`; };
-    });
+    wireAbPlayers(ab);
     const why = $("#cad-ab-why", ab);
     if (why) why.oninput = () => { DA.ab.why = why.value; };
     $$("[data-keep]", ab).forEach(b => b.onclick = () => keepAb(b.dataset.keep));
@@ -156,6 +153,101 @@ async function keepAb(keep) {
     showError(keep === "pending" ? `${L} was the new cadence. ${voiceDisplay(ab.voice)} speaks with it from now on; the old one is set aside.`
                                  : `${L} was the current cadence, so nothing changes. The new one is set aside.`, `Kept ${L}`, null, true);
   } catch (e) { ab.busy = false; ab.err = e.message; renderVoiceCards(DA.cands); }
+}
+// the two players of a blind A/B (the cadence's and an improved voice's): one at a time, one playhead, at the page's volume
+function wireAbPlayers(ab) {
+    let pos = 0;   // switching to the other reading carries on at the same place   // one playhead: switching to the other reading carries on at the same place
+    $$(".ab-side", ab).forEach(sd => {   // one at a time, at the page's volume (muted stays silent)
+      const a = $("audio", sd), bar = $(".ab-bar i", sd);
+      $(".ab-play", sd).onclick = () => {
+        if (!a.paused) return a.pause();
+        const other = $$("audio", ab).find(o => o !== a && !o.paused);
+        if (other) pos = other.currentTime;
+        try { a.currentTime = Math.min(pos, a.duration || pos); } catch (e) {}
+        a.play().catch(() => showError("The browser couldn't play this reading.", "Playback failed"));
+      };
+      a.onplay = () => {
+        a.volume = VOL.muted ? 0 : VOL.level * VOL.level;
+        $$("audio", ab).forEach(o => { if (o !== a) o.pause(); });
+        if (DA.playing) { DA.audio.pause(); DA.playing = null; }
+        sd.classList.add("playing");
+      };
+      a.onpause = () => { sd.classList.remove("playing"); if (!a.ended) pos = a.currentTime; };
+      a.onended = () => { sd.classList.remove("playing"); pos = 0; };
+      a.ontimeupdate = () => { bar.style.width = `${Math.min(100, a.currentTime / (a.duration || 1) * 100)}%`; };
+    });
+}
+
+// ------------------------------------------------------------ an improved voice waiting beside the current one (IA P2-1)
+// GET /api/train/voices/<v>/improved -> {improved: {voice, display, candidate, before, after, minutes, made, current_url, new_url, undo}}
+// (null when nothing waits). The overnight improve never replaces a voice: the retrained one waits, the user hears both of
+// the same line, blind (A / B, an order fixed per candidate), and keeps one. Keep new: the old one is set aside, never deleted.
+// POST .../improved/ab (a job: the two listening copies), .../keep {keep: "new"|"current"}, .../undo.
+DA.imp = {}; DA.impAb = null;   // DA.impAb: the open A/B { voice, busy, err }
+const impUrl = (voice, rest = "") => `/api/train/voices/${encodeURIComponent(voice)}/improved${rest}`;
+const impOrder = st => [...String(st.candidate) + String(st.made || "")].reduce((n, c) => n + c.charCodeAt(0), 0) % 2 ? ["new", "current"] : ["current", "new"];
+const impLetter = (st, w) => "AB"[impOrder(st).indexOf(w)];
+async function loadImproved() {
+  const vs = DA.cands.filter(c => c.trained && c.can);
+  const got = await Promise.all(vs.map(c => api(impUrl(c.voice)).then(r => [c.voice, r.improved], () => [c.voice, null])));
+  const next = Object.fromEntries(got.filter(([, s]) => s));
+  if (JSON.stringify(next) !== JSON.stringify(DA.imp)) { DA.imp = next; renderVoiceCards(DA.cands); }
+}
+function impHtml(voice) {
+  const a = DA.impAb, st = DA.imp[voice];
+  if (!st?.candidate || a?.voice !== voice) return "";
+  if (!st.current_url || !st.new_url)
+    return `<div id="imp-ab" data-voice="${esc(voice)}"><p class="meta">${esc(a.err || "Reading one line with both voices…")}</p></div>`;
+  const side = w => `<div class="ab-side" data-side="${w}">
+      <div class="ab-head"><span class="ab-letter">${impLetter(st, w)}</span></div>
+      <div class="ab-player"><button class="ab-play" type="button" aria-label="Play ${impLetter(st, w)}"><svg class="ico i-play" aria-hidden="true"><use href="#g-play"/></svg><svg class="ico i-pause" aria-hidden="true"><use href="#g-pause"/></svg></button>
+        <div class="ab-bar"><i></i></div></div>
+      <audio preload="none" src="${esc(w === "new" ? st.new_url : st.current_url)}?v=${a.stamp}"></audio>
+      <button class="btn" type="button" data-imp-keep="${w}" ${a.busy ? "disabled" : ""}>Keep ${impLetter(st, w)}</button></div>`;
+  return `<div id="imp-ab" data-voice="${esc(voice)}">
+    <div class="ab-q"><b>Which sounds more like them?</b><span class="meta">Both read the same line. One is ${esc(voiceDisplay(voice))} as it is, the other was retrained overnight.</span></div>
+    <div class="ab-sides">${impOrder(st).map(side).join("")}</div>
+    <small class="meta" data-deep>likeness ${st.before ?? "?"} → ${st.after ?? "?"}${st.minutes ? ` · ${Math.round(st.minutes)} min of audio` : ""}${st.made ? ` · made ${esc(st.made)}` : ""}</small>
+    <p class="meta">The one you keep is the voice from then on; the other is set aside, never deleted, and you can undo it.</p>
+    ${a.err ? `<p class="meta">${esc(a.err)}</p>` : ""}</div>`;
+}
+async function openImp(voice) {
+  if (DA.impAb?.voice === voice) { DA.impAb = null; return renderVoiceCards(DA.cands); }
+  const a = DA.impAb = { voice, busy: false, err: null, stamp: Date.now() };   // stamp: the listening copies get remade, so a stale cached one is never played
+  renderVoiceCards(DA.cands);
+  const st = DA.imp[voice];
+  if (st && (!st.current_url || !st.new_url)) {   // the two listening copies aren't made yet: a short job
+    try {
+      const { job } = await api(impUrl(voice, "/ab"), { json: {} });
+      refreshJobs(true);
+      const off = watchJob(job, async ev => {
+        if (!ev.final) return;
+        off();
+        if (ev.state !== "done") a.err = ev.message || "The listening copies couldn't be made.";
+        else { try { DA.imp[voice] = (await api(impUrl(voice))).improved; a.stamp = Date.now(); } catch (e) { a.err = e.message; } }
+        if (DA.impAb === a) renderVoiceCards(DA.cands);
+      });
+    } catch (e) { a.err = e.message; renderVoiceCards(DA.cands); }
+  }
+}
+async function keepImp(keep) {
+  const a = DA.impAb, st = a && DA.imp[a.voice];
+  if (!a || a.busy || !st) return;
+  a.busy = true; a.err = null; renderVoiceCards(DA.cands);
+  try {
+    await api(impUrl(a.voice, "/keep"), { json: { keep } });
+    const L = impLetter(st, keep);   // blind until now: say which it was
+    DA.impAb = null; loadCandidates(); loadImproved(); loadVoices();
+    showError(keep === "new" ? `${L} was the retrained voice. ${voiceDisplay(a.voice)} is the new one now; the old one is set aside, not deleted.`
+                             : `${L} was the voice you had, so nothing changes. The retrained one is set aside, not deleted.`, `Kept ${L}`, null, true);
+  } catch (e) { a.busy = false; a.err = e.message; renderVoiceCards(DA.cands); }
+}
+async function undoImp(voice) {
+  try {
+    await api(impUrl(voice, "/undo"), { json: {} });
+    DA.impAb = null; loadCandidates(); loadImproved(); loadVoices();
+    showError("Back to how it was before that choice.", "Undone", null, true);
+  } catch (e) { showError(e.message, "Couldn't undo it"); }
 }
 function listen(voice) {
   const a = DA.audio;
@@ -230,9 +322,10 @@ function renderDaWork() {
     const id = b.dataset.daStop;
     clearTimeout(DA.stopTimer);
     if (DA.stopAsk !== id) {
-      DA.stopAsk = id; DA.stopTimer = setTimeout(() => { DA.stopAsk = null; renderDaWork(); }, 4000);
+      DA.stopAsk = id; DA.stopAskAt = Date.now(); DA.stopTimer = setTimeout(() => { DA.stopAsk = null; renderDaWork(); }, 4000);
       return renderDaWork();
     }
+    if (Date.now() - (DA.stopAskAt || 0) < CONFIRM_MS) { DA.stopTimer = setTimeout(() => { DA.stopAsk = null; renderDaWork(); }, 4000); return; }   // a double click isn't a confirmation
     DA.stopAsk = null; b.disabled = true; b.textContent = "Stopping…";
     try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't stop it"); }
     refreshJobs(true);

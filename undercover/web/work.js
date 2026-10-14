@@ -15,6 +15,14 @@ function fmtMin(m) {
   m = Math.round(m || 0);
   return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min` : `${m} min`;
 }
+// the queue's start time: the saved one when there is one, else the last one chosen here (Running room and DoubleAgent's panel share it)
+const startTime = () => $("#rn-at-time").value || $("#q-at-time").value || "23:00";
+function showTimes(w) {
+  const put = (id, v) => { const el = $("#" + id); if (el && v && document.activeElement !== el) el.value = v; };
+  const saved = w?.settings?.start_at || null;
+  if (saved !== showTimes.was) { showTimes.was = saved; put("rn-at-time", saved || store.get("uc-queue-at", null)); put("q-at-time", $("#rn-at-time").value); }   // the saved time when it changes; an edit in the field stays
+  put("rn-finish-time", w?.settings?.finish_by); put("q-finish-time", w?.settings?.finish_by);
+}
 function clock(hhmm) {
   if (!hhmm) return "";
   const [h, m] = hhmm.split(":").map(Number);
@@ -59,8 +67,8 @@ function renderBar() {
     text = [jobName(main), jobLine(main)].filter(Boolean).join(" · ");
     state = "run";
   } else if (w.held) {
-    const res = w.resume || [];
-    text = "Voice work is paused" + (res.length ? ` · ${res.slice(0, 2).join(", ")}${res.length > 2 ? ` and ${res.length - 2} more` : ""}` : "") +
+    const res = (w.resume || []).map(r => r.label ?? r);   // entries are {id, kind, label, ...} (stop-now)
+    text = "Nothing is running · voice work is paused" + (res.length ? ` · ${res.slice(0, 2).join(", ")}${res.length > 2 ? ` and ${res.length - 2} more` : ""}` : "") +
            (w.queued ? ` · ${w.queued} in the overnight queue` : "");
     state = "held";
   } else if (w.armed && w.queued) {
@@ -115,14 +123,15 @@ async function pauseWork() {
   if (W.open) loadQueue();
 }
 $("#wb-pause").onclick = async () => { $("#wb-pause").disabled = true; await pauseWork(); $("#wb-pause").disabled = false; };
-$("#wb-forget").onclick = async () => {
-  const b = $("#wb-forget");
-  if (!b.classList.contains("confirm")) { b.classList.add("confirm"); b.textContent = "Forget it?"; setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Dismiss"; }, 4000); return; }
-  b.classList.remove("confirm"); b.textContent = "Dismiss";
+$("#wb-forget").onclick = () => forgetWork($("#wb-forget"));
+async function forgetWork(b) {   // Dismiss, in the bar and in the Running room's card: two clicks
+  if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Forget it?"; setTimeout(() => { b.classList.remove("confirm"); disarm(b); b.textContent = "Dismiss"; }, 4000); return; }
+  if (!armedFor(b)) return;   // a double click isn't a confirmation
+  b.classList.remove("confirm"); disarm(b); b.textContent = "Dismiss";
   try { const r = await api("/api/work/forget", { json: {} }); renderWorkBar({ ...r, queued: r.queue.filter(i => ["queued", "paused"].includes(i.state)).length }); }
   catch (e) { showError(e.message, "Couldn't dismiss it"); }
   if (W.open) loadQueue();
-};
+}
 async function resumeWork() {
   try {
     const r = await api("/api/work/resume", { json: {} });
@@ -160,21 +169,37 @@ function renderRunRoom() {
         return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[o]} · ${esc(jobLine(j) || JOB_KIND[j.kind] || j.kind)}</small></span>
           <span class="acts"><button class="linkbtn" type="button" data-goto="${o}">Open</button></span></div>`; }).join("")}</div>` : "");
   } else if (work.held) {
-    const res = work.resume || [];
-    now = `<div class="rn-now held" data-owner="doubleagent"><div class="who">Paused</div>
-      <p>Voice work is paused${res.length ? `: ${esc(res.slice(0, 3).join(", "))}${res.length > 3 ? ` and ${res.length - 3} more` : ""}` : ""}. It carries on where it stopped.</p>
-      <div class="row"><button class="btn primary" type="button" data-rn-resume>Resume</button></div></div>`;
+    const res = (work.resume || []).map(r => typeof r === "string" ? { label: r } : r);   // {id, kind, label, held_at, queue_as}
+    // held work is NOT running: no bar, no running look, a plain "not running" label, and what to do with it
+    const when = t => { if (!t) return ""; const [d, h] = String(t).split(" "); return d === new Date().toLocaleDateString("sv") ? `stopped at ${h}` : `stopped ${d} ${h}`; };
+    now = `<div class="rn-now held" data-owner="doubleagent"><div class="who">Not running</div>
+      <p><b>Nothing is running.</b> This work was stopped (you paused it, or UnderCover closed). Where it stopped is saved.</p>
+      ${res.length ? `<div class="rn-list">${res.map(r => `<div class="rn-li"><span><b>${esc(r.label)}</b>${r.held_at ? `<small>${esc(when(r.held_at))}</small>` : ""}</span>
+        <span class="acts">${r.queue_as && r.id ? `<button class="linkbtn" type="button" data-rn-toq="${esc(r.id)}">Train tonight instead</button>` : ""}</span></div>`).join("")}</div>` : ""}
+      <div class="row"><button class="btn primary" type="button" data-rn-resume>Resume now</button>
+        ${res.length ? `<button class="linkbtn" type="button" data-rn-forget>Dismiss</button>` : ""}</div></div>`;
   }
   if (put($("#rn-now"), now)) {
     $$("[data-rn-pause]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await pauseWork(); b.disabled = false; });
     $$("[data-rn-resume]", $("#rn-now")).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
+    $$("[data-rn-forget]", $("#rn-now")).forEach(b => b.onclick = () => forgetWork(b));   // two clicks, then forgotten
+    $$("[data-rn-toq]", $("#rn-now")).forEach(b => b.onclick = async () => {   // this held work moves to tonight's queue
+      b.disabled = true;
+      try {
+        const r = await api("/api/work/to-queue", { json: { id: b.dataset.rnToq } });
+        W.last = r; renderWorkBar({ ...r, queued: r.queue.filter(i => ["queued", "paused"].includes(i.state)).length });
+        showError("It's in tonight's queue now. It runs while the PC is free.", "Moved", null, true);
+        refreshJobs(true); renderQueue();
+      } catch (e) { b.disabled = false; showError(e.message, "Couldn't move it to tonight"); }
+    });
     $$("[data-jcancel]", $("#rn-now")).forEach(b => b.onclick = async () => {   // two clicks; the first is remembered across redraws
       const id = b.dataset.jcancel;
       clearTimeout(W.cancelTimer);
       if (W.cancelAsk !== id) {
-        W.cancelAsk = id; W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000);
+        W.cancelAsk = id; W.cancelAskAt = Date.now(); W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000);
         return renderRunRoom();
       }
+      if (Date.now() - (W.cancelAskAt || 0) < CONFIRM_MS) { W.cancelTimer = setTimeout(() => { W.cancelAsk = null; if (runRoomOpen()) renderRunRoom(); }, 4000); return; }   // a double click isn't a confirmation
       W.cancelAsk = null; b.disabled = true; b.textContent = "Cancelling…";
       try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch (e) { showError(e.message, "Couldn't cancel that"); }
       refreshJobs(true);
@@ -186,8 +211,10 @@ function renderRunRoom() {
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
   $("#rn-total").textContent = left.length ? `About ${fmtMin(w.total_min)} · done by about ${clock(w.done_by)}` : "";
   $("#rn-when").hidden = $("#rn-opts").hidden = !left.length;
-  $("#rn-at").textContent = at ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock($("#q-at-time").value || "23:00")}`;
-  $("#rn-at").setAttribute("aria-pressed", at);
+  showTimes(w);
+  const same = at && startTime() === w.settings.start_at;   // the field still says what's saved; edited, the button offers the new time
+  $("#rn-at").textContent = same ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock(startTime())}`;
+  $("#rn-at").setAttribute("aria-pressed", same);
   $("#rn-go").setAttribute("aria-pressed", going);
   $("#rn-stop").hidden = !w?.armed;
   const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
@@ -222,14 +249,16 @@ const startWork = async body => {
   try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); }
   catch (e) { showError(e.message, "Couldn't change the start"); }
 };
-$("#rn-at").onclick = () => startWork({ at: $("#q-at-time").value || "23:00" });
+$("#rn-at").onclick = () => startWork({ at: startTime() });
+$("#rn-at-time").onchange = e => { store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue(); };
 $("#rn-go").onclick = () => startWork({});
 $("#rn-stop").onclick = () => startWork({ stop: true });
 const workSettings = async body => {
   try { W.last = await api("/api/work/settings", { json: body }); } catch (e) { showError(e.message, "Couldn't change that"); }
   renderQueue();
 };
-$("#rn-finish").onchange = e => workSettings({ finish_by: e.target.checked ? "07:00" : null });
+$("#rn-finish").onchange = e => workSettings({ finish_by: e.target.checked ? ($("#rn-finish-time").value || "07:00") : null });
+$("#rn-finish-time").onchange = e => { if ($("#rn-finish").checked && e.target.value) workSettings({ finish_by: e.target.value }); };
 $("#rn-awake").onchange = e => workSettings({ keep_awake: e.target.checked });
 
 // ------------------------------------------------------------ the overnight queue (DoubleAgent's page + the drawer)
@@ -238,8 +267,9 @@ async function loadQueue() {
   renderQueue();
 }
 const jobWhat = i => ({ improve: `Improve ${esc(i.display || i.target)}`, cadence: `Cadence for ${esc(i.display || i.target)}`,
-                        newcad: `New voice with cadence: ${esc(i.target)}` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
-const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence" })[i.kind] || esc(i.kind);
+                        newcad: `New voice with cadence: ${esc(i.target)}`,
+                        project: `Training ${esc(i.display || i.target)} (your choices)` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
+const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence", project: "voice · your choices" })[i.kind] || esc(i.kind);
 // the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
 function renderDrawer() {
   renderRunning($("#qd-run"), { heading: "Running now" });
@@ -280,7 +310,7 @@ function renderQueue() {
   $("#q-stop").hidden = !w.armed || !left.length;
   st.textContent = w.armed && !w.settings.start_at ? "Running" : "Start now";
   st.disabled = w.armed && !w.settings.start_at;
-  at.textContent = w.armed && w.settings.start_at ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock($("#q-at-time").value)}`;
+  at.textContent = w.armed && w.settings.start_at && startTime() === w.settings.start_at ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock(startTime())}`;
   $("#q-list").innerHTML = w.queue.map(i => {
     const e = i.estimate || {}, run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state);
     const what = jobWhat(i);
@@ -368,6 +398,7 @@ async function loadCandidates() {
   pickSummary();
   renderCadPicker();
   renderVoiceCards(PICK.cands);   // doubleagent.js
+  if (typeof loadImproved === "function") loadImproved();   // a retrained voice waiting beside a current one
 }
 // "Cadence": voices that can get one (or a better one), ticked and added to tonight's queue
 const CADPICK = new Set();
@@ -405,7 +436,7 @@ $("#q-add-sel").onclick = async () => {
   const chosen = PICK.cands.filter(c => PICK.sel.has(c.voice));
   for (const c of chosen) {
     try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); }
-    catch (e) { showError(e.message, `Couldn't add ${c.voice}`); }
+    catch (e) { showError(e.message, `Couldn't add ${voiceDisplay(c.voice)}`); }
   }
   PICK.sel.clear(); renderQueue(); loadCandidates();
 };
@@ -432,10 +463,11 @@ $("#q-name").addEventListener("input", () => {
   }, 450);
 });
 $("#q-start").onclick = async () => { W.last = await api("/api/work/start", { json: {} }); renderQueue(); pollStatusSoon(); };
-$("#q-at").onclick = async () => { W.last = await api("/api/work/start", { json: { at: $("#q-at-time").value } }); renderQueue(); pollStatusSoon(); };
-$("#q-at-time").onchange = () => renderQueue();
+$("#q-at").onclick = async () => { W.last = await api("/api/work/start", { json: { at: startTime() } }); renderQueue(); pollStatusSoon(); };
+$("#q-at-time").onchange = e => { store.set("uc-queue-at", e.target.value || null); $("#rn-at-time").value = e.target.value; renderQueue(); };
 $("#q-stop").onclick = async () => { W.last = await api("/api/work/start", { json: { stop: true } }); renderQueue(); pollStatusSoon(); };
-$("#q-finish").onchange = async e => { W.last = await api("/api/work/settings", { json: { finish_by: e.target.checked ? "07:00" : null } }); renderQueue(); };
+$("#q-finish").onchange = async e => { W.last = await api("/api/work/settings", { json: { finish_by: e.target.checked ? ($("#q-finish-time").value || "07:00") : null } }); renderQueue(); };
+$("#q-finish-time").onchange = async e => { if ($("#q-finish").checked && e.target.value) { W.last = await api("/api/work/settings", { json: { finish_by: e.target.value } }); renderQueue(); } };
 $("#q-awake").onchange = async e => { W.last = await api("/api/work/settings", { json: { keep_awake: e.target.checked } }); renderQueue(); };
 $("#q-dismiss").onclick = async () => { W.last = await api("/api/work/dismiss", { json: {} }); renderQueue(); };
 function pollStatusSoon() { setTimeout(() => api("/api/status").then(s => renderWorkBar(s.work)).catch(() => {}), 300); }

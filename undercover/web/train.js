@@ -93,11 +93,17 @@ function follow(id, kind) {
       closeStream();
       if (ev.state === "error" || ev.state === "lost") showError(ev.message, kind === "train" ? "Training stopped" : "That didn't work");
       else if (ev.state === "paused") { /* the Pause bar at the top says so, with Resume */ }
+      else if (ev.state === "cancelled" && kind === "train" && ev.message) showError(ev.message, "Training stopped", null, true);   // "The saves made before the stop are kept."
       else if (ev.message && kind === "prepare" && ev.message.length) showError(ev.message, "Some sources were skipped", null, true);
       if (kind === "auto") {
         clearInterval(T.autoTimer); $("#tr-prep-progress").hidden = true;
         if (ev.state === "done") loadVoices();   // the card after training: doubleagent.js, on uc:jobdone
       }
+      if (ev.state === "done" && ev.pending_for && ev.message)   // it landed beside a voice that was already there: it waits for the ear
+        showError(ev.message, `Waiting beside ${voiceDisplay(ev.pending_for)}`, { label: "Listen to both", run: () => libOpenAb(ev.pending_for) }, true);
+      if (kind === "export" && ev.state === "done" && T.replaced && !ev.pending_for && ev.voice)   // a confirmed replace: the old one is set aside, and Undo puts it back
+        showError(`${voiceDisplay(ev.voice)} is the new one now. The old one is set aside, not deleted.`, "Replaced", { label: "Undo", run: () => undoImp(ev.voice) }, true);
+      if (kind === "export") T.replaced = false;
       refresh().then(() => { if (kind === "export" && ev.voice) loadVoices(); });
     }
   });
@@ -211,10 +217,11 @@ function renderSources() {
     e.preventDefault();
     const src = T.proj.sources.find(s => s.id === b.dataset.rm);
     if (src && src.status === "ready" && !b.classList.contains("confirm")) {   // deletes its prepared phrases: confirm
-      b.classList.add("confirm"); b.textContent = `Remove ${src.extra?.phrases ?? ""} phrases?`.replace("  ", " ");
-      setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Remove"; }, 4000);
+      b.classList.add("confirm"); arm(b); b.textContent = `Remove ${src.extra?.phrases ?? ""} phrases?`.replace("  ", " ");
+      setTimeout(() => { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; }, 4000);
       return;
     }
+    if (src && src.status === "ready" && !armedFor(b)) return;   // a double click isn't a confirmation
     try { await openProject(T.proj.name, await P("sources", { id: b.dataset.rm, remove: true })); }
     catch (err) { showError(err.message, "Couldn't remove that source"); }
   });
@@ -225,8 +232,11 @@ $("#tr-prepare").onclick = async () => {
   try { const r = await P("prepare"); follow(r.job, "prepare"); }
   catch (e) { showError(e.message, "Can't prepare yet"); }
 };
+// the voice name only when the field is this project's (it keeps the last project's name while this one has no clips:
+// a new Donald Trump project once sent "barack-obama-uc"; the server refuses another person's voice name too)
+const ownName = () => ($("#tr-name").dataset.proj === T.proj?.name && $("#tr-name").value) || undefined;
 $("#tr-auto").onclick = async () => {
-  try { const r = await P("auto", { voice_name: $("#tr-name").value || undefined }); follow(r.job, "auto"); }
+  try { const r = await P("auto", { voice_name: ownName() }); follow(r.job, "auto"); }
   catch (e) { showError(e.message, "Can't start"); }
 };
 function onAutoEvent(ev) {
@@ -336,29 +346,58 @@ function renderTrainForm() {
   $("#tr-train").hidden = !p.reference?.clip || !p.phrases.length;
   if ($("#tr-train").hidden) return;
   if (!$("#tr-name").value || $("#tr-name").dataset.proj !== p.name) {
-    $("#tr-name").value = st.voice_name || `${p.name}-uc`; $("#tr-name").dataset.proj = p.name;
+    // a retrained voice waiting beside its voice is named <voice>-next: a training must not be pointed at it (its export would replace
+    // a candidate nobody has heard), so that name is never the default
+    const own = st.voice_name && !/-next$/.test(st.voice_name) ? st.voice_name : `${p.name}-uc`;
+    $("#tr-name").value = own; $("#tr-name").dataset.proj = p.name;
     $("#tr-length").value = st.length || "auto"; $("#tr-sr").value = String(st.sr || p.defaults.sr);
   }
   const running = T.live?.kind === "train";
   const paused = st.state === "paused";
   const btn = $("#tr-start");
   btn.textContent = paused ? "Resume training" : (st.epoch ? "Train again from scratch" : "Start training");
-  btn.disabled = running || T.live?.kind === "prepare" || kept < 1;
-  ["#tr-name", "#tr-length", "#tr-sr"].forEach(s => $(s).disabled = running || paused);
+  const q = p.queued;   // this project is in tonight's queue with its own choices (the server's `queued`)
+  btn.disabled = running || T.live?.kind === "prepare" || kept < 1 || !!q;
+  $("#tr-tonight").hidden = !!q || running || paused; $("#tr-tonight").disabled = T.live?.kind === "prepare" || kept < 1;
+  $("#tr-queued").hidden = !q;
+  if (q) {
+    $("#tr-queued-say").textContent = q.state === "running" ? "· training now, from the queue" : q.state === "paused" ? "· paused; Resume continues it"
+      : q.now ? "· starts as soon as the GPU is free" : "· it trains while the PC is free, with the sources and choices you set here";
+    $("#tr-unqueue").disabled = q.state === "running";
+  }
+  ["#tr-name", "#tr-length", "#tr-sr"].forEach(s => $(s).disabled = running || paused || !!q);
   const steps = p.defaults.steps[$("#tr-length").value] || p.defaults.steps.auto;
   const est = steps * (st.sec_per_step || 0.3) + 60;   // + data preparation
-  $("#tr-start-note").innerHTML = kept < 1 ? "Keep at least 1 minute of samples first."
+  $("#tr-start-note").innerHTML = q ? ""
+    : kept < 1 ? "Keep at least 1 minute of samples first."
     : paused ? `Paused at epoch ${st.epoch}. <button class="linkbtn" id="tr-fresh">Start over instead</button>`
     : running ? "" : `≈ ${Math.max(1, Math.round(est / 60))} min on this GPU`;
   const fresh = $("#tr-fresh");
   if (fresh) fresh.onclick = () => startTraining(true);
 }
 $("#tr-start").onclick = () => startTraining(false);
+// Train tonight (the Deep path): this project, with its ticked sources and these choices, goes into tonight's queue
+$("#tr-tonight").onclick = async () => {
+  const b = $("#tr-tonight"); b.disabled = true;
+  try {
+    await api("/api/work/add", { json: { kind: "project", project: T.proj.name, voice_name: ownName(), length: $("#tr-length").value, sr: +$("#tr-sr").value } });
+    showError(`${T.proj.person || T.proj.name} trains tonight with your choices. SafeHouse's Running room shows it.`, "On it", null, true);
+    if (typeof refreshJobs === "function") refreshJobs(true);
+    await refresh();
+  } catch (e) { b.disabled = false; showError(e.message, "Couldn't queue it"); }
+};
+$("#tr-unqueue").onclick = async () => {
+  const q = T.proj?.queued; if (!q) return;
+  $("#tr-unqueue").disabled = true;
+  try { await api("/api/work/remove", { json: { id: q.id } }); await refresh(); }
+  catch (e) { $("#tr-unqueue").disabled = false; showError(e.message, "Couldn't take it out"); }
+};
+setInterval(() => { if (T.proj?.queued && !$("#view-train").hidden) refresh(); }, 10000);   // the queue starts it on its own: the line follows
 async function startTraining(fresh) {
   const st = T.proj.train || {};
   if (!fresh && st.epoch && st.state !== "paused" && !confirm("Train again from scratch? The saves from the last run are replaced.")) return;
   try {
-    const r = await P("train", { voice_name: $("#tr-name").value, length: $("#tr-length").value, sr: +$("#tr-sr").value, fresh });
+    const r = await P("train", { voice_name: ownName(), length: $("#tr-length").value, sr: +$("#tr-sr").value, fresh });
     T.trainEv = null;
     follow(r.job, "train");
     refresh();
@@ -380,7 +419,7 @@ function onTrainEvent(ev) {
 function renderRun() {
   const p = T.proj, st = p.train || {}, ev = T.trainEv;
   const running = T.live?.kind === "train";
-  const show = running || (p.history?.length || 0) > 0 || st.state === "paused";
+  const show = running || (p.history?.length || 0) > 0 || st.state === "paused" || st.state === "stopped";
   $("#tr-run").hidden = !show || $("#tr-train").hidden;
   if ($("#tr-run").hidden) return;
   const auto = T.live?.kind === "auto";
@@ -390,7 +429,7 @@ function renderRun() {
   if (running && ev?.stage === "preparing") h.textContent = `Getting ready: ${ev.note || ""}`;
   else if (running && ev?.note === "paused for a cover") h.textContent = "Making your cover first…";
   else if (running) h.textContent = "Training…";
-  else h.textContent = { paused: "Paused", trained: "Training finished", exported: "Training finished", failed: "Training failed" }[st.state] || "Training";
+  else h.textContent = { paused: "Paused", stopped: "Stopped", trained: "Training finished", exported: "Training finished", failed: "Training failed" }[st.state] || "Training";
   $("#tr-bar").style.width = (running && ev ? (ev.fraction || 0) : total ? epoch / total : 0) * 100 + "%";
   $("#tr-epoch").innerHTML = `${epoch}<span class="meta"> / ${total || "—"}</span>`;
   $("#tr-eta").textContent = running && ev?.eta ? fmtTime(ev.eta) : "—";
@@ -428,17 +467,39 @@ function renderListen() {
       <div class="row">${playBtn(p.real_preview, "Play the real voice")}<span class="meta">held out from training</span></div></div>`
     + saves.slice().reverse().map(s => `<div class="ckpt${s.epoch === st.best ? " best" : ""}">
       <div class="row spread"><b>Epoch ${s.epoch}</b><span class="tag${s.epoch === st.best ? " ok" : ""}">${s.epoch === st.best ? "best · " : ""}${s.val.toFixed(3)}</span></div>
-      <div class="row">${playBtn(s.preview, `Play epoch ${s.epoch}`)}${busy ? "" : `<button class="linkbtn" data-export="${s.epoch}">${st.exported_epoch === s.epoch ? "Added ✓" : "Use this one"}</button>`}</div></div>`).join("");
+      <div class="row">${playBtn(s.preview, `Play epoch ${s.epoch}`)}${busy ? "" : `<button class="linkbtn" data-export="${s.epoch}">${st.waiting && st.waiting.epoch === s.epoch ? `Waiting beside ${esc(voiceDisplay(st.waiting.voice))}` : st.exported_epoch === s.epoch ? "Added ✓" : "Use this one"}</button>`}</div></div>`).join("");
   $$("[data-export]").forEach(b => b.onclick = () => exportVoice(+b.dataset.export));
+}
+// "Use this one" onto a voice that's already there: replace it (the old one is set aside, Undo puts it back) or let the two wait side by
+// side for the blind A/B (the new one lands as <voice>-next). Nothing is replaced unheard unless this is answered "Replace".
+function askReplace(name) {
+  return new Promise(resolve => {
+    const dlg = $("#replace-dlg"), who = voiceDisplay(name);
+    $("#replace-q").textContent = `Replace ${who} with this one?`;
+    $("#replace-say").textContent = `The current voice is set aside, not deleted. Undo puts it back. Or let them wait side by side: you hear both read the same line, blind, and keep the one you like.`;
+    const done = v => { dlg.close(); resolve(v); };
+    $("#replace-yes").onclick = () => done("replace"); $("#replace-wait").onclick = () => done("wait"); $("#replace-no").onclick = () => done(null);
+    dlg.oncancel = () => resolve(null);   // Esc
+    dlg.showModal();
+    $("#replace-wait").focus();
+  });
 }
 async function exportVoice(epoch) {
   const st = T.proj.train || {};
   const name = $("#tr-name").value || st.voice_name;
-  const overwrite = !!st.exported && st.exported === name;
-  if (!overwrite && (await api("/api/voices")).some(v => v.name === name) &&
-      !confirm(`A voice called “${name}” already exists. Replace it?`)) return;
-  try { const r = await P("export", { epoch, name, overwrite: true }); follow(r.job, "export"); }
-  catch (e) { showError(e.message, "Couldn't add the voice"); }
+  let replace = false, exists = false;
+  try {
+    exists = (await api("/api/voices")).some(v => v.name === name);
+    if (exists) {
+      const choice = await askReplace(name);
+      if (!choice) return;
+      replace = choice === "replace";
+    }
+    // overwrite without replace: it lands beside the voice as <voice>-next, for the A/B
+    const r = await P("export", { epoch, name, ...(replace ? { replace: true } : exists ? { overwrite: true } : {}) });
+    T.replaced = replace;
+    follow(r.job, "export");
+  } catch (e) { showError(e.message, "Couldn't add the voice"); }   // the server's own words: a voice in use, a retrained one already waiting
 }
 function onExportEvent(ev) {
   const d = $("#tr-done");
@@ -448,7 +509,13 @@ function onExportEvent(ev) {
 function renderDone() {
   const p = T.proj, st = p.train || {}, d = $("#tr-done");
   if (T.live?.kind === "export") return;
-  if (st.state === "exported" && st.exported) {
+  if (st.state === "exported" && st.waiting) {   // landed beside a voice that was already there: not "Added", waiting for the ear
+    d.hidden = false;
+    d.innerHTML = `<div class="row spread"><div><h3 class="tr-h3">Waiting beside ${esc(voiceDisplay(st.waiting.voice))}</h3>
+      <p class="meta">${esc(voiceDisplay(st.waiting.voice))} was already in your voices, so this one waits beside it (epoch ${st.waiting.epoch}). Listen to both on its voice card and keep the one you like; the other is set aside, not deleted.</p></div>
+      <button class="btn primary" id="tr-wait-ab">Listen to both</button></div>`;
+    $("#tr-wait-ab").onclick = () => libOpenAb(st.waiting.voice);
+  } else if (st.state === "exported" && st.exported) {
     d.hidden = false;
     d.innerHTML = `<div class="row spread"><div><h3 class="tr-h3">${esc(st.exported)} is ready</h3>
       <p class="meta">v2 · ${(st.sr || 40000) / 1000} kHz · epoch ${st.exported_epoch} · ${st.train_minutes} min of training audio · added to your voices</p></div>
@@ -461,6 +528,10 @@ function renderDone() {
       <p class="meta">Listen to the saves above, then add the one you like. The best-scoring save is ${st.best ? "epoch " + st.best : "the last one"}.</p></div>
       <button class="btn primary" id="tr-add-best">Add the best one to my voices</button></div>`;
     $("#tr-add-best").onclick = () => exportVoice(st.best || st.epoch);
+  } else if (st.state === "stopped") {   // stopped on purpose: the saves are kept, nothing is offered as "the best one"
+    d.hidden = false;
+    d.innerHTML = `<div class="row spread"><div><h3 class="tr-h3">Training stopped</h3>
+      <p class="meta">The saves made before the stop are kept.</p></div></div>`;
   } else d.hidden = true;
 }
 

@@ -139,6 +139,16 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .prev-top { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .prev-top .seg { flex: 1; min-width: 260px; }
 .prev-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.linkbtn.on { color: var(--accent); font-weight: 600; }   /* the playing one of a Before / After pair */
+.pv-set { display: contents; }
+.pv-for { grid-column: 1 / -1; margin: 0; }
+.confirm-dlg { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r); padding: 20px 22px; max-width: min(460px, calc(100vw - 32px)); }
+.confirm-dlg::backdrop { background: rgb(0 0 0 / .5); }
+.confirm-dlg h3 { margin: 0 0 8px; }
+.confirm-dlg p { margin: 0 0 16px; color: var(--muted); }
+.dlg-btns { flex-wrap: wrap; gap: 10px; }
+.lib-nest { display: flex; align-items: baseline; gap: 12px; margin: -4px 0 6px 56px; padding: 6px 12px; color: var(--muted); font-size: 13.5px; border-left: 2px solid var(--warn); }   /* a retrained voice waiting, under its owner */
+.pv-set[hidden] { display: none; }
 .pcard { border: 1px solid var(--line); border-radius: 9px; padding: 12px; display: grid; gap: 10px; background: var(--panel-2); }
 .pcard.playing { border-color: var(--accent); }
 .pcard .ptitle { display: flex; align-items: center; gap: 10px; }
@@ -223,7 +233,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .alert-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .alert.info::before { background: var(--accent); }
 .alert p { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
-@media (max-width: 520px) { .hrow { grid-template-columns: 1fr auto; } .hrow .hdate { display: none; } .convert { width: 100%; } }
+@media (max-width: 520px) { .hrow { grid-template-columns: 1fr; gap: 6px; } .hrow .hdate { display: none; } .hbtns { flex-wrap: wrap; } .convert { width: 100%; } }   /* the buttons wrap under the title, which keeps its width (IA M2) */
 
 /* ---------------------------------------------------------------- DoubleAgent view (was "Train a voice") */
 .view { display: grid; gap: 18px; }
@@ -394,6 +404,7 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .rn-now[data-owner="speakeasy"] { --jc: var(--c-speakeasy); }
 .rn-now[data-owner="safehouse"] { --jc: var(--c-safehouse); }
 .rn-now.held { --jc: var(--warn); }
+.rn-now.held .who::before { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }   /* a ring, not a lit dot: it isn't running */
 .rn-now p { margin: 0; }
 .rn-now .who { display: flex; align-items: center; gap: 8px; color: var(--jc); font-weight: 600; font-size: 13.5px; }
 .rn-now .who::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -754,7 +765,7 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .qtotal b { font-size: 20px; }
 .qadd { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; }
 .qadd input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; color: inherit; font: inherit; }
-.qat input[type=time] { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: inherit; font: inherit; }
+.qat input[type=time], #rn-at-time, #rn-finish-time, #q-finish-time { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: inherit; font: inherit; }
 .qlist { display: grid; gap: 8px; }
 .qjob { display: grid; grid-template-columns: 18px 1fr auto; gap: 12px; align-items: start; background: var(--panel-2);
   border: 1px solid var(--line); border-radius: 9px; padding: 12px; }

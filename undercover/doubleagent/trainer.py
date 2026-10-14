@@ -317,7 +317,12 @@ class Trainer:
 
         report(stage="preparing", fraction=0.0, note="downloading base models")
         base = setup_models.base_model_files(sr)
-        setup_models.ensure(files=base)
+        try:
+            setup_models.ensure(files=base, cancel=lambda: control.stop)   # Stop aborts the download, not after it
+        except setup_models.DownloadStopped:
+            st["state"], st["outcome"] = "stopped", "stopped"
+            proj.save_train()
+            return st
         report(stage="preparing", fraction=0.0, note="preparing samples")
         def prep_progress(f):
             control.service()   # covers queued meanwhile don't wait for data preparation either
@@ -395,7 +400,8 @@ class Trainer:
         # train in fp32: slower, but no loss scaling needed and nothing to destabilise.
         bf16 = torch.version.hip is not None or torch.cuda.is_bf16_supported(including_emulation=False)
         ac = dict(device_type="cuda", dtype=torch.bfloat16, enabled=self.half and dev.type == "cuda" and bf16)
-        t_start = time.time()
+        prior_step = st.get("sec_per_step") or _speed_prior(sr, bs)
+        warm, steps_run = None, 0   # measured from the end of the first batch (its kernel set-up isn't the speed)
         epoch = epoch0
         outcome = "done"
         with timed("train.run", project=proj.name, from_epoch=epoch0, pieces=len(items), batch=bs) as rec:
@@ -439,13 +445,16 @@ class Trainer:
                     opt_g.step()
                     for k, v in (("mel", loss_mel), ("kl", loss_kl), ("fm", loss_fm), ("gen", loss_gen), ("disc", loss_disc)):
                         sums[k] += float(v.detach())
+                    if warm is None:
+                        warm = time.time()
+                    else:
+                        steps_run += 1
                     if bi % 5 == 0:
                         left = max_epochs - epoch + 1 - (bi + 1) / len(batches)   # epochs still to run
                         if st.get("sec_per_epoch") and epoch - epoch0 > 1:
                             eta = st["sec_per_epoch"] * left                   # recent epochs: no warm-up skew
                         else:
-                            done = epoch - 1 - epoch0 + (bi + 1) / len(batches)
-                            eta = (time.time() - t_start) / max(done, 1e-6) * left
+                            eta = train_eta(left * len(batches), steps_run, time.time() - warm, prior_step)
                         report(stage="training", epoch=epoch, epochs=max_epochs,
                                fraction=(epoch - 1 + (bi + 1) / len(batches)) / max_epochs, eta=eta,
                                sec_per_epoch=st.get("sec_per_epoch"))
@@ -466,6 +475,8 @@ class Trainer:
                 st["epoch"] = epoch
                 st["sec_per_epoch"] = round(float(np.median([x["secs"] for x in hist[-10:]])), 2)
                 st["sec_per_step"] = round(st["sec_per_epoch"] / steps_per_epoch, 3)
+                if epoch - epoch0 >= 2:   # a speed past the warm-up: the next training's first estimate
+                    _speed_record(sr, bs, st["sec_per_step"])
                 saved = epoch % save_every == 0 or epoch == max_epochs
                 if saved:
                     _export_weights(net_g, sr, epoch, self.tdir / f"e{epoch}.pth")
@@ -509,7 +520,7 @@ class Trainer:
                 if hold:
                     self._preview(net_g, hold[0], sr, self.tdir / "previews" / f"e{epoch}.wav")
                 st.setdefault("saves", []).append({"epoch": epoch, "val": round(float(np.mean([x["val"] for x in hist[-5:]])), 4)})
-            st["state"] = "trained"
+            st["state"] = "stopped" if outcome == "stopped" else "trained"   # a Stop is said as one (P2-5)
             st["outcome"] = outcome
         proj.save_train()
         del net_g, net_d, opt_g, opt_d, items, hold
@@ -653,9 +664,48 @@ def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None =
         tmp.unlink(missing_ok=True)
 
 
-def export_voice(proj: Project, epoch: int | None = None, name: str | None = None, overwrite: bool = False):
-    """Install a saved epoch (default: best) plus a freshly built index as a normal UnderCover voice."""
-    from ..core.voices import install
+SPEED_FILE = "train_speed.json"   # cache/: the last training's seconds per step, by sample rate and batch size
+
+
+def train_eta(left_steps: float, steps_done: int, secs: float, prior_step: float | None) -> float | None:
+    """Seconds left in a training before its own epoch speed is known (Internal Affairs pass 5: the first report
+    extrapolated one warm-up batch to 4993 s for an 8-minute run). steps_done / secs: measured after the first batch
+    (kernel set-up isn't counted). prior_step: a known speed (this project's last run, else the last training's); it
+    leads until about 50 steps are measured. None: nothing to go on yet."""
+    measured = secs / steps_done if steps_done > 0 else None
+    if measured is None:
+        return prior_step * left_steps if prior_step else None
+    if not prior_step:
+        return measured * left_steps if steps_done >= 5 else None
+    w = min(1.0, steps_done / 50)
+    return (w * measured + (1 - w) * prior_step) * left_steps
+
+
+def _speed_prior(sr, bs) -> float | None:
+    try:
+        return json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(f"{sr}-{bs}")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _speed_record(sr, bs, sec_per_step: float):
+    f = path("cache_dir") / SPEED_FILE
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    d[f"{sr}-{bs}"] = sec_per_step
+    fsutil.write_text(f, json.dumps(d))
+
+
+def export_voice(proj: Project, epoch: int | None = None, name: str | None = None, overwrite: bool = False,
+                 replace: str | None = None, confirmed: bool = False):
+    """Install a saved epoch (default: best) plus a freshly built index as a normal UnderCover voice.
+    A voice of that name already there is never replaced by a run (Internal Affairs P4-1): with overwrite the new one
+    waits beside it as <name>-next for the blind A/B (the improve route: queued, overnight, Do it all, Use this one).
+    Only confirmed (the user's "Replace my voice", just now on the page) replaces it, and the old one is set aside,
+    not deleted. -> the voice installed (the candidate when it waits: extra.pending_for)."""
+    from ..core.voices import install, label_of, pending_candidate, voices_dir
     from ..core.engine.rvc.index import write_ivf_flat
     st = proj.train
     epoch = int(epoch or st.get("best") or st.get("epoch") or 0)
@@ -664,6 +714,20 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     if not pth.exists():
         raise ModelError(f"There's no save from epoch {epoch}. Pick one of the saves listed.")
     name = slug(name or st.get("voice_name") or proj.name)
+    from .api import check_voice_name
+    check_voice_name(proj, name, replace)   # never over another person's voice (replace: the one improved on purpose)
+    owner = None
+    if overwrite and not confirmed and (voices_dir() / name / "meta.json").exists():
+        owner, name = name, f"{name}-next"   # it waits beside the voice, unheard voices never replace one
+        if pending_candidate(name) or (voices_dir() / name).exists():
+            raise ModelError(f"A retrained {label_of(owner)} ({name}) is already in your voices. Decide on that one first "
+                             "(DoubleAgent, its voice card); this training stays in its project, to add later.")
+    elif confirmed and (voices_dir() / name / "meta.json").exists():
+        from ..core import jobs
+        busy = jobs.jobs_using(name)   # its folder is about to be set aside
+        if busy:
+            raise ModelError(f"{busy[0].title or 'A cover or speech'} is using {label_of(name)} right now. Try again when "
+                             "it's done (or cancel it).")
     data_pt = tdir / "data.pt"
     if not data_pt.exists() and (proj.dir / "before-smaller" / "train" / "data.pt").exists():
         data_pt = proj.dir / "before-smaller" / "train" / "data.pt"   # Make smaller set it aside (phase 24): still there
@@ -680,7 +744,7 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
         write_ivf_flat(idx, feats)
     mins = st.get("train_minutes", 0)
     v = install([pth, idx], name, source=f"trained in UnderCover: {proj.person}, {mins:.1f} min, epoch {epoch}",
-                overwrite=overwrite)
+                overwrite=confirmed)
     likeness = next((s.get("identity") for s in st.get("saves", []) if s["epoch"] == epoch), None)
     v.extra.update(trained=True, project=proj.name, epoch=epoch, train_minutes=mins, likeness=likeness,
                    f0_median=f0_median(data), f0_range=f0_range(data), from_speech=proj.from_speech())
@@ -690,7 +754,15 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
     idx.unlink(missing_ok=True)
     fsutil.link_duplicate(v.pth, pth)   # the exported save is the voice's own model.pth: one copy on disk (phase 24)
     shrink_exported_index(v.dir)        # 10k centres; the full index aside (the user's ear, phase 24 follow-up)
-    st.update(exported=name, exported_epoch=epoch, state="exported")
+    if owner:
+        from ..core.voices import get_voice
+        from .night import mark_improved_pending
+        mark_improved_pending(owner, name, (get_voice(owner).extra or {}).get("likeness"), likeness, mins)
+        v = get_voice(name)
+        st.update(exported=owner, state="exported", waiting={"voice": owner, "candidate": name, "epoch": epoch})
+    else:
+        st.pop("waiting", None)
+        st.update(exported=name, exported_epoch=epoch, state="exported")
     (tdir / "resume.pt").unlink(missing_ok=True)   # 1.3 GB; a finished voice doesn't need it (retraining starts fresh)
     # keep the exported save and the two best alternatives (to try another on the Train tab); the rest are 55 MB each
     alts = sorted([s for s in st.get("saves", []) if s["epoch"] != epoch and s.get("identity") is not None],
