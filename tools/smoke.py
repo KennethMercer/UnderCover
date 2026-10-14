@@ -1414,6 +1414,7 @@ def u_export_lands():
             aside = voices_dir() / ".aside" / rec["aside"]
             assert (aside / "model.pth").read_bytes() == b"m-morgan-freeman-uc" and (aside / "meta.json.aside").exists()
             improved.undo("morgan-freeman-uc")                                  # Undo: the old one back, the new one waits
+            assert "set_aside" not in get_voice("morgan-freeman-uc").extra, "its aside note stayed"
             assert (get_voice("morgan-freeman-uc").dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc"
             assert (get_voice("morgan-freeman-uc-next").dir / "model.pth").read_bytes() == b"new-model-2"
             assert (get_voice("morgan-freeman-uc").dir / "tts" / "ref.wav").exists()
