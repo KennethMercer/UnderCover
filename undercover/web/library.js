@@ -138,6 +138,7 @@ $("#lib-filter").onchange = () => renderList();
 function rows() {
   const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
   let list = (L.data[L.cat] || []).slice();
+  if (L.cat === "voices") list = list.filter(x => !x.waiting_beside);   // a retrained one waiting lives under its owner (renderList)
   const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${voiceDisplay(x.voice)} ${x.backing_voice || ""} ${voiceDisplay(x.backing_voice)}` : L.cat === "speech" ? `${x.title} ${x.text} ${x.voice} ${voiceDisplay(x.voice)}` : L.cat === "songs" ? `${x.title} ${x.source}`
     : L.cat === "voices" ? `${x.name} ${voiceDisplay(x.name)} ${x.source}` : `${x.person} ${x.name}`;
   if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
@@ -166,6 +167,17 @@ function placeDetail() {
   d.hidden = narrowQ.matches && !row;
 }
 narrowQ.addEventListener("change", placeDetail);
+// a retrained voice waiting beside this one (voice list's waiting_beside): nested under its owner, with the way to the A/B
+function waitingRow(owner, all) {
+  const w = all.find(v => v.waiting_beside === owner.name);
+  if (!w) return "";
+  return `<div class="lib-nest"><span>Retrained version waiting${w.size ? ` (${gb(w.size)})` : ""}</span>
+    <button class="linkbtn" type="button" data-lib-ab="${esc(owner.name)}">Hear it</button></div>`;
+}
+async function libOpenAb(voice) {   // DoubleAgent's card for the voice, with the blind A/B open
+  showTab("doubleagent");
+  try { await loadCandidates(); await loadImproved(); if (DA.impAb?.voice !== voice) await openImp(voice); } catch (e) { showError(e.message, "Couldn't open it"); }
+}
 function renderList() {
   const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
   if (box.contains($("#lib-detail"))) box.after($("#lib-detail"));   // the list is redrawn below; the detail lives on
@@ -200,9 +212,11 @@ function renderList() {
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
-      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`;
+      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`
+      + (L.cat === "voices" ? waitingRow(x, all) : "");
   }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
       : hasTray() && L.kf === "kept" ? `No ${L.cat === "covers" ? "covers" : "speech"} kept yet. Send to SafeHouse keeps one for good; until then it's under Recent.` : "Nothing here."}</div>`);
+  $$("[data-lib-ab]", box).forEach(b => b.onclick = () => libOpenAb(b.dataset.libAb));
   $$(".litem", box).forEach(el => {
     const pick = () => { L.sel = el.dataset.id; $$(".litem", box).forEach(x => x.setAttribute("aria-selected", x === el)); renderDetail(); placeDetail(); };
     el.addEventListener("click", e => { if (e.target.matches("input")) return; pick(); });
