@@ -474,23 +474,36 @@ def _loop():
                     _run_item(urgent)   # "Start now": runs without starting the rest of the queue
             elif not st["held"] and st["armed"] and _gpu_idle() and not jobs.STATUS.get("gpu_problem"):
                 now = datetime.now()
-                nxt = next((i for i in st["queue"] if i["state"] == "queued" and i.get("retry_after", 0) <= time.time()), None)
                 waiting = any(i["state"] == "queued" for i in st["queue"])
-                if nxt is None:
-                    if not waiting and any(i["state"] in ("done", "failed", "skipped") for i in st["queue"]):
+                if not waiting:
+                    if any(i["state"] in ("done", "failed", "skipped") for i in st["queue"]):
                         with _LOCK:
                             st["armed"] = False   # queue finished
                             _save()
                 elif _in_window(now):
-                    dl = _deadline(now) if st["settings"].get("start_at") else None
-                    nxt["estimate"] = estimate(nxt)
-                    if dl is not None and now + timedelta(minutes=nxt["estimate"]["total"]) > dl:
-                        pass   # wouldn't finish before the deadline: waits for the next night
-                    else:
+                    nxt = pick(st["queue"], now, _deadline(now) if st["settings"].get("start_at") else None)
+                    if nxt is not None:
                         _run_item(nxt)
         except Exception as e:   # noqa: BLE001 - the loop must survive anything
             _log(f"loop error: {type(e).__name__}: {e}")
         time.sleep(10)
+
+
+def pick(q: list, now: datetime, deadline: datetime | None) -> dict | None:
+    """The queue item to start now: the first queued one that finishes before the deadline (the others wait for the
+    next night) and that follows nothing still waiting. A long first item no longer holds back the shorter ones behind
+    it; a cadence never runs before its voice's own item, wherever that sits in the queue."""
+    for i in q:
+        if i["state"] != "queued" or i.get("retry_after", 0) > time.time():
+            continue
+        f = KINDS.get(i["kind"], {}).get("follows")
+        if f and any(o is not i and o["state"] in ("queued", "paused", "running") and f(i, o) for o in q):
+            continue   # its voice comes first
+        i["estimate"] = estimate(i)
+        if deadline is not None and now + timedelta(minutes=i["estimate"]["total"]) > deadline:
+            continue   # wouldn't finish tonight: waits for the next night
+        return i
+    return None
 
 
 def _before(i: dict, item: dict, q: list) -> bool:

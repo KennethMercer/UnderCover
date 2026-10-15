@@ -182,7 +182,17 @@ def keep(voice: str, which: str) -> dict:
         _drop_samples(voice)
     gpu.forget_voice(voice)
     gpu.forget_voice(p["voice"])
-    return {"kept": which, "voice": voice}
+    queued = None
+    if which == "new":   # its cadence: the old one's carried over; with none, a speaking voice gets one tonight
+        try:
+            from . import cadence
+            if cadence.cadence_after(get_voice(voice))[0]:
+                from ..core import worklist
+                worklist.add("cadence", voice)
+                queued = "cadence"
+        except ModelError:
+            pass   # queued already, or can't be made: its card still offers Train cadence
+    return {"kept": which, "voice": voice, "queued": queued}
 
 
 def undo(voice: str) -> dict:
