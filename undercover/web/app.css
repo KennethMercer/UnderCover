@@ -122,7 +122,7 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .avatar { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; font: 600 14px var(--display); background: var(--line); color: var(--fg); }
 .vside { display: flex; gap: 8px; align-items: center; }
 .tag { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
-.remove { background: none; border: 0; color: var(--muted); font-size: 12px; padding: 2px 4px; opacity: 0; }
+.remove { background: none; border: 0; color: var(--muted); font-size: 12px; padding: 8px 6px; margin: -6px 0; opacity: 0; }   /* a bigger target (a fingertip hit the row instead) */
 .voice:hover .remove, .remove:focus-visible, .remove.confirm { opacity: 1; }
 .remove.confirm { color: var(--err); }
 .online-h { font-size: 12px; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; padding-top: 8px; border-top: 1px solid var(--line); }
