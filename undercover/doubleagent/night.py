@@ -42,8 +42,13 @@ def estimate(item: dict) -> dict:
     # a queued project trains at its own length (the options are saved before this runs: a Quick item says Quick's time)
     length = (proj.train.get("length") if item["kind"] == "project" and proj is not None else None) or "auto"
     train = LENGTHS.get(length, LENGTHS["auto"]) * _sec_per_step() * (EARLY_STOP if length == "auto" else 1.0) / 60
-    return {"prepare": round(prep), "train": round(train), "compare": round(COMPARE_MIN if item["kind"] == "improve" else 1),
-            "total": round(prep + train + (COMPARE_MIN if item["kind"] == "improve" else 1))}
+    compare = COMPARE_MIN if item["kind"] == "improve" else 1
+    out = {"prepare": round(prep), "train": round(train), "compare": round(compare)}
+    if item["kind"] == "new" and item.get("mode") == "speaking":   # its cadence follows (cadence.chain_cadence)
+        from .cadence import CADENCE_MIN
+        out["cadence"] = CADENCE_MIN
+    out["total"] = round(prep + train + compare + out.get("cadence", 0))
+    return out
 
 
 def _improve_extra_minutes(proj) -> float:
@@ -214,8 +219,14 @@ def _new(job, item) -> dict:
             pass
     from .api import pending_of, waiting_note
     owner = pending_of(name)   # a voice of that name was there: it waits beside it
-    return {"voice": name, "after": score, "pending_for": owner,
-            "note": waiting_note(owner) if owner else f"'{name}' added to your voices."}
+    r = {"voice": name, "after": score, "pending_for": owner,
+         "note": waiting_note(owner) if owner else f"'{name}' added to your voices."}
+    if item["kind"] == "new":   # a speaking voice goes on to its cadence ("newcad" does its own, after this)
+        from . import cadence
+        c = cadence.chain_cadence(job, name, worklist.pusher(job), worklist.control_for(job))
+        if c is not None:
+            r.update(cadence=c, note=r["note"] + " " + c["note"])
+    return r
 
 
 def _improve(job, item) -> dict:
@@ -432,5 +443,7 @@ worklist.register_kind("project", run=_project, estimate=estimate, target=_proje
                        label=lambda item: f"Training {shown_project(item)} (your choices)", options=_project_options)
 worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=shown_voice,
                        label=lambda item: f"Improving {shown_voice(item)}")
-worklist.register_kind("new", run=_new, estimate=estimate, label=lambda item: f"Training a voice of {item['target']}",
+worklist.register_kind("new", run=_new, estimate=estimate,
+                       label=lambda item: f"Training a voice of {item['target']}" + (
+                           f", then {item['target']}'s cadence" if item.get("mode") == "speaking" else ""),
                        modes=("speaking", "singing", "both"))

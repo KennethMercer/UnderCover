@@ -1139,6 +1139,40 @@ def _run(job, item) -> dict:
     return train(job, item["target"], worklist.pusher(job), worklist.control_for(job))
 
 
+CADENCE_MIN = 9   # minutes a cadence adds after its voice (transcribe 3 + measure 2 + test 4, as estimate() says)
+
+
+def cadence_after(v) -> tuple[bool, str]:
+    """Does a voice just made get its cadence pack now? (yes?, why). Principle 10, the engine is smart: a voice made
+    from speech reads in its own manner, not a stand-in Reader's (Trump's Do it all left SpeakEasy reading him with
+    bf_emma, a British woman). A singing voice keeps the Reader. A retrained one waiting beside its voice ("-next")
+    gets none: on Keep it takes that voice's cadence, or a cadence is queued for it then (improved.keep)."""
+    ex = v.extra or {}
+    if ex.get("pending_for"):
+        return False, "it waits beside its voice for the blind A/B; its cadence comes when it's kept"
+    if not ex.get("from_speech"):
+        return False, "a singing voice: SpeakEasy reads it with a Reader"
+    if pack_of(v):
+        return False, "it has its cadence already"
+    return can_train(v)
+
+
+def chain_cadence(job, name: str, push, control=None) -> dict | None:
+    """A voice's cadence right after the voice (Do it all, a queued new voice), when cadence_after says so.
+    -> the cadence result, or None when there's none to make."""
+    try:
+        v = get_voice(name)
+    except ModelError:   # not in the voices (nothing to read a cadence for)
+        return None
+    ok, _why = cadence_after(v)
+    if not ok:
+        return None
+    push("cadence", 0.0, f"Now {label_of(v.name)}'s cadence")
+    c = train(job, v.name, push, control)
+    return {**{k: c.get(k) for k in ("after", "likeness", "cadence_gap", "wer", "replaced", "data_minutes")},
+            "note": c.get("note", "")}
+
+
 def _run_new(job, item) -> dict:
     """A new voice, then its cadence from the same clips (one item: the cadence follows its voice)."""
     from .night import _new

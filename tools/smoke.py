@@ -1775,6 +1775,84 @@ def u_p7_1():
     return "the copy went aside alone; the original's candidate still waits beside it"
 
 
+@check("a speaking voice gets its cadence pack after it's made (principle 10, smallfix1): Do it all and a queued new voice chain it; a singing voice, a waiting -next and a voice with a pack don't; newcad doesn't run it twice; a voice kept with no pack gets one queued")
+def u_cadence_chain():
+    import inspect
+    from undercover.core import jobs as J, worklist
+    from undercover.core.voices import get_voice
+    from undercover.doubleagent import api as DA, cadence, improved, night, service
+    assert "cadence.chain_cadence(job, name, push, control)" in inspect.getsource(DA.start_auto), "Do it all doesn't chain it"
+    real = cadence.can_train, cadence.train, service.train_new_voice
+    calls = []
+    cadence.can_train = lambda v: (True, "from the voice's clips")
+    cadence.train = lambda job, name, push, control=None: calls.append(name) or {"note": "Cadence made."}
+    try:
+        with isolated_data():
+            worklist._STATE = None
+            _voice_dir("kris-uc", {"trained": True, "project": "kris", "from_speech": True})
+            _voice_dir("sing-uc", {"trained": True, "project": "sing", "from_speech": False})
+            _voice_dir("kris-uc-next", {"trained": True, "project": "kris", "from_speech": True, "pending_for": "kris-uc"})
+            packed = _voice_dir("talk-uc", {"trained": True, "project": "talk", "from_speech": True, "tts": {"ref": "ref.wav"}})
+            (packed / "tts").mkdir()
+            (packed / "tts" / "ref.wav").write_bytes(b"cadence")
+            want = {"kris-uc": True, "sing-uc": False, "kris-uc-next": False, "talk-uc": False}
+            got = {n: cadence.cadence_after(get_voice(n))[0] for n in want}
+            assert got == want, got
+            assert "singing" in cadence.cadence_after(get_voice("sing-uc"))[1]
+            # the queue's "new": a speaking voice chains it, a singing one doesn't, "newcad" leaves it to its own step
+            for made, kind, n in (("kris-uc", "new", 1), ("sing-uc", "new", 1), ("kris-uc", "newcad", 1)):
+                service.train_new_voice = lambda *a, made=made, **k: made
+                job = J.Job("night")
+                r = night._new(job, {"kind": kind, "target": "Kris", "mode": "speaking"})
+                assert len(calls) == n and (("cadence" in r) == (made == "kris-uc" and kind == "new")), (made, kind, r, calls)
+            est = night.estimate({"kind": "new", "target": "Kris", "mode": "speaking"})
+            assert est["cadence"] == cadence.CADENCE_MIN and "cadence" not in night.estimate({"kind": "new", "target": "Kris"})
+            assert "then Kris's cadence" in worklist.KINDS["new"]["label"]({"target": "Kris", "mode": "speaking"})
+            # Keep the retrained one, the old one with no pack: a cadence is queued for it
+            night.mark_improved_pending("kris-uc", "kris-uc-next", 0.7, 0.72, 10)
+            r = improved.keep("kris-uc", "new")
+            assert r["queued"] == "cadence" and any(i["kind"] == "cadence" and i["target"] == "kris-uc"
+                                                     for i in worklist._state()["queue"]), r
+            worklist._STATE = None
+    finally:
+        cadence.can_train, cadence.train, service.train_new_voice = real
+        worklist._STATE = None
+    return "speaking chains, singing / waiting / packed don't; newcad once; Keep with no pack queues one"
+
+
+@check("queue packing (smallfix1): the first item that finishes before finish_by starts, not only the first in line; a cadence never runs before its own voice's item, wherever it sits")
+def u_queue_pack():
+    from datetime import datetime, timedelta
+    from undercover.core import worklist
+    import undercover.doubleagent.cadence  # noqa: F401 - registers cadence (follows its voice)
+    real = worklist.estimate
+    worklist.estimate = lambda i: {"total": i["_est"]}
+    try:
+        now = datetime(2026, 10, 15, 1, 0)
+        dl = now + timedelta(minutes=120)
+
+        def q(*items):
+            return [{"id": str(n), "state": "queued", **it} for n, it in enumerate(items)]
+        big, small = {"kind": "new", "target": "Big", "_est": 300}, {"kind": "new", "target": "Small", "_est": 60}
+        assert worklist.pick(q(big, small), now, dl)["target"] == "Small"          # the long one waits; the short one runs
+        assert worklist.pick(q(big, small), now, None)["target"] == "Big"          # no deadline: in order
+        assert worklist.pick(q(big), now, dl) is None
+        kris, kcad = {"kind": "new", "target": "Kristen Schaal", "_est": 300}, {"kind": "cadence", "target": "kristen-schaal-uc", "_est": 10}
+        assert worklist.pick(q(kris, kcad), now, dl) is None                        # its voice doesn't fit: nor does it
+        assert worklist.pick(q(kcad, {**kris, "_est": 60}), now, dl)["kind"] == "new"   # before it in line: still after
+        paused = q(kris, kcad)
+        paused[0]["state"] = "paused"
+        assert worklist.pick(paused, now, dl) is None                               # its voice paused: it waits
+        done = q(kris, kcad)
+        done[0]["state"] = "done"
+        assert worklist.pick(done, now, dl)["kind"] == "cadence"                    # its voice done: it runs
+        retry = q({**small, "retry_after": 9e12}, {"kind": "improve", "target": "x-uc", "_est": 30})
+        assert worklist.pick(retry, now, dl)["kind"] == "improve"
+    finally:
+        worklist.estimate = real
+    return "short item past a long one; no deadline in order; cadence after its voice (queued, paused, done); retry_after"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -6729,7 +6807,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

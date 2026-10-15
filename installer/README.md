@@ -46,7 +46,7 @@ downloads the matching PyTorch and tools. Nothing heavy is bundled.
 - **A fresh ROCm install measured in D:\UnderCoverTest25:** setup 262 s, about 2.5 GB downloaded, 8.3 GB on disk.
   After that:
   - the first cover: 1.2 GB of models;
-  - the first SpeakEasy line: 3.0 GB (Chatterbox);
+  - the first SpeakEasy line: 2.8 GB (Turbo);
   - listen-back: 1.6 GB (Whisper, in the background).
 - **Checks:** the self-test, the Doctor (13/13), -Repair and unit smoke (66/66) all passed.
 - **Changes:** the Repair shortcut now runs -Repair; FRIENDS.md ships as READ ME.md.
