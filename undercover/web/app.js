@@ -394,6 +394,7 @@ function voiceDesc(v) {
   const src = (v.source || "").match(/huggingface\.co\/([^/]+\/[^/]+)/);
   return `RVC ${v.version} · ${v.sr ? v.sr / 1000 + " kHz" : "?"}${src ? " · " + src[1].split("/")[1].replace(/_+/g, " ").slice(0, 40) : ""}`;
 }
+const rmArmed = name => S.rmArm?.name === name && Date.now() - S.rmArm.at < 4000;   // Remove's first click, still standing
 function renderVoices() {
   const q = $("#q").value.trim().toLowerCase();
   const isLink = /^https?:\/\//i.test(q);
@@ -401,26 +402,34 @@ function renderVoices() {
     .sort((a, b) => (a.likeness_word === "poor") - (b.likeness_word === "poor"));   // the ones that aren't really them sink
   const shownList = typeof earSort === "function" ? earSort(list) : list;   // the ones you've liked rise (ear.js)
   const box = $("#voices");
+  const kept = document.activeElement?.dataset?.rm;   // a keyboard user on a Remove button stays on it when the list draws again
   if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
   else box.innerHTML = shownList.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
       <span class="vtext"><b>${vname(v.name)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
-      <span class="vside"><button class="remove" data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">Remove</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
+      <span class="vside"><button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
     const pick = () => { S.voice = el.dataset.v; store.set("uc-voice", S.voice); renderVoices(); summary(); refreshEstimate(); };
     el.addEventListener("click", e => { if (!e.target.closest(".remove")) pick(); });
-    el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    el.addEventListener("keydown", e => { if (e.target.closest(".remove")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });   // Enter on Remove is Remove's own
   });
   $$(".remove", box).forEach(b => b.onclick = async e => {
     e.stopPropagation();
-    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Confirm remove"; setTimeout(() => { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; }, 4000); return; }
+    if (!b.classList.contains("confirm")) {
+      S.rmArm = { name: b.dataset.rm, at: Date.now() };   // kept here, not on the button: the list draws again (a job ends, a thumb lands) and a new button would forget it
+      b.classList.add("confirm"); b.textContent = "Confirm remove"; arm(b);
+      clearTimeout(S.rmTimer); S.rmTimer = setTimeout(() => { S.rmArm = null; renderVoices(); }, 4000);
+      return;
+    }
     if (!armedFor(b)) return;   // a double click isn't a confirmation
+    clearTimeout(S.rmTimer); S.rmArm = null; b.disabled = true; b.textContent = "Removing…";   // the server can take a few seconds when Windows holds a file
     try { removedVoice(b.dataset.rm, await api(`/api/voices/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" })); await loadVoices(); }
-    catch (err) { showError(err.message, "Couldn't remove the voice"); }
+    catch (err) { showError(err.message, "Couldn't remove the voice"); renderVoices(); }
   });
+  if (kept) box.querySelector(`.remove[data-rm="${CSS.escape(kept)}"]`)?.focus();
   renderOnline(q, isLink);
 }
 

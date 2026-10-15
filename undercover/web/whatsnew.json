@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-15-preview-above",
+      "date": "2026-10-15",
+      "title": "Preview first, Convert below",
+      "lines": [
+        "FrontMan's Preview panel now sits above the Convert card: try the versions, then convert.",
+        "Removing a voice works from the keyboard too, and \"Confirm remove\" no longer disappears when the list refreshes."
+      ]
+    },
+    {
       "id": "2026-10-14-turbo-speech",
       "date": "2026-10-14",
       "title": "A faster, cleaner speech engine",
