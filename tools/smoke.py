@@ -1870,6 +1870,78 @@ def u_queue_pack():
     return "short item past a long one; no deadline in order; cadence after its voice (queued, paused, done); retry_after"
 
 
+@check("Train tonight instead while that voice trains live isn't both (smallfix2): adding it pauses the live job and moves it to tonight's queue from its resume point; one queue item per person; a voice made from the queue right now is refused")
+def u_queue_live():
+    from undercover.core import jobs as J, worklist
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import api as DA, night, project as P
+    import undercover.doubleagent.cadence  # noqa: F401 - registers newcad
+
+    def refused(fn, word):
+        try:
+            fn()
+        except ModelError as e:
+            assert word in str(e), e
+            return
+        raise AssertionError(f"not refused ({word})")
+    with isolated_data():
+        worklist._STATE = None
+        proj = P.Project.create("Plankton from SpongeBob", "speaking")
+        proj.phrases = [P.Phrase(id="p1", source="s", start=0.0, dur=1.0)]   # something to train on
+        proj.save()
+        job = J.Job("train-auto")
+        job.resume_spec = {"kind": "auto", "project": proj.name, "label": "Making a voice of Plankton"}
+
+        class Ctl:
+            pause = stop = False
+        DA.ACTIVE[proj.name] = {"job": job, "control": Ctl(), "kind": "auto"}
+        try:
+            out = worklist.add("new", "plankton from spongebob", mode="speaking")   # what #da-tonight sends
+            assert "moved" in out and job.pausing, out
+            assert not [i for i in worklist._state()["queue"] if i["kind"] == "new"], "queued as well as live"
+            job.finish("paused", message="Paused.")                              # the training stops at its next step
+            worklist.remember(job)                                               # (jobs.run_job does this)
+        finally:
+            DA.ACTIVE.pop(proj.name, None)
+        q = [i for i in worklist._state()["queue"] if i["state"] == "queued"]
+        assert [(i["kind"], i["target"]) for i in q] == [("project", proj.name)], q
+        assert not worklist._state()["resume"] and not worklist.held(), worklist._state()
+        # one item per person, whichever kind: nothing running now
+        refused(lambda: worklist.add("new", "Plankton from SpongeBob"), "already in the queue")
+        refused(lambda: worklist.add("newcad", "plankton from spongebob"), "already in the queue")
+        worklist.add("newcad", "Kristen Schaal")
+        refused(lambda: worklist.add("new", "kristen schaal", mode="speaking"), "already in the queue")
+        # the voice being made from the queue right now: refused, not paused
+        night_job = J.Job("night")
+        DA.ACTIVE[proj.name] = {"job": night_job, "control": None, "kind": "auto"}
+        try:
+            refused(lambda: worklist.add("new", "Plankton from SpongeBob"), "from tonight's queue right now")
+            assert not night_job.pausing
+        finally:
+            DA.ACTIVE.pop(proj.name, None)
+        worklist._STATE = None
+    return "live Do it all -> paused + moved as its project item; no duplicate; one per person; a queue run refused"
+
+
+@check("starting the queue goes on with its paused items first (smallfix2, ARCHITECTURE known bug 'Paused queue item is skipped'): arming turns them back to queued, in queue order")
+def u_arm_paused():
+    from undercover.core import worklist
+    with isolated_data():
+        worklist._STATE = None
+        st = worklist._state()
+        st["queue"] = [{"id": "a", "kind": "new", "target": "A", "state": "done"},
+                       {"id": "b", "kind": "new", "target": "B", "state": "paused"},
+                       {"id": "c", "kind": "new", "target": "C", "state": "queued"},
+                       {"id": "d", "kind": "new", "target": "D", "state": "paused"}]
+        st["held"] = True
+        worklist.arm("02:00")
+        q = worklist._state()["queue"]
+        assert [i["state"] for i in q] == ["done", "queued", "queued", "queued"] and [i["id"] for i in q] == list("abcd"), q
+        assert worklist._state()["armed"] and not worklist.held()
+        worklist._STATE = None
+    return "paused B and D queued again in place; armed, not held"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -6828,7 +6900,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_queue_live, u_arm_paused, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
