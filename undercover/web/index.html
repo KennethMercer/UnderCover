@@ -296,14 +296,7 @@
     </div>
   </details>
 
-  <div class="go">
-    <div class="summary" id="summary">Drop a song and pick a voice.</div>
-    <div class="go-btns">
-      <button class="btn" id="preview-btn" disabled data-deep>Preview</button>
-      <button class="convert" id="convert" disabled>Convert</button>
-    </div>
-  </div>
-
+  <!-- the versions first (Deep Cover), the convert card below: you try, then you convert -->
   <section class="panel" id="preview" hidden data-deep>
     <div class="hist-head"><h2>Preview</h2><button class="linkbtn" id="preview-close">Close</button></div>
     <div class="prev-top">
@@ -320,6 +313,15 @@
     <div class="bar" id="preview-bar" hidden><i></i></div>
     <div class="prev-grid" id="preview-list"></div>
   </section>
+
+  <div class="go">
+    <div class="summary" id="summary">Drop a song and pick a voice.</div>
+    <div class="go-btns">
+      <button class="btn" id="preview-btn" disabled data-deep>Preview</button>
+      <button class="convert" id="convert" disabled>Convert</button>
+    </div>
+  </div>
+
 
   <div class="sr-only" id="sr-live" aria-live="polite"></div>
   <section class="panel" id="progress" hidden>

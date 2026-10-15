@@ -4769,6 +4769,10 @@ def u_page_rules():
     da = (web / "doubleagent.js").read_text(encoding="utf-8")
     assert "impHtml" in da and 'data-imp-keep' in da and '"/keep"' in da, "DoubleAgent lost the retrained voice's blind A/B"
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
+    # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
+    idx = (web / "index.html").read_text(encoding="utf-8")
+    assert idx.index('id="preview"') < idx.index('id="summary"'), "the Preview panel goes above the summary / Convert card"
+    assert 'if (e.target.closest(".remove")) return;' in app and "S.rmArm" in app and "rmArmed(v.name)" in app, "FrontMan's Remove lost its keyboard path or its armed state across a redraw"
     # IA pass 7: two Set aside / Clean up rows that read the same carry their folder name; nothing ticked never reads "Free 1 kB"
     asd = (web / "aside.js").read_text(encoding="utf-8")
     assert "same(x)" in asd and '"Nothing ticked"' in lib and "const same = n =>" in lib, "identical Set aside / Clean up rows lost their folder name, or the empty Clean up button its words"
