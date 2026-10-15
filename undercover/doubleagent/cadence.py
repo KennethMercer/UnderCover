@@ -1203,6 +1203,11 @@ def _follows(item: dict, other: dict) -> bool:
     return False
 
 
+def _slug(t: str) -> str:
+    from ..core.voices import slug
+    return slug(t)
+
+
 def _shown_voice(item: dict) -> str:
     from .night import shown_voice
     return shown_voice(item)
@@ -1210,5 +1215,10 @@ def _shown_voice(item: dict) -> str:
 
 worklist.register_kind("cadence", run=_run, estimate=estimate, target=_target, follows=_follows, shown=_shown_voice,
                        label=lambda item: f"Cadence for {_shown_voice(item)}")
+def _live_person(person: str):
+    from .night import live_person
+    return live_person(person)
+
+
 worklist.register_kind("newcad", run=_run_new, estimate=estimate,
-                       label=lambda item: f"New voice with cadence: {item['target']}")
+                       label=lambda item: f"New voice with cadence: {item['target']}", person=_slug, live=_live_person)

@@ -32,16 +32,18 @@ CONTROL_LOOKUPS: list = []    # job -> trainer Control (for jobs that don't carr
 
 
 def register_kind(kind: str, run, estimate, target=lambda t: t, label=lambda item: item["target"], follows=None,
-                  shown=lambda item: item["target"], modes: tuple = (), options=None):
+                  shown=lambda item: item["target"], modes: tuple = (), options=None, person=None, live=None):
     """A kind of queue item. run(job, item) -> result dict; estimate(item) -> minutes per step and "total";
     target(text) -> the normalised target (raise ModelError if it's not valid); label(item) -> what the job shows;
     follows(item, other) -> True when item must run after other (a voice's cadence after that voice's training);
     shown(item) -> the target as people read it (a voice's display name; the stored target stays the id);
     modes: the item's optional `mode` values this kind takes (a new voice: speaking / singing / both);
     options(target, body): the add request's own choices for this kind, checked and kept where the run reads them
-    (a queued project's voice name, length, sample rate: what's on screen is what runs); raise ModelError to refuse."""
+    (a queued project's voice name, length, sample rate: what's on screen is what runs); raise ModelError to refuse;
+    person(target) -> whose voice it makes (one queue item per person across these kinds); live(target) -> the job
+    making that voice live right now, if any (adding it pauses that job and moves it to the queue instead)."""
     KINDS[kind] = {"run": run, "estimate": estimate, "target": target, "label": label, "follows": follows, "shown": shown,
-                   "modes": tuple(modes), "options": options}
+                   "modes": tuple(modes), "options": options, "person": person, "live": live}
 
 
 def register_resume(kind: str, start, queue_as=None):
@@ -153,11 +155,16 @@ def hold_one(job, by: str = "you") -> dict:
         st["held_by"] = by
         _save()
         _log(f"pause one: {job.kind} {(getattr(job, 'resume_spec', None) or {}).get('label')}")
-        job.pausing = True
-        ctl = job.control or next((c for c in (look(job) for look in CONTROL_LOOKUPS) if c is not None), None)
-        if ctl is not None:
-            ctl.pause = True
+        _pause_job(job)
     return status()
+
+
+def _pause_job(job):
+    """Ask one job to pause at its next step (its trainer's control too)."""
+    job.pausing = True
+    ctl = job.control or next((c for c in (look(job) for look in CONTROL_LOOKUPS) if c is not None), None)
+    if ctl is not None:
+        ctl.pause = True
 
 
 def remember(job):
@@ -165,6 +172,16 @@ def remember(job):
     spec = getattr(job, "resume_spec", None)
     if not spec:
         return
+    if getattr(job, "then_queue", False) and spec.get("kind") in QUEUE_AS:   # paused to go to tonight's queue (add())
+        try:   # straight to the queue: never on the resume list, where the loop could start it again live
+            add(*QUEUE_AS[spec["kind"]](spec))
+            _log(f"to the queue: {spec.get('label')}")
+            return
+        except ModelError as e:   # held instead, so it waits for the user (Train tonight instead / Resume)
+            _log(f"couldn't move {spec.get('label')} to the queue: {e}")
+            with _LOCK:
+                _state()["held"] = True
+                _save()
     with _LOCK:
         st = _state()
         if spec.get("kind") == "night":
@@ -294,11 +311,33 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None, opti
     if mode and mode not in KINDS[kind]["modes"]:
         raise ModelError("Pick Speaking or Singing." if KINDS[kind]["modes"] else "This kind of work has no Speaking / Singing choice.")
     target = KINDS[kind]["target"](target)   # e.g. a voice that must exist (friendly error if it doesn't)
+    live = KINDS[kind].get("live")
+    job = live(target) if live else None
+    if job is not None and not job.finished:
+        # "Train tonight instead" while that voice trains live: not both. It's paused as Pause does and goes to the
+        # queue as the held list's "Train tonight instead" does (remember -> to_queue), from its resume point.
+        if job.kind == "night":
+            raise ModelError("That voice is being made from tonight's queue right now.")
+        job.then_queue = True
+        _pause_job(job)   # no queue-wide hold: if it ends some other way (done, stopped) nothing is left held
+        _log(f"to the queue when paused: {job.kind} {(getattr(job, 'resume_spec', None) or {}).get('label')}")
+        out = status()
+        out["moved"] = "Paused and moved to tonight's queue: it goes on from where it stopped."
+        return out
+    who = KINDS[kind].get("person")
+    key = who(target) if who else None
     with _LOCK:
         q = _state()["queue"]
-        if any(i["kind"] == kind and i["target"].lower() == target.lower() and i["state"] in ("queued", "paused", "running")
-               for i in q):
-            raise ModelError(f"That's already in the queue ({KINDS[kind]['label']({'kind': kind, 'target': target})}).")
+        for i in q:
+            if i["state"] not in ("queued", "paused", "running"):
+                continue
+            same = i["kind"] == kind and i["target"].lower() == target.lower()
+            if not same and key:   # one item per person: a new voice, a new voice with cadence, a project
+                other = KINDS.get(i["kind"], {}).get("person")
+                same = bool(other) and _person_of(other, i["target"]) == key
+            if same:
+                raise ModelError(f"That's already in the queue "
+                                 f"({KINDS[i['kind']]['label']({'kind': i['kind'], 'target': i['target'], **i})}).")
     if KINDS[kind].get("options"):
         KINDS[kind]["options"](target, options or {})   # checked and kept before the item exists
     item = {"id": uuid.uuid4().hex[:8], "kind": kind, "target": target, "state": "queued",
@@ -321,6 +360,13 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None, opti
             q.append(item)
         _save()
     return status()
+
+
+def _person_of(fn, target: str) -> str | None:
+    try:
+        return fn(target)
+    except Exception:   # noqa: BLE001 - a project gone meanwhile: nobody to compare
+        return None
 
 
 def queued_for(kind: str, target: str) -> dict | None:
@@ -360,6 +406,9 @@ def arm(when: str | None) -> dict:
             st["armed"] = True
             st["settings"]["start_at"] = when or None
             st["held"] = False
+            for it in st["queue"]:   # paused items go on first, in queue order, from their resume point (as Resume)
+                if it.get("state") == "paused":
+                    it["state"] = "queued"
         _save()
     return status()
 

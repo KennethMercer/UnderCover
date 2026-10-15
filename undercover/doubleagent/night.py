@@ -439,11 +439,29 @@ def shown_project(item: dict) -> str:
         return item["target"]
 
 
+def person_of_project(target: str) -> str:
+    from . import project as P
+    return slug(P.Project.load(target).person or target)
+
+
+def live_person(person: str):
+    """The job making this person's voice live right now (prepare / train / Do it all on their project), else None."""
+    proj = _project_named(person)
+    return live_project(proj.name) if proj is not None else None
+
+
+def live_project(name: str):
+    from . import api as DA
+    a = DA.ACTIVE.get(name)
+    return a["job"] if a and not a["job"].finished else None
+
+
 worklist.register_kind("project", run=_project, estimate=estimate, target=_project_target, shown=shown_project,
-                       label=lambda item: f"Training {shown_project(item)} (your choices)", options=_project_options)
+                       label=lambda item: f"Training {shown_project(item)} (your choices)", options=_project_options,
+                       person=person_of_project, live=live_project)
 worklist.register_kind("improve", run=_improve, estimate=estimate, target=_improve_target, shown=shown_voice,
                        label=lambda item: f"Improving {shown_voice(item)}")
 worklist.register_kind("new", run=_new, estimate=estimate,
                        label=lambda item: f"Training a voice of {item['target']}" + (
                            f", then {item['target']}'s cadence" if item.get("mode") == "speaking" else ""),
-                       modes=("speaking", "singing", "both"))
+                       modes=("speaking", "singing", "both"), person=slug, live=live_person)
