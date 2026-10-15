@@ -1805,6 +1805,23 @@ def u_cadence_chain():
                 job = J.Job("night")
                 r = night._new(job, {"kind": kind, "target": "Kris", "mode": "speaking"})
                 assert len(calls) == n and (("cadence" in r) == (made == "kris-uc" and kind == "new")), (made, kind, r, calls)
+            # a Pause or Stop during the cadence: the item ends done (the voice is made), never run again
+            service.train_new_voice = lambda *a, **k: "kris-uc"
+            for exc, word, queued in ((J.Paused, "Paused before its cadence", True), (J.Cancelled, "Stopped before", False)):
+                def stop(job, name, push, control=None, exc=exc):
+                    raise exc()
+                cadence.train = stop
+                worklist._state()["queue"].clear()
+                worklist._save()
+                for kind in ("new", "newcad"):
+                    r = night._new(J.Job("night"), {"kind": kind, "target": "Kris", "mode": "speaking"}) if kind == "new" \
+                        else cadence._run_new(J.Job("night"), {"kind": kind, "target": "Kris"})
+                    assert r["voice"] == "kris-uc" and word in r["note"], (kind, r)
+                q = [i for i in worklist._state()["queue"] if i["kind"] == "cadence" and i["target"] == "kris-uc"]
+                assert bool(q) == queued, (exc, q)
+            cadence.train = lambda job, name, push, control=None: calls.append(name) or {"note": "Cadence made."}
+            worklist._state()["queue"].clear()
+            worklist._save()
             est = night.estimate({"kind": "new", "target": "Kris", "mode": "speaking"})
             assert est["cadence"] == cadence.CADENCE_MIN and "cadence" not in night.estimate({"kind": "new", "target": "Kris"})
             assert "then Kris's cadence" in worklist.KINDS["new"]["label"]({"target": "Kris", "mode": "speaking"})
