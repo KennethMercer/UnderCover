@@ -1142,33 +1142,45 @@ def _run(job, item) -> dict:
 CADENCE_MIN = 9   # minutes a cadence adds after its voice (transcribe 3 + measure 2 + test 4, as estimate() says)
 
 
-def cadence_after(v) -> tuple[bool, str]:
+def cadence_after(v, asked: bool = False) -> tuple[bool, str]:
     """Does a voice just made get its cadence pack now? (yes?, why). Principle 10, the engine is smart: a voice made
     from speech reads in its own manner, not a stand-in Reader's (Trump's Do it all left SpeakEasy reading him with
     bf_emma, a British woman). A singing voice keeps the Reader. A retrained one waiting beside its voice ("-next")
-    gets none: on Keep it takes that voice's cadence, or a cadence is queued for it then (improved.keep)."""
+    gets none: on Keep it takes that voice's cadence, or a cadence is queued for it then (improved.keep).
+    asked: the cadence was asked for with the voice ("newcad"): made whatever the clips were."""
     ex = v.extra or {}
     if ex.get("pending_for"):
         return False, "it waits beside its voice for the blind A/B; its cadence comes when it's kept"
-    if not ex.get("from_speech"):
+    if not ex.get("from_speech") and not asked:
         return False, "a singing voice: SpeakEasy reads it with a Reader"
     if pack_of(v):
         return False, "it has its cadence already"
     return can_train(v)
 
 
-def chain_cadence(job, name: str, push, control=None) -> dict | None:
-    """A voice's cadence right after the voice (Do it all, a queued new voice), when cadence_after says so.
-    -> the cadence result, or None when there's none to make."""
+def chain_cadence(job, name: str, push, control=None, asked: bool = False) -> dict | None:
+    """A voice's cadence right after the voice (Do it all, a queued new voice, newcad), when cadence_after says so.
+    The voice is made by then, so a Pause or Stop here ends the job DONE, never undone or run again (a resumed item
+    would train the whole voice again): Pause queues the cadence (held like the rest), Stop queues nothing.
+    -> {cadence fields..., note}, {"note"} when paused / stopped, or None when there's none to make."""
     try:
         v = get_voice(name)
     except ModelError:   # not in the voices (nothing to read a cadence for)
         return None
-    ok, _why = cadence_after(v)
+    ok, _why = cadence_after(v, asked)
     if not ok:
         return None
-    push("cadence", 0.0, f"Now {label_of(v.name)}'s cadence")
-    c = train(job, v.name, push, control)
+    try:
+        push("cadence", 0.0, f"Now {label_of(v.name)}'s cadence")
+        c = train(job, v.name, push, control)
+    except jobs.Paused:
+        try:
+            worklist.add("cadence", v.name)
+            return {"note": "Paused before its cadence: it waits in tonight's queue."}
+        except ModelError:
+            return {"note": "Paused before its cadence: Train cadence on its card when you like."}
+    except jobs.Cancelled:
+        return {"note": "Stopped before its cadence: Train cadence on its card when you like."}
     return {**{k: c.get(k) for k in ("after", "likeness", "cadence_gap", "wer", "replaced", "data_minutes")},
             "note": c.get("note", "")}
 
@@ -1177,11 +1189,8 @@ def _run_new(job, item) -> dict:
     """A new voice, then its cadence from the same clips (one item: the cadence follows its voice)."""
     from .night import _new
     r = _new(job, item)
-    from ..core.voices import label_of
-    job.push(stage="cadence", frac=0.0, message=f"Now {label_of(r['voice'])}'s cadence")
-    c = train(job, r["voice"], worklist.pusher(job), worklist.control_for(job))
-    return {**r, "cadence": {k: c.get(k) for k in ("after", "likeness", "cadence_gap", "wer", "replaced", "data_minutes")},
-            "note": r["note"] + " " + c.get("note", "")}
+    c = chain_cadence(job, r["voice"], worklist.pusher(job), worklist.control_for(job), asked=True)
+    return {**r, "cadence": c, "note": r["note"] + (" " + c["note"] if c else "")} if c else r
 
 
 def _follows(item: dict, other: dict) -> bool:

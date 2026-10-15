@@ -452,19 +452,9 @@ def start_auto(name: str, b: dict):
         owner = pending_of(name)   # it landed on a voice that's there: it waits
         done = waiting_note(owner) if owner else f"{label_of(name)} is ready in your voices."
         # a voice made from speech goes on to its cadence (principle 10: its own manner, not a Reader's accent)
-        try:
+        try:   # a Pause or Stop in it ends the job done (the voice is made): cadence.chain_cadence
             from . import cadence
             c = cadence.chain_cadence(job, name, push, control)
-        except jobs.Paused:   # the voice is made: only its cadence waits (in the queue, held like the rest)
-            try:
-                worklist.add("cadence", name)
-                later = "Its cadence waits in tonight's queue."
-            except ModelError:
-                later = "Its cadence wasn't made: Train cadence on its card when you like."
-            return job.finish("done", message=f"{done} Paused before its cadence. {later}", voice=name, pending_for=owner)
-        except jobs.Cancelled:   # Stop means stop: the voice stays, nothing more is queued
-            return job.finish("done", message=f"{done} Stopped before its cadence: Train cadence on its card when you "
-                              "like.", voice=name, pending_for=owner)
         finally:
             ACTIVE.pop(proj.name, None)
         job.finish("done", message=f"{done} {c['note']}" if c else done, voice=name, pending_for=owner,
