@@ -4769,6 +4769,9 @@ def u_page_rules():
     da = (web / "doubleagent.js").read_text(encoding="utf-8")
     assert "impHtml" in da and 'data-imp-keep' in da and '"/keep"' in da, "DoubleAgent lost the retrained voice's blind A/B"
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
+    # qa14: the switch's 16 px box is for the checkbox only; the Finish by time field sits inside the same label and drew as a knob
+    css = (web / "app.css").read_text(encoding="utf-8")
+    assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
     assert idx.index('id="preview"') < idx.index('id="summary"'), "the Preview panel goes above the summary / Convert card"

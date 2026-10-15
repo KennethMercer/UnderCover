@@ -2,6 +2,14 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-15-finish-by",
+      "date": "2026-10-15",
+      "title": "Finish by shows its time again",
+      "lines": [
+        "The time next to \"Finish by\" in the overnight queue was squeezed into a dot. It's a normal time field again."
+      ]
+    },
+    {
       "id": "2026-10-15-preview-above",
       "date": "2026-10-15",
       "title": "Preview first, Convert below",
