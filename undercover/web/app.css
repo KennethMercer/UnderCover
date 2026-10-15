@@ -179,7 +179,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--fg); font: inherit; width: 100%; }
 .toggle input:disabled + span { opacity: .6; }
 .toggle { display: flex !important; justify-content: flex-start !important; gap: 10px; align-items: flex-start; font-weight: 500; }
-.toggle input { margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+.toggle > input[type=checkbox] { margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; flex: none; }   /* the switch only: a time field inside the label (Finish by) keeps its own size */
 
 .stages { display: grid; gap: 12px; }
 .stage { display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: center; }
@@ -324,7 +324,7 @@ svg.chart { width: 100%; height: 150px; display: block; }
 .oneshot .big { flex: 1 1 320px; min-width: 0; font: 17px var(--body); padding: 11px 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--fg); }
 .oneshot .go { padding: 11px 22px; font: 600 16px var(--display); }
 .oneshot .toggle { font-weight: 400; font-size: 13.5px; color: var(--muted); align-items: center; }
-.oneshot .toggle input { margin-top: 0; }
+.oneshot .toggle > input[type=checkbox] { margin-top: 0; }
 .os-sub { row-gap: 8px; }
 .ex { display: flex; gap: 6px; flex-wrap: wrap; }
 .ex button { font-size: 12.5px; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 3px 10px; color: var(--muted); }
@@ -765,7 +765,7 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .qtotal b { font-size: 20px; }
 .qadd { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; }
 .qadd input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; color: inherit; font: inherit; }
-.qat input[type=time], #rn-at-time, #rn-finish-time, #q-finish-time { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: inherit; font: inherit; }
+.qat input[type=time], #rn-at-time, #rn-finish-time, #q-finish-time { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: inherit; font: inherit; width: auto; height: auto; min-width: 7.5em; vertical-align: middle; margin: 0 4px; }
 .qlist { display: grid; gap: 8px; }
 .qjob { display: grid; grid-template-columns: 18px 1fr auto; gap: 12px; align-items: start; background: var(--panel-2);
   border: 1px solid var(--line); border-radius: 9px; padding: 12px; }
