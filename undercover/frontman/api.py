@@ -320,15 +320,20 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     else:
         online = [] if prefer_train else service.online_for(person, 2)
         community = [] if prefer_train else inst
-        voice = ({"how": "check", "candidates": [display_name(v) for v in community] + [r.name for r in online],
-                  "candidate_ids": [v.name for v in community] + [r.name for r in online], "name": f"{slug(person)}-uc",
-                  "display": person}
+        cands = {}   # id -> what people read; an online result already installed is listed once
+        for k, d in [(v.name, display_name(v)) for v in community] + [(r.name, r.name) for r in online]:
+            cands.setdefault(k, d)
+        voice = ({"how": "check", "candidates": list(cands.values()), "candidate_ids": list(cands),
+                  "name": f"{slug(person)}-uc", "display": person}
                  if community or online else {"how": "train", "name": f"{slug(person)}-uc", "display": person})
     out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
            "style": req["style"], "voice": voice, "ask": False}
+    here = None if req["style"] else oneshot.library_song(song, artist)   # a version is someone else's cover
     if voice["how"] == "installed":   # from the measured speeds (timings.jsonl), not a fixed "1-3 min"
-        here = None if req["style"] else oneshot.library_song(song, artist)   # a version is someone else's cover
         out["eta_s"] = oneshot.cover_eta(voice["name"], here)
+    elif voice["how"] == "check" and community:   # "Ask me each time" (the user): use one now, check, or train first
+        out["voice_ask"] = True
+        out["voice_choices"] = oneshot.voice_choices(person, community, here)
     if voice["how"] != "installed" or not voice["quality"]["ok"] or subject:
         # what the request names, in plain words (phase 15): a person, a singer, a character, a band; asked when it
         # can't tell ("Which Chris Evans?"), correctable either way (subject=person / character / role:<role>)
