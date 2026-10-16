@@ -1942,6 +1942,70 @@ def u_arm_paused():
     return "paused B and D queued again in place; armed, not held"
 
 
+@check("a one-shot asks which voice when downloaded voices match (smallfix3, 'Ask me each time'): use one now / check against real clips / train a better one, each with its time; /api/auto takes voice_choice and does exactly that; candidate ids listed once; the check's own countdown")
+def u_voice_ask():
+    import inspect
+    from undercover.core.voices import ModelError, get_voice
+    from undercover.frontman import ambiguity, api as FA, oneshot
+    from undercover.doubleagent import service
+    with isolated_data():
+        _voice_dir("plankton-spongebob", {"person": "Plankton"})
+        _voice_dir("plankton-2", {"person": "Plankton"})
+        vs = [get_voice("plankton-spongebob"), get_voice("plankton-2")]
+        ch = oneshot.voice_choices("plankton", vs)
+        assert [c["choice"] for c in ch] == ["use:plankton-spongebob", "use:plankton-2", "check", "train"], ch
+        use, chk, tr = ch[0]["eta_s"], ch[2]["eta_s"], ch[3]["eta_s"]
+        assert use["low"] < chk["low"] < tr["low"] and "trains one" in ch[2]["detail"], ch
+        assert all(oneshot.VOICE_CHOICE.fullmatch(c["choice"]) for c in ch)
+        assert not oneshot.VOICE_CHOICE.fullmatch("use:../x") and not oneshot.VOICE_CHOICE.fullmatch("delete")
+        # the plan: asks, and lists each candidate once (an online result already installed was listed twice)
+        real = (ambiguity.settle, ambiguity.recall, ambiguity.choices_for, service.installed_for, service.online_for,
+                service.subject_of)
+        ambiguity.settle = lambda req, search=None: req
+        ambiguity.recall = lambda *a, **k: None
+        ambiguity.choices_for = lambda *a, **k: []
+        service.installed_for = lambda person: vs
+        service.online_for = lambda person, n: [type("R", (), {"name": "plankton-spongebob"})()]
+        service.subject_of = lambda *a, **k: None
+
+        class H:
+            out = err = None
+
+            def _json(self, obj, status=200):
+                self.out = obj
+
+            def _error(self, msg, status=400):
+                self.err = msg
+        h = H()
+        try:
+            FA._auto_plan(h, "pink pony club as plankton", False)
+        finally:
+            (ambiguity.settle, ambiguity.recall, ambiguity.choices_for, service.installed_for, service.online_for,
+             service.subject_of) = real
+        v = (h.out or {}).get("voice") or {}
+        assert v.get("how") == "check" and v["candidate_ids"] == ["plankton-spongebob", "plankton-2"], (h.out, h.err)
+        assert h.out["voice_ask"] and [c["choice"] for c in h.out["voice_choices"]][-2:] == ["check", "train"]
+        # the answer: "use:" uses that voice as it is, no check; one that's gone is refused
+        real_inst = service.installed_for
+        service.installed_for = lambda person: vs
+        pushed, plan = [], {}
+        try:
+            got = service.resolve_voice(None, "plankton", False, None, lambda *a, **k: pushed.append(a[2]), plan,
+                                        choice="use:plankton-2")
+            assert got.name == "plankton-2" and "your pick" in plan["voice"]["checked"] and "as you picked" in pushed[-1]
+            try:
+                service.resolve_voice(None, "plankton", False, None, lambda *a, **k: None, {}, choice="use:gone-uc")
+                raise AssertionError("a gone voice was used")
+            except ModelError:
+                pass
+        finally:
+            service.installed_for = real_inst
+    src = inspect.getsource(service.resolve_voice)
+    assert "against real clips" in src and 'plan["voice_until"]' in src, "the check's message / its own time"
+    assert 'plan.get("voice_until")' in inspect.getsource(oneshot.run) and "voice_choice" in inspect.getsource(oneshot.start_oneshot)
+    return f"choices use x2 / check / train ({use['low']} < {chk['low']} < {tr['low']} s); ids once; use: used as picked"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -6903,7 +6967,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_queue_live, u_arm_paused, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

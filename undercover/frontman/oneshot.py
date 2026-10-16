@@ -248,7 +248,7 @@ MIN_SUNG = 0.12   # under ~12% of the song with a voiced melody = basically inst
 # ---------------------------------------------------------------- the job
 
 def run(job, text: str, prefer_train: bool = False, song_url: str | None = None, choice: str | None = None,
-        subject: str | None = None):
+        subject: str | None = None, voice_choice: str | None = None):
     from . import songs
     from .pipeline import ENGINE, CoverOptions, history_items
     from ..core.separate import separate
@@ -259,6 +259,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     def push(stage, frac, message, **kw):
         if job.cancel:
             raise jobs.Cancelled()
+        if stage == "voice" and plan.get("voice_until") and kw.get("total_left") is None and kw.get("eta") is None:
+            # the voice step's own estimate (resolve_voice), then the cover: never a training's worst case for a check
+            kw["total_left"] = round(max(5.0, plan["voice_until"] - time.time()) + plan.get("cover_s", 60.0), 1)
         job.push(stage=stage, frac=round(frac, 3), message=message, plan=plan,
                  elapsed=round(time.perf_counter() - t0, 1), **kw)
 
@@ -293,7 +296,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             plan["subject"] = subject_of(person, subject)
         except Exception:
             plan["subject"] = None
-    if not [v for v in installed_for(person) if v.extra.get("trained")]:
+    if not [v for v in installed_for(person) if v.extra.get("trained")] and not (voice_choice or "").startswith("use:"):
         import threading
         early = threading.Thread(target=_prefetch_voice_sources, args=(person, plan.get("subject")), daemon=True,
                                  name="voice-prefetch")
@@ -381,6 +384,12 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             plan["song"]["skipped"] = skipped
         return x["meta"], x["song"], x["stems"], x["hz"]
     meta, song, stems, song_hz = use(versions[0])
+    try:   # the cover's own time, for the voice step's countdown
+        from .pipeline import CoverOptions, estimate
+        plan["cover_s"] = estimate(song, CoverOptions(voice="v", quality="high", dereverb=True, karaoke=True,
+                                                      backing_voice="v", polish=True))["total"]
+    except Exception:   # noqa: BLE001 - a minute, as before
+        pass
 
     # 2. voice
     if early:
@@ -397,7 +406,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             jobs.run_job(other, fn)
     control.service = service
     try:
-        v = resolve_voice(job, person, prefer_train, control, push, plan)
+        v = resolve_voice(job, person, prefer_train, control, push, plan, choice=voice_choice)
     except jobs.Paused:
         # Resume continues this one-shot, not a new one: the same song, and straight back to its voice's training
         # (the project keeps its clips and its training's resume point) when that had started
@@ -478,6 +487,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     push("cover", 0.0, f"Making the cover with {label_of(v.name)}", total_left=est["total"])
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
     item = next((h for h in history_items() if h["id"] == res.id), None)
+    for k in ("voice_until", "cover_s"):   # the countdown's own numbers, not part of what was planned
+        plan.pop(k, None)
     job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
                plan=plan, seconds=res.seconds, notes=res.notes, elapsed=round(time.perf_counter() - t0, 1), quality=q)
 
@@ -533,13 +544,40 @@ def cover_options_of(opts: "CoverOptions") -> dict:
     return {k: v for k, v in asdict(opts).items() if k != "voice" and v is not None}
 
 
+VOICE_CHOICE = re.compile(r"check|train|use:[a-z0-9][a-z0-9-]*")
+
+
+def voice_choices(person: str, voices: list, song: Path | None = None) -> list[dict]:
+    """The plan's voice question ("Ask me each time", the user's decision) when installed voices that weren't trained
+    here match: use one now, check them against real clips first, or train a better one first, each with its time.
+    -> [{choice, label, voice?, eta_s: {low, high}, detail?}] (the page sends `choice` back as voice_choice)."""
+    from ..core.voices import display_name
+    from ..doubleagent.service import check_estimate_s, train_estimate_s
+    out = [{"choice": f"use:{v.name}", "voice": v.name, "label": f"Use {display_name(v)} now",
+            "eta_s": {k: x for k, x in cover_eta(v.name, song).items() if k != "song_here"}} for v in voices]
+    cover = out[0]["eta_s"] if out else cover_eta("", song)
+    chk, tr = check_estimate_s(person, len(voices)), train_estimate_s(person)
+    n = len(voices)
+    out.append({"choice": "check", "label": f"Check {'them' if n > 1 else 'it'} against real clips first",
+                "eta_s": {"low": round(chk + cover["low"]), "high": round(chk + cover["high"])},
+                "detail": f"Uses one if it sounds like {person}; if none does, it trains one (about "
+                          f"{round(tr / 60)} min more)."})
+    out.append({"choice": "train", "label": f"Train a better {person} voice first",
+                "eta_s": {"low": round(tr + cover["low"]), "high": round(tr + cover["high"])}})
+    return out
+
+
 def start_oneshot(body: dict):
-    """Queue a one-shot cover (from the page, or Resume after a pause)."""
+    """Queue a one-shot cover (from the page, or Resume after a pause). voice_choice: the answer to the plan's voice
+    question (voice_choices)."""
     from .pipeline import cancel_presep
     text = (body.get("text") or "").strip()
     req = ambiguity.settle(parse_request(text))   # friendly error now rather than inside the job
     choice = (body.get("choice") or "").strip() or None
     subject = (body.get("subject") or "").strip() or None   # the user's pick from the plan line (phase 15)
+    voice_choice = (body.get("voice_choice") or "").strip() or None
+    if voice_choice and not VOICE_CHOICE.fullmatch(voice_choice):
+        raise ModelError("Pick one of the voice choices the plan offered.")
     key = ambiguity.song_key(req["song"], req["artist"])
     if req["artist"] is None and choice:
         ambiguity.remember(key, choice, ambiguity.cached_choices(req["song"]))   # until a different song is requested
@@ -554,10 +592,10 @@ def start_oneshot(body: dict):
     jobs.JOBS[job.id] = job
     job.resume_spec = {"kind": "oneshot", "text": text, "prefer_train": bool(body.get("prefer_train")),
                        "song_url": body.get("song_url") or None, "choice": choice, "subject": subject,
-                       "label": f"One-shot: {text}"}
+                       "voice_choice": voice_choice, "label": f"One-shot: {text}"}
     job.push(stage="queued", frac=0, message="Waiting for the GPU", plan={"request": text})
     jobs.GPU_QUEUE.put((job, lambda job: run(job, text, bool(body.get("prefer_train")), body.get("song_url") or None, choice,
-                                             subject)))
+                                             subject, voice_choice)))
     return job
 
 
