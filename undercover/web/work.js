@@ -457,7 +457,7 @@ $("#q-name").addEventListener("input", () => {
     }).join("") || `<p class="meta">Nothing found.</p>`;
     $$("#q-sugg [data-name]").forEach(b => b.onclick = async () => {
       b.disabled = true;
-      try { W.last = await api("/api/work/add", { json: { kind: "new", target: b.dataset.name } }); b.textContent = "In the queue"; renderQueue(); }
+      try { W.last = await api("/api/work/add", { json: { kind: "new", target: b.dataset.name } }); b.textContent = "In the queue"; renderQueue(); workMoved(W.last); }
       catch (e) { b.disabled = false; showError(e.message, "Couldn't add that"); }
     });
   }, 450);
@@ -477,6 +477,13 @@ setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden 
 document.addEventListener("uc:module", e => { if (e.detail === "doubleagent") { loadQueue(); loadCandidates(); } });
 
 // a job finished somewhere (this page, another tab, the queue, the API): refresh what it may have changed
+// /api/work/add answers `moved` when that voice was training live right now: it is paused and put in tonight's queue (it goes on from where it stopped).
+// Said instead of "Added to tonight"; returns true when it was.
+function workMoved(r) {
+  if (!r || !r.moved) return false;
+  showError(r.moved, "Moved to tonight", null, true);
+  return true;
+}
 document.addEventListener("uc:jobdone", e => {
   const k = e.detail.kind;
   if (!["train", "train-auto", "train-export", "train-prepare", "train-transcribe", "night", "install", "auto"].includes(k)) return;

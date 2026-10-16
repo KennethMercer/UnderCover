@@ -597,7 +597,17 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .rn-li .linkbtn[data-goto]:hover { color: var(--fg); }
 
 /* the voice lab's A/B ("Listen and choose", phase 9): the card opens across the row; two readings, A and B */
-.vc:has(#cad-ab) { grid-column: 1 / -1; }
+.vc:has(#cad-ab), .vc:has(.vc-own) { grid-column: 1 / -1; }
+.vc-own { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.vc-own .row { gap: 10px; flex-wrap: wrap; }
+.vc-own .seg { justify-self: start; }
+/* "Your voices" filters: a row of chips per kind of fact; pressing the pressed one clears it */
+.vfilters { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 12px; }
+.vf-group { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.vf-group small { margin-right: 2px; }
+.fchip { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 11px; font-size: 13px; cursor: pointer; }
+.fchip:hover { color: var(--fg); }
+.fchip[aria-pressed="true"] { color: var(--fg); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 #cad-ab { display: grid; gap: 12px; padding-top: 4px; }
 .ab-q { display: grid; gap: 2px; }
 .ab-q b { font-size: 15px; }
