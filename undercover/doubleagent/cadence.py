@@ -1181,8 +1181,8 @@ def chain_cadence(job, name: str, push, control=None, asked: bool = False) -> di
             return {"note": "Paused before its cadence: Train cadence on its card when you like."}
     except jobs.Cancelled:
         return {"note": "Stopped before its cadence: Train cadence on its card when you like."}
-    return {**{k: c.get(k) for k in ("after", "likeness", "cadence_gap", "wer", "replaced", "data_minutes")},
-            "note": c.get("note", "")}
+    return {**{k: c[k] for k in ("after", "likeness", "cadence_gap", "wer", "replaced", "data_minutes")
+               if c.get(k) is not None}, "note": c.get("note", "")}
 
 
 def _run_new(job, item) -> dict:
