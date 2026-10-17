@@ -5492,6 +5492,13 @@ def u_page_rules():
     assert 'id="clear-backing"' in app and "function drawPlan" in osj and "data-cad-go" in da and "jfTimer" in jb and "saveStartTime" in work, "a pass-9 page fix is gone"
     # smallfix6 hooks: a tonight add that starts now / waits, queue rows that wait, no times of the page's own in the one-shot
     assert "starts_now" in work and "waits_next_night" in work and "trainWords" in osj and "about 1 hour" not in osj and "about 1 hour" not in ix, "a smallfix6 hook or an estimator time is gone"
+    # qa17 (the consultant's small batch): one press on the one-shot with the time in the button; basic says "speak", Deep says "cadence"; the night's work is "tonight";
+    # the real-person line once; Deep Cover's first flip has its line; empty states are one line and one button; no legend under Your voices
+    sej = (web / "speakeasy.js").read_text(encoding="utf-8")
+    assert "function syncGo" in osj and "Press the button again" not in osj and "const PERSON_WARN" in app and 'id="deep-first"' in ix, "the one-shot's one press, the warning line or the first-flip line is gone"
+    assert "cadence ✓" not in sej and "Find clips + cadence" not in sej and "Speak the way" in ix and "tonight instead" not in ix.lower() and "Overnight queue" not in ix and "both open DoubleAgent" not in ix, "a retired word is back (cadence in basic, 'instead', the overnight queue)"
+    assert "Nothing on file yet." in lib and 'class="empty"' in da and "No one to speak yet." in sej and "Nothing for tonight." in work, "an empty state lost its one line and one button"
+    assert ".nodeep" in css and 'id="da-voices-say" hidden' in ix, "Your voices has its legend back, or Deep no longer replaces the word with the number"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
