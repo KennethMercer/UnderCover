@@ -154,7 +154,7 @@ function renderRunRoom() {
   const w = W.last, work = W.work || {};
   // now: the job the user waits for first is the lit one; any others are rows under it
   const [main, ...rest] = byWait(runningJobs());
-  let now = `<p class="meta rn-idle">Nothing running right now. Covers, speech and voice work show here while they run.</p>`;
+  let now = `<section class="panel rn-idle-panel"><div class="rn-lbl"><b>Now</b></div><p class="meta rn-idle">Nothing running right now. Covers, speech and voice work show here while they run.</p></section>`;
   if (main) {
     const owner = ownerOf(main.kind), f = jobProgress(main), left = main.total_left ?? main.eta, line = jobLine(main, false);
     now = `<div class="rn-now" data-owner="${owner}"><div class="who">${MOD_NAME[owner]} · ${esc(JOB_KIND[main.kind] || main.kind)}</div>
@@ -335,21 +335,47 @@ function renderQueue() {
   $("#q-awake").checked = w.settings.keep_awake !== false;
   renderReport(w.report);
 }
+// The report gathers everything since the last Dismiss, so it's "While you were out", with its real range in days ("yesterday 15:14 to today 13:20").
+const reportDay = d => { const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), n = Math.round((day(new Date()) - day(d)) / 864e5);
+  return n < 1 ? "today" : n < 2 ? "yesterday" : n < 7 ? d.toLocaleDateString(undefined, { weekday: "long" }) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" }); };
+function reportRange(a, z) {
+  const at = s => s ? new Date(String(s).replace(" ", "T")) : null, s = at(a), e = at(z);
+  if (!s || isNaN(s)) return "";
+  const hm = d => d.toTimeString().slice(0, 5);
+  if (!e || isNaN(e)) return `from ${reportDay(s)} ${hm(s)}`;
+  return reportDay(s) === reportDay(e) ? `${reportDay(s)} ${hm(s)} to ${hm(e)}` : `${reportDay(s)} ${hm(s)} to ${reportDay(e)} ${hm(e)}`;
+}
+// What a result says in words. The server's `outcome` when it gives one (better | same | not_better | waiting | new); until it does, from what the result carries:
+// a retrained voice waiting for the ear (pending) is not "kept the old", and a brand-new voice (new, new voice + cadence) had no old one to keep.
+const REPORT_WORDS = { better: "better", same: "about the same", not_better: "not better: yours is kept", waiting: "waiting for your ear", new: "new voice" };
+function reportOutcome(x) {
+  if (x.outcome) return x.outcome;
+  if (x.state !== "done") return "";
+  if (["new", "newcad"].includes(x.kind)) return "new";
+  if (x.pending) return "waiting";
+  if (x.replaced) return "better";
+  return x.before != null || x.after != null ? "not_better" : "";
+}
+const REPORT_PLAIN = { waiting: "Listen to both on its card and keep the one you like.", not_better: "The retrained one didn't beat it, so your voice stays." };
 function renderReport(r) {
   const box = $("#q-report");
   box.hidden = !r || !r.results?.length;
   if (box.hidden) return;
-  $("#q-report-when").textContent = `Ran ${r.started}${r.finished ? " – " + r.finished.slice(11) : ""} · ${r.results.length} job${r.results.length > 1 ? "s" : ""}`;
+  $("#q-report-when").textContent = `${reportRange(r.started, r.finished)} · ${r.results.length} job${r.results.length > 1 ? "s" : ""}`;
   $("#q-report-list").innerHTML = r.results.map(x => {
-    const score = x.before != null || x.after != null
-      ? `${x.before != null ? x.before.toFixed(2) + " → " : ""}${x.after != null ? x.after.toFixed(2) : "?"}${x.replaced ? " ✓ replaced" : x.kind === "new" ? " ✓ new" : x.state === "done" ? " · kept the old" : ""}` : x.state;
-    const what = x.kind === "improve" ? (x.replaced ? "improved" : "tried") : x.kind === "cadence" ? (x.replaced ? "cadence" : "cadence tried")
+    const oc = reportOutcome(x);
+    const what = x.kind === "improve" ? (x.replaced ? "improved" : x.pending ? "retrained" : "tried") : x.kind === "cadence" ? (x.replaced ? "cadence" : "cadence tried")
       : x.kind === "newcad" ? "new voice + cadence" : "new voice";
+    const words = x.before_word && x.after_word && x.before_word !== x.after_word ? `${likeWord(x.before_word)} → ${likeWord(x.after_word)}` : likeWord(x.after_word || x.before_word);
+    const numbers = x.before != null || x.after != null ? `${x.before != null ? x.before.toFixed(2) + " → " : ""}${x.after != null ? x.after.toFixed(2) : "?"}` : "";
     const cad = x.kind === "cadence" ? x : x.cadence;   // cadence numbers: Deep Cover only
     const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: likeness ${cad.likeness} · gap ${cad.cadence_gap} · WER ${cad.wer} · from ${cad.data_minutes} min</p>` : "";
-    const up = x.replaced || (["new", "newcad"].includes(x.kind) && x.state === "done");
-    return `<div class="qres"><div><b>${esc(x.voice ? voiceDisplay(x.voice) : x.display || x.target)}</b> ${what}<p class="meta">${esc(x.note || "")}</p>${deep}</div>
-      <div class="mono ${up ? "up" : "same"}" ${x.kind === "cadence" ? "data-deep" : ""}>${esc(score)}</div></div>`;
+    const raw = x.note || "";
+    const hasNum = /\d\.\d{2,}/.test(raw);   // the server's note quotes the scores: Deep Cover; basic says it plainly
+    const plain = hasNum ? REPORT_PLAIN[oc] || "" : raw;
+    const up = oc === "better" || oc === "new" || oc === "waiting";
+    return `<div class="qres"><div><b>${esc(x.voice ? voiceDisplay(x.voice) : x.display || x.target)}</b> ${what}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
+      <div class="qres-r"><span class="${up ? "up" : "same"}">${oc ? esc(REPORT_WORDS[oc] || oc) : esc(x.state)}</span>${words ? `<span class="meta">${words}</span>` : ""}${numbers ? `<span class="mono meta" data-deep>${esc(numbers)}</span>` : ""}</div></div>`;
   }).join("");
 }
 function dragSort() {
