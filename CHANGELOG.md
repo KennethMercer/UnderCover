@@ -32,6 +32,11 @@ named in brackets.
 - One question on FrontMan, one Tonight in the Running room, Storage in two groups, one sticky band on a phone.
 - Plainer words everywhere; times from one estimator; confirmations that can't be double-clicked.
 
+**A tidier app folder** (layout)
+- The root holds the README, the changelog and the app's folders. The default settings ship in
+  `undercover/config.default.toml`; your `config.toml` keeps only what differs, and an older full one is slimmed
+  once at start, with the full file kept beside it.
+
 **SpeakEasy** (phase 23, smallfix7)
 - Chatterbox-Turbo is the default cadence engine: about twice as fast, cleaner on hard words.
 

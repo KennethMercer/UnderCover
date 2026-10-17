@@ -1,5 +1,6 @@
-# UnderCover configuration: all paths and defaults live here.
-# Relative paths are resolved against this file's folder.
+# UnderCover's default settings. They ship with the code: don't edit them on a PC.
+# Your own settings go in config.toml in the app folder (only what differs from these); UnderCover writes there when
+# you change something. Relative paths are resolved against the app folder.
 
 [gpu]
 # Substring of the GPU name to use. Picks the 7900 XTX over the integrated Radeon graphics.

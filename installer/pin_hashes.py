@@ -78,7 +78,7 @@ def line(name: str, version: str, hashes: list[str]) -> str:
 
 
 def cadence_names() -> list[str]:
-    text = (ROOT / "constraints.txt").read_text(encoding="utf-8")
+    text = (ROOT / "installer" / "constraints.txt").read_text(encoding="utf-8")
     block = text.split("# Cadence engine", 1)[1]
     return [norm(m.group(1)) for m in re.finditer(r"(?m)^([A-Za-z0-9_.\-]+)==", block)]
 

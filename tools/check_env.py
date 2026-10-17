@@ -1,18 +1,18 @@
 """Verify the ROCm PyTorch environment.
 
-    python check_env.py          full report + FP16/FP32 matmul benchmark
-    python check_env.py --quick  fast guard to run after every pip install
+    python tools/check_env.py          full report + FP16/FP32 matmul benchmark
+    python tools/check_env.py --quick  fast guard to run after every pip install
 
 Exits non-zero if torch is not the ROCm build or the configured GPU isn't usable.
 """
 import os
 import sys
 import time
-import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-CONFIG = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from undercover.core.config import CONFIG  # noqa: E402  (the defaults + the user's config.toml; sets the GPU env)
 GPU_CFG = CONFIG["gpu"]
 
 if GPU_CFG.get("hip_visible_devices"):

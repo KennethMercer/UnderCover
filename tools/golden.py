@@ -188,14 +188,21 @@ def _verdicts(run: str) -> dict:
 def _config():
     """golden/config.toml: the app's config with every path inside golden/ (models read from the app folder)."""
     src = (APP / "config.toml") if (APP / "config.toml").exists() else ROOT / "config.toml"
-    text = src.read_text(encoding="utf-8")
+    text = src.read_text(encoding="utf-8") if src.exists() else ""   # a fresh install has no user file: all defaults
     import re
     w = (GOLDEN / "work").as_posix()
     paths = (f"[paths]\nmodels_dir = '{(APP / 'models').as_posix()}'\nvoices_dir = '{(GOLDEN / 'voices').as_posix()}'\n"
              f"cache_dir = '{w}/cache'\noutput_dir = '{w}/output'\nlogs_dir = '{w}/logs'\nuploads_dir = '{w}/uploads'\n")
-    text = re.sub(r"\[paths\][^\[]*", paths + "\n", text, count=1)
+    # (the user's config.toml holds only what differs from the defaults: a section may be missing, so it's added)
+    text = re.sub(r"\[paths\][^\[]*", paths + "\n", text, count=1) if re.search(r"(?m)^\[paths\]", text) else text + "\n" + paths
     if os.environ.get("GOLDEN_CADENCE_ENGINE"):   # a phase checks its engine before it is the app's own setting
-        text = re.sub(r'(?m)^engine\s*=\s*".*"', f'engine = "{os.environ["GOLDEN_CADENCE_ENGINE"]}"', text, count=1)
+        eng = f'engine = "{os.environ["GOLDEN_CADENCE_ENGINE"]}"'
+        if re.search(r'(?m)^engine\s*=\s*".*"', text):
+            text = re.sub(r'(?m)^engine\s*=\s*".*"', eng, text, count=1)
+        elif re.search(r"(?m)^\[cadence\]", text):
+            text = re.sub(r"(?m)^\[cadence\][ \t]*$", lambda m: m.group(0) + "\n" + eng, text, count=1)
+        else:
+            text += f"\n[cadence]\n{eng}\n"
     _write_text(GOLDEN / "config.toml", text)
     os.environ["UNDERCOVER_CONFIG"] = str(GOLDEN / "config.toml")
 
