@@ -24,7 +24,7 @@
   shipped manifest's. Update is the user's choice: the installed folder moves aside to voices/.agent-smoke-previous (its
   meta.json renamed, so the voice list doesn't show it), the shipped one goes in, the name the user gave it stays.
   Undo swaps them back. One previous build is kept; the next update replaces it.
-- **The demo voice** "Agent Smoke" (`undercover/assets/demo-voice/agent-smoke/`, made by tools/make_demo_voice.py):
+- **The demo voice** "Agent Smoke" (`undercover/assets/demo-voice/agent-smoke/`, made by scripts/make_demo_voice.py):
   copied into voices_dir when it isn't there. Its meta says demo: true, trained: false; nothing treats its "person" as
   someone to search for (core/voices.is_demo). The user may delete it; Replay brings it back.
 Seeding only adds; it never replaces or deletes anything of the user's.
@@ -197,28 +197,28 @@ def seed_song() -> str | None:
 
 def demo_files() -> str | None:
     """Why the shipped demo voice can't be used (None: its files match manifest.json). The model files aren't in git:
-    tools/make_demo_voice.py makes them, the installer packs them."""
+    scripts/make_demo_voice.py makes them, the installer packs them."""
     import hashlib
     try:
         man = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return "the demo voice has no manifest.json: run tools/make_demo_voice.py"
+        return "the demo voice has no manifest.json: run scripts/make_demo_voice.py"
     if not (DEMO / "meta.json").is_file():
-        return "the demo voice's meta.json is missing: run tools/make_demo_voice.py"
+        return "the demo voice's meta.json is missing: run scripts/make_demo_voice.py"
     for name, want in (man.get("files") or {}).items():
         f = DEMO / name
         if not f.is_file():
-            return f"the demo voice's {name} isn't here (it isn't kept in git): run tools/make_demo_voice.py"
+            return f"the demo voice's {name} isn't here (it isn't kept in git): run scripts/make_demo_voice.py"
         if f.stat().st_size != want.get("size"):
-            return f"the demo voice's {name} isn't the one its manifest names: run tools/make_demo_voice.py"
+            return f"the demo voice's {name} isn't the one its manifest names: run scripts/make_demo_voice.py"
         h = hashlib.sha256()
         with open(f, "rb") as fh:
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 h.update(chunk)
         if h.hexdigest() != want.get("sha256"):
-            return f"the demo voice's {name} doesn't match its manifest's SHA-256: run tools/make_demo_voice.py"
+            return f"the demo voice's {name} doesn't match its manifest's SHA-256: run scripts/make_demo_voice.py"
     if "model.pth" not in (man.get("files") or {}):
-        return "the demo voice's manifest names no model.pth: run tools/make_demo_voice.py"
+        return "the demo voice's manifest names no model.pth: run scripts/make_demo_voice.py"
     return None
 
 

@@ -387,6 +387,30 @@ def startup_entry(on: bool, target, folder=None, icon=None) -> bool:
     return True
 
 
+def repoint_shortcuts(old, new, folders=None) -> list[str]:
+    """Shortcuts (.lnk) whose target is `old` aimed at `new` instead (their arguments, working folder and icon kept):
+    the desktop (where Windows keeps it, OneDrive's too) and the Start menu with its Startup folder. folders: tests pass
+    their own, and every folder is searched to any depth then. -> the shortcuts changed."""
+    if not WINDOWS:
+        raise _not("Moving shortcuts")
+    q = lambda s: str(s).replace("'", "''")   # noqa: E731 - a PowerShell single-quoted string
+    # (hashtables, not pairs: PowerShell flattens a one-item list of arrays into its items)
+    if folders is not None:
+        where = "@(" + ", ".join(f"@{{p='{q(f)}'; r=$true}}" for f in folders) + ")"
+    else:   # the desktop's own shortcuts only; the Start menu (Startup is inside it) to any depth
+        where = "@(@{p=[Environment]::GetFolderPath('Desktop'); r=$false}, @{p=[Environment]::GetFolderPath('Programs'); r=$true})"
+    ps = (f"$sh = New-Object -ComObject WScript.Shell; $old = '{q(old)}'; $new = '{q(new)}'; "
+          f"foreach ($w in {where}) {{ $d = $w.p; if (-not $d -or -not (Test-Path -LiteralPath $d)) {{ continue }}; "
+          "Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse:$w.r -ErrorAction SilentlyContinue | ForEach-Object { "
+          "$l = $sh.CreateShortcut($_.FullName); if ($l.TargetPath -ieq $old) { $l.TargetPath = $new; $l.Save(); "
+          "Write-Output $_.FullName } } }")
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                       timeout=60, creationflags=NO_WINDOW)
+    if r.returncode:
+        raise OSError(f"The shortcuts couldn't be moved: {(r.stderr or r.stdout).strip()[:200]}")
+    return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+
+
 # ---------------------------------------------------------------- the system's own reports
 
 def run_text(cmd: list, timeout: float = 20) -> str:

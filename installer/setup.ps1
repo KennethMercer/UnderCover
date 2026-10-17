@@ -6,7 +6,7 @@
 .DESCRIPTION
   Everything goes inside -InstallDir (default: the folder above this script), so uninstalling is
   deleting that folder. Nothing system-wide is changed: no PATH edits, no registry, no admin.
-  The app code (undercover\, with its default settings, and tools\check_env.py) must already be in -InstallDir; the
+  The app code (undercover\, with its default settings, and scripts\check_env.py) must already be in -InstallDir; the
   Inno Setup installer copies it there before running this.
 
   Re-running is safe: finished steps are skipped (use -Force to redo the Python packages).
@@ -57,7 +57,7 @@ foreach ($v in 'LibraryDir', 'WorkDir', 'ModelsDir') {
 }
 
 # Pinned tool versions + the SHA-256 of every download. Bump deliberately (releases at least 2 weeks old), take the
-# hash from the release page (GitHub shows each asset's sha256), then re-test with tools\smoke.py --full.
+# hash from the release page (GitHub shows each asset's sha256), then re-test with tests\smoke.py --full.
 $UvVersion    = '0.12.18'   # 2026-09-22
 $UvSha256     = 'cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff'
 $DenoVersion  = '2.9.7'     # 2026-09-17
@@ -402,7 +402,7 @@ if ($addonIds.Count) {
 }
 
 # 8. Launcher --------------------------------------------------------------------------------
-# Same behaviour as UnderCover.bat (dev): from the Start menu / a shortcut (started by Explorer) it runs in the
+# Same behaviour as scripts\UnderCover.bat (dev): from the Start menu / a shortcut (started by Explorer) it runs in the
 # background with no window (quit it from SafeHouse); from a terminal it stays in that window. --console / --background
 # force either.
 if (-not $Fix.launcher) { Info "Launcher: already there" } else {

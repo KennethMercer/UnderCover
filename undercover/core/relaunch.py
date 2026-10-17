@@ -5,7 +5,7 @@ leaves the old process stuck in the driver. So the old server spawns this small 
 exits, and the helper starts the new server only once the old process is gone.
 
     python -m undercover.core.relaunch <old_pid> [server args...]
-    python -m undercover.core.relaunch 0          (UnderCover.bat double-clicked: start windowless, nothing to wait for)
+    python -m undercover.core.relaunch 0          (scripts/UnderCover.bat double-clicked: start windowless, nothing to wait for)
 """
 import subprocess
 import sys
@@ -25,7 +25,7 @@ def main():
     logs = ROOT / "logs"
     logs.mkdir(exist_ok=True)
     with open(logs / "server.log", "a", encoding="utf-8") as log:
-        if old_pid == 0:   # UnderCover.bat double-clicked: a fresh start in the background, no window
+        if old_pid == 0:   # scripts/UnderCover.bat double-clicked: a fresh start in the background, no window
             log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] start: in the background (no window)\n")
         else:
             ok = wait_for_exit(old_pid)

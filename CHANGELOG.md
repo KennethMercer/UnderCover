@@ -33,7 +33,9 @@ named in brackets.
 - Plainer words everywhere; times from one estimator; confirmations that can't be double-clicked.
 
 **A tidier app folder** (layout)
-- The root holds the README, the changelog and the app's folders. The default settings ship in
+- The root holds the README, the changelog and the app's folders: `undercover/`, `installer/`, `scripts/` (UnderCover.bat
+  and the other things you run) and `tests/`. Shortcuts to the old UnderCover.bat follow it once, by themselves.
+  The default settings ship in
   `undercover/config.default.toml`; your `config.toml` keeps only what differs, and an older full one is slimmed
   once at start, with the full file kept beside it.
 

@@ -7,7 +7,7 @@ fell out of the window leaves:
     kept   -> nothing happens (it stays in SafeHouse);
     unkept -> its files and its history line are deleted (through core/storage.remove_files, logged in logs/server.log).
 
-Safety, by construction (each is proved in tools/smoke.py's "keep or roll off" check):
+Safety, by construction (each is proved in tests/smoke.py's "keep or roll off" check):
 - `leaver()` returns at most ONE item per call: the TRAY_SIZE + 1'th newest. Anything older than that left the window at
   an earlier finish (or before this feature existed) and is never touched by a later roll-off, so a long history of
   unkept tracks from before the feature can't be swept away, and a failed delete can't cause a bigger one later.

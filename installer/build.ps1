@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $py = Join-Path $root '.venv\Scripts\python.exe'
 
-# 0. What ships from disk is whole (phase 25): Agent Smoke's binaries aren't in git (tools/make_demo_voice.py makes
+# 0. What ships from disk is whole (phase 25): Agent Smoke's binaries aren't in git (scripts/make_demo_voice.py makes
 #    them), so they're checked against their manifest; the sample song, its classified full version and the greetings
 #    must be there. A build that would ship a broken First assignment stops here.
 Push-Location $root

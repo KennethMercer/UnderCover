@@ -1,6 +1,6 @@
 """Build the demo voice "Agent Smoke" (phase 17): an RVC voice trained from Kokoro's synthetic reader, not a real person.
 
-    .venv\\Scripts\\python.exe tools\\make_demo_voice.py [--minutes 20] [--reader bm_george]
+    .venv\\Scripts\\python.exe scripts\\make_demo_voice.py [--minutes 20] [--reader bm_george]
 
 Everything happens in smoke's sandbox server (scratch library, cache and voices; the real models read only), never in the
 user's folders:
@@ -30,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tests"))   # smoke: its sandbox server
 
 GUTENBERG = "https://www.gutenberg.org/cache/epub/974/pg974.txt"
 OUT = ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke"
@@ -133,7 +133,7 @@ def write_manifest(reader: str):
     (OUT / "manifest.json").write_text(json.dumps({
         "voice": "agent-smoke", "made": time.strftime("%Y-%m-%d"), "reader": f"Kokoro {reader} (Apache-2.0)",
         "text": "Joseph Conrad, The Secret Agent (1907), Project Gutenberg #974, public domain",
-        "recipe": "tools/make_demo_voice.py", "files": files}, indent=1) + "\n", encoding="utf-8")
+        "recipe": "scripts/make_demo_voice.py", "files": files}, indent=1) + "\n", encoding="utf-8")
     return files
 
 

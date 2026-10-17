@@ -52,7 +52,7 @@ def _cmd(which: str) -> list:
     if which in CMD:
         return list(CMD[which])
     fake = os.environ.get("UNDERCOVER_TAILSCALE_FAKE")
-    if fake and storage.ALLOWED_ROOTS is not None:   # a sandbox server in smoke: tools/fake_tailscale.py, test mode only
+    if fake and storage.ALLOWED_ROOTS is not None:   # a sandbox server in smoke: tests/fake_tailscale.py, test mode only
         import sys
         return [sys.executable, fake, "daemon" if which == "tailscaled" else "cli"]
     daemon, cli = platform.tailscale_names()
