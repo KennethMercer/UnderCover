@@ -151,8 +151,9 @@ def candidates() -> list:
             c["likeness"] = trained_likeness(v)
             item = {"kind": "improve", "target": v.name}
             c.update(person=person, kind="improve", target=v.name, can=True,
-                     note=("more of their singing (album tracks), fresh training, kept only if better" if c["singing"]
-                           else "more of their speech, fresh training, kept only if better")
+                     note=("more of their singing (album tracks), fresh training; the new one waits beside it for you "
+                           "to listen" if c["singing"]
+                           else "more of their speech, fresh training; the new one waits beside it for you to listen")
                      + ("" if proj is not None else " · its clips were cleaned up, so they're prepared again"))
         elif voice_person(v):   # checked, or a guess from its name (renaming the display corrects it)
             person = voice_person(v)

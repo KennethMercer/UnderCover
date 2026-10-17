@@ -2064,19 +2064,19 @@ def u_person_guess():
         _voice_dir("agent-smoke", {"demo": True})
         got = {n: (voice_person(get_voice(n)), person_guessed(get_voice(n))) for n in
                ("squidward-tentacles", "charliekirkrvc2", "plankton-x", "agent-smoke", "tr-uc")}
-        assert got["squidward-tentacles"] == ("Squidward Tentacles", True) and got["charliekirkrvc2"] == ("Charliekirk", True), got
+        assert got["squidward-tentacles"] == ("Squidward Tentacles", True) and got["charliekirkrvc2"] == (None, False), got   # one unknown word: no guess (P9-5)
         assert got["plankton-x"] == ("Plankton", False) and got["agent-smoke"] == (None, False), got
-        set_display("squidward-tentacles", "Squidward")       # the user corrects it by renaming the display
+        set_display("squidward-tentacles", "Squid Ward")      # the user corrects it by renaming the display
         v = get_voice("squidward-tentacles")
-        assert voice_person(v) == "Squidward" and v.dir.name == "squidward-tentacles" and "person" not in v.extra
+        assert voice_person(v) == "Squid Ward" and v.dir.name == "squidward-tentacles" and "person" not in v.extra
         real = C.engine_ready
         C.engine_ready = lambda e: True
         try:
-            assert cadence.can_train(v) == (True, "finds clips of Squidward first")
+            assert cadence.can_train(v) == (True, "finds clips of Squid Ward first")
             assert not cadence.can_train(get_voice("agent-smoke"))[0]
             rows = {c["voice"]: c for c in night.candidates()}
             assert rows["squidward-tentacles"]["can"] and rows["squidward-tentacles"]["person_guessed"], rows["squidward-tentacles"]
-            assert rows["squidward-tentacles"]["target"] == "Squidward" and not rows["plankton-x"]["person_guessed"]
+            assert rows["squidward-tentacles"]["target"] == "Squid Ward" and not rows["plankton-x"]["person_guessed"]
         finally:
             C.engine_ready = real
         # the name guard is as before: another voice's folder is refused, a new name isn't
@@ -2094,12 +2094,18 @@ def u_person_guess():
 def u_tonight():
     from datetime import datetime
     from undercover.core import worklist
-    real = worklist.estimate
+    real = worklist.estimate, worklist.datetime
+    evening, night = datetime(2026, 10, 16, 20, 0), datetime(2026, 10, 17, 2, 30)
+
+    class Evening(datetime):   # the answers are read in the evening, whatever the clock says
+        @classmethod
+        def now(cls, tz=None):
+            return evening
     worklist.estimate = lambda i: {"total": 30}
+    worklist.datetime = Evening
     try:
         with isolated_data():
             worklist._STATE = None
-            evening, night = datetime(2026, 10, 16, 20, 0), datetime(2026, 10, 17, 2, 30)
             out = worklist.add("new", "Kristen Schaal")
             st = worklist._state()
             assert st["armed"] and not st.get("start_now") and out["starts_at"] == "23:00" and out.get("start_default"), out
@@ -2132,7 +2138,7 @@ def u_tonight():
             assert worklist.next_item(st, evening)["target"] == "Kristen Schaal" and st["settings"]["start_at"] == "23:00"
             worklist._STATE = None
     finally:
-        worklist.estimate = real
+        worklist.estimate, worklist.datetime = real
     return "arms for 23:00 (default, said) / 02:00 (saved); evening no, night yes; empty disarms; Start now one-time"
 
 
@@ -2185,6 +2191,77 @@ def u_p8_small():
     rises = [b - a for a, b in zip(lefts, lefts[1:])]
     assert max(lefts) <= lefts[0] * 1.15 and max(rises) < 10, (lefts[0], max(lefts), max(rises))
     return f"hold lifted; gone candidate hidden; plain texts; check 640 s measured; time left {lefts[0]:.0f}-{max(lefts):.0f} s"
+
+
+@check("Internal Affairs pass 9 (smallfix6): an open night starts now and counts from now (P9-1); Finish by's waiting items said, never promised (P9-2); a person guessed only from a name (P9-5); one reading per name, a show from a downloaded voice, no sources about the word (P9-6); no 'kept only if better'; failed rows say failed")
+def u_p9():
+    import inspect
+    from datetime import datetime
+    from undercover.core import worklist
+    from undercover.core.voices import get_voice, voice_person, voices_dir
+    from undercover.doubleagent import cadence, night, project as P, service, sources, subject
+    real = worklist.estimate, worklist.datetime
+    clock = [datetime(2026, 10, 17, 1, 36)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+    worklist.datetime = Clock
+    try:
+        with isolated_data():
+            worklist._STATE = None
+            worklist.estimate = lambda i: {"total": i.get("_m", 30) if "_m" in i else (48 if i["target"].startswith("Morgan") else 20)}
+            st = worklist._state()
+            st["settings"]["start_at"] = "23:00"
+            out = worklist.add("new", "Kristen Schaal")          # 01:36, the night already on: it starts now
+            assert out["starts_at"] == "01:36" and out["starts_now"] and out["done_by"] == "01:56", out
+            st["queue"].clear(); st["armed"] = False
+            clock[0] = datetime(2026, 10, 16, 20, 0)
+            st["settings"].update(start_at="06:30", finish_by="07:00")
+            out = worklist.add("improve" if "improve" in worklist.KINDS and False else "new", "Morgan Freeman")
+            assert out.get("waits_next_night") and out["done_by"] is None and out["waits"] == 1, out
+            out = worklist.add("new", "Jon Stewart")             # 20 min fits before 7:00
+            rows = {r["target"]: r for r in out["queue"]}
+            assert rows["Morgan Freeman"].get("waits_next_night") and not rows["Jon Stewart"].get("waits_next_night")
+            assert out["start"] == "06:30" and out["done_by"] == "06:50" and not out.get("waits_next_night"), out
+            worklist._STATE = None
+            # P9-5: a person guessed only from a name
+            _voice_dir("model-v2-final", {})
+            _voice_dir("obama", {})
+            _voice_dir("squid-fan", {})
+            m = json.loads((voices_dir() / "squid-fan" / "meta.json").read_text(encoding="utf-8"))
+            m["display"] = "Squid Ward (SpongeBob)"
+            (voices_dir() / "squid-fan" / "meta.json").write_text(json.dumps(m), encoding="utf-8")
+            assert voice_person(get_voice("model-v2-final")) is None and voice_person(get_voice("obama")) is None
+            P.Project.create("Barack Obama", "speaking")
+            assert voice_person(get_voice("obama")) == "Barack Obama"   # one word, a name UnderCover has met
+            assert voice_person(get_voice("squid-fan")) == "Squid Ward"
+            rows = {c["voice"]: c for c in night.candidates()}
+            assert not rows["model-v2-final"]["can"], rows["model-v2-final"]      # no guess: Train my own
+            # P9-6: one reading per name; a downloaded "(SpongeBob)" makes a character
+            reads = iter([{"kind": "person", "label": "x is a real person"}, {"kind": "character", "label": "x is a character"}])
+            real_cls = subject.classify
+            subject.classify = lambda name, *a, **k: next(reads)
+            try:
+                first = service.subject_of("Kristen Schaal")
+                assert service.subject_of("Kristen Schaal") == first and first["kind"] == "person", "the reading flipped"
+                assert service.subject_of("Squid Ward")["kind"] == "character"          # the shown show wins
+                assert service.subject_of("Squid Ward")["show"] == "spongebob"
+                service.subject_of("Kristen Schaal", "character")                       # the user's pick is kept
+                assert service.subject_of("Kristen Schaal")["kind"] == "character"
+            finally:
+                subject.classify = real_cls
+    finally:
+        worklist.estimate, worklist.datetime = real
+        worklist._STATE = None
+    rx = sources.ABOUT_THE_WORD
+    assert rx.search("The Secret Life of Plankton | TED-Ed") and rx.search("Episode 216 - Plankton | Common Descent")
+    assert not rx.search("Plankton's best moments | SpongeBob") and not rx.search("Plankton: every scene, season 3")
+    assert "only if better" not in inspect.getsource(night.candidates)
+    assert "if c.get(k) is not None" in inspect.getsource(cadence.chain_cadence)
+    assert '"outcome": state' in inspect.getsource(worklist._run_item)
+    return "01:36 starts now (done 01:56); 48-min waits, 20-min runs (done 06:50); Final -> none, Obama -> Barack Obama; reading kept"
 
 
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
@@ -7232,7 +7309,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
