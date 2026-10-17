@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-17-improve-words",
+      "date": "2026-10-17",
+      "title": "Improve says what changed",
+      "lines": [
+        "When Improve offers a retrained voice, the side-by-side says what it measured, in words. Your ear still decides.",
+        "An Improve that found nothing new says so in the report, instead of \"about the same\"."
+      ]
+    },
+    {
       "id": "2026-10-17-consult-structure",
       "date": "2026-10-17",
       "title": "One question on FrontMan, one Tonight, a tidier Storage",

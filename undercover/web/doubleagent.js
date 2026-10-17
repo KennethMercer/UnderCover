@@ -252,9 +252,9 @@ function impHtml(voice) {
       <audio preload="none" src="${esc(w === "new" ? st.new_url : st.current_url)}?v=${a.stamp}"></audio>
       <button class="btn" type="button" data-imp-keep="${w}" ${a.busy ? "disabled" : ""}>Keep ${impLetter(st, w)}</button></div>`;
   return `<div id="imp-ab" data-voice="${esc(voice)}">
-    <div class="ab-q"><b>Which sounds more like them?</b><span class="meta">Both read the same line. One is ${esc(voiceDisplay(voice))} as it is, the other was retrained overnight.</span></div>
+    <div class="ab-q"><b>Which sounds more like them?</b><span class="meta">Both read the same line. One is ${esc(voiceDisplay(voice))} as it is, the other was retrained overnight.</span>${st.words ? `<span class="ab-words">What changed, measured: ${esc(st.words)}. Your ear decides.</span>` : ""}</div>
     <div class="ab-sides">${impOrder(st).map(side).join("")}</div>
-    <small class="meta" data-deep>likeness ${st.before ?? "?"} → ${st.after ?? "?"}${st.minutes ? ` · ${Math.round(st.minutes)} min of audio` : ""}${st.made ? ` · made ${esc(st.made)}` : ""}</small>
+    <small class="meta" data-deep>likeness ${st.before ?? "?"} → ${st.after ?? "?"}${st.minutes ? ` · ${Math.round(st.minutes)} min of audio` : ""}${st.made ? ` · made ${esc(st.made)}` : ""}${st.measures ? ` · ${esc(measuresText(st.measures))}` : ""}</small>
     <p class="meta">The one you keep is the voice from then on; the other is set aside, never deleted, and you can undo it.</p>
     ${a.err ? `<p class="meta">${esc(a.err)}</p>` : ""}</div>`;
 }
