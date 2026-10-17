@@ -3,6 +3,7 @@
 // ($, $$, esc, api, showError, store, fmtTime, fmtSecs, S, renderSong, refreshEstimate, loadVoices, showResult, loadHistory).
 
 const OS = { es: null, job: null, timer: null, t0: 0, planSeq: 0, planTimer: null, last: null, vchoice: null };
+// the first time a real person's voice is about to be made, one calm line (consult 6: PERSON_WARN in app.js): here on the plan when it will train
 
 // ------------------------------------------------------------ plan preview (no downloads)
 // Phase 15: the voice's quality gate. A weak voice (it doesn't sound like them, too little clean audio, or a character
@@ -68,20 +69,36 @@ const pickedVoice = p => p.voice_ask ? (p.voice_choices || []).find(c => c.choic
 function voiceAskHtml(p) {
   if (!p.voice_ask) return "";
   const n = (p.voice_choices || []).filter(c => c.choice.startsWith("use:")).length;
-  return `<div id="os-voice-ask" class="os-subject-ask"${OS.vchoice ? "" : ' role="alert"'}><div class="choice-q"><b>Which voice?</b> ${n > 1 ? `${n} voices` : "A voice"} you didn't train here already match${n > 1 ? "" : "es"} ${esc(p.person)}.</div>
+  const count = n === 1 ? "One voice from the community already matches." : `${["", "", "Two", "Three", "Four", "Five"][n] || n} voices from the community already match.`;
+  return `<div id="os-voice-ask" class="os-subject-ask"${OS.vchoice ? "" : ' role="alert"'}><div class="choice-q"><b>Which ${esc(p.person)}?</b> ${count}</div>
     <div class="choices">${p.voice_choices.map(c => `<button class="choice" type="button" data-os-vchoice="${esc(c.choice)}" aria-pressed="${c.choice === OS.vchoice}"><b>${esc(c.label)}</b><small>${esc(etaWords(c.eta_s))}${c.detail ? ` · ${esc(c.detail)}` : ""}</small></button>`).join("")}</div></div>`;
 }
 function voiceLine(v, p) {
+  const who = esc(p?.person || v?.display || v?.name || "");
   if (p?.voice_ask) {
     const c = pickedVoice(p);
-    return !c ? `<span class="warn">pick one below</span>` : c.voice ? `<b>${vname(c.voice)}</b> <span class="meta">used now, not checked against real clips</span>`
-      : c.choice === "check" ? `<span class="meta">checked against real clips first; one that sounds like them is used, none: it trains one</span>`
-      : `<span class="warn">trains <b>${esc(v.display || v.name)}</b> first</span>`;
+    return !c ? `<span class="warn">pick one below</span>` : c.voice ? `<b>${vname(c.voice)}</b>, used as it is`
+      : c.choice === "check" ? `a ${who} voice from the community, checked against real clips first`
+      : `a new <b>${who}</b> voice, trained first`;
   }
   if (!v) return "";
-  if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
-  if (v.how === "check") return `<span class="meta">a community voice, checked against real clips first; one that sounds even somewhat like them makes a quick cover, said so; none: it trains one</span><span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b> · ~2 GB while training</span>`;
-  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first<span data-deep> (~2 GB while training)</span></span>`;
+  if (v.how === "installed") return `<b>${vname(v.name)}</b>, your voice${v.trained ? ", trained here" : ""}`;
+  if (v.how === "check") return `a ${who} voice from the community, checked against real clips first<span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b>; none close enough trains one (~2 GB while training)</span>`;
+  return `none yet: a new <b>${who}</b> voice is trained first<span class="meta" data-deep> (~2 GB while training)</span>`;
+}
+// how the plan goes: "train" (a voice first), "check" (community voices first), "installed" (a voice of yours), or "" (no plan, or a pick missing)
+function planPath(p) {
+  if (!p) return "";
+  if (p.voice_ask) { const c = pickedVoice(p); return !c ? "" : c.choice === "train" ? "train" : c.choice === "check" ? "check" : "installed"; }
+  return p.voice?.how || "";
+}
+// the button says what one press does, with its time inside (consult 2: no second press, no sentence with a semicolon)
+function syncGo(p) {
+  const btn = $("#os-go"), path = planPath(p);
+  const t = p && path ? planTime(p) : "";
+  const short = t ? t.split(";")[0].replace(/ to check$/, "") : "";   // a time with a branch in it ("a few minutes to check; about 47 min if…") keeps the branch on the card
+  btn.textContent = !path ? "Make it" : path === "train" ? `Train a voice, then make it${short ? ` · ${short}` : ""}`
+    : path === "check" && p.voice_ask ? `Check, then make it${short ? ` · ${short}` : ""}` : `Make it${short ? ` · ${short}` : ""}`;
 }
 function planTime(p) {
   if (p.voice_ask) { const c = pickedVoice(p); return c ? etaWords(c.eta_s) : "depends on your pick"; }
@@ -91,7 +108,7 @@ function planTime(p) {
     return hi < 1 ? "under a minute" : lo >= hi ? `about ${Math.max(1, hi)} min` : `about ${lo}–${hi} min`;
   }
   const v = p.voice?.how, tr = trainWords(p);   // no number of the page's own: training's is the estimator's, a quick cover's the plan's
-  return v === "train" ? tr || "…" : v === "check" ? `a few minutes to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
+  return v === "train" ? tr || "about an hour" : v === "check" ? `a few minutes to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
 }
 const trainWords = p => { const e = estWords("new", p.person, "singing"); if (!e && p.person && !EST.asked.has(estKey("new", p.person, "singing"))) estimateFor("new", p.person, "singing").then(() => { if (OS.last?.plan === p) drawPlan(p); }); return e; };
 // An ambiguous song title ("Hello"): the plan lists the songs it could be as a choice card (#auto-choices: a question, then one
@@ -120,12 +137,12 @@ function renderChoices(p) {
   });
 }
 function planKey() { return $("#os-text").value.trim() + "|" + $("#os-train").checked + "|" + (OS.subject || ""); }
-function resetGo() { OS.confirmFor = null; $("#os-go").textContent = "Make it"; }
+function resetGo() { syncGo(OS.last?.plan && OS.last.key === planKey() ? OS.last.plan : null); }   // the button follows the plan in hand, else it's plain "Make it"
 async function previewPlan() {
   const text = $("#os-text").value.trim();
   const seq = ++OS.planSeq;
   const key = planKey();
-  if (!text) { $("#os-plan").innerHTML = "Name a song and a voice. UnderCover gets the album version of the song from YouTube, finds (or trains) the voice, and makes the cover with the best settings."; return; }
+  if (!text) { $("#os-plan").innerHTML = "Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest."; syncGo(null); return; }
   try {
     const p = await api(`/api/auto/plan?text=${encodeURIComponent(text)}&train=${$("#os-train").checked ? 1 : 0}${OS.subject ? "&subject=" + encodeURIComponent(OS.subject) : ""}`);
     if (seq !== OS.planSeq) return;
@@ -139,14 +156,15 @@ async function previewPlan() {
 }
 // the plan card from a plan (again on a pick, from the plan already in hand: no new request, so "pick one below" is gone at once)
 function drawPlan(p) {
-  {
-    const songLine = p.style ? `${/^[aeiou]/i.test(p.style) ? "an" : "a"} <b>${esc(p.style)}</b> version of “${esc(p.song_query)}” (a cover from YouTube that has singing in it)`
-                             : `“${esc(p.song_query)}” (album version from YouTube)`;
-    const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
-    $("#os-plan").innerHTML = `<div class="os-plan-grid"><span>🎵 <b>Song</b><br>${songLine}</span><span>🎤 <b>Voice</b><br>${voiceLine(p.voice, p)}</span><span>⏱ <b>Time</b><br>${planTime(p)}</span></div>${hint}${subjectHtml(p)}${voiceAskHtml(p)}${p.voice_ask ? "" : qualityHtml(p.voice)}`;
-    bindQuality(); bindSubject(); bindVoiceAsk();
-    renderChoices(p);
-  }
+  // three plain lines (consult 2): the song, the voice, the time. No emoji, no branch list; the branches are Deep Cover's.
+  const songLine = p.style ? `<b>${esc(p.song_query)}</b>, ${/^[aeiou]/i.test(p.style) ? "an" : "a"} ${esc(p.style)} version (a cover with singing in it)`
+                           : `<b>${esc(p.song_query)}</b>, the album version`;
+  const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
+  const warn = planPath(p) === "train" && !personWarned() ? `<p class="meta" id="os-warn">${PERSON_WARN}</p>` : "";
+  $("#os-plan").innerHTML = `<div class="os-plan-grid"><span class="k">Song</span><span>${songLine}</span><span class="k">Voice</span><span>${voiceLine(p.voice, p)}</span><span class="k">Time</span><span>${planTime(p)}</span></div>${hint}${subjectHtml(p)}${voiceAskHtml(p)}${p.voice_ask ? "" : qualityHtml(p.voice)}${warn}`;
+  bindQuality(); bindSubject(); bindVoiceAsk();
+  renderChoices(p);
+  syncGo(p);
 }
 $("#os-text").addEventListener("input", () => { resetGo(); OS.choice = null; OS.subject = null; OS.vchoice = null; $("#auto-choices").hidden = true; clearTimeout(OS.planTimer); OS.planTimer = setTimeout(previewPlan, 500); });
 $("#os-text").addEventListener("keydown", e => { if (e.key === "Enter") $("#os-go").click(); });
@@ -168,17 +186,7 @@ $("#os-go").onclick = async () => {
     if (last.plan.ask && !OS.choice) { $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Pick which song first.</b>`); return; }
     if (last.plan.subject?.ask && !OS.subject) { $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Pick which one first.</b>`); return; }
     if (last.plan.voice_ask && !OS.vchoice) { $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Pick a voice first.</b>`); return; }
-    const how = last.plan.voice_ask ? (OS.vchoice === "train" ? "train" : OS.vchoice === "check" ? "check" : "installed") : last.plan.voice?.how;
-    if ((how === "train" || how === "check") && OS.confirmFor !== key) {
-      OS.confirmFor = key;
-      const pk = last.plan.voice_ask ? pickedVoice(last.plan) : null;   // the picked path's own time, not the fixed words
-      const tw = trainWords(last.plan);
-      btn.textContent = how === "train" ? `Train a voice + make it${pk ? ` (${etaWords(pk.eta_s)})` : tw ? ` (${tw})` : ""}`
-        : pk ? `Check, then make it (${etaWords(pk.eta_s)})` : `Make it (checks first; trains only if no voice comes close${tw ? `, ${tw}` : ""})`;
-      $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Press the button again to go ahead.</b>`);
-      return;
-    }
-    resetGo();
+    if (planPath(last.plan) === "train") store.set("uc-person-warned", true);   // the line was on the card; said once
     const picked = last.plan.voice_ask ? pickedVoice(last.plan) : null;
     OS.pathEta = picked ? (picked.eta_s.low + picked.eta_s.high) / 2 : null; OS.pathAt = performance.now();   // the countdown starts from the whole picked path
     const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined, subject: OS.subject || undefined, voice_choice: last.plan.voice_ask ? OS.vchoice : undefined } });
