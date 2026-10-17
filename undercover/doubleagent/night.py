@@ -6,10 +6,10 @@ pickers for the queue: candidates (voices that can be improved) and lookup (name
 """
 import json
 
-from ..core.config import CONFIG, path
-from ..core.voices import ModelError, label_of, person_guessed, slug, voice_person
 import numpy as np
 
+from ..core.config import CONFIG, path
+from ..core.voices import ModelError, label_of, person_guessed, slug, voice_person
 from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
@@ -325,13 +325,16 @@ def _improve(job, item) -> dict:
             st["improve"] = {"left_out": gate["left_out"], "kept_min": round(kept_min, 1), "old_min": round(old_min, 1),
                              "added_min": round(max(0.0, kept_min - old_min), 1), "recipe": how, "why": why}
             st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"], length="auto", voice_name=cand, seed=1234)
+            if how == "refine" and old.sr and int(old.sr) != int(st["sr"]):   # the weights wouldn't fit another rate's model
+                how, why = "scratch", f"your voice was made at {int(old.sr) // 1000} kHz and this project trains at {int(st['sr']) // 1000} kHz"
+                st["improve"].update(recipe=how, why=why)
             if how == "refine":   # R4: continue from the approved voice's weights, gently, on the new clips
                 st.update(init_from=str(old.pth), lr=frozen.REFINE_LR, steps=frozen.refine_steps(max(0.0, kept_min - old_min) or kept_min))
             proj.save()
         if gate["kept_min"] < frozen.GATE_MIN_KEPT_MIN:
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
-                proj.train.pop("voice_name", None)
+                proj.train["voice_name"] = old.name   # the form's name stays the voice's own (P3-2)
                 proj.save()
             left = "; ".join(f"{x['title'][:40]} ({x['why']})" for x in gate["left_out"][:4])
             return {"voice": old.name, "candidate": None, "replaced": False, "pending": False, "kept": True,
@@ -360,19 +363,30 @@ def _improve(job, item) -> dict:
     export_voice(proj, name=cand, overwrite=True)
     engine = frozen.GpuEngine(conv, SpeakerEmbedder())
     old = get_voice(old.name)
-    frozen.ensure(old, proj, engine, push=lambda f, m: push("night", 0.93 + 0.03 * f, m))   # lazily: its first Improve
-    verdict = frozen.judge(old, get_voice(cand), engine, push=lambda f, m: push("night", 0.96 + 0.03 * f, m))
     kept_min = round(proj.kept_seconds() / 60, 1)
     plan = proj.train.get("improve") or {}
+    with P.lock(proj.name):
+        pr = P.Project.load(proj.name)
+        pr.train["exported"] = old.name   # the installed voice is still the old one
+        pr.train["voice_name"] = old.name   # the training form's name again (not the candidate's: P3-2)
+        pr.save()
+    try:
+        frozen.ensure(old, proj, engine, push=lambda f, m: push("night", 0.93 + 0.03 * f, m))   # lazily: its first Improve
+        verdict = frozen.judge(old, get_voice(cand), engine, push=lambda f, m: push("night", 0.96 + 0.03 * f, m))
+    except (jobs.Cancelled, jobs.Paused):
+        raise
+    except Exception as e:   # noqa: BLE001 - a candidate that can't be judged is never left loose as "<voice>-next"
+        why = jobs.friendly(e, "comparing the voices")
+        aside = set_aside(get_voice(cand).dir, note={"why": f"Improve's attempt, not judged: {why}",
+                                                    "display": f"{label_of(old.name)}: Improve's attempt", "measures": plan})
+        gpu.forget_voice(cand)
+        return {"voice": old.name, "candidate": None, "replaced": False, "pending": False, "kept": True, "tried": plan,
+                "aside": aside.name, "note": f"The new voice couldn't be compared with yours ({why}), so {label_of(old.name)} "
+                "is kept as it is. The attempt is in Storage → Set aside."}
     before, after = verdict["before"], verdict["after"]
     # Internal Affairs P2-1: the ear decides, and the user's voice is never deleted. An offered candidate waits BESIDE
     # the current one (pending); one that doesn't clear the bar parks in Set aside with its numbers. Neither touches
     # the current voice.
-    with P.lock(proj.name):
-        proj = P.Project.load(proj.name)
-        proj.train["exported"] = old.name   # the installed voice is still the old one
-        proj.train["voice_name"] = old.name   # the training form's name again (not the candidate's: P3-2)
-        proj.save()
     tried = {**plan, "minutes": kept_min, "terms": verdict["terms"], "compare": {c: {k: v for k, v in d.items() if k in ("n", "id", "hnr", "contrast")}
                                                                                 for c, d in verdict["compare"].items()}}
     left = "; ".join(f"{x['title'][:40]} ({x['why']})" for x in plan.get("left_out", [])[:3])

@@ -1198,6 +1198,8 @@ def freeze_test(name: str, push=None):
         conv = gpu.MODELS.converter
         frozen.ensure(v, proj, frozen.GpuEngine(conv, SpeakerEmbedder()),
                       push=lambda f, m: (push or (lambda *a, **k: None))("test", f, m))
+    except (jobs.Cancelled, jobs.Paused):   # Stop means stop, and a Pause lands: never swallowed here
+        raise
     except Exception as e:   # noqa: BLE001 - the test comes at the first Improve instead
         print(f"frozen test for {name}: not made now ({type(e).__name__}: {e}); the first Improve makes it", flush=True)
 
