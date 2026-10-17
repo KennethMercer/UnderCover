@@ -46,6 +46,7 @@ function queueDrawer(open) {
 $("#wb-more").onclick = () => queueDrawer(true);
 // the strip's "Running" link: SafeHouse's Running room (now, tonight's queue, recent)
 $("#wb-open").onclick = () => { queueDrawer(false); location.hash = "#safehouse/running"; window.scrollTo({ top: 0 }); };
+$("#qd-open").onclick = () => { queueDrawer(false); location.hash = "#safehouse/running"; window.scrollTo({ top: 0 }); };   // Tonight is edited in one place, SafeHouse's Running room (consult 4)
 $("#qd-close").onclick = $("#q-scrim").onclick = () => queueDrawer(false);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#q-drawer").hidden) queueDrawer(false); });
 // "+ New voice" / "Train a new voice tonight": DoubleAgent's line; "+ Improve a voice": its voice cards (Improve tonight)

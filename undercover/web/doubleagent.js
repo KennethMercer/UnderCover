@@ -25,7 +25,11 @@ async function loadSamples() {
 function renderVoiceCards(cands) {
   DA.cands = cands || []; noteVoices(DA.cands);
   const box = $("#da-cards");
-  if (!DA.cands.length) { box.innerHTML = `<p class="meta">No voices yet. Name a person above, or install one from FrontMan's search.</p>`; $("#da-more").hidden = true; renderDaOutcome(); return; }
+  if (!DA.cands.length) {
+    box.innerHTML = `<div class="empty"><b>No voices yet.</b>${typeof assignBrief === "function" ? `<button class="btn" type="button" id="da-empty-assign">Take the first assignment</button>` : ""}<small class="meta">or name someone above</small></div>`;
+    $("#da-empty-assign")?.addEventListener("click", () => assignBrief());
+    $("#da-more").hidden = true; renderDaOutcome(); return;
+  }
   const running = new Set((W.last?.queue || []).filter(i => i.state === "running").map(i => i.target));
   daFilters();
   // voices trained here first (they can be improved), then the downloaded ones
@@ -37,13 +41,14 @@ function renderVoiceCards(cands) {
     const busy = running.has(c.target), cd = c.cadence || {};
     const im = DA.imp[c.voice];
     // basic: the likeness in a word (the server's; the page never sets the cut-offs), where it came from, what it's doing
+    const like = likeWord(c.likeness_word, "likeness"), num = c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : "";
     const origin = c.demo ? "demo voice · not a real person"
-      : [likeWord(c.likeness_word, "likeness"), c.trained ? "trained here" : "downloaded"].filter(Boolean).join(" · ");
-    const state = cd.queue === "running" ? "learning to speak" : cd.queue ? "learning to speak tonight" : "";
+      : [like || num ? `${like ? `<span class="nodeep">${like}</span>` : ""}${num ? `<span data-deep>${num}</span>` : ""}` : "", c.trained ? "trained here" : "downloaded"].filter(Boolean).join(" · ");
+    const state = cd.queue === "running" ? "learning to speak" : cd.queue ? "learns to speak tonight" : "";
     const status = [state && `<span class="st now">${state}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
     const speaks = cd.has || c.demo ? `<svg class="ico vc-speaks" role="img" aria-label="Can speak in SpeakEasy"><title>Can speak in SpeakEasy</title><use href="#g-speakeasy"/></svg>` : "";
     const facts = [c.trained ? (c.singing ? "singing" : c.singing === false ? "speech" : "") : c.person ? `downloaded · ${esc(c.person)}` : "",
-                   c.minutes ? `${Math.round(c.minutes)} min` : "", c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : ""].filter(Boolean).join(" · ");
+                   c.minutes ? `${Math.round(c.minutes)} min` : ""].filter(Boolean).join(" · ");
     const improve = c.demo ? "" : !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}" aria-expanded="${DA.own?.voice === c.voice}">${DA.own?.voice === c.voice ? "Close" : "Train my own"}</button>`
       : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy || im?.candidate ? "disabled" : ""}>${busy ? "Improving now" : c.queued ? "In tonight's queue" : im?.candidate ? "Retrained one waiting" : "Improve tonight"}</button>`;
     const impOpen = DA.impAb?.voice === c.voice;
@@ -53,7 +58,7 @@ function renderVoiceCards(cands) {
     const abOpen = DA.ab?.voice === c.voice;
     const abBtn = cd.pending ? `<button class="mini" type="button" data-cad-ab="${esc(c.voice)}" aria-expanded="${abOpen}">${abOpen ? "Close" : "Listen and choose"}</button>` : "";
     const cadDeep = cd.has ? `<small class="meta" data-deep>cadence: ${esc(cd.engine || "")} · ${cd.data_minutes ?? "?"} min · likeness ${cd.scores?.likeness ?? "?"} · gap ${cd.scores?.cadence_gap ?? "?"}</small>` : "";
-    const cadBtn = !cd.can || cd.queue ? "" : cd.has ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}" data-deep>Retrain its speaking</button>`
+    const cadBtn = !cd.can || cd.queue ? "" : cd.has ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}" data-deep>Retrain its cadence</button>`
       : `<button class="mini" type="button" data-cad="${esc(c.voice)}" aria-expanded="${DA.cad?.voice === c.voice}" title="${esc(cd.why || "")}">${DA.cad?.voice === c.voice ? "Close" : "Let it speak"}</button>`;
     return `<div class="vc ${busy ? "busy" : ""}">
       <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice, false)}${speaks}</b><small>${origin}</small></div></div>
@@ -85,7 +90,7 @@ function renderVoiceCards(cands) {
       const mins = (await estimateFor("cadence", voice))?.total;
       showError(now ? `${name} is learning how they talk${mins ? ` (${etaWords({ low: mins * 60, high: mins * 60 })})` : ""}. The bar at the top shows how far; Pause is there too.`
                     : `${name} learns how they talk tonight.${startsNote(W.last)} SafeHouse's Running room shows it.`, now ? "Learning to speak" : "Added to tonight", null, true);
-    } catch (e) { b.disabled = false; b.textContent = now ? "Learn now" : "Tonight instead"; showError(e.message, "Couldn't start the cadence"); }
+    } catch (e) { b.disabled = false; b.textContent = now ? "Learn now" : "Tonight"; showError(e.message, "Couldn't start it"); }
   });
   $$("[data-cad-ab]", box).forEach(b => b.onclick = () => openAb(b.dataset.cadAb));
   const fresh = $("#cad-ab", box);
@@ -142,7 +147,7 @@ const abOrder = st => [...String(st.pending.id)].reduce((n, c) => n + c.charCode
 const abLetter = (st, w) => "AB"[abOrder(st).indexOf(w)];
 function abHtml() {
   const a = DA.ab, st = a.st;
-  if (!st || !st.ready) return `<div id="cad-ab" data-voice="${esc(a.voice)}"><p class="meta">${esc(a.err || (st ? "Making a short reading with each cadence…" : "Loading…"))}</p></div>`;
+  if (!st || !st.ready) return `<div id="cad-ab" data-voice="${esc(a.voice)}"><p class="meta">${esc(a.err || (st ? "Making a short reading each way…" : "Loading…"))}</p></div>`;
   const side = w => {
     const s = st[w], sc = s.scores || {}, L = abLetter(st, w);
     return `<div class="ab-side" data-side="${w}">
@@ -157,7 +162,7 @@ function abHtml() {
     <div class="ab-q"><b>Which sounds more like them?</b><span class="meta">Both read the same line: “${esc(st.line)}”</span></div>
     <div class="ab-sides">${abOrder(st).map(side).join("")}</div>
     <textarea id="cad-ab-why" rows="2" placeholder="What did you hear? (optional)">${esc(a.why || "")}</textarea>
-    <p class="meta">The one you keep is the voice's cadence from then on; the other is set aside, not deleted.</p>
+    <p class="meta">The one you keep is how the voice speaks from then on; the other is set aside, not deleted.</p>
     ${a.err ? `<p class="meta">${esc(a.err)}</p>` : ""}</div>`;
 }
 async function openAb(voice) {
@@ -192,8 +197,8 @@ async function keepAb(keep) {
     DA.ab = null;
     loadCandidates();
     const L = abLetter(ab.st, keep);   // blind until now: say which it was
-    showError(keep === "pending" ? `${L} was the new cadence. ${voiceDisplay(ab.voice)} speaks with it from now on; the old one is set aside.`
-                                 : `${L} was the current cadence, so nothing changes. The new one is set aside.`, `Kept ${L}`, null, true);
+    showError(keep === "pending" ? `${L} was the new one. ${voiceDisplay(ab.voice)} speaks that way from now on; the old one is set aside.`
+                                 : `${L} was the one it had, so nothing changes. The new one is set aside.`, `Kept ${L}`, null, true);
   } catch (e) { ab.busy = false; ab.err = e.message; renderVoiceCards(DA.cands); }
 }
 // the two players of a blind A/B (the cadence's and an improved voice's): one at a time, one playhead, at the page's volume
@@ -336,7 +341,7 @@ function cadHtml(c) {
   const eta = estWords("cadence", c.voice);
   if (!eta && !EST.asked.has(estKey("cadence", c.voice, null))) estimateFor("cadence", c.voice).then(() => { if (DA.cad) renderVoiceCards(DA.cands); });
   return `<div class="vc-own"><p class="meta">${esc(voiceDisplay(c.voice))} learns how ${esc(c.person ? "they" : "the person")} talk${c.person ? "" : "s"}: their pace and pauses, so SpeakEasy reads like them. It transcribes clips and measures them${c.cadence?.why ? `; ${esc(String(c.cadence.why).replace(/^./, m => m.toLowerCase()))}` : ""}.</p>
-    <div class="row"><button class="btn primary" type="button" data-cad-go="now">Learn now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-cad-go="tonight">Tonight instead</button></div></div>`;
+    <div class="row"><button class="btn primary" type="button" data-cad-go="now">Learn now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-cad-go="tonight">Tonight</button></div></div>`;
 }
 // "Train my own" on a downloaded voice's card: the choice there, Now or Tonight; Speaking / Singing from the voice where known
 function ownHtml(c) {
@@ -344,7 +349,7 @@ function ownHtml(c) {
   if (!eta && !EST.asked.has(estKey("new", person, m))) estimateFor("new", person, m).then(() => { if (DA.own) renderVoiceCards(DA.cands); });
   return `<div class="vc-own"><p class="meta">Train your own <b>${esc(person)}</b> voice to compare with this one: UnderCover finds clips of them and trains it${c.singing == null ? "" : ` (${c.singing ? "singing" : "speaking"}, like this one)`}.</p>
     <div class="seg" role="group" aria-label="Kind of audio"><button type="button" data-own-mode="speaking" aria-pressed="${m === "speaking"}">Speaking</button><button type="button" data-own-mode="singing" aria-pressed="${m === "singing"}">Singing</button></div>
-    <div class="row"><button class="btn primary" type="button" data-own-go="now">Train now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-own-go="tonight">Tonight instead</button></div></div>`;
+    <div class="row"><button class="btn primary" type="button" data-own-go="now">Train now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-own-go="tonight">Tonight</button></div></div>`;
 }
 async function daStart(tonight) {
   const person = $("#da-person").value.trim();
@@ -358,11 +363,13 @@ async function daBegin(person, mode, tonight, btn) {
   try {
     const r = await trainVoice(person, mode, tonight);   // train.js
     ok = true; DA.own = null; renderVoiceCards(DA.cands);
+    const first = !personWarned(); if (first) store.set("uc-person-warned", true);   // the one calm line, once, with this toast (consult 6)
     if (tonight) {
-      if (!workMoved(r)) showError(`${person} is in tonight's work.${startsNote(r) || " It trains while the PC is free."} SafeHouse's Running room shows it.`, "Added to tonight", null, true);
+      if (!workMoved(r)) showError(`${person} is in tonight's work.${startsNote(r) || " It trains while the PC is free."} SafeHouse's Running room shows it.${first ? ` ${PERSON_WARN}` : ""}`, "Added to tonight", null, true);
+      else if (first) showError(PERSON_WARN, "One thing", null, true);
       document.dispatchEvent(new CustomEvent("uc:voicequeued", { detail: { person } }));   // the First assignment ends on it
     }
-    else { daOutcomeClear(); renderDaWork(); }
+    else { daOutcomeClear(); renderDaWork(); if (first) showError(PERSON_WARN, "One thing", null, true); }
   } catch (e) { showError(e.message, tonight ? "Couldn't add it to tonight" : "Couldn't start the voice"); }
   finally { btn.disabled = false; btn.innerHTML = label; }
   return ok;
@@ -386,7 +393,7 @@ function renderDaWork() {
     ...(W.last?.queue || []).filter(i => i.state === "paused").map(i => jobWhat(i).replace(/&amp;/g, "&"))];
   box.hidden = !j && !held.length;
   if (!j && held.length) {
-    if (!put(box, `<div class="who">Paused</div><div class="da-prog"><span><b>${esc([...new Set(held)].slice(0, 2).join(", "))}${held.length > 2 ? ` and ${held.length - 2} more` : ""}</b> · stopped; where it stopped is saved</span></div>
+    if (!put(box, `<div class="who">Paused</div><div class="da-prog"><span><b>${esc([...new Set(held)].slice(0, 2).join(", "))}${held.length > 2 ? ` and ${held.length - 2} more` : ""}</b> stopped where it was; Resume picks it up.</span></div>
       <div class="row"><button class="btn primary" type="button" data-da-resume>Resume now</button></div>`)) return;
     $$("[data-da-resume]", box).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
     return;
