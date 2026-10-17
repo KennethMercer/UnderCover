@@ -1462,9 +1462,16 @@ def u_aside_list():
         odd = voices_dir() / ".aside" / "someone-20261001-010101-unfinished"
         odd.mkdir(parents=True)
         (odd / "model.pth").write_bytes(b"x" * 10)
+        from undercover.core.voices import set_aside
+        _voice_dir("morgan-freeman-uc-try", {"trained": True})
+        tried = {"recipe": "refine", "minutes": 11.9, "terms": {"likeness": True, "harmonicity": False}}
+        attempt = set_aside(voices_dir() / "morgan-freeman-uc-try", note={"why": "Improve tried, no improvement: x",
+                                                                          "display": "Morgan Freeman: Improve's attempt", "measures": tried})
         items = {x["id"]: x for x in library.aside()}
+        assert items[attempt.name]["measures"] == tried, items[attempt.name]     # Deep Cover shows an attempt's numbers (Q, smallfix7)
         kept = next(x for x in items.values() if x["undo_for"])
         assert kept["voice"] == "morgan-freeman-uc" and kept["size"] > 0 and "kept" in kept["why"], kept
+        assert kept["measures"] is None, kept
         assert kept["display"] == "Morgan Freeman", kept   # from its meta (set aside by a Keep, no note)
         assert items[odd.name]["why"] == "a replace that didn't finish" and items[odd.name]["undo_for"] is None
         assert items[odd.name]["at"] == "2026-10-01 01:01", items[odd.name]   # from its stamp, not the folder's time
@@ -1490,8 +1497,9 @@ def u_aside_list():
         assert not improved.state("morgan-freeman-uc"), "an Undo with nothing behind it"
         assert (get_voice("morgan-freeman-uc").dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the voice was touched"
         library.remove_aside(odd.name)
+        library.remove_aside(attempt.name)
         assert library.aside() == []
-    return "listed with why / size / Undo; bad ids refused; delete frees it and ends its Undo; the voice untouched"
+    return "listed with why / size / Undo / an attempt's measures; bad ids refused; delete frees it and ends its Undo; the voice untouched"
 
 
 @check("the user's Delete sets a voice aside, never deletes it (Internal Affairs P5-1): a retrained one waiting goes with it; Bring it back restores both; refused while a job reads it, when the name is taken, and for one an Undo serves")
@@ -2425,6 +2433,170 @@ def u_frozen_recipe():
     return "refine x1.4 / scratch x2.2, thin, weak, unknown; budget 8000..32400; refine 1000..4000; nothing-new rule; gate 6 rows"
 
 
+TRUMP_FINDS = [   # the titles of Trump's real new-voice search and hand-picks (2026-10-14), with their minutes
+    ("t01", "FULL SPEECH: President Donald Trump Holds Midterm Campaign Rally In Syracuse", 84),
+    ("t02", "President Donald Trump's extended 60 Minutes interview", 73),
+    ("t03", "President Donald Trump 2025 Inaugural Address FULL SPEECH", 30),
+    ("t04", "President Trump Addresses Joint Session of Congress, March 4, 2025", 120),
+    ("t05", "Donald Trump's address to the nation from Oval Office | December 2025", 18),
+    ("t06", "Donald Trump Interview | Lex Fridman Podcast #442", 64),
+    ("t07", "Canada\u2019s Plans for Donald Trump | The New Yorker Radio Hour", 31),
+    ("t08", "How Trump Just Became America's Biggest Traitor | The Daily Beast Podcast", 40),
+    ("t09", "Interview: Donald Trump with Rona Barrett - October 6, 1980", 49),
+    ("t10", "Zelenskyy talks Trump, rising diesel prices and the ongoing war in his country", 16),
+    ("t11", "Joe Rogan Experience #2219 - Donald Trump", 178),
+]
+
+
+@check("the real-person search (smallfix7, Trump's new run 2026-10-14): talk ABOUT the person is unticked, material decades before their newest is a younger voice, and speeches / addresses / recent rank above rallies, chambers and old interviews; Do it all prepares by that rank and gates what it prepared")
+def u_person_search():
+    import inspect
+    from undercover.doubleagent import service, sources as S
+    about = {t for i, t, m in TRUMP_FINDS if i in ("t07", "t08", "t10")}
+    for i, t, m in TRUMP_FINDS:
+        assert S.about_them(t, "Donald Trump") == (t in about), t
+    assert S.about_them("The Truth About Morgan Freeman", "Morgan Freeman") and not S.about_them("Morgan Freeman on The Daily Show", "Morgan Freeman")
+
+    class FakeYdl:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, q, download=False):
+            return {"entries": [{"id": i, "title": t, "channel": "c", "duration": m * 60.0} for i, t, m in TRUMP_FINDS]}
+    ydl, S._ydl = S._ydl, FakeYdl
+    try:
+        found = S.search("Donald Trump", "speaking", force="person")
+    finally:
+        S._ydl = ydl
+    by = {x.id: x for x in found}
+    for i in ("t07", "t08", "t10"):
+        assert not by[i].selected and by[i].note == S.ABOUT_NOTE, (by[i].title, by[i].selected, by[i].note)
+    assert not by["t09"].selected and "younger voice" in by["t09"].note and "1980" in by["t09"].note, by["t09"].note
+    order = [x.id for x in found]
+    assert order.index("t05") < order.index("t01") and order.index("t03") < order.index("t01"), order   # addresses before the rally
+    assert order.index("t04") > order.index("t05"), order                                              # the chamber below the Oval Office
+    assert order.index("t09") > order.index("t06"), order                                              # 1980 below a recent interview
+    assert by["t05"].selected and by["t03"].selected
+    rank = lambda i: S.expected_clean(by[i], "Donald Trump")                                           # noqa: E731
+    assert rank("t05") > rank("t02") > rank("t09") and rank("t05") > rank("t04"), [rank(i) for i in ("t05", "t02", "t09", "t04")]
+    assert "{name} talks" not in S.QUERIES["speaking"] and "{name} address" in S.QUERIES["speaking"]
+    src = inspect.getsource(service.train_new_voice)
+    assert "expected_clean(" in src and 'by="DoubleAgent"' in src and "not s.user" in src, "Do it all lost its rank or its gate"
+    assert "s.note != srcmod.ABOUT_NOTE" in src, "Do it all may tick talk about the person back in when it's short"
+    return "3 'about him' and 1980 unticked; addresses > rally > chamber; recent > 1980; Do it all ranks and gates"
+
+
+@check("the trainer honours source.selected (smallfix7, the phase 26 known bug): unticking a prepared source takes its phrases out of the training set, its holdout, the kept minutes and the cadence's clips; a phrase the user ticked by hand still trains; the gate leaves an already-unticked source alone and says who left a source out")
+def u_source_selected():
+    from undercover.doubleagent import cadence, frozen, project as P, trainer
+    with isolated_data():
+        proj = _fake_project("sel", "Sel Person", n_phrases=30, other=0, n_sources=3)
+        all_ids = {p.id for p in proj.phrases if p.kept}
+        before = proj.kept_seconds()
+        key0 = trainer.data_key_for(proj, 40000)[0]
+        proj.source("s1").selected = False
+        s1 = {p.id for p in proj.phrases if p.source == "s1"}
+        hand = next(p for p in proj.phrases if p.source == "s1")
+        hand.choice = True                                                    # ticked by hand inside the unticked source
+        proj.save()
+        proj = P.Project.load("sel")
+        key, kept, hold = trainer.data_key_for(proj, 40000)
+        assert key != key0 and set(kept) == (all_ids - s1) | {hand.id}, "an unticked source's phrases still train"
+        assert not (set(hold) & (s1 - {hand.id})) and not (set(trainer.choose_holdout(proj)) & (s1 - {hand.id}))
+        assert abs(proj.kept_seconds() - (before - sum(p.dur for p in proj.phrases if p.id in s1 - {hand.id}))) < 1e-6
+        assert {p.id for p in cadence.speech_clips(proj)} == set(kept)
+        assert proj.summary()["kept"] == len(kept)
+        proj.source("s1").selected = True
+        assert P.Project.load("sel").source("s1").selected is False and proj.kept_seconds() == before   # ticked again: back
+        # the gate: an unticked source stays as the user left it (its phrases untouched); the label says who left one out
+        proj = P.Project.load("sel")
+        emb = proj.load_embeddings()
+        for p in proj.phrases:
+            if p.source == "s2":
+                emb[p.id] = -emb[p.id]                                        # s2 is someone else
+        g = frozen.gate_project(proj, emb, None, by="DoubleAgent")
+        assert [x["title"] for x in g["left_out"]] == ["Source 2"], g["left_out"]
+        assert proj.source("s2").note.startswith("left out by DoubleAgent:") and not proj.source("s1").selected
+        assert all(p.reason == "" for p in proj.phrases if p.source == "s1"), "the gate marked an unticked source's phrases"
+    return "unticked: out of data key, holdout, kept minutes, cadence clips; hand-ticked stays; the gate skips it, labels by who"
+
+
+@check("the Reader by voice print and accent (smallfix7: Trump read by bf_emma, a British woman): a clear voice-print vote decides the sex, else the pitch; automatic picks are American unless the voice is known British; the vote is measured from the project's reference voice once and kept with the voice")
+def u_reader_print():
+    import json as _json
+    import numpy as np
+    from undercover.core import speaker
+    from undercover.core.voices import get_voice
+    from undercover.doubleagent import service
+    from undercover.speakeasy import speak, tts
+    import inspect
+    prints = speaker.labelled_prints()
+    assert len(prints) == len(tts.READERS) and {k for k, _, _ in prints} == set(tts.READERS), "the shipped prints don't match the Readers"
+    wrong = [k for k, sex, v in prints if (speaker.sex_vote(v + 0.0) > 0) != (sex == "male")]
+    right = len(prints) - len(wrong)
+    assert wrong in ([], ["af_alloy"]), f"the prints vote their own Readers' sex wrong: {wrong}"   # af_alloy: 'American woman, low'
+    assert speaker.sex_vote(None) is None
+    # the user's people, as measured on their real projects (2026-10-17): vote, median Hz, low end Hz
+    people = {"Trump": (3, 167.1, 126.4, "am_"), "Obama": (-1, 180.0, 109.3, "am_"), "Freeman": (1, 104.6, 72.0, "am_"),
+              "Kristen Schaal": (-5, 195.0, 109.6, "af_"), "Peter Griffin": (5, 177.9, 88.1, "am_"), "Chappelle": (3, 101.2, 64.7, "am_")}
+    for who, (vote, hz, low, want) in people.items():
+        r = tts.pick_reader(hz, low, vote=vote)
+        assert r.startswith(want), (who, r)
+    assert tts.pick_reader(167.1, 126.4, vote=3) == "am_fenrir"
+    assert not any(tts.pick_reader(hz, lo, vote=vt).startswith("b") for hz in (90, 130, 167.1, 178.6, 200, 260)
+                   for lo in (70, 120, 160) for vt in (None, -5, -1, 1, 5)), "a British Reader was picked for a voice not known British"
+    assert tts.pick_reader(178.6, 130.0).startswith("af_") and tts.pick_reader(178.6, 130.0, vote=4).startswith("am_")
+    assert tts.pick_reader(120.0, 80.0, accent="british").startswith("bm_") and tts.pick_reader(None, None, vote=5) == "am_michael"
+    assert tts.pick_reader(None, None) == tts.DEFAULT
+    assert "vote=service.print_vote(v)" in inspect.getsource(speak.plan)
+    # measured once from the project's reference voice, kept in meta.json; no project: None (pitch decides)
+    with isolated_data():
+        proj = _fake_project("pv", "Print Voice", n_phrases=12, other=0, n_sources=2)
+        emb = proj.load_embeddings()
+        emb["speaker:1"] = next(v for k, sex, v in prints if k == "am_michael")
+        proj.save_embeddings(emb)
+        _voice_dir("pv-uc", {"project": "pv"})
+        _voice_dir("downloaded", {})
+        vote = service.print_vote(get_voice("pv-uc"))
+        assert vote is not None and vote > 0, vote
+        meta = _json.loads((get_voice("pv-uc").dir / "meta.json").read_text(encoding="utf-8"))
+        assert meta["extra"]["print_vote"] == vote and service.print_vote(get_voice("pv-uc")) == vote
+        assert service.print_vote(get_voice("downloaded")) is None
+        _fake_project("noref", "No Ref", n_phrases=6, other=0, n_sources=1)
+        P2 = __import__("undercover.doubleagent.project", fromlist=["Project"]).Project
+        pr = P2.load("noref")
+        pr.reference = {}
+        pr.save()
+        _voice_dir("noref-uc", {"project": "noref"})
+        assert service.print_vote(get_voice("noref-uc")) is None
+        assert "print_vote" in _json.loads((get_voice("noref-uc").dir / "meta.json").read_text(encoding="utf-8"))["extra"], \
+            "a project without a reference voice is read again on every listing"
+    return f"prints vote their Readers right ({right}/{len(prints)}); Trump -> am_fenrir, Kristen -> af_; never British unasked; kept once"
+
+
+@check("the compare is priced by the frozen test's size (smallfix7; the real Freeman run said 9 min and took 70 s, its time left jumping 46 -> 8 -> 20 s): an Improve's estimate and its time left during the compare come from the test's own lines and donors")
+def u_compare_priced():
+    import inspect
+    from undercover.doubleagent import frozen, night
+    small = {"lines": [0] * 6, "donors": [0] * 8, "approved": "abc"}
+    c = frozen.compare_seconds(small)
+    assert c["ensure"] == 0.0 and c["judge"] == round(frozen.JUDGE_BASE_S + frozen.SCORE_S * 14, 1), c
+    assert 20 < c["judge"] < 60, c                                            # the real run: ~25 s for the candidate's score
+    unscored = frozen.compare_seconds({**small, "approved": None})
+    assert unscored["ensure"] == round(frozen.SCORE_S * 14, 1)
+    first = frozen.compare_seconds(None)                                      # a first Improve: freeze at the usual size
+    assert first["ensure"] > first["judge"] > c["judge"] and (first["ensure"] + first["judge"] + frozen.EXPORT_S) / 60 < 5, first
+    assert not hasattr(night, "COMPARE_MIN") and not hasattr(night, "FREEZE_MIN")
+    src = inspect.getsource(night._improve)
+    assert "compare_seconds(frozen.load_test(old))" in src and src.count("total_left=") >= 2, "the compare's time left is extrapolated again"
+    with isolated_data():
+        _fake_project("cmp", "Cmp Person", n_phrases=40, other=0, n_sources=2)
+        _voice_dir("cmp-uc", {"project": "cmp", "train_minutes": 3.0})
+        est = night.estimate({"kind": "improve", "target": "cmp-uc"})
+        assert est["compare"] == round((frozen.EXPORT_S + first["ensure"] + first["judge"]) / 60), est
+    return f"6 lines + 8 donors: {c['judge']:.0f} s; a first Improve's freeze + compare: {(first['ensure'] + first['judge']) / 60:.1f} min"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -2600,7 +2772,7 @@ def u_frozen_gate_project():
         g = frozen.gate_project(proj, emb, 101.0, pitch_of=lambda clip: 320.0 if "p001" in str(clip) else 101.0)
         assert [x["title"] for x in g["left_out"]] == ["Source 2"], g["left_out"]
         assert "another voice" in g["left_out"][0]["why"]
-        assert not proj.source("s2").selected and proj.source("s2").note.startswith("left out by Improve")
+        assert not proj.source("s2").selected and proj.source("s2").note.startswith("left out by Improve"), (proj.source("s2").selected, proj.source("s2").note)
         assert all(not ph.kept for ph in proj.phrases if ph.source == "s2" and ph.choice is None), "s2's phrases still train"
         assert ticked.kept and ticked.reason == "", "the user's hand-ticked phrase was touched"
         assert proj.source("s1").selected and all(ph.kept for ph in proj.phrases if ph.source == "s1" and ph.reason == "")
@@ -3497,7 +3669,7 @@ def u_characters():
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def extract_info(self, q, download=False):
-            pool = sponge if any(w in q for w in ("interview", "speech", "podcast", "talks")) else sponge[4:]
+            pool = sponge if any(w in q for w in ("interview", "speech", "podcast", "talks", "address")) else sponge[4:]
             return {"entries": [{"id": x.id, "title": x.title, "channel": x.channel, "duration": x.duration} for x in pool]}
     ydl, S._ydl = S._ydl, FakeYdl
     try:
@@ -7681,7 +7853,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

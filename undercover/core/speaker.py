@@ -4,6 +4,9 @@ Same front end as WeSpeaker: 16 kHz audio scaled to int16 range, Kaldi fbank (80
 no dither), per-utterance mean removal. Embeddings are L2-normalised, so cosine similarity is a dot product.
 Same-speaker pairs typically score > 0.5, different speakers < 0.3.
 """
+import json
+from pathlib import Path
+
 import numpy as np
 import torch
 
@@ -11,6 +14,36 @@ from .config import path
 from . import setup_models
 
 SR = 16000
+# Voice prints of voices whose sex is known: SpeakEasy's Readers, rendered once (tools/reader_prints.py). Prints carry sex
+# only weakly across recording conditions (a centroid split of the Readers got Freeman and Obama wrong on their real
+# interviews, 2026-10-17), so the vote of the nearest few is a hint that decides only when it's clear (tts.pick_reader).
+PRINTS = Path(__file__).resolve().parents[1] / "assets" / "reader-prints.json"
+NEAREST = 5
+_PRINTS = None
+
+
+def labelled_prints() -> list[tuple[str, str, np.ndarray]]:
+    """[(id, sex, unit vector)] from the shipped prints; [] when the file is missing or unreadable."""
+    global _PRINTS
+    if _PRINTS is None:
+        try:
+            d = json.loads(PRINTS.read_text(encoding="utf-8"))["prints"]
+            _PRINTS = [(k, x["sex"], np.asarray(x["v"], np.float32) / (np.linalg.norm(x["v"]) + 1e-9)) for k, x in d.items()]
+        except (OSError, ValueError, KeyError, TypeError):
+            _PRINTS = []
+    return _PRINTS
+
+
+def sex_vote(vec, k: int = NEAREST) -> int | None:
+    """+k (the k nearest labelled voices all male) .. -k (all female), or None without prints or a vector. Measured on
+    the user's people (2026-10-17): Trump +3, Kristen Schaal -5, Peter Griffin +5, Obama -1, Freeman +1."""
+    prints = labelled_prints()
+    if vec is None or not prints:
+        return None
+    v = np.asarray(vec, np.float32)
+    v = v / (np.linalg.norm(v) + 1e-9)
+    near = sorted(prints, key=lambda p: -float(p[2] @ v))[:k]
+    return int(sum(1 if sex == "male" else -1 for _, sex, _ in near))
 
 
 class SpeakerEmbedder:

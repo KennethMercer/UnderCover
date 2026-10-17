@@ -71,14 +71,32 @@ def lang(reader: str) -> str:
     return "en-gb" if reader.startswith("b") else "en-us"
 
 
-def pick_reader(target_hz: float | None, low_hz: float | None = None) -> str:
-    """The automatic Reader for a voice that speaks around target_hz (low_hz: its p5): same sex, closest pitch.
-    Measured 2026-10-10: Morgan Freeman (105 Hz) 0.84 with am_michael, Obama (180 Hz) 0.77 with bm_george, the best
-    of six Readers for each."""
+PRINT_CLEAR = 3   # a voice-print vote this clear (4 of the 5 nearest Readers, or more) decides the sex; a closer one, the pitch
+
+
+def is_male(target_hz: float | None, low_hz: float | None = None, vote: int | None = None) -> bool | None:
+    """The person's sex for the Reader pick: their voice print's vote when it's clear (core.speaker.sex_vote), else
+    their speaking pitch (median, or a low end under MALE_LOW_BELOW); None when neither is known. Pitch alone read
+    Trump as a woman (167 Hz, raised by rallies; vote +3) and Kristen Schaal as a man (low end 110 Hz; vote -5)."""
+    if vote is not None and abs(vote) >= PRINT_CLEAR:
+        return vote > 0
     if not target_hz:
+        return None
+    return target_hz < MALE_BELOW or (low_hz is not None and low_hz < MALE_LOW_BELOW)
+
+
+def pick_reader(target_hz: float | None, low_hz: float | None = None, vote: int | None = None,
+                accent: str | None = None) -> str:
+    """The automatic Reader for a voice that speaks around target_hz (low_hz: its p5): same sex (is_male), same accent,
+    closest pitch. The accent is American unless the voice is known to be British (extra.accent): nothing measures an
+    accent yet, and the British Readers were picked by pitch alone (Trump read by bf_emma, a British woman, smallfix7).
+    Measured 2026-10-10: Morgan Freeman (105 Hz) 0.84 with am_michael, the best of six Readers for him."""
+    male = is_male(target_hz, low_hz, vote)
+    if male is None:
         return DEFAULT
-    male = target_hz < MALE_BELOW or (low_hz is not None and low_hz < MALE_LOW_BELOW)
-    cands = [r for r in AUTO if r[1] == ("m" if male else "f")]
+    cands = [r for r in AUTO if r[0] == ("b" if accent == "british" else "a") and r[1] == ("m" if male else "f")]
+    if not target_hz:
+        return cands[0]
     return min(cands, key=lambda r: abs(np.log2(READERS[r][1][1] / target_hz)))
 
 
