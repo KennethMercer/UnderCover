@@ -362,8 +362,27 @@ function reportRange(a, z) {
 }
 // What a result says in words. The server's `outcome` when it gives one (better | same | not_better | waiting | new); until it does, from what the result carries:
 // a retrained voice waiting for the ear (pending) is not "kept the old", and a brand-new voice (new, new voice + cadence) had no old one to keep.
-const REPORT_WORDS = { better: "better", same: "about the same", not_better: "not better: yours is kept", waiting: "waiting for your ear", new: "new voice" };
+// Improve's numbers (phase 26: the frozen test), for Deep Cover: the recipe and minutes, then per class (their own lines / other voices) each measure's
+// paired difference with its interval, and whether it cleared the bar. m: a result's `tried`, or the improved card's `measures`.
+const IMP_TERM = { id: "likeness", hnr: "harmonicity", contrast: "contrast" };
+function measuresText(m) {
+  if (!m || typeof m !== "object") return "";
+  const n3 = v => (v > 0 ? "+" : v < 0 ? "\u2212" : "\u00b1") + Math.abs(v).toFixed(3);
+  const head = [m.recipe ? `${m.recipe}${m.minutes != null ? ` on ${m.minutes} min` : ""}` : m.minutes != null ? `${m.minutes} min` : "",
+                m.added_min != null ? `${m.added_min} min new` : "", m.left_out?.length ? `${m.left_out.length} source${m.left_out.length > 1 ? "s" : ""} left out` : ""].filter(Boolean).join(" \u00b7 ");
+  const cls = Object.entries(m.compare || {}).map(([c, d]) => {
+    const parts = Object.entries(IMP_TERM).filter(([k]) => d && d[k]).map(([k, name]) => {
+      const t = d[k], pass = c === "lines" && m.terms && name in m.terms ? (m.terms[name] ? " \u2713" : " \u2717") : "";
+      return `${name} ${n3(t.mean)} (${n3(t.lo)}..${n3(t.hi)})${pass}`;
+    });
+    return parts.length ? `${c === "lines" ? "own lines" : "other voices"} n=${d.n}: ${parts.join(", ")}` : "";
+  }).filter(Boolean);
+  const left = (m.left_out || []).slice(0, 4).map(x => `${x.title ? String(x.title).slice(0, 40) : "a source"} (${x.why || "left out"})`);
+  return [head, ...cls, left.length ? `left out: ${left.join("; ")}` : ""].filter(Boolean).join(" \u00b7 ");
+}
+const REPORT_WORDS = { better: "better", same: "about the same", not_better: "not better: yours is kept", waiting: "waiting for your ear", new: "new voice", nothing_new: "nothing new to learn from" };
 function reportOutcome(x) {
+  if (x.nothing_new) return "nothing_new";   // phase 26: nothing new found and every source still belongs: not even trained (the server says "same")
   if (x.outcome) return x.outcome;
   if (x.state !== "done") return "";
   if (["new", "newcad"].includes(x.kind)) return "new";
@@ -380,13 +399,14 @@ function renderReport(r) {
   $("#q-report-when").textContent = `${reportRange(r.started, r.finished)} · ${r.results.length} job${r.results.length > 1 ? "s" : ""}`;
   $("#q-report-list").innerHTML = r.results.map(x => {
     const oc = reportOutcome(x);
-    const what = x.kind === "improve" ? (x.replaced ? "improved" : x.pending ? "retrained" : "tried") : x.kind === "cadence" ? (x.replaced ? "speaks" : "speaking tried")
+    const what = x.kind === "improve" ? (x.replaced ? "improved" : x.pending ? "retrained" : x.nothing_new ? "checked" : "tried") : x.kind === "cadence" ? (x.replaced ? "speaks" : "speaking tried")
       : x.kind === "newcad" ? "new voice, speaks" : "new voice";
     const what2 = x.state === "done" ? what : x.state === "skipped" ? "was cancelled" : "didn't finish";   // a failed "new voice" read as if one was made (IA P9-14)
     const words = x.before_word && x.after_word && x.before_word !== x.after_word ? `${likeWord(x.before_word)} → ${likeWord(x.after_word)}` : likeWord(x.after_word || x.before_word);
     const numbers = x.before != null || x.after != null ? `${x.before != null ? x.before.toFixed(3) + " → " : ""}${x.after != null ? x.after.toFixed(3) : "?"}` : "";   // three places: the word was cut at the unrounded score
     const cad = x.kind === "cadence" ? x : x.cadence;   // cadence numbers: Deep Cover only
-    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: ${[`likeness ${cad.likeness}`, cad.cadence_gap != null && `gap ${cad.cadence_gap}`, cad.wer != null && `WER ${cad.wer}`, cad.data_minutes != null && `from ${cad.data_minutes} min`].filter(Boolean).join(" · ")}</p>` : "";
+    const impDeep = x.kind === "improve" && x.tried ? `<p class="meta" data-deep>${esc(measuresText(x.tried))}</p>` : "";   // Improve's frozen test, Deep only
+    const deep = impDeep + (cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: ${[`likeness ${cad.likeness}`, cad.cadence_gap != null && `gap ${cad.cadence_gap}`, cad.wer != null && `WER ${cad.wer}`, cad.data_minutes != null && `from ${cad.data_minutes} min`].filter(Boolean).join(" · ")}</p>` : "");
     const raw = x.note || "";
     const hasNum = /\d\.\d{2,}/.test(raw);   // the server's note quotes the scores: Deep Cover; basic says it plainly
     const plain = x.note_plain != null ? x.note_plain : hasNum ? REPORT_PLAIN[oc] || "" : raw;   // the server's plain note (smallfix4); until a result has one, from the outcome
