@@ -60,7 +60,7 @@ These are the principles that have settled every argument so far. When the docs 
 ## How the work is done
 
 - **Phases, one at a time, each a chat.** `RUNBOOK.md` is the sequence; `docs/prompts/` holds each phase's brief;
-  `docs/handoffs/` is what each one learned. A phase tags its start, works on a branch, runs `tools/smoke.py --full`,
+  `docs/handoffs/` is what each one learned. A phase tags its start, works on a branch, runs `tests/smoke.py --full`,
   runs the built-in code review on its whole diff, writes its handoff, asks the architect for the merge, and tags its end.
   Between phases the app is always working on `main`.
 - **The architect reviews every merge** (diff, handoff, its own smoke run, its own check of the phase's claims, and the
