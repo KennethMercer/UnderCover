@@ -2294,6 +2294,233 @@ def u_start_at_hold():
     return "held one-shot stays held through Start at / Start now; queue pause lifts; start_at saved, bad ones refused"
 
 
+def _diffs(mean, spread, n=12, seed=1):
+    """Paired differences around a mean with a spread small enough that the bootstrap interval sits on one side."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    return list(mean + rng.normal(0, spread, n))
+
+
+def _cmp(id_l, hnr, contrast, id_d=0.0, n=12, nd=30):
+    """A compare() result built from the research table's own-lines deltas (likeness, harmonicity, contrast) and a donor delta."""
+    from undercover.doubleagent.frozen import paired
+    return {"lines": {"n": n, "id": paired(_diffs(id_l, 0.01, n)), "hnr": paired(_diffs(hnr, 0.01, n)),
+                      "contrast": paired(_diffs(contrast, 0.08, n))},
+            "donors": {"n": nd, "id": paired(_diffs(id_d, 0.01, nd))}}
+
+
+@check("Improve's offer bar (phase 26, R3) reproduces the eleven blind verdicts on the research table: the two kept voices are offered, every rejected, 'same' or 'level' one fails; too few own lines or a slipped donor likeness refuses; the words say what changed (R3a)")
+def u_frozen_bar():
+    from undercover.doubleagent.frozen import offer, words_of
+    cases = [   # (name, likeness own lines, hnr, contrast, donor likeness, ear kept the NEW one?)
+        ("Griffin 3.5->18 scratch", +0.03, +0.096, +0.59, +0.03, True),
+        ("SpongeBob 7->13 scratch", 0.0, +0.058, +0.40, 0.0, True),
+        ("Obama 59->130 scratch (8 passes)", +0.03, +0.007, +0.34, +0.028, False),
+        ("Freeman 13->18 scratch", -0.02, 0.0, -0.39, -0.025, False),
+        ("Chappelle 32->38 scratch", -0.01, -0.017, -0.45, -0.019, False),
+        ("Chappelle calm 34", +0.01, 0.0, +0.19, +0.036, False),
+        ("Chappelle stand-up 21", -0.09, +0.03, +0.40, -0.008, False),
+        ("Trump 36->77 scratch (8 passes)", 0.0, +0.024, -0.88, +0.003, False),
+        ("Freeman refine (level)", 0.0, +0.040, 0.0, +0.003, False),
+        ("Obama refine", 0.0, +0.020, +0.43, -0.004, False),
+        ("Trump rallies-only vs hand-picked", -0.104, +0.01, -0.3, -0.096, False),
+    ]
+    for name, idl, hnr, con, idd, kept in cases:
+        v = offer(_cmp(idl, hnr, con, idd))
+        assert v["offer"] == kept, (name, v)
+    v = offer(_cmp(0.0, 0.058, 0.40))
+    assert words_of(v) == "cleaner voicing, more detail; the likeness is unchanged", words_of(v)
+    v = offer(_cmp(0.05, 0.08, 0.5))
+    assert words_of(v) == "cleaner voicing, more detail; a closer likeness", words_of(v)
+    assert not offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["offer"], "a slipped donor likeness was offered"
+    assert "other people" in offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["reasons"][0]
+    assert not offer(_cmp(0.0, 0.08, 0.5, n=3))["offer"] and "too few" in offer(_cmp(0.0, 0.08, 0.5, n=3))["reasons"][0]
+    assert offer(_cmp(0.0, 0.08, 0.5, nd=5))["offer"], "too few donors must skip the guard, not refuse"
+    r = offer(_cmp(-0.02, 0.0, -0.39))["reasons"]
+    assert r == ["the likeness slipped", "the voicing isn't clearer", "no more detail in it"], r
+    return "11 of 11 verdicts; words; donor guard; too few lines refuses; too few donors skips the guard"
+
+
+@check("Improve's recipe and budget (phase 26, R4 / R5): refine for a well-fed voice with a modest data jump, scratch for a thin one or a big jump; 450 steps a kept minute (floor 8000, cap 2x); refine steps scale 1000-4000; the gate rows (R6) on the research's examples")
+def u_frozen_recipe():
+    from undercover.doubleagent.frozen import budget_steps, gate_rows, recipe, refine_steps
+    assert recipe(13, 0.78, 18)[0] == "refine"                      # Freeman: x1.4
+    assert recipe(59, 0.75, 130)[0] == "scratch"                    # Obama: x2.2
+    assert recipe(7, 0.77, 13)[0] == "scratch"                      # SpongeBob: thin
+    assert recipe(3.5, 0.50, 18)[0] == "scratch"                    # Griffin: thin and x5
+    assert recipe(20, None, 25)[0] == "refine"                      # likeness unknown: the path that can't wander off
+    assert recipe(20, 0.55, 25)[0] == "scratch"                     # a weak voice: fresh
+    assert recipe(0, None, 10)[0] == "scratch"
+    assert budget_steps(13) == (8000, 16000) and budget_steps(36) == (16200, 32400) and budget_steps(0) == (8000, 16000)
+    assert refine_steps(15) == 2000 and refine_steps(3) == 1000 and refine_steps(60) == 4000
+    rows = [{"id": "a", "title": "NPR", "kept_min": 4.0, "cos": 0.70, "med_score": 0.6, "dropped": 0.3, "f0_st": 0.5},
+            {"id": "b", "title": "2001 interview", "kept_min": 2.0, "cos": 0.57, "med_score": 0.6, "dropped": 0.4, "f0_st": 8.4},
+            {"id": "c", "title": "Conan", "kept_min": 2.0, "cos": 0.70, "med_score": 0.55, "dropped": 0.3, "f0_st": 9.1},
+            {"id": "d", "title": "about him", "kept_min": 0.0, "cos": None, "med_score": 0.1, "dropped": 1.0},
+            {"id": "e", "title": "noisy", "kept_min": 0.5, "cos": 0.7, "med_score": 0.6, "dropped": 0.95, "f0_st": 0.0},
+            {"id": "f", "title": "no pitch", "kept_min": 3.0, "cos": 0.7, "med_score": 0.6, "dropped": 0.2}]
+    gate_rows(rows, 101.0)   # the approved voice at 101 Hz = +0.2 st
+    got = {r["id"]: r["pass"] for r in rows}
+    assert got == {"a": True, "b": False, "c": False, "d": False, "e": False, "f": True}, got
+    assert "another voice" in rows[1]["gate"] and "younger" in rows[1]["gate"], rows[1]["gate"]
+    assert rows[2]["gate"] == "a much younger voice" and rows[3]["gate"] == "nothing usable" and "usable" in rows[4]["gate"]
+    return "refine x1.4 / scratch x2.2, thin, weak, unknown; budget 8000..32400; refine 1000..4000; gate 6 rows"
+
+
+class _FakeEngine:
+    """The frozen test's engine on fixed numbers: a 'voice' is a dict {gain, buzz}; convert() scales and adds a hum, so
+    likeness / harmonicity / contrast differ between voices deterministically; embed() is a fixed projection."""
+
+    def __init__(self):
+        import numpy as np
+        self.rng = np.random.default_rng(7)
+        self.P = self.rng.normal(0, 1, (64, 256)).astype("float32")
+
+    def pitch(self, x16):
+        import numpy as np
+        n = len(x16) // 160
+        f = np.full(n, 120.0, dtype="float32")
+        f[:: 7] = 0.0
+        return f
+
+    def load_voice(self, voice):
+        ex = voice.extra or {}
+        return {"gain": float(ex.get("fake_gain", 1.0)), "buzz": float(ex.get("fake_buzz", 0.0))}
+
+    def convert(self, x16, lv, shift):
+        import numpy as np
+        t = np.arange(len(x16)) / 16000
+        return (x16 * lv["gain"] + lv["buzz"] * np.sin(2 * np.pi * 120 * t)).astype("float32"), 16000
+
+    def embed(self, x16):
+        import numpy as np
+        from undercover.doubleagent.frozen import ltas
+        v = self.P.T @ ltas(x16)
+        return (v / (np.linalg.norm(v) + 1e-9)).astype("float32")
+
+    def content(self, x16):
+        import numpy as np
+        n = max(1, len(x16) // 320)
+        return np.tile(np.linspace(0, 1, 16, dtype="float32"), (n, 1)) + 1e-3 * x16[:n, None] if len(x16) >= n else np.ones((n, 16), "float32")
+
+    def read(self, text, voice, proj, seed):
+        import numpy as np
+        t = np.arange(24000 * 2) / 24000
+        return (0.3 * np.sin(2 * np.pi * 140 * t) * (1 + 0.3 * np.sin(2 * np.pi * 3 * t))).astype("float32"), 24000, "clip:fake"
+
+    def transcribe(self, files):
+        return ["these are the words I really said that day, nothing more"] * len(files)
+
+
+def _fake_project(name, person, n_phrases=30, other=6, n_sources=3):
+    """A training project on disk with clips (short tones), a reference cluster, scores and embeddings: enough to freeze a test."""
+    import numpy as np
+    import soundfile as sf
+    from undercover.doubleagent import project as P
+    proj = P.Project.create(person, "speaking", name=name)
+    rng = np.random.default_rng(3)
+    (proj.dir / "clips").mkdir(parents=True, exist_ok=True)
+    emb = {}
+    ref = rng.normal(0, 1, 256).astype("float32")
+    ref /= np.linalg.norm(ref)
+    for k in range(n_phrases + other):
+        pid = f"p{k:03d}"
+        dur = 4.0 + (k % 3)
+        t = np.arange(int(16000 * dur)) / 16000
+        sf.write(str(proj.dir / "clips" / f"{pid}.flac"), (0.2 * np.sin(2 * np.pi * (110 + 5 * (k % 4)) * t)).astype("float32"), 16000)
+        own = k < n_phrases
+        e = (ref + rng.normal(0, 0.03 if own else 1.5, 256)).astype("float32")   # own: cosine ~0.9; others ~0
+        emb[pid] = e / np.linalg.norm(e)
+        proj.phrases.append(P.Phrase(id=pid, source=f"s{k % n_sources}", start=0.0, dur=dur, score=0.8 if own else 0.1,
+                                     reason="" if own else "other speaker", noise=0.1))
+    emb["speaker:1"] = ref
+    from undercover.doubleagent.sources import Source
+    proj.sources = [Source(id=f"s{i}", url="u", title=f"Source {i}", duration=600.0) for i in range(n_sources)]
+    proj.reference = {"cluster": 1, "clip": "p000", "confirmed": True}
+    proj.save()
+    proj.save_embeddings(emb)
+    return P.Project.load(name)
+
+
+@check("the frozen test on disk (phase 26, R1 / R2 / R7): freeze writes refs, donors from other projects, the person's own lines and test.json; the approved voice is scored and set; a candidate is judged on the same test by its model hash; Keep moves the test with the name and swaps the approved pointer; the A/B reads the frozen lines")
+def u_frozen_files():
+    import numpy as np
+    from undercover.core.voices import get_voice, voices_dir
+    from undercover.doubleagent import frozen, improved, night
+    eng = _FakeEngine()
+    with isolated_data():
+        proj = _fake_project("morgan-freeman", "Morgan Freeman")
+        _fake_project("other-person", "Other Person", n_phrases=6, other=30, n_sources=12)   # the donors: two per source,
+        _fake_project("third-person", "Third Person", n_phrases=6, other=30, n_sources=12)   # at most ten per project
+        cur = _voice_dir("morgan-freeman-uc", {"trained": True, "project": "morgan-freeman", "f0_median": 105.0, "train_minutes": 13.0})
+        (cur / "model.pth").write_bytes(b"approved-model")
+        v = get_voice("morgan-freeman-uc")
+        t, s = frozen.ensure(v, proj, eng)
+        assert t["sex"] == "male" and t["project"] == "morgan-freeman" and t["approved"] == s["model"], (t.get("approved"), s["model"])
+        assert len(t["donors"]) >= frozen.POOL_MIN and {d["project"] for d in t["donors"]} == {"other-person", "third-person"}, (len(t["donors"]), t["notes"])
+        assert len(t["lines"]) >= frozen.LINES_MIN and t["read_with"] == "clip:fake" and t["notes"] == [], t
+        d = frozen.test_dir(v)
+        assert (d / "refs.npz").exists() and (d / "scores" / f"{s['model']}.json").exists()
+        assert len(s["lines"]) == len(t["lines"]) and all(k in s["lines"][0] for k in ("id", "hnr", "contrast", "noise", "ltas"))
+        assert all(k in s["donors"][0] for k in ("id", "cent", "content", "hnr", "contrast")), s["donors"][0]
+        t2, s2 = frozen.ensure(v, proj, eng)                                  # idempotent, no second score
+        assert t2["made"] == t["made"] and s2["model"] == s["model"]
+        # a candidate: the same voice (gain 1) scores level and is NOT offered; its score is kept by model hash
+        cand = _voice_dir("morgan-freeman-uc-next", {"trained": True, "project": "morgan-freeman", "f0_median": 105.0, "pending_for": "morgan-freeman-uc"})
+        (cand / "model.pth").write_bytes(b"candidate-model")
+        verdict = frozen.judge(v, get_voice("morgan-freeman-uc-next"), eng)
+        assert not verdict["offer"] and verdict["candidate_model"] != verdict["approved_model"], verdict["terms"]
+        assert abs(verdict["compare"]["lines"]["id"]["mean"]) < 0.02 and verdict["before"] is not None
+        assert (d / "scores" / f"{verdict['candidate_model']}.json").exists()
+        assert "likeness is unchanged" not in frozen.words_of(verdict)                 # not offered: no words
+        # R7: the A/B inputs are the frozen lines
+        ab = frozen.ab_inputs(v, n=2)
+        assert len(ab) == 2 and ab[0]["file"].exists() and ab[0]["text"]
+        # Keep the candidate: the test follows the name, the approved pointer is the kept model
+        night.mark_improved_pending("morgan-freeman-uc", "morgan-freeman-uc-next", verdict["before"], verdict["after"], 13.0,
+                                    words="cleaner voicing", measures={"terms": verdict["terms"]})
+        st = improved.state("morgan-freeman-uc")
+        assert st["words"] == "cleaner voicing" and st["measures"]["terms"], st
+        improved.keep("morgan-freeman-uc", "new")
+        v2 = get_voice("morgan-freeman-uc")
+        assert (v2.dir / "model.pth").read_bytes() == b"candidate-model" and (v2.dir / "test" / "test.json").exists()
+        assert frozen.load_test(v2)["approved"] == verdict["candidate_model"], frozen.load_test(v2)["approved"]
+        assert not any(".aside" in str(p) and (p / "test").exists() for p in (voices_dir() / ".aside").iterdir())
+        improved.undo("morgan-freeman-uc")                                            # Undo: back with the old name and pointer
+        v3 = get_voice("morgan-freeman-uc")
+        assert (v3.dir / "model.pth").read_bytes() == b"approved-model" and frozen.load_test(v3)["approved"] == verdict["approved_model"]
+        assert not (voices_dir() / "morgan-freeman-uc-next" / "test").exists()
+    return f"{len(t['donors'])} donors, {len(t['lines'])} lines, scored by hash; level candidate not offered; keep / undo carry the test"
+
+
+@check("the source gate on a project (phase 26, R6): a failing source is unticked with the reason AND its cut phrases are left out of training; the user's own sources and ticked phrases are never touched; the report says kept (R3a)")
+def u_frozen_gate_project():
+    import numpy as np
+    from undercover.core.worklist import report_words
+    from undercover.doubleagent import frozen
+    with isolated_data():
+        proj = _fake_project("dave", "Dave Chappelle")
+        emb = proj.load_embeddings()
+        # source s2's phrases pulled far from the reference: it fails on cos; s1 is the user's own
+        for ph in proj.phrases:
+            if ph.source == "s2" and ph.kept:
+                e = np.random.default_rng(int(ph.id[1:])).normal(0, 1, 256).astype("float32")
+                emb[ph.id] = e / np.linalg.norm(e)
+        proj.sources[1].user = True
+        proj.save_embeddings(emb)
+        before = proj.kept_seconds()
+        g = frozen.gate_project(proj, emb, 101.0, pitch_of=lambda clip: 320.0 if "p001" in str(clip) else 101.0)
+        assert [x["title"] for x in g["left_out"]] == ["Source 2"], g["left_out"]
+        assert "another voice" in g["left_out"][0]["why"]
+        assert not proj.source("s2").selected and proj.source("s2").note.startswith("left out by Improve")
+        assert all(not ph.kept for ph in proj.phrases if ph.source == "s2" and ph.choice is None), "s2's phrases still train"
+        assert proj.source("s1").selected and all(ph.kept for ph in proj.phrases if ph.source == "s1" and ph.reason == "")
+        assert g["kept_min"] < before / 60 and abs(proj.kept_seconds() / 60 - g["kept_min"]) < 0.1, (g["kept_min"], before)
+        w = report_words("improve", {"kept": True, "before": 0.78, "after": 0.79, "tried": {"added_min": 5.0, "left_out": [{"title": "x", "why": "y"}]}}, "Dave Chappelle")
+        assert w["outcome"] == "not_better" and "yours is kept" in w["note_plain"] and "1 source left out" in w["note_plain"], w
+    return "s2 unticked with its phrases left out; the user's s1 untouched; kept row"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -7341,7 +7568,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_at_hold, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

@@ -91,7 +91,8 @@ def _samples(voice: str) -> dict:
 
 
 def state(voice: str) -> dict | None:
-    """{voice, display, candidate, before, after, minutes, made, current_url, new_url, undo} or None."""
+    """{voice, display, candidate, before, after, minutes, made, words, measures, current_url, new_url, undo} or None.
+    words: what changed, in words (R3a); measures: the frozen test's numbers (Deep Cover)."""
     from ..core.files import file_url
     v = get_voice(voice)
     ex = v.extra or {}
@@ -106,31 +107,39 @@ def state(voice: str) -> dict | None:
     s = _samples(v.name)
     return {"voice": v.name, "display": label_of(v.name), "candidate": p["voice"], "before": p.get("before"),
             "after": p.get("after"), "minutes": p.get("minutes"), "made": p.get("made"), "undo": undo,
+            "words": p.get("words"), "measures": p.get("measures"),
             "current_url": file_url(s["current"]) if s["current"].exists() else None,
             "new_url": file_url(s["new"]) if s["new"].exists() else None}
 
 
 def make_samples(job, voice: str) -> dict:
-    """The same spoken line through the current voice and the candidate (each at its own pitch), saved to hear: the
-    blind A/B MasterPlan presents. A GPU job."""
+    """R7: the person's own words (two of the frozen test's lines, read once through their cadence pack) through the
+    current voice and the candidate, each at its own pitch, saved to hear: the blind A/B MasterPlan presents. A voice
+    without a frozen test (none should be offered without one) falls back to Agent Smoke's line. A GPU job."""
     import soundfile as sf
     from ..core.cadence import render
     from ..core.engine.convert import LoadedVoice, Settings
+    from . import frozen
     st = state(voice)
     if not st or not st["candidate"]:
         raise ModelError(f"No retrained {label_of(voice)} is waiting.")
     conv = gpu.MODELS.converter
-    x = render.trim(render.load16(LINE))
+    lines = frozen.ab_inputs(get_voice(voice), n=2)
+    xs = [render.trim(render.load16(ln["file"])) for ln in lines] or [render.trim(render.load16(LINE))]
     out = _samples(voice)
     out["current"].parent.mkdir(parents=True, exist_ok=True)
     for key, name in (("current", voice), ("new", st["candidate"])):
-        job.push(stage="reading", fraction=0.1 if key == "current" else 0.55, label=f"Reading the line with the {key} one")
+        job.push(stage="reading", fraction=0.1 if key == "current" else 0.55,
+                 label=f"Reading {'their own words' if lines else 'the line'} with the {key} one")
         v = get_voice(name)
-        shift = render.octave_shift(x, conv.rmvpe, (v.extra or {}).get("f0_median"))
         lv = LoadedVoice(v, conv.device, conv.half)
-        y, sr = conv.convert(x, lv, Settings(pitch=shift))
+        pieces, sr = [], 16000
+        for x in xs:
+            shift = render.octave_shift(x, conv.rmvpe, (v.extra or {}).get("f0_median"))
+            y, sr = conv.convert(np.concatenate([np.zeros(int(16000 * render.LEAD_S), np.float32), x]), lv, Settings(pitch=shift))
+            pieces += [render.level(np.nan_to_num(y[int(sr * render.LEAD_S):])), np.zeros(int(sr * 0.6), np.float32)]
         del lv
-        sf.write(str(out[key]), render.level(np.nan_to_num(y)), sr, subtype="PCM_16")
+        sf.write(str(out[key]), np.concatenate(pieces[:-1]), sr, subtype="PCM_16")
     return state(voice)
 
 
@@ -170,6 +179,8 @@ def keep(voice: str, which: str) -> dict:
             _move_voice(v.dir, aside, None, listed=False)           # the current one, set aside (never deleted)
             _move_voice(cand_dir, voices_dir() / voice, voice, listed=True)
             new_dir = voices_dir() / voice
+            from . import frozen
+            frozen.move_test(aside, new_dir)   # the frozen test follows the name; the kept one was scored on it (R1)
             meta = _meta(new_dir)
             ex = meta.setdefault("extra", {})
             ex.pop("pending_for", None)
@@ -181,6 +192,10 @@ def keep(voice: str, which: str) -> dict:
                     ex["tts"] = old_meta["extra"]["tts"]
             ex["improved_previous"] = {**rec, "aside": aside.name}
             _write_meta(new_dir, meta)
+            try:   # the kept candidate is the approved voice on the test now
+                frozen.approve(get_voice(voice), frozen.model_hash(get_voice(voice)))
+            except (OSError, ModelError):
+                pass
         _drop_samples(voice)
     gpu.forget_voice(voice)
     gpu.forget_voice(p["voice"])
@@ -224,6 +239,12 @@ def undo(voice: str) -> dict:
             _write_meta(cur, meta)
             _move_voice(cur, voices_dir() / rec["candidate"], rec["candidate"], listed=True)
             _move_voice(aside, voices_dir() / voice, voice, listed=True)
+            from . import frozen
+            frozen.move_test(voices_dir() / rec["candidate"], voices_dir() / voice)   # the test back with the name
+            try:
+                frozen.approve(get_voice(voice), frozen.model_hash(get_voice(voice)))
+            except (OSError, ModelError):
+                pass
             old = _meta(voices_dir() / voice)
             for k in ("improved_previous", "improved_turned_down"):   # its own older records: that Undo is spent
                 old.setdefault("extra", {}).pop(k, None)
