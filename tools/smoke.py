@@ -5063,6 +5063,17 @@ def _fake_demo_voice(d: Path):
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
 def u_page_rules():
     web = ROOT / "undercover" / "web"
+    import re
+    # P8-1: two page scripts declaring the same top-level name make the second one not load at all (a `const AS` in aside.js and tutorial.js killed
+    # the First assignment for two days). Every top-level const / let / class / var / function name must be unique across the scripts index.html loads.
+    ixh = (web / "index.html").read_text(encoding="utf-8")
+    seen = {}
+    for src in re.findall(r'<script src="/static/([^"]+[.]js)"', ixh):
+        for nm in re.findall(r"^(?:async\s+)?(?:const|let|var|class|function[*]?)\s+([A-Za-z_$][\w$]*)", (web / src).read_text(encoding="utf-8"), re.M):
+            seen.setdefault(nm, []).append(src)
+    clash = {k: v for k, v in seen.items() if len(v) > 1}
+    assert not clash, f"page scripts declare the same top-level name twice (the second script won't load): {clash}"
+    assert "const ASIDE = {" in (web / "aside.js").read_text(encoding="utf-8"), "aside.js's state is ASIDE (tutorial.js owns AS)"
     tut = (web / "tutorial.js").read_text(encoding="utf-8")
     # M1: the First assignment starts from default settings (a one-shot's backing voice / octave once rode into the cover)
     start = tut[tut.index("async function assignStart()"):tut.index("function assignGo(")]
