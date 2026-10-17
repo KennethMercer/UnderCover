@@ -2090,6 +2090,103 @@ def u_person_guess():
     return "likeness from its own save; guessed persons; Squidward corrected by its display; cards open; guard unchanged"
 
 
+@check("'tonight' is tonight (Internal Affairs P8-2): a tonight add arms the queue for the saved start time (23:00 when none, said so), never for now; an emptied queue disarms; Start now is one-time and goes back to the start time once dry; tonight's items (a move to the queue too) wait for the night")
+def u_tonight():
+    from datetime import datetime
+    from undercover.core import worklist
+    real = worklist.estimate
+    worklist.estimate = lambda i: {"total": 30}
+    try:
+        with isolated_data():
+            worklist._STATE = None
+            evening, night = datetime(2026, 10, 16, 20, 0), datetime(2026, 10, 17, 2, 30)
+            out = worklist.add("new", "Kristen Schaal")
+            st = worklist._state()
+            assert st["armed"] and not st.get("start_now") and out["starts_at"] == "23:00" and out.get("start_default"), out
+            assert st["queue"][0].get("night")
+            st["settings"]["start_at"] = "02:00"                       # the user's own start time
+            st["queue"].clear(); st["armed"] = False
+            out = worklist.add("new", "Kristen Schaal")
+            assert out["starts_at"] == "02:00" and not out.get("start_default"), out
+            assert worklist.next_item(st, evening) is None and st["armed"], "tonight ran in the evening"
+            assert worklist.next_item(st, night)["target"] == "Kristen Schaal"
+            # an emptied queue disarms: a later tonight add waits for the night instead of starting at once
+            st["queue"].clear()
+            assert worklist.next_item(st, evening) is None and not st["armed"]
+            # Start now: one-time; tonight's adds meanwhile wait; dry -> back to the saved start time
+            worklist.add("new", "Jon Stewart")
+            worklist.arm(None)
+            a = worklist.next_item(st, evening)
+            assert a and a["target"] == "Jon Stewart" and st["start_now"] and st["settings"]["start_at"] == "02:00"
+            a["state"] = "running"
+            worklist.add("new", "Kristen Schaal")                      # e.g. a paused job moved to the queue
+            assert worklist.next_item(st, evening) is None, "a tonight add ran during the Start now"
+            a["state"] = "done"
+            assert worklist.next_item(st, evening) is None and not st["start_now"] and st["armed"]
+            assert worklist.next_item(st, night)["target"] == "Kristen Schaal"
+            # an older Start now (it cleared the start time) is read as one
+            st["settings"]["start_at"] = None
+            st.pop("start_now", None)
+            for i in st["queue"]:
+                i.pop("night", None)                                  # (items from before had no flag)
+            assert worklist.next_item(st, evening)["target"] == "Kristen Schaal" and st["settings"]["start_at"] == "23:00"
+            worklist._STATE = None
+    finally:
+        worklist.estimate = real
+    return "arms for 23:00 (default, said) / 02:00 (saved); evening no, night yes; empty disarms; Start now one-time"
+
+
+@check("the small P8 fixes: the hold lifts when nothing held is left (P8-6), a Remove says what stays; time left never climbs (P8-3); plain messages with a clock time (P8-7/9); a gone candidate isn't offered (P8-7); measured check times and 'them' (P8-4); one estimator (P8-10)")
+def u_p8_small():
+    import inspect
+    from unittest import mock
+    from undercover.core import jobs as J, voices as V, worklist
+    from undercover.core.voices import ModelError, get_voice
+    from undercover.doubleagent import improved, night, service, sources
+    from undercover.frontman import oneshot, songs
+    with isolated_data():
+        worklist._STATE = None
+        st = worklist._state()
+        st["queue"] = [{"id": "p1", "kind": "new", "target": "Jon Stewart", "state": "paused"}]
+        st["held"] = True
+        out = worklist.remove("p1")
+        assert not out["held"] and "Storage" in out["note"], out
+        worklist._STATE = None
+        # a candidate whose folder is gone isn't offered
+        _voice_dir("spongebob-uc", {"trained": True, "improved_pending": {"voice": "spongebob-uc-next"}})
+        assert improved.state("spongebob-uc") is None
+        try:
+            get_voice("nope-uc")
+            raise AssertionError("found")
+        except ModelError as e:
+            assert "python" not in str(e) and "installed:" not in str(e), e
+        # measured check times lead the estimate
+        service._record_check("clips_new", 280.0)
+        service._record_check("per_voice", 120.0)
+        assert service.check_estimate_s("Nobody Here", 3) == 280.0 + 360.0
+        ch = oneshot.voice_choices("plankton", [get_voice("spongebob-uc")], others=2)
+        assert ch[1]["label"].startswith("Check them")
+        e = worklist.estimate_for("new", "Kristen Schaal", "speaking")
+        assert e["cadence"] and e["total"] == e["prepare"] + e["train"] + e["compare"] + e["cadence"], e
+    for mod in (sources, songs):
+        assert "top right" not in inspect.getsource(mod), mod.__name__
+    assert "Trying again at" in inspect.getsource(worklist) and "in an hour." not in inspect.getsource(worklist)
+    # time left: one step's progress stalling and restarting can't make it climb (766 s -> 4817 s)
+    job = J.Job("night")
+    job.planned_s = 900.0
+    t = [1000.0]
+    with mock.patch("undercover.core.jobs.time.time", lambda: t[0]):
+        lefts = []
+        for k in range(80):
+            t[0] += 1.5
+            p = 0.26 + 0.002 * (k % 20)                                 # crawls, restarts every 20 updates
+            job.push(stage="night", frac=p, message="Preparing clips: removing music and noise")
+            lefts.append(job.events[-1]["total_left"])
+    rises = [b - a for a, b in zip(lefts, lefts[1:])]
+    assert max(lefts) <= lefts[0] * 1.15 and max(rises) < 10, (lefts[0], max(lefts), max(rises))
+    return f"hold lifted; gone candidate hidden; plain texts; check 640 s measured; time left {lefts[0]:.0f}-{max(lefts):.0f} s"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -3306,15 +3403,15 @@ def u_likeness_word():
     from undercover.core.config import path
     from undercover.core.voices import get_voice, likeness_word, voice_info
     with isolated_data():
-        for name, lk in (("zz-t1", 0.5), ("zz-t2", 0.7), ("zz-t3", 0.8)):
+        for name, lk in (("zz-t1", 0.6), ("zz-t2", 0.7), ("zz-t3", 0.8)):
             _fake_voice(name, "trained", {"trained": True, "likeness": lk})
         _fake_voice("zz-t0", "trained", {"trained": True})
         for name in ("zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5"):
             _fake_voice(name, "https://x/y", {"person": "Zed"} if name == "zz-c5" else {})
         (path("cache_dir") / "voice_quality.json").write_text(json.dumps({
-            "zed|a": {"voice": "zz-c1", "score": 0.35}, "zed|b": {"voice": "zz-c2", "score": 0.5},
-            "zed|c": {"voice": "zz-c3", "score": 0.6}, "zed|d": {"voice": "zz-c4", "score": -0.02, "verdict": "bad"},
-            "other|e": {"voice": "zz-c5", "score": 0.7}, "zed|f": {"voice": "zz-c5", "score": 0.32}}), encoding="utf-8")
+            "zed|a": {"voice": "zz-c1", "score": 0.6}, "zed|b": {"voice": "zz-c2", "score": 0.75},
+            "zed|c": {"voice": "zz-c3", "score": 0.85}, "zed|d": {"voice": "zz-c4", "score": -0.02, "verdict": "bad"},
+            "other|e": {"voice": "zz-c5", "score": 0.9}, "zed|f": {"voice": "zz-c5", "score": 0.6}}), encoding="utf-8")
         got = {n: likeness_word(get_voice(n)) for n in ("zz-t0", "zz-t1", "zz-t2", "zz-t3", "zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5")}
         assert got == {"zz-t0": None, "zz-t1": "fair", "zz-t2": "good", "zz-t3": "great", "zz-c1": "fair", "zz-c2": "good",
                        "zz-c3": "great", "zz-c4": "poor", "zz-c5": "fair"}, got   # c5: its own person's check, not another's
@@ -7128,7 +7225,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
