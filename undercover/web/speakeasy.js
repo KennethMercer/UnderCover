@@ -422,7 +422,7 @@ function seRelease(id) {
   }
   if (SE.recId === id) SE.recId = null;
 }
-$("#se-all").onclick = () => { if (typeof L !== "undefined") L.cat = "speech"; store.set("uc-lib-cat", "speech"); showTab("safehouse"); window.scrollTo({ top: 0 }); };
+$("#se-all").onclick = () => { if (typeof L !== "undefined") L.cat = "speech"; store.set("uc-lib-cat", "speech"); location.hash = "#safehouse/library"; showTab("safehouse"); window.scrollTo({ top: 0 }); };
 
 seCount();
 

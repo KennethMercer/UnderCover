@@ -709,7 +709,9 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 }
 .cats { display: flex; gap: 6px; flex-wrap: wrap; }
 /* Kept / Recent and the kinds are one set of filters: one row on a wide page, a rule between the two groups */
-.lib-filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.lib-filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; min-width: 0; }
+.lib-filters .cats { min-width: 0; max-width: 100%; }
+@media (max-width: 760px) { .lib-filters .cats { flex: 1 1 100%; } }   /* the kinds are their own scrolling row on a phone (the row made the page 444 px wide at 375) */
 .lib-filters .tabs { margin: 0; border-bottom: 0; }
 @media (min-width: 761px) { .lib-filters .cats { padding-left: 18px; border-left: 1px solid var(--line); } }
 .lib-filters .tab:disabled { opacity: .55; cursor: default; }

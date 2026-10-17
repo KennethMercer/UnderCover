@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-17-pass9",
+      "date": "2026-10-17",
+      "title": "Backing voice shown, Let it speak asks first",
+      "lines": [
+        "A backing voice carried over from \"Use these settings\" is named in the summary, with one click to drop it.",
+        "Let it speak asks Now or Tonight and says how long it takes. A paused job shows as paused on DoubleAgent."
+      ]
+    },
+    {
       "id": "2026-10-16-polish",
       "date": "2026-10-16",
       "title": "Clearer Running room, tabs and scores",
