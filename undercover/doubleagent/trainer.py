@@ -394,10 +394,19 @@ class Trainer:
         best = min((h["val"] for h in hist if h.get("val") == h.get("val")), default=float("inf"))
         steps_per_epoch = len(_batches(items, bs))
         if not st.get("epochs"):   # fixed when the run starts, so resuming keeps the same plan
-            st["epochs"] = int(np.clip(round((st.get("steps") or LENGTHS.get(length, LENGTHS["auto"])) / steps_per_epoch), 1 if st.get("steps") else 20, 2000))
+            if st.get("steps"):   # a given budget (a refine, the lab): exactly that
+                planned = cap = int(st["steps"])
+            elif length == "auto":   # R5: 450 steps a kept minute (floor 8000), on to 2x while the held-out loss falls
+                from .frozen import budget_steps
+                planned, cap = budget_steps(proj.kept_seconds() / 60)
+            else:
+                planned = cap = LENGTHS.get(length, LENGTHS["auto"])
+            st["epochs"] = int(np.clip(round(cap / steps_per_epoch), 1 if st.get("steps") else 20, 2000))
+            st["planned_epochs"] = int(np.clip(round(planned / steps_per_epoch), 1, st["epochs"]))
         max_epochs = int(st["epochs"])
+        planned_epochs = int(st.get("planned_epochs") or max_epochs // 2 or 1)
         save_every = max(1, round(SAVE_STEPS / steps_per_epoch))
-        patience = max(10, max_epochs // 4)     # auto: stop when held-out loss hasn't improved for a quarter of the run
+        patience = max(10, planned_epochs // 4)     # auto: past the planned budget, stop when the held-out loss stalls
         st.update(state="training", steps_per_epoch=steps_per_epoch, error="")
         self._reprobe(st, sr)
         proj.save_train()
@@ -507,7 +516,7 @@ class Trainer:
                        eta=st["sec_per_epoch"] * (max_epochs - epoch), saved=saved, history=h,
                        sec_per_epoch=st["sec_per_epoch"])
                 # auto: stop once held-out loss hasn't improved for 100 epochs (after at least 150)
-                if length == "auto" and epoch >= max_epochs // 2 and st.get("best") and epoch - st["best"] >= patience:
+                if length == "auto" and not st.get("steps") and epoch >= planned_epochs and st.get("best") and epoch - st["best"] >= patience:
                     outcome = "early stop"
                     break
                 if control.wants_out():

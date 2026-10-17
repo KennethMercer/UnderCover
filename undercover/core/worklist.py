@@ -726,7 +726,16 @@ def report_words(kind: str, res: dict, display: str) -> dict:
     b, a = res.get("before"), res.get("after")
     bw, aw = word_of(b), word_of(a)
     num = isinstance(a, (int, float)) and isinstance(b, (int, float))
-    if res.get("pending") or res.get("pending_for"):
+    if res.get("nothing_new") and kind == "improve":   # phase 26: nothing new found, nothing left out: not even tried
+        out, plain = "same", f"Nothing new of {display} was found and every source still belongs, so yours is kept as it is."
+    elif res.get("kept") and kind == "improve":   # phase 26: Improve tried, the bar wasn't cleared, yours is kept
+        tried = res.get("tried") or {}
+        left = tried.get("left_out") or []
+        out = "not_better"
+        plain = (f"Improve tried {display}: no improvement, so yours is kept"
+                 + (f" ({tried.get('added_min')} min of new clips" + (f"; {len(left)} source{'s' if len(left) != 1 else ''} left out" if left else "") + ")."
+                    if tried.get("added_min") is not None else "."))
+    elif res.get("pending") or res.get("pending_for"):
         out, plain = "waiting", (f"A retrained {display} waits beside the current one"
                                  + (f" ({aw} against {bw})" if aw and bw else "") + ". Listen to both and keep the one you like.")
     elif kind == "cadence" and res.get("replaced") is not None:   # a cadence: replaced, or the one it had stays

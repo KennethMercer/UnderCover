@@ -1173,6 +1173,7 @@ def chain_cadence(job, name: str, push, control=None, asked: bool = False) -> di
     try:
         push("cadence", 0.0, f"Now {label_of(v.name)}'s cadence")
         c = train(job, v.name, push, control)
+        freeze_test(v.name, push)   # R1: the voice's frozen test, now that its own lines can be read with its cadence
     except jobs.Paused:
         try:
             worklist.add("cadence", v.name)
@@ -1183,6 +1184,24 @@ def chain_cadence(job, name: str, push, control=None, asked: bool = False) -> di
         return {"note": "Stopped before its cadence: Train cadence on its card when you like."}
     return {**{k: c[k] for k in ("after", "likeness", "cadence_gap", "wer", "replaced", "data_minutes")
                if c.get(k) is not None}, "note": c.get("note", "")}
+
+
+def freeze_test(name: str, push=None):
+    """A voice's frozen test (phase 26, R1), made when its cadence is: never fails the job it rides on."""
+    from . import frozen
+    from ..core.speaker import SpeakerEmbedder
+    try:
+        v = get_voice(name)
+        proj = project_for_voice(v)
+        if proj is None or frozen.load_test(v):
+            return
+        conv = gpu.MODELS.converter
+        frozen.ensure(v, proj, frozen.GpuEngine(conv, SpeakerEmbedder()),
+                      push=lambda f, m: (push or (lambda *a, **k: None))("test", f, m))
+    except (jobs.Cancelled, jobs.Paused):   # Stop means stop, and a Pause lands: never swallowed here
+        raise
+    except Exception as e:   # noqa: BLE001 - the test comes at the first Improve instead
+        print(f"frozen test for {name}: not made now ({type(e).__name__}: {e}); the first Improve makes it", flush=True)
 
 
 def _run_new(job, item) -> dict:
