@@ -111,7 +111,7 @@ def index_feats(data: dict) -> torch.Tensor:
 
 
 def choose_holdout(proj: Project) -> list[str]:
-    kept = [p for p in proj.phrases if p.kept]
+    kept = proj.training_phrases()
     good = sorted([p for p in kept if 3.0 <= p.dur <= 8.0], key=lambda p: -p.score)
     picked, used = [], set()
     for p in good:  # spread over sources first
@@ -130,7 +130,7 @@ def choose_holdout(proj: Project) -> list[str]:
 
 def data_key_for(proj: Project, sr: int) -> tuple[str, list[str], list[str]]:
     """(key, kept ids, holdout ids) for the current sample selection; the key changes when samples change."""
-    kept = sorted(p.id for p in proj.phrases if p.kept)
+    kept = sorted(p.id for p in proj.training_phrases())   # an unticked source's phrases never train (smallfix7)
     # a stored holdout whose phrases are all left out now (e.g. speech dropped for singing) would leave an empty set,
     # and an empty set used to be re-chosen on the next call: a different key, so a paused run restarted from zero
     holdout = [h for h in (proj.train.get("holdout") or []) if h in kept] or [h for h in choose_holdout(proj) if h in kept]
@@ -148,7 +148,7 @@ def prepare(proj: Project, hubert, rmvpe, sr: int, device, half: bool, progress=
             score(cur)
             cur.save()
         proj.phrases = cur.phrases
-    if sum(p.dur for p in proj.phrases if p.kept) < 60:
+    if proj.kept_seconds() < 60:
         raise ModelError("At least 1 minute of kept samples is needed to train (10+ minutes is better).")
     key, kept, holdout = data_key_for(proj, sr)
     tdir = proj.dir / "train"

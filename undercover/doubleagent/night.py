@@ -14,8 +14,6 @@ from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
                        # realtime on Elliott Smith's album tracks; downloads and phrase cutting take the rest)
-COMPARE_MIN = 6.0      # export + the candidate's score on the frozen test (R2: ~50 conversions, both input classes)
-FREEZE_MIN = 3.0       # a voice's first Improve freezes its test (R1): the donors, their own lines read once, the approved score
 SAME_PERSON = 0.35     # the current voice scoring under this against the new clips = they're probably someone else
 IMPROVE_SINGING_MIN = 30   # minutes of clean singing an "improve" aims for (more than ~30 rarely helps)
 
@@ -52,15 +50,16 @@ def estimate(item: dict) -> dict:
     else:
         steps = LENGTHS.get(length, LENGTHS["auto"])
     train = steps * _sec_per_step() / 60   # the planned budget runs in full (R5: early stop only past it): a 6-hour plan says 6 hours
-    compare = COMPARE_MIN if item["kind"] == "improve" else 1
-    if item["kind"] == "improve":
-        try:   # the first Improve of a voice freezes its test
+    compare = 1
+    if item["kind"] == "improve":   # export + the frozen test (made at a voice's first Improve), priced by its size
+        from .frozen import EXPORT_S, compare_seconds, load_test
+        try:
             from ..core.voices import get_voice
-            from .frozen import load_test
-            if load_test(get_voice(item["target"])) is None:
-                compare += FREEZE_MIN
+            test = load_test(get_voice(item["target"]))
         except ModelError:
-            pass
+            test = None
+        c = compare_seconds(test)
+        compare = (EXPORT_S + c["ensure"] + c["judge"]) / 60
     out = {"prepare": round(prep), "train": round(train), "compare": round(compare)}
     if item["kind"] == "new" and item.get("mode") == "speaking":   # its cadence follows (cadence.chain_cadence)
         from .cadence import CADENCE_MIN
@@ -402,9 +401,12 @@ def _improve(job, item) -> dict:
         pr.train["exported"] = old.name   # the installed voice is still the old one
         pr.train["voice_name"] = old.name   # the training form's name again (not the candidate's: P3-2)
         pr.save()
+    cost = frozen.compare_seconds(frozen.load_test(old))   # the time left said from the test's own size, not extrapolated
     try:
-        frozen.ensure(old, proj, engine, push=lambda f, m: push("night", 0.93 + 0.03 * f, m))   # lazily: its first Improve
-        verdict = frozen.judge(old, get_voice(cand), engine, push=lambda f, m: push("night", 0.96 + 0.03 * f, m))
+        frozen.ensure(old, proj, engine, push=lambda f, m: push("night", 0.93 + 0.03 * f, m,   # lazily: its first Improve
+                                                                total_left=round((1 - f) * cost["ensure"] + cost["judge"], 1)))
+        verdict = frozen.judge(old, get_voice(cand), engine, push=lambda f, m: push("night", 0.96 + 0.03 * f, m,
+                                                                                    total_left=round((1 - f) * cost["judge"], 1)))
     except (jobs.Cancelled, jobs.Paused):
         raise
     except Exception as e:   # noqa: BLE001 - a candidate that can't be judged is never left loose as "<voice>-next"
