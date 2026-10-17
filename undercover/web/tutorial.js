@@ -162,14 +162,15 @@ function assignGo(n, move = true) {
 }
 const assignTargets = () => AS.step > 0 && !AS.finished ? (ASSIGN[AS.step - 1].aim() || []).filter(Boolean) : [];
 // the lit edge follows its target through redraws (the library list, the result panel)
-let aimFrame = 0;
+let aimFrame = 0, aimTimer = 0;
 function reaim() {
-  aimFrame = 0;
+  aimFrame = 0; clearTimeout(aimTimer);
   const want = new Set(assignTargets());
   $$(".aim").forEach(el => { if (!want.has(el)) el.classList.remove("aim"); });
   want.forEach(el => el.classList.add("aim"));
 }
-new MutationObserver(() => { if (AS.step > 0 && !aimFrame) aimFrame = requestAnimationFrame(reaim); })
+// a frame, or 200 ms when the window isn't painting (the frame never comes and aimFrame stayed set, so the kept cover was never lit: RC pass 10, as P9-4)
+new MutationObserver(() => { if (AS.step > 0 && !aimFrame) { aimFrame = requestAnimationFrame(reaim); aimTimer = setTimeout(reaim, 200); } })
   .observe(document.body, { childList: true, subtree: true });
 
 async function assignShowKept() {   // SafeHouse > Library > Covers > Kept, so the kept cover is in sight
@@ -177,6 +178,8 @@ async function assignShowKept() {   // SafeHouse > Library > Covers > Kept, so t
   const soon = async sel => { for (let i = 0; i < 40 && !$(sel); i++) await new Promise(r => setTimeout(r, 50)); return $(sel); };
   (await soon('#lib-cats .cat[data-cat="covers"]'))?.click();
   (await soon('#lib-kfilter .tab[data-v="kept"]'))?.click();
+  const row = await soon('#lib-list .litem[data-kept="true"]');   // the list arrives after the clicks: light it and bring it into sight then
+  if (row && AS.step === 4) { reaim(); row.scrollIntoView({ behavior: "smooth", block: "center" }); }
 }
 
 // ------------------------------------------------------------ what moves it on: the real actions
