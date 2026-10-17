@@ -444,7 +444,7 @@ function renderDaOutcome() {
   box.innerHTML = weak
     ? `<h3>${name} is ready${w ? `, but only a ${likeWord(w)} likeness` : ", but it's weak"}.</h3>
        <p class="meta">${mins != null && mins < 10 ? `Only ${mins} minute${mins === 1 ? "" : "s"} of their clean voice were found; 10 is the aim. ` : ""}It sounds somewhat like them. More clips would make it good, or great.</p>
-       <div class="row"><button class="btn primary" type="button" data-da-more>Find more clips and keep training</button><span class="meta">${estWords("improve", v) || "about an hour"}</span>
+       <div class="row"><button class="btn primary" type="button" data-da-more>Find more clips and keep training</button><span class="meta">${estWords("improve", v)}</span>
          <button class="linkbtn quiet" type="button" data-da-close>Use it as it is</button></div>`
     : `<h3>${name} is ready${w ? `: a ${likeWord(w)} likeness` : ""}.</h3>
        <p class="meta">${mins ? `Trained from ${mins} minutes of their voice, checked against real clips. ` : ""}It's in your voices now.</p>
