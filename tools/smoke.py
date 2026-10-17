@@ -2018,6 +2018,10 @@ def u_report_words():
         ("improve", {"before": 0.66, "after": 0.66 + SAME + 0.01}, "better"),
         ("improve", {"before": 0.70, "after": 0.71}, "same"),
         ("improve", {"before": 0.72, "after": 0.66}, "not_better"),
+        ("cadence", {"after": 0.3, "replaced": False, "note": "none beat the current cadence 0.31"}, "not_better"),
+        ("cadence", {"after": 0.3, "replaced": True}, "better"),
+        ("cadence", {"after": 0.3, "replaced": False, "pending": True}, "waiting"),
+        ("smaller", {"note": "measured 0.76 against 0.7, kept"}, None),
     ]
     for kind, res, want in cases:
         w = report_words(kind, res, "Morgan Freeman")
