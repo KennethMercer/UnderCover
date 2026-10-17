@@ -1,72 +1,75 @@
 # UnderCover
 
-**Songs and speech in the voices you choose, made on your own PC.** No account, no cloud: nothing you make leaves the
-machine.
+UnderCover makes songs and speech in voices you choose, entirely on your own PC. It has no account and no cloud
+service, and what you make stays on the machine.
 
-UnderCover runs in your browser and works on your graphics card. Four rooms, one crew:
+It runs as a local web page and uses your graphics card. It is made of four parts:
 
-| | |
-|---|---|
-| **FrontMan** | Sings a song in another voice. Drop in a song, or type what you want: *"Hold On as Agent Smoke"*. |
-| **DoubleAgent** | Builds voices. Finds clean clips of a person, keeps only theirs, trains a voice, and can improve it overnight. |
-| **SpeakEasy** | Reads text aloud in a voice, with that person's own way of speaking when the voice has learnt it. |
-| **SafeHouse** | Keeps everything: covers, speech, songs and voices. Also the Running room, Storage, backups and the Doctor. |
+- **FrontMan** sings a song in another voice. You can drop in a song file or type a request such as
+  "Hold On as Agent Smoke".
+- **DoubleAgent** trains voices. It finds clean clips of a person, keeps only that person's voice, trains a model and
+  can improve it overnight.
+- **SpeakEasy** reads text aloud in a voice, in that person's own manner of speaking once the voice has learnt it.
+- **SafeHouse** keeps your covers, speech, songs and voices, and holds the Running room, Storage, backups and the
+  Doctor.
 
-The plain pages show only what gets a result. Scores, settings, logs and engine choices wait behind **Deep Cover**,
-the glasses in the top bar.
+The standard pages show what you need to get a result. Scores, settings, logs and engine choices are in Deep Cover,
+which you switch on from the top bar.
 
-## What it needs
+## Requirements
 
-- **Windows 11**, 64-bit. Windows 10 may work; it isn't tested.
-- **An AMD graphics card with ROCm for Windows:** Radeon RX 7000 or RX 9000 (RX 7700 and up, RX 9060 / 9070), or
-  Radeon PRO W7800 / W7900. That's the tested setup. Without one it runs on the processor: slowly, and without voice
-  training. NVIDIA builds in place but hasn't been tested on real hardware.
-- **About 15 GB free disk space:** 8.3 GB after setup, then the models each feature fetches the first time you use
-  it (covers 1.2 GB, speech 2.8 GB, listen-back 1.6 GB, training about 2 GB).
-- **A good internet connection for the first hour:** setup downloads about 2.5-3 GB.
+- Windows 11, 64-bit. Windows 10 may work but has not been tested.
+- An AMD graphics card supported by ROCm for Windows: Radeon RX 7700 or newer in the RX 7000 series, RX 9060 or
+  RX 9070, or Radeon PRO W7800 or W7900. Without a supported card UnderCover runs on the processor, much more slowly
+  and without voice training. NVIDIA cards have not been tested.
+- About 15 GB of free disk space. Setup uses 8.3 GB, and each feature downloads its models the first time you use it
+  (covers 1.2 GB, speech 2.8 GB, listen-back 1.6 GB, training about 2 GB).
+- An internet connection for setup, which downloads about 2.5 to 3 GB.
 
-## Install
+## Installing
 
-1. Run **`UnderCover-Setup-1.0.0.exe`**. It installs for you only (`%LOCALAPPDATA%\UnderCover`) and never asks for
-   admin rights. Windows may say it protected your PC, because the installer isn't signed: **More info**, then
-   **Run anyway**.
-2. Choose where your files go (the defaults are fine), and skip the optional add-ons unless you want them. Each one
-   shows its licence and installs only if you accept it yourself.
-3. A setup window downloads Python, PyTorch for your card and the tools, every one at a fixed version with a checked
-   checksum. It takes 20-40 minutes and ends with a self-test.
-4. Start **UnderCover** from the Start menu. It runs in the background (an icon by the clock) and opens in your
-   browser at `http://127.0.0.1:7860`. To quit: SafeHouse, then **Quit UnderCover**.
+1. Run `UnderCover-Setup-1.0.0.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
+   not need administrator rights. The installer is not signed, so Windows may show a warning; choose More info and
+   then Run anyway.
+2. Choose where your files are kept. The defaults are fine. Optional add-ons each show their licence and are only
+   installed if you accept it.
+3. A setup window then downloads Python, PyTorch for your card and the other tools, each at a fixed version with its
+   checksum verified. This takes 20 to 40 minutes and ends with a self-test.
+4. Start UnderCover from the Start menu. It runs in the background with an icon near the clock and opens in your
+   browser at `http://127.0.0.1:7860`. To quit, open SafeHouse and choose Quit UnderCover.
 
-The step-by-step for friends is [installer/FRIENDS.md](installer/FRIENDS.md). From a source checkout:
-`powershell -ExecutionPolicy Bypass -File installer\setup.ps1`, then `scripts\UnderCover.bat`.
+Step-by-step instructions are in [installer/FRIENDS.md](installer/FRIENDS.md). To run from a source checkout, use
+`powershell -ExecutionPolicy Bypass -File installer\setup.ps1` and then `scripts\UnderCover.bat`.
 
-**Your settings** live in `config.toml` in the app folder, and it holds only what you (or setup) changed. The defaults
-ship with the code in `undercover/config.default.toml`, so an update brings new defaults without touching your
-choices. The folder itself: `undercover/` (the app), `installer/`, `scripts/` (what you run: `UnderCover.bat`, the
-command-line cover tool `cover.bat`, the GPU check) and `tests/` (`python tests/smoke.py`).
+Your settings are stored in `config.toml` in the app folder, which holds only the values you or setup have changed.
+The defaults are in `undercover/config.default.toml`, so updates can add new defaults without changing yours.
+
+The repository contains `undercover/` (the application), `installer/`, `scripts/` (`UnderCover.bat`, the
+command-line cover tool `cover.bat` and the GPU check) and `tests/` (`python tests/smoke.py`).
 
 ## First run
 
-**The First assignment** walks you through a cover in about ten minutes: a short sample song, *Hold On*, sung by
-**Agent Smoke**, a demo voice made for UnderCover (not a real person). It ends by showing you how to train a voice of
-your own tonight. You can replay it from SafeHouse's Settings.
+The first time you open UnderCover, a short tutorial called the First assignment takes you through making a cover.
+It uses a sample song, *Hold On*, and a demo voice named Agent Smoke that was made for UnderCover and is not based on
+a real person. It finishes by showing you how to train a voice of your own overnight. You can run it again from
+SafeHouse's Settings.
 
-## Private by design
+## Privacy
 
-- The app listens on this PC only. No telemetry, no account, no analytics.
-- It downloads only the parts it needs (models from their publishers, pinned and checksum-verified) and what *you* ask
-  it to find (a song or clips of a person, through yt-dlp).
-- **Phone access** and **away from home** are off until you switch them on. Each phone pairs once with a code.
-- Your voices, songs, covers and speech live in plain folders you choose. Nothing deletes a voice behind your back:
-  a replaced or removed voice waits in SafeHouse's Storage until you delete it yourself.
+UnderCover only accepts connections from your own PC and sends no usage data. It downloads the models it needs from
+their publishers, pinned to fixed versions and verified by checksum, and anything you ask it to find, such as a song
+or clips of a person, through yt-dlp. Phone access and access from outside your home are off until you turn them on,
+and each phone has to be paired with a code.
 
-Use voices you have the right to use, and say a recording is synthetic when you share it.
+Your voices, songs, covers and speech are kept in ordinary folders that you choose. UnderCover never deletes a voice
+on its own: a replaced or removed voice is kept in SafeHouse's Storage until you delete it yourself.
 
+Only use voices you have the right to use, and say that a recording is synthetic when you share it.
 
-## When something breaks
+## Troubleshooting
 
-**SafeHouse → System → the Doctor** checks the install, fixes the common problems itself, and can save a diagnostics
-file (text only, no audio, your folder names shortened). **Start menu → Repair UnderCover** does the same from outside
-the app. Your voices, covers and settings stay.
+In SafeHouse, the System room has the Doctor, which checks the installation, fixes common problems and can save a
+diagnostics file. The file contains text only, no audio, and shortens your folder names. The Start menu also has a
+Repair UnderCover entry that does the same from outside the app. Your voices, covers and settings are not affected.
 
-What changed and when: [CHANGELOG.md](CHANGELOG.md).
+The history of changes is in [CHANGELOG.md](CHANGELOG.md).
