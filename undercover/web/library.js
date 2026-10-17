@@ -475,7 +475,7 @@ async function afterChangeKeep() { L.audio.pause(); await refreshAll(true); load
 // ------------------------------------------------------------ clean up
 $("#lib-clean-btn").onclick = async () => {
   const panel = $("#lib-clean");
-  if (!panel.hidden) { panel.hidden = true; return; }
+  if (!panel.hidden) { panel.hidden = true; stRowsSync?.(); return; }
   let g;
   try { g = await api("/api/library/cleanup"); } catch (e) { return showError(e.message); }
   const keys = Object.keys(g).filter(k => g[k].count);
@@ -518,6 +518,6 @@ $("#lib-clean-btn").onclick = async () => {
     catch (e) { showError(e.message, "Couldn't clean up"); upd(); }
   };
 };
-$("#lib-clean-close").onclick = () => { $("#lib-clean").hidden = true; };
+$("#lib-clean-close").onclick = () => { $("#lib-clean").hidden = true; stRowsSync?.(); };
 $("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); location.hash = "#safehouse/library"; showTab("safehouse"); };   // the Library room, not the last room (IA P9-12)
 
