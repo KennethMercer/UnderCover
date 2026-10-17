@@ -5,7 +5,8 @@ rem  - Double-clicked (or from the Desktop shortcut): runs in the background, no
 rem    (SafeHouse, "Quit UnderCover"); its output goes to logs\server.log.
 rem  - Run from a terminal: stays in that window with its output; Ctrl+C stops it.
 rem  - Force either way: UnderCover.bat --console   or   UnderCover.bat --background
-cd /d "%~dp0"
+rem (in scripts\: the app folder is one up, and everything below runs from there)
+cd /d "%~dp0.."
 set "UC_MODE="
 set "UC_ARGS=%*"
 if /i "%~1"=="--console" (set "UC_MODE=console" & set "UC_ARGS=")

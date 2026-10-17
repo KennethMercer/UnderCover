@@ -36,10 +36,10 @@ session. Items 6-9 are still open. On the dev PC nothing changes: `backend = "ro
 
 ## Nice to have
 
-7. **`config.toml [gpu]`.** `device_name = "7900 XTX"` is only read by `tools/check_env.py`. setup.ps1 rewrites it for
+7. **`config.toml [gpu]`.** `device_name = "7900 XTX"` is only read by `scripts/check_env.py`. setup.ps1 rewrites it for
    the detected card. `miopen_find_mode` / `hip_visible_devices` are ROCm-only and harmless elsewhere.
-   `tools/check_env.py` itself fails on non-ROCm torch by design; the installer uses `installer/selftest.py`
-   instead, so leave `tools/check_env.py` as the dev-machine guard.
+   `scripts/check_env.py` itself fails on non-ROCm torch by design; the installer uses `installer/selftest.py`
+   instead, so leave `scripts/check_env.py` as the dev-machine guard.
 8. **Restart button (`relaunch.py`).** It assumes the dev layout. Check that it still finds `.venv\Scripts\python.exe`
    under `%LOCALAPPDATA%\UnderCover`, and that `PATH` (tools\ffmpeg, tools\deno) survives the relaunch.
    UnderCover.cmd sets PATH, and child processes inherit it, so it should work.

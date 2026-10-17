@@ -33,6 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(1, str(ROOT / "scripts"))   # make_demo_voice (the demo voice's builder) lives there
 
 RESULTS: list = []
 try:   # a check's note with a non-Windows character (≥) must not fail the check when output goes to a file or pipe
@@ -870,7 +871,7 @@ def _fake_ts_set(state_file, **kw):
     """Change the fake Tailscale's state (signed in, Funnel approved...) through the fake itself: its processes change
     the same file at the same time, under its lock."""
     import subprocess
-    subprocess.run([sys.executable, str(ROOT / "tools" / "fake_tailscale.py"), "set", json.dumps(kw)], check=True,
+    subprocess.run([sys.executable, str(ROOT / "tests" / "fake_tailscale.py"), "set", json.dumps(kw)], check=True,
                    env={**os.environ, "FAKE_TS_STATE": str(state_file)}, timeout=30)
 
 
@@ -879,7 +880,7 @@ def u_tailnet():
     import re
     from undercover.core import tailnet
     from undercover.core.voices import ModelError
-    fake = ROOT / "tools" / "fake_tailscale.py"
+    fake = ROOT / "tests" / "fake_tailscale.py"
     with isolated_data() as box:
         st = box / "fake-ts.json"
         os.environ["FAKE_TS_STATE"] = str(st)
@@ -2788,7 +2789,7 @@ def u_config_layers():
     return "overlay; fresh = defaults; migrate keeps values (path, quoted list, bool), the full file, once; writes go to the user file"
 
 
-@check("the product repo's root (layout, user 2026-10-17: 'shouldn't root be basically the readme, changelog, and project folder'): README, CHANGELOG, .gitignore, UnderCover.bat, docs/MASTERPLAN.md and the undercover / installer / tools folders; constraints, check_env and cover.bat moved and every reference follows; the user's config.toml is ignored")
+@check("the product repo's root (layout + layout2, user 2026-10-17: 'shouldn't root be basically the readme, changelog, and project folder', 'do it'): README, CHANGELOG, .gitignore, docs/MASTERPLAN.md and the undercover / installer / scripts / tests folders; every reference to a moved file follows; the user's config.toml is ignored")
 def u_layout():
     import re
     import subprocess
@@ -2796,32 +2797,108 @@ def u_layout():
     if not files:
         return "not a git checkout: skipped"
     top = sorted({f.split("/")[0] for f in files})
-    assert top == [".gitignore", "CHANGELOG.md", "README.md", "UnderCover.bat", "docs", "installer", "tools", "undercover"], top
+    assert top == [".gitignore", "CHANGELOG.md", "README.md", "docs", "installer", "scripts", "tests", "undercover"], top
     assert sorted(f for f in files if f.startswith("docs/")) == ["docs/MASTERPLAN.md"]
-    for f in ("installer/constraints.txt", "tools/check_env.py", "tools/cover.bat", "undercover/config.default.toml"):
+    # layout2 (user, 2026-10-17: "do it"): the tests and what they need in tests/, the things you run in scripts/
+    assert sorted(f for f in files if f.startswith("tests/")) == ["tests/fake_tailscale.py", "tests/golden.py", "tests/smoke.py"]
+    assert sorted(f for f in files if f.startswith("scripts/")) == ["scripts/UnderCover.bat", "scripts/check_env.py", "scripts/cover.bat",
+                                                                    "scripts/make_demo_voice.py", "scripts/reader_prints.py"]
+    for f in ("installer/constraints.txt", "undercover/config.default.toml"):
         assert f in files, f
     ign = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "/config.toml" in ign.splitlines() and "/config.before-defaults*.toml" in ign.splitlines()
     iss = (ROOT / "installer" / "UnderCover.iss").read_text(encoding="utf-8-sig")
-    assert '"..\\tools\\check_env.py"' in iss and 'Source: "constraints.txt"; DestDir: "{app}\\installer"' in iss
+    assert '"..\\scripts\\check_env.py"; DestDir: "{app}\\scripts"' in iss and 'Source: "constraints.txt"; DestDir: "{app}\\installer"' in iss
     assert '"..\\config.toml"' not in iss, "the installer ships a config.toml again"
     setup = (ROOT / "installer" / "setup.ps1").read_text(encoding="utf-8-sig")
     assert setup.count("-m undercover.core.config set") == 2 and "WriteAllText($cfg" not in setup, "setup edits config.toml text again"
     assert "-m undercover.core.config get gpu backend" in setup
-    cover = (ROOT / "tools" / "cover.bat").read_text(encoding="utf-8")
+    cover = (ROOT / "scripts" / "cover.bat").read_text(encoding="utf-8")
     assert r'"%~dp0..\.venv\Scripts\python.exe" -m undercover.cli' in cover and "PYTHONPATH=%~dp0.." in cover
-    assert "from undercover.core.config import CONFIG" in (ROOT / "tools" / "check_env.py").read_text(encoding="utf-8")
-    bat = (ROOT / "UnderCover.bat").read_text(encoding="utf-8")
-    assert '".venv\\Scripts\\python.exe" -m undercover.server' in bat and 'cd /d "%~dp0"' in bat
+    assert "from undercover.core.config import CONFIG" in (ROOT / "scripts" / "check_env.py").read_text(encoding="utf-8")
+    bat = (ROOT / "scripts" / "UnderCover.bat").read_text(encoding="utf-8")
+    assert '".venv\\Scripts\\python.exe" -m undercover.server' in bat and 'cd /d "%~dp0.."' in bat, "UnderCover.bat must start from the app folder"
     # nothing still looks for the moved files at the root
     stale = []
     for f in files:
         if f.endswith((".py", ".ps1", ".iss", ".bat", ".js")) and not f.startswith("tools/research"):
             txt = (ROOT / f).read_text(encoding="utf-8-sig", errors="replace")
-            if re.search(r'ROOT\s*/\s*"constraints\.txt"|"\.\.\\\\constraints\.txt"|ROOT\s*/\s*"check_env\.py"', txt):
+            if re.search(r'ROOT\s*/\s*"constraints\.txt"|"\.\.\\\\constraints\.txt"|ROOT\s*/\s*"check_env\.py"|ROOT\s*/\s*"UnderCover\.bat"|'   # (an installed app's tools\ holds uv, ffmpeg, Deno)
+                         r'tools[/\\](smoke|golden|fake_tailscale|make_demo_voice|reader_prints|check_env|cover)\b', txt):
                 stale.append(f)
     assert not stale, f"these still look for a moved file at the root: {stale}"
     return f"root: {', '.join(top)}; moves followed in the installer, setup, tools and code"
+
+
+@check("the user's shortcuts follow UnderCover.bat into scripts\\ (layout2): once, at a real start, the desktop / Start menu / Startup shortcuts aimed at the old one are aimed at the new one; never in a test, a sandbox or a golden run, nor in an installed copy; a failure is tried again next start (mocked: the real shortcuts are never touched)")
+def u_launcher_moved():
+    import inspect
+    import json as _json
+    import subprocess
+    import tempfile
+    import undercover.server as entry
+    from undercover.core import config, platform
+    calls, real = [], platform.repoint_shortcuts
+    outcome = {"raise": None}
+
+    def fake(old, new, folders=None):
+        assert folders is None   # the entry point asks for the user's own folders: this fake is all that answers it
+        calls.append((Path(old), Path(new)))
+        if outcome["raise"]:
+            raise outcome["raise"]
+        return [r"C:\\Users\\x\\Desktop\\UnderCover.lnk"]
+    platform.repoint_shortcuts = fake
+    try:
+        with isolated_data():
+            with tempfile.TemporaryDirectory(prefix="uc-launch-") as td:
+                app = Path(td)
+                (app / "scripts").mkdir()
+                (app / "scripts" / "UnderCover.bat").write_text("@echo off\n", encoding="utf-8")
+                assert entry.repoint_launchers(app, env={"UNDERCOVER_TEST_ROOTS": td}) is None and not calls, "a test run looked at shortcuts"
+                assert entry.repoint_launchers(app, env={"UNDERCOVER_CONFIG": "x"}) is None and not calls, "a sandbox / golden run looked"
+                outcome["raise"] = OSError("PowerShell said no")
+                assert entry.repoint_launchers(app, env={}) is None and len(calls) == 1
+                mark = config.path("cache_dir") / entry.LAUNCHER_MOVED
+                assert not mark.exists(), "a failure was marked done"
+                outcome["raise"] = None
+                assert entry.repoint_launchers(app, env={}) == [r"C:\\Users\\x\\Desktop\\UnderCover.lnk"]
+                assert calls[-1] == (app / "UnderCover.bat", app / "scripts" / "UnderCover.bat"), calls[-1]
+                assert _json.loads(mark.read_text(encoding="utf-8"))["changed"], "the mark doesn't say what moved"
+                assert entry.repoint_launchers(app, env={}) is None and len(calls) == 2, "looked twice"
+                mark.unlink()
+                (app / "UnderCover.bat").write_text("@echo off\n", encoding="utf-8")   # the old one still there: nothing to do
+                assert entry.repoint_launchers(app, env={}) is None and len(calls) == 2
+                inst = Path(td) / "installed"
+                inst.mkdir()
+                (inst / "UnderCover.cmd").write_text("@echo off\n", encoding="utf-8")   # an installed copy: no scripts\UnderCover.bat
+                assert entry.repoint_launchers(inst, env={}) is None and len(calls) == 2
+    finally:
+        platform.repoint_shortcuts = real
+    src = inspect.getsource(entry.main)
+    assert src.index("_migrate()") < src.index("repoint_launchers()") < src.index("from .app.server import"), "start order"
+    # the real helper on shortcuts of its own, in a temp folder (Windows only): only the ones aimed at the old file move
+    if os.name != "nt":
+        return "repointed once, never in tests / sandboxes / installed copies, retried after a failure (no Windows here for the .lnk round trip)"
+    with tempfile.TemporaryDirectory(prefix="uc-lnk-") as td:
+        d = Path(td)
+        old, new, other = d / "UnderCover.bat", d / "scripts" / "UnderCover.bat", d / "Other.bat"
+        sub = d / "Startup"
+        platform.startup_entry(True, old, folder=d)                  # UnderCover.lnk -> the old .bat
+        platform.startup_entry(True, old, folder=sub)                # one deeper, as "Start with Windows" sits in the Start menu
+        (d / "keep").mkdir()
+        platform.startup_entry(True, other, folder=d / "keep")      # a shortcut to something else
+        changed = platform.repoint_shortcuts(old, new, folders=[d])
+        assert sorted(Path(c).parent.name for c in changed) == sorted([d.name, "Startup"]), changed
+
+        def target(link):
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                f"(New-Object -ComObject WScript.Shell).CreateShortcut('{link}').TargetPath"],
+                               capture_output=True, text=True, timeout=30)
+            return Path(r.stdout.strip())
+        assert target(d / "UnderCover.lnk") == new and target(sub / "UnderCover.lnk") == new
+        assert target(d / "keep" / "UnderCover.lnk") == other, "a shortcut to another file moved"
+        assert platform.repoint_shortcuts(old, new, folders=[d]) == []
+    return "repointed once (the old .bat's shortcuts, deep too; others kept); never in tests / sandboxes / installed copies; retried after a failure"
 
 
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
@@ -6193,7 +6270,7 @@ def u_tutorial():
     import inspect
     from undercover.doubleagent import api as da_api   # "Do it all" called a local function named like the module it uses
     assert "def service(" not in inspect.getsource(da_api.start_auto), "start_auto shadows the service module again"
-    why = tutorial.demo_files()   # the real shipped demo voice: its files are made by tools/make_demo_voice.py, not kept in git
+    why = tutorial.demo_files()   # the real shipped demo voice: its files are made by scripts/make_demo_voice.py, not kept in git
     return ("fresh: done null + both seeds; existing install; done; reset re-seeds once; manifest checked; never searched for; "
             + ("the shipped demo voice matches its manifest" if why is None else f"NOTE: {why}"))
 
@@ -6233,7 +6310,7 @@ def u_platform():
     # Start with Windows: only ever in a folder of the test's own
     if platform.WINDOWS:
         with tempfile.TemporaryDirectory(prefix="uc-startup-") as d:
-            target = ROOT / "UnderCover.bat"
+            target = ROOT / "scripts" / "UnderCover.bat"
             assert not platform.startup_entry_state(d)
             assert platform.startup_entry(True, target, folder=d) and platform.startup_entry_state(d)
             assert not platform.startup_entry(False, target, folder=d) and not platform.startup_entry_state(d)
@@ -8093,7 +8170,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -8109,9 +8186,9 @@ def main():
             port = sandbox_port()
             print(f"API checks (a sandbox server on port {port}: scratch folders, the real models read-only)")
             try:
-                # away from home's checks drive a fake Tailscale (tools/fake_tailscale.py): the sandbox server inherits these
+                # away from home's checks drive a fake Tailscale (tests/fake_tailscale.py): the sandbox server inherits these
                 import tempfile
-                os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tools" / "fake_tailscale.py")
+                os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tests" / "fake_tailscale.py")
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):

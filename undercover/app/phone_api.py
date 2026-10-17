@@ -1,7 +1,7 @@
 """Phone access on the server (phase 11): the route table, the second listener, and the /api/phone routes.
 
 ROUTES is the one list of every route and what a paired phone may do with it (the handoff's security table is made from
-it; tools/smoke.py checks that every route the code answers is in it):
+it; tests/smoke.py checks that every route the code answers is in it):
     "open"   no token needed from the network: the pairing page and its claim, the home-screen manifest and its icons
     "phone"  a paired phone may use it (everything on the basic pages)
     "pc"     refused for phones with a plain message: Restart, Quit, storage moves and clean-up, add-on installs, the

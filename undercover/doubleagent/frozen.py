@@ -22,7 +22,7 @@ The user's words: "re-training shouldn't be able to make it worse like that". So
   R8  Hygiene: scores from different tests never compare; a scratch retrain is a new voice of the same person.
 
 The GPU sits behind `Engine` (pitch, convert, embed, content, read), so everything here runs on fixed numbers in
-tools/smoke.py. Nothing here deletes a voice: a candidate that isn't offered is set aside by its caller.
+tests/smoke.py. Nothing here deletes a voice: a candidate that isn't offered is set aside by its caller.
 """
 import hashlib
 import json

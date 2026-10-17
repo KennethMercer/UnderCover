@@ -1005,7 +1005,7 @@ def set_display(name: str, text: str) -> Voice:
 
 def remove_voice(name: str):
     """The one code path that deletes a voice folder, and only for the CLI's remove and a one-shot's own
-    just-downloaded community voices (tools/smoke.py u_no_voice_deletes holds the callers). The user's Delete sets the
+    just-downloaded community voices (tests/smoke.py u_no_voice_deletes holds the callers). The user's Delete sets the
     voice aside (remove_to_aside) and a replace does too (set_aside); deleting for good is SafeHouse's Set aside
     section (safehouse/library.remove_aside)."""
     v = get_voice(name)

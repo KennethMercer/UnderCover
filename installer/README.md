@@ -29,7 +29,7 @@ downloads the matching PyTorch and tools. Nothing heavy is bundled.
   accept" under its licence summary; then `python -m undercover.addons install <id> --accept-licence`, whose packages
   install from `requirements/addon-<id>.txt` with hashes). The add-ons list is generated from the registry at build
   time (`build.ps1` -> `addons.isi`).
-- **Launcher:** `UnderCover.cmd` behaves like `UnderCover.bat` (from the Start menu / a shortcut: windowless in the
+- **Launcher:** `UnderCover.cmd` behaves like `scripts\UnderCover.bat` (from the Start menu / a shortcut: windowless in the
   background, quit from SafeHouse; from a terminal: stays in the window). "Start UnderCover now" passes --background.
 - **Uninstall** keeps the training projects (`cache\training`: hours of collected clips); it removes only caches that
   are re-made when needed.
