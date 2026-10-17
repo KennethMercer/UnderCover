@@ -2597,6 +2597,34 @@ def u_compare_priced():
     return f"6 lines + 8 donors: {c['judge']:.0f} s; a first Improve's freeze + compare: {(first['ensure'] + first['judge']) / 60:.1f} min"
 
 
+@check("one version (release-prep): undercover/VERSION is the only place it's written; about.VERSION, the System room / Doctor / diagnostics (about.about), the installer (UnderCover.iss reads the file, build.ps1 checks it) and the friends' guide and README all say it; What's new has the 1.0 entry")
+def u_version():
+    import re
+    from undercover.core import about
+    web = ROOT / "undercover" / "web"
+    v = (ROOT / "undercover" / "VERSION").read_text(encoding="utf-8").strip()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", v), v
+    assert about.VERSION == v and about.about()["version"] == v, (about.VERSION, v)
+    iss = (ROOT / "installer" / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    assert 'undercover\\VERSION' in iss and "FileRead(" in iss, "the installer doesn't read undercover\\VERSION"
+    assert not re.search(r'#define\s+AppVersion\s+"', iss), "the installer writes its own version again"
+    assert "undercover\\VERSION" in (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
+    for doc in ("installer/FRIENDS.md", "README.md"):
+        assert f"UnderCover-Setup-{v}.exe" in (ROOT / doc).read_text(encoding="utf-8"), f"{doc} names another installer"
+    # no other file writes the app's version as a literal (the System room reads about.version from the Doctor's report)
+    for f in [ROOT / "undercover" / "core" / "about.py", ROOT / "undercover" / "core" / "manifest.py", ROOT / "undercover" / "core" / "diagnostics.py",
+              web / "rooms.js", web / "index.html"]:
+        txt = f.read_text(encoding="utf-8")
+        assert not re.search(r"""(VERSION|version)\s*[:=]\s*["']\d+\.\d+\.\d+["']""", txt), f"{f.name} writes a version of its own"
+    assert "a.version" in (web / "rooms.js").read_text(encoding="utf-8")
+    wn = json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"]
+    ids = [e["id"] for e in wn]
+    assert len(ids) == len(set(ids)) and wn[0]["title"] == f"UnderCover {v.rsplit('.', 1)[0] if v.endswith('.0') else v}", wn[0]
+    assert 1 <= len(wn[0]["lines"]) <= 4
+    assert f"## {v}" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    return f"{v} from one file: app, System room, Doctor, diagnostics, installer, guides, What's new, changelog"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -7853,7 +7881,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

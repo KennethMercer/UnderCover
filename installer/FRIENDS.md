@@ -16,7 +16,7 @@ anywhere.
 
 ## Install
 
-1. **Run `UnderCover-Setup-0.4.0.exe`.** Windows may say "Windows protected your PC": the installer isn't signed. Click
+1. **Run `UnderCover-Setup-1.0.0.exe`.** Windows may say "Windows protected your PC": the installer isn't signed. Click
    **More info**, then **Run anyway**. It installs for you only and never asks for admin rights.
 2. **"Where should UnderCover keep your files?"** The defaults are fine. Pick another drive if your C: drive is
    short on space.
