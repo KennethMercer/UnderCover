@@ -2264,6 +2264,36 @@ def u_p9():
     return "01:36 starts now (done 01:56); 48-min waits, 20-min runs (done 06:50); Final -> none, Obama -> Barack Obama; reading kept"
 
 
+@check("Start at never resumes held work the user paused (smallfix6 addendum): arm() lifts only the queue's own pause; settings() saves a valid HH:MM start_at without arming")
+def u_start_at_hold():
+    from undercover.core import worklist
+    from undercover.core.voices import ModelError
+    with isolated_data():
+        worklist._STATE = None
+        st = worklist._state()
+        st["held"], st["held_by"] = True, "you"
+        st["resume"] = [{"id": "h1", "kind": "oneshot", "text": "pink pony club as plankton", "label": "One-shot"}]
+        out = worklist.arm("02:00")                                    # Start at, the queue empty
+        assert out["held"] and st["resume"] and st["armed"], "Start at lifted the user's hold"
+        worklist.arm(None)                                             # Start now: the same
+        assert st["held"] and st["resume"]
+        st["resume"] = []
+        st["queue"] = [{"id": "q1", "kind": "new", "target": "A", "state": "paused"}]
+        worklist.arm("02:00")                                          # the queue's own pause only: it goes on
+        assert not st["held"] and st["queue"][0]["state"] == "queued"
+        worklist.arm(False)
+        out = worklist.settings(start_at="03:15")
+        assert out["settings"]["start_at"] == "03:15" and not out["armed"], out
+        for bad in ("25:00", "3:15", "soon", 315):
+            try:
+                worklist.settings(start_at=bad)
+                raise AssertionError(f"{bad!r} accepted")
+            except ModelError:
+                pass
+        worklist._STATE = None
+    return "held one-shot stays held through Start at / Start now; queue pause lifts; start_at saved, bad ones refused"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -7306,7 +7336,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_at_hold, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
