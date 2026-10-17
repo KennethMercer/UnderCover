@@ -50,7 +50,8 @@ function noteVoices(list) {
 }
 const voiceDisplay = id => VOICES.get(id)?.display || id || "";
 const voiceTrained = id => { const t = VOICES.get(id)?.trained; return t != null ? !!t : /-uc$/.test(id || ""); };
-const vname = id => id ? `<span class="vname" data-voice="${esc(id)}"${voiceTrained(id) ? ' data-trained="1" title="Trained in UnderCover"' : ""}>${esc(voiceDisplay(id))}${voiceTrained(id) ? '<span class="sr-only"> (trained in UnderCover)</span>' : ""}</span>` : "";
+// sr: the screen-reader-only "(trained in UnderCover)"; lines that already say "trained here" next to the name pass false so it isn't read twice
+const vname = (id, sr = true) => id ? `<span class="vname" data-voice="${esc(id)}"${voiceTrained(id) ? ' data-trained="1" title="Trained in UnderCover"' : ""}>${esc(voiceDisplay(id))}${sr && voiceTrained(id) ? '<span class="sr-only"> (trained in UnderCover)</span>' : ""}</span>` : "";
 // How like the person a voice sounds, in a word and its dot (the server's likeness_word, on every voice API: "great" |
 // "good" | "fair" | "poor"; poor = a downloaded voice the check judged bad or broken; null = not measured, so nothing).
 // The page never sets the cut-offs. The word sits in the sentence's own font; the dot alone is the shorthand in lists.
@@ -83,10 +84,15 @@ async function api(path, opts = {}) {
   return data;
 }
 // action: optional { label, run } shown as a button in the banner; info: accent stripe instead of red
+// No command lines in the page (IA P8-7): "... Search for one with: python -m undercover.core.voices search x" is for developers, so the sentence goes.
+const plainMsg = m => String(m ?? "").replace(/\s*(?:Search for one with|Run|Try|Use):?\s*(?:python|py|pip)\s+-m\s.*$/i, "").trim();
 function showError(msg, title = "Something went wrong", action = null, info = false) {
+  msg = plainMsg(msg);
   if (/^One is already waiting/.test(msg || "")) title = "One is already waiting";   // a retrained voice waits to be heard first
   $("#err-title").textContent = title; $("#err-msg").textContent = msg; $("#err").hidden = false;
   $("#err").classList.toggle("info", info);
+  clearTimeout(showError.t);   // an info note says what just happened: it goes after a while (IA P8-13: "Added to tonight" stayed up for half an hour); a real error stays
+  if (info && !action) showError.t = setTimeout(() => { if ($("#err").classList.contains("info") && $("#err-msg").textContent === msg) $("#err").hidden = true; }, 15000);
   const b = $("#err-action");
   b.hidden = !action; b.disabled = false;
   if (action) { b.textContent = action.label; b.onclick = action.run; }
@@ -408,7 +414,7 @@ function renderVoices() {
   else box.innerHTML = shownList.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
-      <span class="vtext"><b>${vname(v.name)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
+      <span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
       <span class="vside"><button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {

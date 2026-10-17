@@ -180,6 +180,7 @@ function setRunning(on, title) {
   $("#os-h").textContent = on ? title : "Make a cover in one go";
   $("#os-cancel").textContent = "Cancel";
   clearInterval(OS.timer);
+  if (on && $("#progress-h").textContent === "Done") $("#progress").hidden = true;   // the last manual cover's "Finished in 20.1 s" isn't this cover's (IA P8-13)
   if (on) {
     OS.t0 = performance.now();
     OS.timer = setInterval(() => {

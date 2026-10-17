@@ -532,10 +532,12 @@
       <button class="room" role="tab" type="button" data-room="settings" aria-selected="false"><svg class="ico" aria-hidden="true"><use href="#r-settings"/></svg>Settings</button>
     </div>
     <div class="sh-room" id="room-library">
+    <div class="lib-filters">
     <div class="tabs small" id="lib-kfilter" role="group" aria-label="Kept or recent">
       <button class="tab" type="button" data-v="kept" aria-pressed="true">Kept <b id="lib-n-kept"></b></button>
       <button class="tab" type="button" data-v="recent" aria-pressed="false">Recent <b id="lib-n-recent"></b></button></div>
     <div class="cats" id="lib-cats" role="group" aria-label="Show"></div>
+    </div>
     <div class="lib-tools">
       <input type="search" id="lib-q" autocomplete="off" aria-label="Search the library">
       <select id="lib-sort" aria-label="Sort" data-deep></select>
@@ -621,14 +623,14 @@
           <button type="button" data-v="cadence" aria-pressed="false">Cadence</button>
         </div>
         <div id="q-improve">
-          <p class="meta">More singing (their album tracks first) or more speech, every clip checked again, a fresh training. The new voice replaces the old only if it measures better.</p>
+          <p class="meta">More singing (their album tracks first) or more speech, every clip checked again, a fresh training. The new voice waits beside the old one: you hear both, blind, and keep the one you like.</p>
           <div class="vpick" id="q-cands"></div>
           <div class="row spread"><span class="meta" id="q-sel-sum">Tick the voices to improve.</span><button class="btn primary" id="q-add-sel" type="button" disabled>Add to the queue</button></div>
           <details class="qother" id="q-other" hidden data-deep><summary class="meta">Voices that can't be improved</summary><p class="meta" id="q-cands-off"></p></details>
         </div>
         <div id="q-cadence" hidden>
           <p class="meta">Teaches a voice how the person talks (their pace and pauses), for SpeakEasy. It transcribes their clips, measures
-            how they speak and picks the clip that reads most like them: minutes, not hours. Kept only if it sounds more like them.</p>
+            how they speak and picks the clip that reads most like them: minutes, not hours. The new reading waits for your ear: you hear both and keep the one you like.</p>
           <div class="vpick" id="q-cad-cands"></div>
           <div class="row spread"><span class="meta" id="q-cad-sum">Tick the voices.</span><button class="btn primary" id="q-cad-add" type="button" disabled>Add to the queue</button></div>
         </div>

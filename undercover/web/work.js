@@ -149,6 +149,8 @@ const runRoomOpen = () => !$("#view-library").hidden && !$("#room-running").hidd
 function loadRunRoom() { renderRunRoom(); refreshJobs(true); loadQueue(); }   // rooms.js, when the room opens
 const ENDED = { done: ["ok", "done"], error: ["bad", "failed"], cancelled: ["warn", "cancelled"], paused: ["warn", "paused"], lost: ["bad", "stopped"] };
 const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+// a source that wouldn't answer (YouTube blocked): the server says "Trying again in an hour"; the page says when (the item's retry_after)
+const queueNote = i => i.retry_after ? `${String(i.note || "").replace(/\s*(?:The queue t|T)rying again in an hour\.?|\s*The queue tries again in an hour\.?/i, "").trim()} Tries again at ${hhmm(i.retry_after)}.`.trim() : (i.note || "");
 // the room redraws on every job event: a part is rewritten only when its HTML changed, so focus and clicks survive
 const shown = new WeakMap();
 const put = (el, html) => { if (shown.get(el) === html) return false; el.innerHTML = html; shown.set(el, html); return true; };
@@ -221,7 +223,7 @@ function renderRunRoom() {
   $("#rn-stop").hidden = !w?.armed;
   const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
     const run = i.state === "running";
-    const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
+    const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : queueNote(i);
     return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobKind(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
       <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
   }).join("") : `<p class="meta">Nothing queued for tonight. Add a voice to improve, or train a new one, and it runs while you sleep.</p>`;
@@ -235,7 +237,7 @@ function renderRunRoom() {
   const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);
   put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = ENDED[st] || ["warn", st];
-    const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : j.final?.message || "";
+    const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");
     return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}${how ? ` · ${esc(how)}` : ""}</small></span>
       <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span>${j.retry ? `<button class="linkbtn" type="button" data-retry="${esc(j.id)}">Retry</button>` : ""}<button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
   }).join("") : `<p class="meta">Nothing has finished in the last hour.</p>`);
@@ -286,7 +288,7 @@ function renderDrawer() {
     const run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state), owner = ownerOf(i.kind);
     const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
     const note = done ? `${i.state} · ${fmtMin(i.minutes)}${i.result?.note ? " · " + i.result.note : ""}` : run ? [live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")
-      : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
+      : i.state === "paused" ? "paused · Resume continues it" : queueNote(i);
     return `<div class="qd-job ${run ? "running" : ""} ${done ? "done" : ""}" data-owner="${owner}">
       <div><span class="kind">${MOD_NAME[owner]} · ${jobKind(i)}</span><b>${jobWhat(i)}</b>${note ? `<small>${esc(note)}</small>` : ""}
         ${run ? `<div class="bar"><i style="width:${Math.round((live.fraction || 0) * 100)}%"></i></div>` : ""}</div>
@@ -323,7 +325,7 @@ function renderQueue() {
          : [["prepare", "prepare"], ["train", "train"], ["compare", i.kind === "improve" ? "compare" : "check"]])
           .filter(([k]) => e[k]).map(([k, l]) => `<span class="qchip">${l} ~${fmtMin(e[k])}</span>`).join("");
     const note = done ? esc(i.result?.note || "") : run ? esc([live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")) : i.state === "paused" ? "paused · Resume (top of the page) continues it"
-      : i.now ? "starts as soon as the GPU is free" : esc(i.note || "");
+      : i.now ? "starts as soon as the GPU is free" : esc(queueNote(i));
     return `<div class="qjob ${run ? "running" : ""} ${done ? "done" : ""}" draggable="${!run && !done}" data-id="${i.id}">
       <span class="grip" aria-hidden="true">${run || done ? "" : "⋮⋮"}</span>
       <div><b>${what}</b>${note ? `<p class="meta">${note}</p>` : ""}<div class="qchips">${chips}</div>
@@ -375,9 +377,9 @@ function renderReport(r) {
     const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: likeness ${cad.likeness} · gap ${cad.cadence_gap} · WER ${cad.wer} · from ${cad.data_minutes} min</p>` : "";
     const raw = x.note || "";
     const hasNum = /\d\.\d{2,}/.test(raw);   // the server's note quotes the scores: Deep Cover; basic says it plainly
-    const plain = hasNum ? REPORT_PLAIN[oc] || "" : raw;
+    const plain = x.note_plain != null ? x.note_plain : hasNum ? REPORT_PLAIN[oc] || "" : raw;   // the server's plain note (smallfix4); until a result has one, from the outcome
     const up = oc === "better" || oc === "new" || oc === "waiting";
-    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
+    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum || (x.note_plain != null && raw && raw !== x.note_plain) ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
       <div class="qres-r"><span class="${up ? "up" : "same"}">${oc ? esc(REPORT_WORDS[oc] || oc) : esc(x.state)}</span>${words ? `<span class="meta">${words}</span>` : ""}${numbers ? `<span class="mono meta" data-deep>${esc(numbers)}</span>` : ""}</div></div>`;
   }).join("");
 }
@@ -410,20 +412,20 @@ $("#q-mode").addEventListener("click", e => {
 });
 async function loadCandidates() {
   try { PICK.cands = await api("/api/work/candidates"); noteVoices(PICK.cands); } catch (e) { return; }
-  const can = PICK.cands.filter(c => c.can), off = PICK.cands.filter(c => !c.can);
+  const can = PICK.cands.filter(c => c.can), off = PICK.cands.filter(c => !c.can && !c.demo);   // the demo voice is nobody to improve: not listed
   [...PICK.sel].forEach(k => { if (!can.some(c => c.voice === k && !c.queued)) PICK.sel.delete(k); });
   $("#q-cands").innerHTML = can.length ? can.map(c => {
     const facts = [c.minutes ? `${Math.round(c.minutes)} min of ${c.singing ? "singing" : c.singing === false ? "speech" : "voice"}` : c.trained ? "" : "downloaded",
                    c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : "", c.estimate ? `≈ ${fmtMin(c.estimate)}` : ""].filter(Boolean);
     return `<label class="vcard ${c.queued ? "queued" : ""}">
       <input type="checkbox" data-v="${esc(c.voice)}" ${c.queued ? "disabled" : PICK.sel.has(c.voice) ? "checked" : ""}>
-      <span><b>${vname(c.voice)}</b>${c.person && c.person.toLowerCase() !== voiceDisplay(c.voice).replace(/-uc$/, "").replace(/-/g, " ").toLowerCase() ? ` <span class="meta">${esc(c.person)}</span>` : ""}
+      <span><b>${vname(c.voice)}</b>${c.person_guessed ? ` <span class="meta">${esc(c.person)} · from its name: rename the voice if that's wrong</span>` : c.person && c.person.toLowerCase() !== voiceDisplay(c.voice).replace(/-uc$/, "").replace(/-/g, " ").toLowerCase() ? ` <span class="meta">${esc(c.person)}</span>` : ""}
         <span class="qchips">${facts.map(f => `<span class="qchip" data-deep>${esc(f)}</span>`).join("")}${c.queued ? `<span class="qchip ok">in the queue</span>` : ""}</span>
         <span class="meta">${esc(c.note)}</span></span></label>`;
   }).join("") : `<p class="meta">No voices yet. Use "New voices" to train one.</p>`;
   $$("#q-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? PICK.sel.add(cb.dataset.v) : PICK.sel.delete(cb.dataset.v); pickSummary(); });
   $("#q-other").hidden = !off.length;
-  $("#q-cands-off").textContent = off.map(c => voiceDisplay(c.voice)).join(", ") + ". These were downloaded and DoubleAgent doesn't know whose voices they are. To train your own, add the person under New voices.";
+  $("#q-cands-off").innerHTML = off.map(c => `<b>${esc(voiceDisplay(c.voice))}</b>${c.note ? `: ${esc(c.note)}` : ""}`).join("<br>") + `<br>To train your own, add the person under New voices.`;
   pickSummary();
   renderCadPicker();
   renderVoiceCards(PICK.cands);   // doubleagent.js
@@ -438,7 +440,7 @@ function renderCadPicker() {
     const cd = c.cadence;
     return `<label class="vcard ${cd.queue ? "queued" : ""}"><input type="checkbox" data-cv="${esc(c.voice)}" ${cd.queue ? "disabled" : CADPICK.has(c.voice) ? "checked" : ""}>
       <span><b>${vname(c.voice)}</b> <span class="qchips">${cd.has ? `<span class="qchip ok">has one</span>` : ""}${cd.queue ? `<span class="qchip ok">in the queue</span>` : ""}</span>
-        <span class="meta">${cd.has ? "tries again; kept only if better" : esc(cd.why || "")}</span></span></label>`;
+        <span class="meta">${cd.has ? "tries again; the new one waits for your ear" : esc(cd.why || "")}</span></span></label>`;
   }).join("") : `<p class="meta">No voice can get a cadence yet: it needs a voice trained on speech, or a downloaded voice DoubleAgent has checked.</p>`;
   $$("#q-cad-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? CADPICK.add(cb.dataset.cv) : CADPICK.delete(cb.dataset.cv); cadSummary(); });
   cadSummary();
