@@ -171,7 +171,7 @@ new MutationObserver(() => { if (AS.step > 0 && !aimFrame) aimFrame = requestAni
   .observe(document.body, { childList: true, subtree: true });
 
 async function assignShowKept() {   // SafeHouse > Library > Covers > Kept, so the kept cover is in sight
-  location.hash = "safehouse";
+  location.hash = "safehouse/library";   // the Library, not whichever room was open last (IA P9-14: the kept cover wasn't lit)
   const soon = async sel => { for (let i = 0; i < 40 && !$(sel); i++) await new Promise(r => setTimeout(r, 50)); return $(sel); };
   (await soon('#lib-cats .cat[data-cat="covers"]'))?.click();
   (await soon('#lib-kfilter .tab[data-v="kept"]'))?.click();

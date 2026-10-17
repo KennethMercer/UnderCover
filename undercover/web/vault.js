@@ -149,7 +149,7 @@ function vtPicker() {
   return `<div class="move vt-pick">
     <div class="meta">Pick another drive (a USB disk is fine), or type a folder. The vault goes in a folder called “UnderCover Vault” there.</div>
     <div class="drives">${drives.map(d => `<button class="drive" type="button" data-drive="${esc(d.drive)}" aria-pressed="${cur === d.drive.toUpperCase()}">
-      <b>${esc(d.drive)}${d.app ? ` <small>(UnderCover's)</small>` : ""}</b><small>${d.removable ? "USB · " : ""}${gb(d.free)} free of ${gb(d.total)}</small><span class="dbar"><i style="width:${Math.round((1 - d.free / d.total) * 100)}%"></i></span></button>`).join("")}</div>
+      <b>${esc(d.drive)}${d.app ? ` <small>(where UnderCover is installed)</small>` : ""}</b><small>${d.removable ? "USB · " : ""}${gb(d.free)} free of ${gb(d.total)}</small><span class="dbar"><i style="width:${Math.round((1 - d.free / d.total) * 100)}%"></i></span></button>`).join("")}</div>
     <div class="mfield"><input id="vt-folder" value="${esc(VT.pick.folder)}" aria-label="Vault folder" spellcheck="false" autocomplete="off"></div>
     <div class="vt-size"><span class="meta">What to keep</span><span class="seg" id="vt-size" role="group" aria-label="What to keep">
       <button type="button" data-v="matters" aria-pressed="${VT.pick.size === "matters"}">What matters<small>voices, songs, covers, speech, settings</small></button>

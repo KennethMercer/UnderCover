@@ -47,7 +47,7 @@ function subjectHtml(p) {
     ${(sj.choices || []).map(c => `<button class="linkbtn" type="button" data-os-subject="${esc(c.id)}">${esc(`Not right? ${ask(c.label)}`)}</button>`).join(" ")}</div>`;
 }
 function bindVoiceAsk() {
-  $$("#os-plan [data-os-vchoice]").forEach(b => b.onclick = () => { OS.vchoice = b.dataset.osVchoice; resetGo(); previewPlan(); });
+  $$("#os-plan [data-os-vchoice]").forEach(b => b.onclick = () => { OS.vchoice = b.dataset.osVchoice; resetGo(); if (OS.last?.plan) drawPlan(OS.last.plan); });
 }
 function bindSubject() {
   $$("#os-plan [data-os-subject]").forEach(b => b.onclick = () => { OS.subject = b.dataset.osSubject; resetGo(); previewPlan(); });
@@ -80,8 +80,8 @@ function voiceLine(v, p) {
   }
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
-  if (v.how === "check") return `<span class="meta">a community voice, checked against real clips first (~2 min); one that sounds even somewhat like them makes a quick cover, said so; none: it trains one (~1 hour)</span><span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b> · ~2 GB while training</span>`;
-  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~1 hour<span data-deep>, ~2 GB while training</span>)</span>`;
+  if (v.how === "check") return `<span class="meta">a community voice, checked against real clips first; one that sounds even somewhat like them makes a quick cover, said so; none: it trains one</span><span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b> · ~2 GB while training</span>`;
+  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first<span data-deep> (~2 GB while training)</span></span>`;
 }
 function planTime(p) {
   if (p.voice_ask) { const c = pickedVoice(p); return c ? etaWords(c.eta_s) : "depends on your pick"; }
@@ -90,9 +90,10 @@ function planTime(p) {
     const lo = Math.max(1, Math.round(eta.low / 60)), hi = Math.round(eta.high / 60);
     return hi < 1 ? "under a minute" : lo >= hi ? `about ${Math.max(1, hi)} min` : `about ${lo}–${hi} min`;
   }
-  const v = p.voice?.how;
-  return v === "train" ? "about 1 hour" : v === "check" ? "about 3–5 min (an hour if it has to train)" : "about 1–3 min";
+  const v = p.voice?.how, tr = trainWords(p);   // no number of the page's own: training's is the estimator's, a quick cover's the plan's
+  return v === "train" ? tr || "…" : v === "check" ? `a few minutes to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
 }
+const trainWords = p => { const e = estWords("new", p.person, "singing"); if (!e && p.person && !EST.asked.has(estKey("new", p.person, "singing"))) estimateFor("new", p.person, "singing").then(() => { if (OS.last?.plan === p) drawPlan(p); }); return e; };
 // An ambiguous song title ("Hello"): the plan lists the songs it could be as a choice card (#auto-choices: a question, then one
 // button[data-choice] per song with artist, year and title); the one picked goes with the request. While an earlier answer is
 // in effect the plan returns it as `chosen`, the rest as `others`, and the card says so with the others offered as a switch.
@@ -130,20 +131,28 @@ async function previewPlan() {
     if (seq !== OS.planSeq) return;
     OS.last = { key, plan: p };
     if (!p.voice_ask || !p.voice_choices.some(c => c.choice === OS.vchoice)) OS.vchoice = null;   // a pick that's no longer offered lapses
+    drawPlan(p);
+  } catch (e) {
+    if (seq === OS.planSeq) { $("#os-plan").textContent = e.message; OS.last = { key, error: e.message }; }
+  }
+  return OS.last && OS.last.key === key ? OS.last : null;
+}
+// the plan card from a plan (again on a pick, from the plan already in hand: no new request, so "pick one below" is gone at once)
+function drawPlan(p) {
+  {
     const songLine = p.style ? `${/^[aeiou]/i.test(p.style) ? "an" : "a"} <b>${esc(p.style)}</b> version of “${esc(p.song_query)}” (a cover from YouTube that has singing in it)`
                              : `“${esc(p.song_query)}” (album version from YouTube)`;
     const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
     $("#os-plan").innerHTML = `<div class="os-plan-grid"><span>🎵 <b>Song</b><br>${songLine}</span><span>🎤 <b>Voice</b><br>${voiceLine(p.voice, p)}</span><span>⏱ <b>Time</b><br>${planTime(p)}</span></div>${hint}${subjectHtml(p)}${voiceAskHtml(p)}${p.voice_ask ? "" : qualityHtml(p.voice)}`;
     bindQuality(); bindSubject(); bindVoiceAsk();
     renderChoices(p);
-  } catch (e) {
-    if (seq === OS.planSeq) { $("#os-plan").textContent = e.message; OS.last = { key, error: e.message }; }
   }
-  return OS.last && OS.last.key === key ? OS.last : null;
 }
 $("#os-text").addEventListener("input", () => { resetGo(); OS.choice = null; OS.subject = null; OS.vchoice = null; $("#auto-choices").hidden = true; clearTimeout(OS.planTimer); OS.planTimer = setTimeout(previewPlan, 500); });
 $("#os-text").addEventListener("keydown", e => { if (e.key === "Enter") $("#os-go").click(); });
 $("#os-train").onchange = () => { resetGo(); previewPlan(); };
+// (work.js, which owns estimateFor, loads after this file: ask once the page is all there)
+document.addEventListener("DOMContentLoaded", () => estimateFor("new", "", "singing").then(e => { if (e?.total && $("#os-train-eta")) $("#os-train-eta").textContent = ` · ${etaWords({ low: e.total * 60, high: e.total * 60 })}`; }));   // the checkbox's time is the estimator's, not a fixed hour
 $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan(); $("#os-text").focus(); });
 
 // ------------------------------------------------------------ running
@@ -162,11 +171,16 @@ $("#os-go").onclick = async () => {
     const how = last.plan.voice_ask ? (OS.vchoice === "train" ? "train" : OS.vchoice === "check" ? "check" : "installed") : last.plan.voice?.how;
     if ((how === "train" || how === "check") && OS.confirmFor !== key) {
       OS.confirmFor = key;
-      btn.textContent = how === "train" ? "Train a voice + make it (~1 hour)" : "Make it (~3 min; ~1 hour only if no voice comes close)";
+      const pk = last.plan.voice_ask ? pickedVoice(last.plan) : null;   // the picked path's own time, not the fixed words
+      const tw = trainWords(last.plan);
+      btn.textContent = how === "train" ? `Train a voice + make it${pk ? ` (${etaWords(pk.eta_s)})` : tw ? ` (${tw})` : ""}`
+        : pk ? `Check, then make it (${etaWords(pk.eta_s)})` : `Make it (checks first; trains only if no voice comes close${tw ? `, ${tw}` : ""})`;
       $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Press the button again to go ahead.</b>`);
       return;
     }
     resetGo();
+    const picked = last.plan.voice_ask ? pickedVoice(last.plan) : null;
+    OS.pathEta = picked ? (picked.eta_s.low + picked.eta_s.high) / 2 : null; OS.pathAt = performance.now();   // the countdown starts from the whole picked path
     const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined, subject: OS.subject || undefined, voice_choice: last.plan.voice_ask ? OS.vchoice : undefined } });
     osFollow(r.job, text);
   } catch (e) { showError(e.message, "Can't make that cover"); }
@@ -180,6 +194,7 @@ function setRunning(on, title) {
   $("#os-h").textContent = on ? title : "Make a cover in one go";
   $("#os-cancel").textContent = "Cancel";
   clearInterval(OS.timer);
+  if (!on) OS.pathEta = null;
   if (on && $("#progress-h").textContent === "Done") $("#progress").hidden = true;   // the last manual cover's "Finished in 20.1 s" isn't this cover's (IA P8-13)
   if (on) {
     OS.t0 = performance.now();
@@ -221,6 +236,8 @@ function renderOS(ev) {
   $("small", cc).innerHTML = ev.stage === "cover" && !ev.final ? esc(ev.message)
     : set ? esc(`Best settings · ${fitWords(set)}`) + `<span data-deep> (${esc(set.why)})</span>` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
   OS.eta = ev.total_left ?? ev.eta ?? null; OS.etaAt = performance.now();
+  // before the cover itself starts, never count less than what's left of the picked path (a check's whole time, then the cover): the server's first number was the cover's alone
+  if (OS.pathEta && !ev.final && ev.stage !== "cover") OS.eta = Math.max(OS.eta ?? 0, OS.pathEta - (OS.etaAt - OS.pathAt) / 1000);
   $("#os-foot").textContent = voice?.how === "train" && ev.stage === "voice"
     ? "Covers you start meanwhile are made right away; training waits for them. You can watch it in DoubleAgent."
     : ev.stage === "queued" ? "Waiting for the GPU to finish the current job…" : "";

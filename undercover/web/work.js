@@ -56,7 +56,7 @@ const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9)
 
 // ------------------------------------------------------------ the bar: any running job, live (jobs.js), plus Pause / Resume
 W.work = null; W.watch = {};
-function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); }   // called from app.js pollStatus with /api/status's "work"
+function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); if (typeof renderDaWork === "function" && !$("#view-train").hidden) renderDaWork(); }   // DoubleAgent's card follows the status too (a pause lands in the status as well as the jobs)   // called from app.js pollStatus with /api/status's "work"
 function renderBar() {
   const bar = $("#workbar"), w = W.work || {};
   if (typeof queueCount !== "function") return;   // shell.js (loaded last) isn't there yet: the job feed answered early
@@ -213,8 +213,11 @@ function renderRunRoom() {
   // tonight: the overnight queue (its full editor stays on DoubleAgent's page)
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
-  $("#rn-total").textContent = left.length ? `About ${fmtMin(w.total_min)} · done by about ${clock(w.done_by)}` : "";
-  $("#rn-when").hidden = $("#rn-opts").hidden = !left.length;
+  $("#rn-total").textContent = !left.length ? "" : [w.total_min ? `About ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : "",
+    w.waits ? `${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : ""].filter(Boolean).join(" · ");
+  $("#rn-opts").hidden = !left.length;
+  $("#rn-when").hidden = false;   // the start time can be set any time; the two buttons only mean something with work queued
+  $("#rn-when .seg").hidden = !left.length; $("#rn-when-lbl").hidden = !!left.length;
   showTimes(w);
   const same = at && startTime() === w.settings.start_at;   // the field still says what's saved; edited, the button offers the new time
   $("#rn-at").textContent = same ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock(startTime())}`;
@@ -223,7 +226,7 @@ function renderRunRoom() {
   $("#rn-stop").hidden = !w?.armed;
   const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
     const run = i.state === "running";
-    const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : queueNote(i);
+    const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.waits_next_night ? "waits for the next night (or start it earlier)" : queueNote(i);
     return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobKind(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
       <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
   }).join("") : `<p class="meta">Nothing queued for tonight. Add a voice to improve, or train a new one, and it runs while you sleep.</p>`;
@@ -252,11 +255,21 @@ $("#rn-recent").addEventListener("click", async e => {
   catch (err) { b.disabled = false; showError(err.message, "Couldn't start it again"); }
 });
 const startWork = async body => {
-  try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); }
-  catch (e) { showError(e.message, "Couldn't change the start"); }
+  try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); return true; }
+  catch (e) { showError(e.message, "Couldn't change the start"); return false; }
 };
 $("#rn-at").onclick = () => startWork({ at: startTime() });
-$("#rn-at-time").onchange = e => { store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue(); };
+$("#rn-at-time").onchange = e => {
+  store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue();
+  // nothing queued: this is only the time tonight's work will start at. It goes through the settings, never through Start at: arming the queue also
+  // takes the hold off and would restart work you paused (found by trying it). `start_at` there saves without arming (smallfix6 addendum).
+  if (e.target.value && !(W.last?.queue || []).some(i => ["queued", "paused", "running"].includes(i.state))) saveStartTime(e.target.value);
+};
+async function saveStartTime(v) {
+  try { W.last = await api("/api/work/settings", { json: { start_at: v } }); renderQueue(); } catch (e) { return showError(e.message, "Couldn't save the start time"); }
+  if (W.last?.settings?.start_at === v) showError(`Tonight's work will start at ${clock(v)}.`, "Start time saved", null, true);
+  else showError("The server didn't keep that start time. Try again.", "Start time not saved", null, true);
+}
 $("#rn-go").onclick = () => startWork({});
 $("#rn-stop").onclick = () => startWork({ stop: true });
 const workSettings = async body => {
@@ -283,14 +296,15 @@ function renderDrawer() {
   if (!w) { $("#qd-list").innerHTML = `<p class="meta">Loading…</p>`; return; }
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
   $("#qd-total").innerHTML = left.length
-    ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> of work · done by about <span class="mono">${clock(w.done_by)}</span>` +
-      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet (start it in DoubleAgent)")
+    ? (w.total_min ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> of work` : "<b>Nothing fits tonight</b>") + (w.done_by ? ` · done by about <span class="mono">${clock(w.done_by)}</span>` : "") +
+      (w.waits ? ` · ${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : "") +
+      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet (Start now is in SafeHouse's Running room)")
     : "Nothing queued. Add a voice to improve, or a person to train, and let it run overnight.";
   $("#qd-list").innerHTML = w.queue.map(i => {
     const run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state), owner = ownerOf(i.kind);
     const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
     const note = done ? `${i.state} · ${fmtMin(i.minutes)}${i.result?.note ? " · " + i.result.note : ""}` : run ? [live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")
-      : i.state === "paused" ? "paused · Resume continues it" : queueNote(i);
+      : i.state === "paused" ? "paused · Resume continues it" : i.waits_next_night ? "waits for the next night (or start it earlier)" : queueNote(i);
     return `<div class="qd-job ${run ? "running" : ""} ${done ? "done" : ""}" data-owner="${owner}">
       <div><span class="kind">${MOD_NAME[owner]} · ${jobKind(i)}</span><b>${jobWhat(i)}</b>${note ? `<small>${esc(note)}</small>` : ""}
         ${run ? `<div class="bar"><i style="width:${Math.round((live.fraction || 0) * 100)}%"></i></div>` : ""}</div>
@@ -309,7 +323,7 @@ function renderQueue() {
   queueCount(w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length, w.armed);
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
   $("#q-total").innerHTML = left.length
-    ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> <span class="meta">· done by about <span class="mono">${clock(w.done_by)}</span>${w.armed && w.settings.start_at ? ` if it starts at ${clock(w.settings.start_at)}` : ""}</span>`
+    ? `${w.total_min ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b>` : "<b>Nothing fits tonight</b>"} <span class="meta">${w.done_by ? `· done by about <span class="mono">${clock(w.done_by)}</span>${w.armed && w.settings.start_at ? ` if it starts at ${clock(w.settings.start_at)}` : ""}` : ""}${w.waits ? ` · ${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : ""}</span>`
     : `<span class="meta">Nothing queued. Add a voice to improve, or a person to train, and let it run overnight.</span>`;
   const st = $("#q-start"), at = $("#q-at");
   st.hidden = at.hidden = !left.length;
@@ -373,15 +387,16 @@ function renderReport(r) {
     const oc = reportOutcome(x);
     const what = x.kind === "improve" ? (x.replaced ? "improved" : x.pending ? "retrained" : "tried") : x.kind === "cadence" ? (x.replaced ? "cadence" : "cadence tried")
       : x.kind === "newcad" ? "new voice + cadence" : "new voice";
+    const what2 = x.state === "done" ? what : x.state === "skipped" ? "was cancelled" : "didn't finish";   // a failed "new voice" read as if one was made (IA P9-14)
     const words = x.before_word && x.after_word && x.before_word !== x.after_word ? `${likeWord(x.before_word)} → ${likeWord(x.after_word)}` : likeWord(x.after_word || x.before_word);
-    const numbers = x.before != null || x.after != null ? `${x.before != null ? x.before.toFixed(2) + " → " : ""}${x.after != null ? x.after.toFixed(2) : "?"}` : "";
+    const numbers = x.before != null || x.after != null ? `${x.before != null ? x.before.toFixed(3) + " → " : ""}${x.after != null ? x.after.toFixed(3) : "?"}` : "";   // three places: the word was cut at the unrounded score
     const cad = x.kind === "cadence" ? x : x.cadence;   // cadence numbers: Deep Cover only
-    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: likeness ${cad.likeness} · gap ${cad.cadence_gap} · WER ${cad.wer} · from ${cad.data_minutes} min</p>` : "";
+    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: ${[`likeness ${cad.likeness}`, cad.cadence_gap != null && `gap ${cad.cadence_gap}`, cad.wer != null && `WER ${cad.wer}`, cad.data_minutes != null && `from ${cad.data_minutes} min`].filter(Boolean).join(" · ")}</p>` : "";
     const raw = x.note || "";
     const hasNum = /\d\.\d{2,}/.test(raw);   // the server's note quotes the scores: Deep Cover; basic says it plainly
     const plain = x.note_plain != null ? x.note_plain : hasNum ? REPORT_PLAIN[oc] || "" : raw;   // the server's plain note (smallfix4); until a result has one, from the outcome
     const up = oc === "better" || oc === "new" || oc === "waiting";
-    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum || (x.note_plain != null && raw && raw !== x.note_plain) ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
+    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what2}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum || (x.note_plain != null && raw && raw !== x.note_plain) ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
       <div class="qres-r"><span class="${up ? "up" : "same"}">${oc ? esc(REPORT_WORDS[oc] || oc) : esc(x.state)}</span>${words ? `<span class="meta">${words}</span>` : ""}${numbers ? `<span class="mono meta" data-deep>${esc(numbers)}</span>` : ""}</div></div>`;
   }).join("");
 }
@@ -522,7 +537,10 @@ function estimateFor(kind, target = "", mode = null) {
 }
 const estWords = (kind, target, mode) => { const e = EST.got.get(estKey(kind, target, mode)); return e && e.total ? etaWords({ low: e.total * 60, high: e.total * 60 }) : ""; };
 // a tonight add answers starts_at (and start_default when no start time was saved): say when it starts, and where to change it
-const startsNote = r => r && r.starts_at ? ` It starts at ${clock(r.starts_at)}${r.start_default ? ", the default: change it in SafeHouse's Running room" : ""}.` : "";
+// (smallfix6: starts_now when the night is already open; waits_next_night when Finish by leaves no room for it)
+const startsNote = r => !r ? "" : r.waits_next_night ? " It waits for the next night (or start it earlier in SafeHouse's Running room)."
+  : r.starts_now ? " It starts now."
+  : r.starts_at ? ` It starts at ${clock(r.starts_at)}${r.start_default ? ", the default: change it in SafeHouse's Running room" : ""}.` : "";
 // what a pause waits for (the status's running rows carry pausing_note: "Pausing at the end of this step (removing music and noise)")
 const pausingNote = j => ((W.work?.running || []).find(r => !j || r.job === j.id && r.pausing_note) || {}).pausing_note || "";
 // /api/work/add answers `moved` when that voice was training live right now: it is paused and put in tonight's queue (it goes on from where it stopped).
