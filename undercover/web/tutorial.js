@@ -147,12 +147,14 @@ function assignGo(n, move = true) {
   const st = ASSIGN[n - 1];
   $("#assign").hidden = false; $("#assign").classList.remove("done");
   $("#assign-n").textContent = `${n} of ${ASSIGN.length}`;
-  $("#assign-say").innerHTML = `<b>${esc(st.head)}</b> ${esc(typeof st.say === "function" ? st.say() : st.say)}`;
+  const say = typeof st.say === "function" ? st.say() : st.say;
+  $("#assign-say").innerHTML = `<b>${esc(st.head)}</b> <span class="say-full">${esc(say)}</span><span class="say-short">${esc(say.split(/(?<=[.!?])\s+/)[0])}</span>`;
   $("#assign-line").style.width = `${n / ASSIGN.length * 100}%`;
   $("#assign-next").hidden = !st.next; $("#assign-next").textContent = st.next || "";
-  $("#assign-skip").hidden = false; $("#assign-skip").textContent = "Skip the rest";
+  $("#assign-skip").hidden = n === ASSIGN.length; $("#assign-skip").textContent = "Skip the rest";   // no rest on the last step
   if (move) {
     if (document.body.dataset.module !== st.tab) showTab(st.tab);
+    if (n === 1 && typeof syncBuild === "function") { S.buildOpen = true; syncBuild(); }   // the desk is laid: the build path is in sight
     if (n === 4) assignShowKept();
   }
   reaim();
