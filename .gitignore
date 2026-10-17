@@ -26,3 +26,6 @@ installer/dist/
 docs/research/samples/
 golden/
 /ear.json
+
+# The chats' rules: a local copy of D:\UnderCover-dev\CLAUDE.md (the dev repo holds the original).
+/CLAUDE.md
