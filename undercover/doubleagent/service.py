@@ -283,15 +283,26 @@ def subject_of(person: str, pick: str | None = None) -> dict:
             memo[key] = r
             _save_subjects(memo)
         return r
+    if memo.get(key, {}).get("picked"):
+        return memo[key]   # the user's own pick wins over everything
+    # a downloaded voice of this name that names its show (in brackets, its folder or where it came from:
+    # "plankton-spongebob", ".../Plankton__SpongeBob___RVC_v2") wins over a web guess, a remembered one too (RC pass A:
+    # "pink pony club as plankton" read as a character, a person and a singer on three fresh installs)
+    show = _show_hint(person)
+    if show:
+        m = memo.get(key) or {}
+        if m.get("kind") == "character" and (m.get("show") or "").lower() == show.lower():
+            return m
+        r = {"kind": "character", "show": show.lower(), "how": "scenes and voice lines", "evidence": [], "from": "voice",
+             "label": f"{person} is a character from {_show_title(show)}: looking for scenes and voice lines from the "
+                      "show, not interviews about it.",
+             "choices": [{"id": "person", "label": f"{person} is a real person"}]}
+        memo[key] = r
+        _save_subjects(memo)
+        return r
     if key in memo:
         return memo[key]
-    show = _show_hint(person)
     r = classify(person)
-    if show and (r.get("kind") != "character" or not r.get("show")):   # the downloaded voice names the show
-        r = {"kind": "character", "show": show.lower(), "how": "scenes and voice lines", "evidence": [],
-             "label": f"{person} is a character from {show}: looking for scenes and voice lines from the show, not "
-                      "interviews about it.",
-             "choices": [{"id": "person", "label": f"{person} is a real person"}]}
     if r.get("kind") in ("person", "character", "singer", "group"):
         memo[key] = r
         _save_subjects(memo)
@@ -312,16 +323,52 @@ def _save_subjects(memo: dict):
         pass
 
 
+# Shows a downloaded voice's folder or source may name ("plankton-spongebob", "Plankton__SpongeBob___RVC_v2"): famous
+# animated shows and game series, plus every show a character was read from before (cache/subjects.json). A folder's
+# other words alone ("morgan-freeman-narrator") aren't a show.
+KNOWN_SHOWS = ("spongebob", "simpsons", "family guy", "south park", "futurama", "rick and morty", "bobs burgers",
+               "american dad", "king of the hill", "adventure time", "regular show", "gravity falls", "avatar",
+               "pokemon", "sesame street", "muppets", "looney tunes", "scooby doo", "peppa pig", "paw patrol", "bluey",
+               "shrek", "toy story", "star wars", "mario", "sonic", "minecraft", "fortnite", "genshin", "overwatch",
+               "league of legends", "naruto", "dragon ball", "one piece", "my little pony", "steven universe",
+               "invader zim", "hey arnold", "rugrats", "phineas and ferb", "teen titans", "transformers",
+               "teenage mutant ninja turtles", "winnie the pooh", "thomas the tank engine", "garfield")
+
+
+def _show_in(text: str, person: str) -> str | None:
+    """The known show a voice's folder name or source names, besides the person's own words."""
+    words = re.findall(r"[a-z0-9]+", text.lower().replace("'", ""))
+    joined = f" {' '.join(words)} "
+    own = set(re.findall(r"[a-z0-9]+", person.lower()))
+    seen = {(r.get("show") or "").lower() for r in _subjects().values() if r.get("kind") == "character" and r.get("show")}
+    for show in sorted(set(KNOWN_SHOWS) | {s for s in seen if s}, key=len, reverse=True):   # the longest name first
+        if f" {show} " in joined and not set(show.split()) <= own:
+            return show
+    return None
+
+
+def _show_title(show: str) -> str:
+    return {"spongebob": "SpongeBob", "bobs burgers": "Bob's Burgers"}.get(show.lower(), show if any(c.isupper() for c in show)
+                                                                            else show.title())
+
+
 def _show_hint(person: str) -> str | None:
-    """The show a downloaded voice of this person names in brackets ("Plankton (SpongeBob)"), if any: a voice matched
-    by its folder name, or one whose display name, brackets aside, is the person."""
+    """The show a downloaded voice of this person names: in brackets in its display name ("Plankton (SpongeBob)"), or
+    in its folder name or source link ("plankton-spongebob", ".../Plankton__SpongeBob___RVC_v2"). A voice counts when
+    it's matched to the person by its folder name, or its display name, brackets aside, is the person."""
     from ..core.voices import list_voices
     mine = {v.name for v in installed_for(person) or []}
     for v in list_voices():
         shown = display_name(v)
+        bare = slug(re.sub(r"\([^)]*\)", " ", shown))
+        if not (v.name in mine or bare == slug(person) or bare.startswith(slug(person) + "-")):
+            continue
         m = re.search(r"\(([^)]{3,40})\)", shown)
-        if m and (v.name in mine or slug(re.sub(r"\([^)]*\)", " ", shown)) == slug(person)):
+        if m:
             return m.group(1).strip()
+        hit = _show_in(f"{v.name} {(v.source or '').split('?')[0]}", person)   # only known shows match: a host isn't one
+        if hit:
+            return hit
     return None
 
 
