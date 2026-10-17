@@ -143,7 +143,7 @@
       </div>
       <div class="row spread os-sub">
         <div class="ex" id="os-ex"><button type="button">Bohemian Rhapsody by Queen as Obama</button><button type="button">Toxic by Britney Spears as SpongeBob</button><button type="button">acoustic cover of Hello by Adele as Peter Griffin</button></div>
-        <label class="toggle" id="os-train-row"><input type="checkbox" id="os-train" aria-label="Train a new voice if there isn't one, about 1 hour"><span>Train a new voice: about 1 hour</span></label>
+        <label class="toggle" id="os-train-row"><input type="checkbox" id="os-train" aria-label="Train a new voice if there isn't one"><span>Train a new voice if there isn't one<small class="meta" id="os-train-eta"></small></span></label>
       </div>
       <p class="meta" id="os-plan">Name a song and a voice. UnderCover gets the album version of the song from YouTube, finds (or trains) the voice, and makes the cover with the best settings.</p>
       <div id="auto-choices" hidden></div>
@@ -389,7 +389,7 @@
       <div class="da-cmd">
         <input type="text" id="da-person" autocomplete="off" placeholder="Who should it sound like?" aria-label="Who should it sound like">
         <span class="seg" id="da-mode" role="group" aria-label="Kind of audio"><button type="button" data-v="speaking" aria-pressed="true">Speaking</button><button type="button" data-v="singing" aria-pressed="false">Singing</button></span>
-        <button class="btn primary" id="da-train" type="button">Train the voice<small id="da-train-eta">about 1 hour</small></button>
+        <button class="btn primary" id="da-train" type="button">Train the voice<small id="da-train-eta"></small></button>
       </div>
       <div class="da-under"><span>e.g. Elliott Smith, or Barack Obama</span><span class="sep">·</span><button class="linkbtn" id="da-tonight" type="button">Train tonight instead</button><span>adds it to tonight's work in SafeHouse, so the PC stays free now</span></div>
       <p class="meta">For personal use: don't pass the results off as the real person.</p>
@@ -592,7 +592,7 @@
     <div class="rn-now-box" id="rn-now"></div>
     <section class="panel rn-sec">
       <div class="rn-lbl"><b>Tonight</b><small id="rn-total"></small>
-        <span class="end" id="rn-when"><input type="time" id="rn-at-time" value="23:00" aria-label="Start time"><span class="seg" role="group" aria-label="When the queue starts"><button type="button" id="rn-at" aria-pressed="false">Start at 11:00 pm</button><button type="button" id="rn-go" aria-pressed="false">Start now</button></span>
+        <span class="end" id="rn-when"><span class="meta" id="rn-when-lbl" hidden>Tonight's work starts at</span><input type="time" id="rn-at-time" value="23:00" aria-label="Start time"><span class="seg" role="group" aria-label="When the queue starts"><button type="button" id="rn-at" aria-pressed="false">Start at 11:00 pm</button><button type="button" id="rn-go" aria-pressed="false">Start now</button></span>
           <button class="linkbtn" id="rn-stop" type="button" hidden>Don't start more</button></span></div>
       <div class="rn-list" id="rn-list"></div>
       <div class="rn-opts" id="rn-opts">
@@ -760,7 +760,7 @@
           <div class="row spread"><b>Someone who isn't here?</b><span class="meta">DoubleAgent builds the voice</span></div>
           <div class="row"><input id="se-newname" placeholder="Dolly Parton" aria-label="Person's name"><button class="btn" id="se-newgo" type="button">New voice</button>
             <button class="linkbtn" id="se-newnight" type="button">Tonight instead</button></div>
-          <p class="meta" id="se-newnote">DoubleAgent finds clean clips of them on YouTube, trains a voice and learns how they talk (about <span id="se-new-eta">3 h</span>).
+          <p class="meta" id="se-newnote">DoubleAgent finds clean clips of them on YouTube, trains a voice and learns how they talk <span id="se-new-eta-wrap" hidden>(about <span id="se-new-eta"></span>)</span>.
             It then appears here and in FrontMan. <button class="linkbtn" id="se-newsteps" type="button">Step by step in DoubleAgent</button></p>
         </div>
       </section>
