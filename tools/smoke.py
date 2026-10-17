@@ -2771,6 +2771,15 @@ def u_config_layers():
         assert crlf.count("[paths]") == 1 and "elsewhere" not in crlf, crlf   # a CRLF file's own [paths] is replaced, not doubled
         config.CONFIG_FILE.write_text(config.HEADER + "[ui]\nport = 7860\n", encoding="utf-8")
         assert "elsewhere" not in vault._config_keeping_paths(other.encode()).decode()
+        # importing the entry point (as the imports check does) never migrates: only a real start does
+        import importlib
+        import inspect
+        config.CONFIG_FILE.write_text(text, encoding="utf-8")
+        import undercover.server as entry
+        importlib.reload(entry)
+        assert config.CONFIG_FILE.read_text(encoding="utf-8") == text, "importing undercover.server rewrote a config.toml"
+        src = inspect.getsource(entry.main)
+        assert src.index("_migrate()") < src.index("from .app.server import"), "the migration must come before the server stamps itself"
     return "overlay; fresh = defaults; migrate keeps values (path, quoted list, bool), the full file, once; writes go to the user file"
 
 

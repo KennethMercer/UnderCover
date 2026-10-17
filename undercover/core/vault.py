@@ -724,7 +724,6 @@ def restore_now(keys: list[str], on_conflict: str, stamp: str | None = None) -> 
 
 def _config_keeping_paths(data: bytes) -> bytes:
     """A restored config.toml keeps this install's [paths] (where its folders are), everything else from the vault."""
-    import re
     old = data.decode("utf-8")
     cur = config.CONFIG_FILE.read_text(encoding="utf-8") if config.CONFIG_FILE.is_file() else ""
     # this install's [paths], or none when it uses the default folders (a vaulted [paths] from elsewhere never comes in)
