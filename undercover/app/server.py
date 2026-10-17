@@ -626,7 +626,7 @@ class Handler(BaseHTTPRequestHandler):
             if action == "start":   # {"at": "23:00"} or {} = now; {"stop": true} = don't start more
                 return self._json(worklist.arm(False if b.get("stop") else (b.get("at") or None)))
             if action == "settings":
-                return self._json(worklist.settings(**{k: b[k] for k in ("finish_by", "keep_awake") if k in b}))
+                return self._json(worklist.settings(**{k: b[k] for k in ("finish_by", "keep_awake", "start_at") if k in b}))
             if action == "dismiss":
                 return self._json(worklist.dismiss_report())
         except (ModelError, LookupError) as e:

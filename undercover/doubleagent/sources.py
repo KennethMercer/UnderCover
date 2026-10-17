@@ -19,6 +19,9 @@ QUERIES = {
 QUERIES["both"] = ["{name} isolated vocals", "{name} acapella", "{name} vocals only", "{name} live acoustic",
                    "{name} interview"]
 # Titles that usually mean someone else's voice, a fake, or a mash-up. Shown unticked with the reason.
+ABOUT_THE_WORD = re.compile(r"\bted-?ed\b|\bscience\b|\bbiology\b|\bspecies\b|\bmarine\b|\becosystems?\b|"
+                            r"\bdocumentary\b|\blecture\b|\bexplained\b|\bwhat (is|are)\b|\bfacts about\b|"
+                            r"\bsecret life of\b|\bcommon descent\b|\bnature\b|\bevolution\b", re.I)
 SUSPECT = [
     (re.compile(r"\bimpressions?\b|\bimpersonat|\bdoes an? .*voice|\bparody\b|\bsnl\b|\brap battles?\b", re.I), "may be an impersonator"),
     (re.compile(r"\bai\b|\bdeepfake|\bvoice ?clon|\brvc\b|\bai cover\b|\bsynthesi[sz]ed\b|\btts\b|text.to.speech|"
@@ -386,6 +389,8 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None, forc
                 break
         if character and src.selected and src.extra["kind"] == "talk":
             src.selected, src.note = False, TALK_NOTE
+        if len(name.split()) == 1 and src.selected and ABOUT_THE_WORD.search(f"{src.title} {src.channel}"):
+            src.selected, src.note = False, "about the word, not the voice"   # "The Secret Life of Plankton | TED-Ed"
         lang = other_language(src.title, f"{name} {words}")
         if lang and src.selected:
             src.selected, src.note = False, f"may be in {lang.title()} (a dub or another language)"
