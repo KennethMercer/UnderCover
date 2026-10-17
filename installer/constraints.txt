@@ -1,5 +1,5 @@
 # Pin AMD's ROCm torch builds. Use on EVERY install:
-#   .venv\Scripts\python.exe -m pip install -c constraints.txt <pkg>
+#   .venv\Scripts\python.exe -m pip install -c installer\constraints.txt <pkg>
 # If a package demands a different torch, pip fails instead of silently
 # replacing ROCm torch with the CUDA/CPU build from PyPI.
 torch==2.9.1+rocm7.2.1

@@ -2690,6 +2690,135 @@ def u_phrase_list_trains():
     return f"unticked source: listed left out ({da_api.UNTICKED}); hand-ticked stays; {listed:.2f} min = kept_minutes"
 
 
+FULL_CONFIG = r"""# UnderCover configuration: all paths and defaults live here.
+
+[gpu]
+device_name = "7900 XTX"   # a comment
+backend = "rocm"
+
+[paths]
+models_dir = "models"
+cache_dir = 'D:\Work\cache'
+
+[training]
+target_minutes = 15
+max_minutes_per_source = 12
+
+[game_pause]
+never_ask = ["explorer.exe", "C:/Games/x \"quoted\".exe"]
+ask = true
+"""
+
+
+@check("settings in two layers (layout): undercover/config.default.toml, then the user's config.toml on top (tables key by key); a full file from before is migrated to only what differs, values exactly kept, the full one kept beside it, once; every settings write lands in the user's file, never the defaults")
+def u_config_layers():
+    import tomllib
+    from undercover.core import config, gamepause, storage
+    base = {"gpu": {"device_name": "7900 XTX", "backend": "rocm", "fp16": True}, "training": {"target_minutes": 15}}
+    got = config.overlay(base, {"gpu": {"backend": "cpu"}, "game_pause": {"ask": False}})
+    assert got == {"gpu": {"device_name": "7900 XTX", "backend": "cpu", "fp16": True}, "training": {"target_minutes": 15},
+                   "game_pause": {"ask": False}}, got
+    assert config.differing({"gpu": {"backend": "rocm", "x": 1}}, base) == {"gpu": {"x": 1}}
+    d = config.defaults()
+    assert d["gpu"] and d["paths"]["models_dir"] == "models" and config.DEFAULT_FILE.parent.name == "undercover"
+    assert config.CONSTRAINTS == ROOT / "installer" / "constraints.txt" and config.CONSTRAINTS.is_file()
+    with isolated_data() as t:
+        # a fresh install: no user file, the defaults alone; a new default reaches it
+        none = t / "fresh" / "config.toml"
+        none.parent.mkdir()
+        assert config.read(none) == d and config.migrate(none) is None
+        # an existing install's full file, with a value of its own in each kind (a path, a list with quotes, a bool)
+        full = t / "old" / "config.toml"
+        full.parent.mkdir()
+        text = FULL_CONFIG.replace('target_minutes = 15', f'target_minutes = {d["training"]["target_minutes"]}')
+        full.write_text(text, encoding="utf-8")
+        was = config.read(full)
+        dry = config.migrate(full, dry_run=True)
+        assert full.read_text(encoding="utf-8") == text and dry["backup"] is None, "a dry run wrote"
+        r = config.migrate(full)
+        bak = Path(r["backup"])
+        assert bak.name == config.BACKUP and bak.read_text(encoding="utf-8") == text, "the full file wasn't kept as it was"
+        assert config.read(full) == was, "the migrated file gives other settings"
+        slim = tomllib.loads(full.read_text(encoding="utf-8"))
+        assert full.read_text(encoding="utf-8").startswith(config.HEADER) and r["after"] == full.read_text(encoding="utf-8")
+        assert slim["game_pause"] == {"never_ask": ["explorer.exe", 'C:/Games/x "quoted".exe'], "ask": True}, slim
+        assert slim["paths"] == {"cache_dir": r"D:\Work\cache"} and "training" not in slim and "backend" not in slim.get("gpu", {}), slim
+        assert config.migrate(full) is None, "migrated twice"
+        full.write_text(text, encoding="utf-8")                     # (a second full file later: the first backup stays)
+        assert Path(config.migrate(full)["backup"]).name == "config.before-defaults-2.toml" and bak.read_text(encoding="utf-8") == text
+        # writes: the user's file (made with the header if missing), never the defaults
+        before = config.DEFAULT_FILE.read_bytes()
+        config.CONFIG_FILE.unlink()
+        gamepause.set_never("game.exe", True)
+        gamepause.set_ask(False)
+        storage.write_paths({"uploads_dir": f"'{t / 'app' / 'uploads'}'"})
+        mine = config.CONFIG_FILE.read_text(encoding="utf-8")
+        assert mine.startswith(config.HEADER) and tomllib.loads(mine)["game_pause"] == {"never_ask": ["game.exe"], "ask": False}, mine
+        assert "uploads_dir" in tomllib.loads(mine)["paths"] and config.DEFAULT_FILE.read_bytes() == before
+        try:
+            config.set_values("gpu", {"backend": '"cpu"'}, config_file=config.DEFAULT_FILE)
+            raise AssertionError("the defaults file was written")
+        except ValueError:
+            pass
+        # the command line setup.ps1 uses: strings, one key=value each, spaces kept
+        assert config._cli(["set", "gpu", "device_name=RX 7900 XTX", "backend=rocm"]) == 0
+        assert config.CONFIG["gpu"]["device_name"] == "RX 7900 XTX" and config.read(config.CONFIG_FILE)["gpu"]["backend"] == "rocm"
+        # a vault restore keeps this install's [paths], and brings none from elsewhere when this one has none
+        from undercover.core import vault
+        other = '[paths]\nmodels_dir = "D:/elsewhere"\n\n[ui]\nport = 7860\n'
+        assert "[paths]" in vault._config_keeping_paths(other.encode()).decode()     # ours has [paths] (set above)
+        crlf = vault._config_keeping_paths(other.replace('\n', '\r\n').encode()).decode()
+        assert crlf.count("[paths]") == 1 and "elsewhere" not in crlf, crlf   # a CRLF file's own [paths] is replaced, not doubled
+        config.CONFIG_FILE.write_text(config.HEADER + "[ui]\nport = 7860\n", encoding="utf-8")
+        assert "elsewhere" not in vault._config_keeping_paths(other.encode()).decode()
+        # importing the entry point (as the imports check does) never migrates: only a real start does
+        import importlib
+        import inspect
+        config.CONFIG_FILE.write_text(text, encoding="utf-8")
+        import undercover.server as entry
+        importlib.reload(entry)
+        assert config.CONFIG_FILE.read_text(encoding="utf-8") == text, "importing undercover.server rewrote a config.toml"
+        src = inspect.getsource(entry.main)
+        assert src.index("_migrate()") < src.index("from .app.server import"), "the migration must come before the server stamps itself"
+    return "overlay; fresh = defaults; migrate keeps values (path, quoted list, bool), the full file, once; writes go to the user file"
+
+
+@check("the product repo's root (layout, user 2026-10-17: 'shouldn't root be basically the readme, changelog, and project folder'): README, CHANGELOG, .gitignore, UnderCover.bat, docs/MASTERPLAN.md and the undercover / installer / tools folders; constraints, check_env and cover.bat moved and every reference follows; the user's config.toml is ignored")
+def u_layout():
+    import re
+    import subprocess
+    files = [f for f in subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8").stdout.split("\0") if f]
+    if not files:
+        return "not a git checkout: skipped"
+    top = sorted({f.split("/")[0] for f in files})
+    assert top == [".gitignore", "CHANGELOG.md", "README.md", "UnderCover.bat", "docs", "installer", "tools", "undercover"], top
+    assert sorted(f for f in files if f.startswith("docs/")) == ["docs/MASTERPLAN.md"]
+    for f in ("installer/constraints.txt", "tools/check_env.py", "tools/cover.bat", "undercover/config.default.toml"):
+        assert f in files, f
+    ign = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "/config.toml" in ign.splitlines() and "/config.before-defaults*.toml" in ign.splitlines()
+    iss = (ROOT / "installer" / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    assert '"..\\tools\\check_env.py"' in iss and 'Source: "constraints.txt"; DestDir: "{app}\\installer"' in iss
+    assert '"..\\config.toml"' not in iss, "the installer ships a config.toml again"
+    setup = (ROOT / "installer" / "setup.ps1").read_text(encoding="utf-8-sig")
+    assert setup.count("-m undercover.core.config set") == 2 and "WriteAllText($cfg" not in setup, "setup edits config.toml text again"
+    assert "-m undercover.core.config get gpu backend" in setup
+    cover = (ROOT / "tools" / "cover.bat").read_text(encoding="utf-8")
+    assert r'"%~dp0..\.venv\Scripts\python.exe" -m undercover.cli' in cover and "PYTHONPATH=%~dp0.." in cover
+    assert "from undercover.core.config import CONFIG" in (ROOT / "tools" / "check_env.py").read_text(encoding="utf-8")
+    bat = (ROOT / "UnderCover.bat").read_text(encoding="utf-8")
+    assert '".venv\\Scripts\\python.exe" -m undercover.server' in bat and 'cd /d "%~dp0"' in bat
+    # nothing still looks for the moved files at the root
+    stale = []
+    for f in files:
+        if f.endswith((".py", ".ps1", ".iss", ".bat", ".js")) and not f.startswith("tools/research"):
+            txt = (ROOT / f).read_text(encoding="utf-8-sig", errors="replace")
+            if re.search(r'ROOT\s*/\s*"constraints\.txt"|"\.\.\\\\constraints\.txt"|ROOT\s*/\s*"check_env\.py"', txt):
+                stale.append(f)
+    assert not stale, f"these still look for a moved file at the root: {stale}"
+    return f"root: {', '.join(top)}; moves followed in the installer, setup, tools and code"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -3255,7 +3384,7 @@ def u_ytdlp():
             args, req = calls[-1]
             assert len(calls) == 1 and req == f"yt-dlp=={ver} --hash=sha256:{sha}\n", (calls, req)
             assert "--require-hashes" in args and "--no-deps" in args and "--upgrade" not in args, args
-            assert args[args.index("-c") + 1] == str(ROOT / "constraints.txt") and "yt-dlp" not in args, args
+            assert args[args.index("-c") + 1] == str(ROOT / "installer" / "constraints.txt") and "yt-dlp" not in args, args
             import re
             assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", addons.updated("ytdlp") or ""), addons.updated("ytdlp")
             info = addons.pin_state("ytdlp")
@@ -3429,7 +3558,7 @@ def u_rolloff_covers():
         assert Path(target["converted_vocal"]).exists(), "a refused roll-off removed part of the cover"
         assert "roll-off (covers): failed" in (path("logs_dir") / "server.log").read_text(encoding="utf-8")
         # test mode refuses the app's real folders whatever a history line says (stubbed delete: nothing real can go)
-        real = ROOT / "constraints.txt"
+        real = ROOT / "installer" / "constraints.txt"
         assert real.exists()
         calls = []
         old_retry, storage.fsutil.retry = storage.fsutil.retry, lambda fn, *a, **k: calls.append(1)
@@ -4742,8 +4871,8 @@ def u_doctor_fast():
         from undercover.core import config
         block = "[paths]\n" + "".join(f"{k} = '{v}'\n" for k, v in config.CONFIG["paths"].items()) + "\n"
         cold_cfg = box / "cold.toml"
-        cold_cfg.write_text(re.sub(r"(?ms)^\[paths\][ \t]*$.*?(?=^\[|\Z)", lambda _: block,
-                                   (ROOT / "config.toml").read_text(encoding="utf-8"), count=1), encoding="utf-8")
+        mine = (ROOT / "config.toml").read_text(encoding="utf-8") if (ROOT / "config.toml").is_file() else ""   # the user's file, if any
+        cold_cfg.write_text(config.replace_section(mine, "paths", block), encoding="utf-8")
         env = {**os.environ, "UNDERCOVER_CONFIG": str(cold_cfg), "UNDERCOVER_TEST_ROOTS": str(box)}
         secs, tried_cold = best_time(cold, 2)
     assert all(t == "False" for _, t in tried_cold), "the fast checks imported torch"
@@ -7761,9 +7890,9 @@ def real_dirs() -> dict:
     from and whose folders are checked unchanged (the worktree's own config points at its empty folders); the sandbox
     server still runs the worktree's code."""
     import os
-    import tomllib
+    from undercover.core import config
     base = Path(os.environ.get("UNDERCOVER_DATA_ROOT") or ROOT)
-    cfg = tomllib.loads((base / "config.toml").read_text(encoding="utf-8"))["paths"]
+    cfg = config.read(base / "config.toml")["paths"]   # the defaults + that install's own file (only what differs)
     out = {k: (Path(v) if Path(v).is_absolute() else base / v) for k, v in cfg.items()}
     out.setdefault("voices_dir", out["models_dir"] / "voices")
     out.setdefault("themes_dir", out["uploads_dir"].parent / "themes")
@@ -7775,7 +7904,7 @@ def snapshot_real(dirs: dict) -> dict:
     beside the config (config.toml, tutorial.json, phone.json, themes.json: a check once appended to the real config)."""
     import os
     snap = {}
-    for name in ("config.toml", "tutorial.json", "phone.json", "themes.json", "ear.json"):
+    for name in ("config.toml", "config.before-defaults.toml", "tutorial.json", "phone.json", "themes.json", "ear.json"):
         p = ROOT / name
         if p.is_file():
             st = p.stat()
@@ -7800,8 +7929,10 @@ def _sandbox_config(root: Path, real: dict) -> tuple[Path, dict]:
     mine = {"uploads_dir": root / "uploads", "output_dir": root / "output", "cache_dir": root / "cache",
             "logs_dir": root / "logs", "voices_dir": root / "voices", "themes_dir": root / "themes",
             "models_dir": real["models_dir"]}
+    from undercover.core import config
     block = "[paths]\n" + "".join(f"{k} = '{v}'\n" for k, v in mine.items()) + "\n"
-    text = re.sub(r"(?ms)^\[paths\][ \t]*$.*?(?=^\[|\Z)", lambda _: block, (ROOT / "config.toml").read_text(encoding="utf-8"), count=1)
+    user = (ROOT / "config.toml").read_text(encoding="utf-8") if (ROOT / "config.toml").is_file() else ""   # only what differs
+    text = config.replace_section(user, "paths", block)
     cfg = root / "config.toml"
     cfg.write_text(text, encoding="utf-8")
     got = {k: Path(v) for k, v in tomllib.loads(text)["paths"].items()}
@@ -7949,7 +8080,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
