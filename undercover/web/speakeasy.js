@@ -115,7 +115,7 @@ async function seNewVoice(now) {
   if (typeof loadQueue === "function") loadQueue();
   refreshJobs(true);
 }
-estimateFor("new", "", "speaking").then(e => { if (e?.total && $("#se-new-eta")) $("#se-new-eta").textContent = etaWords({ low: e.total * 60, high: e.total * 60 }).replace(/^about /, ""); });   // the time in the note under the box
+estimateFor("new", "", "speaking").then(e => { if (e?.total && $("#se-new-eta")) { $("#se-new-eta").textContent = etaWords({ low: e.total * 60, high: e.total * 60 }).replace(/^about /, ""); $("#se-new-eta-wrap").hidden = false; } });   // the time in the note under the box
 $("#se-newgo").onclick = () => seNewVoice(true);
 $("#se-newnight").onclick = () => seNewVoice(false);
 $("#se-newsteps").onclick = () => {

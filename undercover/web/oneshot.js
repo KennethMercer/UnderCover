@@ -80,8 +80,8 @@ function voiceLine(v, p) {
   }
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b> <span class="meta">your voice${v.trained ? ", trained here" : ""}</span>`;
-  if (v.how === "check") return `<span class="meta">a community voice, checked against real clips first (~2 min); one that sounds even somewhat like them makes a quick cover, said so; none: it trains one (~1 hour)</span><span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b> · ~2 GB while training</span>`;
-  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first (~1 hour<span data-deep>, ~2 GB while training</span>)</span>`;
+  if (v.how === "check") return `<span class="meta">a community voice, checked against real clips first; one that sounds even somewhat like them makes a quick cover, said so; none: it trains one</span><span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b> · ~2 GB while training</span>`;
+  return `<span class="warn">none yet: trains <b>${esc(v.display || v.name)}</b> first<span data-deep> (~2 GB while training)</span></span>`;
 }
 function planTime(p) {
   if (p.voice_ask) { const c = pickedVoice(p); return c ? etaWords(c.eta_s) : "depends on your pick"; }
@@ -90,9 +90,10 @@ function planTime(p) {
     const lo = Math.max(1, Math.round(eta.low / 60)), hi = Math.round(eta.high / 60);
     return hi < 1 ? "under a minute" : lo >= hi ? `about ${Math.max(1, hi)} min` : `about ${lo}–${hi} min`;
   }
-  const v = p.voice?.how;
-  return v === "train" ? "about 1 hour" : v === "check" ? "about 3–5 min (an hour if it has to train)" : "about 1–3 min";
+  const v = p.voice?.how, tr = trainWords(p);   // no number of the page's own: training's is the estimator's, a quick cover's the plan's
+  return v === "train" ? tr || "…" : v === "check" ? `a few minutes to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
 }
+const trainWords = p => { const e = estWords("new", p.person, "singing"); if (!e && p.person && !EST.asked.has(estKey("new", p.person, "singing"))) estimateFor("new", p.person, "singing").then(() => { if (OS.last?.plan === p) drawPlan(p); }); return e; };
 // An ambiguous song title ("Hello"): the plan lists the songs it could be as a choice card (#auto-choices: a question, then one
 // button[data-choice] per song with artist, year and title); the one picked goes with the request. While an earlier answer is
 // in effect the plan returns it as `chosen`, the rest as `others`, and the card says so with the others offered as a switch.
@@ -150,6 +151,8 @@ function drawPlan(p) {
 $("#os-text").addEventListener("input", () => { resetGo(); OS.choice = null; OS.subject = null; OS.vchoice = null; $("#auto-choices").hidden = true; clearTimeout(OS.planTimer); OS.planTimer = setTimeout(previewPlan, 500); });
 $("#os-text").addEventListener("keydown", e => { if (e.key === "Enter") $("#os-go").click(); });
 $("#os-train").onchange = () => { resetGo(); previewPlan(); };
+// (work.js, which owns estimateFor, loads after this file: ask once the page is all there)
+document.addEventListener("DOMContentLoaded", () => estimateFor("new", "", "singing").then(e => { if (e?.total && $("#os-train-eta")) $("#os-train-eta").textContent = ` · ${etaWords({ low: e.total * 60, high: e.total * 60 })}`; }));   // the checkbox's time is the estimator's, not a fixed hour
 $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan(); $("#os-text").focus(); });
 
 // ------------------------------------------------------------ running
@@ -169,8 +172,9 @@ $("#os-go").onclick = async () => {
     if ((how === "train" || how === "check") && OS.confirmFor !== key) {
       OS.confirmFor = key;
       const pk = last.plan.voice_ask ? pickedVoice(last.plan) : null;   // the picked path's own time, not the fixed words
-      btn.textContent = how === "train" ? `Train a voice + make it (${pk ? etaWords(pk.eta_s) : "~1 hour"})`
-        : pk ? `Check, then make it (${etaWords(pk.eta_s)})` : "Make it (~3 min; ~1 hour only if no voice comes close)";
+      const tw = trainWords(last.plan);
+      btn.textContent = how === "train" ? `Train a voice + make it${pk ? ` (${etaWords(pk.eta_s)})` : tw ? ` (${tw})` : ""}`
+        : pk ? `Check, then make it (${etaWords(pk.eta_s)})` : `Make it (checks first; trains only if no voice comes close${tw ? `, ${tw}` : ""})`;
       $("#os-plan").insertAdjacentHTML("beforeend", ` <b>Press the button again to go ahead.</b>`);
       return;
     }
