@@ -398,10 +398,10 @@ class Trainer:
                 planned = cap = int(st["steps"])
             elif length == "auto":   # R5: 450 steps a kept minute (floor 8000), on to 2x while the held-out loss falls
                 from .frozen import budget_steps
-                planned, cap = budget_steps(sum(x["wav"].shape[-1] for x in items) / sr / 60)
+                planned, cap = budget_steps(proj.kept_seconds() / 60)
             else:
                 planned = cap = LENGTHS.get(length, LENGTHS["auto"])
-            st["epochs"] = int(np.clip(round(cap / steps_per_epoch), 1 if st.get("steps") else 20, 4000))
+            st["epochs"] = int(np.clip(round(cap / steps_per_epoch), 1 if st.get("steps") else 20, 2000))
             st["planned_epochs"] = int(np.clip(round(planned / steps_per_epoch), 1, st["epochs"]))
         max_epochs = int(st["epochs"])
         planned_epochs = int(st.get("planned_epochs") or max_epochs // 2 or 1)
