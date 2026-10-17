@@ -8,7 +8,16 @@
 ; "Where should UnderCover keep your files?" page (phase 4b).
 
 #define AppName "UnderCover"
-#define AppVersion "0.4.0"
+; The version is written in one place, undercover/VERSION (the app reads it too: core/about.py).
+#define VersionHandle FileOpen(AddBackslash(SourcePath) + "..\undercover\VERSION")
+#if VersionHandle == 0
+  #error undercover\VERSION is missing: it holds the app's version
+#endif
+#define AppVersion Trim(FileRead(VersionHandle))
+#expr FileClose(VersionHandle)
+#if AppVersion == ""
+  #error undercover\VERSION is empty: it holds the app's version
+#endif
 
 [Setup]
 AppId={{E6B05D70-0109-4D65-8AEC-89622D0F5C91}
