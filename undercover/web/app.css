@@ -412,6 +412,11 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .rn-pl { display: flex; justify-content: space-between; gap: 4px 16px; flex-wrap: wrap; }
 .rn-now-box { display: grid; gap: 10px; }
 .rn-sec { display: grid; gap: 10px; }
+.rn-sec.panel { gap: 12px; }   /* Tonight and Recent are panels like the other rooms' */
+.rn-sec .rn-opts { background: var(--panel-2); border-radius: 10px; padding: 12px 14px; }
+.rn-idle-panel { display: grid; gap: 6px; }
+.rn-idle-panel b { font: 600 16px var(--display); }
+.rn-idle-panel p { margin: 0; }
 .rn-lbl { display: flex; gap: 6px 12px; align-items: baseline; flex-wrap: wrap; }
 .rn-lbl b { font-weight: 600; font-size: 16px; }
 .rn-lbl small { color: var(--muted); font-size: 13.5px; }
@@ -635,7 +640,11 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
   .rn-li .acts { grid-column: 1 / -1; }   /* the state words stay visible, under the name */
   .sys, .setting { grid-template-columns: minmax(0, 1fr); }
   .rn-opts { grid-template-columns: minmax(0, 1fr); }
-  .rn-lbl .end { margin-left: 0; }
+  .rn-lbl .end { margin-left: 0; flex-wrap: wrap; gap: 10px; width: 100%; }
+  .rn-lbl .end .seg { flex: 1 1 auto; }
+  .rn-lbl .end .seg button { flex: 1 1 auto; padding: 7px 8px; }
+  .rn-sec > *, .rn-now-box > * { min-width: 0; }
+  .rn-li { overflow-wrap: anywhere; }
   .rn-more { flex-direction: column; gap: 8px; }
   .rn-more .meta { display: none; }
   #lib-list { max-height: none; }   /* the page scrolls, not the list */
@@ -794,6 +803,8 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .qres { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 12px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); }
 .qres .up { color: var(--ok); font-weight: 600; }
 .qres .same { color: var(--muted); font-weight: 600; }
+.qres-r { display: grid; gap: 2px; justify-items: end; text-align: right; align-content: start; }
+.qres-r .meta { font-size: 13px; }
 @media (max-width: 560px) {
   .qadd { grid-template-columns: 1fr; }
   .qjob { grid-template-columns: 1fr; }

@@ -588,7 +588,7 @@
     <div class="sh-room" id="room-running" hidden>
     <div class="roomhead"><h3>Running</h3><p>What's working now, what's queued for tonight, and what finished recently.</p></div>
     <div class="rn-now-box" id="rn-now"></div>
-    <section class="rn-sec">
+    <section class="panel rn-sec">
       <div class="rn-lbl"><b>Tonight</b><small id="rn-total"></small>
         <span class="end" id="rn-when"><input type="time" id="rn-at-time" value="23:00" aria-label="Start time"><span class="seg" role="group" aria-label="When the queue starts"><button type="button" id="rn-at" aria-pressed="false">Start at 11:00 pm</button><button type="button" id="rn-go" aria-pressed="false">Start now</button></span>
           <button class="linkbtn" id="rn-stop" type="button" hidden>Don't start more</button></span></div>
@@ -599,12 +599,12 @@
       </div>
       <div class="rn-more"><button class="linkbtn" type="button" data-qadd="improve">Add a voice to improve</button><button class="linkbtn" type="button" data-qadd="new">Train a new voice tonight</button><span class="meta">· both open DoubleAgent</span></div>
     </section>
-    <section class="rn-sec">
+    <section class="panel rn-sec">
       <div class="rn-lbl"><b>Recent</b><small>The last five finished, and how they ended.</small></div>
       <div class="rn-list" id="rn-recent"></div>
     </section>
     <section class="panel" id="q-report" hidden>
-      <div class="row spread"><div><h2>Last night</h2><p class="meta" id="q-report-when"></p></div><button class="linkbtn" id="q-dismiss" type="button">Dismiss</button></div>
+      <div class="row spread"><div><h2>While you were out</h2><p class="meta" id="q-report-when"></p></div><button class="linkbtn" id="q-dismiss" type="button">Dismiss</button></div>
       <div class="qreport" id="q-report-list"></div>
     </section>
     <section class="panel" id="q-panel" data-deep>
