@@ -5503,6 +5503,13 @@ def u_page_rules():
     assert "cadence ✓" not in sej and "Find clips + cadence" not in sej and "Speak the way" in ix and "tonight instead" not in ix.lower() and "Overnight queue" not in ix and "both open DoubleAgent" not in ix, "a retired word is back (cadence in basic, 'instead', the overnight queue)"
     assert "Nothing on file yet." in lib and 'class="empty"' in da and "No one to speak yet." in sej and "Nothing for tonight." in work, "an empty state lost its one line and one button"
     assert ".nodeep" in css and 'id="da-voices-say" hidden' in ix, "Your voices has its legend back, or Deep no longer replaces the word with the number"
+    # qa18 (the consultant's four structural changes): the build path in the one-shot card, one Tonight, Storage in two groups, one sticky band on a phone
+    rooms_js = (web / "rooms.js").read_text(encoding="utf-8")
+    assert 'id="build"' in ix and "function syncBuild" in app and 'id="build-toggle"' in ix and ix.index('id="build"') > ix.index('id="oneshot"'), "the build path is no longer a section of the one-shot card"
+    assert 'id="q-at-time"' not in ix and 'id="q-finish"' not in ix and 'id="q-start"' not in ix and 'id="qd-glance"' in ix and 'id="qd-list"' not in ix and "function jobSource" in work, "Tonight is edited in more than one place again, or the drawer is an editor again"
+    assert 'class="frow"' in ix and "function stOpen" in rooms_js and 'id="st-make"' in ix and 'id="st-keep"' in ix, "Storage lost its two groups of rows"
+    assert 'id="wb-fold"' in ix and "function jobShort" in work or "const jobShort" in work, "the running strip lost its phone fold"
+    assert "say-short" in tut and "n === ASSIGN.length" in tut, "the First assignment band lost its one-clause phone form or shows Skip on the last step"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")

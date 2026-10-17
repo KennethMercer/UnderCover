@@ -2,6 +2,17 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-17-consult-structure",
+      "date": "2026-10-17",
+      "title": "One question on FrontMan, one Tonight, a tidier Storage",
+      "lines": [
+        "FrontMan opens on the one line. \"Set it up yourself\" lives in that card and opens when a song or a hand-picked voice is on your desk.",
+        "Tonight is edited in one place, SafeHouse's Running room; the strip's drawer is a glance with one button.",
+        "Storage is two groups of rows (Make room, Keep it safe), each with its number, opening one at a time.",
+        "On a phone, only one band sticks at a time: while the First assignment runs, the running strip folds to its line of light and the time left."
+      ]
+    },
+    {
       "id": "2026-10-17-consult-small",
       "date": "2026-10-17",
       "title": "Plainer words, one press",
