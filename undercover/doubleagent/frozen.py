@@ -127,14 +127,16 @@ def compare(approved: dict, candidate: dict) -> dict:
     return out
 
 
-def offer(cmp: dict) -> dict:
+def offer(cmp: dict, test: dict | None = None) -> dict:
     """R3, the conservative bar, on the person's own lines: likeness not worse by more than the band; harmonicity and
     spectral contrast both up by their margins and outside their intervals; donor likeness not worse (the guard).
     -> {offer: bool, reasons: [why not], words: what changed (R3a), terms: {name: pass}}."""
     lines, donors = cmp.get("lines") or {}, cmp.get("donors") or {}
     terms, why, words = {}, [], []
     if lines.get("n", 0) < LINES_MIN:
-        return {"offer": False, "reasons": ["too few of their own lines to judge on"], "words": [], "terms": {}}
+        why = ("no spoken lines to judge a singer by yet" if (test or {}).get("singer")
+               else "too few of their own lines to judge on" + (f" ({(test or {}).get('lines_why')})" if (test or {}).get("lines_why") else ""))
+        return {"offer": False, "reasons": [why], "words": [], "terms": {}}
     idl = lines.get("id")
     terms["likeness"] = bool(idl and idl["mean"] > -LIKENESS_BAND)
     if not terms["likeness"]:
@@ -554,8 +556,12 @@ def freeze(voice, proj, engine, push=None) -> dict:
         f = f"{i:02d}.wav"
         sf.write(str(d / "lines" / f), np.asarray(y, dtype=np.float32), int(sr), subtype="PCM_16")
         lines.append({"id": q["id"], "text": q["text"], "file": f, "sr": int(sr)})
+    singer = not any(q.kept and not q.sung for q in proj.phrases)   # a singer: no speech of theirs to read back (a known gap)
     t = {"version": TEST_VERSION, "made": time.strftime("%Y-%m-%d %H:%M"), "voice": voice.name, "project": proj.name,
          "sex": sex, "tgt_hz": round(tgt_hz, 1), "donors": donors, "lines": lines, "read_with": how, "approved": None,
+         "singer": singer, "lines_why": (None if len(lines) >= LINES_MIN else "no spoken clips of theirs" if singer
+                                         else "no cadence engine to read them" if how and how.startswith("failed") else
+                                         "too few transcribed clips" if not cands_l else None),
          "notes": ([] if len(donors) >= POOL_MIN else [f"only {len(donors)} other voices: the donor guard is skipped"])
                   + ([] if len(lines) >= LINES_MIN else [f"only {len(lines)} of their own lines: Improve can't judge on them"])}
     _write_json(d / "test.json", t)
@@ -663,7 +669,7 @@ def judge(test_voice, candidate, engine, push=None) -> dict:
         raise ModelError("The approved voice hasn't been scored on its frozen test.")
     cand = score_voice(test_voice, candidate, engine, push)
     cmp = compare(appr, cand)
-    v = offer(cmp)
+    v = offer(cmp, load_test(test_voice))
     before = (appr.get("summary") or {}).get("lines", {}).get("id")
     after = (cand.get("summary") or {}).get("lines", {}).get("id")
     if before is None:   # no own lines: the donor likeness, so the card still has a number
