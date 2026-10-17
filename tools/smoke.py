@@ -4907,6 +4907,13 @@ def u_page_rules():
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
     # qa14: the switch's 16 px box is for the checkbox only; the Finish by time field sits inside the same label and drew as a knob
     css = (web / "app.css").read_text(encoding="utf-8")
+    # qa15: the one-shot asks which voice (voice_ask / voice_choice), a moved work item says so, Your voices has filters, Train my own opens Now / Tonight on the card
+    ix = (web / "index.html").read_text(encoding="utf-8")
+    osj = (web / "oneshot.js").read_text(encoding="utf-8")
+    assert "voice_choice:" in osj and "data-os-vchoice" in osj and "Pick a voice first." in osj, "the one-shot lost its voice question"
+    assert "function workMoved" in work and "workMoved(" in (web / "train.js").read_text(encoding="utf-8"), "work/add's `moved` is no longer said"
+    assert "daFilters" in da and "data-own-go" in da and 'id="da-filters"' in ix, "Your voices lost its filter chips, or Train my own its Now / Tonight"
+    assert "reportOutcome" in work and "While you were out" in ix and "REPORT_WORDS" in work, "the overnight report lost its words"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
