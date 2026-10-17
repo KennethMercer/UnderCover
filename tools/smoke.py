@@ -2722,7 +2722,11 @@ def u_config_layers():
     d = config.defaults()
     assert d["gpu"] and d["paths"]["models_dir"] == "models" and config.DEFAULT_FILE.parent.name == "undercover"
     assert config.CONSTRAINTS == ROOT / "installer" / "constraints.txt" and config.CONSTRAINTS.is_file()
+    import copy
+    outside = copy.deepcopy(config.CONFIG)
     with isolated_data() as t:
+        assert config.CONFIG.get("game_pause", {}) == config.read(config.CONFIG_FILE).get("game_pause", {}), \
+            "the user's own settings reach a check inside isolated_data"
         # a fresh install: no user file, the defaults alone; a new default reaches it
         none = t / "fresh" / "config.toml"
         none.parent.mkdir()
@@ -2780,6 +2784,7 @@ def u_config_layers():
         assert config.CONFIG_FILE.read_text(encoding="utf-8") == text, "importing undercover.server rewrote a config.toml"
         src = inspect.getsource(entry.main)
         assert src.index("_migrate()") < src.index("from .app.server import"), "the migration must come before the server stamps itself"
+    assert config.CONFIG == outside, "a check's settings writes leaked out of isolated_data"
     return "overlay; fresh = defaults; migrate keeps values (path, quoted list, bool), the full file, once; writes go to the user file"
 
 
@@ -3289,9 +3294,12 @@ def _fake_addon_roundtrip(addons):
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
     rule in this file's header). Asserts nothing points outside it before handing over; restores everything after."""
+    import copy
     import tempfile
     from undercover.core import config, storage
-    saved = (dict(config.CONFIG["paths"]), config.CONFIG_FILE, storage.ALLOWED_ROOTS)
+    # the whole in-memory settings, not just [paths]: run from the main checkout they're the user's (layout-fix: a game
+    # pause test saw the user's never-ask list), and a test's set_values must not leak into the checks after it
+    saved = (copy.deepcopy(config.CONFIG), config.CONFIG_FILE, storage.ALLOWED_ROOTS)
     with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
         t = Path(td)
         app = t / "app"
@@ -3301,6 +3309,9 @@ def isolated_data():
                        + '\n[cadence]\nengine = "chatterbox"\n', encoding="utf-8")
         try:
             config.CONFIG_FILE = cfg
+            fresh = config.read(cfg)   # the defaults + this test's own file: the user's settings never steer a check
+            config.CONFIG.clear()
+            config.CONFIG.update(fresh)   # (in place: modules hold this very dict)
             config.CONFIG["paths"] = {k: str(app / v) for k, v in keys.items()}
             storage.ALLOWED_ROOTS = [t]
             for k in (*keys, "voices_dir"):
@@ -3308,7 +3319,9 @@ def isolated_data():
                 assert storage._inside(p, t) and not storage._inside(p, ROOT), f"{k} -> {p} is outside the test's folder"
             yield t
         finally:
-            config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved
+            config.CONFIG.clear()
+            config.CONFIG.update(saved[0])
+            config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved[1], saved[2]
 
 
 @check("add-ons: registry, CLI list, a fake add-on installs (checksum) and removes cleanly")
