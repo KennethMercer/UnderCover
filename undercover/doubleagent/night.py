@@ -8,12 +8,15 @@ import json
 
 from ..core.config import CONFIG, path
 from ..core.voices import ModelError, label_of, person_guessed, slug, voice_person
+import numpy as np
+
 from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
                        # realtime on Elliott Smith's album tracks; downloads and phrase cutting take the rest)
 EARLY_STOP = 0.7       # auto-length trainings stop on their own at ~70% of the step budget (Elliott: 219 of 296 epochs)
-COMPARE_MIN = 3.0      # export + likeness test of old and new voice
+COMPARE_MIN = 6.0      # export + the candidate's score on the frozen test (R2: ~50 conversions, both input classes)
+FREEZE_MIN = 3.0       # a voice's first Improve freezes its test (R1): the donors, their own lines read once, the approved score
 SAME_PERSON = 0.35     # the current voice scoring under this against the new clips = they're probably someone else
 IMPROVE_SINGING_MIN = 30   # minutes of clean singing an "improve" aims for (more than ~30 rarely helps)
 
@@ -41,8 +44,22 @@ def estimate(item: dict) -> dict:
     prep = raw_min / PREP_RT
     # a queued project trains at its own length (the options are saved before this runs: a Quick item says Quick's time)
     length = (proj.train.get("length") if item["kind"] == "project" and proj is not None else None) or "auto"
-    train = LENGTHS.get(length, LENGTHS["auto"]) * _sec_per_step() * (EARLY_STOP if length == "auto" else 1.0) / 60
+    if length == "auto":   # R5: the budget scales with the kept minutes (what's kept already + about a quarter of the new raw)
+        from .frozen import budget_steps
+        kept_min = (proj.kept_seconds() / 60 if proj is not None else 0.0) + raw_min / 4
+        steps = budget_steps(kept_min)[0]
+    else:
+        steps = LENGTHS.get(length, LENGTHS["auto"])
+    train = steps * _sec_per_step() * (EARLY_STOP if length == "auto" else 1.0) / 60
     compare = COMPARE_MIN if item["kind"] == "improve" else 1
+    if item["kind"] == "improve":
+        try:   # the first Improve of a voice freezes its test
+            from ..core.voices import get_voice
+            from .frozen import load_test
+            if load_test(get_voice(item["target"])) is None:
+                compare += FREEZE_MIN
+        except ModelError:
+            pass
     out = {"prepare": round(prep), "train": round(train), "compare": round(compare)}
     if item["kind"] == "new" and item.get("mode") == "speaking":   # its cadence follows (cadence.chain_cadence)
         from .cadence import CADENCE_MIN
@@ -230,9 +247,12 @@ def _new(job, item) -> dict:
 
 
 def _improve(job, item) -> dict:
-    """More material, re-checked clips, a fresh training, and the new voice only if it measures better."""
-    from . import voicecheck
-    from ..core.voices import get_voice, remove_voice
+    """Improve that improves (phase 26): more material through the source gate (R6), refine or scratch as the engine
+    decides (R4) with the scaled budget (R5), then the candidate scored on the voice's frozen test (R1, R2) and offered
+    only if it clears the conservative bar (R3); otherwise "tried, no improvement: yours is kept" and the candidate
+    parks in Set aside. The ear decides anything offered; nothing here deletes a voice."""
+    from . import frozen
+    from ..core.voices import get_voice, set_aside
     from . import project as P
     from . import sources as srcmod
     from ..core.speaker import SpeakerEmbedder
@@ -284,17 +304,46 @@ def _improve(job, item) -> dict:
                 P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)
             else:
                 P.score(proj)
+            # R6: the source gate, against the approved voice (its pitch) and the person's reference; the user's own
+            # sources and phrases are never touched. Unticking alone would leave a source's cut phrases in training.
+            push("night", 0.38, "Checking which clips belong to this voice")
+            rm = gpu.MODELS.converter.rmvpe
+
+            def pitch_of(clip):
+                f = rm.infer_from_audio(frozen._load16(clip), thred=0.03)
+                f = f[f > 0]
+                return float(np.median(f)) if len(f) > 20 else None
+            gate = frozen.gate_project(proj, proj.load_embeddings(), (old.extra or {}).get("f0_median"), pitch_of)
             proj.save()
             st = proj.train
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
-                st.pop(k, None)
-            st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"], length="auto", voice_name=cand)
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs", "planned_epochs", "init_from", "lr", "steps"):
+                st.pop(k, None)   # exported stays: the voice is still there
+            kept_min = proj.kept_seconds() / 60
+            old_min = float((old.extra or {}).get("train_minutes") or 0)
+            from ..core.voices import trained_likeness
+            how, why = frozen.recipe(old_min, trained_likeness(old), kept_min)
+            st["improve"] = {"left_out": gate["left_out"], "kept_min": round(kept_min, 1), "old_min": round(old_min, 1),
+                             "added_min": round(max(0.0, kept_min - old_min), 1), "recipe": how, "why": why}
+            st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"], length="auto", voice_name=cand, seed=1234)
+            if how == "refine":   # R4: continue from the approved voice's weights, gently, on the new clips
+                st.update(init_from=str(old.pth), lr=frozen.REFINE_LR, steps=frozen.refine_steps(max(0.0, kept_min - old_min) or kept_min))
             proj.save()
+        if gate["kept_min"] < frozen.GATE_MIN_KEPT_MIN:
+            with P.lock(proj.name):
+                proj = P.Project.load(proj.name)
+                proj.train.pop("voice_name", None)
+                proj.save()
+            left = "; ".join(f"{x['title'][:40]} ({x['why']})" for x in gate["left_out"][:4])
+            return {"voice": old.name, "candidate": None, "replaced": False, "pending": False, "kept": True,
+                    "tried": st.get("improve"), "note": f"Tried, nothing usable: the new clips were left out ({left}), so "
+                    f"{label_of(old.name)} is kept as it is."}
         (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
-    # 2. train
+    # 2. train (R4 / R5: the recipe and the budget were set above, or kept from the paused run)
     conv = gpu.MODELS.converter
     proj = P.Project.load(proj.name)
-    push("night", 0.4, f"Training on {proj.kept_seconds() / 60:.1f} min of {proj.person}")
+    plan = proj.train.get("improve") or {}
+    push("night", 0.4, (f"Refining {label_of(old.name)} on {proj.kept_seconds() / 60:.1f} min of {proj.person}"
+                        if plan.get("recipe") == "refine" else f"Training on {proj.kept_seconds() / 60:.1f} min of {proj.person}"))
 
     def tprog(**ev):
         if ev.get("stage") == "training" and ev.get("epochs"):
@@ -305,47 +354,58 @@ def _improve(job, item) -> dict:
     if st.get("state") == "paused":
         from ..core.jobs import Paused
         raise Paused()
-    # 3. compare on the same test, keep the better one
-    push("night", 0.96, "Comparing the new voice with the old one")
+    # 3. the candidate on the voice's frozen test (R1, R2), offered only past the bar (R3)
+    push("night", 0.93, "Comparing the new voice with yours on the same test")
     proj = P.Project.load(proj.name)
     export_voice(proj, name=cand, overwrite=True)
-    emb = SpeakerEmbedder()
-    tests = voicecheck.test_phrases(proj)
-    try:
-        before = voicecheck.check(old.name, proj, conv, emb, tests=tests).score
-    except ValueError:
-        before = None
-    after = voicecheck.check(cand, proj, conv, emb, tests=tests).score
+    engine = frozen.GpuEngine(conv, SpeakerEmbedder())
+    old = get_voice(old.name)
+    frozen.ensure(old, proj, engine, push=lambda f, m: push("night", 0.93 + 0.03 * f, m))   # lazily: its first Improve
+    verdict = frozen.judge(old, get_voice(cand), engine, push=lambda f, m: push("night", 0.96 + 0.03 * f, m))
     kept_min = round(proj.kept_seconds() / 60, 1)
-    # Internal Affairs P2-1: the ear decides, and the user's voice is never deleted. The retrained voice waits BESIDE the
-    # current one (pending), whatever the numbers say; the current one is never exported over or removed here. The
-    # user picks by ear (a blind A/B through MasterPlan); the one not kept is set aside, never deleted.
+    plan = proj.train.get("improve") or {}
+    before, after = verdict["before"], verdict["after"]
+    # Internal Affairs P2-1: the ear decides, and the user's voice is never deleted. An offered candidate waits BESIDE
+    # the current one (pending); one that doesn't clear the bar parks in Set aside with its numbers. Neither touches
+    # the current voice.
     with P.lock(proj.name):
         proj = P.Project.load(proj.name)
         proj.train["exported"] = old.name   # the installed voice is still the old one
         proj.train["voice_name"] = old.name   # the training form's name again (not the candidate's: P3-2)
         proj.save()
-    mark_improved_pending(old.name, cand, before, after, kept_min)
-    if before is not None and before < SAME_PERSON:
-        note = (f"The clips found this time don't sound much like the current voice (it scores {before} against them), so "
-                f"they may be someone else's. The retrained one waits beside it; compare them before keeping either.")
-    else:
-        note = (f"Retrained on {kept_min} min of {'singing' if proj.mode != 'speaking' else 'speech'}. The new one waits "
-                f"beside the current one (measured {after} against {before}); listen to both and keep the one you like.")
-    return {"voice": old.name, "candidate": cand, "before": before, "after": after, "replaced": False, "pending": True,
-            "minutes_of_voice": kept_min, "note": note}
+    tried = {**plan, "minutes": kept_min, "terms": verdict["terms"], "compare": {c: {k: v for k, v in d.items() if k in ("n", "id", "hnr", "contrast")}
+                                                                                for c, d in verdict["compare"].items()}}
+    left = "; ".join(f"{x['title'][:40]} ({x['why']})" for x in plan.get("left_out", [])[:3])
+    left_s = f" {len(plan['left_out'])} source{'s' if len(plan['left_out']) != 1 else ''} left out ({left})." if plan.get("left_out") else ""
+    if verdict["offer"]:
+        words = frozen.words_of(verdict)
+        mark_improved_pending(old.name, cand, before, after, kept_min, words=words, measures=tried)
+        note = (f"{'Refined' if plan.get('recipe') == 'refine' else 'Retrained'} on {kept_min} min of "
+                f"{'singing' if proj.mode != 'speaking' else 'speech'}: {words}. The new one waits beside yours; listen to both "
+                f"and keep the one you like.{left_s}")
+        return {"voice": old.name, "candidate": cand, "before": before, "after": after, "replaced": False, "pending": True,
+                "minutes_of_voice": kept_min, "words": words, "tried": tried, "note": note}
+    cand_dir = get_voice(cand).dir
+    aside = set_aside(cand_dir, note={"why": f"Improve tried, no improvement: {', '.join(verdict['reasons'])}",
+                                      "display": f"{label_of(old.name)}: Improve's attempt", "measures": tried})
+    gpu.forget_voice(cand)
+    note = (f"Tried {'refining' if plan.get('recipe') == 'refine' else 'retraining'} on {kept_min} min "
+            f"({plan.get('added_min', 0)} min new): no improvement ({', '.join(verdict['reasons'])}), so "
+            f"{label_of(old.name)} is kept as it is.{left_s} The attempt is in Storage → Set aside.")
+    return {"voice": old.name, "candidate": None, "before": before, "after": after, "replaced": False, "pending": False,
+            "kept": True, "minutes_of_voice": kept_min, "tried": tried, "aside": aside.name, "note": note}
 
 
-def mark_improved_pending(voice: str, cand: str, before, after, minutes):
+def mark_improved_pending(voice: str, cand: str, before, after, minutes, **more):
     """The current voice knows a retrained one waits beside it (extra.improved_pending), and the candidate knows whose
-    it is (extra.pending_for). Nothing is replaced or removed."""
+    it is (extra.pending_for). Nothing is replaced or removed. more: words (what changed, R3a) and measures."""
     import json
     import time
     from ..core import fsutil
     from ..core.voices import get_voice
     v = get_voice(voice)
     v.extra = {**(v.extra or {}), "improved_pending": {"voice": cand, "before": before, "after": after,
-                                                       "minutes": minutes, "made": time.strftime("%Y-%m-%d %H:%M")}}
+                                                       "minutes": minutes, "made": time.strftime("%Y-%m-%d %H:%M"), **more}}
     fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     c = get_voice(cand)
     c.extra = {**(c.extra or {}), "pending_for": voice}
