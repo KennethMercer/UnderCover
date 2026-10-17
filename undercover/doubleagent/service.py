@@ -270,9 +270,59 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
 
 
 def subject_of(person: str, pick: str | None = None) -> dict:
-    """What a voice request names, read from a quick search (subject.py), with the user's correction or answer."""
+    """What a voice request names, read from a quick search (subject.py), with the user's correction or answer.
+    Stable per name (P9-6: "plankton" read as a cartoon character in one pass and a real person in the next): the
+    first sure reading (or the user's pick) is kept in cache/subjects.json and used again; a downloaded voice named
+    "<name> (<show>)" makes it a character from that show."""
     from .subject import apply_pick, classify
-    return apply_pick(person, {} if pick else classify(person), pick)
+    key = slug(person)
+    memo = _subjects()
+    if pick:
+        r = apply_pick(person, {}, pick)
+        if r.get("kind") in ("person", "character", "role"):
+            memo[key] = r
+            _save_subjects(memo)
+        return r
+    if key in memo:
+        return memo[key]
+    show = _show_hint(person)
+    r = classify(person)
+    if show and (r.get("kind") != "character" or not r.get("show")):   # the downloaded voice names the show
+        r = {"kind": "character", "show": show.lower(), "how": "scenes and voice lines", "evidence": [],
+             "label": f"{person} is a character from {show}: looking for scenes and voice lines from the show, not "
+                      "interviews about it.",
+             "choices": [{"id": "person", "label": f"{person} is a real person"}]}
+    if r.get("kind") in ("person", "character", "singer", "group"):
+        memo[key] = r
+        _save_subjects(memo)
+    return r
+
+
+def _subjects() -> dict:
+    try:
+        return json.loads((path("cache_dir") / "subjects.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_subjects(memo: dict):
+    try:
+        fsutil.write_text(path("cache_dir") / "subjects.json", json.dumps(memo, indent=1))
+    except OSError:
+        pass
+
+
+def _show_hint(person: str) -> str | None:
+    """The show a downloaded voice of this person names in brackets ("Plankton (SpongeBob)"), if any: a voice matched
+    by its folder name, or one whose display name, brackets aside, is the person."""
+    from ..core.voices import list_voices
+    mine = {v.name for v in installed_for(person) or []}
+    for v in list_voices():
+        shown = display_name(v)
+        m = re.search(r"\(([^)]{3,40})\)", shown)
+        if m and (v.name in mine or slug(re.sub(r"\([^)]*\)", " ", shown)) == slug(person)):
+            return m.group(1).strip()
+    return None
 
 
 def _prefetch_voice_sources(person: str, subject: dict | None = None):
