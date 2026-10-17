@@ -4963,6 +4963,50 @@ def _fake_demo_voice(d: Path):
                                      encoding="utf-8")
 
 
+def _chrome():
+    import shutil
+    return shutil.which("chrome") or shutil.which("google-chrome") or next(
+        (c for c in (r"C:\Program Files\Google\Chrome\Application\chrome.exe", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") if Path(c).is_file()), None)
+
+
+@check("page scripts all parse and load (headless Chrome on the static page; skipped when there is no Chrome)")
+def u_page_syntax():
+    """A script that fails to parse or redeclares a name takes its whole feature with it (P8-1: tutorial.js, two days; a bad regex in app.js
+    would take the page). No server: the web folder is served as /static, the index as /, and the console is read for SyntaxErrors."""
+    import http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            f = web / "index.html" if path == "/" else web / path[len("/static/"):] if path.startswith("/static/") else None
+            if f is None or not f.is_file():
+                self.send_response(404); self.end_headers(); return
+            body = f.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", {".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".json": "application/json"}.get(f.suffix, "application/octet-stream"))
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--enable-logging=stderr", "--v=0",
+                                "--virtual-time-budget=6000", "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"], capture_output=True, text=True, timeout=90)
+    finally:
+        srv.shutdown()
+    bad = [ln.split("CONSOLE", 1)[1][:200] for ln in r.stderr.splitlines() if ":CONSOLE" in ln and "SyntaxError" in ln]
+    assert not bad, "a page script doesn't parse or load: " + " | ".join(bad)
+    return "every page script parses and loads"
+
+
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
 def u_page_rules():
     web = ROOT / "undercover" / "web"
@@ -7088,7 +7132,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_page_rules, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_page_rules, u_page_syntax, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

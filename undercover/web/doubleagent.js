@@ -55,7 +55,7 @@ function renderVoiceCards(cands) {
     const cadBtn = !cd.can || cd.queue ? "" : cd.has ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}" data-deep>Retrain its speaking</button>`
       : `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}">Let it speak</button>`;
     return `<div class="vc ${busy ? "busy" : ""}">
-      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice)}${speaks}</b><small>${origin}</small></div></div>
+      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice, false)}${speaks}</b><small>${origin}</small></div></div>
       ${status ? `<div class="vc-status">${status}</div>` : ""}${facts ? `<small class="meta" data-deep>${facts}</small>` : ""}${cadDeep}
       <div class="vc-acts">${DA.samples[c.voice] ? `<button class="mini" type="button" data-listen="${esc(c.voice)}" aria-pressed="${DA.playing === c.voice}">${DA.playing === c.voice ? "Stop" : "Listen"}</button>` : ""}
         <button class="mini" type="button" data-use="${esc(c.voice)}">Use in FrontMan</button>${improve}
@@ -228,7 +228,7 @@ function impHtml(voice) {
   const a = DA.impAb, st = DA.imp[voice];
   if (!st?.candidate || a?.voice !== voice) return "";
   if (!st.current_url || !st.new_url)
-    return `<div id="imp-ab" data-voice="${esc(voice)}"><p class="meta">${esc(a.err || "Reading one line with both voices…")}</p></div>`;
+    return `<div id="imp-ab" data-voice="${esc(voice)}"><p class="meta">${esc(a.err || a.say || "Reading one line with both voices…")}</p></div>`;
   const side = w => `<div class="ab-side" data-side="${w}">
       <div class="ab-head"><span class="ab-letter">${impLetter(st, w)}</span></div>
       <div class="ab-player"><button class="ab-play" type="button" aria-label="Play ${impLetter(st, w)}"><svg class="ico i-play" aria-hidden="true"><use href="#g-play"/></svg><svg class="ico i-pause" aria-hidden="true"><use href="#g-pause"/></svg></button>
@@ -252,9 +252,15 @@ async function openImp(voice) {
       const { job } = await api(impUrl(voice, "/ab"), { json: {} });
       refreshJobs(true);
       const off = watchJob(job, async ev => {
-        if (!ev.final) return;
+        if (!ev.final) {   // behind another job: say what it waits for, not "reading one line" (IA P8-9)
+          const queued = ev.state === "queued" || ev.stage === "queued" || ev.stage === "preparing";
+          const other = runningJobs().find(j => j.id !== job);
+          const say = !queued ? "" : (ev.label || ev.message || (other ? `Waiting for “${jobName(other)}” to finish, then it reads one line with both voices…` : "Waiting its turn on the GPU, then it reads one line with both voices…"));
+          if (say !== (a.say || "")) { a.say = say; if (DA.impAb === a) renderVoiceCards(DA.cands); }
+          return;
+        }
         off();
-        if (ev.state !== "done") a.err = ev.message || "The listening copies couldn't be made.";
+        if (ev.state !== "done") a.err = plainMsg(ev.message) || "The listening copies couldn't be made.";
         else { try { DA.imp[voice] = (await api(impUrl(voice))).improved; a.stamp = Date.now(); } catch (e) { a.err = e.message; } }
         if (DA.impAb === a) renderVoiceCards(DA.cands);
       });
