@@ -2,7 +2,7 @@
 (jobs, voices, Pause / Resume and the queue) and the route assembly (FrontMan, DoubleAgent, SafeHouse). Python
 standard library only.
 
-    python -m undercover.server        (or UnderCover.bat; undercover/server.py runs main() here)
+    python -m undercover.server        (or scripts/UnderCover.bat; undercover/server.py runs main() here)
 
 JSON API + Server-Sent Events for live progress; audio served with HTTP Range support so the
 player can seek. All GPU work runs on one worker thread, so the models stay loaded and jobs queue.

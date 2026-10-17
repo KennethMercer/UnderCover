@@ -4,7 +4,7 @@ Reader's sex and accent, for the voice-print sex vote (core/speaker.py: sex_vote
 The Readers are fixed (pinned Kokoro weights) and so is WeSpeaker, so the file is made once and shipped; run this again
 only when either model changes. CPU only, about two minutes:
 
-    cd <repo> && .venv\Scripts\python.exe tools\reader_prints.py
+    cd <repo> && .venv\Scripts\python.exe scripts\reader_prints.py
 """
 import json
 import os
@@ -38,7 +38,7 @@ def main():
         out[r] = {"sex": "male" if r[1] == "m" else "female", "accent": "british" if r[0] == "b" else "american",
                   "v": [round(float(x), 5) for x in v]}
         print(r, flush=True)
-    PRINTS.write_text(json.dumps({"made": time.strftime("%Y-%m-%d"), "how": "tools/reader_prints.py: Kokoro v1.0, three lines "
+    PRINTS.write_text(json.dumps({"made": time.strftime("%Y-%m-%d"), "how": "scripts/reader_prints.py: Kokoro v1.0, three lines "
                                   "each, WeSpeaker ResNet34-LM", "prints": out}, indent=None), encoding="utf-8")
     print("wrote", PRINTS, len(out), "prints")
 

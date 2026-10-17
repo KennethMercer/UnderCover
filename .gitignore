@@ -16,7 +16,7 @@ phone.json
 /themes/
 # The First assignment's state (phase 17).
 tutorial.json
-# The demo voice's model files (phase 17): too large for git; tools/make_demo_voice.py makes them, manifest.json pins them.
+# The demo voice's model files (phase 17): too large for git; scripts/make_demo_voice.py makes them, manifest.json pins them.
 /undercover/assets/demo-voice/agent-smoke/model.pth
 /undercover/assets/demo-voice/agent-smoke/model.index
 test/

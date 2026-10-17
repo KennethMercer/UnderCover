@@ -1,7 +1,7 @@
 """Verify the ROCm PyTorch environment.
 
-    python tools/check_env.py          full report + FP16/FP32 matmul benchmark
-    python tools/check_env.py --quick  fast guard to run after every pip install
+    python scripts/check_env.py          full report + FP16/FP32 matmul benchmark
+    python scripts/check_env.py --quick  fast guard to run after every pip install
 
 Exits non-zero if torch is not the ROCm build or the configured GPU isn't usable.
 """
