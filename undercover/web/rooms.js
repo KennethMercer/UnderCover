@@ -188,11 +188,35 @@ async function loadStorage() {
   const moving = runningJobs().find(j => j.kind === "move");
   if (moving && !R.moving) followMove(moving);
   renderPlaces();
+  $("#st-drive").textContent = ((s.root || s.folder || s.path || "").match(/^([A-Za-z]:)/) || ($("#lib-free").textContent.match(/drive ([A-Z]:)/)) || [])[1] || "";
+  stCleanCount();
   if (typeof vaultLoad === "function") vaultLoad();   // the Vault section (vault.js)
   if (typeof smallerLoad === "function") smallerLoad();   // Make it smaller (smaller.js)
   if (typeof asideLoad === "function") asideLoad();   // voices set aside, with what they take (aside.js)
 }
 
+// Storage's rows (consult 5): one row open at a time; its panel opens under it. Clean up's row loads its groups (library.js owns that click).
+function stOpen(key, already) {
+  const panel = $("#" + key); if (!panel) return;
+  if (!already) panel.hidden = !panel.hidden;
+  $$("#room-storage .fopen").forEach(p => { if (p !== panel) p.hidden = true; });
+  stRowsSync();
+  if (!panel.hidden) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function stRowsSync() {
+  $$("#room-storage .frow[data-open]").forEach(b => { const open = !($("#" + b.dataset.open)?.hidden ?? true); b.setAttribute("aria-expanded", open); b.querySelector(".chev").innerHTML = open ? "&#9662;" : "&#8250;"; });
+}
+$$("#room-storage .frow[data-open]").forEach(b => b.addEventListener("click", () => stOpen(b.dataset.open, b.id === "lib-clean-btn")));
+if ($("#lib-clean")) new MutationObserver(stRowsSync).observe($("#lib-clean"), { attributes: true, attributeFilter: ["hidden"] });   // Clean up opens after its groups arrive: the row follows
+// the Clean up row's number: what the ticked-by-default groups would free (and move), without opening it
+async function stCleanCount() {
+  try {
+    const g = await api("/api/library/cleanup");
+    const on = Object.values(g).filter(x => x.count && x.default);
+    const free = on.reduce((a, x) => a + (x.size || 0), 0), moved = on.reduce((a, x) => a + (x.aside_size || 0), 0);
+    $("#st-n-clean").textContent = free ? `about ${gb(free)}` : moved ? `${gb(moved)} to set aside` : "nothing to free";
+  } catch (e) { $("#st-n-clean").textContent = ""; }
+}
 function renderPlaces() {
   const s = R.storage; if (!s) return;
   $("#st-places").innerHTML = Object.entries(s.groups).map(([k, x]) => `

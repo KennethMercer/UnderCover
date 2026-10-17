@@ -9,11 +9,11 @@ async function asideLoad() {
   renderAside();
 }
 function renderAside() {
-  const box = $("#as-body"), sec = $("#aside");
-  sec.hidden = !ASIDE.list.length;
-  if (!ASIDE.list.length) return;
-  const total = ASIDE.list.reduce((a, x) => a + (x.size || 0), 0);
-  $("#as-say").textContent = `${ASIDE.list.length} set aside · ${gb(total)}`;
+  const box = $("#as-body");   // its row in Storage's Make room group says the count and the size; the row opens it
+  const total = ASIDE.list.reduce((a, x) => a + (x.size || 0), 0), n = ASIDE.list.length;
+  $("#as-say").textContent = n ? gb(total) : "none";
+  $("#as-what").textContent = n ? `${n} voice${n > 1 ? "s" : ""} UnderCover moved out of the way` : "voices UnderCover moved out of the way, never deleted";
+  if (!n) { box.innerHTML = `<p class="meta">Nothing set aside. When a voice is replaced or you keep the other one, the old voice is moved here, never deleted.</p>`; return; }
   // rows that read the same (two copies of one voice) get the folder name beside them, in basic view too
   const same = x => ASIDE.list.filter(y => (y.display || y.voice) === (x.display || x.voice)).length > 1;
   box.innerHTML = `<p class="vt-lead">When a voice is replaced or you keep the other one, the old voice is moved here, never deleted. Delete only what you're sure you won't want back.</p>`
@@ -23,7 +23,7 @@ function renderAside() {
         ${asking && x.undo_for ? `<small class="meta aside-warn">Undo for ${esc(voiceDisplay(x.undo_for))} won't be able to bring it back.</small>` : ""}</span>
         <span class="row"><span class="meta mono">${gb(x.size || 0)}</span>
         <button class="btn" type="button" data-aside-back="${esc(x.id)}" data-pc>Bring it back</button>
-        <button class="btn${asking ? " confirm" : ""}" type="button" data-aside-rm="${esc(x.id)}" data-pc>${asking ? "Delete it?" : "Delete…"}</button></span></div>`;
+        <button class="btn${asking ? " confirm" : ""}" type="button" data-aside-rm="${esc(x.id)}" data-pc data-deep>${asking ? "Delete it?" : "Delete…"}</button></span></div>`;
     }).join("");
   $$("[data-aside-rm]", box).forEach(b => b.onclick = () => asideDelete(b.dataset.asideRm, b));
   $$("[data-aside-back]", box).forEach(b => b.onclick = async () => { b.disabled = true; await asideRestore(b.dataset.asideBack); if (b.isConnected) b.disabled = false; });

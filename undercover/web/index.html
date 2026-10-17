@@ -69,6 +69,7 @@
     <div class="assign-line"><i id="assign-line"></i></div>
   </div>
   <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
+    <button class="wb-fold" id="wb-fold" type="button" hidden aria-label="Open the Running room"></button>
     <span class="who" id="wb-who"></span>
     <div class="wb-main" id="wb-main"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
     <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-forget" type="button" hidden title="Forget the paused work instead of resuming it">Dismiss</button><button class="linkbtn" id="wb-open" type="button" title="Open SafeHouse's Running room">Running</button></div>
@@ -136,7 +137,7 @@
   <section class="panel oneshot" id="oneshot">
     <div class="row spread"><h2 id="os-h">Make a cover in one go</h2>
       <span class="row" id="os-run-meta" hidden><span class="mono meta" id="os-elapsed"></span><button class="linkbtn" id="os-cancel">Cancel</button></span>
-      <span class="meta" id="os-alt">or set it up yourself below</span></div>
+      <span class="meta" id="os-alt" hidden></span></div>
     <div id="os-idle">
       <div class="row">
         <input class="big" type="text" id="os-text" autocomplete="off" placeholder="Hello by Adele as Peter Griffin" aria-label="What cover to make">
@@ -148,6 +149,7 @@
       </div>
       <p class="meta" id="os-plan">Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest.</p>
       <div id="auto-choices" hidden></div>
+      <div class="os-foot"><button class="linkbtn quiet" id="build-toggle" type="button" aria-expanded="false" aria-controls="build">or set it up yourself &#8250;</button></div>
     </div>
     <div id="os-running" hidden>
       <div class="plan">
@@ -157,8 +159,8 @@
       </div>
       <p class="meta" id="os-foot"></p>
     </div>
-  </section>
-
+  <div class="build" id="build" hidden>
+  <div class="rn-lbl build-h"><b>Set it up yourself</b><small>your own file, a search, the exact voice</small></div>
   <section class="setup">
     <div class="panel">
       <h2>1 · Song</h2>
@@ -322,7 +324,8 @@
       <button class="convert" id="convert" disabled>Convert</button>
     </div>
   </div>
-
+  </div>
+  </section>
 
   <div class="sr-only" id="sr-live" aria-live="polite"></div>
   <section class="panel" id="progress" hidden>
@@ -345,6 +348,9 @@
     <h2 id="result-h">Your cover</h2>
     <div class="player">
       <button class="play" id="play" aria-label="Play">▶</button>
+      <div class="ab" role="group" aria-label="Compare with the original">
+        <button type="button" aria-pressed="true" data-ab="cover">Cover</button><button type="button" aria-pressed="false" data-ab="orig">Original</button>
+      </div>
       <div class="player-main">
         <canvas class="wave seekable" id="wave-res" aria-label="Waveform, click to seek"></canvas>
         <div class="song-row"><span class="mono meta" id="pos">0:00 / 0:00</span>
@@ -354,9 +360,6 @@
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path id="vol-waves" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path id="vol-x" d="M16 9l6 6M22 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" hidden/></svg>
             </button>
             <input type="range" id="volume" min="0" max="1" step="0.01" aria-label="Volume">
-          </div>
-          <div class="ab" role="group" aria-label="Compare with the original">
-            <button type="button" aria-pressed="true" data-ab="cover">Cover</button><button type="button" aria-pressed="false" data-ab="orig">Original</button>
           </div></div></div>
       </div>
     </div>
@@ -375,9 +378,8 @@
   </section>
 
   <section class="panel">
-    <div class="hist-head"><h2>History</h2><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output" data-deep data-pc>Open output folder</button></span></div>
+    <div class="hist-head"><div><h2>Recent covers</h2><small class="meta" id="hist-note">The latest 15 stay here; older ones roll off unless sent to SafeHouse.</small></div><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output" data-deep data-pc>Open output folder</button></span></div>
     <div class="hist" id="hist"><p class="meta">Your covers will appear here.</p></div>
-    <p class="meta" id="hist-note">The latest 15 covers stay here. Older ones you haven't sent to SafeHouse roll off (are deleted); sent ones stay in SafeHouse.</p>
   </section>
   </div>
 
@@ -559,31 +561,28 @@
           <div data-deep><div class="stack thin" id="lib-stack" role="img" aria-label="Storage by type"></div>
             <div class="legend" id="lib-legend"></div></div>
         </div>
-        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span><button class="btn" id="lib-clean-btn" data-pc>Clean up…</button></div>
+        <div class="lib-total"><b id="lib-total">…</b><span class="meta" id="lib-free"></span></div>
       </div>
     </section>
-    <section class="panel" id="lib-clean" hidden>
-      <div class="row spread"><h2>Clean up</h2><span class="meta">Frees space without touching your covers, songs or voices (unless you tick those)</span></div>
-      <div class="clean" id="lib-clean-list"></div>
-      <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
-        <span class="meta">Can't be undone; anything here is made again when it's needed.</span></div>
+    <!-- two groups (consult 5): each feature is one row with what it's for and its number, until opened; one row open at a time -->
+    <section class="panel grp" id="st-make"><h3 class="grp-h">Make room</h3>
+      <button class="frow" id="lib-clean-btn" type="button" data-open="lib-clean" aria-expanded="false" data-pc><b>Clean up</b><span class="what">stems, previews, old working files</span><span class="num" id="st-n-clean"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <div class="fopen" id="lib-clean" hidden>
+        <p class="meta">Frees space without touching your covers, songs or voices (unless you tick those).</p>
+        <div class="clean" id="lib-clean-list"></div>
+        <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
+          <span class="meta">Can't be undone; anything here is made again when it's needed.</span></div>
+      </div>
+      <button class="frow" type="button" data-open="smaller" aria-expanded="false"><b>Make it smaller</b><span class="what">voices and projects, checked to sound the same</span><span class="num" id="sm-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <div class="fopen" id="smaller" hidden><div class="vt-body" id="sm-body"></div></div>
+      <button class="frow" type="button" data-open="aside" aria-expanded="false"><b>Set aside</b><span class="what" id="as-what">voices UnderCover moved out of the way</span><span class="num" id="as-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <div class="fopen" id="aside" hidden><div class="vt-body" id="as-body"></div></div>
     </section>
-    <section class="panel" id="aside" hidden>
-      <div class="row spread"><h2>Set aside</h2><span class="meta" id="as-say"></span></div>
-      <div class="vt-body" id="as-body"></div>
-    </section>
-    <section class="panel" id="smaller" hidden>
-      <div class="row spread"><h2>Make it smaller</h2><span class="meta" id="sm-say"></span></div>
-      <div class="vt-body" id="sm-body"></div>
-    </section>
-    <section class="panel">
-      <div class="row spread"><h2>Where your files live</h2><span class="meta">Keep UnderCover on C: and its files somewhere roomier</span></div>
-      <div class="places" id="st-places"></div>
-      <p class="meta">Logs and settings stay with the app.</p>
-    </section>
-    <section class="panel" id="vault">
-      <div class="row spread"><h2>Vault</h2><span class="meta" id="vt-say"></span></div>
-      <div class="vt-body" id="vt-body"><p class="meta">Loading…</p></div>
+    <section class="panel grp" id="st-keep"><h3 class="grp-h">Keep it safe</h3>
+      <button class="frow" type="button" data-open="vault" aria-expanded="false"><b>Vault</b><span class="what">a copy of what can't be downloaded again, on another drive</span><span class="num" id="vt-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <div class="fopen" id="vault" hidden><div class="vt-body" id="vt-body"><p class="meta">Loading…</p></div></div>
+      <button class="frow" type="button" data-open="st-places-wrap" aria-expanded="false"><b>Where your files live</b><span class="what">keep UnderCover on C: and its files somewhere roomier</span><span class="num" id="st-drive"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <div class="fopen" id="st-places-wrap" hidden><div class="places" id="st-places"></div><p class="meta">Logs and settings stay with the app.</p></div>
     </section>
     </div>
 
@@ -592,7 +591,7 @@
     <div class="rn-now-box" id="rn-now"></div>
     <section class="panel rn-sec">
       <div class="rn-lbl"><b>Tonight</b><small id="rn-total"></small>
-        <span class="end" id="rn-when"><span class="meta" id="rn-when-lbl" hidden>Tonight's work starts at</span><input type="time" id="rn-at-time" value="23:00" aria-label="Start time"><span class="seg" role="group" aria-label="When the queue starts"><button type="button" id="rn-at" aria-pressed="false">Start at 11:00 pm</button><button type="button" id="rn-go" aria-pressed="false">Start now</button></span>
+        <span class="end" id="rn-when"><span class="at-ctl"><button class="btn" id="rn-at" type="button" aria-pressed="false">Starts at</button><input type="time" id="rn-at-time" value="23:00" aria-label="Start time"></span><button class="linkbtn" id="rn-go" type="button" aria-pressed="false">Start now</button>
           <button class="linkbtn" id="rn-stop" type="button" hidden>Don't start more</button></span></div>
       <div class="rn-list" id="rn-list"></div>
       <div class="rn-opts" id="rn-opts">
@@ -611,10 +610,7 @@
     </section>
     <section class="panel" id="q-panel" data-deep>
       <div class="row spread">
-        <div><h2>Tonight's queue, in detail</h2><p class="qtotal" id="q-total"></p></div>
-        <div class="row"><button class="btn" id="q-start" type="button" hidden>Start now</button>
-          <span class="row qat"><button class="btn primary" id="q-at" type="button" hidden>Start at 11:00 pm</button><input type="time" id="q-at-time" value="23:00" aria-label="Start time"></span>
-          <button class="linkbtn" id="q-stop" type="button" hidden>Don't start more</button></div>
+        <div><h2>Add to tonight <span class="deepmark"><svg class="ico" aria-hidden="true"><use href="#g-deep"/></svg>Deep Cover</span></h2><p class="meta">The pickers, and each job's steps. Start, Finish by and Keep the PC awake are in Tonight above.</p></div>
       </div>
       <div class="qpick">
         <div class="seg" id="q-mode" role="tablist" aria-label="Add to the queue">
@@ -640,11 +636,6 @@
         </div>
       </div>
       <div class="qlist" id="q-list"></div>
-      <div class="qopts">
-        <label class="toggle"><input type="checkbox" id="q-finish"><span>Finish by <input type="time" id="q-finish-time" value="07:00" aria-label="Finish by"><br><span class="meta">A job that wouldn't finish in time waits for the next night.</span></span></label>
-        <label class="toggle"><input type="checkbox" id="q-awake"><span>Keep the PC awake<br><span class="meta">Only while voice work runs.</span></span></label>
-      </div>
-      <p class="meta">Covers you start meanwhile go first. Pause / Resume at the top of the page stops and continues everything; the queue is saved, so a restart carries on.</p>
     </section>
     </div>
 
@@ -817,14 +808,9 @@
 
 <div class="scrim" id="q-scrim" hidden></div>
 <aside class="drawer" id="q-drawer" hidden role="dialog" aria-modal="true" aria-labelledby="qd-h">
-  <div class="row spread"><h2 id="qd-h">Tonight</h2><button class="linkbtn" id="qd-close" type="button">Close</button></div>
-  <div class="qd-jobs" id="qd-run" hidden></div>
-  <p class="meta" id="qd-total"></p>
-  <div class="qd-jobs" id="qd-list"></div>
-  <div class="row qd-add"><button class="btn" type="button" data-qadd="improve">+ Improve a voice</button><button class="btn" type="button" data-qadd="new">+ New voice</button>
-    <button class="btn" type="button" data-qadd="cadence">+ Let it speak</button></div>
-  <p class="meta">Any module can add long jobs here. Covers you start meanwhile go first; Pause / Resume (under the top bar) stops and continues everything.</p>
-  <button class="btn" type="button" id="qd-open">Open Tonight in SafeHouse</button>
+  <div class="row spread"><h2 id="qd-h">Running</h2><button class="linkbtn" id="qd-close" type="button">Close</button></div>
+  <div class="glance" id="qd-glance"></div>
+  <button class="btn" type="button" id="qd-open">Open in SafeHouse</button>
 </aside>
 
 <script src="/static/app.js"></script>

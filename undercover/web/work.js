@@ -16,12 +16,12 @@ function fmtMin(m) {
   return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min` : `${m} min`;
 }
 // the queue's start time: the saved one when there is one, else the last one chosen here (Running room and DoubleAgent's panel share it)
-const startTime = () => $("#rn-at-time").value || $("#q-at-time").value || "23:00";
+const startTime = () => $("#rn-at-time").value || "23:00";
 function showTimes(w) {
   const put = (id, v) => { const el = $("#" + id); if (el && v && document.activeElement !== el) el.value = v; };
   const saved = w?.settings?.start_at || null;
-  if (saved !== showTimes.was) { showTimes.was = saved; put("rn-at-time", saved || store.get("uc-queue-at", null)); put("q-at-time", $("#rn-at-time").value); }   // the saved time when it changes; an edit in the field stays
-  put("rn-finish-time", w?.settings?.finish_by); put("q-finish-time", w?.settings?.finish_by);
+  if (saved !== showTimes.was) { showTimes.was = saved; put("rn-at-time", saved || store.get("uc-queue-at", null)); }   // the saved time when it changes; an edit in the field stays
+  put("rn-finish-time", w?.settings?.finish_by);
 }
 function clock(hhmm) {
   if (!hhmm) return "";
@@ -49,6 +49,9 @@ function jobLine(j, withLeft = true) {
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
+// the job in a word or two for the folded strip: the person or the title, not the verb ("Training a voice of Kristen Schaal" -> "Kristen Schaal")
+const jobShort = j => (jobName(j).replace(/^(Training a voice of|Making a voice of|Improving|Improve|Cadence for|Let|Installing|Preview:|One-shot:)\s+/i, "").replace(/\s+speak$/i, "").split(/ · | then /)[0] || jobName(j)).trim();
+$("#wb-fold").onclick = () => { if (typeof queueDrawer === "function") queueDrawer(false); location.hash = "#safehouse/running"; window.scrollTo({ top: 0 }); };
 // a voice id read as a person ("barack-obama-uc" -> "Barack Obama"): the voice's display name when it's listed, else the id's own words; anything else as it is
 const niceName = s => !s ? "" : VOICES.has(s) ? voiceDisplay(s) : /^[a-z0-9]+(-[a-z0-9]+)*-uc$/.test(s) ? s.slice(0, -3).split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ") : s;
 const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
@@ -85,6 +88,10 @@ function renderBar() {
   bar.dataset.owner = owner;
   $("#wb-who").innerHTML = `${glyph(owner)}${MOD_NAME[owner]}`;
   $("#wb-text").textContent = text;
+  if (main) $("#wb-text").innerHTML = `<span class="wb-t">${esc(jobName(main))}</span>${jobLine(main) ? `<span class="wb-l">${esc(jobLine(main))}</span>` : ""}`;   // two lines on a phone
+  // on a phone, while the First assignment is the band, the strip folds to its line of light, the owner's glyph, the job and the time left (consult 7)
+  const fold = $("#wb-fold"); fold.hidden = !main;
+  if (main) { const left = main.total_left ?? main.eta; fold.innerHTML = `${glyph(owner)}<b>${esc(jobShort(main))}</b>${left != null && !main.pausing ? `<span class="mono">${esc(leftText(left).replace(/^about /, ""))}</span>` : ""}<span class="arrow">&#9656;</span>`; }
   $("#wb-more").hidden = run.length < 2;
   $("#wb-more").textContent = run.length > 1 ? `+${run.length - 1} more` : "";
   const frac = main ? jobProgress(main) : null;
@@ -103,7 +110,7 @@ function renderBar() {
 onJobs(list => {
   for (const j of runningJobs()) if (!W.watch[j.id]) W.watch[j.id] = watchJob(j.id, ev => { if (ev.final) { W.watch[j.id]?.(); delete W.watch[j.id]; } });
   renderBar();
-  if (!$("#q-drawer").hidden) renderRunning($("#qd-run"), { heading: "Running now" });
+  if (!$("#q-drawer").hidden) renderDrawer();
   if (runRoomOpen()) renderRunRoom();
 });
 // running jobs as rows (the drawer's "Running now")
@@ -213,21 +220,21 @@ function renderRunRoom() {
   // tonight: the overnight queue (its full editor stays on DoubleAgent's page)
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
-  $("#rn-total").textContent = !left.length ? "" : [w.total_min ? `About ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : "",
-    w.waits ? `${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : ""].filter(Boolean).join(" · ");
+  $("#rn-total").textContent = !left.length ? "" : [w.total_min ? `About ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : ""].filter(Boolean).join(" · ");   // a job that waits says so on its row
   $("#rn-opts").hidden = !left.length;
-  $("#rn-when").hidden = false;   // the start time can be set any time; the two buttons only mean something with work queued
-  $("#rn-when .seg").hidden = !left.length; $("#rn-when-lbl").hidden = !!left.length;
+  $("#rn-when").hidden = false;   // one time control, "Starts at [11:00 PM]" (consult round 2, 4.1): settable any time; the word is a button only when a press would arm the queue
   showTimes(w);
-  const same = at && startTime() === w.settings.start_at;   // the field still says what's saved; edited, the button offers the new time
-  $("#rn-at").textContent = same ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock(startTime())}`;
+  const same = at && startTime() === w.settings.start_at;   // the field still says what's saved; edited, the word offers the new time
+  $("#rn-at").textContent = same ? "Starts at" : left.length ? "Start at" : "Tonight's work starts at";
+  $("#rn-at").disabled = same || !left.length;
   $("#rn-at").setAttribute("aria-pressed", same);
-  $("#rn-go").setAttribute("aria-pressed", going);
+  $("#rn-go").hidden = !left.length; $("#rn-go").setAttribute("aria-pressed", going); $("#rn-go").textContent = going ? "Running now" : "Start now";
   $("#rn-stop").hidden = !w?.armed;
+  if (typeof PICK !== "undefined" && !PICK.cands.length && !PICK.loading && typeof loadCandidates === "function") { PICK.loading = true; loadCandidates().then(() => { if (runRoomOpen()) renderRunRoom(); }); }   // the rows' sources
   const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
     const run = i.state === "running";
     const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.waits_next_night ? "waits for the next night (or start it earlier)" : queueNote(i);
-    return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobKind(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
+    return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobSource(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
       <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
   }).join("") : `<p class="meta">Nothing for tonight.</p>`;
   if (put($("#rn-list"), list)) $$("#rn-list [data-rn-rm]").forEach(b => b.onclick = async () => {
@@ -260,7 +267,7 @@ const startWork = async body => {
 };
 $("#rn-at").onclick = () => startWork({ at: startTime() });
 $("#rn-at-time").onchange = e => {
-  store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue();
+  store.set("uc-queue-at", e.target.value || null); renderQueue();
   // nothing queued: this is only the time tonight's work will start at. It goes through the settings, never through Start at: arming the queue also
   // takes the hold off and would restart work you paused (found by trying it). `start_at` there saves without arming (smallfix6 addendum).
   if (e.target.value && !(W.last?.queue || []).some(i => ["queued", "paused", "running"].includes(i.state))) saveStartTime(e.target.value);
@@ -290,47 +297,34 @@ const jobWhat = i => ({ improve: `Improve ${esc(niceName(i.display || i.target))
                         project: `Training ${esc(i.display || i.target)} (your choices)` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
 const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "voice · speaking", newcad: "voice · new, speaking", project: "voice · your choices" })[i.kind] || esc(i.kind);
 // the drawer: a short list, labelled by module and kind; the full editor stays on DoubleAgent's page
+// The drawer is a glance (consult 4): what runs now, what tonight holds, one button to the Running room. Tonight is edited there, nowhere else.
 function renderDrawer() {
-  renderRunning($("#qd-run"), { heading: "Running now" });
-  const w = W.last;
-  if (!w) { $("#qd-list").innerHTML = `<p class="meta">Loading…</p>`; return; }
-  const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
-  $("#qd-total").innerHTML = left.length
-    ? (w.total_min ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> of work` : "<b>Nothing fits tonight</b>") + (w.done_by ? ` · done by about <span class="mono">${clock(w.done_by)}</span>` : "") +
-      (w.waits ? ` · ${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : "") +
-      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet · Start it in SafeHouse's Running room")
-    : "Nothing for tonight.";
-  $("#qd-list").innerHTML = w.queue.map(i => {
-    const run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state), owner = ownerOf(i.kind);
-    const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
-    const note = done ? `${i.state} · ${fmtMin(i.minutes)}${i.result?.note ? " · " + i.result.note : ""}` : run ? [live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")
-      : i.state === "paused" ? "paused · Resume continues it" : i.waits_next_night ? "waits for the next night (or start it earlier)" : queueNote(i);
-    return `<div class="qd-job ${run ? "running" : ""} ${done ? "done" : ""}" data-owner="${owner}">
-      <div><span class="kind">${MOD_NAME[owner]} · ${jobKind(i)}</span><b>${jobWhat(i)}</b>${note ? `<small>${esc(note)}</small>` : ""}
-        ${run ? `<div class="bar"><i style="width:${Math.round((live.fraction || 0) * 100)}%"></i></div>` : ""}</div>
-      <div class="qside">${done ? "" : `<span>~${fmtMin((i.estimate || {}).total)}</span>`}
-        ${run ? "" : `<button class="linkbtn" type="button" data-qd-rm="${i.id}">${done ? "Clear" : "Remove"}</button>`}</div></div>`;
-  }).join("") || "";
-  $$("#qd-list [data-qd-rm]").forEach(b => b.onclick = async () => {
-    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.qdRm } }); renderQueue(); removedNote(W.last); }
-    catch (e) { showError(e.message, "Couldn't remove that"); }
-  });
+  const w = W.last, run = byWait(runningJobs());
+  const now = run.length ? run.map(j => { const left = j.total_left ?? j.eta, line = [jobLine(j, false), left != null && !j.pausing ? leftText(left) : ""].filter(Boolean).join(" · ");
+      return `<div class="g"><span class="k">Now</span><div><b>${esc(jobName(j))}</b>${line ? `<small>${esc(line)}</small>` : ""}</div></div>`; }).join("")
+    : `<div class="g"><span class="k">Now</span><div><small>Nothing running right now.</small></div></div>`;
+  const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
+  const tonight = !w ? `<small>Loading…</small>` : !left.length ? `<small>Nothing for tonight.</small>`
+    : `<b>${left.length} job${left.length > 1 ? "s" : ""}${w.total_min ? ` · about ${fmtMin(w.total_min)}` : ""}</b><small>${[
+        w.armed ? (w.settings.start_at && !w.start_now ? `starts at ${clock(w.settings.start_at)}` : "running") : "not started yet",
+        w.done_by ? `done by about ${clock(w.done_by)}` : "", w.waits ? `${w.waits} wait${w.waits > 1 ? "" : "s"} for the next night` : ""].filter(Boolean).join(" · ")}</small>`;
+  put($("#qd-glance"), `${now}<div class="g"><span class="k">Tonight</span><div>${tonight}</div></div>`);
+}
+// what a queue job works from, where we know it (consult round 2, 4.4), else the kind
+function jobSource(i) {
+  const c = (typeof PICK !== "undefined" ? PICK.cands : []).find(x => x.target === i.target || x.voice === i.target);
+  if (i.kind === "improve") return c?.minutes ? `from ${Math.round(c.minutes)} min of ${c.singing ? "singing" : "speech"}, trained again` : "more clips, trained again";
+  if (i.kind === "new") return "finds clips first, then trains";
+  if (i.kind === "newcad") return "finds clips first, then trains and learns to speak";
+  if (i.kind === "cadence") return "from the voice's clips";
+  if (i.kind === "project") return "your choices";
+  return jobKind(i);
 }
 function renderQueue() {
   const w = W.last; if (!w) return;
   if (!$("#q-drawer").hidden) renderDrawer();
   if (runRoomOpen()) renderRunRoom();
   queueCount(w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length, w.armed);
-  const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
-  $("#q-total").innerHTML = left.length
-    ? `${w.total_min ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b>` : "<b>Nothing fits tonight</b>"} <span class="meta">${w.done_by ? `· done by about <span class="mono">${clock(w.done_by)}</span>${w.armed && w.settings.start_at ? ` if it starts at ${clock(w.settings.start_at)}` : ""}` : ""}${w.waits ? ` · ${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : ""}</span>`
-    : `<span class="meta">Nothing for tonight.</span>`;
-  const st = $("#q-start"), at = $("#q-at");
-  st.hidden = at.hidden = !left.length;
-  $("#q-stop").hidden = !w.armed || !left.length;
-  st.textContent = w.armed && !w.settings.start_at ? "Running" : "Start now";
-  st.disabled = w.armed && !w.settings.start_at;
-  at.textContent = w.armed && w.settings.start_at && startTime() === w.settings.start_at ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock(startTime())}`;
   $("#q-list").innerHTML = w.queue.map(i => {
     const e = i.estimate || {}, run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state);
     const what = jobWhat(i);
@@ -351,8 +345,6 @@ function renderQueue() {
   }).join("");
   $$("#q-list [data-rm]").forEach(b => b.onclick = async () => { W.last = await api("/api/work/remove", { json: { id: b.dataset.rm } }); renderQueue(); removedNote(W.last); });
   dragSort();
-  $("#q-finish").checked = !!w.settings.finish_by;
-  $("#q-awake").checked = w.settings.keep_awake !== false;
   renderReport(w.report);
 }
 // The report gathers everything since the last Dismiss, so it's "While you were out", with its real range in days ("yesterday 15:14 to today 13:20").
@@ -510,13 +502,6 @@ $("#q-name").addEventListener("input", () => {
     });
   }, 450);
 });
-$("#q-start").onclick = async () => { W.last = await api("/api/work/start", { json: {} }); renderQueue(); pollStatusSoon(); };
-$("#q-at").onclick = async () => { W.last = await api("/api/work/start", { json: { at: startTime() } }); renderQueue(); pollStatusSoon(); };
-$("#q-at-time").onchange = e => { store.set("uc-queue-at", e.target.value || null); $("#rn-at-time").value = e.target.value; renderQueue(); };
-$("#q-stop").onclick = async () => { W.last = await api("/api/work/start", { json: { stop: true } }); renderQueue(); pollStatusSoon(); };
-$("#q-finish").onchange = async e => { W.last = await api("/api/work/settings", { json: { finish_by: e.target.checked ? ($("#q-finish-time").value || "07:00") : null } }); renderQueue(); };
-$("#q-finish-time").onchange = async e => { if ($("#q-finish").checked && e.target.value) { W.last = await api("/api/work/settings", { json: { finish_by: e.target.value } }); renderQueue(); } };
-$("#q-awake").onchange = async e => { W.last = await api("/api/work/settings", { json: { keep_awake: e.target.checked } }); renderQueue(); };
 $("#q-dismiss").onclick = async () => { W.last = await api("/api/work/dismiss", { json: {} }); renderQueue(); };
 function pollStatusSoon() { setTimeout(() => api("/api/status").then(s => renderWorkBar(s.work)).catch(() => {}), 300); }
 

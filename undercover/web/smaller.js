@@ -8,8 +8,7 @@ const SM_MIN = 20e6;   // below this, an item isn't worth a row (it still shows 
 const smKey = (kind, name) => `${kind}:${name}`;
 
 async function smallerLoad() {
-  try { SM.o = await api("/api/library/smaller"); } catch (e) { SM.o = null; $("#smaller").hidden = true; return; }
-  $("#smaller").hidden = false;
+  try { SM.o = await api("/api/library/smaller"); } catch (e) { SM.o = null; $("#sm-say").textContent = "not now"; return; }   // its row in Storage opens it
   renderSmaller();
 }
 function smItems() {
@@ -20,7 +19,7 @@ function smItems() {
 }
 function renderSmaller() {
   const box = $("#sm-body"), items = smItems(), o = SM.o || {};
-  $("#sm-say").textContent = o.saving >= SM_MIN ? `could save about ${gb(o.saving)}` : "";
+  $("#sm-say").textContent = o.saving >= SM_MIN ? `could save ${gb(o.saving)}` : "nothing worth it";
   if (!items.length) { box.innerHTML = `<p class="meta">Nothing big enough to be worth it right now.</p>`; return; }
   const shown = SM.all ? items : items.slice(0, 5);
   box.innerHTML = `<p class="vt-lead">The voices you trained keep a big search file, and training projects keep their clips uncompressed. Both shrink a lot. The originals wait aside until you choose Keep, so nothing goes until you're happy with it.</p>
