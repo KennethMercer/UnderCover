@@ -518,5 +518,5 @@ $("#lib-clean-btn").onclick = async () => {
   };
 };
 $("#lib-clean-close").onclick = () => { $("#lib-clean").hidden = true; };
-$("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); showTab("safehouse"); };
+$("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); location.hash = "#safehouse/library"; showTab("safehouse"); };   // the Library room, not the last room (IA P9-12)
 

@@ -56,7 +56,7 @@ const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9)
 
 // ------------------------------------------------------------ the bar: any running job, live (jobs.js), plus Pause / Resume
 W.work = null; W.watch = {};
-function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); }   // called from app.js pollStatus with /api/status's "work"
+function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); if (typeof renderDaWork === "function" && !$("#view-train").hidden) renderDaWork(); }   // DoubleAgent's card follows the status too (a pause lands in the status as well as the jobs)   // called from app.js pollStatus with /api/status's "work"
 function renderBar() {
   const bar = $("#workbar"), w = W.work || {};
   if (typeof queueCount !== "function") return;   // shell.js (loaded last) isn't there yet: the job feed answered early
@@ -214,7 +214,9 @@ function renderRunRoom() {
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
   $("#rn-total").textContent = left.length ? `About ${fmtMin(w.total_min)} · done by about ${clock(w.done_by)}` : "";
-  $("#rn-when").hidden = $("#rn-opts").hidden = !left.length;
+  $("#rn-opts").hidden = !left.length;
+  $("#rn-when").hidden = false;   // the start time can be set any time; the two buttons only mean something with work queued
+  $("#rn-when .seg").hidden = !left.length; $("#rn-when-lbl").hidden = !!left.length;
   showTimes(w);
   const same = at && startTime() === w.settings.start_at;   // the field still says what's saved; edited, the button offers the new time
   $("#rn-at").textContent = same ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock(startTime())}`;
@@ -252,11 +254,21 @@ $("#rn-recent").addEventListener("click", async e => {
   catch (err) { b.disabled = false; showError(err.message, "Couldn't start it again"); }
 });
 const startWork = async body => {
-  try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); }
-  catch (e) { showError(e.message, "Couldn't change the start"); }
+  try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); return true; }
+  catch (e) { showError(e.message, "Couldn't change the start"); return false; }
 };
 $("#rn-at").onclick = () => startWork({ at: startTime() });
-$("#rn-at-time").onchange = e => { store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue(); };
+$("#rn-at-time").onchange = e => {
+  store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue();
+  // nothing queued: this is only the time tonight's work will start at. It goes through the settings, never through Start at: arming the queue also
+  // takes the hold off and would restart work you paused (found by trying it). The server must keep `start_at` there; until it does, say so.
+  if (e.target.value && !(W.last?.queue || []).some(i => ["queued", "paused", "running"].includes(i.state))) saveStartTime(e.target.value);
+};
+async function saveStartTime(v) {
+  try { W.last = await api("/api/work/settings", { json: { start_at: v } }); renderQueue(); } catch (e) { return showError(e.message, "Couldn't save the start time"); }
+  if (W.last?.settings?.start_at === v) showError(`Tonight's work will start at ${clock(v)}.`, "Start time saved", null, true);
+  else showError("The start time can't be saved until something is queued.", "Start time not saved", null, true);
+}
 $("#rn-go").onclick = () => startWork({});
 $("#rn-stop").onclick = () => startWork({ stop: true });
 const workSettings = async body => {
@@ -373,15 +385,16 @@ function renderReport(r) {
     const oc = reportOutcome(x);
     const what = x.kind === "improve" ? (x.replaced ? "improved" : x.pending ? "retrained" : "tried") : x.kind === "cadence" ? (x.replaced ? "cadence" : "cadence tried")
       : x.kind === "newcad" ? "new voice + cadence" : "new voice";
+    const what2 = x.state === "done" ? what : x.state === "skipped" ? "was cancelled" : "didn't finish";   // a failed "new voice" read as if one was made (IA P9-14)
     const words = x.before_word && x.after_word && x.before_word !== x.after_word ? `${likeWord(x.before_word)} → ${likeWord(x.after_word)}` : likeWord(x.after_word || x.before_word);
-    const numbers = x.before != null || x.after != null ? `${x.before != null ? x.before.toFixed(2) + " → " : ""}${x.after != null ? x.after.toFixed(2) : "?"}` : "";
+    const numbers = x.before != null || x.after != null ? `${x.before != null ? x.before.toFixed(3) + " → " : ""}${x.after != null ? x.after.toFixed(3) : "?"}` : "";   // three places: the word was cut at the unrounded score
     const cad = x.kind === "cadence" ? x : x.cadence;   // cadence numbers: Deep Cover only
-    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: likeness ${cad.likeness} · gap ${cad.cadence_gap} · WER ${cad.wer} · from ${cad.data_minutes} min</p>` : "";
+    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: ${[`likeness ${cad.likeness}`, cad.cadence_gap != null && `gap ${cad.cadence_gap}`, cad.wer != null && `WER ${cad.wer}`, cad.data_minutes != null && `from ${cad.data_minutes} min`].filter(Boolean).join(" · ")}</p>` : "";
     const raw = x.note || "";
     const hasNum = /\d\.\d{2,}/.test(raw);   // the server's note quotes the scores: Deep Cover; basic says it plainly
     const plain = x.note_plain != null ? x.note_plain : hasNum ? REPORT_PLAIN[oc] || "" : raw;   // the server's plain note (smallfix4); until a result has one, from the outcome
     const up = oc === "better" || oc === "new" || oc === "waiting";
-    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum || (x.note_plain != null && raw && raw !== x.note_plain) ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
+    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what2}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum || (x.note_plain != null && raw && raw !== x.note_plain) ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
       <div class="qres-r"><span class="${up ? "up" : "same"}">${oc ? esc(REPORT_WORDS[oc] || oc) : esc(x.state)}</span>${words ? `<span class="meta">${words}</span>` : ""}${numbers ? `<span class="mono meta" data-deep>${esc(numbers)}</span>` : ""}</div></div>`;
   }).join("");
 }

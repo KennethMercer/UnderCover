@@ -549,7 +549,11 @@ function renderBackingSelect() {
   $("#karaoke").checked = on || !!S.opts.karaoke;
   $("#karaoke").disabled = on;
 }
-$("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.target.value; renderBackingSelect(); saveOpts(); });
+$("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.target.value; renderBackingSelect(); saveOpts(); summary(); refreshEstimate(); });
+$("#summary").addEventListener("click", e => {   // "Use the original singer's backing": one click to drop a carried-over backing voice
+  if (!e.target.closest("#clear-backing")) return;
+  S.opts.backing_voice = ""; renderBackingSelect(); saveOpts(); summary(); refreshEstimate();
+});
 $("#reset").onclick = () => { store.set("uc-opts", {}); loadOpts(); refreshEstimate(); };
 
 function summary() {
@@ -567,7 +571,8 @@ function summary() {
   else if (!S.voice) $("#summary").innerHTML = `<b>${esc(S.song.title)}</b>. Now pick a voice.`;
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
-    const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals` : "";
+    // a backing voice carried over (Use these settings) stays on when the lead changes: it is said here, with a way to clear it, never silently (IA P9-3)
+    const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
     $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }
 }

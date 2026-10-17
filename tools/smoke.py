@@ -5153,6 +5153,9 @@ def u_page_rules():
     # smallfix5 hooks: the one estimator, the tonight start note, the pause note, the paused card, the remove note
     assert all(k in work for k in ("function estimateFor", "const startsNote", "const pausingNote", "function removedNote")) and "/api/work/estimate" in work, "work.js lost a smallfix5 hook"
     assert "data-da-resume" in da and 'id="da-train-eta"' in ix and "estWords(" in da, "DoubleAgent lost its paused card or the estimator's time"
+    # qa16 (pass 9): a carried backing voice is said and clearable, a one-shot's pick is drawn at once, Let it speak asks Now / Tonight, the job notifier has a fallback
+    jb = (web / "jobs.js").read_text(encoding="utf-8")
+    assert 'id="clear-backing"' in app and "function drawPlan" in osj and "data-cad-go" in da and "jfTimer" in jb and "saveStartTime" in work, "a pass-9 page fix is gone"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
