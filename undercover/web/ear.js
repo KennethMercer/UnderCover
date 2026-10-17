@@ -100,7 +100,7 @@ async function earDo(a, kind, item) {
     const who = voiceDisplay(a.body?.target || "") || "The voice";
     const at = typeof startsNote === "function" ? startsNote(W.last) : "";
     return showError(a.body?.kind === "improve" ? `${who} improves tonight.${at} SafeHouse's Running room shows it.`
-      : a.body?.kind === "cadence" ? `${who} learns their own cadence tonight.${at} SpeakEasy reads with it once it's done.`
+      : a.body?.kind === "cadence" ? `${who} learns to speak tonight.${at} SpeakEasy reads that way once it's done.`
       : `${who} is in tonight's work.${at} SafeHouse's Running room shows it.`, "On it", null, true);
   }
   if (a.action === "pick_voice") {   // Try another voice: FrontMan's voice list

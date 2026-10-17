@@ -77,22 +77,22 @@ function seVoices() {
     const facts = v.trained ? [v.kind, v.undertrained ? "under-trained" : ""]
                             : ["downloaded", v.person ? `checked: ${v.person}` : "", v.kind === "singing" ? "singing" : ""];
     const c = v.cadence || {};
-    const cad = c.has ? `cadence <span class="y">✓</span>` : c.queue === "running" ? "cadence: making it now" : c.queue ? "cadence queued" : "cadence –";
+    const cad = c.has ? `<span class="y">speaks</span>` : c.queue === "running" ? "learning to speak" : c.queue ? "learns to speak tonight" : "can't speak yet";
     const act = c.has || c.queue || !c.can ? ""
-      : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">${v.trained ? "Train cadence" : "Find clips + cadence"}</button>`;
+      : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">Let it speak</button>`;
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
-      <div class="vtext"><b>${vname(v.name)}</b>${v.trained && v.likeness != null ? `<small data-deep>likeness ${(+v.likeness).toFixed(2)}</small>` : ""}<small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">voice <span class="y">✓</span> · ${cad}</span></small></div>
+      <div class="vtext"><b>${vname(v.name)}</b>${v.trained && v.likeness != null ? `<small data-deep>likeness ${(+v.likeness).toFixed(2)}</small>` : ""}<small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">${cad}</span></small></div>
       <div class="se-vact">${act}</div></div>`;
   };
   const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
   $("#se-voices").innerHTML = (trained.length ? `<div class="se-vgroup">Trained in DoubleAgent</div>` + trained.map(row).join("") : "")
-    + (dl.length ? `<div class="se-vgroup">Downloaded (cadence needs clips first)</div>` + dl.map(row).join("") : "")
-    || `<p class="meta">${SE.voices.length ? `No voice matches “${esc(q)}”.` : "No voices yet: train one in DoubleAgent or install one in FrontMan."}</p>`;
+    + (dl.length ? `<div class="se-vgroup">Downloaded (they learn to speak from clips first)</div>` + dl.map(row).join("") : "")
+    || (SE.voices.length ? `<p class="meta">No voice matches “${esc(q)}”.</p>` : `<div class="empty"><b>No one to speak yet.</b><button class="btn" type="button" data-goto="doubleagent">Get a voice</button></div>`);
   $$("#se-voices [data-cad]").forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
     try { await api("/api/speak/cadence", { json: { voice: b.dataset.cad, now: true } }); }
-    catch (e) { b.disabled = false; return showError(e.message, "Couldn't start the cadence"); }
+    catch (e) { b.disabled = false; return showError(e.message, "Couldn't start it"); }
     seLoad(); if (typeof loadQueue === "function") loadQueue();
   });
   $$("#se-voices .voice").forEach(el => {
@@ -110,7 +110,7 @@ async function seNewVoice(now) {
   catch (e) { return showError(e.message, "Couldn't start the new voice"); }
   $("#se-newname").value = "";
   const eta = (await estimateFor("new", name, "speaking"))?.total, about = eta ? etaWords({ low: eta * 60, high: eta * 60 }) : "a few hours";
-  $("#se-newnote").textContent = now ? `DoubleAgent is on it: ${name}'s voice and cadence (${about}; the bar at the top shows how far). It appears here when it's done.`
+  $("#se-newnote").textContent = now ? `DoubleAgent is on it: ${name}'s voice, and how they talk (${about}; the bar at the top shows how far). It appears here when it's done.`
     : `${name} is in tonight's queue (${about}).${startsNote(r) || " It runs at the queue's start time."} SafeHouse's Running room shows it.`;
   if (typeof loadQueue === "function") loadQueue();
   refreshJobs(true);
@@ -159,6 +159,8 @@ function sePlan(soon) {
     catch (e) { if (seq === sePlanSeq) { SE.plan = null; seSummary(); } }
   }, soon ? 120 : 0);
 }
+// "Speak the way Morgan Freeman really does" (a name), "the way they really do" (none)
+function seCadName(name) { $("#se-cad-name").textContent = name || "they"; $("#se-cad-verb").textContent = name ? "does" : "do"; $("#se-cad").setAttribute("aria-label", `Speak the way ${name || "they"} really ${name ? "does" : "do"}`); }
 $("#se-cad").checked = store.get("uc-se-cad", true);
 $("#se-cad").onchange = () => { store.set("uc-se-cad", $("#se-cad").checked); sePlan(); };
 function seShowPlan() {
@@ -170,16 +172,16 @@ function seShowPlan() {
   $("#se-cad-field").classList.toggle("off", !c.has);
   $("#se-cad-note").textContent = c.has ? (cadOn ? "Their pace and pauses, from their own clips. It starts playing after the first few sentences."
       : "Off: the quick built-in Reader speaks, then the voice makes it sound like them.")
-    : c.queue ? "Their cadence is being made (DoubleAgent); it's used as soon as it's ready."
-    : c.can ? `Their pace and pauses, learned from their clips. "Train cadence" on the voice makes it (minutes).` : (c.why || "Not available for this voice.");
+    : c.queue ? "They're learning to speak (DoubleAgent); it's used as soon as it's ready."
+    : c.can ? `Their own pace and pauses, learned from their clips. "Let it speak" on the voice makes it (minutes).` : (c.why || "Not available for this voice.");
   $("#se-cad-deep").textContent = c.has ? `${p.engine_name || c.engine} · from ${c.data_minutes ?? "?"} min of speech · likeness ${c.scores?.likeness ?? "?"} · cadence gap ${c.scores?.cadence_gap ?? "?"} · gap between sentences ${c.gap_s ?? "?"} s · tempo ${c.tempo ?? 1}` : "";
   $("#se-reader-field").hidden = cadOn;
   $("#se-pace-deep").textContent = cadOn ? `${p.pace}: gap between sentences ${p.gap_s} s${p.engine === "chatterbox" ? ` · cfg_weight ${p.cfg_weight} · exaggeration ${p.exaggeration}` : ""} · no stretching`
     : `${p.pace}: the Reader reads at ${p.speed}× · pauses ×${p.gap_scale}`;
   if (cadOn) {
     $("#se-nudge-out").textContent = p.nudge ? st(p.nudge) : "their own";
-    $("#se-pitch-note").textContent = "With their cadence, they speak at their own pitch. Nudge it only if it sounds off.";
-    $("#se-cad-name").textContent = v0?.person ? `${v0.person}'s` : `${voiceDisplay(p.voice)}'s`; $("#se-cad").setAttribute("aria-label", `Speak with ${$("#se-cad-name").textContent} own cadence`);
+    $("#se-pitch-note").textContent = "Speaking their own way, they use their own pitch. Nudge it only if it sounds off.";
+    seCadName(v0?.person || voiceDisplay(p.voice));
     return seSummary();
   }
   $("#se-reader-out").textContent = `${p.auto ? "auto · " : ""}${p.reader}`;
@@ -188,7 +190,7 @@ function seShowPlan() {
     ? `Speaks around ${Math.round(p.target_hz)} Hz (from ${p.pitch_from}); the Reader is at ${Math.round(p.reader_hz)} Hz. Nudge it if they sound too high or low.`
     : "This voice's speaking pitch isn't known (a downloaded voice nobody checked), so the Reader's own pitch is used. Nudge it, or pick another Reader, if it sounds off.";
   const v = SE.voices.find(x => x.name === p.voice);
-  $("#se-cad-name").textContent = v?.person ? `${v.person}'s` : `${voiceDisplay(p.voice)}'s`; $("#se-cad").setAttribute("aria-label", `Speak with ${$("#se-cad-name").textContent} own cadence`);
+  seCadName(v?.person || voiceDisplay(p.voice));
   seSummary();
 }
 function seSummary() {
@@ -201,7 +203,7 @@ function seSummary() {
   const cad = est ? est.mode === "cadence" : SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
   const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${est.waiting ? ` (${est.waiting} ahead in the queue)` : ""}`
     : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
-  const when = `${cad ? "with their cadence" : "read by the Reader"}${ready} · starts playing after the ${cad ? "first few sentences" : "first sentence"}`;
+  const when = `${cad ? "the way they really do" : "read by the Reader"}${ready} · starts playing after the ${cad ? "first few sentences" : "first sentence"}`;
   $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
     : `<b>${vname(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
 }
@@ -366,7 +368,7 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their cadence" : ""} · ${esc(seWhen(r.created))}</small></div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their own way" : ""} · ${esc(seWhen(r.created))}</small></div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));

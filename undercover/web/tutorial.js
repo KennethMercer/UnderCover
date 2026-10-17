@@ -24,7 +24,7 @@ const ASSIGN = [
     aim: () => [$("#keep")] },
   { head: "This is SafeHouse.", say: "Everything you keep lives here, room by room. Your cover is in the Library.", tab: "safehouse",
     aim: () => [$('#lib-list .litem[data-kept="true"]')], next: "Next" },
-  { head: "Last: a voice of your own.", say: "Name someone and press Train tonight instead. It trains while the PC is free, and you wake up to your first voice of your own.", tab: "doubleagent",
+  { head: "Last: a voice of your own.", say: "Name someone and press Train tonight. It trains while the PC is free, and you wake up to your first voice of your own.", tab: "doubleagent",
     aim: () => [$("#da-person"), $("#da-tonight")], next: "Done" },
 ];
 const VOICE_KINDS = new Set(["train", "train-auto", "train-prepare", "train-export", "install", "night"]);   // "a voice of your own" started

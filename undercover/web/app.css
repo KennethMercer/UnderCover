@@ -764,9 +764,16 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .renamer { display: flex; gap: 8px; }
 .renamer input { flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--fg); font: inherit; }
 
-.os-plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.os-plan-grid > span { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
-@media (max-width: 700px) { .os-plan-grid { grid-template-columns: 1fr; } }
+/* the one-shot's plan: three plain lines (Song / Voice / Time), the label in a quiet column */
+.os-plan-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: 13.5px; color: var(--fg); align-items: baseline; }
+.os-plan-grid > .k { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; }
+.os-plan-grid > span:not(.k) { overflow-wrap: anywhere; }
+#os-warn { margin: 8px 0 0; }
+/* an empty state: one line and one button, the same shape everywhere (consult 9) */
+.empty { display: grid; gap: 10px; justify-items: start; padding: 12px 0; }
+.empty > b { font-weight: 600; }
+.empty > small { color: var(--muted); }
+body.deep .nodeep { display: none !important; }   /* basic-only words: in Deep Cover the number stands where the word was */
 .os-opts summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .os-opts[open] summary { margin-bottom: 6px; }
 
