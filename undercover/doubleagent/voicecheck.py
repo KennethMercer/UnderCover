@@ -133,7 +133,7 @@ def target_range(proj, rmvpe, n: int = 16) -> list | None:
     """[p5, median, p95] pitch (Hz) of the person's best kept phrases (their singing, for singers)."""
     import soundfile as sf
     from .project import _resample16
-    kept = sorted([p for p in proj.phrases if p.kept and p.dur >= 2], key=lambda p: -p.score)[:n]
+    kept = sorted([p for p in proj.training_phrases() if p.dur >= 2], key=lambda p: -p.score)[:n]
     f0s = []
     for p in kept:
         x, sr = sf.read(str(proj.clip_path(p.id)), dtype="float32")

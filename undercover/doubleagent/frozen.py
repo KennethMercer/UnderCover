@@ -238,20 +238,20 @@ def source_table(proj, emb: dict) -> list[dict]:
     return rows
 
 
-def gate_project(proj, emb: dict, voice_hz: float | None, pitch_of=None, per_source: int = 12) -> dict:
+def gate_project(proj, emb: dict, voice_hz: float | None, pitch_of=None, per_source: int = 12, by: str = "Improve") -> dict:
     """R6 on a project, after score(): sources that fail are unticked with the reason, and their kept phrases marked
     left out (unticking a source alone leaves its cut phrases in training). The user's own sources and phrases
     (user=True / choice=True) are never touched. pitch_of(clip path) -> median pitch Hz, for the register term.
     -> {left_out: [{title, why}], kept_min, rows}."""
     rows = source_table(proj, emb)
     if pitch_of is not None:
-        by: dict = {}
+        of: dict = {}
         for ph in proj.phrases:
             if ph.kept:
-                by.setdefault(ph.source, []).append(ph)
+                of.setdefault(ph.source, []).append(ph)
         for r in rows:
             hz = []
-            for ph in sorted(by.get(r["id"], []), key=lambda q: -q.score)[:per_source]:
+            for ph in sorted(of.get(r["id"], []), key=lambda q: -q.score)[:per_source]:
                 try:
                     h = pitch_of(proj.clip_path(ph.id))
                 except Exception:   # noqa: BLE001 - an unreadable clip says nothing about the register
@@ -263,11 +263,11 @@ def gate_project(proj, emb: dict, voice_hz: float | None, pitch_of=None, per_sou
     gate_rows(rows, voice_hz)
     left = []
     for r in rows:
-        if r["pass"] or r.get("user"):
-            continue
+        if r["pass"] or r.get("user") or not r.get("selected", True):
+            continue   # (one unticked already, by the user or an earlier gate, stays as it is: it doesn't train)
         src = proj.source(r["id"])
         src.selected = False
-        src.note = f"left out by Improve: {r['gate']}"
+        src.note = f"left out by {by}: {r['gate']}"
         src.extra["gate"] = r["gate"]
         for ph in proj.phrases:
             if ph.source == r["id"] and ph.kept and ph.choice is None:
@@ -452,7 +452,7 @@ def own_line_candidates(proj, texts: dict, pack_clip: str | None, n: int = N_LIN
     """The person's best kept speech phrases to read back: 3-9 s, score >= 0.6, not a training holdout, not the pack's
     reference, at most three per source, in a fixed order (sha1 of the id). texts: transcripts (may be empty)."""
     hold = set(proj.train.get("holdout") or [])
-    good = [q for q in proj.phrases if q.kept and not q.sung and q.score >= 0.6 and 3 <= q.dur <= 9
+    good = [q for q in proj.training_phrases() if not q.sung and q.score >= 0.6 and 3 <= q.dur <= 9
             and q.id not in hold and q.id != pack_clip]
     good.sort(key=lambda q: hashlib.sha1(q.id.encode()).hexdigest())
     seen, out = {}, []
@@ -487,7 +487,7 @@ def freeze(voice, proj, engine, push=None) -> dict:
     ref = emb[key] / (np.linalg.norm(emb[key]) + 1e-9)
     # the person's references: embeddings and spectra of up to 40 of their best real clips, spread over sources
     push(0.0, "Freezing the test: their real clips")
-    good = sorted([q for q in proj.phrases if q.kept and q.score >= 0.6 and 3 <= q.dur <= 9], key=lambda q: -q.score)
+    good = sorted([q for q in proj.training_phrases() if q.score >= 0.6 and 3 <= q.dur <= 9], key=lambda q: -q.score)
     seen, picks = {}, []
     for q in good:
         if seen.get(q.source, 0) >= 4:
@@ -569,7 +569,7 @@ def freeze(voice, proj, engine, push=None) -> dict:
         f = f"{i:02d}.wav"
         sf.write(str(d / "lines" / f), np.asarray(y, dtype=np.float32), int(sr), subtype="PCM_16")
         lines.append({"id": q["id"], "text": q["text"], "file": f, "sr": int(sr)})
-    singer = not any(q.kept and not q.sung for q in proj.phrases)   # a singer: no speech of theirs to read back (a known gap)
+    singer = not any(not q.sung for q in proj.training_phrases())   # a singer: no speech of theirs to read back (a known gap)
     t = {"version": TEST_VERSION, "made": time.strftime("%Y-%m-%d %H:%M"), "voice": voice.name, "project": proj.name,
          "sex": sex, "tgt_hz": round(tgt_hz, 1), "donors": donors, "lines": lines, "read_with": how, "approved": None,
          "singer": singer, "lines_why": (None if len(lines) >= LINES_MIN else "no spoken clips of theirs" if singer
@@ -651,6 +651,28 @@ def score_voice(test_voice, voice, engine, push=None) -> dict:
                      for cls, rs in (("donors", rows), ("lines", lines)) if rs}}
     _write_json(out, s)
     return s
+
+
+# The compare's cost by the test's own size (smallfix7; the real Freeman run: 6 lines + 8 donors, freeze and both
+# scorings in 70 s, against a flat 9 min said, so its time left jumped 46 -> 8 -> 20 s).
+SCORE_S = 1.2        # s per test input scored (one conversion + its measures)
+READ_S = 5.0         # s per own line read through the pack, once, at freeze time
+FREEZE_BASE_S = 15.0  # the real clips' references and the donors' pick
+JUDGE_BASE_S = 10.0   # loading the candidate
+EXPORT_S = 20.0       # the candidate's export before it's judged
+
+
+def compare_seconds(test: dict | None) -> dict:
+    """{"ensure": s, "judge": s}: freezing the test and scoring the approved voice (0 when the test exists and the
+    approved voice was scored on it), then scoring the candidate. A test not made yet is priced at the usual size
+    (N_LINES lines, POOL_PER_SEX donors)."""
+    if test:
+        n_l, n_d = len(test.get("lines") or []), len(test.get("donors") or [])
+        ens = 0.0 if test.get("approved") else SCORE_S * (n_l + n_d)
+    else:
+        n_l, n_d = N_LINES, POOL_PER_SEX
+        ens = FREEZE_BASE_S + READ_S * n_l + SCORE_S * (n_l + n_d)
+    return {"ensure": round(ens, 1), "judge": round(JUDGE_BASE_S + SCORE_S * (n_l + n_d), 1)}
 
 
 def ensure(voice, proj, engine, push=None) -> tuple[dict, dict]:

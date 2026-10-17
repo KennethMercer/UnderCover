@@ -609,6 +609,33 @@ def speaking_pitch(v) -> dict | None:
     return None
 
 
+def print_vote(v) -> int | None:
+    """The voice-print sex vote (core.speaker.sex_vote) of the person a voice was trained on, from its project's
+    reference voice; kept in meta.json (extra.print_vote) once measured. None for a voice without a project (a
+    downloaded one), or when it can't be measured: then SpeakEasy's Reader goes by pitch alone."""
+    ex = v.extra or {}
+    if "print_vote" in ex:
+        return ex["print_vote"]
+    if not ex.get("project"):
+        return None
+    from ..core.speaker import sex_vote
+    from .project import Project
+    try:
+        proj = Project.load(ex["project"])
+        vote = sex_vote(proj.load_embeddings().get(f"speaker:{proj.reference.get('cluster')}"))
+    except Exception:   # noqa: BLE001 - a project gone or unreadable: the pitch decides
+        return None
+    if vote is not None:
+        import json
+        from ..core import fsutil
+        try:
+            v.extra = {**ex, "print_vote": vote}
+            fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+        except Exception:   # noqa: BLE001 - measured again next time
+            pass
+    return vote
+
+
 def _remember_range(v, rng: list, from_speech: bool, person: str):
     """A community voice that passed the check for a person: keep that person's measured range with the voice, so
     "Fit pitch to the voice" works for it on manual covers too."""
@@ -653,7 +680,7 @@ def voice_quality(v) -> dict:
         proj = None
     k = kinds(proj) if proj else {}
     if k:
-        kept = [p for p in proj.phrases if p.kept and not p.sung]
+        kept = [p for p in proj.training_phrases() if not p.sung]
         total = sum(p.dur for p in kept)
         if total:
             share = sum(p.dur for p in kept if k.get(p.source) == "scene") / total
@@ -786,7 +813,11 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
             # a channel whose videos turned out unavailable here (whatever yt-dlp's reason: why_unavailable) goes
             # last, so the next tries are other uploads of the same scenes
             locked = {s.channel for s in proj.sources if s.status == "failed" and srcmod.why_unavailable(s.error or "")}
-            todo = [s.id for s in sorted(proj.sources, key=lambda s: (sung_first(s), s.channel in locked))
+            # the best first (smallfix7): the user's own picks, then by the clean voice each should give (a speech over
+            # a rally, recent over decades old), not the order they were found in
+            character = srcmod.is_character_project(proj)
+            todo = [s.id for s in sorted(proj.sources, key=lambda s: (sung_first(s), s.channel in locked, not s.user,
+                                                                      -srcmod.expected_clean(s, person, proj.mode, character)))
                     if s.selected and s.status not in ("ready", "failed")]
             if singer and not songs_exhausted(proj):
                 todo = [i for i in todo if srcmod.is_sung(proj.source(i))]
@@ -807,6 +838,18 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                 if proj.speakers and not proj.reference.get("confirmed"):
                     P.set_reference(proj, cluster=proj.reference["cluster"], auto=True)   # the dominant voice
                     proj.save()
+                # a source being theirs is checked, not assumed (smallfix7): a prepared one whose clips aren't clearly
+                # the person (talk about them, another voice) is left out by the same gate Improve uses. A real person
+                # who speaks only: a character's scenes and a singer's songs hold other voices by nature.
+                gate = None
+                if proj.reference.get("confirmed") and proj.mode == "speaking" and not srcmod.is_character_project(proj):
+                    from . import frozen
+                    gate = frozen.gate_project(proj, proj.load_embeddings(), None, None, by="DoubleAgent")
+                    if gate["left_out"]:
+                        proj.save()
+            if gate and gate["left_out"]:
+                push("voice", 0.1, f"Left out {len(gate['left_out'])} source{'s' if len(gate['left_out']) != 1 else ''} "
+                     f"that didn't sound clearly like {person} ({gate['left_out'][0]['title'][:40]}: {gate['left_out'][0]['why']})")
             if proj.reference.get("also"):   # a recast or another era: said, not decided silently
                 push("voice", 0.1, proj.reference["also"]["note"])
             mins = proj.kept_seconds() / 60
@@ -814,7 +857,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                 break
             more = sorted([s for s in proj.sources if not s.selected and not s.note.startswith(NOT_USABLE)
                            and s.status == "found" and s.duration >= (90 if singer and srcmod.is_sung(s) else 120)],
-                          key=sung_first)
+                          key=lambda s: (sung_first(s), s.note == srcmod.ABOUT_NOTE,
+                                         -srcmod.expected_clean(s, person, proj.mode, srcmod.is_character_project(proj))))
             if singer and not searched_more and not [s for s in more if srcmod.is_sung(s)]:
                 # out of songs: look for more of them before settling for interviews
                 searched_more = True
