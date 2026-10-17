@@ -333,7 +333,8 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
         out["eta_s"] = oneshot.cover_eta(voice["name"], here)
     elif voice["how"] == "check" and community:   # "Ask me each time" (the user): use one now, check, or train first
         out["voice_ask"] = True
-        out["voice_choices"] = oneshot.voice_choices(person, community, here)
+        out["voice_choices"] = oneshot.voice_choices(person, community, here,
+                                                     others=len([k for k in cands if k not in {v.name for v in community}]))
     if voice["how"] != "installed" or not voice["quality"]["ok"] or subject:
         # what the request names, in plain words (phase 15): a person, a singer, a character, a band; asked when it
         # can't tell ("Which Chris Evans?"), correctable either way (subject=person / character / role:<role>)

@@ -345,6 +345,8 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None, opti
             "added": time.strftime("%Y-%m-%d %H:%M")}
     if now:
         item["now"] = True
+    else:
+        item["night"] = True   # tonight's work: waits for the start time, even while a Start now runs (P8-2)
     if mode:
         item["mode"] = mode
     item["estimate"] = estimate(item)
@@ -359,8 +361,19 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None, opti
             q.insert(next((k for k in active if q[k]["state"] == "queued" and not q[k].get("now")), len(q)), item)
         else:
             q.append(item)
+        default = False
+        if not now and not _state()["armed"]:   # "tonight" arms the queue for its start time, never for now (P8-2)
+            st = _state()
+            default = not st["settings"].get("start_at")
+            st["settings"]["start_at"] = st["settings"].get("start_at") or DEFAULT_START
+            st.update(armed=True, start_now=False)
         _save()
-    return status()
+    out = status()
+    if not now:
+        out["starts_at"] = _state()["settings"]["start_at"]
+        if default:
+            out["start_default"] = True   # no start time was saved: it starts at DEFAULT_START (say so on the page)
+    return out
 
 
 def _person_of(fn, target: str) -> str | None:
@@ -368,6 +381,15 @@ def _person_of(fn, target: str) -> str | None:
         return fn(target)
     except Exception:   # noqa: BLE001 - a project gone meanwhile: nobody to compare
         return None
+
+
+def estimate_for(kind: str, target: str, mode: str | None = None) -> dict:
+    """How long this queue work takes, in minutes per step and "total": the one estimator every page asks
+    (P8-10: "about 1 hour", "~50 min" and "about 3 h" for the same new voice)."""
+    if kind not in KINDS:
+        raise ModelError("Pick Improve a voice or Train a new voice.")
+    item = {"kind": kind, "target": (target or "").strip(), **({"mode": mode} if mode else {})}
+    return estimate(item)
 
 
 def queued_for(kind: str, target: str) -> dict | None:
@@ -384,8 +406,15 @@ def remove(item_id: str) -> dict:
         if it and it["state"] == "running":
             raise ModelError("That one is running. Pause first, then remove it.")
         st["queue"] = [i for i in st["queue"] if i["id"] != item_id]
+        if st["held"] and not st["resume"] and not any(i.get("state") == "paused" for i in st["queue"]):
+            st["held"] = False   # nothing held is left (P8-6: "Train the voice" did nothing after the last Remove)
+            st.pop("held_by", None)
         _save()
-    return status()
+    out = status()
+    if it and it["kind"] in ("new", "newcad", "project", "improve"):   # never deleted by a Remove
+        out["note"] = ("Its training project and downloads stay. Storage → Clean up can tidy them "
+                       "(\"Training projects of finished voices\", \"Left over from training downloads\").")
+    return out
 
 
 def reorder(ids: list) -> dict:
@@ -402,11 +431,15 @@ def arm(when: str | None) -> dict:
     with _LOCK:
         st = _state()
         if when is False:
-            st["armed"] = False
+            st.update(armed=False, start_now=False)
         else:
-            st["armed"] = True
-            st["settings"]["start_at"] = when or None
-            st["held"] = False
+            # Start now (when=None) is a one-time start: the saved start time stays, and the queue goes back to it
+            # once this run is dry; tonight's items in it now run now too
+            st.update(armed=True, start_now=when is None, held=False)
+            st["settings"]["start_at"] = when or st["settings"].get("start_at") or DEFAULT_START
+            for it in st["queue"]:
+                if when is None and it.get("state") == "queued":
+                    it.pop("night", None)
             for it in st["queue"]:   # paused items go on first, in queue order, from their resume point (as Resume)
                 if it.get("state") == "paused":
                     it["state"] = "queued"
@@ -441,14 +474,18 @@ def status() -> dict:
                         "message": ev.get("message") or ev.get("note") or ev.get("label") or ev.get("stage"),
                         "epoch": ev.get("epoch"), "epochs": ev.get("epochs"), "eta": ev.get("eta"),
                         "fraction": ev.get("fraction", ev.get("frac")), "pausing": j.pausing,
+                        # P8-5: what a pause waits for (it lands at the end of the step under way)
+                        "pausing_note": (f"Pausing at the end of this step ({ev.get('label') or ev.get('message') or 'the current step'})"
+                                         if j.pausing else None),
                         "total_left": next((e["total_left"] for e in reversed(j.events[-20:]) if e.get("total_left") is not None), None)})
     left = [i for i in st["queue"] if i["state"] in ("queued", "paused", "running")]
     total = sum(i.get("estimate", {}).get("total", 0) for i in left)
     start = now
-    if st["armed"] and st["settings"].get("start_at"):
+    if st["armed"] and st["settings"].get("start_at") and not st.get("start_now"):
         start = _next_time(st["settings"]["start_at"], now)
     return {"held": st["held"], "resume": [_resume_row(s) for s in st["resume"]], "running": running,
-            "queue": [{**i, "display": _shown(i)} for i in st["queue"]], "armed": st["armed"], "settings": st["settings"], "report": st["report"],
+            "queue": [{**i, "display": _shown(i)} for i in st["queue"]], "armed": st["armed"],
+            "start_now": bool(st.get("start_now")), "settings": st["settings"], "report": st["report"],
             "total_min": total, "start": start.strftime("%H:%M") if left else None,
             "done_by": (start + timedelta(minutes=total)).strftime("%H:%M") if left else None}
 
@@ -523,29 +560,23 @@ def _loop():
                            for i in st["queue"] if KINDS.get(urgent["kind"], {}).get("follows")):
                     _run_item(urgent)   # "Start now": runs without starting the rest of the queue
             elif not st["held"] and st["armed"] and _gpu_idle() and not jobs.STATUS.get("gpu_problem"):
-                now = datetime.now()
-                waiting = any(i["state"] == "queued" for i in st["queue"])
-                if not waiting:
-                    if any(i["state"] in ("done", "failed", "skipped") for i in st["queue"]):
-                        with _LOCK:
-                            st["armed"] = False   # queue finished
-                            _save()
-                elif _in_window(now):
-                    nxt = pick(st["queue"], now, _deadline(now) if st["settings"].get("start_at") else None)
-                    if nxt is not None:
-                        _run_item(nxt)
+                nxt = next_item(st, datetime.now())
+                if nxt is not None:
+                    _run_item(nxt)
         except Exception as e:   # noqa: BLE001 - the loop must survive anything
             _log(f"loop error: {type(e).__name__}: {e}")
         time.sleep(10)
 
 
-def pick(q: list, now: datetime, deadline: datetime | None) -> dict | None:
+def pick(q: list, now: datetime, deadline: datetime | None, night: bool = True) -> dict | None:
     """The queue item to start now: the first queued one that finishes before the deadline (the others wait for the
     next night) and that follows nothing still waiting. A long first item no longer holds back the shorter ones behind
     it; a cadence never runs before its voice's own item, wherever that sits in the queue."""
     for i in q:
         if i["state"] != "queued" or i.get("retry_after", 0) > time.time():
             continue
+        if i.get("night") and not night:
+            continue   # tonight's: not during a Start now outside the night
         f = KINDS.get(i["kind"], {}).get("follows")
         if f and any(o is not i and o["state"] in ("queued", "paused", "running") and f(i, o) for o in q):
             continue   # its voice comes first
@@ -554,6 +585,32 @@ def pick(q: list, now: datetime, deadline: datetime | None) -> dict | None:
             continue   # wouldn't finish tonight: waits for the next night
         return i
     return None
+
+
+def next_item(st: dict, now: datetime) -> dict | None:
+    """The armed queue's next item now, or None (P8-2). A queue with nothing queued, paused or running disarms; a
+    Start now that's run dry goes back to the saved start time; tonight's items wait for their night."""
+    q = st["queue"]
+    if not st["settings"].get("start_at"):   # armed by an older Start now (it cleared the start time): it was one
+        with _LOCK:
+            st["settings"]["start_at"] = DEFAULT_START
+            st["start_now"] = True
+            _save()
+    start_now = bool(st.get("start_now"))
+    if not any(i["state"] in ("queued", "paused", "running") for i in q):
+        with _LOCK:
+            st.update(armed=False, start_now=False)   # emptied, not only finished: a later "tonight" waits for the night
+            _save()
+        return None
+    night = _in_window(now)
+    if start_now and not night and not any(i["state"] in ("queued", "running") and not i.get("night") for i in q):
+        with _LOCK:
+            st["start_now"] = False   # the one-time start ran dry: tonight's items wait for the start time
+            _save()
+        return None
+    if not (night or start_now):
+        return None
+    return pick(q, now, _deadline(now) if night else None, night=night)
 
 
 def _before(i: dict, item: dict, q: list) -> bool:
@@ -571,6 +628,10 @@ def _keep_awake(on: bool):
 def _run_item(item: dict):
     job = jobs.Job("night")
     jobs.JOBS[job.id] = job
+    est = item.get("estimate") or {}
+    if est.get("total"):   # its time left: the whole item's, from its own estimate (P8-3, P8-10)
+        job.planned_s = est["total"] * 60.0
+        job.after_eta_s = max(0.0, est["total"] - est.get("prepare", 0) - est.get("train", 0)) * 60.0
     label = KINDS[item["kind"]]["label"](item)
     job.resume_spec = {"kind": "night", "item": item["id"], "label": label}
     with _LOCK:
@@ -594,9 +655,11 @@ def _run_item(item: dict):
                 return
             if type(e).__name__ == "YouTubeBlocked":   # try again in an hour, not "failed"
                 with _LOCK:
-                    item.update(state="queued", retry_after=time.time() + 3600, note=str(e) + " Trying again in an hour.")
+                    at = time.time() + 3600
+                    item.update(state="queued", retry_after=at,
+                                note=f"{e} Trying again at {time.strftime('%H:%M', time.localtime(at))}.")
                     _save()
-                job.finish("error", message=str(e) + " The queue tries again in an hour.")
+                job.finish("error", message=f"{e} The queue tries again at {time.strftime('%H:%M', time.localtime(at))}.")
                 return
             if type(e).__name__ == "Cancelled":
                 res, state = {"note": "cancelled"}, "skipped"
@@ -615,6 +678,9 @@ def _run_item(item: dict):
         job.finish("done" if state == "done" else "error", message=res.get("note") or "Done.", result=res)
 
     jobs.GPU_QUEUE.put((job, run))
+
+
+DEFAULT_START = "23:00"   # "tonight" with no start time saved yet (said so in the answer; the Running room changes it)
 
 
 SAME = 0.02   # likeness points: a change smaller than this is "the same" (run-to-run noise on one voice is ~0.01)
