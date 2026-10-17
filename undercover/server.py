@@ -14,8 +14,14 @@ def _migrate():
         print(f"Settings: config.toml left as it is ({type(e).__name__}: {e})", flush=True)
 
 
-_migrate()
-from .app.server import main  # noqa: E402  (after the migration: the server stamps its code and config at import)
+def main():
+    """Start the server. Only a real start migrates the settings: importing this module (a test that loads every
+    module) must never rewrite a config.toml. The migration comes before app.server is imported, which stamps the code
+    and config (a write after the stamp would read as "out of date, restart")."""
+    _migrate()
+    from .app.server import main as run
+    run()
+
 
 if __name__ == "__main__":
     main()
