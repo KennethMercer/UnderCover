@@ -14,7 +14,7 @@ from .config import path
 from . import setup_models
 
 SR = 16000
-# Voice prints of voices whose sex is known: SpeakEasy's Readers, rendered once (tools/reader_prints.py). Prints carry sex
+# Voice prints of voices whose sex is known: SpeakEasy's Readers, rendered once (scripts/reader_prints.py). Prints carry sex
 # only weakly across recording conditions (a centroid split of the Readers got Freeman and Obama wrong on their real
 # interviews, 2026-10-17), so the vote of the nearest few is a hint that decides only when it's clear (tts.pick_reader).
 PRINTS = Path(__file__).resolve().parents[1] / "assets" / "reader-prints.json"

@@ -2,21 +2,21 @@
 quality regression is caught before the user hears it. Numbers flag; the ear decides (only verdicts move the baseline).
 
     set UNDERCOVER_DATA_ROOT=D:\\UnderCover            (the app folder: its models, voices and projects are read, never written)
-    python tools/golden.py make [--song NAME=FILE@START+SECONDS [--with VOICE,VOICE]] [--voice NAME ...]
+    python tests/golden.py make [--song NAME=FILE@START+SECONDS [--with VOICE,VOICE]] [--voice NAME ...]
                                    freeze what isn't in the set yet (a section of each song; the voices), then run 3 times:
                                    the new items' baseline and noise bands (items already in the set keep theirs).
                                    The first make freezes "Hold On" and the default voices; the set grows the same way.
-    python tools/golden.py run [--force]                 the set again -> runs/<stamp>/scores.json + renders
-    python tools/golden.py compare [RUN]                 what moved past twice its noise band, the bad way
-    python tools/golden.py pairs [RUN] [--items A,B]     blind pairs (every flag + one rotating item, or the items a phase
+    python tests/golden.py run [--force]                 the set again -> runs/<stamp>/scores.json + renders
+    python tests/golden.py compare [RUN]                 what moved past twice its noise band, the bad way
+    python tests/golden.py pairs [RUN] [--items A,B]     blind pairs (every flag + one rotating item, or the items a phase
                                                          changed on purpose; at most 4) + key.json
-    python tools/golden.py verdict RUN ITEM new|old|same|neither [--note ...]   the ear's answer ("neither": both off; it
+    python tests/golden.py verdict RUN ITEM new|old|same|neither [--note ...]   the ear's answer ("neither": both off; it
                                                          neither moves the baseline nor blocks: the phase tries again)
-    python tools/golden.py accept RUN                    the items heard as new / same take the run's scores into the baseline
-    python tools/golden.py rebands                       run the set twice more and widen every band to the largest spread seen
-    python tools/golden.py retire SONG --note "..."      take a song out of the regression set (its files, scores and
+    python tests/golden.py accept RUN                    the items heard as new / same take the run's scores into the baseline
+    python tests/golden.py rebands                       run the set twice more and widen every band to the largest spread seen
+    python tests/golden.py retire SONG --note "..."      take a song out of the regression set (its files, scores and
                                                          renders are kept, under "retired", for the phase that will use it)
-    python tools/golden.py refreeze VOICE                after the user approved a newer version of a voice: a fresh copy, and
+    python tests/golden.py refreeze VOICE                after the user approved a newer version of a voice: a fresh copy, and
                                                          that voice's items start a new baseline on the next run (MasterPlan, q2)
 
 The golden folder: UNDERCOVER_GOLDEN, or <app folder>/golden. It has its own config (models read from the app folder,
@@ -587,7 +587,7 @@ def main():
         stamp = time.strftime("%Y%m%d-%H%M%S")
         run_set(stamp, spec, speech_only=a.speech)
         _prune()
-        print(f"run {stamp}: python tools/golden.py compare {stamp}")
+        print(f"run {stamp}: python tests/golden.py compare {stamp}")
     elif a.cmd == "compare":
         run = a.run or last()
         fl = flags(_read(GOLDEN / "baseline.json", {}), _read(GOLDEN / "runs" / run / "scores.json", {})["scores"])

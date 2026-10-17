@@ -8,7 +8,7 @@ engine's packages, installed --no-deps like on the dev PC; the list is constrain
 (their published SHA-256 per file; nothing is downloaded). Only files a Windows x64 / CPython 3.12 install can use are
 listed. uv checks every hash it is given and refuses a file that doesn't match.
 
-Pins move only after tools/smoke.py --full passed on the new versions (ARCHITECTURE.md "Resilience and self-healing").
+Pins move only after tests/smoke.py --full passed on the new versions (ARCHITECTURE.md "Resilience and self-healing").
 """
 import json
 import re

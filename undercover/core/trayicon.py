@@ -206,11 +206,11 @@ def leaves_with_server(reason: str | None) -> bool:
 
 
 def launcher() -> Path:
-    """What "Start with Windows" points at: the installer's UnderCover.cmd, or the repo's UnderCover.bat."""
-    for name in ("UnderCover.cmd", "UnderCover.bat"):
-        if (ROOT / name).exists():
-            return ROOT / name
-    return ROOT / "UnderCover.bat"
+    """What "Start with Windows" points at: the installer's UnderCover.cmd, or the repo's scripts/UnderCover.bat."""
+    for p in (ROOT / "UnderCover.cmd", ROOT / "scripts" / "UnderCover.bat"):
+        if p.exists():
+            return p
+    return ROOT / "scripts" / "UnderCover.bat"
 
 
 # ---------------------------------------------------------------- the icon process

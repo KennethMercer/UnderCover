@@ -3,7 +3,7 @@
  "made": "2026-10-13",
  "reader": "Kokoro am_michael (Apache-2.0)",
  "text": "Joseph Conrad, The Secret Agent (1907), Project Gutenberg #974, public domain",
- "recipe": "tools/make_demo_voice.py",
+ "recipe": "scripts/make_demo_voice.py",
  "files": {
   "model.pth": {
    "size": 55217261,

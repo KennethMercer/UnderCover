@@ -38,12 +38,12 @@ the glasses in the top bar.
    browser at `http://127.0.0.1:7860`. To quit: SafeHouse, then **Quit UnderCover**.
 
 The step-by-step for friends is [installer/FRIENDS.md](installer/FRIENDS.md). From a source checkout:
-`powershell -ExecutionPolicy Bypass -File installer\setup.ps1`, then `UnderCover.bat`.
+`powershell -ExecutionPolicy Bypass -File installer\setup.ps1`, then `scripts\UnderCover.bat`.
 
 **Your settings** live in `config.toml` in the app folder, and it holds only what you (or setup) changed. The defaults
 ship with the code in `undercover/config.default.toml`, so an update brings new defaults without touching your
-choices. The folder itself: `undercover/` (the app), `installer/`, `tools/` (the tests and the command-line cover tool,
-`tools\cover.bat`).
+choices. The folder itself: `undercover/` (the app), `installer/`, `scripts/` (what you run: `UnderCover.bat`, the
+command-line cover tool `cover.bat`, the GPU check) and `tests/` (`python tests/smoke.py`).
 
 ## First run
 
