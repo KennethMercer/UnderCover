@@ -2335,6 +2335,7 @@ def u_frozen_bar():
     assert not offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["offer"], "a slipped donor likeness was offered"
     assert "other people" in offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["reasons"][0]
     assert not offer(_cmp(0.0, 0.08, 0.5, n=3))["offer"] and "too few" in offer(_cmp(0.0, 0.08, 0.5, n=3))["reasons"][0]
+    assert offer(_cmp(0.0, 0.08, 0.5, n=0), {"singer": True})["reasons"] == ["no spoken lines to judge a singer by yet"]
     assert offer(_cmp(0.0, 0.08, 0.5, nd=5))["offer"], "too few donors must skip the guard, not refuse"
     r = offer(_cmp(-0.02, 0.0, -0.39))["reasons"]
     assert r == ["the likeness slipped", "the voicing isn't clearer", "no more detail in it"], r
@@ -2507,6 +2508,8 @@ def u_frozen_gate_project():
                 e = np.random.default_rng(int(ph.id[1:])).normal(0, 1, 256).astype("float32")
                 emb[ph.id] = e / np.linalg.norm(e)
         proj.sources[1].user = True
+        ticked = next(ph for ph in proj.phrases if ph.source == "s2" and ph.kept)
+        ticked.choice = True                                                         # the user ticked this one by hand
         proj.save_embeddings(emb)
         before = proj.kept_seconds()
         g = frozen.gate_project(proj, emb, 101.0, pitch_of=lambda clip: 320.0 if "p001" in str(clip) else 101.0)
@@ -2514,6 +2517,7 @@ def u_frozen_gate_project():
         assert "another voice" in g["left_out"][0]["why"]
         assert not proj.source("s2").selected and proj.source("s2").note.startswith("left out by Improve")
         assert all(not ph.kept for ph in proj.phrases if ph.source == "s2" and ph.choice is None), "s2's phrases still train"
+        assert ticked.kept and ticked.reason == "", "the user's hand-ticked phrase was touched"
         assert proj.source("s1").selected and all(ph.kept for ph in proj.phrases if ph.source == "s1" and ph.reason == "")
         assert g["kept_min"] < before / 60 and abs(proj.kept_seconds() / 60 - g["kept_min"]) < 0.1, (g["kept_min"], before)
         w = report_words("improve", {"kept": True, "before": 0.78, "after": 0.79, "tried": {"added_min": 5.0, "left_out": [{"title": "x", "why": "y"}]}}, "Dave Chappelle")

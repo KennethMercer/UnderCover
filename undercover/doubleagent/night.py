@@ -14,7 +14,6 @@ from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
                        # realtime on Elliott Smith's album tracks; downloads and phrase cutting take the rest)
-EARLY_STOP = 0.7       # auto-length trainings stop on their own at ~70% of the step budget (Elliott: 219 of 296 epochs)
 COMPARE_MIN = 6.0      # export + the candidate's score on the frozen test (R2: ~50 conversions, both input classes)
 FREEZE_MIN = 3.0       # a voice's first Improve freezes its test (R1): the donors, their own lines read once, the approved score
 SAME_PERSON = 0.35     # the current voice scoring under this against the new clips = they're probably someone else
@@ -50,7 +49,7 @@ def estimate(item: dict) -> dict:
         steps = budget_steps(kept_min)[0]
     else:
         steps = LENGTHS.get(length, LENGTHS["auto"])
-    train = steps * _sec_per_step() * (EARLY_STOP if length == "auto" else 1.0) / 60
+    train = steps * _sec_per_step() / 60   # the planned budget runs in full (R5: early stop only past it): a 6-hour plan says 6 hours
     compare = COMPARE_MIN if item["kind"] == "improve" else 1
     if item["kind"] == "improve":
         try:   # the first Improve of a voice freezes its test
