@@ -925,6 +925,30 @@ def likeness_word(v: Voice) -> str | None:
 
 
 _GUESS_NOISE = re.compile(r"(?i)\b(rvc\d*|v\d+|uc|model|voice|ai|hq|e\d+|s\d+|\d+k?)\b|rvc\d*$")
+# words that are never a name (P9-5: "model-v2-final" became "Final", and Let it speak searched YouTube for it)
+_NOT_A_NAME = {"final", "best", "new", "test", "my", "latest", "old", "fixed", "clean", "good", "better", "official",
+               "edit", "remix", "version", "beta", "alpha", "copy", "backup", "sample", "trained", "pretrained", "pth",
+               "index", "the", "a", "of", "and", "full", "small", "large", "big", "mini", "lite", "pro", "hd", "default",
+               "singing", "speaking", "talking", "speech", "vocals", "vocal", "male", "female", "deep", "high", "low",
+               "un", "nouveau", "neu", "train", "training", "epoch", "step", "steps", "mix", "custom"}
+
+
+def _known_names() -> list[str]:
+    """People and characters UnderCover has met: its projects' persons and the voice checks' persons (files only)."""
+    out = []
+    for f in (path("cache_dir") / "training").glob("*/project.json"):
+        try:
+            p = json.loads(f.read_text(encoding="utf-8")).get("person")
+        except (OSError, ValueError):
+            continue
+        if p:
+            out.append(str(p))
+    try:
+        for k in json.loads((path("cache_dir") / "voice_quality.json").read_text(encoding="utf-8")):
+            out.append(k.split("|")[0].replace("-", " "))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return out
 
 
 def voice_person(v: Voice) -> str | None:
@@ -938,8 +962,18 @@ def voice_person(v: Voice) -> str | None:
         return ex["person"].strip()
     if is_demo(v):
         return None
-    guess = re.sub(r"\s+", " ", _GUESS_NOISE.sub(" ", display_name(v))).strip(" -_")
-    return guess or None
+    shown = re.sub(r"\([^)]*\)", " ", display_name(v))   # "Plankton (SpongeBob)": the show isn't the name
+    words = [w for w in re.sub(r"\s+", " ", _GUESS_NOISE.sub(" ", shown)).strip(" -_").split()
+             if w.lower().strip(".,'") not in _NOT_A_NAME and not w.isdigit()]
+    if len(words) >= 2:
+        return " ".join(words)
+    if len(words) == 1 and len(words[0]) >= 3:   # one word: only a name UnderCover has met ("Obama" -> "Barack Obama")
+        w = words[0].lower()
+        for known in _known_names():
+            kw = [x.lower() for x in re.split(r"[\s-]+", known) if x]
+            if w in kw:
+                return known.title() if known == known.lower() else known
+    return None   # no good guess: the card offers Train my own
 
 
 def person_guessed(v: Voice) -> bool:
