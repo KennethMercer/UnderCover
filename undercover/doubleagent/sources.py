@@ -202,13 +202,18 @@ def is_character_project(proj) -> bool:
     return any((s.extra or {}).get("kind") for s in proj.sources) or (proj.mode == "speaking" and looks_like_character(proj.person, proj.sources))
 
 
+def is_song(src) -> bool:
+    """An album track (or another song) in a project: never one of a character's scenes."""
+    return src.note == "album track" or bool((src.extra or {}).get("sung"))
+
+
 def kinds(proj) -> dict:
-    """{source id: "scene" | "talk"} for a character project ({} for a person): stored at search time, else read
-    from the titles (projects from before phase 15)."""
+    """{source id: "scene" | "talk" | "song"} for a character project ({} for a person): stored at search time, else
+    read from the titles (projects from before phase 15). A song is never a scene, whatever its title says."""
     if not is_character_project(proj):
         return {}
     show = show_of(proj.person, proj.sources)
-    return {s.id: (s.extra or {}).get("kind") or char_kind(s, show) for s in proj.sources}
+    return {s.id: "song" if is_song(s) else (s.extra or {}).get("kind") or char_kind(s, show) for s in proj.sources}
 
 
 def _rank_character(src, name: str, show: str | None = None) -> float:
@@ -470,7 +475,9 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None, forc
             src.selected, src.note = False, f"may be in {lang.title()} (a dub or another language)"
     if not character and mode == "speaking":
         mark_era(found.values(), name)
-    albums = album_tracks(name) if mode != "speaking" else []
+    # a character's voice is in its scenes: never album tracks (rc-fix2: "plankton" got "Mark Mothersbaugh - I'm
+    # Plankton" and two other artists' songs first, and the check judged every voice against them)
+    albums = album_tracks(name) if mode != "speaking" and not character else []
     if not found and not albums:
         raise ModelError(f"No videos found for '{name}'. Check the spelling, or paste links / add recordings.")
     rank = (lambda s: -_rank_character(s, name, show)) if character else (lambda s: -_rank(s, name, mode))

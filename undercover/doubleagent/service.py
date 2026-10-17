@@ -160,20 +160,70 @@ def is_musician(person: str) -> bool:
     return False
 
 
-def project_for(person: str, mode: str | None = None):
+def project_for(person: str, mode: str | None = None, subject: dict | None = None):
     """The Train-tab project for this person that isn't finished yet (or a new one). Musicians get "both":
     interviews (for the voice check's other speakers) plus isolated vocals from their songs, so the trained
     voice has actually sung. mode: the person's own choice (DoubleAgent's Speaking / Singing) instead of that guess:
-    a new project starts in it; an existing one is left for apply_mode (train_new_voice calls it)."""
+    a new project starts in it; an existing one is left for apply_mode (train_new_voice calls it).
+    subject: the request's reading (subject_of). A character's voice is in its scenes (rc-fix2): its project speaks,
+    never gets songs (YouTube Music has "Plankton" tracks by other artists), and one made before is corrected."""
     from . import project as P
+    character = (subject or {}).get("kind") == "character"
     key = slug(person)
     proj = next((P.Project.load(p["name"]) for p in P.list_projects()
                  if slug(p["person"]) == key and not p["train"].get("exported")), None)
     if proj is None:
-        return P.Project.create(person, mode or ("both" if is_musician(person) else "speaking"))
+        return P.Project.create(person, mode or ("speaking" if character else "both" if is_musician(person) else "speaking"))
+    if character:
+        return fit_character(proj, person)
     if not mode and proj.mode == "speaking" and not proj.train.get("epoch") and is_musician(person):
         proj = _add_songs(proj, person, "both")   # an interviews-only project for a singer (nothing trained yet)
     return proj
+
+
+SONG_NOTE = "a song, not the character's scenes"
+
+
+def fit_character(proj, person: str):
+    """A project for a character that was made as a singer's (rc-fix2: "plankton" was "both", its first sources
+    other artists' album tracks): it speaks now, its songs are unticked (never deleted: the user can tick one back),
+    the voices are found again among what's left, and the show's scenes are searched when it has none. The user's
+    own sources stay as they are, and a project that has trained is left alone."""
+    from . import project as P
+    from . import sources as srcmod
+    if proj.train.get("epoch"):
+        return proj
+    with P.lock(proj.name):
+        proj = P.Project.load(proj.name)
+        changed = proj.mode != "speaking"
+        proj.mode = "speaking"
+        off = []
+        for s in proj.sources:
+            if s.selected and not s.user and srcmod.is_song(s):
+                s.selected, s.note = False, SONG_NOTE
+                off.append(s.id)
+        changed = changed or bool(off)
+        scenes = [s for s in proj.sources if s.selected and (s.extra or {}).get("kind") == "scene"]
+        if not scenes:
+            try:
+                found = srcmod.search(person, "speaking", force="character")
+            except ModelError:
+                found = []
+            have = {s.id for s in proj.sources}
+            new = [s for s in found if s.id not in have]
+            proj.sources += new
+            changed = changed or bool(new)
+        if off and any(p.source in off for p in proj.phrases):
+            # the voices were clustered with the songs in: again without them (the reference may have been a singer)
+            if not (proj.reference.get("confirmed") and not proj.reference.get("auto")):
+                proj.reference = {}
+            try:
+                P.find_speakers(proj)
+            except ModelError:
+                proj.speakers, proj.reference = [], {}
+        if changed:
+            proj.save()
+    return P.Project.load(proj.name)
 
 
 def _add_songs(proj, person: str, mode: str):
@@ -221,7 +271,7 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
     from . import sources as srcmod
     from .subject import search_kind
     from ..core.speaker import SpeakerEmbedder
-    proj = project_for(person)
+    proj = project_for(person, subject=subject)
     if not proj.sources:
         push("voice", 0.02, f"Finding clips of {person} to check voices against")
         force, words = search_kind(subject)
@@ -246,7 +296,8 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
         k = srcmod.kinds(proj)
         if ready(proj, k):
             break
-        todo = sorted((s for s in proj.sources if s.selected and s.status not in ("ready", "failed")),
+        todo = sorted((s for s in proj.sources if s.selected and s.status not in ("ready", "failed")
+                       and (not k or k.get(s.id) == "scene" or s.user)),   # a character: only its scenes (or the user's own)
                       key=lambda s: k.get(s.id) != "scene")[:1]   # scenes first (stable: the search's order otherwise)
         todo = [s.id for s in todo]
         if not todo:
@@ -377,7 +428,7 @@ def _prefetch_voice_sources(person: str, subject: dict | None = None):
     from . import sources as srcmod
     from .subject import search_kind
     try:
-        proj = project_for(person)
+        proj = project_for(person, subject=subject)
         if not proj.sources:
             from . import project as P
             force, words = search_kind(subject)
@@ -505,6 +556,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             ready_before = False
         proj = reference_clips(job, person, control, push, plan.get("subject"))
         _record_check("clips_ready" if ready_before else "clips_new", time.time() - t_clips)
+        why = clips_missing(proj, plan.get("subject"))
+        if why:   # rc-fix2: no clips to judge by is said plainly, never a failed check that goes on to train
+            return no_check(person, why, community, plan, push)
         t_voices = time.time()
         conv, emb = gpu.MODELS.converter, SpeakerEmbedder()
 
@@ -554,6 +608,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             # ValueError: no other-speaker phrases to test with, so we can't judge them and don't trust them
             checked.append({"name": "-", "verdict": "unknown", "note": "couldn't test (clips had only one speaker)"})
         plan["checked"] = checked
+        if checked and all(c.get("verdict") in ("unknown", "broken") for c in checked) and any(c.get("verdict") == "unknown" for c in checked):
+            drop_downloads()
+            return no_check(person, f"the clips of {person} had no other voices to test against", community, plan, push)
         tested = [c for c in checked if c.get("verdict") not in (None, "broken", "unknown")]
         if tested:
             _record_check("per_voice", (time.time() - t_voices) / len(tested))
@@ -608,6 +665,38 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     plan["voice"]["name"] = v.name
     gpu.forget_voice(v.name)
     return v
+
+
+def clips_missing(proj, subject: dict | None) -> str | None:
+    """Why the real clips can't judge a voice, or None when they can: a reference voice heard in 2+ sources with other
+    people's speech to test against; for a character, a reference heard in its scenes (not a song, not talk)."""
+    from . import sources as srcmod
+    ref = proj.reference or {}
+    who = proj.person or "them"
+    if (subject or {}).get("kind") == "character" or srcmod.kinds(proj):
+        if not ref.get("scene_minutes") and not (ref.get("confirmed") and not ref.get("auto")):
+            return f"no clean clips of {who} from the show's scenes came through"
+    if not ref.get("clip"):
+        return f"no clean clips of {who} came through"
+    if not any(p.reason == "other speaker" for p in proj.phrases):
+        return f"the clips of {who} had no other voices to test against"
+    return None
+
+
+def no_check(person: str, why: str, installed: list, plan: dict, push):
+    """The check couldn't be done: said plainly. With a voice of theirs installed, it's used as it is (the quick cover
+    the user was promised, marked unchecked); with none, the job stops and says what to do. Never a training the user
+    didn't ask for (rc-fix2: a failed check trained for "about 104 min" after "about 8-9 min")."""
+    from ..core import ear
+    plan["checked"] = [{"name": "-", "verdict": "unknown", "note": f"couldn't check: {why}"}]
+    if installed:
+        v = ear.prefer(list(installed), name=lambda x: x.name)[0]   # the liked one first, else installed_for's order
+        plan["voice"] = {"name": v.name, "display": display_name(v), "how": "installed",
+                         "checked": f"not checked: {why}"}
+        push("voice", 1.0, f"Couldn't check the voices ({why}), so “{display_name(v)}” is used as it is")
+        return v
+    raise ModelError(f"Couldn't check any voice of {person}: {why}. Add clips of {person} in DoubleAgent, or pick "
+                     "Train a new voice.")
 
 
 def voice_f0(v) -> tuple[float | None, bool]:
@@ -822,7 +911,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         from .night import _project_named
         proj = _project_named(person) or P.Project.create(person, "speaking")
     else:
-        proj = project_for(person, mode)
+        proj = project_for(person, mode, subject)
     busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
                  and (n == proj.name or a["kind"] in ("train", "auto"))), None)
     if busy:

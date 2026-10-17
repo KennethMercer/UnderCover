@@ -2901,6 +2901,102 @@ def u_launcher_moved():
     return "repointed once (the old .bat's shortcuts, deep too; others kept); never in tests / sandboxes / installed copies; retried after a failure"
 
 
+@check("a character's check uses its scenes (RC pass 11 A2: 'plankton' read as a character, but its project was a singer's, other artists' album tracks made the 'real clips', every voice failed, and it trained): no album tracks for a character, its project speaks, an existing one is corrected (songs unticked, the user's own kept, the voices found again without them, scenes searched when there are none), the check prepares only scenes, and no clips to judge by is said plainly with the installed voice used unchecked, never a training")
+def u_character_check():
+    import inspect
+    from undercover.core.voices import ModelError, get_voice
+    from undercover.doubleagent import project as P, service, sources as S
+    from undercover.doubleagent.sources import Source
+
+    def album(i, user=False):
+        return Source(id=f"al{i}", url="u", title=f"Plankton - Krapinoo {i}", channel="planktons - Topic", duration=200.0,
+                      note="album track", extra={"sung": True}, user=user)
+
+    def scene(i):
+        return Source(id=f"sc{i}", url="u", title=f"Plankton's best moments {i} | SpongeBob", channel="Nickelodeon",
+                      duration=600.0, extra={"kind": "scene"})
+    # search(): a character never gets album tracks, whatever the mode
+    class FakeYdl:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, q, download=False):
+            return {"entries": [{"id": f"v{i}", "title": f"Plankton scenes {i} | SpongeBob SquarePants", "channel": "Nickelodeon",
+                                 "duration": 600.0} for i in range(5)]}
+    real = (S._ydl, S.album_tracks, service.is_musician, S.search)
+    S._ydl, S.album_tracks = FakeYdl, lambda name, n=20: [album(1), album(2), album(3)]
+    service.is_musician = lambda person: True                           # YouTube Music has "Plankton" tracks
+    try:
+        found = S.search("plankton", "both", force="character")
+        assert found and not any(S.is_song(x) for x in found), [x.title for x in found]
+        searched = []
+
+        def fake_search(name, mode="speaking", force=None, **k):
+            searched.append((name, mode, force))
+            return [scene(7), scene(8)]
+        S.search = fake_search
+        character = {"kind": "character", "show": "spongebob"}
+        with isolated_data():
+            # a new project for a character speaks, even though the name is on YouTube Music
+            assert service.project_for("Plankton Fresh", subject=character).mode == "speaking"
+            assert service.project_for("Singer Fresh").mode == "both"    # (a singer's still gets songs)
+            # an existing project made as a singer's: 2 prepared album tracks, 1 prepared scene, 1 album the user added
+            proj = _fake_project("plankton", "plankton", n_phrases=30, other=6, n_sources=3)
+            a1, a2 = album(1), album(2)
+            a1.id, a2.id = "s0", "s1"                                     # the prepared phrases' sources
+            sc = scene(2)
+            sc.id = "s2"
+            mine = album(9, user=True)
+            proj.sources = [a1, a2, sc, mine]
+            for x in proj.sources[:3]:
+                x.status = "ready"
+            proj.mode = "both"
+            proj.reference = {"cluster": 1, "clip": "p000", "confirmed": True, "auto": True}   # picked with the songs in
+            proj.save()
+            fixed = service.project_for("plankton", subject=character)
+            by = {x.id: x for x in fixed.sources}
+            assert fixed.mode == "speaking" and not by["s0"].selected and not by["s1"].selected, fixed.mode
+            assert by["s0"].note == service.SONG_NOTE and by["s2"].selected and by["al9"].selected, "the user's own pick was unticked"
+            assert not searched, "re-searched although the project has scenes"
+            assert S.kinds(fixed)["s0"] == "song" and S.kinds(fixed)["s2"] == "scene"
+            assert fixed.reference.get("scene_minutes"), f"the voice wasn't found again in the scenes: {fixed.reference}"
+            assert not any(p.source in ("s0", "s1") for p in fixed.training_phrases())
+            assert service.project_for("plankton", subject=character).sources == fixed.sources, "corrected twice"
+            # one with no scenes at all: the show's scenes are searched and added, nothing removed
+            only = _fake_project("squidward", "squidward", n_phrases=6, other=0, n_sources=1)
+            only.sources = [album(4)]
+            only.mode = "both"
+            only.save()
+            got = service.project_for("squidward", subject=character)
+            assert searched == [("squidward", "speaking", "character")] and {x.id for x in got.sources} == {"al4", "sc7", "sc8"}
+            # a project that has trained is left as it is
+            done = _fake_project("larry", "larry", n_phrases=6, other=0, n_sources=1)
+            done.sources, done.mode, done.train = [album(5)], "both", {"epoch": 40}
+            done.save()
+            assert service.project_for("larry", subject=character).mode == "both"
+            # no clips to judge by: said plainly; the installed voice is used unchecked, else the job stops; never a training
+            bare = P.Project.load("squidward")
+            bare.reference = {"clip": "p000", "cluster": 1}
+            assert "scenes" in service.clips_missing(bare, character)
+            _voice_dir("plankton-spongebob", {})
+            plan, said = {}, []
+            v = service.no_check("plankton", "no clean clips of plankton from the show's scenes came through",
+                                 [get_voice("plankton-spongebob")], plan, lambda *a: said.append(a[-1]))
+            assert v.name == "plankton-spongebob" and plan["voice"]["checked"].startswith("not checked:") and "used as it is" in said[-1]
+            try:
+                service.no_check("plankton", "x", [], {}, lambda *a: None)
+                raise AssertionError("no voice and no check went on")
+            except ModelError as e:
+                assert "Couldn't check any voice" in str(e)
+    finally:
+        S._ydl, S.album_tracks, service.is_musician, S.search = real
+    src = inspect.getsource(service.resolve_voice)
+    assert "clips_missing(proj" in src and src.index("clips_missing(proj") < src.index("def test(") and "no_check(" in src
+    rsrc = inspect.getsource(service.reference_clips)
+    assert "project_for(person, subject=subject)" in rsrc and 'k.get(s.id) == "scene" or s.user' in rsrc
+    return "no songs for a character; its project speaks; songs unticked (user's kept), voices found again, scenes searched if none; plain when unchecked"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -8170,7 +8266,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
