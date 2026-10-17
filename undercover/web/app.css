@@ -635,6 +635,8 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .vc-own { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .vc-own .row { gap: 10px; flex-wrap: wrap; }
 .vc-own .seg { justify-self: start; }
+.own-who { display: grid; gap: 6px; font-weight: 600; }
+.own-who input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; color: inherit; font: 500 15px var(--body); min-width: 0; }
 /* "Your voices" filters: a row of chips per kind of fact; pressing the pressed one clears it */
 .vfilters { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 12px; }
 .vf-group { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
