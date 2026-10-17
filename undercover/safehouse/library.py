@@ -306,8 +306,9 @@ def _aside_records() -> dict:
 
 def aside() -> list[dict]:
     """Voices set aside, never deleted (Internal Affairs P4-1): a replaced voice, the one not kept after a blind A/B, a
-    replace that didn't finish. Newest first: {id, voice, display, size, at, why, undo_for}. undo_for: the voice whose
-    Undo would bring this one back (removing it ends that Undo)."""
+    replace that didn't finish. Newest first: {id, voice, display, size, at, why, undo_for, measures}. undo_for: the
+    voice whose Undo would bring this one back (removing it ends that Undo). measures: an Improve attempt's numbers
+    (its recipe, minutes, terms and compare, kept when it was set aside), for Deep Cover; None for any other."""
     import re
     from ..core.voices import display_of_meta
     d = _aside_dir()
@@ -337,7 +338,8 @@ def aside() -> list[dict]:
         display = (((meta.get("extra") or {}).get("set_aside") or {}).get("display")   # kept when it was set aside
                    or display_of_meta(meta) or name)
         out.append({"id": f.name, "voice": name, "display": display, "size": _size(f),
-                    "at": at, "why": why, "undo_for": undo_for})
+                    "at": at, "why": why, "undo_for": undo_for,
+                    "measures": ((meta.get("extra") or {}).get("set_aside") or {}).get("measures")})
     out.sort(key=lambda x: x["at"], reverse=True)
     return out
 

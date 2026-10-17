@@ -1462,9 +1462,16 @@ def u_aside_list():
         odd = voices_dir() / ".aside" / "someone-20261001-010101-unfinished"
         odd.mkdir(parents=True)
         (odd / "model.pth").write_bytes(b"x" * 10)
+        from undercover.core.voices import set_aside
+        _voice_dir("morgan-freeman-uc-try", {"trained": True})
+        tried = {"recipe": "refine", "minutes": 11.9, "terms": {"likeness": True, "harmonicity": False}}
+        attempt = set_aside(voices_dir() / "morgan-freeman-uc-try", note={"why": "Improve tried, no improvement: x",
+                                                                          "display": "Morgan Freeman: Improve's attempt", "measures": tried})
         items = {x["id"]: x for x in library.aside()}
+        assert items[attempt.name]["measures"] == tried, items[attempt.name]     # Deep Cover shows an attempt's numbers (Q, smallfix7)
         kept = next(x for x in items.values() if x["undo_for"])
         assert kept["voice"] == "morgan-freeman-uc" and kept["size"] > 0 and "kept" in kept["why"], kept
+        assert kept["measures"] is None, kept
         assert kept["display"] == "Morgan Freeman", kept   # from its meta (set aside by a Keep, no note)
         assert items[odd.name]["why"] == "a replace that didn't finish" and items[odd.name]["undo_for"] is None
         assert items[odd.name]["at"] == "2026-10-01 01:01", items[odd.name]   # from its stamp, not the folder's time
@@ -1490,8 +1497,9 @@ def u_aside_list():
         assert not improved.state("morgan-freeman-uc"), "an Undo with nothing behind it"
         assert (get_voice("morgan-freeman-uc").dir / "model.pth").read_bytes() == b"m-morgan-freeman-uc-next", "the voice was touched"
         library.remove_aside(odd.name)
+        library.remove_aside(attempt.name)
         assert library.aside() == []
-    return "listed with why / size / Undo; bad ids refused; delete frees it and ends its Undo; the voice untouched"
+    return "listed with why / size / Undo / an attempt's measures; bad ids refused; delete frees it and ends its Undo; the voice untouched"
 
 
 @check("the user's Delete sets a voice aside, never deletes it (Internal Affairs P5-1): a retrained one waiting goes with it; Bring it back restores both; refused while a job reads it, when the name is taken, and for one an Undo serves")
