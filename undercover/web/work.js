@@ -39,7 +39,7 @@ function jobProgress(j) {   // 0..1 over the whole job (a cover's events count e
 }
 function jobLine(j, withLeft = true) {
   const bits = [];
-  if (j.pausing) bits.push("pausing…");
+  if (j.pausing) bits.push(pausingNote(j) || "pausing…");
   else if (j.epoch && j.epochs) bits.push(`epoch ${j.epoch} of ${j.epochs}`);
   else if (j.kind === "speech" && j.of) bits.push(`sentence ${(j.index ?? -1) + 1} of ${j.of}`);
   else if (j.message) bits.push(j.message);
@@ -120,7 +120,7 @@ function renderRunning(box, opts = {}) {
   }).join("");
 }
 async function pauseWork() {
-  try { await api("/api/work/pause", { json: {} }); $("#wb-text").textContent = "Pausing… (training saves its place first)"; }
+  try { await api("/api/work/pause", { json: {} }); $("#wb-text").textContent = pausingNote() || "Pausing at the end of this step…"; }
   catch (e) { showError(e.message, "Couldn't pause"); }
   if (W.open) loadQueue();
 }
@@ -228,7 +228,9 @@ function renderRunRoom() {
       <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
   }).join("") : `<p class="meta">Nothing queued for tonight. Add a voice to improve, or train a new one, and it runs while you sleep.</p>`;
   if (put($("#rn-list"), list)) $$("#rn-list [data-rn-rm]").forEach(b => b.onclick = async () => {
-    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.rnRm } }); renderQueue(); }
+    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Remove it?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; } }, 4000); return; }
+    if (!armedFor(b)) return;   // a double click isn't a confirmation
+    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.rnRm } }); renderQueue(); removedNote(W.last); }
     catch (e) { showError(e.message, "Couldn't remove that"); }
   });
   if (w) { $("#rn-finish").checked = !!w.settings.finish_by; $("#rn-awake").checked = w.settings.keep_awake !== false; }
@@ -296,7 +298,7 @@ function renderDrawer() {
         ${run ? "" : `<button class="linkbtn" type="button" data-qd-rm="${i.id}">${done ? "Clear" : "Remove"}</button>`}</div></div>`;
   }).join("") || "";
   $$("#qd-list [data-qd-rm]").forEach(b => b.onclick = async () => {
-    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.qdRm } }); renderQueue(); }
+    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.qdRm } }); renderQueue(); removedNote(W.last); }
     catch (e) { showError(e.message, "Couldn't remove that"); }
   });
 }
@@ -333,7 +335,7 @@ function renderQueue() {
       <div class="qside">${done ? "" : `<span class="mono">~${fmtMin(e.total)}</span>`}
         ${run ? "" : `<button class="linkbtn" data-rm="${i.id}">${done ? "Clear" : "Remove"}</button>`}</div></div>`;
   }).join("");
-  $$("#q-list [data-rm]").forEach(b => b.onclick = async () => { W.last = await api("/api/work/remove", { json: { id: b.dataset.rm } }); renderQueue(); });
+  $$("#q-list [data-rm]").forEach(b => b.onclick = async () => { W.last = await api("/api/work/remove", { json: { id: b.dataset.rm } }); renderQueue(); removedNote(W.last); });
   dragSort();
   $("#q-finish").checked = !!w.settings.finish_by;
   $("#q-awake").checked = w.settings.keep_awake !== false;
@@ -508,8 +510,25 @@ setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden 
 document.addEventListener("uc:module", e => { if (e.detail === "doubleagent") { loadQueue(); loadCandidates(); } });
 
 // a job finished somewhere (this page, another tab, the queue, the API): refresh what it may have changed
+// The one "how long" (smallfix5, POST /api/work/estimate {kind, target, mode}): minutes per step and a total, the cadence included for a new speaking voice.
+// estimateFor() asks once per question and keeps the answer; estWords(key) reads what has arrived ("" until then) so a card can draw now and fill in.
+const EST = { asked: new Map(), got: new Map() };
+const estKey = (kind, target, mode) => `${kind}|${String(target || "").trim().toLowerCase()}|${mode || ""}`;
+function estimateFor(kind, target = "", mode = null) {
+  const key = estKey(kind, target, mode);
+  if (!EST.asked.has(key)) EST.asked.set(key, api("/api/work/estimate", { json: { kind, target: String(target || "").trim(), ...(mode ? { mode } : {}) } })
+    .then(e => { EST.got.set(key, e); return e; }).catch(() => null));
+  return EST.asked.get(key);
+}
+const estWords = (kind, target, mode) => { const e = EST.got.get(estKey(kind, target, mode)); return e && e.total ? etaWords({ low: e.total * 60, high: e.total * 60 }) : ""; };
+// a tonight add answers starts_at (and start_default when no start time was saved): say when it starts, and where to change it
+const startsNote = r => r && r.starts_at ? ` It starts at ${clock(r.starts_at)}${r.start_default ? ", the default: change it in SafeHouse's Running room" : ""}.` : "";
+// what a pause waits for (the status's running rows carry pausing_note: "Pausing at the end of this step (removing music and noise)")
+const pausingNote = j => ((W.work?.running || []).find(r => !j || r.job === j.id && r.pausing_note) || {}).pausing_note || "";
 // /api/work/add answers `moved` when that voice was training live right now: it is paused and put in tonight's queue (it goes on from where it stopped).
 // Said instead of "Added to tonight"; returns true when it was.
+// removing a voice item answers a `note`: its project and downloads stay (nothing is deleted; Storage > Clean up can tidy them)
+function removedNote(r) { if (r && r.note) showError(r.note, "Removed from tonight", null, true); }
 function workMoved(r) {
   if (!r || !r.moved) return false;
   showError(r.moved, "Moved to tonight", null, true);

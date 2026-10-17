@@ -68,7 +68,7 @@ function renderVoiceCards(cands) {
   $$("[data-improve]", box).forEach(b => b.onclick = async () => {
     const c = DA.cands.find(x => x.voice === b.dataset.improve);
     b.disabled = true;
-    try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); renderQueue(); loadCandidates(); }
+    try { W.last = await api("/api/work/add", { json: { kind: c.kind, target: c.target } }); renderQueue(); loadCandidates(); if (!workMoved(W.last)) showError(`${voiceDisplay(c.voice)} improves tonight.${startsNote(W.last)} SafeHouse's Running room shows it.`, "Added to tonight", null, true); }
     catch (e) { b.disabled = false; showError(e.message, `Couldn't add ${voiceDisplay(c.voice)}`); }
   });
   $$("[data-cad]", box).forEach(b => b.onclick = async () => {
@@ -311,13 +311,22 @@ $$("#da-mode button").forEach(b => b.onclick = () => {
 });
 $("#da-person").addEventListener("keydown", e => { if (e.key === "Enter") $("#da-train").click(); });
 $("#da-train").onclick = () => daStart(false);
+// "Train the voice · about …": the estimator's own time for this kind (and the cadence a speaking voice gets), not a fixed hour
+function daEta() {
+  const p = $("#da-person").value.trim(), words = estWords("new", p, DA_MODE.v);
+  if (words) $("#da-train-eta").textContent = words;
+  else if (!EST.asked.has(estKey("new", p, DA_MODE.v))) estimateFor("new", p, DA_MODE.v).then(daEta);
+}
+$("#da-person").addEventListener("input", () => { clearTimeout(DA.etaTimer); DA.etaTimer = setTimeout(daEta, 600); });
+daEta();
 $("#da-tonight").onclick = () => daStart(true);
 // "Train my own" on a downloaded voice's card: the choice there, Now or Tonight; Speaking / Singing from the voice where known
 function ownHtml(c) {
-  const person = c.person || voiceDisplay(c.voice), m = DA.own.mode;
+  const person = c.person || voiceDisplay(c.voice), m = DA.own.mode, eta = estWords("new", person, m);
+  if (!eta && !EST.asked.has(estKey("new", person, m))) estimateFor("new", person, m).then(() => { if (DA.own) renderVoiceCards(DA.cands); });
   return `<div class="vc-own"><p class="meta">Train your own <b>${esc(person)}</b> voice to compare with this one: UnderCover finds clips of them and trains it${c.singing == null ? "" : ` (${c.singing ? "singing" : "speaking"}, like this one)`}.</p>
     <div class="seg" role="group" aria-label="Kind of audio"><button type="button" data-own-mode="speaking" aria-pressed="${m === "speaking"}">Speaking</button><button type="button" data-own-mode="singing" aria-pressed="${m === "singing"}">Singing</button></div>
-    <div class="row"><button class="btn primary" type="button" data-own-go="now">Train now · about 1 hour</button><button class="btn" type="button" data-own-go="tonight">Tonight instead</button></div></div>`;
+    <div class="row"><button class="btn primary" type="button" data-own-go="now">Train now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-own-go="tonight">Tonight instead</button></div></div>`;
 }
 async function daStart(tonight) {
   const person = $("#da-person").value.trim();
@@ -332,7 +341,7 @@ async function daBegin(person, mode, tonight, btn) {
     const r = await trainVoice(person, mode, tonight);   // train.js
     ok = true; DA.own = null; renderVoiceCards(DA.cands);
     if (tonight) {
-      if (!workMoved(r)) showError(`${person} is in tonight's work: it trains while the PC is free. SafeHouse's Running room shows it.`, "Added to tonight", null, true);
+      if (!workMoved(r)) showError(`${person} is in tonight's work.${startsNote(r) || " It trains while the PC is free."} SafeHouse's Running room shows it.`, "Added to tonight", null, true);
       document.dispatchEvent(new CustomEvent("uc:voicequeued", { detail: { person } }));   // the First assignment ends on it
     }
     else { daOutcomeClear(); renderDaWork(); }
@@ -354,7 +363,14 @@ const daStage = j => {
 };
 function renderDaWork() {
   const box = $("#da-work"), j = byWait(runningJobs()).find(x => DA_KINDS.has(x.kind));
-  box.hidden = !j;
+  const w = W.work || {}, held = !j && w.held ? (w.resume || []).map(r => r.label ?? r) : [];   // the pause has landed: the job isn't running any more, but it isn't gone
+  box.hidden = !j && !held.length;
+  if (!j && held.length) {
+    if (!put(box, `<div class="who">Paused</div><div class="da-prog"><span><b>${esc(held.slice(0, 2).join(", "))}${held.length > 2 ? ` and ${held.length - 2} more` : ""}</b> · stopped; where it stopped is saved</span></div>
+      <div class="row"><button class="btn primary" type="button" data-da-resume>Resume now</button></div>`)) return;
+    $$("[data-da-resume]", box).forEach(b => b.onclick = async () => { b.disabled = true; await resumeWork(); b.disabled = false; });
+    return;
+  }
   if (!j) { put(box, ""); return; }
   const f = jobProgress(j), left = j.total_left ?? j.eta, ix = daStage(j), line = jobLine(j, false);
   const stopping = DA.stopAsk === j.id;
@@ -404,10 +420,11 @@ function renderDaOutcome() {
   const name = esc(voiceDisplay(v)), w = LIKE_WORDS.includes(c.likeness_word) ? c.likeness_word : null;
   const weak = w === "fair" || w === "poor" || c.quality?.ok === false;
   const mins = c.minutes != null ? Math.round(c.minutes) : null;
+  if (weak && !EST.asked.has(estKey("improve", v))) estimateFor("improve", v).then(() => renderDaOutcome());   // the time fills in
   box.innerHTML = weak
     ? `<h3>${name} is ready${w ? `, but only a ${likeWord(w)} likeness` : ", but it's weak"}.</h3>
        <p class="meta">${mins != null && mins < 10 ? `Only ${mins} minute${mins === 1 ? "" : "s"} of their clean voice were found; 10 is the aim. ` : ""}It sounds somewhat like them. More clips would make it good, or great.</p>
-       <div class="row"><button class="btn primary" type="button" data-da-more>Find more clips and keep training</button><span class="meta">about 1 hour</span>
+       <div class="row"><button class="btn primary" type="button" data-da-more>Find more clips and keep training</button><span class="meta">${estWords("improve", v) || "about an hour"}</span>
          <button class="linkbtn quiet" type="button" data-da-close>Use it as it is</button></div>`
     : `<h3>${name} is ready${w ? `: a ${likeWord(w)} likeness` : ""}.</h3>
        <p class="meta">${mins ? `Trained from ${mins} minutes of their voice, checked against real clips. ` : ""}It's in your voices now.</p>
@@ -417,7 +434,7 @@ function renderDaOutcome() {
          <button class="linkbtn quiet" type="button" data-da-close>Close</button></div>`;
   const add = async (b, body, done) => {
     b.disabled = true;
-    try { W.last = await api("/api/work/add", { json: body }); renderQueue(); refreshJobs(true); daOutcomeClear(); loadCandidates(); if (!workMoved(W.last) && done) showError(done, "On it", null, true); }
+    try { W.last = await api("/api/work/add", { json: body }); renderQueue(); refreshJobs(true); daOutcomeClear(); loadCandidates(); if (!workMoved(W.last) && done) showError(done + startsNote(W.last), "On it", null, true); }
     catch (e) { b.disabled = false; showError(e.message, "Couldn't start it"); }
   };
   $$("[data-da-close]", box).forEach(b => b.onclick = daOutcomeClear);

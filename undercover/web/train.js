@@ -381,7 +381,7 @@ $("#tr-tonight").onclick = async () => {
   const b = $("#tr-tonight"); b.disabled = true;
   try {
     const r = await api("/api/work/add", { json: { kind: "project", project: T.proj.name, voice_name: ownName(), length: $("#tr-length").value, sr: +$("#tr-sr").value } });
-    if (!workMoved(r)) showError(`${T.proj.person || T.proj.name} trains tonight with your choices. SafeHouse's Running room shows it.`, "On it", null, true);
+    if (!workMoved(r)) showError(`${T.proj.person || T.proj.name} trains tonight with your choices.${startsNote(r)} SafeHouse's Running room shows it.`, "On it", null, true);
     if (typeof refreshJobs === "function") refreshJobs(true);
     await refresh();
   } catch (e) { b.disabled = false; showError(e.message, "Couldn't queue it"); }

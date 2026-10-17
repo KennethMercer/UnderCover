@@ -5150,6 +5150,9 @@ def u_page_rules():
     assert "function workMoved" in work and "workMoved(" in (web / "train.js").read_text(encoding="utf-8"), "work/add's `moved` is no longer said"
     assert "daFilters" in da and "data-own-go" in da and 'id="da-filters"' in ix, "Your voices lost its filter chips, or Train my own its Now / Tonight"
     assert "reportOutcome" in work and "reportName(x)" in work and "While you were out" in ix and "REPORT_WORDS" in work, "the overnight report lost its words"
+    # smallfix5 hooks: the one estimator, the tonight start note, the pause note, the paused card, the remove note
+    assert all(k in work for k in ("function estimateFor", "const startsNote", "const pausingNote", "function removedNote")) and "/api/work/estimate" in work, "work.js lost a smallfix5 hook"
+    assert "data-da-resume" in da and 'id="da-train-eta"' in ix and "estWords(" in da, "DoubleAgent lost its paused card or the estimator's time"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
@@ -5513,6 +5516,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/library/smaller/undo"),
     ("POST", "/api/library/voices/some-voice/full-index"),
     ("POST", "/api/work/to-queue"),
+    ("POST", "/api/work/estimate"),
     ("GET", "/api/train/voices/some-voice/improved"), ("POST", "/api/train/voices/some-voice/improved/keep"),
 ]
 
