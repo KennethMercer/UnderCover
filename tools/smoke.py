@@ -2354,6 +2354,11 @@ def u_frozen_recipe():
     assert recipe(0, None, 10)[0] == "scratch"
     assert budget_steps(13) == (8000, 16000) and budget_steps(36) == (16200, 32400) and budget_steps(0) == (8000, 16000)
     assert refine_steps(15) == 2000 and refine_steps(3) == 1000 and refine_steps(60) == 4000
+    from undercover.doubleagent.frozen import nothing_new
+    assert nothing_new(13.3, 13.3, [], False) and nothing_new(13.6, 13.3, [], False)       # the real Freeman run: 0 new, nothing out
+    assert not nothing_new(11.9, 13.3, [{"id": "x"}], False), "sources left out: the set changed, it trains"
+    assert not nothing_new(13.3, 13.3, [], True), "a source newly prepared trains"
+    assert not nothing_new(14.0, 13.3, [], False) and not nothing_new(13.3, 0, [], False) and not nothing_new(5.0, None, [], False)
     rows = [{"id": "a", "title": "NPR", "kept_min": 4.0, "cos": 0.70, "med_score": 0.6, "dropped": 0.3, "f0_st": 0.5},
             {"id": "b", "title": "2001 interview", "kept_min": 2.0, "cos": 0.57, "med_score": 0.6, "dropped": 0.4, "f0_st": 8.4},
             {"id": "c", "title": "Conan", "kept_min": 2.0, "cos": 0.70, "med_score": 0.55, "dropped": 0.3, "f0_st": 9.1},
@@ -2365,7 +2370,35 @@ def u_frozen_recipe():
     assert got == {"a": True, "b": False, "c": False, "d": False, "e": False, "f": True}, got
     assert "another voice" in rows[1]["gate"] and "younger" in rows[1]["gate"], rows[1]["gate"]
     assert rows[2]["gate"] == "a much younger voice" and rows[3]["gate"] == "nothing usable" and "usable" in rows[4]["gate"]
-    return "refine x1.4 / scratch x2.2, thin, weak, unknown; budget 8000..32400; refine 1000..4000; gate 6 rows"
+    return "refine x1.4 / scratch x2.2, thin, weak, unknown; budget 8000..32400; refine 1000..4000; nothing-new rule; gate 6 rows"
+
+
+@check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
+def u_improve_estimate():
+    import inspect
+    from undercover.doubleagent import api as da_api, night
+    from undercover.doubleagent.frozen import budget_steps, refine_steps
+    with isolated_data():
+        proj = _fake_project("freeman", "Morgan Freeman", n_phrases=160, other=6, n_sources=3)   # ~13 min kept
+        for src in proj.sources:
+            src.status = "ready"
+        proj.save()
+        kept = proj.kept_seconds() / 60
+        assert 12.5 < kept < 14.5, kept
+        _voice_dir("freeman-uc", {"project": "freeman", "train_minutes": round(kept, 1), "likeness": 0.795, "f0_median": 104.6})
+        _voice_dir("thin-uc", {"project": "freeman", "train_minutes": 3.0, "likeness": 0.7})
+        spe = night._sec_per_step()
+        well = night.estimate({"kind": "improve", "target": "freeman-uc"})
+        thin = night.estimate({"kind": "improve", "target": "thin-uc"})
+        new_min = night._improve_extra_minutes(proj) / 4                                        # the estimate's own growth guess
+        assert well["train"] == round(refine_steps(new_min) * spe / 60), (well, refine_steps(new_min), spe)
+        assert thin["train"] == round(budget_steps(kept + new_min)[0] * spe / 60), (thin, spe)
+        assert well["train"] * 4 < thin["train"], (well, thin)
+        assert well["prepare"] == thin["prepare"] and well["compare"] == thin["compare"]
+    src = inspect.getsource(da_api.start_train)
+    pops = src[src.index("for k in (") : src.index("st.pop(k, None)")]
+    assert all(k in pops for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
+    return f"well-fed: refine {well['train']} min; thin: scratch {thin['train']} min (at {spe:.2f} s/step); the training form pops the refine plan"
 
 
 class _FakeEngine:
@@ -2522,6 +2555,8 @@ def u_frozen_gate_project():
         assert g["kept_min"] < before / 60 and abs(proj.kept_seconds() / 60 - g["kept_min"]) < 0.1, (g["kept_min"], before)
         w = report_words("improve", {"kept": True, "before": 0.78, "after": 0.79, "tried": {"added_min": 5.0, "left_out": [{"title": "x", "why": "y"}]}}, "Dave Chappelle")
         assert w["outcome"] == "not_better" and "yours is kept" in w["note_plain"] and "1 source left out" in w["note_plain"], w
+        w = report_words("improve", {"kept": True, "nothing_new": True, "tried": {"added_min": 0.0, "left_out": []}}, "Dave Chappelle")
+        assert w["outcome"] == "same" and w["note_plain"].startswith("Nothing new of Dave Chappelle") and "kept as it is" in w["note_plain"], w
     return "s2 unticked with its phrases left out; the user's s1 untouched; kept row"
 
 
@@ -7586,7 +7621,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

@@ -346,7 +346,8 @@ def start_train(name: str, b: dict):
             if not vname:
                 raise ModelError("Give the new voice a name.")
             check_voice_name(proj, vname)
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
+            for k in ("epoch", "best", "saves", "state", "outcome", "epochs",   # exported stays: the voice is still there
+                      "planned_epochs", "init_from", "lr", "steps", "seed"):    # an Improve's refine plan never leaks into a training
                 st.pop(k, None)
             st.update(sr=sr, length=length, voice_name=vname, epochs=None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)

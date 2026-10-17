@@ -79,6 +79,19 @@ def refine_steps(new_minutes: float) -> int:
     return int(np.clip(round(REFINE_STEPS_PER_MIN * max(0.0, new_minutes)), lo, hi))
 
 
+NOTHING_NEW_MIN = 0.5   # kept minutes grown by less than this, nothing newly prepared, nothing left out: the same clips again
+
+
+def nothing_new(kept_minutes: float, old_minutes: float | None, left_out: list, new_ready: bool) -> bool:
+    """True when an Improve would train on exactly the clips the approved voice learnt from (no new clips found or
+    prepared, nothing left out by the gate): training again can only shuffle the dice, so the voice is kept untried.
+    An unknown old minute count (0 / None) is never "nothing new": the voice's own numbers aren't known."""
+    old = float(old_minutes or 0.0)
+    if old <= 0 or left_out or new_ready:
+        return False
+    return kept_minutes - old < NOTHING_NEW_MIN
+
+
 def recipe(old_minutes: float | None, old_likeness: float | None, kept_minutes: float) -> tuple[str, str]:
     """("refine" | "scratch", why). Refine keeps the approved identity (Freeman, Obama: weights 2 % away, drift 0.10);
     a thin voice or a big data jump learns too little from it (SpongeBob, Griffin: the user kept scratch retrains).
