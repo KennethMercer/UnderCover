@@ -73,12 +73,16 @@ def project_json(proj: P.Project) -> dict:
     a = _busy(proj.name)
     from ..core import worklist
     queued = worklist.queued_for("project", proj.name)   # "Queued for tonight" on the Deep path
+    trains = {p.id for p in proj.training_phrases()}
     return {
         "queued": queued,
         **proj.summary(),
         "sources": [{**s.to_json(), "raw": files.file_url(proj.dir / "raw" / f"{s.id}.wav")} for s in proj.sources],
+        # kept = what trains (rc-fix, RC pass C): a phrase of an unticked source is listed as left out, with why,
+        # unless the user ticked it by hand; Step by step's Kept filter and its minutes then agree with kept_minutes
         "phrases": [{"id": p.id, "source": p.source, "start": p.start, "dur": p.dur, "score": p.score, "mix": p.mix,
-                     "music_db": p.music_db, "reason": p.reason, "choice": p.choice, "kept": p.kept, "sung": p.sung,
+                     "music_db": p.music_db, "choice": p.choice, "sung": p.sung, "kept": p.id in trains,
+                     "reason": UNTICKED if p.kept and p.id not in trains else p.reason,
                      "url": files.file_url(proj.clip_path(p.id))} for p in proj.phrases],
         "speakers": [{**sp, "url": files.file_url(proj.clip_path(sp["clip"]))} for sp in proj.speakers],
         "reference_url": files.file_url(proj.clip_path(proj.reference["clip"])) if proj.reference.get("clip") else None,
@@ -86,6 +90,9 @@ def project_json(proj: P.Project) -> dict:
         "job": {"id": a["job"].id, "kind": a["kind"]} if a else None,
         "defaults": {"sr": TCFG["sample_rate"], "length": "auto", "steps": _lengths()},
     }
+
+
+UNTICKED = "its source is unticked"
 
 
 def _lengths() -> dict:

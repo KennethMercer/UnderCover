@@ -2625,6 +2625,71 @@ def u_version():
     return f"{v} from one file: app, System room, Doctor, diagnostics, installer, guides, What's new, changelog"
 
 
+@check("one name, one reading (RC pass A: 'pink pony club as plankton' read as a character, a person and a singer on three fresh installs): a downloaded voice's folder or source naming a known show makes it a character from that show, over a web guess and over a remembered one; a folder's other words aren't a show; the user's pick still wins")
+def u_plankton_reads():
+    import json as _json
+    from undercover.core.voices import voices_dir
+    from undercover.doubleagent import service, subject
+    asked = []
+    real = subject.classify
+
+    def web(name, *a, **k):                                                   # the web's guess: a singer, every time
+        asked.append(name)
+        return {"kind": "singer", "label": f"{name} is a singer", "how": "their songs", "evidence": [], "choices": []}
+    subject.classify = web
+    try:
+        with isolated_data():
+            src = "https://huggingface.co/binant/Plankton__SpongeBob___RVC_v2__1K_Epochs_69K_Steps/resolve/main/model.pth"
+            for name, source in (("plankton-spongebob", ""), ("plankton", src)):
+                d = _voice_dir(name, {})
+                m = _json.loads((d / "meta.json").read_text(encoding="utf-8"))
+                m["source"] = source
+                (d / "meta.json").write_text(_json.dumps(m), encoding="utf-8")
+            r = service.subject_of("plankton")
+            assert r["kind"] == "character" and r["show"] == "spongebob" and "SpongeBob" in r["label"], r
+            assert not asked, "the web was asked although a downloaded voice names the show"
+            # a fresh install that remembered a web guess: the voice still wins, and keeps winning
+            service._save_subjects({"plankton": {"kind": "singer", "label": "plankton is a singer"}})
+            assert service.subject_of("plankton")["kind"] == "character" and service.subject_of("plankton")["show"] == "spongebob"
+            # only the source link names it (the folder is just "plankton")
+            import shutil
+            shutil.rmtree(voices_dir() / "plankton-spongebob")
+            service._save_subjects({})
+            assert service.subject_of("Plankton")["kind"] == "character"
+            # a folder's other words aren't a show; with no voice, the web's reading stands (and is remembered)
+            _voice_dir("morgan-freeman-narrator", {})
+            assert service.subject_of("Morgan Freeman")["kind"] == "singer" and asked == ["Morgan Freeman"]
+            assert service._show_in("spongebob-squarepants", "SpongeBob") is None, "the person's own name read as a show"
+            # the user's pick still wins over the voice
+            service.subject_of("plankton", "person")
+            assert service.subject_of("plankton")["kind"] == "person"
+    finally:
+        subject.classify = real
+    return "folder 'plankton-spongebob' or its source -> a character from SpongeBob, over a remembered 'singer'; narrator isn't a show; a pick wins"
+
+
+@check("the phrase list follows what trains (RC pass C: Morgan's 91 phrases said kept while 12.7 of 17.8 min trained): a phrase of an unticked source is listed as left out with why, unless ticked by hand; the listed kept minutes equal kept_minutes")
+def u_phrase_list_trains():
+    from undercover.doubleagent import api as da_api, project as P
+    with isolated_data():
+        proj = _fake_project("listed", "Listed Person", n_phrases=24, other=3, n_sources=3)
+        proj.source("s1").selected = False
+        hand = next(p for p in proj.phrases if p.source == "s1" and p.kept)
+        hand.choice = True
+        proj.save()
+        out = da_api.project_json(P.Project.load("listed"))
+        rows = {r["id"]: r for r in out["phrases"]}
+        for p in proj.phrases:
+            if p.source == "s1" and p.kept and p.id != hand.id:
+                assert not rows[p.id]["kept"] and rows[p.id]["reason"] == da_api.UNTICKED, rows[p.id]
+        assert rows[hand.id]["kept"], "a hand-ticked phrase listed as left out"
+        assert all(rows[p.id]["reason"] == p.reason for p in proj.phrases if p.source != "s1")
+        listed = sum(r["dur"] for r in out["phrases"] if r["kept"]) / 60
+        assert abs(listed - out["kept_minutes"]) < 0.02, (listed, out["kept_minutes"])
+        assert P.Project.load("listed").phrases[0].reason == proj.phrases[0].reason, "the listing wrote the project"
+    return f"unticked source: listed left out ({da_api.UNTICKED}); hand-ticked stays; {listed:.2f} min = kept_minutes"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -7881,7 +7946,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
