@@ -619,12 +619,14 @@ class Handler(BaseHTTPRequestHandler):
                                                options={k: b[k] for k in ("voice_name", "length", "sr") if k in b}))
             if action == "remove":
                 return self._json(worklist.remove(b.get("id", "")))
+            if action == "estimate":   # {kind, target, mode}: the one "how long" every page shows (P8-10)
+                return self._json(worklist.estimate_for(b.get("kind", ""), b.get("target") or "", b.get("mode") or None))
             if action == "order":
                 return self._json(worklist.reorder(b.get("ids") or []))
             if action == "start":   # {"at": "23:00"} or {} = now; {"stop": true} = don't start more
                 return self._json(worklist.arm(False if b.get("stop") else (b.get("at") or None)))
             if action == "settings":
-                return self._json(worklist.settings(**{k: b[k] for k in ("finish_by", "keep_awake") if k in b}))
+                return self._json(worklist.settings(**{k: b[k] for k in ("finish_by", "keep_awake", "start_at") if k in b}))
             if action == "dismiss":
                 return self._json(worklist.dismiss_report())
         except (ModelError, LookupError) as e:

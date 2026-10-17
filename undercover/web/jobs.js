@@ -17,7 +17,7 @@ const JOB_OWNER = { cover: "frontman", presep: "frontman", auto: "frontman", ins
 const jobOwner = kind => JOB_OWNER[kind] || "doubleagent";   // train, train-*, night (the overnight queue)
 const JOB_KIND = { cover: "cover", presep: "separating", auto: "one-shot", install: "voice install", speech: "speech",
                    train: "training", "train-prepare": "preparing clips", "train-auto": "new voice", "train-export": "adding a voice",
-                   "train-transcribe": "transcripts", "cadence-ab": "listening copies", night: "voice work",
+                   "train-transcribe": "transcripts", "cadence-ab": "listening copies", "improve-ab": "listening copies", smaller: "making it smaller", night: "voice work",
                    addon: "add-on", move: "moving files", doctor: "check-up", ytdlp: "YouTube downloader" };
 const PAUSABLE_KINDS = new Set(["train", "train-prepare", "train-auto", "train-transcribe", "night", "auto"]);
 const isRunning = j => j && !j.final && !["done", "error", "cancelled", "paused", "lost"].includes(j.state);
@@ -53,11 +53,18 @@ function jfAnnounce(list) {
 // fn(list) after every change (new list, or a live event moved a job on)
 // (not called at once: scripts subscribe while the page loads, before the ones they draw with are there)
 function onJobs(fn) { JF.subs.add(fn); return () => JF.subs.delete(fn); }
-let jfFrame = 0;
+let jfFrame = 0, jfTimer = 0;
 function jfNotify() {   // at most once a frame; at once in a hidden tab (no frames there, but the title still counts)
   if (jfFrame) return;
-  const run = () => { jfFrame = 0; jfTitle(); JF.subs.forEach(fn => { try { fn(JF.list); } catch (e) { console.error(e); } }); };
-  if (document.hidden) run(); else jfFrame = requestAnimationFrame(run);
+  const run = () => {
+    if (!jfFrame) return;
+    clearTimeout(jfTimer); jfFrame = 0; jfTitle(); JF.subs.forEach(fn => { try { fn(JF.list); } catch (e) { console.error(e); } });
+  };
+  if (document.hidden) { jfFrame = 1; run(); }
+  else {
+    jfFrame = requestAnimationFrame(run);
+    jfTimer = setTimeout(run, 300);   // a window that isn't painting (covered, throttled) never runs the frame: without this nothing was told again and a paused job stayed "running" on DoubleAgent's card (IA P9-4)
+  }
 }
 const runningJobs = (opts = {}) => JF.list.filter(j => isRunning(j) && (opts.background || j.kind !== "presep"));
 

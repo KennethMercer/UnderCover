@@ -2,23 +2,23 @@
 // retrained voice, a replace that didn't finish), each with why, when and what it takes. Nothing here is deleted unless you say so, twice.
 // GET /api/library/aside -> [{id, voice, display, size, at, why, undo_for}] newest first; DELETE /api/library/aside/<id> -> {removed, freed,
 // undo_ended_for}. Uses helpers from app.js ($, $$, esc, api, showError, gb) and library.js (when, loadStorage).
-const AS = { list: [], ask: null, timer: null };
+const ASIDE = { list: [], ask: null, timer: null };
 
 async function asideLoad() {
-  try { AS.list = await api("/api/library/aside"); } catch (e) { AS.list = []; }
+  try { ASIDE.list = await api("/api/library/aside"); } catch (e) { ASIDE.list = []; }
   renderAside();
 }
 function renderAside() {
   const box = $("#as-body"), sec = $("#aside");
-  sec.hidden = !AS.list.length;
-  if (!AS.list.length) return;
-  const total = AS.list.reduce((a, x) => a + (x.size || 0), 0);
-  $("#as-say").textContent = `${AS.list.length} set aside · ${gb(total)}`;
+  sec.hidden = !ASIDE.list.length;
+  if (!ASIDE.list.length) return;
+  const total = ASIDE.list.reduce((a, x) => a + (x.size || 0), 0);
+  $("#as-say").textContent = `${ASIDE.list.length} set aside · ${gb(total)}`;
   // rows that read the same (two copies of one voice) get the folder name beside them, in basic view too
-  const same = x => AS.list.filter(y => (y.display || y.voice) === (x.display || x.voice)).length > 1;
+  const same = x => ASIDE.list.filter(y => (y.display || y.voice) === (x.display || x.voice)).length > 1;
   box.innerHTML = `<p class="vt-lead">When a voice is replaced or you keep the other one, the old voice is moved here, never deleted. Delete only what you're sure you won't want back.</p>`
-    + AS.list.map(x => {
-      const asking = AS.ask === x.id;
+    + ASIDE.list.map(x => {
+      const asking = ASIDE.ask === x.id;
       return `<div class="vt-row aside-row"><span><b>${esc(x.display || x.voice)}</b>${same(x) ? `<small class="meta mono">${esc(x.voice)}</small>` : ""}<small class="meta">${esc(x.why || "set aside")} · ${esc(when(x.at))}</small>
         ${asking && x.undo_for ? `<small class="meta aside-warn">Undo for ${esc(voiceDisplay(x.undo_for))} won't be able to bring it back.</small>` : ""}</span>
         <span class="row"><span class="meta mono">${gb(x.size || 0)}</span>
@@ -43,13 +43,13 @@ async function asideRestore(id) {
 }
 // two clicks within 4 s; the first one says what it will cost (an Undo that would no longer work)
 async function asideDelete(id, btn) {
-  if (AS.ask !== id) {
-    AS.ask = id; AS.askAt = Date.now(); renderAside();
-    clearTimeout(AS.timer); AS.timer = setTimeout(() => { if (AS.ask === id) { AS.ask = null; renderAside(); } }, 4000);
+  if (ASIDE.ask !== id) {
+    ASIDE.ask = id; ASIDE.askAt = Date.now(); renderAside();
+    clearTimeout(ASIDE.timer); ASIDE.timer = setTimeout(() => { if (ASIDE.ask === id) { ASIDE.ask = null; renderAside(); } }, 4000);
     return;
   }
-  if (Date.now() - (AS.askAt || 0) < CONFIRM_MS) return;   // a double click isn't a confirmation
-  clearTimeout(AS.timer); AS.ask = null; btn.disabled = true;
+  if (Date.now() - (ASIDE.askAt || 0) < CONFIRM_MS) return;   // a double click isn't a confirmation
+  clearTimeout(ASIDE.timer); ASIDE.ask = null; btn.disabled = true;
   try {
     const r = await api(`/api/library/aside/${encodeURIComponent(id)}`, { method: "DELETE" });
     showError(`${r.freed != null ? `${gb(r.freed)} freed. ` : ""}${r.undo_ended_for ? `Undo for ${voiceDisplay(r.undo_ended_for)} can't bring it back any more.` : ""}`.trim() || "Deleted.", "Deleted", null, true);

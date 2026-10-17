@@ -105,14 +105,17 @@ $("#se-q").addEventListener("input", seVoices);
 async function seNewVoice(now) {
   const name = $("#se-newname").value.trim();
   if (!name) return $("#se-newname").focus();
-  try { await api("/api/speak/newvoice", { json: { person: name, now } }); }
+  let r;
+  try { r = await api("/api/speak/newvoice", { json: { person: name, now } }); }
   catch (e) { return showError(e.message, "Couldn't start the new voice"); }
   $("#se-newname").value = "";
-  $("#se-newnote").textContent = now ? `DoubleAgent is on it: ${name}'s voice and cadence (about 3 h; the bar at the top shows how far). It appears here when it's done.`
-    : `${name} is in tonight's queue (DoubleAgent). Start the queue there, or let it run at its start time.`;
+  const eta = (await estimateFor("new", name, "speaking"))?.total, about = eta ? etaWords({ low: eta * 60, high: eta * 60 }) : "a few hours";
+  $("#se-newnote").textContent = now ? `DoubleAgent is on it: ${name}'s voice and cadence (${about}; the bar at the top shows how far). It appears here when it's done.`
+    : `${name} is in tonight's queue (${about}).${startsNote(r) || " It runs at the queue's start time."} SafeHouse's Running room shows it.`;
   if (typeof loadQueue === "function") loadQueue();
   refreshJobs(true);
 }
+estimateFor("new", "", "speaking").then(e => { if (e?.total && $("#se-new-eta")) { $("#se-new-eta").textContent = etaWords({ low: e.total * 60, high: e.total * 60 }).replace(/^about /, ""); $("#se-new-eta-wrap").hidden = false; } });   // the time in the note under the box
 $("#se-newgo").onclick = () => seNewVoice(true);
 $("#se-newnight").onclick = () => seNewVoice(false);
 $("#se-newsteps").onclick = () => {
@@ -419,7 +422,7 @@ function seRelease(id) {
   }
   if (SE.recId === id) SE.recId = null;
 }
-$("#se-all").onclick = () => { if (typeof L !== "undefined") L.cat = "speech"; store.set("uc-lib-cat", "speech"); showTab("safehouse"); window.scrollTo({ top: 0 }); };
+$("#se-all").onclick = () => { if (typeof L !== "undefined") L.cat = "speech"; store.set("uc-lib-cat", "speech"); location.hash = "#safehouse/library"; showTab("safehouse"); window.scrollTo({ top: 0 }); };
 
 seCount();
 

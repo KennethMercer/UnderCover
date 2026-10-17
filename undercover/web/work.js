@@ -39,7 +39,7 @@ function jobProgress(j) {   // 0..1 over the whole job (a cover's events count e
 }
 function jobLine(j, withLeft = true) {
   const bits = [];
-  if (j.pausing) bits.push("pausing…");
+  if (j.pausing) bits.push(pausingNote(j) || "pausing…");
   else if (j.epoch && j.epochs) bits.push(`epoch ${j.epoch} of ${j.epochs}`);
   else if (j.kind === "speech" && j.of) bits.push(`sentence ${(j.index ?? -1) + 1} of ${j.of}`);
   else if (j.message) bits.push(j.message);
@@ -49,12 +49,14 @@ function jobLine(j, withLeft = true) {
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
+// a voice id read as a person ("barack-obama-uc" -> "Barack Obama"): the voice's display name when it's listed, else the id's own words; anything else as it is
+const niceName = s => !s ? "" : VOICES.has(s) ? voiceDisplay(s) : /^[a-z0-9]+(-[a-z0-9]+)*-uc$/.test(s) ? s.slice(0, -3).split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ") : s;
 const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
 const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9) - ((WAIT_ORDER.indexOf(b.kind) + 1) || 9));
 
 // ------------------------------------------------------------ the bar: any running job, live (jobs.js), plus Pause / Resume
 W.work = null; W.watch = {};
-function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); }   // called from app.js pollStatus with /api/status's "work"
+function renderWorkBar(w) { W.work = w; renderBar(); if (runRoomOpen()) renderRunRoom(); if (typeof renderDaWork === "function" && !$("#view-train").hidden) renderDaWork(); }   // DoubleAgent's card follows the status too (a pause lands in the status as well as the jobs)   // called from app.js pollStatus with /api/status's "work"
 function renderBar() {
   const bar = $("#workbar"), w = W.work || {};
   if (typeof queueCount !== "function") return;   // shell.js (loaded last) isn't there yet: the job feed answered early
@@ -118,7 +120,7 @@ function renderRunning(box, opts = {}) {
   }).join("");
 }
 async function pauseWork() {
-  try { await api("/api/work/pause", { json: {} }); $("#wb-text").textContent = "Pausing… (training saves its place first)"; }
+  try { await api("/api/work/pause", { json: {} }); $("#wb-text").textContent = pausingNote() || "Pausing at the end of this step…"; }
   catch (e) { showError(e.message, "Couldn't pause"); }
   if (W.open) loadQueue();
 }
@@ -147,6 +149,8 @@ const runRoomOpen = () => !$("#view-library").hidden && !$("#room-running").hidd
 function loadRunRoom() { renderRunRoom(); refreshJobs(true); loadQueue(); }   // rooms.js, when the room opens
 const ENDED = { done: ["ok", "done"], error: ["bad", "failed"], cancelled: ["warn", "cancelled"], paused: ["warn", "paused"], lost: ["bad", "stopped"] };
 const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+// a source that wouldn't answer (YouTube blocked): the server says "Trying again in an hour"; the page says when (the item's retry_after)
+const queueNote = i => i.retry_after ? `${String(i.note || "").replace(/\s*(?:The queue t|T)rying again in an hour\.?|\s*The queue tries again in an hour\.?/i, "").trim()} Tries again at ${hhmm(i.retry_after)}.`.trim() : (i.note || "");
 // the room redraws on every job event: a part is rewritten only when its HTML changed, so focus and clicks survive
 const shown = new WeakMap();
 const put = (el, html) => { if (shown.get(el) === html) return false; el.innerHTML = html; shown.set(el, html); return true; };
@@ -154,7 +158,7 @@ function renderRunRoom() {
   const w = W.last, work = W.work || {};
   // now: the job the user waits for first is the lit one; any others are rows under it
   const [main, ...rest] = byWait(runningJobs());
-  let now = `<p class="meta rn-idle">Nothing running right now. Covers, speech and voice work show here while they run.</p>`;
+  let now = `<section class="panel rn-idle-panel"><div class="rn-lbl"><b>Now</b></div><p class="meta rn-idle">Nothing running right now. Covers, speech and voice work show here while they run.</p></section>`;
   if (main) {
     const owner = ownerOf(main.kind), f = jobProgress(main), left = main.total_left ?? main.eta, line = jobLine(main, false);
     now = `<div class="rn-now" data-owner="${owner}"><div class="who">${MOD_NAME[owner]} · ${esc(JOB_KIND[main.kind] || main.kind)}</div>
@@ -209,8 +213,11 @@ function renderRunRoom() {
   // tonight: the overnight queue (its full editor stays on DoubleAgent's page)
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
-  $("#rn-total").textContent = left.length ? `About ${fmtMin(w.total_min)} · done by about ${clock(w.done_by)}` : "";
-  $("#rn-when").hidden = $("#rn-opts").hidden = !left.length;
+  $("#rn-total").textContent = !left.length ? "" : [w.total_min ? `About ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : "",
+    w.waits ? `${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : ""].filter(Boolean).join(" · ");
+  $("#rn-opts").hidden = !left.length;
+  $("#rn-when").hidden = false;   // the start time can be set any time; the two buttons only mean something with work queued
+  $("#rn-when .seg").hidden = !left.length; $("#rn-when-lbl").hidden = !!left.length;
   showTimes(w);
   const same = at && startTime() === w.settings.start_at;   // the field still says what's saved; edited, the button offers the new time
   $("#rn-at").textContent = same ? `Starts at ${clock(w.settings.start_at)}` : `Start at ${clock(startTime())}`;
@@ -219,12 +226,14 @@ function renderRunRoom() {
   $("#rn-stop").hidden = !w?.armed;
   const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
     const run = i.state === "running";
-    const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
+    const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.waits_next_night ? "waits for the next night (or start it earlier)" : queueNote(i);
     return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobKind(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
       <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
   }).join("") : `<p class="meta">Nothing queued for tonight. Add a voice to improve, or train a new one, and it runs while you sleep.</p>`;
   if (put($("#rn-list"), list)) $$("#rn-list [data-rn-rm]").forEach(b => b.onclick = async () => {
-    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.rnRm } }); renderQueue(); }
+    if (!b.classList.contains("confirm")) { b.classList.add("confirm"); arm(b); b.textContent = "Remove it?"; setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); disarm(b); b.textContent = "Remove"; } }, 4000); return; }
+    if (!armedFor(b)) return;   // a double click isn't a confirmation
+    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.rnRm } }); renderQueue(); removedNote(W.last); }
     catch (e) { showError(e.message, "Couldn't remove that"); }
   });
   if (w) { $("#rn-finish").checked = !!w.settings.finish_by; $("#rn-awake").checked = w.settings.keep_awake !== false; }
@@ -233,7 +242,7 @@ function renderRunRoom() {
   const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);
   put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = ENDED[st] || ["warn", st];
-    const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : j.final?.message || "";
+    const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");
     return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}${how ? ` · ${esc(how)}` : ""}</small></span>
       <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span>${j.retry ? `<button class="linkbtn" type="button" data-retry="${esc(j.id)}">Retry</button>` : ""}<button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
   }).join("") : `<p class="meta">Nothing has finished in the last hour.</p>`);
@@ -246,11 +255,21 @@ $("#rn-recent").addEventListener("click", async e => {
   catch (err) { b.disabled = false; showError(err.message, "Couldn't start it again"); }
 });
 const startWork = async body => {
-  try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); }
-  catch (e) { showError(e.message, "Couldn't change the start"); }
+  try { W.last = await api("/api/work/start", { json: body }); renderQueue(); pollStatusSoon(); return true; }
+  catch (e) { showError(e.message, "Couldn't change the start"); return false; }
 };
 $("#rn-at").onclick = () => startWork({ at: startTime() });
-$("#rn-at-time").onchange = e => { store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue(); };
+$("#rn-at-time").onchange = e => {
+  store.set("uc-queue-at", e.target.value || null); $("#q-at-time").value = e.target.value; renderQueue();
+  // nothing queued: this is only the time tonight's work will start at. It goes through the settings, never through Start at: arming the queue also
+  // takes the hold off and would restart work you paused (found by trying it). `start_at` there saves without arming (smallfix6 addendum).
+  if (e.target.value && !(W.last?.queue || []).some(i => ["queued", "paused", "running"].includes(i.state))) saveStartTime(e.target.value);
+};
+async function saveStartTime(v) {
+  try { W.last = await api("/api/work/settings", { json: { start_at: v } }); renderQueue(); } catch (e) { return showError(e.message, "Couldn't save the start time"); }
+  if (W.last?.settings?.start_at === v) showError(`Tonight's work will start at ${clock(v)}.`, "Start time saved", null, true);
+  else showError("The server didn't keep that start time. Try again.", "Start time not saved", null, true);
+}
 $("#rn-go").onclick = () => startWork({});
 $("#rn-stop").onclick = () => startWork({ stop: true });
 const workSettings = async body => {
@@ -266,7 +285,7 @@ async function loadQueue() {
   try { W.last = await api("/api/work"); } catch (e) { return; }
   renderQueue();
 }
-const jobWhat = i => ({ improve: `Improve ${esc(i.display || i.target)}`, cadence: `Cadence for ${esc(i.display || i.target)}`,
+const jobWhat = i => ({ improve: `Improve ${esc(niceName(i.display || i.target))}`, cadence: `Cadence for ${esc(niceName(i.display || i.target))}`,
                         newcad: `New voice with cadence: ${esc(i.target)}`,
                         project: `Training ${esc(i.display || i.target)} (your choices)` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
 const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence", project: "voice · your choices" })[i.kind] || esc(i.kind);
@@ -277,14 +296,15 @@ function renderDrawer() {
   if (!w) { $("#qd-list").innerHTML = `<p class="meta">Loading…</p>`; return; }
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
   $("#qd-total").innerHTML = left.length
-    ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> of work · done by about <span class="mono">${clock(w.done_by)}</span>` +
-      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet (start it in DoubleAgent)")
+    ? (w.total_min ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> of work` : "<b>Nothing fits tonight</b>") + (w.done_by ? ` · done by about <span class="mono">${clock(w.done_by)}</span>` : "") +
+      (w.waits ? ` · ${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : "") +
+      (w.armed ? (w.settings.start_at ? ` · starts at ${clock(w.settings.start_at)}` : " · running") : " · not started yet (Start now is in SafeHouse's Running room)")
     : "Nothing queued. Add a voice to improve, or a person to train, and let it run overnight.";
   $("#qd-list").innerHTML = w.queue.map(i => {
     const run = i.state === "running", done = ["done", "failed", "skipped"].includes(i.state), owner = ownerOf(i.kind);
     const live = run ? (w.running.find(r => r.job === i.job) || {}) : {};
     const note = done ? `${i.state} · ${fmtMin(i.minutes)}${i.result?.note ? " · " + i.result.note : ""}` : run ? [live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")
-      : i.state === "paused" ? "paused · Resume continues it" : i.note || "";
+      : i.state === "paused" ? "paused · Resume continues it" : i.waits_next_night ? "waits for the next night (or start it earlier)" : queueNote(i);
     return `<div class="qd-job ${run ? "running" : ""} ${done ? "done" : ""}" data-owner="${owner}">
       <div><span class="kind">${MOD_NAME[owner]} · ${jobKind(i)}</span><b>${jobWhat(i)}</b>${note ? `<small>${esc(note)}</small>` : ""}
         ${run ? `<div class="bar"><i style="width:${Math.round((live.fraction || 0) * 100)}%"></i></div>` : ""}</div>
@@ -292,7 +312,7 @@ function renderDrawer() {
         ${run ? "" : `<button class="linkbtn" type="button" data-qd-rm="${i.id}">${done ? "Clear" : "Remove"}</button>`}</div></div>`;
   }).join("") || "";
   $$("#qd-list [data-qd-rm]").forEach(b => b.onclick = async () => {
-    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.qdRm } }); renderQueue(); }
+    try { W.last = await api("/api/work/remove", { json: { id: b.dataset.qdRm } }); renderQueue(); removedNote(W.last); }
     catch (e) { showError(e.message, "Couldn't remove that"); }
   });
 }
@@ -303,7 +323,7 @@ function renderQueue() {
   queueCount(w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)).length, w.armed);
   const left = w.queue.filter(i => ["queued", "paused", "running"].includes(i.state));
   $("#q-total").innerHTML = left.length
-    ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b> <span class="meta">· done by about <span class="mono">${clock(w.done_by)}</span>${w.armed && w.settings.start_at ? ` if it starts at ${clock(w.settings.start_at)}` : ""}</span>`
+    ? `${w.total_min ? `<b class="mono">≈ ${fmtMin(w.total_min)}</b>` : "<b>Nothing fits tonight</b>"} <span class="meta">${w.done_by ? `· done by about <span class="mono">${clock(w.done_by)}</span>${w.armed && w.settings.start_at ? ` if it starts at ${clock(w.settings.start_at)}` : ""}` : ""}${w.waits ? ` · ${w.waits} job${w.waits > 1 ? "s wait" : " waits"} for the next night` : ""}</span>`
     : `<span class="meta">Nothing queued. Add a voice to improve, or a person to train, and let it run overnight.</span>`;
   const st = $("#q-start"), at = $("#q-at");
   st.hidden = at.hidden = !left.length;
@@ -321,7 +341,7 @@ function renderQueue() {
          : [["prepare", "prepare"], ["train", "train"], ["compare", i.kind === "improve" ? "compare" : "check"]])
           .filter(([k]) => e[k]).map(([k, l]) => `<span class="qchip">${l} ~${fmtMin(e[k])}</span>`).join("");
     const note = done ? esc(i.result?.note || "") : run ? esc([live.message || "running", leftText(live.total_left ?? live.eta)].filter(Boolean).join(" · ")) : i.state === "paused" ? "paused · Resume (top of the page) continues it"
-      : i.now ? "starts as soon as the GPU is free" : esc(i.note || "");
+      : i.now ? "starts as soon as the GPU is free" : esc(queueNote(i));
     return `<div class="qjob ${run ? "running" : ""} ${done ? "done" : ""}" draggable="${!run && !done}" data-id="${i.id}">
       <span class="grip" aria-hidden="true">${run || done ? "" : "⋮⋮"}</span>
       <div><b>${what}</b>${note ? `<p class="meta">${note}</p>` : ""}<div class="qchips">${chips}</div>
@@ -329,27 +349,55 @@ function renderQueue() {
       <div class="qside">${done ? "" : `<span class="mono">~${fmtMin(e.total)}</span>`}
         ${run ? "" : `<button class="linkbtn" data-rm="${i.id}">${done ? "Clear" : "Remove"}</button>`}</div></div>`;
   }).join("");
-  $$("#q-list [data-rm]").forEach(b => b.onclick = async () => { W.last = await api("/api/work/remove", { json: { id: b.dataset.rm } }); renderQueue(); });
+  $$("#q-list [data-rm]").forEach(b => b.onclick = async () => { W.last = await api("/api/work/remove", { json: { id: b.dataset.rm } }); renderQueue(); removedNote(W.last); });
   dragSort();
   $("#q-finish").checked = !!w.settings.finish_by;
   $("#q-awake").checked = w.settings.keep_awake !== false;
   renderReport(w.report);
 }
+// The report gathers everything since the last Dismiss, so it's "While you were out", with its real range in days ("yesterday 15:14 to today 13:20").
+const reportDay = d => { const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), n = Math.round((day(new Date()) - day(d)) / 864e5);
+  return n < 1 ? "today" : n < 2 ? "yesterday" : n < 7 ? d.toLocaleDateString(undefined, { weekday: "long" }) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" }); };
+function reportRange(a, z) {
+  const at = s => s ? new Date(String(s).replace(" ", "T")) : null, s = at(a), e = at(z);
+  if (!s || isNaN(s)) return "";
+  const hm = d => d.toTimeString().slice(0, 5);
+  if (!e || isNaN(e)) return `from ${reportDay(s)} ${hm(s)}`;
+  return reportDay(s) === reportDay(e) ? `${reportDay(s)} ${hm(s)} to ${hm(e)}` : `${reportDay(s)} ${hm(s)} to ${reportDay(e)} ${hm(e)}`;
+}
+// What a result says in words. The server's `outcome` when it gives one (better | same | not_better | waiting | new); until it does, from what the result carries:
+// a retrained voice waiting for the ear (pending) is not "kept the old", and a brand-new voice (new, new voice + cadence) had no old one to keep.
+const REPORT_WORDS = { better: "better", same: "about the same", not_better: "not better: yours is kept", waiting: "waiting for your ear", new: "new voice" };
+function reportOutcome(x) {
+  if (x.outcome) return x.outcome;
+  if (x.state !== "done") return "";
+  if (["new", "newcad"].includes(x.kind)) return "new";
+  if (x.pending) return "waiting";
+  if (x.replaced) return "better";
+  return x.before != null || x.after != null ? "not_better" : "";
+}
+const REPORT_PLAIN = { waiting: "Listen to both on its card and keep the one you like.", not_better: "The retrained one didn't beat it, so your voice stays." };
+const reportName = x => x.voice && VOICES.has(x.voice) ? voiceDisplay(x.voice) : niceName(x.display || x.voice || x.target);   // the person's name, never the voice id
 function renderReport(r) {
   const box = $("#q-report");
   box.hidden = !r || !r.results?.length;
   if (box.hidden) return;
-  $("#q-report-when").textContent = `Ran ${r.started}${r.finished ? " – " + r.finished.slice(11) : ""} · ${r.results.length} job${r.results.length > 1 ? "s" : ""}`;
+  $("#q-report-when").textContent = `${reportRange(r.started, r.finished)} · ${r.results.length} job${r.results.length > 1 ? "s" : ""}`;
   $("#q-report-list").innerHTML = r.results.map(x => {
-    const score = x.before != null || x.after != null
-      ? `${x.before != null ? x.before.toFixed(2) + " → " : ""}${x.after != null ? x.after.toFixed(2) : "?"}${x.replaced ? " ✓ replaced" : x.kind === "new" ? " ✓ new" : x.state === "done" ? " · kept the old" : ""}` : x.state;
-    const what = x.kind === "improve" ? (x.replaced ? "improved" : "tried") : x.kind === "cadence" ? (x.replaced ? "cadence" : "cadence tried")
+    const oc = reportOutcome(x);
+    const what = x.kind === "improve" ? (x.replaced ? "improved" : x.pending ? "retrained" : "tried") : x.kind === "cadence" ? (x.replaced ? "cadence" : "cadence tried")
       : x.kind === "newcad" ? "new voice + cadence" : "new voice";
+    const what2 = x.state === "done" ? what : x.state === "skipped" ? "was cancelled" : "didn't finish";   // a failed "new voice" read as if one was made (IA P9-14)
+    const words = x.before_word && x.after_word && x.before_word !== x.after_word ? `${likeWord(x.before_word)} → ${likeWord(x.after_word)}` : likeWord(x.after_word || x.before_word);
+    const numbers = x.before != null || x.after != null ? `${x.before != null ? x.before.toFixed(3) + " → " : ""}${x.after != null ? x.after.toFixed(3) : "?"}` : "";   // three places: the word was cut at the unrounded score
     const cad = x.kind === "cadence" ? x : x.cadence;   // cadence numbers: Deep Cover only
-    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: likeness ${cad.likeness} · gap ${cad.cadence_gap} · WER ${cad.wer} · from ${cad.data_minutes} min</p>` : "";
-    const up = x.replaced || (["new", "newcad"].includes(x.kind) && x.state === "done");
-    return `<div class="qres"><div><b>${esc(x.voice ? voiceDisplay(x.voice) : x.display || x.target)}</b> ${what}<p class="meta">${esc(x.note || "")}</p>${deep}</div>
-      <div class="mono ${up ? "up" : "same"}" ${x.kind === "cadence" ? "data-deep" : ""}>${esc(score)}</div></div>`;
+    const deep = cad && cad.likeness != null ? `<p class="meta" data-deep>cadence: ${[`likeness ${cad.likeness}`, cad.cadence_gap != null && `gap ${cad.cadence_gap}`, cad.wer != null && `WER ${cad.wer}`, cad.data_minutes != null && `from ${cad.data_minutes} min`].filter(Boolean).join(" · ")}</p>` : "";
+    const raw = x.note || "";
+    const hasNum = /\d\.\d{2,}/.test(raw);   // the server's note quotes the scores: Deep Cover; basic says it plainly
+    const plain = x.note_plain != null ? x.note_plain : hasNum ? REPORT_PLAIN[oc] || "" : raw;   // the server's plain note (smallfix4); until a result has one, from the outcome
+    const up = oc === "better" || oc === "new" || oc === "waiting";
+    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what2}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum || (x.note_plain != null && raw && raw !== x.note_plain) ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
+      <div class="qres-r"><span class="${up ? "up" : "same"}">${oc ? esc(REPORT_WORDS[oc] || oc) : esc(x.state)}</span>${words ? `<span class="meta">${words}</span>` : ""}${numbers ? `<span class="mono meta" data-deep>${esc(numbers)}</span>` : ""}</div></div>`;
   }).join("");
 }
 function dragSort() {
@@ -381,20 +429,20 @@ $("#q-mode").addEventListener("click", e => {
 });
 async function loadCandidates() {
   try { PICK.cands = await api("/api/work/candidates"); noteVoices(PICK.cands); } catch (e) { return; }
-  const can = PICK.cands.filter(c => c.can), off = PICK.cands.filter(c => !c.can);
+  const can = PICK.cands.filter(c => c.can), off = PICK.cands.filter(c => !c.can && !c.demo);   // the demo voice is nobody to improve: not listed
   [...PICK.sel].forEach(k => { if (!can.some(c => c.voice === k && !c.queued)) PICK.sel.delete(k); });
   $("#q-cands").innerHTML = can.length ? can.map(c => {
     const facts = [c.minutes ? `${Math.round(c.minutes)} min of ${c.singing ? "singing" : c.singing === false ? "speech" : "voice"}` : c.trained ? "" : "downloaded",
                    c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : "", c.estimate ? `≈ ${fmtMin(c.estimate)}` : ""].filter(Boolean);
     return `<label class="vcard ${c.queued ? "queued" : ""}">
       <input type="checkbox" data-v="${esc(c.voice)}" ${c.queued ? "disabled" : PICK.sel.has(c.voice) ? "checked" : ""}>
-      <span><b>${vname(c.voice)}</b>${c.person && c.person.toLowerCase() !== voiceDisplay(c.voice).replace(/-uc$/, "").replace(/-/g, " ").toLowerCase() ? ` <span class="meta">${esc(c.person)}</span>` : ""}
+      <span><b>${vname(c.voice)}</b>${c.person_guessed ? ` <span class="meta">${esc(c.person)} · from its name: rename the voice if that's wrong</span>` : c.person && c.person.toLowerCase() !== voiceDisplay(c.voice).replace(/-uc$/, "").replace(/-/g, " ").toLowerCase() ? ` <span class="meta">${esc(c.person)}</span>` : ""}
         <span class="qchips">${facts.map(f => `<span class="qchip" data-deep>${esc(f)}</span>`).join("")}${c.queued ? `<span class="qchip ok">in the queue</span>` : ""}</span>
         <span class="meta">${esc(c.note)}</span></span></label>`;
   }).join("") : `<p class="meta">No voices yet. Use "New voices" to train one.</p>`;
   $$("#q-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? PICK.sel.add(cb.dataset.v) : PICK.sel.delete(cb.dataset.v); pickSummary(); });
   $("#q-other").hidden = !off.length;
-  $("#q-cands-off").textContent = off.map(c => voiceDisplay(c.voice)).join(", ") + ". These were downloaded and DoubleAgent doesn't know whose voices they are. To train your own, add the person under New voices.";
+  $("#q-cands-off").innerHTML = off.map(c => `<b>${esc(voiceDisplay(c.voice))}</b>${c.note ? `: ${esc(c.note)}` : ""}`).join("<br>") + `<br>To train your own, add the person under New voices.`;
   pickSummary();
   renderCadPicker();
   renderVoiceCards(PICK.cands);   // doubleagent.js
@@ -409,7 +457,7 @@ function renderCadPicker() {
     const cd = c.cadence;
     return `<label class="vcard ${cd.queue ? "queued" : ""}"><input type="checkbox" data-cv="${esc(c.voice)}" ${cd.queue ? "disabled" : CADPICK.has(c.voice) ? "checked" : ""}>
       <span><b>${vname(c.voice)}</b> <span class="qchips">${cd.has ? `<span class="qchip ok">has one</span>` : ""}${cd.queue ? `<span class="qchip ok">in the queue</span>` : ""}</span>
-        <span class="meta">${cd.has ? "tries again; kept only if better" : esc(cd.why || "")}</span></span></label>`;
+        <span class="meta">${cd.has ? "tries again; the new one waits for your ear" : esc(cd.why || "")}</span></span></label>`;
   }).join("") : `<p class="meta">No voice can get a cadence yet: it needs a voice trained on speech, or a downloaded voice DoubleAgent has checked.</p>`;
   $$("#q-cad-cands input[type=checkbox]").forEach(cb => cb.onchange = () => { cb.checked ? CADPICK.add(cb.dataset.cv) : CADPICK.delete(cb.dataset.cv); cadSummary(); });
   cadSummary();
@@ -457,7 +505,7 @@ $("#q-name").addEventListener("input", () => {
     }).join("") || `<p class="meta">Nothing found.</p>`;
     $$("#q-sugg [data-name]").forEach(b => b.onclick = async () => {
       b.disabled = true;
-      try { W.last = await api("/api/work/add", { json: { kind: "new", target: b.dataset.name } }); b.textContent = "In the queue"; renderQueue(); }
+      try { W.last = await api("/api/work/add", { json: { kind: "new", target: b.dataset.name } }); b.textContent = "In the queue"; renderQueue(); workMoved(W.last); }
       catch (e) { b.disabled = false; showError(e.message, "Couldn't add that"); }
     });
   }, 450);
@@ -477,6 +525,33 @@ setInterval(() => { W.open = !$("#view-train").hidden || !$("#q-drawer").hidden 
 document.addEventListener("uc:module", e => { if (e.detail === "doubleagent") { loadQueue(); loadCandidates(); } });
 
 // a job finished somewhere (this page, another tab, the queue, the API): refresh what it may have changed
+// The one "how long" (smallfix5, POST /api/work/estimate {kind, target, mode}): minutes per step and a total, the cadence included for a new speaking voice.
+// estimateFor() asks once per question and keeps the answer; estWords(key) reads what has arrived ("" until then) so a card can draw now and fill in.
+const EST = { asked: new Map(), got: new Map() };
+const estKey = (kind, target, mode) => `${kind}|${String(target || "").trim().toLowerCase()}|${mode || ""}`;
+function estimateFor(kind, target = "", mode = null) {
+  const key = estKey(kind, target, mode);
+  if (!EST.asked.has(key)) EST.asked.set(key, api("/api/work/estimate", { json: { kind, target: String(target || "").trim(), ...(mode ? { mode } : {}) } })
+    .then(e => { EST.got.set(key, e); return e; }).catch(() => null));
+  return EST.asked.get(key);
+}
+const estWords = (kind, target, mode) => { const e = EST.got.get(estKey(kind, target, mode)); return e && e.total ? etaWords({ low: e.total * 60, high: e.total * 60 }) : ""; };
+// a tonight add answers starts_at (and start_default when no start time was saved): say when it starts, and where to change it
+// (smallfix6: starts_now when the night is already open; waits_next_night when Finish by leaves no room for it)
+const startsNote = r => !r ? "" : r.waits_next_night ? " It waits for the next night (or start it earlier in SafeHouse's Running room)."
+  : r.starts_now ? " It starts now."
+  : r.starts_at ? ` It starts at ${clock(r.starts_at)}${r.start_default ? ", the default: change it in SafeHouse's Running room" : ""}.` : "";
+// what a pause waits for (the status's running rows carry pausing_note: "Pausing at the end of this step (removing music and noise)")
+const pausingNote = j => ((W.work?.running || []).find(r => !j || r.job === j.id && r.pausing_note) || {}).pausing_note || "";
+// /api/work/add answers `moved` when that voice was training live right now: it is paused and put in tonight's queue (it goes on from where it stopped).
+// Said instead of "Added to tonight"; returns true when it was.
+// removing a voice item answers a `note`: its project and downloads stay (nothing is deleted; Storage > Clean up can tidy them)
+function removedNote(r) { if (r && r.note) showError(r.note, "Removed from tonight", null, true); }
+function workMoved(r) {
+  if (!r || !r.moved) return false;
+  showError(r.moved, "Moved to tonight", null, true);
+  return true;
+}
 document.addEventListener("uc:jobdone", e => {
   const k = e.detail.kind;
   if (!["train", "train-auto", "train-export", "train-prepare", "train-transcribe", "night", "install", "auto"].includes(k)) return;

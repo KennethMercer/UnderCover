@@ -2,6 +2,25 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-17-pass9",
+      "date": "2026-10-17",
+      "title": "Backing voice shown, Let it speak asks first",
+      "lines": [
+        "A backing voice carried over from \"Use these settings\" is named in the summary, with one click to drop it.",
+        "Let it speak asks Now or Tonight and says how long it takes. A paused job shows as paused on DoubleAgent."
+      ]
+    },
+    {
+      "id": "2026-10-16-polish",
+      "date": "2026-10-16",
+      "title": "Clearer Running room, tabs and scores",
+      "lines": [
+        "SafeHouse's Running room is panels like the rest of the app, and the room tabs read as tabs.",
+        "The overnight report says it in words: better, about the same, waiting for your ear. The decimals are in Deep Cover.",
+        "A one-shot cover asks which voice to use when you already have one that matches. Your voices has filters, and Train my own offers Now or Tonight on the card."
+      ]
+    },
+    {
       "id": "2026-10-15-finish-by",
       "date": "2026-10-15",
       "title": "Finish by shows its time again",

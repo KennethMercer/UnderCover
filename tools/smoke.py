@@ -1870,6 +1870,430 @@ def u_queue_pack():
     return "short item past a long one; no deadline in order; cadence after its voice (queued, paused, done); retry_after"
 
 
+@check("Train tonight instead while that voice trains live isn't both (smallfix2): adding it pauses the live job and moves it to tonight's queue from its resume point; one queue item per person; a voice made from the queue right now is refused")
+def u_queue_live():
+    from undercover.core import jobs as J, worklist
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import api as DA, night, project as P
+    import undercover.doubleagent.cadence  # noqa: F401 - registers newcad
+
+    def refused(fn, word):
+        try:
+            fn()
+        except ModelError as e:
+            assert word in str(e), e
+            return
+        raise AssertionError(f"not refused ({word})")
+    with isolated_data():
+        worklist._STATE = None
+        proj = P.Project.create("Plankton from SpongeBob", "speaking")
+        proj.phrases = [P.Phrase(id="p1", source="s", start=0.0, dur=1.0)]   # something to train on
+        proj.save()
+        job = J.Job("train-auto")
+        job.resume_spec = {"kind": "auto", "project": proj.name, "label": "Making a voice of Plankton"}
+
+        class Ctl:
+            pause = stop = False
+        DA.ACTIVE[proj.name] = {"job": job, "control": Ctl(), "kind": "auto"}
+        try:
+            out = worklist.add("new", "plankton from spongebob", mode="speaking")   # what #da-tonight sends
+            assert "moved" in out and job.pausing, out
+            assert not [i for i in worklist._state()["queue"] if i["kind"] == "new"], "queued as well as live"
+            job.finish("paused", message="Paused.")                              # the training stops at its next step
+            worklist.remember(job)                                               # (jobs.run_job does this)
+        finally:
+            DA.ACTIVE.pop(proj.name, None)
+        q = [i for i in worklist._state()["queue"] if i["state"] == "queued"]
+        assert [(i["kind"], i["target"]) for i in q] == [("project", proj.name)], q
+        assert not worklist._state()["resume"] and not worklist.held(), worklist._state()
+        # one item per person, whichever kind: nothing running now
+        refused(lambda: worklist.add("new", "Plankton from SpongeBob"), "already in the queue")
+        refused(lambda: worklist.add("newcad", "plankton from spongebob"), "already in the queue")
+        worklist.add("newcad", "Kristen Schaal")
+        refused(lambda: worklist.add("new", "kristen schaal", mode="speaking"), "already in the queue")
+        # the voice being made from the queue right now: refused, not paused
+        night_job = J.Job("night")
+        DA.ACTIVE[proj.name] = {"job": night_job, "control": None, "kind": "auto"}
+        try:
+            refused(lambda: worklist.add("new", "Plankton from SpongeBob"), "from tonight's queue right now")
+            assert not night_job.pausing
+        finally:
+            DA.ACTIVE.pop(proj.name, None)
+        worklist._STATE = None
+    return "live Do it all -> paused + moved as its project item; no duplicate; one per person; a queue run refused"
+
+
+@check("starting the queue goes on with its paused items first (smallfix2, ARCHITECTURE known bug 'Paused queue item is skipped'): arming turns them back to queued, in queue order")
+def u_arm_paused():
+    from undercover.core import worklist
+    with isolated_data():
+        worklist._STATE = None
+        st = worklist._state()
+        st["queue"] = [{"id": "a", "kind": "new", "target": "A", "state": "done"},
+                       {"id": "b", "kind": "new", "target": "B", "state": "paused"},
+                       {"id": "c", "kind": "new", "target": "C", "state": "queued"},
+                       {"id": "d", "kind": "new", "target": "D", "state": "paused"}]
+        st["held"] = True
+        worklist.arm("02:00")
+        q = worklist._state()["queue"]
+        assert [i["state"] for i in q] == ["done", "queued", "queued", "queued"] and [i["id"] for i in q] == list("abcd"), q
+        assert worklist._state()["armed"] and not worklist.held()
+        worklist._STATE = None
+    return "paused B and D queued again in place; armed, not held"
+
+
+@check("a one-shot asks which voice when downloaded voices match (smallfix3, 'Ask me each time'): use one now / check against real clips / train a better one, each with its time; /api/auto takes voice_choice and does exactly that; candidate ids listed once; the check's own countdown")
+def u_voice_ask():
+    import inspect
+    from undercover.core.voices import ModelError, get_voice
+    from undercover.frontman import ambiguity, api as FA, oneshot
+    from undercover.doubleagent import service
+    with isolated_data():
+        _voice_dir("plankton-spongebob", {"person": "Plankton"})
+        _voice_dir("plankton-2", {"person": "Plankton"})
+        vs = [get_voice("plankton-spongebob"), get_voice("plankton-2")]
+        ch = oneshot.voice_choices("plankton", vs)
+        assert [c["choice"] for c in ch] == ["use:plankton-spongebob", "use:plankton-2", "check", "train"], ch
+        use, chk, tr = ch[0]["eta_s"], ch[2]["eta_s"], ch[3]["eta_s"]
+        assert use["low"] < chk["low"] < tr["low"] and "trains one" in ch[2]["detail"], ch
+        assert all(oneshot.VOICE_CHOICE.fullmatch(c["choice"]) for c in ch)
+        assert not oneshot.VOICE_CHOICE.fullmatch("use:../x") and not oneshot.VOICE_CHOICE.fullmatch("delete")
+        # the plan: asks, and lists each candidate once (an online result already installed was listed twice)
+        real = (ambiguity.settle, ambiguity.recall, ambiguity.choices_for, service.installed_for, service.online_for,
+                service.subject_of)
+        ambiguity.settle = lambda req, search=None: req
+        ambiguity.recall = lambda *a, **k: None
+        ambiguity.choices_for = lambda *a, **k: []
+        service.installed_for = lambda person: vs
+        service.online_for = lambda person, n: [type("R", (), {"name": "plankton-spongebob"})()]
+        service.subject_of = lambda *a, **k: None
+
+        class H:
+            out = err = None
+
+            def _json(self, obj, status=200):
+                self.out = obj
+
+            def _error(self, msg, status=400):
+                self.err = msg
+        h = H()
+        try:
+            FA._auto_plan(h, "pink pony club as plankton", False)
+        finally:
+            (ambiguity.settle, ambiguity.recall, ambiguity.choices_for, service.installed_for, service.online_for,
+             service.subject_of) = real
+        v = (h.out or {}).get("voice") or {}
+        assert v.get("how") == "check" and v["candidate_ids"] == ["plankton-spongebob", "plankton-2"], (h.out, h.err)
+        assert h.out["voice_ask"] and [c["choice"] for c in h.out["voice_choices"]][-2:] == ["check", "train"]
+        # the answer: "use:" uses that voice as it is, no check; one that's gone is refused
+        real_inst = service.installed_for
+        service.installed_for = lambda person: vs
+        pushed, plan = [], {}
+        try:
+            got = service.resolve_voice(None, "plankton", False, None, lambda *a, **k: pushed.append(a[2]), plan,
+                                        choice="use:plankton-2")
+            assert got.name == "plankton-2" and "your pick" in plan["voice"]["checked"] and "as you picked" in pushed[-1]
+            try:
+                service.resolve_voice(None, "plankton", False, None, lambda *a, **k: None, {}, choice="use:gone-uc")
+                raise AssertionError("a gone voice was used")
+            except ModelError:
+                pass
+        finally:
+            service.installed_for = real_inst
+    src = inspect.getsource(service.resolve_voice)
+    assert "against real clips" in src and 'plan["voice_until"]' in src, "the check's message / its own time"
+    assert 'plan.get("voice_until")' in inspect.getsource(oneshot.run) and "voice_choice" in inspect.getsource(oneshot.start_oneshot)
+    return f"choices use x2 / check / train ({use['low']} < {chk['low']} < {tr['low']} s); ids once; use: used as picked"
+
+
+@check("the overnight report in words (smallfix4): before_word / after_word, outcome new / waiting / better / same / not_better (SAME = 0.02), and a note_plain with no decimals")
+def u_report_words():
+    import re as _re
+    from undercover.core.worklist import SAME, report_words
+    cases = [
+        ("improve", {"before": 0.70, "after": 0.76, "pending": True, "note": "measured 0.76 against 0.7"}, "waiting"),
+        ("project", {"after": 0.81, "pending_for": "x-uc"}, "waiting"),
+        ("new", {"after": 0.82, "note": "'x-uc' added"}, "new"),
+        ("newcad", {"after": None, "cadence": {"after": 0.3, "note": "cadence 0.31"}}, "new"),
+        ("improve", {"before": 0.66, "after": 0.66 + SAME + 0.01}, "better"),
+        ("improve", {"before": 0.70, "after": 0.71}, "same"),
+        ("improve", {"before": 0.72, "after": 0.66}, "not_better"),
+        ("cadence", {"after": 0.3, "replaced": False, "note": "none beat the current cadence 0.31"}, "not_better"),
+        ("cadence", {"after": 0.3, "replaced": True}, "better"),
+        ("cadence", {"after": 0.3, "replaced": False, "pending": True}, "waiting"),
+        ("smaller", {"note": "measured 0.76 against 0.7, kept"}, None),
+    ]
+    for kind, res, want in cases:
+        w = report_words(kind, res, "Morgan Freeman")
+        assert w["outcome"] == want, (kind, res, w)
+        assert w["note_plain"] and not _re.search(r"\d\.\d", w["note_plain"]), w
+    w = report_words("improve", {"before": 0.70, "after": 0.76, "pending": True}, "Morgan Freeman")
+    assert (w["before_word"], w["after_word"]) == ("good", "good") and "waits beside" in w["note_plain"], w
+    assert "kept" not in report_words("new", {"after": 0.82}, "X")["note_plain"].lower()
+    return "waiting / new / better / same / not_better, words on the trained cut-offs, no decimals"
+
+
+@check("likeness and person for the voice cards (smallfix4): a trained voice's word falls back to its own save's identity (same run only); a downloaded voice without a checked person gets one guessed from its display name (never stored, never the folder; renaming corrects it), so Improve and Let it speak open up; the name guard is unchanged")
+def u_person_guess():
+    from types import SimpleNamespace
+    from undercover.core import cadence as C
+    from undercover.core.config import path
+    from undercover.core.voices import (ModelError, get_voice, likeness_word, person_guessed, set_display, voice_person,
+                                        voices_dir)
+    from undercover.doubleagent import cadence, night
+    from undercover.doubleagent.api import check_voice_name
+    with isolated_data():
+        # likeness: the project's own save for that epoch, only while the project still names this voice
+        _voice_dir("tr-uc", {"trained": True, "project": "tr", "epoch": 8, "likeness": None})
+        pj = path("cache_dir") / "training" / "tr"
+        pj.mkdir(parents=True)
+
+        def proj(exported):
+            (pj / "project.json").write_text(json.dumps({"name": "tr", "person": "Tr", "train": {"exported": exported, "saves": [
+                {"epoch": 8, "identity": 0.81}, {"epoch": 16, "identity": 0.5}]}}), encoding="utf-8")
+            import os as _os, time as _t
+            _os.utime(pj / "project.json", (_t.time() + len(exported), _t.time() + len(exported)))
+        proj("tr-uc")
+        assert likeness_word(get_voice("tr-uc")) == "great"
+        proj("tr-other-uc")                                   # a later run of the project: its saves aren't this voice's
+        assert likeness_word(get_voice("tr-uc")) is None
+        # person: checked, guessed, trained, demo
+        _voice_dir("squidward-tentacles", {})
+        _voice_dir("charliekirkrvc2", {})
+        _voice_dir("plankton-x", {"person": "Plankton"})
+        _voice_dir("agent-smoke", {"demo": True})
+        got = {n: (voice_person(get_voice(n)), person_guessed(get_voice(n))) for n in
+               ("squidward-tentacles", "charliekirkrvc2", "plankton-x", "agent-smoke", "tr-uc")}
+        assert got["squidward-tentacles"] == ("Squidward Tentacles", True) and got["charliekirkrvc2"] == (None, False), got   # one unknown word: no guess (P9-5)
+        assert got["plankton-x"] == ("Plankton", False) and got["agent-smoke"] == (None, False), got
+        set_display("squidward-tentacles", "Squid Ward")      # the user corrects it by renaming the display
+        v = get_voice("squidward-tentacles")
+        assert voice_person(v) == "Squid Ward" and v.dir.name == "squidward-tentacles" and "person" not in v.extra
+        real = C.engine_ready
+        C.engine_ready = lambda e: True
+        try:
+            assert cadence.can_train(v) == (True, "finds clips of Squid Ward first")
+            assert not cadence.can_train(get_voice("agent-smoke"))[0]
+            rows = {c["voice"]: c for c in night.candidates()}
+            assert rows["squidward-tentacles"]["can"] and rows["squidward-tentacles"]["person_guessed"], rows["squidward-tentacles"]
+            assert rows["squidward-tentacles"]["target"] == "Squid Ward" and not rows["plankton-x"]["person_guessed"]
+        finally:
+            C.engine_ready = real
+        # the name guard is as before: another voice's folder is refused, a new name isn't
+        p = SimpleNamespace(name="squidward")
+        try:
+            check_voice_name(p, "squidward-tentacles")
+            raise AssertionError("another voice's folder accepted")
+        except ModelError:
+            pass
+        check_voice_name(p, "squidward-uc")
+    return "likeness from its own save; guessed persons; Squidward corrected by its display; cards open; guard unchanged"
+
+
+@check("'tonight' is tonight (Internal Affairs P8-2): a tonight add arms the queue for the saved start time (23:00 when none, said so), never for now; an emptied queue disarms; Start now is one-time and goes back to the start time once dry; tonight's items (a move to the queue too) wait for the night")
+def u_tonight():
+    from datetime import datetime
+    from undercover.core import worklist
+    real = worklist.estimate, worklist.datetime
+    evening, night = datetime(2026, 10, 16, 20, 0), datetime(2026, 10, 17, 2, 30)
+
+    class Evening(datetime):   # the answers are read in the evening, whatever the clock says
+        @classmethod
+        def now(cls, tz=None):
+            return evening
+    worklist.estimate = lambda i: {"total": 30}
+    worklist.datetime = Evening
+    try:
+        with isolated_data():
+            worklist._STATE = None
+            out = worklist.add("new", "Kristen Schaal")
+            st = worklist._state()
+            assert st["armed"] and not st.get("start_now") and out["starts_at"] == "23:00" and out.get("start_default"), out
+            assert st["queue"][0].get("night")
+            st["settings"]["start_at"] = "02:00"                       # the user's own start time
+            st["queue"].clear(); st["armed"] = False
+            out = worklist.add("new", "Kristen Schaal")
+            assert out["starts_at"] == "02:00" and not out.get("start_default"), out
+            assert worklist.next_item(st, evening) is None and st["armed"], "tonight ran in the evening"
+            assert worklist.next_item(st, night)["target"] == "Kristen Schaal"
+            # an emptied queue disarms: a later tonight add waits for the night instead of starting at once
+            st["queue"].clear()
+            assert worklist.next_item(st, evening) is None and not st["armed"]
+            # Start now: one-time; tonight's adds meanwhile wait; dry -> back to the saved start time
+            worklist.add("new", "Jon Stewart")
+            worklist.arm(None)
+            a = worklist.next_item(st, evening)
+            assert a and a["target"] == "Jon Stewart" and st["start_now"] and st["settings"]["start_at"] == "02:00"
+            a["state"] = "running"
+            worklist.add("new", "Kristen Schaal")                      # e.g. a paused job moved to the queue
+            assert worklist.next_item(st, evening) is None, "a tonight add ran during the Start now"
+            a["state"] = "done"
+            assert worklist.next_item(st, evening) is None and not st["start_now"] and st["armed"]
+            assert worklist.next_item(st, night)["target"] == "Kristen Schaal"
+            # an older Start now (it cleared the start time) is read as one
+            st["settings"]["start_at"] = None
+            st.pop("start_now", None)
+            for i in st["queue"]:
+                i.pop("night", None)                                  # (items from before had no flag)
+            assert worklist.next_item(st, evening)["target"] == "Kristen Schaal" and st["settings"]["start_at"] == "23:00"
+            worklist._STATE = None
+    finally:
+        worklist.estimate, worklist.datetime = real
+    return "arms for 23:00 (default, said) / 02:00 (saved); evening no, night yes; empty disarms; Start now one-time"
+
+
+@check("the small P8 fixes: the hold lifts when nothing held is left (P8-6), a Remove says what stays; time left never climbs (P8-3); plain messages with a clock time (P8-7/9); a gone candidate isn't offered (P8-7); measured check times and 'them' (P8-4); one estimator (P8-10)")
+def u_p8_small():
+    import inspect
+    from unittest import mock
+    from undercover.core import jobs as J, voices as V, worklist
+    from undercover.core.voices import ModelError, get_voice
+    from undercover.doubleagent import improved, night, service, sources
+    from undercover.frontman import oneshot, songs
+    with isolated_data():
+        worklist._STATE = None
+        st = worklist._state()
+        st["queue"] = [{"id": "p1", "kind": "new", "target": "Jon Stewart", "state": "paused"}]
+        st["held"] = True
+        out = worklist.remove("p1")
+        assert not out["held"] and "Storage" in out["note"], out
+        worklist._STATE = None
+        # a candidate whose folder is gone isn't offered
+        _voice_dir("spongebob-uc", {"trained": True, "improved_pending": {"voice": "spongebob-uc-next"}})
+        assert improved.state("spongebob-uc") is None
+        try:
+            get_voice("nope-uc")
+            raise AssertionError("found")
+        except ModelError as e:
+            assert "python" not in str(e) and "installed:" not in str(e), e
+        # measured check times lead the estimate
+        service._record_check("clips_new", 280.0)
+        service._record_check("per_voice", 120.0)
+        assert service.check_estimate_s("Nobody Here", 3) == 280.0 + 360.0
+        ch = oneshot.voice_choices("plankton", [get_voice("spongebob-uc")], others=2)
+        assert ch[1]["label"].startswith("Check them")
+        e = worklist.estimate_for("new", "Kristen Schaal", "speaking")
+        assert e["cadence"] and e["total"] == e["prepare"] + e["train"] + e["compare"] + e["cadence"], e
+    for mod in (sources, songs):
+        assert "top right" not in inspect.getsource(mod), mod.__name__
+    assert "Trying again at" in inspect.getsource(worklist) and "in an hour." not in inspect.getsource(worklist)
+    # time left: one step's progress stalling and restarting can't make it climb (766 s -> 4817 s)
+    job = J.Job("night")
+    job.planned_s = 900.0
+    t = [1000.0]
+    with mock.patch("undercover.core.jobs.time.time", lambda: t[0]):
+        lefts = []
+        for k in range(80):
+            t[0] += 1.5
+            p = 0.26 + 0.002 * (k % 20)                                 # crawls, restarts every 20 updates
+            job.push(stage="night", frac=p, message="Preparing clips: removing music and noise")
+            lefts.append(job.events[-1]["total_left"])
+    rises = [b - a for a, b in zip(lefts, lefts[1:])]
+    assert max(lefts) <= lefts[0] * 1.15 and max(rises) < 10, (lefts[0], max(lefts), max(rises))
+    return f"hold lifted; gone candidate hidden; plain texts; check 640 s measured; time left {lefts[0]:.0f}-{max(lefts):.0f} s"
+
+
+@check("Internal Affairs pass 9 (smallfix6): an open night starts now and counts from now (P9-1); Finish by's waiting items said, never promised (P9-2); a person guessed only from a name (P9-5); one reading per name, a show from a downloaded voice, no sources about the word (P9-6); no 'kept only if better'; failed rows say failed")
+def u_p9():
+    import inspect
+    from datetime import datetime
+    from undercover.core import worklist
+    from undercover.core.voices import get_voice, voice_person, voices_dir
+    from undercover.doubleagent import cadence, night, project as P, service, sources, subject
+    real = worklist.estimate, worklist.datetime
+    clock = [datetime(2026, 10, 17, 1, 36)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+    worklist.datetime = Clock
+    try:
+        with isolated_data():
+            worklist._STATE = None
+            worklist.estimate = lambda i: {"total": i.get("_m", 30) if "_m" in i else (48 if i["target"].startswith("Morgan") else 20)}
+            st = worklist._state()
+            st["settings"]["start_at"] = "23:00"
+            out = worklist.add("new", "Kristen Schaal")          # 01:36, the night already on: it starts now
+            assert out["starts_at"] == "01:36" and out["starts_now"] and out["done_by"] == "01:56", out
+            st["queue"].clear(); st["armed"] = False
+            clock[0] = datetime(2026, 10, 16, 20, 0)
+            st["settings"].update(start_at="06:30", finish_by="07:00")
+            out = worklist.add("improve" if "improve" in worklist.KINDS and False else "new", "Morgan Freeman")
+            assert out.get("waits_next_night") and out["done_by"] is None and out["waits"] == 1, out
+            out = worklist.add("new", "Jon Stewart")             # 20 min fits before 7:00
+            rows = {r["target"]: r for r in out["queue"]}
+            assert rows["Morgan Freeman"].get("waits_next_night") and not rows["Jon Stewart"].get("waits_next_night")
+            assert out["start"] == "06:30" and out["done_by"] == "06:50" and not out.get("waits_next_night"), out
+            worklist._STATE = None
+            # P9-5: a person guessed only from a name
+            _voice_dir("model-v2-final", {})
+            _voice_dir("obama", {})
+            _voice_dir("squid-fan", {})
+            m = json.loads((voices_dir() / "squid-fan" / "meta.json").read_text(encoding="utf-8"))
+            m["display"] = "Squid Ward (SpongeBob)"
+            (voices_dir() / "squid-fan" / "meta.json").write_text(json.dumps(m), encoding="utf-8")
+            assert voice_person(get_voice("model-v2-final")) is None and voice_person(get_voice("obama")) is None
+            P.Project.create("Barack Obama", "speaking")
+            assert voice_person(get_voice("obama")) == "Barack Obama"   # one word, a name UnderCover has met
+            assert voice_person(get_voice("squid-fan")) == "Squid Ward"
+            rows = {c["voice"]: c for c in night.candidates()}
+            assert not rows["model-v2-final"]["can"], rows["model-v2-final"]      # no guess: Train my own
+            # P9-6: one reading per name; a downloaded "(SpongeBob)" makes a character
+            reads = iter([{"kind": "person", "label": "x is a real person"}, {"kind": "character", "label": "x is a character"}])
+            real_cls = subject.classify
+            subject.classify = lambda name, *a, **k: next(reads)
+            try:
+                first = service.subject_of("Kristen Schaal")
+                assert service.subject_of("Kristen Schaal") == first and first["kind"] == "person", "the reading flipped"
+                assert service.subject_of("Squid Ward")["kind"] == "character"          # the shown show wins
+                assert service.subject_of("Squid Ward")["show"] == "spongebob"
+                service.subject_of("Kristen Schaal", "character")                       # the user's pick is kept
+                assert service.subject_of("Kristen Schaal")["kind"] == "character"
+            finally:
+                subject.classify = real_cls
+    finally:
+        worklist.estimate, worklist.datetime = real
+        worklist._STATE = None
+    rx = sources.ABOUT_THE_WORD
+    assert rx.search("The Secret Life of Plankton | TED-Ed") and rx.search("Episode 216 - Plankton | Common Descent")
+    assert not rx.search("Plankton's best moments | SpongeBob") and not rx.search("Plankton: every scene, season 3")
+    assert "only if better" not in inspect.getsource(night.candidates)
+    assert "if c.get(k) is not None" in inspect.getsource(cadence.chain_cadence)
+    assert '"outcome": state' in inspect.getsource(worklist._run_item)
+    return "01:36 starts now (done 01:56); 48-min waits, 20-min runs (done 06:50); Final -> none, Obama -> Barack Obama; reading kept"
+
+
+@check("Start at never resumes held work the user paused (smallfix6 addendum): arm() lifts only the queue's own pause; settings() saves a valid HH:MM start_at without arming")
+def u_start_at_hold():
+    from undercover.core import worklist
+    from undercover.core.voices import ModelError
+    with isolated_data():
+        worklist._STATE = None
+        st = worklist._state()
+        st["held"], st["held_by"] = True, "you"
+        st["resume"] = [{"id": "h1", "kind": "oneshot", "text": "pink pony club as plankton", "label": "One-shot"}]
+        out = worklist.arm("02:00")                                    # Start at, the queue empty
+        assert out["held"] and st["resume"] and st["armed"], "Start at lifted the user's hold"
+        worklist.arm(None)                                             # Start now: the same
+        assert st["held"] and st["resume"]
+        st["resume"] = []
+        st["queue"] = [{"id": "q1", "kind": "new", "target": "A", "state": "paused"}]
+        worklist.arm("02:00")                                          # the queue's own pause only: it goes on
+        assert not st["held"] and st["queue"][0]["state"] == "queued"
+        worklist.arm(False)
+        out = worklist.settings(start_at="03:15")
+        assert out["settings"]["start_at"] == "03:15" and not out["armed"], out
+        for bad in ("25:00", "3:15", "soon", 315):
+            try:
+                worklist.settings(start_at=bad)
+                raise AssertionError(f"{bad!r} accepted")
+            except ModelError:
+                pass
+        worklist._STATE = None
+    return "held one-shot stays held through Start at / Start now; queue pause lifts; start_at saved, bad ones refused"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -3086,15 +3510,15 @@ def u_likeness_word():
     from undercover.core.config import path
     from undercover.core.voices import get_voice, likeness_word, voice_info
     with isolated_data():
-        for name, lk in (("zz-t1", 0.5), ("zz-t2", 0.7), ("zz-t3", 0.8)):
+        for name, lk in (("zz-t1", 0.6), ("zz-t2", 0.7), ("zz-t3", 0.8)):
             _fake_voice(name, "trained", {"trained": True, "likeness": lk})
         _fake_voice("zz-t0", "trained", {"trained": True})
         for name in ("zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5"):
             _fake_voice(name, "https://x/y", {"person": "Zed"} if name == "zz-c5" else {})
         (path("cache_dir") / "voice_quality.json").write_text(json.dumps({
-            "zed|a": {"voice": "zz-c1", "score": 0.35}, "zed|b": {"voice": "zz-c2", "score": 0.5},
-            "zed|c": {"voice": "zz-c3", "score": 0.6}, "zed|d": {"voice": "zz-c4", "score": -0.02, "verdict": "bad"},
-            "other|e": {"voice": "zz-c5", "score": 0.7}, "zed|f": {"voice": "zz-c5", "score": 0.32}}), encoding="utf-8")
+            "zed|a": {"voice": "zz-c1", "score": 0.6}, "zed|b": {"voice": "zz-c2", "score": 0.75},
+            "zed|c": {"voice": "zz-c3", "score": 0.85}, "zed|d": {"voice": "zz-c4", "score": -0.02, "verdict": "bad"},
+            "other|e": {"voice": "zz-c5", "score": 0.9}, "zed|f": {"voice": "zz-c5", "score": 0.6}}), encoding="utf-8")
         got = {n: likeness_word(get_voice(n)) for n in ("zz-t0", "zz-t1", "zz-t2", "zz-t3", "zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5")}
         assert got == {"zz-t0": None, "zz-t1": "fair", "zz-t2": "good", "zz-t3": "great", "zz-c1": "fair", "zz-c2": "good",
                        "zz-c3": "great", "zz-c4": "poor", "zz-c5": "fair"}, got   # c5: its own person's check, not another's
@@ -4743,9 +5167,54 @@ def _fake_demo_voice(d: Path):
                                      encoding="utf-8")
 
 
+def _chrome():
+    import shutil
+    return shutil.which("chrome") or shutil.which("google-chrome") or next(
+        (c for c in (r"C:\Program Files\Google\Chrome\Application\chrome.exe", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") if Path(c).is_file()), None)
+
+
+@check("page scripts all parse and load (headless Chrome on the static page; skipped when there is no Chrome)")
+def u_page_syntax():
+    """A script that fails to parse or redeclares a name takes its whole feature with it (P8-1: tutorial.js, two days; a bad regex in app.js
+    would take the page). No server: the web folder is served as /static, the index as /, and the console is read for SyntaxErrors."""
+    import http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            f = web / "index.html" if path == "/" else web / path[len("/static/"):] if path.startswith("/static/") else None
+            if f is None or not f.is_file():
+                self.send_response(404); self.end_headers(); return
+            body = f.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", {".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".json": "application/json"}.get(f.suffix, "application/octet-stream"))
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--enable-logging=stderr", "--v=0",
+                                "--virtual-time-budget=6000", "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"], capture_output=True, text=True, timeout=90)
+    finally:
+        srv.shutdown()
+    bad = [ln.split("CONSOLE", 1)[1][:200] for ln in r.stderr.splitlines() if ":CONSOLE" in ln and ("SyntaxError" in ln or "ReferenceError" in ln)]
+    assert not bad, "a page script doesn't parse or load: " + " | ".join(bad)
+    return "every page script parses and loads"
+
+
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
 def u_page_rules():
     web = ROOT / "undercover" / "web"
+    import re
     tut = (web / "tutorial.js").read_text(encoding="utf-8")
     # M1: the First assignment starts from default settings (a one-shot's backing voice / octave once rode into the cover)
     start = tut[tut.index("async function assignStart()"):tut.index("function assignGo(")]
@@ -4769,8 +5238,33 @@ def u_page_rules():
     da = (web / "doubleagent.js").read_text(encoding="utf-8")
     assert "impHtml" in da and 'data-imp-keep' in da and '"/keep"' in da, "DoubleAgent lost the retrained voice's blind A/B"
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
+    # P8-1: two page scripts declaring the same top-level name make the second one not load at all (a `const AS` in aside.js and tutorial.js killed
+    # the First assignment for two days). Every top-level const / let / class / var / function name must be unique across the scripts index.html loads.
+    ixh = (web / "index.html").read_text(encoding="utf-8")
+    seen = {}
+    for src in re.findall(r'<script src="/static/([^"]+\.js)"', ixh):
+        for nm in re.findall(r"^(?:async\s+)?(?:const|let|var|class|function\*?)\s+([A-Za-z_$][\w$]*)", (web / src).read_text(encoding="utf-8"), re.M):
+            seen.setdefault(nm, []).append(src)
+    clash = {k: v for k, v in seen.items() if len(v) > 1}
+    assert not clash, f"page scripts declare the same top-level name twice (the second script won't load): {clash}"
+    assert "const ASIDE = {" in (web / "aside.js").read_text(encoding="utf-8"), "aside.js's state is ASIDE (tutorial.js owns AS)"
     # qa14: the switch's 16 px box is for the checkbox only; the Finish by time field sits inside the same label and drew as a knob
     css = (web / "app.css").read_text(encoding="utf-8")
+    # qa15: the one-shot asks which voice (voice_ask / voice_choice), a moved work item says so, Your voices has filters, Train my own opens Now / Tonight on the card
+    ix = (web / "index.html").read_text(encoding="utf-8")
+    osj = (web / "oneshot.js").read_text(encoding="utf-8")
+    assert "voice_choice:" in osj and "data-os-vchoice" in osj and "Pick a voice first." in osj, "the one-shot lost its voice question"
+    assert "function workMoved" in work and "workMoved(" in (web / "train.js").read_text(encoding="utf-8"), "work/add's `moved` is no longer said"
+    assert "daFilters" in da and "data-own-go" in da and 'id="da-filters"' in ix, "Your voices lost its filter chips, or Train my own its Now / Tonight"
+    assert "reportOutcome" in work and "reportName(x)" in work and "While you were out" in ix and "REPORT_WORDS" in work, "the overnight report lost its words"
+    # smallfix5 hooks: the one estimator, the tonight start note, the pause note, the paused card, the remove note
+    assert all(k in work for k in ("function estimateFor", "const startsNote", "const pausingNote", "function removedNote")) and "/api/work/estimate" in work, "work.js lost a smallfix5 hook"
+    assert "data-da-resume" in da and 'id="da-train-eta"' in ix and "estWords(" in da, "DoubleAgent lost its paused card or the estimator's time"
+    # qa16 (pass 9): a carried backing voice is said and clearable, a one-shot's pick is drawn at once, Let it speak asks Now / Tonight, the job notifier has a fallback
+    jb = (web / "jobs.js").read_text(encoding="utf-8")
+    assert 'id="clear-backing"' in app and "function drawPlan" in osj and "data-cad-go" in da and "jfTimer" in jb and "saveStartTime" in work, "a pass-9 page fix is gone"
+    # smallfix6 hooks: a tonight add that starts now / waits, queue rows that wait, no times of the page's own in the one-shot
+    assert "starts_now" in work and "waits_next_night" in work and "trainWords" in osj and "about 1 hour" not in osj and "about 1 hour" not in ix, "a smallfix6 hook or an estimator time is gone"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
@@ -5134,6 +5628,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/library/smaller/undo"),
     ("POST", "/api/library/voices/some-voice/full-index"),
     ("POST", "/api/work/to-queue"),
+    ("POST", "/api/work/estimate"),
     ("GET", "/api/train/voices/some-voice/improved"), ("POST", "/api/train/voices/some-voice/improved/keep"),
 ]
 
@@ -6185,6 +6680,21 @@ def a_page():
     return f"4 modules, {len(files)} static files"
 
 
+@check("page: loads in a browser with no uncaught error (headless Chrome; skipped when there isn't one)")
+def a_page_console():
+    import shutil, subprocess, tempfile
+    exe = shutil.which("chrome") or shutil.which("google-chrome") or next(
+        (c for c in (r"C:\Program Files\Google\Chrome\Application\chrome.exe", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") if Path(c).is_file()), None)
+    if not exe:
+        return "no Chrome here: skipped (the unit scan for clashing top-level names still ran)"
+    with tempfile.TemporaryDirectory() as prof:
+        r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--enable-logging=stderr", "--v=0",
+                            "--virtual-time-budget=8000", "--dump-dom", BASE + "/"], capture_output=True, text=True, timeout=90)
+    bad = [ln.split("CONSOLE", 1)[1][:220] for ln in r.stderr.splitlines() if ":CONSOLE" in ln and "Uncaught" in ln]
+    assert not bad, "the page threw on load (a script that fails to load takes its whole feature with it): " + " | ".join(bad)
+    return "no uncaught error on load"
+
+
 @check("api: voices, history, config")
 def a_lists():
     v = api("/api/voices")
@@ -6831,17 +7341,17 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_at_hold, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_page_rules, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_tutorial, u_page_rules, u_page_syntax, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
             BASE = f"http://127.0.0.1:{a.port}"
             print(f"API checks ({BASE}, reads only: anything that makes, deletes or pauses work runs on the sandbox only)")
-            for fn in (a_status, a_page, a_lists, a_library, a_train):
+            for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train):
                 fn()
         else:
             port = sandbox_port()
@@ -6853,7 +7363,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()

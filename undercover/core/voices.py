@@ -752,9 +752,7 @@ def get_voice(name: str) -> Voice:
     for v in list_voices():
         if v.name == slug(name):
             return v
-    names = ", ".join(v.name for v in list_voices()) or "none yet"
-    raise ModelError(f"No voice called '{name}' is installed (installed: {names}). "
-                     f"Search for one with: python -m undercover.core.voices search {name}")
+    raise ModelError(f"There's no voice called {name!r} in your voices (it may have been set aside or removed).")
 
 
 def _titled(s: str) -> str:
@@ -859,8 +857,13 @@ def is_demo(v: Voice) -> bool:
 # export (its own clips; on the user's voices: Peter Griffin 0.50 "weak" by the gate, Obama 0.70 and SpongeBob 0.77
 # approved by ear, Freeman 0.80); a downloaded voice has the voice check's score against the person (good from 0.45,
 # weak from 0.30; the ones it called bad or broken sit near 0, so they're "poor", not unmeasured).
-TRAINED_WORDS = ((0.80, "great"), (0.65, "good"), (-9.0, "fair"))
-CHECKED_WORDS = ((0.55, "great"), (0.45, "good"), (0.30, "fair"), (-9.0, "poor"))
+# One scale for every voice, trained or downloaded (Internal Affairs P8-11: a downloaded Plankton at 0.757 read "great"
+# beside Morgan Freeman's 0.795 "good"). Both numbers are the same kind: speaker-embedding likeness to the person. The
+# voice lab's frozen test (docs/research/phase26-improve.md, branch phase26-improve) finds a person's voices saturate
+# at 0.75-0.85 with about +-0.01-0.015 scoring noise, so "great" starts at 0.80, "good" covers the usual 0.70-0.80
+# band, "fair" is a voice that's like them but clearly short, and "poor" is unlike them.
+LIKENESS_WORDS = ((0.80, "great"), (0.70, "good"), (0.55, "fair"), (-9.0, "poor"))
+TRAINED_WORDS = CHECKED_WORDS = LIKENESS_WORDS
 _QCACHE: dict = {"key": None, "data": {}}
 
 
@@ -881,13 +884,101 @@ def _checked_score(v: Voice) -> float | None:
     return max(float(q["score"]) for q in pick) if pick else None
 
 
+def word_of(score, words=TRAINED_WORDS) -> str | None:
+    """A likeness number as people read it ("great" / "good" / "fair"), None when there's none."""
+    if not isinstance(score, (int, float)):
+        return None
+    return next(w for cut, w in words if score >= cut)
+
+
+_LIKE: dict = {}   # project.json (path, mtime) -> its saves' identities by epoch
+
+
+def trained_likeness(v: Voice) -> float | None:
+    """A trained voice's likeness: extra.likeness (written at export), else the identity its training project measured
+    for the very save it was made from (same run: the project still names this voice and that epoch's save is there).
+    Read from the project's file (core reads no module)."""
+    ex = v.extra or {}
+    if ex.get("likeness") is not None:
+        return ex["likeness"]
+    if not ex.get("project") or ex.get("epoch") is None:
+        return None
+    f = path("cache_dir") / "training" / ex["project"] / "project.json"
+    try:
+        key = (str(f), f.stat().st_mtime_ns)
+        if key not in _LIKE:
+            st = (json.loads(f.read_text(encoding="utf-8")).get("train") or {})
+            _LIKE.clear()   # one project at a time is plenty: lists read each voice's own once per change
+            _LIKE[key] = (st.get("exported"), {s.get("epoch"): s.get("identity") for s in st.get("saves", [])})
+        exported, ids = _LIKE[key]
+    except (OSError, ValueError, AttributeError):
+        return None
+    return ids.get(ex["epoch"]) if exported in (v.name, ex.get("pending_for")) else None
+
+
 def likeness_word(v: Voice) -> str | None:
     """"great" | "good" | "fair" ("poor": a downloaded voice the check found unlike the person) | None (not measured)."""
     ex = v.extra or {}
-    score, words = (ex.get("likeness"), TRAINED_WORDS) if ex.get("trained") else (_checked_score(v), CHECKED_WORDS)
-    if score is None:
+    if ex.get("trained"):
+        return word_of(trained_likeness(v))
+    return word_of(_checked_score(v), CHECKED_WORDS)
+
+
+_GUESS_NOISE = re.compile(r"(?i)\b(rvc\d*|v\d+|uc|model|voice|ai|hq|e\d+|s\d+|\d+k?)\b|rvc\d*$")
+# words that are never a name (P9-5: "model-v2-final" became "Final", and Let it speak searched YouTube for it)
+_NOT_A_NAME = {"final", "best", "new", "test", "my", "latest", "old", "fixed", "clean", "good", "better", "official",
+               "edit", "remix", "version", "beta", "alpha", "copy", "backup", "sample", "trained", "pretrained", "pth",
+               "index", "the", "a", "of", "and", "full", "small", "large", "big", "mini", "lite", "pro", "hd", "default",
+               "singing", "speaking", "talking", "speech", "vocals", "vocal", "male", "female", "deep", "high", "low",
+               "un", "nouveau", "neu", "train", "training", "epoch", "step", "steps", "mix", "custom"}
+
+
+def _known_names() -> list[str]:
+    """People and characters UnderCover has met: its projects' persons and the voice checks' persons (files only)."""
+    out = []
+    for f in (path("cache_dir") / "training").glob("*/project.json"):
+        try:
+            p = json.loads(f.read_text(encoding="utf-8")).get("person")
+        except (OSError, ValueError):
+            continue
+        if p:
+            out.append(str(p))
+    try:
+        for k in json.loads((path("cache_dir") / "voice_quality.json").read_text(encoding="utf-8")):
+            out.append(k.split("|")[0].replace("-", " "))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return out
+
+
+def voice_person(v: Voice) -> str | None:
+    """Whose voice it is: a trained voice's person; a downloaded one's checked person (extra.person); else, for a
+    downloaded voice that isn't the demo, a GUESS from its display name (the user's name for it, else the tidied folder
+    name: "Squidward Tentacles"). Never stored, never the folder: renaming the display corrects it."""
+    ex = v.extra or {}
+    if ex.get("trained"):
+        return trained_person(v) or None
+    if str(ex.get("person") or "").strip():
+        return ex["person"].strip()
+    if is_demo(v):
         return None
-    return next(w for cut, w in words if score >= cut)
+    shown = re.sub(r"\([^)]*\)", " ", display_name(v))   # "Plankton (SpongeBob)": the show isn't the name
+    words = [w for w in re.sub(r"\s+", " ", _GUESS_NOISE.sub(" ", shown)).strip(" -_").split()
+             if w.lower().strip(".,'") not in _NOT_A_NAME and not w.isdigit()]
+    if len(words) >= 2:
+        return " ".join(words)
+    if len(words) == 1 and len(words[0]) >= 3:   # one word: only a name UnderCover has met ("Obama" -> "Barack Obama")
+        w = words[0].lower()
+        for known in _known_names():
+            kw = [x.lower() for x in re.split(r"[\s-]+", known) if x]
+            if w in kw:
+                return known.title() if known == known.lower() else known
+    return None   # no good guess: the card offers Train my own
+
+
+def person_guessed(v: Voice) -> bool:
+    ex = v.extra or {}
+    return not ex.get("trained") and not str(ex.get("person") or "").strip() and voice_person(v) is not None
 
 
 def voice_info(v: Voice) -> dict:
