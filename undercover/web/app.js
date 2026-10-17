@@ -23,16 +23,24 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
 };
 
+// The first time a real person's voice is about to be made, one calm line, once (consult 6): on the one-shot's plan when it will train, and with
+// DoubleAgent's first Train press. The First assignment's brief keeps its own line.
+const PERSON_WARN = "For personal use: don't pass the result off as the real person.";
+const personWarned = () => !!store.get("uc-person-warned", false);
 // Deep Cover (ARCHITECTURE "UI backlog"): expert-only elements carry data-deep and stay hidden unless body.deep. The
 // switch is remembered (localStorage uc-deep); a Settings room will carry it too.
 // The quick switch in the top bar (#deep-toggle, phase 5) and typing "deepcover" both flip it.
 function setDeep(on) {
   document.body.classList.toggle("deep", on); store.set("uc-deep", on);
   $("#deep-toggle")?.setAttribute("aria-pressed", on);
+  // the first flip (and only the first) gets one line under the top bar (consult 8): the page doubles in a frame, and this says what happened
+  const first = $("#deep-first");
+  if (first) { if (on && !store.get("uc-deep-seen", false)) first.hidden = false; else first.hidden = true; }
   $("#set-deep")?.setAttribute("aria-checked", on);   // the switch in SafeHouse's Settings room
 }
 setDeep(!!store.get("uc-deep", false));
 $("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
+$("#deep-first-ok")?.addEventListener("click", () => { store.set("uc-deep-seen", true); $("#deep-first").hidden = true; });
 $("#set-deep")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
 let deepTyped = "";
 
@@ -409,7 +417,7 @@ function renderVoices() {
   const shownList = typeof earSort === "function" ? earSort(list) : list;   // the ones you've liked rise (ear.js)
   const box = $("#voices");
   const kept = document.activeElement?.dataset?.rm;   // a keyboard user on a Remove button stays on it when the list draws again
-  if (!S.voices.length && !q) box.innerHTML = `<p class="meta">No voices yet. Search for one here (try “spongebob”), drop a .zip/.pth, train your own in <b>DoubleAgent</b>, or just type a request in the box at the top of the page.</p>`;
+  if (!S.voices.length && !q) box.innerHTML = `<div class="empty"><b>No voices yet.</b><button class="btn" type="button" data-goto="doubleagent">Get a voice</button><small class="meta">or search above (try “spongebob”)</small></div>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
   else box.innerHTML = shownList.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
