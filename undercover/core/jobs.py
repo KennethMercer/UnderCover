@@ -165,6 +165,9 @@ class Job:
         self.stage_secs: dict = {}   # finished stages -> seconds (learned for the next estimate)
         self._stage = None        # (name, started, first progress (t, p))
         self._p0 = None           # first whole-job progress (t, p)
+        self.planned_s = None     # the whole job's own estimate, when it has one (queue items, Do it all)
+        self.after_eta_s = 0.0    # what follows a training's own eta (export, compare, cadence)
+        self._left = None         # the last time left said (value, t): it never climbs fast (P8-3)
 
     def push(self, **ev):
         with self.cond:
@@ -188,7 +191,7 @@ class Job:
         if ev.get("total_left") is not None:
             return
         if ev.get("eta") is not None:
-            ev["total_left"] = ev["eta"]
+            ev["total_left"] = self._said(ev["eta"] + (self.after_eta_s or 0.0), now)
             return
         p = ev.get("frac", ev.get("fraction"))
         if p is None or p < 0:
@@ -215,10 +218,28 @@ class Job:
             return
         if self._p0 is None and p > 0:
             self._p0 = (now, p)
-        if self._p0 and p - self._p0[1] > 0.01 and now - self._p0[0] > 2:
-            ev["total_left"] = round((now - self._p0[0]) * (1 - p) / (p - self._p0[1]), 1)
+        left = None
+        if self.planned_s:   # the whole job's estimate first, its measured progress taking over as it goes
+            el = now - self.started
+            plan_left = max(self.planned_s * (1 - p), self.planned_s - el, 0.0)
+            w = min(1.0, max(0.0, (p - 0.05) / 0.45))
+            left = w * (el / p * (1 - p)) + (1 - w) * plan_left if p > 0.05 else plan_left
+        elif self._p0 and p - self._p0[1] > 0.01 and now - self._p0[0] > 2:
+            left = (now - self._p0[0]) * (1 - p) / (p - self._p0[1])
         elif typical(self.kind):
-            ev["total_left"] = round(max(0.0, typical(self.kind) - (now - self.started)), 1)
+            left = max(0.0, typical(self.kind) - (now - self.started))
+        if left is not None:
+            ev["total_left"] = self._said(left, now)
+
+    def _said(self, left: float, now: float) -> float:
+        """Time left as said: it counts down, and rises at most 5 % a minute (P8-3: 766 s -> 4817 s in two minutes
+        while one step's progress restarted)."""
+        if self._left is not None:
+            v, t = self._left
+            dt = max(0.0, now - t)
+            left = min(left, max(0.0, v - dt) + max(5.0, v * 0.05 * dt / 60.0))
+        self._left = (left, now)
+        return round(max(0.0, left), 1)
 
     def finish(self, state: str, **ev):
         with self.cond:

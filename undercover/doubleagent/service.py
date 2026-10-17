@@ -12,13 +12,14 @@ Other modules (FrontMan's one-shot, SpeakEasy) use voices through this file only
   cadence_status               has / can make / queued, for a voice row
   start_cadence, start_new_voice   "Train cadence" / "New voice" as queue items (now or tonight)
 """
+import json
 import re
 from pathlib import Path
 import time
 
-from ..core.config import CONFIG
+from ..core.config import CONFIG, path
 from ..core.voices import ModelError, display_name, slug
-from ..core import gpu, jobs
+from ..core import fsutil, gpu, jobs
 from ..core.jobs import Paused
 
 
@@ -269,9 +270,59 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
 
 
 def subject_of(person: str, pick: str | None = None) -> dict:
-    """What a voice request names, read from a quick search (subject.py), with the user's correction or answer."""
+    """What a voice request names, read from a quick search (subject.py), with the user's correction or answer.
+    Stable per name (P9-6: "plankton" read as a cartoon character in one pass and a real person in the next): the
+    first sure reading (or the user's pick) is kept in cache/subjects.json and used again; a downloaded voice named
+    "<name> (<show>)" makes it a character from that show."""
     from .subject import apply_pick, classify
-    return apply_pick(person, {} if pick else classify(person), pick)
+    key = slug(person)
+    memo = _subjects()
+    if pick:
+        r = apply_pick(person, {}, pick)
+        if r.get("kind") in ("person", "character", "role"):
+            memo[key] = r
+            _save_subjects(memo)
+        return r
+    if key in memo:
+        return memo[key]
+    show = _show_hint(person)
+    r = classify(person)
+    if show and (r.get("kind") != "character" or not r.get("show")):   # the downloaded voice names the show
+        r = {"kind": "character", "show": show.lower(), "how": "scenes and voice lines", "evidence": [],
+             "label": f"{person} is a character from {show}: looking for scenes and voice lines from the show, not "
+                      "interviews about it.",
+             "choices": [{"id": "person", "label": f"{person} is a real person"}]}
+    if r.get("kind") in ("person", "character", "singer", "group"):
+        memo[key] = r
+        _save_subjects(memo)
+    return r
+
+
+def _subjects() -> dict:
+    try:
+        return json.loads((path("cache_dir") / "subjects.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_subjects(memo: dict):
+    try:
+        fsutil.write_text(path("cache_dir") / "subjects.json", json.dumps(memo, indent=1))
+    except OSError:
+        pass
+
+
+def _show_hint(person: str) -> str | None:
+    """The show a downloaded voice of this person names in brackets ("Plankton (SpongeBob)"), if any: a voice matched
+    by its folder name, or one whose display name, brackets aside, is the person."""
+    from ..core.voices import list_voices
+    mine = {v.name for v in installed_for(person) or []}
+    for v in list_voices():
+        shown = display_name(v)
+        m = re.search(r"\(([^)]{3,40})\)", shown)
+        if m and (v.name in mine or slug(re.sub(r"\([^)]*\)", " ", shown)) == slug(person)):
+            return m.group(1).strip()
+    return None
 
 
 def _prefetch_voice_sources(person: str, subject: dict | None = None):
@@ -296,8 +347,51 @@ def _prefetch_voice_sources(person: str, subject: dict | None = None):
         pass   # best effort: the normal path does all of this again if needed
 
 
-def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dict):
-    """-> installed Voice to use (training one if nothing measured good enough)."""
+CHECK_CLIPS_S = 300.0     # finding and preparing a few clips of the person when there are none yet (~5 min)
+CHECK_CLIPS_READY_S = 60.0
+CHECK_PER_VOICE_S = 50.0  # one voice checked against them (the reading tests, ~45 s on a free GPU)
+
+
+def check_estimate_s(person: str, voices: int) -> float:
+    """Seconds to check this many voices against real clips of the person (the clips first, when there are none)."""
+    from .night import _project_named
+    proj = _project_named(person)
+    try:
+        ready = proj is not None and proj.kept_seconds() >= 60
+    except Exception:   # noqa: BLE001 - an odd project: the longer way
+        ready = False
+    m = _check_speed()   # measured on this PC (P8-4: 213-253 s promised, about 400 s measured)
+    clips = m.get("clips_ready" if ready else "clips_new") or (CHECK_CLIPS_READY_S if ready else CHECK_CLIPS_S)
+    return clips + (m.get("per_voice") or CHECK_PER_VOICE_S) * max(1, voices)
+
+
+def _check_speed() -> dict:
+    try:
+        return json.loads((path("cache_dir") / "check_speed.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_check(key: str, seconds: float):
+    """A check's measured time, kept as a running average (the next estimate)."""
+    d = _check_speed()
+    d[key] = round(seconds if d.get(key) is None else 0.6 * d[key] + 0.4 * seconds, 1)
+    try:
+        fsutil.write_text(path("cache_dir") / "check_speed.json", json.dumps(d))
+    except OSError:
+        pass
+
+
+def train_estimate_s(person: str) -> float:
+    """Seconds to train a new voice of the person (the queue's own estimate: find, prepare, train)."""
+    from .night import estimate
+    return estimate({"kind": "new", "target": person})["total"] * 60.0
+
+
+def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dict, choice: str | None = None):
+    """-> installed Voice to use (training one if nothing measured good enough).
+    choice: the user's answer to the plan's voice question ("Ask me each time"): "use:<voice>" uses that installed
+    voice now, unchecked; "check" checks the voices against real clips first; "train" trains a better one."""
     from . import voicecheck
     from ..core.voices import download_and_install, get_voice, remove_voice
     from ..core.speaker import SpeakerEmbedder
@@ -311,6 +405,16 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         plan["voice"] = {"name": demo.name, "display": display_name(demo), "how": "installed", "checked": "the demo voice"}
         push("voice", 1.0, f"Using the demo voice “{display_name(demo)}”")
         return demo
+    if choice and choice.startswith("use:"):   # the user's pick, used as it is
+        v = next((c for c in cands if c.name == choice[4:]), None)
+        if v is None:
+            raise ModelError(f"That voice isn't in your voices any more. Ask again to pick another.")
+        plan["voice"] = {"name": v.name, "display": display_name(v), "how": "installed",
+                         "checked": "your pick (not checked against real clips)"}
+        push("voice", 1.0, f"Using “{display_name(v)}”, as you picked")
+        return v
+    if choice == "train":
+        prefer_train = True
     trained = [v for v in cands if v.extra.get("trained")]
     weak_trained = None
     if trained:
@@ -329,9 +433,32 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         cands = [v for v in cands if v.name != weak_trained.name]
     community = [] if prefer_train else cands
     online = [] if prefer_train else online_for(person, 2)
+    have = {slug(v.name) for v in community} | {v.source for v in community if v.source}
+    seen, uniq = set(), []
+    for r in online:   # P8-4: the same candidate was downloaded twice (installed already, or listed twice)
+        key = f"{r.repo}/{r.file}"
+        if key in seen or slug(r.name) in have or getattr(r, "url", None) in have:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    online = uniq
     checked = []
     if community or online:
+        # said as it is, with the check's own time (not a training's worst case: "about 177 min left" looked hung)
+        n = len(community)
+        plan["voice_until"] = time.time() + check_estimate_s(person, n + len(online))
+        push("voice", 0.02, f"Checking your {n} {person} voice{'s' if n != 1 else ''} against real clips" if n
+             else f"Checking community voices of {person} against real clips")
+        t_clips = time.time()
+        from .night import _project_named
+        before = _project_named(person)
+        try:
+            ready_before = before is not None and before.kept_seconds() >= 60
+        except Exception:   # noqa: BLE001 - as check_estimate_s
+            ready_before = False
         proj = reference_clips(job, person, control, push, plan.get("subject"))
+        _record_check("clips_ready" if ready_before else "clips_new", time.time() - t_clips)
+        t_voices = time.time()
         conv, emb = gpu.MODELS.converter, SpeakerEmbedder()
 
         def test(v, ident):
@@ -380,6 +507,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             # ValueError: no other-speaker phrases to test with, so we can't judge them and don't trust them
             checked.append({"name": "-", "verdict": "unknown", "note": "couldn't test (clips had only one speaker)"})
         plan["checked"] = checked
+        tested = [c for c in checked if c.get("verdict") not in (None, "broken", "unknown")]
+        if tested:
+            _record_check("per_voice", (time.time() - t_voices) / len(tested))
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
         from ..core import ear
         good = ear.prefer(good, name=lambda c: c["name"], score=lambda c: c["score"])   # equally good: the liked one
@@ -423,6 +553,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         push("voice", 1.0, f"Using your voice “{display_name(weak_trained)}”, though it's weak")
         return weak_trained
     plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
+    plan["voice_until"] = time.time() + train_estimate_s(person)
     push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 1 hour)"
          + (f". {plan['subject']['label']}" if (plan.get("subject") or {}).get("label") else ""))
     name = train_new_voice(job, person, control, push, subject=plan.get("subject"))

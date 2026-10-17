@@ -412,6 +412,11 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .rn-pl { display: flex; justify-content: space-between; gap: 4px 16px; flex-wrap: wrap; }
 .rn-now-box { display: grid; gap: 10px; }
 .rn-sec { display: grid; gap: 10px; }
+.rn-sec.panel { gap: 12px; }   /* Tonight and Recent are panels like the other rooms' */
+.rn-sec .rn-opts { background: var(--panel-2); border-radius: 10px; padding: 12px 14px; }
+.rn-idle-panel { display: grid; gap: 6px; }
+.rn-idle-panel b { font: 600 16px var(--display); }
+.rn-idle-panel p { margin: 0; }
 .rn-lbl { display: flex; gap: 6px 12px; align-items: baseline; flex-wrap: wrap; }
 .rn-lbl b { font-weight: 600; font-size: 16px; }
 .rn-lbl small { color: var(--muted); font-size: 13.5px; }
@@ -429,7 +434,8 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .rn-opts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 .rn-opts[hidden] { display: none; }
 .rn-more { display: flex; gap: 6px 18px; align-items: baseline; flex-wrap: wrap; }
-.kv2 { display: block; margin-top: 3px; font: 12.5px var(--mono); color: var(--muted); }
+.kv2 { display: block; margin-top: 3px; font: 12.5px var(--mono); color: var(--muted); overflow-wrap: anywhere; min-width: 0; }   /* a long path wraps (it made Deep Cover's System 807 px wide at 375) */
+.sys > span { min-width: 0; }
 .setting.later { opacity: .55; }
 .sys-btns { gap: 12px 18px; }
 .dotw { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; white-space: nowrap; color: var(--muted); }
@@ -597,7 +603,17 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .rn-li .linkbtn[data-goto]:hover { color: var(--fg); }
 
 /* the voice lab's A/B ("Listen and choose", phase 9): the card opens across the row; two readings, A and B */
-.vc:has(#cad-ab) { grid-column: 1 / -1; }
+.vc:has(#cad-ab), .vc:has(.vc-own) { grid-column: 1 / -1; }
+.vc-own { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.vc-own .row { gap: 10px; flex-wrap: wrap; }
+.vc-own .seg { justify-self: start; }
+/* "Your voices" filters: a row of chips per kind of fact; pressing the pressed one clears it */
+.vfilters { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 12px; }
+.vf-group { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.vf-group small { margin-right: 2px; }
+.fchip { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 11px; font-size: 13px; cursor: pointer; }
+.fchip:hover { color: var(--fg); }
+.fchip[aria-pressed="true"] { color: var(--fg); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 #cad-ab { display: grid; gap: 12px; padding-top: 4px; }
 .ab-q { display: grid; gap: 2px; }
 .ab-q b { font-size: 15px; }
@@ -625,7 +641,11 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
   .rn-li .acts { grid-column: 1 / -1; }   /* the state words stay visible, under the name */
   .sys, .setting { grid-template-columns: minmax(0, 1fr); }
   .rn-opts { grid-template-columns: minmax(0, 1fr); }
-  .rn-lbl .end { margin-left: 0; }
+  .rn-lbl .end { margin-left: 0; flex-wrap: wrap; gap: 10px; width: 100%; }
+  .rn-lbl .end .seg { flex: 1 1 auto; }
+  .rn-lbl .end .seg button { flex: 1 1 auto; padding: 7px 8px; }
+  .rn-sec > *, .rn-now-box > * { min-width: 0; }
+  .rn-li { overflow-wrap: anywhere; }
   .rn-more { flex-direction: column; gap: 8px; }
   .rn-more .meta { display: none; }
   #lib-list { max-height: none; }   /* the page scrolls, not the list */
@@ -688,6 +708,13 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
   .mfield { flex-direction: column; }
 }
 .cats { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Kept / Recent and the kinds are one set of filters: one row on a wide page, a rule between the two groups */
+.lib-filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; min-width: 0; }
+.lib-filters .cats { min-width: 0; max-width: 100%; }
+@media (max-width: 760px) { .lib-filters .cats { flex: 1 1 100%; } }   /* the kinds are their own scrolling row on a phone (the row made the page 444 px wide at 375) */
+.lib-filters .tabs { margin: 0; border-bottom: 0; }
+@media (min-width: 761px) { .lib-filters .cats { padding-left: 18px; border-left: 1px solid var(--line); } }
+.lib-filters .tab:disabled { opacity: .55; cursor: default; }
 .cat { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 13px; font-size: 14px; color: var(--muted); }
 .cat b { color: var(--fg); font-weight: 600; }
 .cat small { font: 12px var(--mono); }
@@ -784,6 +811,8 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .qres { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 12px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); }
 .qres .up { color: var(--ok); font-weight: 600; }
 .qres .same { color: var(--muted); font-weight: 600; }
+.qres-r { display: grid; gap: 2px; justify-items: end; text-align: right; align-content: start; }
+.qres-r .meta { font-size: 13px; }
 @media (max-width: 560px) {
   .qadd { grid-template-columns: 1fr; }
   .qjob { grid-template-columns: 1fr; }

@@ -117,7 +117,7 @@ async function trainVoice(person, mode, tonight) {
   if (tonight) {
     W.last = await api("/api/work/add", { json: { kind: "new", target: person, mode } });   // the queue keeps Speaking / Singing
     renderQueue(); refreshJobs(true);
-    return;
+    return W.last;   // `moved` is there when the voice was training live (it was paused and moved to tonight)
   }
   T.list = await api("/api/train/projects");
   const same = T.list.find(x => (x.person || "").toLowerCase() === person.toLowerCase());
@@ -380,8 +380,8 @@ $("#tr-start").onclick = () => startTraining(false);
 $("#tr-tonight").onclick = async () => {
   const b = $("#tr-tonight"); b.disabled = true;
   try {
-    await api("/api/work/add", { json: { kind: "project", project: T.proj.name, voice_name: ownName(), length: $("#tr-length").value, sr: +$("#tr-sr").value } });
-    showError(`${T.proj.person || T.proj.name} trains tonight with your choices. SafeHouse's Running room shows it.`, "On it", null, true);
+    const r = await api("/api/work/add", { json: { kind: "project", project: T.proj.name, voice_name: ownName(), length: $("#tr-length").value, sr: +$("#tr-sr").value } });
+    if (!workMoved(r)) showError(`${T.proj.person || T.proj.name} trains tonight with your choices.${startsNote(r)} SafeHouse's Running room shows it.`, "On it", null, true);
     if (typeof refreshJobs === "function") refreshJobs(true);
     await refresh();
   } catch (e) { b.disabled = false; showError(e.message, "Couldn't queue it"); }

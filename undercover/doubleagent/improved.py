@@ -96,6 +96,8 @@ def state(voice: str) -> dict | None:
     v = get_voice(voice)
     ex = v.extra or {}
     p = ex.get("improved_pending")
+    if p and not (voices_dir() / str(p.get("voice") or "") / "meta.json").exists():
+        p = None   # its folder is gone (set aside, removed by hand): nothing to hear (P8-7)
     # Undo only while what it would bring back is still set aside (Internal Affairs pass 5: undo stayed true after one)
     last = ex.get("improved_previous") or ex.get("improved_turned_down") or {}
     undo = bool(last.get("aside") and (_aside_dir() / last["aside"]).is_dir())

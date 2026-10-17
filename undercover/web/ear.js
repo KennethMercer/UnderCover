@@ -96,10 +96,12 @@ async function earDo(a, kind, item) {
     W.last = await api("/api/work/add", { json: a.body });
     if (typeof renderQueue === "function") renderQueue();
     refreshJobs(true);
+    if (typeof workMoved === "function" && workMoved(W.last)) return;
     const who = voiceDisplay(a.body?.target || "") || "The voice";
-    return showError(a.body?.kind === "improve" ? `${who} improves tonight. SafeHouse's Running room shows it.`
-      : a.body?.kind === "cadence" ? `${who} learns their own cadence tonight. SpeakEasy reads with it once it's done.`
-      : `${who} is in tonight's work. SafeHouse's Running room shows it.`, "On it", null, true);
+    const at = typeof startsNote === "function" ? startsNote(W.last) : "";
+    return showError(a.body?.kind === "improve" ? `${who} improves tonight.${at} SafeHouse's Running room shows it.`
+      : a.body?.kind === "cadence" ? `${who} learns their own cadence tonight.${at} SpeakEasy reads with it once it's done.`
+      : `${who} is in tonight's work.${at} SafeHouse's Running room shows it.`, "On it", null, true);
   }
   if (a.action === "pick_voice") {   // Try another voice: FrontMan's voice list
     showTab("frontman");

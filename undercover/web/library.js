@@ -124,8 +124,8 @@ L.kf = store.get("uc-lib-kf", "kept");
 const hasTray = () => L.cat === "covers" || L.cat === "speech";
 function renderKf() {
   const tray = hasTray(), sum = o => Object.values(o).reduce((n, v) => n + (+v || 0), 0);
-  $$("#lib-kfilter .tab").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === kfNow()));
-  $("#lib-kfilter [data-v=recent]").disabled = !tray;
+  // Songs, voices and training are always kept: neither tab is lit for them (Kept used to switch itself on), and both say why
+  $$("#lib-kfilter .tab").forEach(b => { b.setAttribute("aria-pressed", tray && b.dataset.v === L.kf); b.disabled = !tray; b.title = tray ? "" : "These are always kept"; });
   $("#lib-n-kept").textContent = L.summary ? sum(tabCounts("kept")) : "";
   $("#lib-n-recent").textContent = L.summary ? sum(tabCounts("recent")) : "";
   renderCats();   // the chips' numbers follow the tab
@@ -212,7 +212,7 @@ function renderList() {
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
-      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`
+      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name, false) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`
       + (L.cat === "voices" ? waitingRow(x, all) : "");
   }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
       : hasTray() && L.kf === "kept" ? `No ${L.cat === "covers" ? "covers" : "speech"} kept yet. Send to SafeHouse keeps one for good; until then it's under Recent.` : "Nothing here."}</div>`);
@@ -338,7 +338,7 @@ function coverDetail(d, c) {
   };
   $("#lib-keep").onclick = async () => { try { await api(`/api/library/covers/${c.id}/${c.kept ? "unkeep" : "keep"}`, { json: {} }); afterChangeKeep(); } catch (e) { showError(e.message, "Couldn't change that"); } };
   renameFlow(c.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/covers/${c.id}/rename`, { json: { name } }); });
-  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/covers/${c.id}`, { method: "DELETE" }); afterChange(); });
+  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/covers/${c.id}`, { method: "DELETE" }); showError(`${c.title || "That cover"} is deleted.`, "Deleted", null, true); afterChange(); });
 }
 
 function speechDetail(d, x) {
@@ -363,7 +363,7 @@ function speechDetail(d, x) {
   };
   $("#lib-keep").onclick = async () => { try { await api(`/api/library/speech/${x.id}/${x.kept ? "unkeep" : "keep"}`, { json: {} }); afterChangeKeep(); } catch (e) { showError(e.message, "Couldn't change that"); } };
   renameFlow(x.file.replace(/\.[^.]+$/, ""), async name => { await api(`/api/library/speech/${x.id}/rename`, { json: { name } }); });
-  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/speech/${x.id}`, { method: "DELETE" }); afterChange(); });
+  confirmClick($("#lib-del"), "Click again to delete", async () => { await api(`/api/library/speech/${x.id}`, { method: "DELETE" }); showError("That speech is deleted.", "Deleted", null, true); afterChange(); });
 }
 
 function songDetail(d, s) {
@@ -389,9 +389,10 @@ function songDetail(d, s) {
   });
   $("#lib-make").onclick = async () => { try { S.song = await api(`/api/songs/${s.id}`); store.set("uc-song", s.id); renderSong(); refreshEstimate(); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) { showError(e.message); } };
   const ds = $("#lib-del-stems");
-  if (ds) confirmClick(ds, `Delete ${gb(s.stems_size)} of stems?`, async () => { await api(`/api/library/songs/${s.id}?stems_only=1`, { method: "DELETE" }); afterChange(); });
+  if (ds) confirmClick(ds, `Delete ${gb(s.stems_size)} of stems?`, async () => { await api(`/api/library/songs/${s.id}?stems_only=1`, { method: "DELETE" }); showError(`${gb(s.stems_size)} of stems deleted. The song stays; its next cover separates it again.`, "Deleted", null, true); afterChange(); });
   confirmClick($("#lib-del"), "Click again to delete", async () => {
     await api(`/api/library/songs/${s.id}`, { method: "DELETE" });
+    showError(`${s.title || "The song"} is deleted.`, "Deleted", null, true);
     if (S.song?.id === s.id) { S.song = null; store.set("uc-song", null); renderSong(); }
     afterChange();
   });
@@ -517,5 +518,5 @@ $("#lib-clean-btn").onclick = async () => {
   };
 };
 $("#lib-clean-close").onclick = () => { $("#lib-clean").hidden = true; };
-$("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); showTab("safehouse"); };
+$("#hist-library").onclick = () => { L.cat = "covers"; store.set("uc-lib-cat", "covers"); location.hash = "#safehouse/library"; showTab("safehouse"); };   // the Library room, not the last room (IA P9-12)
 
