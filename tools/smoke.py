@@ -2264,6 +2264,58 @@ def u_p9():
     return "01:36 starts now (done 01:56); 48-min waits, 20-min runs (done 06:50); Final -> none, Obama -> Barack Obama; reading kept"
 
 
+@check("the start time sticks (user, 2026-10-17: 02:00 went back to 23:00 and 'done by' counted from 23:00): settings(start_at) survives a reload of the saved state (a restart), a tonight add, Start now and the runner; done_by = the shown start + the work at noon and at 01:30, from now inside the window, from the start time for a stopped queue's tonight jobs; the page saves the field at once")
+def u_start_time_sticks():
+    from datetime import datetime
+    from undercover.core import worklist
+    real = worklist.estimate, worklist.datetime
+    clock = [datetime(2026, 10, 17, 12, 0)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+    worklist.estimate = lambda i: {"total": 211}                           # 3 h 31 min, the user's queue
+    worklist.datetime = Clock
+    try:
+        with isolated_data():
+            worklist._STATE = None
+            out = worklist.settings(start_at="02:00")                     # set in the Running room, nothing queued
+            assert out["settings"]["start_at"] == "02:00" and not out["armed"]
+            worklist._STATE = None                                         # a restart: the state comes back from its file
+            assert worklist._state()["settings"]["start_at"] == "02:00", "the saved start time didn't survive a restart"
+            out = worklist.add("new", "Kristen Schaal")                    # tonight: arms for 02:00, never for 23:00
+            assert out["starts_at"] == "02:00" and not out.get("start_default") and out["settings"]["start_at"] == "02:00", out
+            assert out["start"] == "02:00" and out["done_by"] == "05:31" and out["total_min"] == 211, out   # noon: 02:00 + 3 h 31
+            clock[0] = datetime(2026, 10, 17, 1, 30)
+            out = worklist.status()
+            assert out["start"] == "02:00" and out["done_by"] == "05:31" and not out["starts_now"], out    # 01:30: still 02:00 + 3 h 31
+            clock[0] = datetime(2026, 10, 17, 2, 30)
+            out = worklist.status()
+            assert out["starts_now"] and out["start"] == "02:30" and out["done_by"] == "06:01", out         # inside the window: from now (P9-1)
+            clock[0] = datetime(2026, 10, 17, 12, 0)
+            out = worklist.settings(start_at="03:00")                     # changed with a job queued: saved and counted from at once
+            assert out["settings"]["start_at"] == "03:00" and out["start"] == "03:00" and out["done_by"] == "06:31", out
+            st = worklist._state()
+            worklist.arm(None)                                             # Start now keeps the saved time
+            assert st["settings"]["start_at"] == "03:00" and st["start_now"]
+            worklist.next_item(st, clock[0])
+            assert st["settings"]["start_at"] == "03:00", "the runner changed the start time"
+            worklist.arm(False)                                            # stopped, a tonight job left: "done by" from the start time, not the clock
+            st["queue"][0].pop("now", None)
+            out = worklist.status()
+            assert not out["armed"] and out["start"] == "03:00" and out["done_by"] == "06:31", out
+            worklist._STATE = None
+            assert worklist._state()["settings"]["start_at"] == "03:00"
+            worklist._STATE = None
+    finally:
+        worklist.estimate, worklist.datetime = real
+    work = (ROOT / "undercover" / "web" / "work.js").read_text(encoding="utf-8")
+    handler = work[work.index('$("#rn-at-time").onchange'):work.index("async function saveStartTime")]
+    assert "if (e.target.value) saveStartTime(e.target.value)" in handler and ".some(" not in handler, "the page saves the start time only while nothing is queued again"
+    return "02:00 saved, back after a restart, kept by tonight / Start now / the runner; done by 05:31 at noon and 01:30, 06:01 at 02:30; the page saves at once"
+
+
 @check("Start at never resumes held work the user paused (smallfix6 addendum): arm() lifts only the queue's own pause; settings() saves a valid HH:MM start_at without arming")
 def u_start_at_hold():
     from undercover.core import worklist
@@ -6784,7 +6836,12 @@ def a_work():
     assert p["held"] is True
     r = api("/api/work/resume", {})
     assert r["held"] is False
-    return f"{len(w['queue'])} queued items"
+    was = w["settings"].get("start_at")
+    s = api("/api/work/settings", {"start_at": "02:00"})                 # the Running room's time field: saved as set, read back as set
+    assert s["settings"]["start_at"] == "02:00" and api("/api/work")["settings"]["start_at"] == "02:00" and not s["armed"], s["settings"]
+    if was:
+        api("/api/work/settings", {"start_at": was})
+    return f"{len(w['queue'])} queued items; start time saved and read back"
 
 
 def _tray_room(listing: str):
@@ -7355,7 +7412,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_at_hold, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
