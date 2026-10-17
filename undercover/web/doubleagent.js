@@ -113,9 +113,25 @@ function renderVoiceCards(cands) {
   });
   $$("[data-own-mode]", box).forEach(b => b.onclick = () => { DA.own.mode = b.dataset.ownMode; renderVoiceCards(DA.cands); });
   $$("[data-own-go]", box).forEach(b => b.onclick = () => {
-    const c = DA.cands.find(x => x.voice === DA.own?.voice);
-    if (c) daBegin(c.person || voiceDisplay(c.voice), DA.own.mode, b.dataset.ownGo === "tonight", b);
+    const c = DA.cands.find(x => x.voice === DA.own?.voice); if (!c) return;
+    const person = ownPerson(c);
+    if (!person) return $("[data-own-name]", box)?.focus();   // never search YouTube for a file name ("Model V2 Final"): ask whose voice it is
+    daBegin(person, DA.own.mode, b.dataset.ownGo === "tonight", b);
   });
+  const nameIn = $("[data-own-name]", box);
+  if (nameIn) nameIn.oninput = () => {   // typing the name: the buttons wake up now; the time follows once the typing stops (a redraw would take the caret)
+    DA.own.name = nameIn.value;
+    $$("[data-own-go]", box).forEach(b => { b.disabled = !nameIn.value.trim(); });
+    clearTimeout(DA.ownTimer);
+    DA.ownTimer = setTimeout(() => {
+      const p = nameIn.value.trim(); if (!p || !DA.own) return;
+      estimateFor("new", p, DA.own.mode).then(() => {
+        if (!DA.own || DA.own.name !== nameIn.value) return;
+        const at = nameIn.selectionStart; renderVoiceCards(DA.cands);
+        const again = $("#da-cards [data-own-name]"); if (again) { again.focus(); again.setSelectionRange(at, at); }
+      });
+    }, 700);
+  };
   renderDaOutcome();
 }
 
@@ -344,12 +360,18 @@ function cadHtml(c) {
     <div class="row"><button class="btn primary" type="button" data-cad-go="now">Learn now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-cad-go="tonight">Tonight</button></div></div>`;
 }
 // "Train my own" on a downloaded voice's card: the choice there, Now or Tonight; Speaking / Singing from the voice where known
+// the person to search for: the voice's known (or guessed) person, else the name typed on the card. Never the voice's display name: for a downloaded file
+// that's often "Model V2 Final", and UnderCover would search YouTube for it (RC pass 10, B).
+const ownPerson = c => (c.person || (DA.own?.voice === c.voice ? DA.own.name || "" : "")).trim();
 function ownHtml(c) {
-  const person = c.person || voiceDisplay(c.voice), m = DA.own.mode, eta = estWords("new", person, m);
-  if (!eta && !EST.asked.has(estKey("new", person, m))) estimateFor("new", person, m).then(() => { if (DA.own) renderVoiceCards(DA.cands); });
-  return `<div class="vc-own"><p class="meta">Train your own <b>${esc(person)}</b> voice to compare with this one: UnderCover finds clips of them and trains it${c.singing == null ? "" : ` (${c.singing ? "singing" : "speaking"}, like this one)`}.</p>
+  const person = ownPerson(c), m = DA.own.mode, eta = person ? estWords("new", person, m) : "";
+  if (person && !eta && !EST.asked.has(estKey("new", person, m))) estimateFor("new", person, m).then(() => { if (DA.own) renderVoiceCards(DA.cands); });
+  const ask = !c.person;
+  return `<div class="vc-own">${ask ? `<label class="own-who"><span>Whose voice is this?</span><input type="text" data-own-name autocomplete="off" value="${esc(DA.own.name || "")}" placeholder="their name, e.g. Barack Obama" aria-label="Whose voice is this"></label>
+    <p class="meta">UnderCover finds clips of them and trains your own voice of them, to compare with this one.</p>`
+    : `<p class="meta">Train your own <b>${esc(person)}</b> voice to compare with this one: UnderCover finds clips of them and trains it${c.singing == null ? "" : ` (${c.singing ? "singing" : "speaking"}, like this one)`}.</p>`}
     <div class="seg" role="group" aria-label="Kind of audio"><button type="button" data-own-mode="speaking" aria-pressed="${m === "speaking"}">Speaking</button><button type="button" data-own-mode="singing" aria-pressed="${m === "singing"}">Singing</button></div>
-    <div class="row"><button class="btn primary" type="button" data-own-go="now">Train now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-own-go="tonight">Tonight</button></div></div>`;
+    <div class="row"><button class="btn primary" type="button" data-own-go="now"${person ? "" : " disabled"}>Train now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-own-go="tonight"${person ? "" : " disabled"}>Tonight</button></div></div>`;
 }
 async function daStart(tonight) {
   const person = $("#da-person").value.trim();
