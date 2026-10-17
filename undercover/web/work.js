@@ -220,7 +220,9 @@ function renderRunRoom() {
   // tonight: the overnight queue (its full editor stays on DoubleAgent's page)
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
-  $("#rn-total").textContent = !left.length ? "" : [w.total_min ? `About ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : ""].filter(Boolean).join(" · ");   // a job that waits says so on its row
+  // the real start (status `start`, counted inside the night window from now), the time, done by; a job that waits says so on its row
+  $("#rn-total").textContent = !left.length ? "" : [w.armed ? (w.starts_now ? "Starts now" : w.start ? `Starts ${clock(w.start)}` : "") : "Not started yet",
+    w.total_min ? `about ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : ""].filter(Boolean).join(" · ");
   $("#rn-opts").hidden = !left.length;
   $("#rn-when").hidden = false;   // one time control, "Starts at [11:00 PM]" (consult round 2, 4.1): settable any time; the word is a button only when a press would arm the queue
   showTimes(w);
@@ -267,10 +269,11 @@ const startWork = async body => {
 };
 $("#rn-at").onclick = () => startWork({ at: startTime() });
 $("#rn-at-time").onchange = e => {
-  store.set("uc-queue-at", e.target.value || null); renderQueue();
-  // nothing queued: this is only the time tonight's work will start at. It goes through the settings, never through Start at: arming the queue also
-  // takes the hold off and would restart work you paused (found by trying it). `start_at` there saves without arming (smallfix6 addendum).
-  if (e.target.value && !(W.last?.queue || []).some(i => ["queued", "paused", "running"].includes(i.state))) saveStartTime(e.target.value);
+  store.set("uc-queue-at", e.target.value || null);
+  // the time saves the moment it's set, jobs queued or not (the user set 02:00 with jobs queued, pressed nothing, and "done by" still counted
+  // from 23:00). It goes through the settings, never through Start at: arming the queue also lifts its pause (smallfix6 addendum). An armed
+  // queue simply starts at the new time; a stopped one with jobs still wants the "Start at" press, and the word stays a button until then.
+  if (e.target.value) saveStartTime(e.target.value); else renderQueue();
 };
 async function saveStartTime(v) {
   try { W.last = await api("/api/work/settings", { json: { start_at: v } }); renderQueue(); } catch (e) { return showError(e.message, "Couldn't save the start time"); }
@@ -306,7 +309,7 @@ function renderDrawer() {
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const tonight = !w ? `<small>Loading…</small>` : !left.length ? `<small>Nothing for tonight.</small>`
     : `<b>${left.length} job${left.length > 1 ? "s" : ""}${w.total_min ? ` · about ${fmtMin(w.total_min)}` : ""}</b><small>${[
-        w.armed ? (w.settings.start_at && !w.start_now ? `starts at ${clock(w.settings.start_at)}` : "running") : "not started yet",
+        w.armed ? (w.starts_now ? "starts now" : w.start ? `starts at ${clock(w.start)}` : "running") : "not started yet",   // the real start, not the saved setting
         w.done_by ? `done by about ${clock(w.done_by)}` : "", w.waits ? `${w.waits} wait${w.waits > 1 ? "" : "s"} for the next night` : ""].filter(Boolean).join(" · ")}</small>`;
   put($("#qd-glance"), `${now}<div class="g"><span class="k">Tonight</span><div>${tonight}</div></div>`);
 }
