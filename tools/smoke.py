@@ -4966,6 +4966,7 @@ def _fake_demo_voice(d: Path):
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
 def u_page_rules():
     web = ROOT / "undercover" / "web"
+    import re
     tut = (web / "tutorial.js").read_text(encoding="utf-8")
     # M1: the First assignment starts from default settings (a one-shot's backing voice / octave once rode into the cover)
     start = tut[tut.index("async function assignStart()"):tut.index("function assignGo(")]
@@ -4989,6 +4990,16 @@ def u_page_rules():
     da = (web / "doubleagent.js").read_text(encoding="utf-8")
     assert "impHtml" in da and 'data-imp-keep' in da and '"/keep"' in da, "DoubleAgent lost the retrained voice's blind A/B"
     assert "progressSay" in app and "step_n" in app, "preview / cover progress lost its step and time-left line"
+    # P8-1: two page scripts declaring the same top-level name make the second one not load at all (a `const AS` in aside.js and tutorial.js killed
+    # the First assignment for two days). Every top-level const / let / class / var / function name must be unique across the scripts index.html loads.
+    ixh = (web / "index.html").read_text(encoding="utf-8")
+    seen = {}
+    for src in re.findall(r'<script src="/static/([^"]+\.js)"', ixh):
+        for nm in re.findall(r"^(?:async\s+)?(?:const|let|var|class|function\*?)\s+([A-Za-z_$][\w$]*)", (web / src).read_text(encoding="utf-8"), re.M):
+            seen.setdefault(nm, []).append(src)
+    clash = {k: v for k, v in seen.items() if len(v) > 1}
+    assert not clash, f"page scripts declare the same top-level name twice (the second script won't load): {clash}"
+    assert "const ASIDE = {" in (web / "aside.js").read_text(encoding="utf-8"), "aside.js's state is ASIDE (tutorial.js owns AS)"
     # qa14: the switch's 16 px box is for the checkbox only; the Finish by time field sits inside the same label and drew as a knob
     css = (web / "app.css").read_text(encoding="utf-8")
     # qa15: the one-shot asks which voice (voice_ask / voice_choice), a moved work item says so, Your voices has filters, Train my own opens Now / Tonight on the card
@@ -6412,6 +6423,21 @@ def a_page():
     return f"4 modules, {len(files)} static files"
 
 
+@check("page: loads in a browser with no uncaught error (headless Chrome; skipped when there isn't one)")
+def a_page_console():
+    import shutil, subprocess, tempfile
+    exe = shutil.which("chrome") or shutil.which("google-chrome") or next(
+        (c for c in (r"C:\Program Files\Google\Chrome\Application\chrome.exe", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") if Path(c).is_file()), None)
+    if not exe:
+        return "no Chrome here: skipped (the unit scan for clashing top-level names still ran)"
+    with tempfile.TemporaryDirectory() as prof:
+        r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--enable-logging=stderr", "--v=0",
+                            "--virtual-time-budget=8000", "--dump-dom", BASE + "/"], capture_output=True, text=True, timeout=90)
+    bad = [ln.split("CONSOLE", 1)[1][:220] for ln in r.stderr.splitlines() if ":CONSOLE" in ln and "Uncaught" in ln]
+    assert not bad, "the page threw on load (a script that fails to load takes its whole feature with it): " + " | ".join(bad)
+    return "no uncaught error on load"
+
+
 @check("api: voices, history, config")
 def a_lists():
     v = api("/api/voices")
@@ -7068,7 +7094,7 @@ def main():
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
             BASE = f"http://127.0.0.1:{a.port}"
             print(f"API checks ({BASE}, reads only: anything that makes, deletes or pauses work runs on the sandbox only)")
-            for fn in (a_status, a_page, a_lists, a_library, a_train):
+            for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train):
                 fn()
         else:
             port = sandbox_port()
@@ -7080,7 +7106,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_tutorial, a_tray):
+                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_tutorial, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
