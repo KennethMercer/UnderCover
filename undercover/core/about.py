@@ -6,7 +6,21 @@ from pathlib import Path
 
 from .config import ROOT
 
-VERSION = "0.4.0"   # the installer's AppVersion (installer/UnderCover.iss) says the same
+# The version is written in one place, undercover/VERSION: this reads it, and so does the installer
+# (installer/UnderCover.iss reads the same file at build time). The System room, the Doctor, the diagnostics file and the
+# install record show VERSION.
+VERSION_FILE = Path(__file__).resolve().parents[1] / "VERSION"
+
+
+def _version() -> str:
+    try:
+        v = VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        v = ""
+    return v or "0.0.0"
+
+
+VERSION = _version()
 
 
 def git_commit(root: Path = ROOT) -> dict | None:

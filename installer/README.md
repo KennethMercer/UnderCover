@@ -37,8 +37,9 @@ downloads the matching PyTorch and tools. Nothing heavy is bundled.
   passed, every hash checked, `[paths]` written, the app and its cadence packages import, the F5 add-on's hashed
   package set resolves (`--dry-run`); 1.8 GB on disk (venv 1.2 GB, ffmpeg 0.3, Deno 0.1, Python + uv 0.1, uv cache
   0.1). The .exe wizard itself wasn't clicked through (it would install for real).
-- Build: `powershell -ExecutionPolicy Bypass -File installer\build.ps1` -> `dist\UnderCover-Setup-0.2.0.exe`. Local
-  only: never publish or share a build.
+- Build: `powershell -ExecutionPolicy Bypass -File installer\build.ps1` -> `dist\UnderCover-Setup-<version>.exe`. Local
+  only: never publish or share a build. The version is written in one place, `undercover\VERSION` (release-prep,
+  2026-10-17): the app reads it (`core/about.py`), `UnderCover.iss` reads it at build time, `build.ps1` checks it.
 
 **Phase 25 (2026-10-13), release prep:**
 - **The .exe:** 0.4.0, 75.4 MB. Agent Smoke, the sample song and the greetings are bundled, and build.ps1 checks them
