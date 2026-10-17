@@ -726,7 +726,9 @@ def report_words(kind: str, res: dict, display: str) -> dict:
     b, a = res.get("before"), res.get("after")
     bw, aw = word_of(b), word_of(a)
     num = isinstance(a, (int, float)) and isinstance(b, (int, float))
-    if res.get("kept") and kind == "improve":   # phase 26: Improve tried, the bar wasn't cleared, yours is kept
+    if res.get("nothing_new") and kind == "improve":   # phase 26: nothing new found, nothing left out: not even tried
+        out, plain = "same", f"Nothing new of {display} was found and every source still belongs, so yours is kept as it is."
+    elif res.get("kept") and kind == "improve":   # phase 26: Improve tried, the bar wasn't cleared, yours is kept
         tried = res.get("tried") or {}
         left = tried.get("left_out") or []
         out = "not_better"

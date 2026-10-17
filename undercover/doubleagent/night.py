@@ -47,6 +47,8 @@ def estimate(item: dict) -> dict:
         from .frozen import budget_steps
         kept_min = (proj.kept_seconds() / 60 if proj is not None else 0.0) + raw_min / 4
         steps = budget_steps(kept_min)[0]
+        if item["kind"] == "improve" and proj is not None:   # R4: a well-fed voice refines, far below scratch's budget
+            steps = _improve_steps(item["target"], proj, raw_min / 4) or steps
     else:
         steps = LENGTHS.get(length, LENGTHS["auto"])
     train = steps * _sec_per_step() / 60   # the planned budget runs in full (R5: early stop only past it): a 6-hour plan says 6 hours
@@ -65,6 +67,24 @@ def estimate(item: dict) -> dict:
         out["cadence"] = CADENCE_MIN
     out["total"] = round(prep + train + compare + out.get("cadence", 0))
     return out
+
+
+def _improve_steps(target: str, proj, new_min: float) -> int | None:
+    """The steps an Improve of this voice would most likely plan (R4), for the estimate: a refine's when the voice's own
+    numbers say refine (well fed, a fair likeness, the same sample rate), else None (scratch's budget). Whether the
+    clips grow enough for scratch depends on what the search finds, so the estimate doesn't guess that: the real
+    Freeman Improve said 99 min on scratch's budget and took 12 (refine, nothing new found)."""
+    from ..core.voices import get_voice, trained_likeness
+    from .frozen import recipe, refine_steps
+    try:
+        v = get_voice(target)
+    except ModelError:
+        return None
+    old_min = float((v.extra or {}).get("train_minutes") or 0)
+    sr = int(proj.train.get("sr") or CONFIG["training"]["sample_rate"])
+    if recipe(old_min, trained_likeness(v), old_min)[0] != "refine" or (v.sr and int(v.sr) != sr):
+        return None
+    return refine_steps(new_min or old_min)
 
 
 def _improve_extra_minutes(proj) -> float:
@@ -339,6 +359,19 @@ def _improve(job, item) -> dict:
             return {"voice": old.name, "candidate": None, "replaced": False, "pending": False, "kept": True,
                     "tried": st.get("improve"), "note": f"Tried, nothing usable: the new clips were left out ({left}), so "
                     f"{label_of(old.name)} is kept as it is."}
+        # the same clips the approved voice learnt from (nothing new found or prepared, nothing left out): training
+        # again can only shuffle the dice, so nothing is trained and the voice is kept untried
+        new_ready = any(s.id in set(todo) and s.status == "ready" for s in proj.sources)
+        if frozen.nothing_new(kept_min, old_min, gate["left_out"], new_ready):
+            with P.lock(proj.name):
+                proj = P.Project.load(proj.name)
+                proj.train["voice_name"] = old.name
+                for k in ("init_from", "lr", "steps"):
+                    proj.train.pop(k, None)
+                proj.save()
+            return {"voice": old.name, "candidate": None, "replaced": False, "pending": False, "kept": True, "nothing_new": True,
+                    "tried": st.get("improve"), "note": f"Nothing new of {proj.person} to learn from: no new clips were found and "
+                    f"every source still belongs, so {label_of(old.name)} is kept as it is."}
         (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
     # 2. train (R4 / R5: the recipe and the budget were set above, or kept from the paused run)
     conv = gpu.MODELS.converter
