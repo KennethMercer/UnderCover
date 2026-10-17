@@ -512,8 +512,9 @@ def find_speakers(proj: Project):
     old_ref = (emb.get(f"speaker:{proj.reference.get('cluster')}")
                if proj.reference.get("confirmed") and not proj.reference.get("auto") else None)
     lim = _music_limits(proj)
+    off = {s.id for s in proj.sources if not s.selected}   # an unticked source's voices aren't candidates (rc-fix2)
     usable = [p for p in proj.phrases if p.id in emb and p.dur >= 1.5 and p.music_db < lim.get(p.source, TCFG["music_db"])
-              and not p.clipped]
+              and not p.clipped and (p.source not in off or p.choice is True)]
     if len(usable) < 3:
         raise ModelError("Not enough clean speech was found to identify the voice. Add more sources or recordings.")
     usable.sort(key=lambda p: -p.dur)
