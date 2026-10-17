@@ -182,8 +182,9 @@ function renderList() {
   const box = $("#lib-list"), list = rows(), all = L.data[L.cat] || [];
   if (box.contains($("#lib-detail"))) box.after($("#lib-detail"));   // the list is redrawn below; the detail lives on
   if (!all.length) {
-    box.innerHTML = `<div class="lib-empty"><b>Nothing here yet</b>${{ covers: "Covers you make will collect here.", speech: "Speech you make in SpeakEasy collects here.", songs: "Songs you drop in or get from YouTube collect here.",
-      voices: "Install a voice in FrontMan, or train one in DoubleAgent.", training: "Voices you train get a project here." }[L.cat]}</div>`;
+    // one line and one button, the same shape everywhere (consult 9): "Nothing on file yet." and the way to the first thing
+    const go = { covers: ["Make a cover", "frontman"], speech: ["Say something", "speakeasy"], songs: ["Get a song", "frontman"], voices: ["Get a voice", "doubleagent"], training: ["Train a voice", "doubleagent"] }[L.cat];
+    box.innerHTML = `<div class="lib-empty empty"><b>Nothing on file yet.</b><button class="btn" type="button" data-goto="${go[1]}">${go[0]}</button></div>`;
     placeDetail();
     return;
   }
@@ -204,7 +205,7 @@ function renderList() {
     } else if (L.cat === "voices") {
       const [cls, word] = quality(x);
       title = voiceDisplay(x.name); sub = [x.demo ? "demo voice · not a real person" : x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
-      side = (x.cadence ? `<span class="tag ok" title="Has a cadence for SpeakEasy">cadence ✓</span>` : "") + (x.trained ? `<span class="tag ok">trained here</span>` : "") + `<span class="tag ${cls}" data-deep>${word}</span><span class="mono" data-deep>${gb(x.size)}</span>`;
+      side = (x.cadence ? `<span class="tag ok" title="Can speak in SpeakEasy">speaks</span>` : "") + (x.trained ? `<span class="tag ok">trained here</span>` : "") + `<span class="tag ${cls}" data-deep>${word}</span><span class="mono" data-deep>${gb(x.size)}</span>`;
     } else {
       title = x.person || x.name; const st = x.train || {};
       sub = [`${x.kept_minutes} min kept`, st.state === "exported" ? `voice ${st.exported}` : st.state ? st.state : "not trained yet", `changed ${when(x.updated)}`].join(" · ");
@@ -411,7 +412,7 @@ function voiceDetail(d, v) {
       <dt data-deep>From</dt><dd data-deep>${src}</dd>
       ${v.trained ? `<dt data-deep>Training</dt><dd data-deep>${v.train_minutes ? `${v.train_minutes} min of ${v.from_speech ? "speech" : "audio"}` : ""}${v.epoch ? ` · epoch ${v.epoch}` : ""}${v.f0_range ? ` · range ${Math.round(v.f0_range[0])}–${Math.round(v.f0_range[2])} Hz` : ""}</dd>` : ""}
       <dt>Used in</dt><dd>${v.covers ? v.cover_titles.map(esc).join("<br>") : "no covers yet"}</dd>
-      <dt>Cadence</dt><dd>${v.cadence ? `yes, for SpeakEasy · ${gb(v.cadence.size)} <span class="meta" data-deep>· ${esc(v.cadence.engine || "")} · from ${v.cadence.data_minutes ?? "?"} min · made ${esc(when(v.cadence.made))}</span>
+      <dt>Speaks</dt><dd>${v.cadence ? `yes, in SpeakEasy · ${gb(v.cadence.size)} <span class="meta" data-deep>· ${esc(v.cadence.engine || "")} · from ${v.cadence.data_minutes ?? "?"} min · made ${esc(when(v.cadence.made))}</span>
         <button class="linkbtn" id="lib-del-cad" type="button" data-deep data-pc>Delete cadence</button>` : "none"}</dd>
       ${v.full_index ? `<dt data-deep>Full index</dt><dd data-deep>Kept${v.full_index.until ? ` until ${esc(fullIndexDate(v.full_index.until))}` : ""} <span class="meta">· ${v.full_index.vectors_before ?? "?"} → ${v.full_index.vectors_after ?? "?"} vectors · ${gb(v.full_index.bytes_before || 0)} before</span>
         <button class="linkbtn" id="lib-full-idx" type="button" data-pc>Put the full index back</button></dd>` : ""}
