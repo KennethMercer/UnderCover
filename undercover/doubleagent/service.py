@@ -618,21 +618,22 @@ def print_vote(v) -> int | None:
         return ex["print_vote"]
     if not ex.get("project"):
         return None
-    from ..core.speaker import sex_vote
+    from ..core.speaker import labelled_prints, sex_vote
     from .project import Project
+    if not labelled_prints():
+        return None   # the prints file is missing: nothing to vote with (not kept, so it's measured once it's back)
     try:
         proj = Project.load(ex["project"])
         vote = sex_vote(proj.load_embeddings().get(f"speaker:{proj.reference.get('cluster')}"))
     except Exception:   # noqa: BLE001 - a project gone or unreadable: the pitch decides
         return None
-    if vote is not None:
-        import json
-        from ..core import fsutil
-        try:
-            v.extra = {**ex, "print_vote": vote}
-            fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
-        except Exception:   # noqa: BLE001 - measured again next time
-            pass
+    import json   # kept, a None too (a project with no reference voice): its embeddings are read once, not on every listing
+    from ..core import fsutil
+    try:
+        v.extra = {**ex, "print_vote": vote}
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    except Exception:   # noqa: BLE001 - measured again next time
+        pass
     return vote
 
 
@@ -855,10 +856,11 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
             mins = proj.kept_seconds() / 60
             if enough(proj):
                 break
+            character = srcmod.is_character_project(proj)
             more = sorted([s for s in proj.sources if not s.selected and not s.note.startswith(NOT_USABLE)
+                           and s.note != srcmod.ABOUT_NOTE   # talk about them is never ticked back in (smallfix7)
                            and s.status == "found" and s.duration >= (90 if singer and srcmod.is_sung(s) else 120)],
-                          key=lambda s: (sung_first(s), s.note == srcmod.ABOUT_NOTE,
-                                         -srcmod.expected_clean(s, person, proj.mode, srcmod.is_character_project(proj))))
+                          key=lambda s: (sung_first(s), -srcmod.expected_clean(s, person, proj.mode, character)))
             if singer and not searched_more and not [s for s in more if srcmod.is_sung(s)]:
                 # out of songs: look for more of them before settling for interviews
                 searched_more = True
