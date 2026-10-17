@@ -441,7 +441,10 @@ def arm(when: str | None) -> dict:
         else:
             # Start now (when=None) is a one-time start: the saved start time stays, and the queue goes back to it
             # once this run is dry; tonight's items in it now run now too
-            st.update(armed=True, start_now=when is None, held=False)
+            st.update(armed=True, start_now=when is None)
+            if not st["resume"]:   # only the queue's own pause lifts: held work the user paused waits for Resume
+                st.update(held=False)
+                st.pop("held_by", None)
             st["settings"]["start_at"] = when or st["settings"].get("start_at") or DEFAULT_START
             for it in st["queue"]:
                 if when is None and it.get("state") == "queued":
@@ -454,9 +457,13 @@ def arm(when: str | None) -> dict:
 
 
 def settings(**kw) -> dict:
+    """The queue's settings. start_at ("HH:MM") is saved without arming: the Running room sets it while the queue is
+    empty, and the next "tonight" add arms for it."""
+    if "start_at" in kw and not (isinstance(kw["start_at"], str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", kw["start_at"])):
+        raise ModelError("Give the start time as HH:MM (for example 02:00).")
     with _LOCK:
         st = _state()
-        for k in ("finish_by", "keep_awake"):
+        for k in ("finish_by", "keep_awake", "start_at"):
             if k in kw:
                 st["settings"][k] = kw[k]
         _save()
