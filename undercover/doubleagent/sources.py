@@ -11,7 +11,7 @@ from ..core.youtube import (YouTubeBlocked, _cancelled_in, _music_tracks, _short
 TCFG = CONFIG["training"]
 
 QUERIES = {
-    "speaking": ["{name} interview", "{name} full speech", "{name} podcast", "{name} talks"],
+    "speaking": ["{name} interview", "{name} full speech", "{name} podcast", "{name} address"],
     "singing": ["{name} isolated vocals", "{name} acapella", "{name} live vocals", "{name} live"],
 }
 # Singers: their singing is what the voice will be used for, so search mostly for sung material (isolated vocals
@@ -34,6 +34,59 @@ SUSPECT = [
 ]
 COMMENTARY = re.compile(r"destroys|obliterates|slams|owns|claps back|shuts down|what were they thinking|baffling|"
                         r"breaks down|explained|analysis|tier list|ranking|top \d+", re.I)
+# A real person's own material (smallfix7; Trump's new run 2026-10-14 ticked 1980 interviews, a podcast ABOUT him and
+# "Zelenskyy talks Trump"): by them, recent, one voice. A title with the person as its object is talk about them; a
+# speech or an address is one voice at a microphone; a chamber, a stadium or a stage is echo, applause and laughter.
+ABOUT_VERBS = (r"about|on|for|against|vs\.?|versus|talks?|discuss(?:es|ing)?|reacts? to|slams?|blasts?|mocks?|warns?|"
+               r"says|explains?|why|how|what|inside|the truth about|the rise of|the fall of|biography of|life of")
+TITLE_WORDS = (r"(?:(?:president|former president|vice president|mr\.?|ms\.?|mrs\.?|dr\.?|sir|dame|senator|governor|"
+               r"prime minister)\s+)?")
+ABOUT_NOTE = "talk about them, not by them"
+SPEECH = re.compile(r"\bspeech\b|\baddress\b|\bremarks\b|oval office|\bkeynote\b|commencement|\bsermon\b|\beulogy\b|"
+                    r"\bstatement\b|press conference|\bbriefing\b", re.I)
+ECHO = re.compile(r"joint session|state of the union|\bcongress\b|\bparliament\b|\bstadium\b|stand-?up|comedy special", re.I)
+CROWD = re.compile(r"\brally\b|\bdebate\b|\bpanel\b|\broundtable\b", re.I)
+YEAR = re.compile(r"(?<!\d)(19[5-9]\d|20[0-4]\d)(?!\d)")
+ERA_YEARS = 15   # a source this many years before the newest one found is a younger voice (Trump 1980 against 2025)
+
+
+def about_them(title: str, name: str) -> bool:
+    """The title has the person as its object ("Canada's Plans for Donald Trump", "Zelenskyy talks Trump", "How Trump
+    Just Became ..."): talk about them, mostly someone else's voice. "Trump on The Axios Show" is theirs."""
+    toks = [w for w in re.findall(r"[\w']+", name) if len(w) > 1]
+    if not toks:
+        return False
+    full = r"\s+".join(re.escape(t) for t in toks)
+    rx = re.compile(rf"(?:^|[\s:|(\"'\u2013\u2014-])(?:{ABOUT_VERBS})\s+{TITLE_WORDS}(?:{full}|{re.escape(toks[-1])})\b", re.I)
+    return bool(rx.search(title))
+
+
+def title_year(src) -> int | None:
+    """The year a source's title (or its upload date, when the search gave one) names; the latest when it names two."""
+    ys = [int(y) for y in YEAR.findall(src.title or "")]
+    up = str((src.extra or {}).get("upload_date") or "")[:4]
+    if up.isdigit():
+        ys.append(int(up))
+    return max(ys) if ys else None
+
+
+def mark_era(sources, name: str) -> None:
+    """A real person's sources: talk about them unticked, and material decades before their newest unticked as a
+    younger voice; each source's distance from the newest year is kept for the rank (recent first)."""
+    years = {s.id: title_year(s) for s in sources}
+    newest = max((y for y in years.values() if y), default=None)
+    for s in sources:
+        y = years[s.id]
+        if y and newest:
+            s.extra["year"], s.extra["era_gap"] = y, newest - y
+        if not s.selected or s.user:
+            continue
+        if about_them(s.title, name):
+            s.selected, s.note = False, ABOUT_NOTE
+        elif y and newest and newest - y > ERA_YEARS:
+            s.selected, s.note = False, f"from {y}, decades before their newest ({newest}): a younger voice"
+
+
 GOOD = {"speaking": re.compile(r"interview|podcast|speech|address|conversation|talk|keynote|q&a|lecture", re.I),
         "singing": re.compile(r"acapella|a cappella|isolated|vocals? only|live|unplugged|session", re.I)}
 
@@ -256,7 +309,24 @@ def _rank(src: Source, name: str, mode: str) -> float:
     shouty = [w for w in re.findall(r"\b[A-Z]{4,}\b", src.title) if w.lower() not in name_tokens]
     if shouty or COMMENTARY.search(t):
         score -= 1.5
+    if mode == "speaking" or (mode == "both" and not sung):   # smallfix7: the cleanest of their own voice first
+        if SPEECH.search(t):
+            score += 0.75                 # one voice at a microphone (the Oval Office address: 11.6 of 18 min clean)
+        if ECHO.search(t):
+            score -= 1.0                  # a chamber, a stadium, a stage (the joint session: 0.1 of 120 min)
+        elif CROWD.search(t):
+            score -= 0.25
+        gap = (src.extra or {}).get("era_gap")
+        if gap is not None:
+            score += 0.5 if gap <= 5 else (-0.5 if gap > 10 else 0.0)
     return score
+
+
+def expected_clean(src, name: str, mode: str = "speaking", character: bool = False) -> float:
+    """How much clean voice of the person a source should give, before it's prepared: the search's own rank (a speech
+    over a rally, recent over decades old, by them over about them). "Do it all" prepares the best first; once
+    prepared, the source gate measures what it really gave (frozen.gate_project)."""
+    return _rank_character(src, name) if character else _rank(src, name, mode)
 
 
 def blocked_share(sources) -> tuple[int, int]:
@@ -326,9 +396,13 @@ def search_more(name: str, have: set, character: bool) -> list:
                     found[vid] = Source(id=vid, url=f"https://www.youtube.com/watch?v={vid}", title=e.get("title") or vid,
                                         channel=e.get("channel") or e.get("uploader") or "", duration=float(e["duration"]))
     out = []
+    if not character:
+        mark_era(found.values(), name)
     for src in found.values():
         if character:
             src.extra["kind"] = char_kind(src)
+        if not src.selected:
+            continue
         for rx, why in SUSPECT:
             if rx.search(src.title) and not (why == "probably another singer") and not (character and why == "edited or mixed audio"):
                 src.selected, src.note = False, why
@@ -394,6 +468,8 @@ def search(name: str, mode: str = "speaking", per_query: int | None = None, forc
         lang = other_language(src.title, f"{name} {words}")
         if lang and src.selected:
             src.selected, src.note = False, f"may be in {lang.title()} (a dub or another language)"
+    if not character and mode == "speaking":
+        mark_era(found.values(), name)
     albums = album_tracks(name) if mode != "speaking" else []
     if not found and not albums:
         raise ModelError(f"No videos found for '{name}'. Check the spelling, or paste links / add recordings.")

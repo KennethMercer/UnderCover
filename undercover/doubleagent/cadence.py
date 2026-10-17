@@ -148,7 +148,7 @@ def transcripts(proj) -> dict:
 
 def speech_clips(proj) -> list:
     """The person's kept speech (not singing): what a cadence is made from."""
-    return [p for p in proj.phrases if p.kept and not p.sung]
+    return [p for p in proj.training_phrases() if not p.sung]
 
 
 def transcribe(proj_name: str, push, check) -> dict:

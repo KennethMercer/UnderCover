@@ -92,7 +92,8 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
     auto = reader in (None, "", "auto")
     if not auto and reader not in tts.READERS:
         raise SpeakError(f"Unknown Reader '{reader}'.")
-    r = tts.pick_reader(sp and sp["hz"], sp and sp["low"]) if auto else reader
+    r = tts.pick_reader(sp and sp["hz"], sp and sp["low"], vote=service.print_vote(v), accent=(v.extra or {}).get("accent")) \
+        if auto else reader
     pitch = (tts.pitch_for(r, sp["hz"]) if sp else 0.0) + float(nudge or 0)
     return {"voice": v.name, "mode": "reader", "reader": r, "auto": auto, "reader_label": tts.READERS[r][0],
             "reader_hz": tts.READERS[r][1][1], "target_hz": sp and sp["hz"], "target_low": sp and sp["low"],

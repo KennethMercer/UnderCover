@@ -164,11 +164,17 @@ class Project:
         _replace(tmp, self._emb_file())
 
     # ------------------------------------------------------------ summary
+    def training_phrases(self) -> list:
+        """The phrases a training uses: kept, from a ticked source (a phrase the user ticked by hand counts even in an
+        unticked one). Unticking a source after its clips were cut takes them out (smallfix7: they used to train)."""
+        off = {s.id for s in self.sources if not s.selected}
+        return [p for p in self.phrases if p.kept and (p.choice is True or p.source not in off)]
+
     def kept_seconds(self) -> float:
-        return sum(p.dur for p in self.phrases if p.kept)
+        return sum(p.dur for p in self.training_phrases())
 
     def sung_seconds(self) -> float:
-        return sum(p.dur for p in self.phrases if p.kept and p.sung)
+        return sum(p.dur for p in self.training_phrases() if p.sung)
 
     def from_speech(self) -> bool:
         """Mostly speech in the training data (the octave choice gives speech-trained voices extra headroom)."""
@@ -181,7 +187,7 @@ class Project:
                 reasons[p.reason] = reasons.get(p.reason, 0) + 1
         return {"name": self.name, "person": self.person, "mode": self.mode, "created": self.created,
                 "sources": len(self.sources), "ready_sources": sum(s.status == "ready" for s in self.sources),
-                "phrases": len(self.phrases), "kept": sum(p.kept for p in self.phrases),
+                "phrases": len(self.phrases), "kept": len(self.training_phrases()),
                 "kept_minutes": round(self.kept_seconds() / 60, 2), "sung_minutes": round(self.sung_seconds() / 60, 2),
                 "target_minutes": TCFG["target_minutes"],
                 "left_out": reasons, "reference": self.reference,
