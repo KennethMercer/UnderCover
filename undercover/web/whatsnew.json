@@ -2,6 +2,16 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-17-consult-small",
+      "date": "2026-10-17",
+      "title": "Plainer words, one press",
+      "lines": [
+        "The one-shot's plan is three plain lines, and Make it says how long inside the button. One press starts it.",
+        "A voice can speak, or can't speak yet; \"cadence\" is Deep Cover's word now. The night's work is called tonight everywhere.",
+        "Empty pages say what to do next, with one button. Deep Cover's first switch-on says what just happened."
+      ]
+    },
+    {
       "id": "2026-10-17-pass9",
       "date": "2026-10-17",
       "title": "Backing voice shown, Let it speak asks first",
