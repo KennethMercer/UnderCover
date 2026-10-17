@@ -370,9 +370,15 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None, opti
         _save()
     out = status()
     if not now:
-        out["starts_at"] = _state()["settings"]["start_at"]
-        if default:
-            out["start_default"] = True   # no start time was saved: it starts at DEFAULT_START (say so on the page)
+        if out.get("starts_now"):   # the night is on already (P9-1: "starts at 11:00 pm" said at 01:36)
+            out["starts_at"] = datetime.now().strftime("%H:%M")
+        else:
+            out["starts_at"] = _state()["settings"]["start_at"]
+            if default:
+                out["start_default"] = True   # no start time was saved: it starts at DEFAULT_START (say so on the page)
+        row = next((r for r in out["queue"] if r["id"] == item["id"]), {})
+        if row.get("waits_next_night"):   # P9-2: never promise a run its own rule refuses
+            out["waits_next_night"] = True
     return out
 
 
@@ -435,7 +441,10 @@ def arm(when: str | None) -> dict:
         else:
             # Start now (when=None) is a one-time start: the saved start time stays, and the queue goes back to it
             # once this run is dry; tonight's items in it now run now too
-            st.update(armed=True, start_now=when is None, held=False)
+            st.update(armed=True, start_now=when is None)
+            if not st["resume"]:   # only the queue's own pause lifts: held work the user paused waits for Resume
+                st.update(held=False)
+                st.pop("held_by", None)
             st["settings"]["start_at"] = when or st["settings"].get("start_at") or DEFAULT_START
             for it in st["queue"]:
                 if when is None and it.get("state") == "queued":
@@ -448,9 +457,13 @@ def arm(when: str | None) -> dict:
 
 
 def settings(**kw) -> dict:
+    """The queue's settings. start_at ("HH:MM") is saved without arming: the Running room sets it while the queue is
+    empty, and the next "tonight" add arms for it."""
+    if "start_at" in kw and not (isinstance(kw["start_at"], str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", kw["start_at"])):
+        raise ModelError("Give the start time as HH:MM (for example 02:00).")
     with _LOCK:
         st = _state()
-        for k in ("finish_by", "keep_awake"):
+        for k in ("finish_by", "keep_awake", "start_at"):
             if k in kw:
                 st["settings"][k] = kw[k]
         _save()
@@ -479,15 +492,27 @@ def status() -> dict:
                                          if j.pausing else None),
                         "total_left": next((e["total_left"] for e in reversed(j.events[-20:]) if e.get("total_left") is not None), None)})
     left = [i for i in st["queue"] if i["state"] in ("queued", "paused", "running")]
-    total = sum(i.get("estimate", {}).get("total", 0) for i in left)
+    # when it really starts (P9-1: an open night window starts now, so "done by" counts from now) and what the
+    # Finish by rule leaves for the next night (P9-2: "done by 7:18" for a job that won't start before 7:00)
+    starts_now = bool(st["armed"] and (st.get("start_now") or _in_window(now)))
     start = now
-    if st["armed"] and st["settings"].get("start_at") and not st.get("start_now"):
+    if st["armed"] and st["settings"].get("start_at") and not starts_now:
         start = _next_time(st["settings"]["start_at"], now)
+    dl = _deadline(start) if st["armed"] and not st.get("start_now") else None
+    t, waits = start, set()
+    for i in left:   # as pick() goes: one that won't finish in time waits; the ones after it may still fit
+        m = timedelta(minutes=(i.get("estimate") or {}).get("total", 0))
+        if dl is not None and i["state"] != "running" and t + m > dl:
+            waits.add(i["id"])
+        else:
+            t += m
+    total = sum(i.get("estimate", {}).get("total", 0) for i in left if i["id"] not in waits)
     return {"held": st["held"], "resume": [_resume_row(s) for s in st["resume"]], "running": running,
-            "queue": [{**i, "display": _shown(i)} for i in st["queue"]], "armed": st["armed"],
-            "start_now": bool(st.get("start_now")), "settings": st["settings"], "report": st["report"],
-            "total_min": total, "start": start.strftime("%H:%M") if left else None,
-            "done_by": (start + timedelta(minutes=total)).strftime("%H:%M") if left else None}
+            "queue": [{**i, "display": _shown(i), **({"waits_next_night": True} if i["id"] in waits else {})}
+                      for i in st["queue"]], "armed": st["armed"],
+            "start_now": bool(st.get("start_now")), "starts_now": starts_now and bool(left), "settings": st["settings"],
+            "report": st["report"], "total_min": total, "start": start.strftime("%H:%M") if left else None,
+            "done_by": t.strftime("%H:%M") if left and len(waits) < len(left) else None, "waits": len(waits)}
 
 
 def _shown(item: dict) -> str:
@@ -670,7 +695,8 @@ def _run_item(item: dict):
             item.update(state=state, finished=time.strftime("%H:%M"), result=res, minutes=mins)
             rep = _state()["report"]
             if rep is not None:
-                words = report_words(item["kind"], res, _shown(item)) if state == "done" else {"note_plain": res.get("note")}
+                words = (report_words(item["kind"], res, _shown(item)) if state == "done"
+                         else {"outcome": state, "note_plain": _no_numbers(res.get("note") or "") or None})
                 rep["results"].append({"kind": item["kind"], "target": item["target"], "display": _shown(item), "state": state,
                                        "minutes": mins, **res, **words})
                 rep["finished"] = time.strftime("%Y-%m-%d %H:%M")
