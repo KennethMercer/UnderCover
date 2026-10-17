@@ -76,6 +76,7 @@ document.addEventListener("keydown", e => {
 
 const S = {
   song: null, voice: store.get("uc-voice", null), voices: [], defaults: {}, opts: {},
+  deskVoice: false, buildOpen: null, deskWas: false,   // the build path: open while something is on its desk (a song, a voice picked by hand), or by the link
   job: null, es: null, estimate: null, result: null, online: [], searchSeq: 0,
 };
 
@@ -374,8 +375,21 @@ function upload(file) {
   xhr.onerror = () => { setDrop(S.song ? "loaded" : "empty"); showError("Lost contact with UnderCover while uploading. Is its window still open?", "Couldn't load that song"); };
   xhr.send(file);
 }
+// The build path (Song / Voice / Convert) is a section of the one-shot card (consult 1): open while something is on its desk, a song loaded or a
+// voice picked by hand, and closed by itself when the desk is empty; "or set it up yourself" opens it by hand. No memory: a first visit is empty.
+function syncBuild() {
+  const build = $("#build"), tog = $("#build-toggle"); if (!build) return;
+  const desk = !!S.song || S.deskVoice;
+  if (S.deskWas !== desk) S.buildOpen = null;   // the desk changed (a song arrived, or it emptied): the desk decides again; a hand choice holds only while it stays the same
+  S.deskWas = desk;
+  const open = S.buildOpen != null ? S.buildOpen : desk;
+  build.hidden = !open;
+  tog.setAttribute("aria-expanded", open); tog.innerHTML = open ? "set it up yourself &#9662;" : "or set it up yourself &#8250;";
+}
+$("#build-toggle")?.addEventListener("click", () => { S.buildOpen = $("#build").hidden; syncBuild(); if (!$("#build").hidden) $("#build").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
 function renderSong() {
   previewSync();   // versions made for another song are put away
+  syncBuild();
   if (!S.song) return setDrop("empty");
   setDrop("loaded");
   const s = S.song;
@@ -398,7 +412,7 @@ function renderSong() {
 async function loadVoices(select) {
   S.voices = await api("/api/voices"); noteVoices(S.voices);
   S.voicesLoaded = true;
-  if (select) S.voice = select;
+  if (select) { S.voice = select; S.deskVoice = true; }   // picked by hand (Use in FrontMan, Use these settings): it's on the desk
   if (S.voice && !S.voices.some(v => v.name === S.voice)) S.voice = null;
   if (!S.voice && S.voices.length === 1) S.voice = S.voices[0].name;
   store.set("uc-voice", S.voice);
@@ -426,7 +440,7 @@ function renderVoices() {
       <span class="vside"><button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
-    const pick = () => { S.voice = el.dataset.v; store.set("uc-voice", S.voice); renderVoices(); summary(); refreshEstimate(); };
+    const pick = () => { S.voice = el.dataset.v; S.deskVoice = true; store.set("uc-voice", S.voice); renderVoices(); summary(); refreshEstimate(); syncBuild(); };
     el.addEventListener("click", e => { if (!e.target.closest(".remove")) pick(); });
     el.addEventListener("keydown", e => { if (e.target.closest(".remove")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });   // Enter on Remove is Remove's own
   });
@@ -574,7 +588,7 @@ function summary() {
   $("#convert").disabled = !ready || busy;
   $("#preview-btn").disabled = !ready || busy;
   if (S.osBusy) { $("#summary").textContent = "Busy with the one-shot cover at the top of the page…"; return; }
-  if (!S.song && !S.voice) $("#summary").textContent = "Drop a song and pick a voice.";
+  if (!S.song && !S.voice) $("#summary").textContent = "A song and a voice, and Convert is yours.";
   else if (!S.song) $("#summary").innerHTML = `Voice: <b>${vname(S.voice)}</b>. Now drop a song.`;
   else if (!S.voice) $("#summary").innerHTML = `<b>${esc(S.song.title)}</b>. Now pick a voice.`;
   else {
