@@ -44,11 +44,11 @@ FinishedLabel=UnderCover is installed. Start it from the Start menu: it runs in 
 [Files]
 ; App code. __pycache__ and anything personal (models, cache, output, uploads, logs, test, .venv) stay out.
 Source: "..\undercover\*"; DestDir: "{app}\undercover"; Flags: recursesubdirs ignoreversion; Excludes: "__pycache__,*.pyc"
-Source: "..\check_env.py"; DestDir: "{app}"; Flags: ignoreversion
-; Package pins: add-ons install their packages --no-deps against these (core/addons.py).
-Source: "..\constraints.txt"; DestDir: "{app}"; Flags: ignoreversion
-; Keep the user's settings on reinstall/update.
-Source: "..\config.toml"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\tools\check_env.py"; DestDir: "{app}\tools"; Flags: ignoreversion
+; Package pins: add-ons install their packages --no-deps against these (core/addons.py: config.CONSTRAINTS).
+Source: "constraints.txt"; DestDir: "{app}\installer"; Flags: ignoreversion
+; The user's own config.toml isn't shipped: the defaults are undercover\config.default.toml (in the app code above), and
+; setup writes the user's file (the GPU, where the files live). An update keeps it; uninstall leaves it (not ours).
 ; Setup scripts + the pinned, hashed requirement files (installer/pin_hashes.py).
 Source: "setup.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "detect_gpu.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion

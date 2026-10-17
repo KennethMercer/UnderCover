@@ -18,7 +18,7 @@ Kokoro: speakeasy/tts.py, the core's own parts at the bottom of this file).
 What the user accepted, and when, is kept in models/addons.json (local only, never in git):
     {"f5": {"accepted": "2026-10-11 14:05", "licence": "CC-BY-NC-4.0", "installed": "2026-10-11 14:07"}}
 
-An add-on installs pinned pip packages (`--no-deps -c constraints.txt`, so the GPU's torch is never replaced; through
+An add-on installs pinned pip packages (`--no-deps -c installer/constraints.txt`, so the GPU's torch is never replaced; through
 the installer's uv when there is one, since its venv has no pip) and model files (core.setup_models.ensure: pinned
 revisions, SHA-256 checked). Removing it deletes its model files and the packages only it uses.
 
@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import fsutil
-from .config import ROOT, path
+from .config import CONSTRAINTS, ROOT, path
 from .voices import ModelError
 
 
@@ -242,7 +242,7 @@ def pin_command(addon_id: str, req_file) -> list:
     else held by constraints.txt, no dependencies. Raises ModelError when the part has no hashed pin."""
     name, ver, sha = _need_pin(addon_id)
     Path(req_file).write_text(f"{name}=={ver} --hash=sha256:{sha}\n", encoding="utf-8")
-    return ["install", "--no-deps", "--require-hashes", "-c", str(ROOT / "constraints.txt"), "-r", str(req_file)]
+    return ["install", "--no-deps", "--require-hashes", "-c", str(CONSTRAINTS), "-r", str(req_file)]
 
 
 def update_pinned(addon_id: str) -> dict:
@@ -293,7 +293,7 @@ def install(addon_id: str, accept: bool, progress=None, cancel=None) -> dict:
         if hashed.exists():
             _pip("install", "--no-deps", "--require-hashes", "-r", str(hashed))
         else:
-            _pip("install", "--no-deps", "-c", str(ROOT / "constraints.txt"), *a.packages)
+            _pip("install", "--no-deps", "-c", str(CONSTRAINTS), *a.packages)
     if a.files:
         from . import setup_models
 
