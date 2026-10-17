@@ -341,14 +341,16 @@ class Trainer:
         items = [to_dev(x) for x in data["items"]]
         hold = [to_dev(x) for x in data["holdout"]]
 
-        torch.manual_seed(1234)
-        random.seed(1234)
+        seed = int(st.get("seed") or 1234)   # lab runs (phase 26) vary it to measure training noise; the app leaves it at 1234
+        torch.manual_seed(seed)
+        random.seed(seed)
         net_g = SynthesizerTrnMs768NSFsid(*model_config(sr), is_half=False).to(dev)
         net_d = MultiPeriodDiscriminatorV2().to(dev)
         # fused AdamW is a native kernel (not Triton) and works on ROCm Windows: optimizer time 0.9 -> 0.2 s/epoch (~8%)
         fused = dev.type == "cuda"
-        opt_g = torch.optim.AdamW(net_g.parameters(), 1e-4, betas=(0.8, 0.99), eps=1e-9, fused=fused)
-        opt_d = torch.optim.AdamW(net_d.parameters(), 1e-4, betas=(0.8, 0.99), eps=1e-9, fused=fused)
+        base_lr = float(st.get("lr") or 1e-4)
+        opt_g = torch.optim.AdamW(net_g.parameters(), base_lr, betas=(0.8, 0.99), eps=1e-9, fused=fused)
+        opt_d = torch.optim.AdamW(net_d.parameters(), base_lr, betas=(0.8, 0.99), eps=1e-9, fused=fused)
         resume = self.tdir / "resume.pt"
         if resume.exists() and st.get("epoch", 0) > 0 and st.get("data_key_trained") == st.get("data_key"):
             ck = torch.load(resume, map_location="cpu", weights_only=True)
@@ -371,6 +373,9 @@ class Trainer:
             d = torch.load(mdir / f"rvc/pretrained_v2/f0D{sr // 1000}k.pth", map_location="cpu", weights_only=True)["model"]
             net_g.load_state_dict(g)
             net_d.load_state_dict(d)
+            if st.get("init_from"):   # refine (phase 26 lab): start from a kept voice's weights; its posterior encoder wasn't exported, the base's stays
+                kept = torch.load(st["init_from"], map_location="cpu", weights_only=True)["weight"]
+                net_g.load_state_dict({k: v.float() for k, v in kept.items()}, strict=False)
             epoch0 = 0
             for f in (self.tdir / "history.jsonl", *self.tdir.glob("e*.pth"), *(self.tdir / "previews").glob("e*.wav")):
                 f.unlink(missing_ok=True)
@@ -378,7 +383,7 @@ class Trainer:
             if hold:
                 import soundfile as sf
                 sf.write(str(self.tdir / "previews" / "real.wav"), hold[0]["wav"].cpu().numpy(), sr, subtype="PCM_16")
-        lr = 1e-4 * (0.999875 ** epoch0)
+        lr = base_lr * (0.999875 ** epoch0)
         for o in (opt_g, opt_d):
             for pg in o.param_groups:
                 pg["lr"] = lr
@@ -389,7 +394,7 @@ class Trainer:
         best = min((h["val"] for h in hist if h.get("val") == h.get("val")), default=float("inf"))
         steps_per_epoch = len(_batches(items, bs))
         if not st.get("epochs"):   # fixed when the run starts, so resuming keeps the same plan
-            st["epochs"] = int(np.clip(round(LENGTHS.get(length, LENGTHS["auto"]) / steps_per_epoch), 20, 2000))
+            st["epochs"] = int(np.clip(round((st.get("steps") or LENGTHS.get(length, LENGTHS["auto"])) / steps_per_epoch), 1 if st.get("steps") else 20, 2000))
         max_epochs = int(st["epochs"])
         save_every = max(1, round(SAVE_STEPS / steps_per_epoch))
         patience = max(10, max_epochs // 4)     # auto: stop when held-out loss hasn't improved for a quarter of the run
