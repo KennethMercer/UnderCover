@@ -35,7 +35,7 @@ from ..core import fsutil, gpu, jobs, storage, worklist
 from ..core.cadence import render
 from ..core.config import CONFIG, path
 from ..core.jobs import Cancelled, Paused
-from ..core.voices import ModelError, get_voice, label_of
+from ..core.voices import ModelError, get_voice, label_of, voice_person
 from . import clipsound
 from . import project as P
 
@@ -583,8 +583,8 @@ def can_train(v) -> tuple[bool, str]:
             return False, (f"{proj.person}'s clips are mostly singing: a cadence needs a few minutes of them talking "
                            "(add interviews in DoubleAgent).")
         return True, "from the voice's clips"
-    if ex.get("person") and not ex.get("trained"):   # a checked community voice; a trained voice with no clips left isn't searched for
-        return True, f"finds clips of {ex['person']} first"
+    if not ex.get("trained") and voice_person(v):   # a downloaded voice (its checked person, or a guess from its name)
+        return True, f"finds clips of {voice_person(v)} first"
     return False, "Downloaded voice: UnderCover doesn't know whose voice it is."
 
 
@@ -613,7 +613,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
     if proj is None and (v.extra or {}).get("demo"):
         raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
     if proj is None:
-        person = None if (v.extra or {}).get("trained") else (v.extra or {}).get("person")
+        person = None if (v.extra or {}).get("trained") else voice_person(v)
         if not person:
             raise ModelError(f"UnderCover doesn't know whose voice {label_of(v.name)} is, so it can't find their clips.")
         push("clips", 0.0, f"Finding clips of {person} talking")

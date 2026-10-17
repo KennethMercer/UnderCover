@@ -7,7 +7,7 @@ pickers for the queue: candidates (voices that can be improved) and lookup (name
 import json
 
 from ..core.config import CONFIG, path
-from ..core.voices import ModelError, label_of, slug
+from ..core.voices import ModelError, label_of, person_guessed, slug, voice_person
 from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
@@ -147,17 +147,16 @@ def candidates() -> list:
         if ex.get("trained"):
             person = _person_from_voice(v)
             proj = _project_for_item({"kind": "improve", "target": v.name}, create=False)
-            if proj is not None:
-                saves = {s["epoch"]: s for s in proj.train.get("saves", [])}
-                c["likeness"] = (saves.get(ex.get("epoch")) or {}).get("identity")
-            c["likeness"] = c["likeness"] or ex.get("likeness")
+            from ..core.voices import trained_likeness
+            c["likeness"] = trained_likeness(v)
             item = {"kind": "improve", "target": v.name}
             c.update(person=person, kind="improve", target=v.name, can=True,
                      note=("more of their singing (album tracks), fresh training, kept only if better" if c["singing"]
                            else "more of their speech, fresh training, kept only if better")
                      + ("" if proj is not None else " · its clips were cleaned up, so they're prepared again"))
-        elif ex.get("person"):
-            person = ex["person"]
+        elif voice_person(v):   # checked, or a guess from its name (renaming the display corrects it)
+            person = voice_person(v)
+            c["person_guessed"] = person_guessed(v)
             hit = next((q for q in qcache.values() if q.get("voice") == v.name or q.get("voice") == ex.get("original_name")), None)
             c["likeness"] = (hit or {}).get("score")
             item = {"kind": "new", "target": person}
