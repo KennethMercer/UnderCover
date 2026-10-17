@@ -9,6 +9,7 @@ item can finish before a "finish by" time. The kinds of items, how paused work i
 stops are registered by the modules (DoubleAgent's improve / new voice items: doubleagent/night.py).
 """
 import json
+import re
 import threading
 import time
 import uuid
@@ -606,12 +607,55 @@ def _run_item(item: dict):
             item.update(state=state, finished=time.strftime("%H:%M"), result=res, minutes=mins)
             rep = _state()["report"]
             if rep is not None:
-                rep["results"].append({"kind": item["kind"], "target": item["target"], "display": _shown(item), "state": state, "minutes": mins, **res})
+                words = report_words(item["kind"], res, _shown(item)) if state == "done" else {"note_plain": res.get("note")}
+                rep["results"].append({"kind": item["kind"], "target": item["target"], "display": _shown(item), "state": state,
+                                       "minutes": mins, **res, **words})
                 rep["finished"] = time.strftime("%Y-%m-%d %H:%M")
             _save()
         job.finish("done" if state == "done" else "error", message=res.get("note") or "Done.", result=res)
 
     jobs.GPU_QUEUE.put((job, run))
+
+
+SAME = 0.02   # likeness points: a change smaller than this is "the same" (run-to-run noise on one voice is ~0.01)
+
+
+def _no_numbers(note: str) -> str:
+    """A note for the basic page: its measured numbers left out ("(measured 0.76 against 0.7)", "0.31")."""
+    note = re.sub(r"\s*\([^()]*\d\.\d+[^()]*\)", "", note)
+    return re.sub(r"\s+", " ", re.sub(r"\s*-?\d+\.\d+", "", note)).strip()
+
+
+def report_words(kind: str, res: dict, display: str) -> dict:
+    """The overnight report in words (no decimals for the basic page; `note` keeps the numbers for Deep Cover):
+    before_word / after_word (the trained cut-offs) and outcome: "new" (a voice made from nothing: never "kept the
+    old"), "waiting" (a retrained one waits beside the voice for the ear), "better" / "same" / "not_better"."""
+    from .voices import word_of
+    b, a = res.get("before"), res.get("after")
+    bw, aw = word_of(b), word_of(a)
+    num = isinstance(a, (int, float)) and isinstance(b, (int, float))
+    if res.get("pending") or res.get("pending_for"):
+        out, plain = "waiting", (f"A retrained {display} waits beside the current one"
+                                 + (f" ({aw} against {bw})" if aw and bw else "") + ". Listen to both and keep the one you like.")
+    elif kind == "cadence" and res.get("replaced") is not None:   # a cadence: replaced, or the one it had stays
+        out, plain = (("better", f"{display} speaks with a better cadence now.") if res["replaced"] else
+                      ("not_better", f"{display}'s cadence stays as it was: the new one wasn't better."))
+    elif kind in ("new", "newcad") or (a is not None and b is None and kind != "cadence"):
+        out, plain = "new", f"{display} is new in your voices" + (f", with a {aw} likeness." if aw else ".")
+    elif num and a - b >= SAME:
+        out, plain = "better", f"{display} got better" + (f" ({bw} to {aw})." if aw != bw else ".")
+    elif num and a - b > -SAME:
+        out, plain = "same", f"{display} sounds about the same" + (f" ({aw})." if aw else ".")
+    elif num:
+        out, plain = "not_better", f"{display} didn't get better" + (f" ({bw} to {aw})" if aw != bw else "") + \
+            "; the one you had stays."
+    else:
+        out, plain = None, _no_numbers(res.get("note") or "") or None
+    cad = res.get("cadence")
+    if out == "new" and isinstance(cad, dict):
+        plain += " Its cadence is ready too." if cad.get("after") is not None or cad.get("likeness") is not None \
+            else " " + _no_numbers(cad.get("note") or "")
+    return {"before_word": bw, "after_word": aw, "outcome": out, "note_plain": plain.strip() if plain else plain}
 
 
 def control_for(job):

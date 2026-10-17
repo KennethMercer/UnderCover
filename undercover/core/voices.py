@@ -881,13 +881,67 @@ def _checked_score(v: Voice) -> float | None:
     return max(float(q["score"]) for q in pick) if pick else None
 
 
+def word_of(score, words=TRAINED_WORDS) -> str | None:
+    """A likeness number as people read it ("great" / "good" / "fair"), None when there's none."""
+    if not isinstance(score, (int, float)):
+        return None
+    return next(w for cut, w in words if score >= cut)
+
+
+_LIKE: dict = {}   # project.json (path, mtime) -> its saves' identities by epoch
+
+
+def trained_likeness(v: Voice) -> float | None:
+    """A trained voice's likeness: extra.likeness (written at export), else the identity its training project measured
+    for the very save it was made from (same run: the project still names this voice and that epoch's save is there).
+    Read from the project's file (core reads no module)."""
+    ex = v.extra or {}
+    if ex.get("likeness") is not None:
+        return ex["likeness"]
+    if not ex.get("project") or ex.get("epoch") is None:
+        return None
+    f = path("cache_dir") / "training" / ex["project"] / "project.json"
+    try:
+        key = (str(f), f.stat().st_mtime_ns)
+        if key not in _LIKE:
+            st = (json.loads(f.read_text(encoding="utf-8")).get("train") or {})
+            _LIKE.clear()   # one project at a time is plenty: lists read each voice's own once per change
+            _LIKE[key] = (st.get("exported"), {s.get("epoch"): s.get("identity") for s in st.get("saves", [])})
+        exported, ids = _LIKE[key]
+    except (OSError, ValueError, AttributeError):
+        return None
+    return ids.get(ex["epoch"]) if exported in (v.name, ex.get("pending_for")) else None
+
+
 def likeness_word(v: Voice) -> str | None:
     """"great" | "good" | "fair" ("poor": a downloaded voice the check found unlike the person) | None (not measured)."""
     ex = v.extra or {}
-    score, words = (ex.get("likeness"), TRAINED_WORDS) if ex.get("trained") else (_checked_score(v), CHECKED_WORDS)
-    if score is None:
+    if ex.get("trained"):
+        return word_of(trained_likeness(v))
+    return word_of(_checked_score(v), CHECKED_WORDS)
+
+
+_GUESS_NOISE = re.compile(r"(?i)\b(rvc\d*|v\d+|uc|model|voice|ai|hq|e\d+|s\d+|\d+k?)\b|rvc\d*$")
+
+
+def voice_person(v: Voice) -> str | None:
+    """Whose voice it is: a trained voice's person; a downloaded one's checked person (extra.person); else, for a
+    downloaded voice that isn't the demo, a GUESS from its display name (the user's name for it, else the tidied folder
+    name: "Squidward Tentacles"). Never stored, never the folder: renaming the display corrects it."""
+    ex = v.extra or {}
+    if ex.get("trained"):
+        return trained_person(v) or None
+    if str(ex.get("person") or "").strip():
+        return ex["person"].strip()
+    if is_demo(v):
         return None
-    return next(w for cut, w in words if score >= cut)
+    guess = re.sub(r"\s+", " ", _GUESS_NOISE.sub(" ", display_name(v))).strip(" -_")
+    return guess or None
+
+
+def person_guessed(v: Voice) -> bool:
+    ex = v.extra or {}
+    return not ex.get("trained") and not str(ex.get("person") or "").strip() and voice_person(v) is not None
 
 
 def voice_info(v: Voice) -> dict:
