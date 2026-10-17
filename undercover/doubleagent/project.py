@@ -279,10 +279,15 @@ def process_source(proj: Project, src: Source, separator, embedder, progress=Non
     # sung sources: lead only (harmonies are another pitch line; unison double-tracking stays with the lead)
     from .sources import is_sung
     from ..core.separate import Stopped
-    try:   # stop (Stop, never Pause) ends the separation within one chunk
+    seen = [0.0]
+
+    def sep_progress(f, name):   # one bar for all its passes: never back down (P8-3)
+        seen[0] = max(seen[0], f)
+        report(0.25 + 0.5 * seen[0], "removing music and noise")
+    try:   # Stop and Pause both end the separation within one chunk (P8-5: a Pause waited for the whole source)
         stems = separate(raw, dereverb=TCFG["dereverb"], karaoke=(proj.mode == "singing" or is_sung(src)),
-                         separator=separator, quality=TCFG["separation_quality"], stop=stop,
-                         progress=lambda f, name: report(0.25 + 0.5 * f, "removing music and noise"))
+                         separator=separator, quality=TCFG["separation_quality"],
+                         stop=lambda: bool((stop and stop()) or (cancel and cancel())), progress=sep_progress)
     except Stopped:
         return 0
     if cancel and cancel():

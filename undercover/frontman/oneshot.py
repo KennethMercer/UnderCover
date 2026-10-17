@@ -547,7 +547,7 @@ def cover_options_of(opts: "CoverOptions") -> dict:
 VOICE_CHOICE = re.compile(r"check|train|use:[a-z0-9][a-z0-9-]*")
 
 
-def voice_choices(person: str, voices: list, song: Path | None = None) -> list[dict]:
+def voice_choices(person: str, voices: list, song: Path | None = None, others: int = 0) -> list[dict]:
     """The plan's voice question ("Ask me each time", the user's decision) when installed voices that weren't trained
     here match: use one now, check them against real clips first, or train a better one first, each with its time.
     -> [{choice, label, voice?, eta_s: {low, high}, detail?}] (the page sends `choice` back as voice_choice)."""
@@ -556,8 +556,8 @@ def voice_choices(person: str, voices: list, song: Path | None = None) -> list[d
     out = [{"choice": f"use:{v.name}", "voice": v.name, "label": f"Use {display_name(v)} now",
             "eta_s": {k: x for k, x in cover_eta(v.name, song).items() if k != "song_here"}} for v in voices]
     cover = out[0]["eta_s"] if out else cover_eta("", song)
-    chk, tr = check_estimate_s(person, len(voices)), train_estimate_s(person)
-    n = len(voices)
+    n = len(voices) + others   # the check also downloads and tests the community voices found online
+    chk, tr = check_estimate_s(person, n), train_estimate_s(person)
     out.append({"choice": "check", "label": f"Check {'them' if n > 1 else 'it'} against real clips first",
                 "eta_s": {"low": round(chk + cover["low"]), "high": round(chk + cover["high"])},
                 "detail": f"Uses one if it sounds like {person}; if none does, it trains one (about "

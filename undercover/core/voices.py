@@ -752,9 +752,7 @@ def get_voice(name: str) -> Voice:
     for v in list_voices():
         if v.name == slug(name):
             return v
-    names = ", ".join(v.name for v in list_voices()) or "none yet"
-    raise ModelError(f"No voice called '{name}' is installed (installed: {names}). "
-                     f"Search for one with: python -m undercover.core.voices search {name}")
+    raise ModelError(f"There's no voice called {name!r} in your voices (it may have been set aside or removed).")
 
 
 def _titled(s: str) -> str:
@@ -859,8 +857,13 @@ def is_demo(v: Voice) -> bool:
 # export (its own clips; on the user's voices: Peter Griffin 0.50 "weak" by the gate, Obama 0.70 and SpongeBob 0.77
 # approved by ear, Freeman 0.80); a downloaded voice has the voice check's score against the person (good from 0.45,
 # weak from 0.30; the ones it called bad or broken sit near 0, so they're "poor", not unmeasured).
-TRAINED_WORDS = ((0.80, "great"), (0.65, "good"), (-9.0, "fair"))
-CHECKED_WORDS = ((0.55, "great"), (0.45, "good"), (0.30, "fair"), (-9.0, "poor"))
+# One scale for every voice, trained or downloaded (Internal Affairs P8-11: a downloaded Plankton at 0.757 read "great"
+# beside Morgan Freeman's 0.795 "good"). Both numbers are the same kind: speaker-embedding likeness to the person. The
+# voice lab's frozen test (docs/research/phase26-improve.md, branch phase26-improve) finds a person's voices saturate
+# at 0.75-0.85 with about +-0.01-0.015 scoring noise, so "great" starts at 0.80, "good" covers the usual 0.70-0.80
+# band, "fair" is a voice that's like them but clearly short, and "poor" is unlike them.
+LIKENESS_WORDS = ((0.80, "great"), (0.70, "good"), (0.55, "fair"), (-9.0, "poor"))
+TRAINED_WORDS = CHECKED_WORDS = LIKENESS_WORDS
 _QCACHE: dict = {"key": None, "data": {}}
 
 
