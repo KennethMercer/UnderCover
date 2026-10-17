@@ -267,10 +267,11 @@ const startWork = async body => {
 };
 $("#rn-at").onclick = () => startWork({ at: startTime() });
 $("#rn-at-time").onchange = e => {
-  store.set("uc-queue-at", e.target.value || null); renderQueue();
-  // nothing queued: this is only the time tonight's work will start at. It goes through the settings, never through Start at: arming the queue also
-  // takes the hold off and would restart work you paused (found by trying it). `start_at` there saves without arming (smallfix6 addendum).
-  if (e.target.value && !(W.last?.queue || []).some(i => ["queued", "paused", "running"].includes(i.state))) saveStartTime(e.target.value);
+  store.set("uc-queue-at", e.target.value || null);
+  // the time saves the moment it's set, jobs queued or not (the user set 02:00 with jobs queued, pressed nothing, and "done by" still counted
+  // from 23:00). It goes through the settings, never through Start at: arming the queue also lifts its pause (smallfix6 addendum). An armed
+  // queue simply starts at the new time; a stopped one with jobs still wants the "Start at" press, and the word stays a button until then.
+  if (e.target.value) saveStartTime(e.target.value); else renderQueue();
 };
 async function saveStartTime(v) {
   try { W.last = await api("/api/work/settings", { json: { start_at: v } }); renderQueue(); } catch (e) { return showError(e.message, "Couldn't save the start time"); }

@@ -496,8 +496,8 @@ def status() -> dict:
     # Finish by rule leaves for the next night (P9-2: "done by 7:18" for a job that won't start before 7:00)
     starts_now = bool(st["armed"] and (st.get("start_now") or _in_window(now)))
     start = now
-    if st["armed"] and st["settings"].get("start_at") and not starts_now:
-        start = _next_time(st["settings"]["start_at"], now)
+    if st["settings"].get("start_at") and not starts_now and not all(i.get("now") for i in left):
+        start = _next_time(st["settings"]["start_at"], now)   # "done by" = the shown start time + the work, armed or stopped
     dl = _deadline(start) if st["armed"] and not st.get("start_now") else None
     t, waits = start, set()
     for i in left:   # as pick() goes: one that won't finish in time waits; the ones after it may still fit
