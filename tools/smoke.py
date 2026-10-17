@@ -2006,6 +2006,86 @@ def u_voice_ask():
     return f"choices use x2 / check / train ({use['low']} < {chk['low']} < {tr['low']} s); ids once; use: used as picked"
 
 
+@check("the overnight report in words (smallfix4): before_word / after_word, outcome new / waiting / better / same / not_better (SAME = 0.02), and a note_plain with no decimals")
+def u_report_words():
+    import re as _re
+    from undercover.core.worklist import SAME, report_words
+    cases = [
+        ("improve", {"before": 0.70, "after": 0.76, "pending": True, "note": "measured 0.76 against 0.7"}, "waiting"),
+        ("project", {"after": 0.81, "pending_for": "x-uc"}, "waiting"),
+        ("new", {"after": 0.82, "note": "'x-uc' added"}, "new"),
+        ("newcad", {"after": None, "cadence": {"after": 0.3, "note": "cadence 0.31"}}, "new"),
+        ("improve", {"before": 0.66, "after": 0.66 + SAME + 0.01}, "better"),
+        ("improve", {"before": 0.70, "after": 0.71}, "same"),
+        ("improve", {"before": 0.72, "after": 0.66}, "not_better"),
+    ]
+    for kind, res, want in cases:
+        w = report_words(kind, res, "Morgan Freeman")
+        assert w["outcome"] == want, (kind, res, w)
+        assert w["note_plain"] and not _re.search(r"\d\.\d", w["note_plain"]), w
+    w = report_words("improve", {"before": 0.70, "after": 0.76, "pending": True}, "Morgan Freeman")
+    assert (w["before_word"], w["after_word"]) == ("good", "good") and "waits beside" in w["note_plain"], w
+    assert "kept" not in report_words("new", {"after": 0.82}, "X")["note_plain"].lower()
+    return "waiting / new / better / same / not_better, words on the trained cut-offs, no decimals"
+
+
+@check("likeness and person for the voice cards (smallfix4): a trained voice's word falls back to its own save's identity (same run only); a downloaded voice without a checked person gets one guessed from its display name (never stored, never the folder; renaming corrects it), so Improve and Let it speak open up; the name guard is unchanged")
+def u_person_guess():
+    from types import SimpleNamespace
+    from undercover.core import cadence as C
+    from undercover.core.config import path
+    from undercover.core.voices import (ModelError, get_voice, likeness_word, person_guessed, set_display, voice_person,
+                                        voices_dir)
+    from undercover.doubleagent import cadence, night
+    from undercover.doubleagent.api import check_voice_name
+    with isolated_data():
+        # likeness: the project's own save for that epoch, only while the project still names this voice
+        _voice_dir("tr-uc", {"trained": True, "project": "tr", "epoch": 8, "likeness": None})
+        pj = path("cache_dir") / "training" / "tr"
+        pj.mkdir(parents=True)
+
+        def proj(exported):
+            (pj / "project.json").write_text(json.dumps({"name": "tr", "person": "Tr", "train": {"exported": exported, "saves": [
+                {"epoch": 8, "identity": 0.81}, {"epoch": 16, "identity": 0.5}]}}), encoding="utf-8")
+            import os as _os, time as _t
+            _os.utime(pj / "project.json", (_t.time() + len(exported), _t.time() + len(exported)))
+        proj("tr-uc")
+        assert likeness_word(get_voice("tr-uc")) == "great"
+        proj("tr-other-uc")                                   # a later run of the project: its saves aren't this voice's
+        assert likeness_word(get_voice("tr-uc")) is None
+        # person: checked, guessed, trained, demo
+        _voice_dir("squidward-tentacles", {})
+        _voice_dir("charliekirkrvc2", {})
+        _voice_dir("plankton-x", {"person": "Plankton"})
+        _voice_dir("agent-smoke", {"demo": True})
+        got = {n: (voice_person(get_voice(n)), person_guessed(get_voice(n))) for n in
+               ("squidward-tentacles", "charliekirkrvc2", "plankton-x", "agent-smoke", "tr-uc")}
+        assert got["squidward-tentacles"] == ("Squidward Tentacles", True) and got["charliekirkrvc2"] == ("Charliekirk", True), got
+        assert got["plankton-x"] == ("Plankton", False) and got["agent-smoke"] == (None, False), got
+        set_display("squidward-tentacles", "Squidward")       # the user corrects it by renaming the display
+        v = get_voice("squidward-tentacles")
+        assert voice_person(v) == "Squidward" and v.dir.name == "squidward-tentacles" and "person" not in v.extra
+        real = C.engine_ready
+        C.engine_ready = lambda e: True
+        try:
+            assert cadence.can_train(v) == (True, "finds clips of Squidward first")
+            assert not cadence.can_train(get_voice("agent-smoke"))[0]
+            rows = {c["voice"]: c for c in night.candidates()}
+            assert rows["squidward-tentacles"]["can"] and rows["squidward-tentacles"]["person_guessed"], rows["squidward-tentacles"]
+            assert rows["squidward-tentacles"]["target"] == "Squidward" and not rows["plankton-x"]["person_guessed"]
+        finally:
+            C.engine_ready = real
+        # the name guard is as before: another voice's folder is refused, a new name isn't
+        p = SimpleNamespace(name="squidward")
+        try:
+            check_voice_name(p, "squidward-tentacles")
+            raise AssertionError("another voice's folder accepted")
+        except ModelError:
+            pass
+        check_voice_name(p, "squidward-uc")
+    return "likeness from its own save; guessed persons; Squidward corrected by its display; cards open; guard unchanged"
+
+
 @check("DoubleAgent's project Pause holds (Internal Affairs P2-2): it pauses that job and sets the hold, so the queue loop doesn't start it again; prepare jobs (no trainer control) pause too")
 def u_project_pause_holds():
     from undercover.core import jobs as J, worklist
@@ -6967,7 +7047,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
