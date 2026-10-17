@@ -5762,6 +5762,8 @@ def u_page_rules():
     assert 'id="wb-fold"' in ix and "function jobShort" in work or "const jobShort" in work, "the running strip lost its phone fold"
     assert "say-short" in tut and "n === ASSIGN.length" in tut, "the First assignment band lost its one-clause phone form or shows Skip on the last step"
     assert "Starts ${clock(w.start)}" in work and "starts at ${clock(w.settings.start_at)}" not in work, "Tonight's start must be the status's real start (qa19), not the saved setting"
+    # qa20 (phase 26's page side): Improve's words on the A/B, its numbers in Deep, "nothing new to learn from" in the report
+    assert "function measuresText" in work and "nothing_new" in work and "ab-words" in da and "measuresText(st.measures)" in da, "Improve's words or its Deep numbers are gone from the page"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
