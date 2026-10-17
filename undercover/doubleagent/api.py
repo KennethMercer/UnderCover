@@ -460,6 +460,14 @@ def start_auto(name: str, b: dict):
         job.finish("done", message=f"{done} {c['note']}" if c else done, voice=name, pending_for=owner,
                    cadence=c)
 
+    try:   # its time left is the whole voice's (P8-10: "about 6 min left" was the download step's), the queue's estimator
+        from .night import estimate
+        est = estimate({"kind": "new", "target": proj.person or proj.name,
+                        **({"mode": "speaking"} if proj.mode == "speaking" else {})})
+        job.planned_s = est["total"] * 60.0
+        job.after_eta_s = max(0.0, est["total"] - est.get("prepare", 0) - est.get("train", 0)) * 60.0
+    except Exception:   # noqa: BLE001 - extrapolated from its progress instead
+        pass
     job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}
     job.control = control
     jobs.GPU_QUEUE.put((job, run))

@@ -12,13 +12,14 @@ Other modules (FrontMan's one-shot, SpeakEasy) use voices through this file only
   cadence_status               has / can make / queued, for a voice row
   start_cadence, start_new_voice   "Train cadence" / "New voice" as queue items (now or tonight)
 """
+import json
 import re
 from pathlib import Path
 import time
 
-from ..core.config import CONFIG
+from ..core.config import CONFIG, path
 from ..core.voices import ModelError, display_name, slug
-from ..core import gpu, jobs
+from ..core import fsutil, gpu, jobs
 from ..core.jobs import Paused
 
 
@@ -309,7 +310,26 @@ def check_estimate_s(person: str, voices: int) -> float:
         ready = proj is not None and proj.kept_seconds() >= 60
     except Exception:   # noqa: BLE001 - an odd project: the longer way
         ready = False
-    return (CHECK_CLIPS_READY_S if ready else CHECK_CLIPS_S) + CHECK_PER_VOICE_S * max(1, voices)
+    m = _check_speed()   # measured on this PC (P8-4: 213-253 s promised, about 400 s measured)
+    clips = m.get("clips_ready" if ready else "clips_new") or (CHECK_CLIPS_READY_S if ready else CHECK_CLIPS_S)
+    return clips + (m.get("per_voice") or CHECK_PER_VOICE_S) * max(1, voices)
+
+
+def _check_speed() -> dict:
+    try:
+        return json.loads((path("cache_dir") / "check_speed.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_check(key: str, seconds: float):
+    """A check's measured time, kept as a running average (the next estimate)."""
+    d = _check_speed()
+    d[key] = round(seconds if d.get(key) is None else 0.6 * d[key] + 0.4 * seconds, 1)
+    try:
+        fsutil.write_text(path("cache_dir") / "check_speed.json", json.dumps(d))
+    except OSError:
+        pass
 
 
 def train_estimate_s(person: str) -> float:
@@ -363,6 +383,15 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         cands = [v for v in cands if v.name != weak_trained.name]
     community = [] if prefer_train else cands
     online = [] if prefer_train else online_for(person, 2)
+    have = {slug(v.name) for v in community} | {v.source for v in community if v.source}
+    seen, uniq = set(), []
+    for r in online:   # P8-4: the same candidate was downloaded twice (installed already, or listed twice)
+        key = f"{r.repo}/{r.file}"
+        if key in seen or slug(r.name) in have or getattr(r, "url", None) in have:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    online = uniq
     checked = []
     if community or online:
         # said as it is, with the check's own time (not a training's worst case: "about 177 min left" looked hung)
@@ -370,7 +399,16 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         plan["voice_until"] = time.time() + check_estimate_s(person, n + len(online))
         push("voice", 0.02, f"Checking your {n} {person} voice{'s' if n != 1 else ''} against real clips" if n
              else f"Checking community voices of {person} against real clips")
+        t_clips = time.time()
+        from .night import _project_named
+        before = _project_named(person)
+        try:
+            ready_before = before is not None and before.kept_seconds() >= 60
+        except Exception:   # noqa: BLE001 - as check_estimate_s
+            ready_before = False
         proj = reference_clips(job, person, control, push, plan.get("subject"))
+        _record_check("clips_ready" if ready_before else "clips_new", time.time() - t_clips)
+        t_voices = time.time()
         conv, emb = gpu.MODELS.converter, SpeakerEmbedder()
 
         def test(v, ident):
@@ -419,6 +457,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             # ValueError: no other-speaker phrases to test with, so we can't judge them and don't trust them
             checked.append({"name": "-", "verdict": "unknown", "note": "couldn't test (clips had only one speaker)"})
         plan["checked"] = checked
+        tested = [c for c in checked if c.get("verdict") not in (None, "broken", "unknown")]
+        if tested:
+            _record_check("per_voice", (time.time() - t_voices) / len(tested))
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
         from ..core import ear
         good = ear.prefer(good, name=lambda c: c["name"], score=lambda c: c["score"])   # equally good: the liked one

@@ -3306,15 +3306,15 @@ def u_likeness_word():
     from undercover.core.config import path
     from undercover.core.voices import get_voice, likeness_word, voice_info
     with isolated_data():
-        for name, lk in (("zz-t1", 0.5), ("zz-t2", 0.7), ("zz-t3", 0.8)):
+        for name, lk in (("zz-t1", 0.6), ("zz-t2", 0.7), ("zz-t3", 0.8)):
             _fake_voice(name, "trained", {"trained": True, "likeness": lk})
         _fake_voice("zz-t0", "trained", {"trained": True})
         for name in ("zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5"):
             _fake_voice(name, "https://x/y", {"person": "Zed"} if name == "zz-c5" else {})
         (path("cache_dir") / "voice_quality.json").write_text(json.dumps({
-            "zed|a": {"voice": "zz-c1", "score": 0.35}, "zed|b": {"voice": "zz-c2", "score": 0.5},
-            "zed|c": {"voice": "zz-c3", "score": 0.6}, "zed|d": {"voice": "zz-c4", "score": -0.02, "verdict": "bad"},
-            "other|e": {"voice": "zz-c5", "score": 0.7}, "zed|f": {"voice": "zz-c5", "score": 0.32}}), encoding="utf-8")
+            "zed|a": {"voice": "zz-c1", "score": 0.6}, "zed|b": {"voice": "zz-c2", "score": 0.75},
+            "zed|c": {"voice": "zz-c3", "score": 0.85}, "zed|d": {"voice": "zz-c4", "score": -0.02, "verdict": "bad"},
+            "other|e": {"voice": "zz-c5", "score": 0.9}, "zed|f": {"voice": "zz-c5", "score": 0.6}}), encoding="utf-8")
         got = {n: likeness_word(get_voice(n)) for n in ("zz-t0", "zz-t1", "zz-t2", "zz-t3", "zz-c1", "zz-c2", "zz-c3", "zz-c4", "zz-c5")}
         assert got == {"zz-t0": None, "zz-t1": "fair", "zz-t2": "good", "zz-t3": "great", "zz-c1": "fair", "zz-c2": "good",
                        "zz-c3": "great", "zz-c4": "poor", "zz-c5": "fair"}, got   # c5: its own person's check, not another's
