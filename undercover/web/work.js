@@ -49,6 +49,8 @@ function jobLine(j, withLeft = true) {
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
+// a voice id read as a person ("barack-obama-uc" -> "Barack Obama"): the voice's display name when it's listed, else the id's own words; anything else as it is
+const niceName = s => !s ? "" : VOICES.has(s) ? voiceDisplay(s) : /^[a-z0-9]+(-[a-z0-9]+)*-uc$/.test(s) ? s.slice(0, -3).split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ") : s;
 const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
 const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9) - ((WAIT_ORDER.indexOf(b.kind) + 1) || 9));
 
@@ -266,7 +268,7 @@ async function loadQueue() {
   try { W.last = await api("/api/work"); } catch (e) { return; }
   renderQueue();
 }
-const jobWhat = i => ({ improve: `Improve ${esc(i.display || i.target)}`, cadence: `Cadence for ${esc(i.display || i.target)}`,
+const jobWhat = i => ({ improve: `Improve ${esc(niceName(i.display || i.target))}`, cadence: `Cadence for ${esc(niceName(i.display || i.target))}`,
                         newcad: `New voice with cadence: ${esc(i.target)}`,
                         project: `Training ${esc(i.display || i.target)} (your choices)` })[i.kind] || `Train a new voice: ${esc(i.target)}`;
 const jobKind = i => ({ improve: "voice · improve", new: "voice · new", cadence: "cadence", newcad: "voice + cadence", project: "voice · your choices" })[i.kind] || esc(i.kind);
@@ -357,6 +359,7 @@ function reportOutcome(x) {
   return x.before != null || x.after != null ? "not_better" : "";
 }
 const REPORT_PLAIN = { waiting: "Listen to both on its card and keep the one you like.", not_better: "The retrained one didn't beat it, so your voice stays." };
+const reportName = x => x.voice && VOICES.has(x.voice) ? voiceDisplay(x.voice) : niceName(x.display || x.voice || x.target);   // the person's name, never the voice id
 function renderReport(r) {
   const box = $("#q-report");
   box.hidden = !r || !r.results?.length;
@@ -374,7 +377,7 @@ function renderReport(r) {
     const hasNum = /\d\.\d{2,}/.test(raw);   // the server's note quotes the scores: Deep Cover; basic says it plainly
     const plain = hasNum ? REPORT_PLAIN[oc] || "" : raw;
     const up = oc === "better" || oc === "new" || oc === "waiting";
-    return `<div class="qres"><div><b>${esc(x.voice ? voiceDisplay(x.voice) : x.display || x.target)}</b> ${what}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
+    return `<div class="qres"><div><b>${esc(reportName(x))}</b> ${what}${plain ? `<p class="meta">${esc(plain)}</p>` : ""}${hasNum ? `<p class="meta" data-deep>${esc(raw)}</p>` : ""}${deep}</div>
       <div class="qres-r"><span class="${up ? "up" : "same"}">${oc ? esc(REPORT_WORDS[oc] || oc) : esc(x.state)}</span>${words ? `<span class="meta">${words}</span>` : ""}${numbers ? `<span class="mono meta" data-deep>${esc(numbers)}</span>` : ""}</div></div>`;
   }).join("");
 }
