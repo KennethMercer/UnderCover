@@ -220,7 +220,9 @@ function renderRunRoom() {
   // tonight: the overnight queue (its full editor stays on DoubleAgent's page)
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
-  $("#rn-total").textContent = !left.length ? "" : [w.total_min ? `About ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : ""].filter(Boolean).join(" · ");   // a job that waits says so on its row
+  // the real start (status `start`, counted inside the night window from now), the time, done by; a job that waits says so on its row
+  $("#rn-total").textContent = !left.length ? "" : [w.armed ? (w.starts_now ? "Starts now" : w.start ? `Starts ${clock(w.start)}` : "") : "Not started yet",
+    w.total_min ? `about ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : ""].filter(Boolean).join(" · ");
   $("#rn-opts").hidden = !left.length;
   $("#rn-when").hidden = false;   // one time control, "Starts at [11:00 PM]" (consult round 2, 4.1): settable any time; the word is a button only when a press would arm the queue
   showTimes(w);
@@ -307,7 +309,7 @@ function renderDrawer() {
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const tonight = !w ? `<small>Loading…</small>` : !left.length ? `<small>Nothing for tonight.</small>`
     : `<b>${left.length} job${left.length > 1 ? "s" : ""}${w.total_min ? ` · about ${fmtMin(w.total_min)}` : ""}</b><small>${[
-        w.armed ? (w.settings.start_at && !w.start_now ? `starts at ${clock(w.settings.start_at)}` : "running") : "not started yet",
+        w.armed ? (w.starts_now ? "starts now" : w.start ? `starts at ${clock(w.start)}` : "running") : "not started yet",   // the real start, not the saved setting
         w.done_by ? `done by about ${clock(w.done_by)}` : "", w.waits ? `${w.waits} wait${w.waits > 1 ? "" : "s"} for the next night` : ""].filter(Boolean).join(" · ")}</small>`;
   put($("#qd-glance"), `${now}<div class="g"><span class="k">Tonight</span><div>${tonight}</div></div>`);
 }

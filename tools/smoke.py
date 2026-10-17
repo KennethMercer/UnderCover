@@ -5331,6 +5331,7 @@ def u_page_rules():
     assert 'class="frow"' in ix and "function stOpen" in rooms_js and 'id="st-make"' in ix and 'id="st-keep"' in ix, "Storage lost its two groups of rows"
     assert 'id="wb-fold"' in ix and "function jobShort" in work or "const jobShort" in work, "the running strip lost its phone fold"
     assert "say-short" in tut and "n === ASSIGN.length" in tut, "the First assignment band lost its one-clause phone form or shows Skip on the last step"
+    assert "Starts ${clock(w.start)}" in work and "starts at ${clock(w.settings.start_at)}" not in work, "Tonight's start must be the status's real start (qa19), not the saved setting"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
