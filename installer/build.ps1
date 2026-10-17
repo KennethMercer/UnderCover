@@ -23,7 +23,7 @@ try {
 } finally { Pop-Location }
 $assets = Join-Path $root 'undercover\assets'
 foreach ($f in @('sample\sample.json', 'sample\hold-on.mp3', 'sample\classified\hold-on (full).mp3',
-                 'demo-voice\greetings\greetings.json', 'demo-voice\agent-smoke\tts\ref.wav')) {
+                 'demo-voice\greetings\greetings.json', 'demo-voice\agent-smoke\tts\ref.wav', 'reader-prints.json')) {
     if (-not (Test-Path (Join-Path $assets $f))) { throw "Missing from the build: undercover\assets\$f" }
 }
 $greet = Get-Content (Join-Path $assets 'demo-voice\greetings\greetings.json') -Raw | ConvertFrom-Json

@@ -2474,6 +2474,7 @@ def u_person_search():
     assert "{name} talks" not in S.QUERIES["speaking"] and "{name} address" in S.QUERIES["speaking"]
     src = inspect.getsource(service.train_new_voice)
     assert "expected_clean(" in src and 'by="DoubleAgent"' in src and "not s.user" in src, "Do it all lost its rank or its gate"
+    assert "s.note != srcmod.ABOUT_NOTE" in src, "Do it all may tick talk about the person back in when it's short"
     return "3 'about him' and 1980 unticked; addresses > rally > chamber; recent > 1980; Do it all ranks and gates"
 
 
@@ -2553,6 +2554,15 @@ def u_reader_print():
         meta = _json.loads((get_voice("pv-uc").dir / "meta.json").read_text(encoding="utf-8"))
         assert meta["extra"]["print_vote"] == vote and service.print_vote(get_voice("pv-uc")) == vote
         assert service.print_vote(get_voice("downloaded")) is None
+        _fake_project("noref", "No Ref", n_phrases=6, other=0, n_sources=1)
+        P2 = __import__("undercover.doubleagent.project", fromlist=["Project"]).Project
+        pr = P2.load("noref")
+        pr.reference = {}
+        pr.save()
+        _voice_dir("noref-uc", {"project": "noref"})
+        assert service.print_vote(get_voice("noref-uc")) is None
+        assert "print_vote" in _json.loads((get_voice("noref-uc").dir / "meta.json").read_text(encoding="utf-8"))["extra"], \
+            "a project without a reference voice is read again on every listing"
     return f"prints vote their Readers right ({right}/{len(prints)}); Trump -> am_fenrir, Kristen -> af_; never British unasked; kept once"
 
 
