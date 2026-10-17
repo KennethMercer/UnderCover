@@ -6,7 +6,7 @@
 .DESCRIPTION
   Everything goes inside -InstallDir (default: the folder above this script), so uninstalling is
   deleting that folder. Nothing system-wide is changed: no PATH edits, no registry, no admin.
-  The app code (undercover\, config.toml, check_env.py) must already be in -InstallDir; the
+  The app code (undercover\, with its default settings, and tools\check_env.py) must already be in -InstallDir; the
   Inno Setup installer copies it there before running this.
 
   Re-running is safe: finished steps are skipped (use -Force to redo the Python packages).
@@ -181,7 +181,10 @@ if ($Repair) {
         $cfgPath = Join-Path $InstallDir 'config.toml'
         $cfgText = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw } else { '' }
         $m = [regex]::Match($cfgText, '(?m)^backend\s*=\s*"(\w+)"')
-        if ($m.Success) { $Backend = if ($m.Groups[1].Value -eq 'cuda') { 'cuda128' } else { $m.Groups[1].Value } }
+        $was = if ($m.Success) { $m.Groups[1].Value } elseif (Test-Path $Py) {   # the defaults hold it when the user's file doesn't
+            Push-Location $InstallDir; try { (& $Py -m undercover.core.config get gpu backend 2>$null | Out-String).Trim() } finally { Pop-Location }
+        } else { '' }
+        if ($was) { $Backend = if ($was -eq 'cuda') { 'cuda128' } else { $was } }
     }
     if (Test-Path $Py) {
         Push-Location $InstallDir
@@ -332,16 +335,11 @@ if ($gpu -and $Backend -ne 'cpu') {
 }
 $cfgBackend = $Backend -replace '^cuda\d+$', 'cuda'      # config knows rocm / cuda / cpu
 if ($DryRun) { Info "[dry-run] config.toml [gpu] device_name = `"$deviceName`", backend = `"$cfgBackend`"" }
-elseif (Test-Path $cfg) {
-    $text = Get-Content $cfg -Raw
-    $text = [regex]::Replace($text, '(?m)^device_name\s*=\s*".*?"', "device_name = `"$deviceName`"")
-    if ($text -match '(?m)^backend\s*=') {
-        $text = [regex]::Replace($text, '(?m)^backend\s*=\s*".*?"', "backend = `"$cfgBackend`"")
-    } else {   # config.toml from before the setting existed: add it under device_name
-        $text = [regex]::Replace($text, '(?m)^(device_name\s*=.*)$', "`$1`r`nbackend = `"$cfgBackend`"", 1)
-    }
-    # UTF-8 without BOM (tomllib rejects a BOM, and Windows PowerShell's 'utf8' writes one).
-    [IO.File]::WriteAllText($cfg, $text, (New-Object Text.UTF8Encoding $false))
+else {
+    # the user's config.toml (made if missing) gets only these; the rest comes from undercover\config.default.toml
+    Push-Location $InstallDir
+    try { & $Py -m undercover.core.config set gpu "device_name=$deviceName" "backend=$cfgBackend" } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { Fail "couldn't write the GPU settings to config.toml" }
     Info "device_name = `"$deviceName`", backend = `"$cfgBackend`""
 }
 
@@ -353,27 +351,24 @@ function SameDir([string]$a, [string]$b) {
 }
 $paths = [ordered]@{}
 if (-not (SameDir $LibraryDir $InstallDir)) {   # your library: songs, covers + speech, voices (with their cadence)
-    $paths['uploads_dir'] = "'" + (Join-Path $LibraryDir 'uploads') + "'"
-    $paths['output_dir']  = "'" + (Join-Path $LibraryDir 'output') + "'"
-    $paths['voices_dir']  = "'" + (Join-Path $LibraryDir 'voices') + "'"
+    $paths['uploads_dir'] = Join-Path $LibraryDir 'uploads'
+    $paths['output_dir']  = Join-Path $LibraryDir 'output'
+    $paths['voices_dir']  = Join-Path $LibraryDir 'voices'
 }
-if (-not (SameDir $WorkDir $InstallDir)) { $paths['cache_dir'] = "'" + (Join-Path $WorkDir 'cache') + "'" }
+if (-not (SameDir $WorkDir $InstallDir)) { $paths['cache_dir'] = Join-Path $WorkDir 'cache' }
 if (-not (SameDir $ModelsDir $InstallDir)) {
-    $paths['models_dir'] = "'" + (Join-Path $ModelsDir 'models') + "'"
-    if (-not $paths.Contains('voices_dir')) { $paths['voices_dir'] = '"models/voices"' }   # voices stay with the library
+    $paths['models_dir'] = Join-Path $ModelsDir 'models'
+    if (-not $paths.Contains('voices_dir')) { $paths['voices_dir'] = 'models/voices' }   # voices stay with the library
 }
 if ($paths.Count) {
     Step "Writing where your files live"
     if ($DryRun) { $paths.GetEnumerator() | ForEach-Object { Info "[dry-run] config.toml [paths] $($_.Key) = $($_.Value)" } }
     else {
-        $text = Get-Content $cfg -Raw
-        foreach ($k in $paths.Keys) {
-            $line = "$k = $($paths[$k])"
-            if ($text -match "(?m)^$k\s*=") { $text = [regex]::Replace($text, "(?m)^$k\s*=.*$", { param($m) $line }) }
-            else { $text = [regex]::Replace($text, '(?m)^(uploads_dir\s*=.*)$', { param($m) $m.Value + "`r`n" + $line }, 1) }
-            Info $line
-        }
-        [IO.File]::WriteAllText($cfg, $text, (New-Object Text.UTF8Encoding $false))
+        $kv = @($paths.Keys | ForEach-Object { "$_=$($paths[$_])" })   # one argument each (spaces kept): strings in the user's file
+        Push-Location $InstallDir
+        try { & $Py -m undercover.core.config set paths @kv } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) { Fail "couldn't write where your files live to config.toml" }
+        $kv | ForEach-Object { Info $_ }
     }
 }
 }

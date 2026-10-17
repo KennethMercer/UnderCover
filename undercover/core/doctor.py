@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 
 from . import manifest, setup_models, storage
-from .config import CONFIG, ROOT, path
+from .config import CONFIG, CONSTRAINTS, ROOT, path
 from .voices import ModelError
 
 STALE_HOURS = 6
@@ -837,7 +837,7 @@ def fix_packages(dry_run: bool = False) -> dict:
     with tempfile.TemporaryDirectory() as d:
         req = Path(d) / "repair.txt"
         req.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        args = ["install", "--no-deps", "--require-hashes", "-c", str(ROOT / "constraints.txt"), "-r", str(req)]
+        args = ["install", "--no-deps", "--require-hashes", "-c", str(CONSTRAINTS), "-r", str(req)]
         if dry_run:
             args.insert(1, "--dry-run")
         log(("dry run: " if dry_run else "") + "reinstalling pinned packages: " + ", ".join(l.split()[0] for l in lines))

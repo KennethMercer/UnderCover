@@ -1,4 +1,7 @@
 # Personal data and downloads: never commit.
+# The user's own settings (only what differs from undercover/config.default.toml) and the full file migrate() kept.
+/config.toml
+/config.before-defaults*.toml
 .venv/
 models/
 cache/

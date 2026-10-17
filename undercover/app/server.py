@@ -48,7 +48,8 @@ for ext, mt in ((".flac", "audio/flac"), (".mp3", "audio/mpeg"), (".wav", "audio
 def code_stamp() -> float:
     """Newest modification time of the server's Python code and config. If it changes after startup, the
     running process is out of date (Python doesn't reload code), and the page tells the user to restart."""
-    files = list(PKG.rglob("*.py")) + [ROOT / "config.toml"]
+    from ..core import config
+    files = list(PKG.rglob("*.py")) + [config.CONFIG_FILE, config.DEFAULT_FILE]
     return max((f.stat().st_mtime for f in files if f.exists()), default=0.0)
 
 

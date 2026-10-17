@@ -40,6 +40,11 @@ the glasses in the top bar.
 The step-by-step for friends is [installer/FRIENDS.md](installer/FRIENDS.md). From a source checkout:
 `powershell -ExecutionPolicy Bypass -File installer\setup.ps1`, then `UnderCover.bat`.
 
+**Your settings** live in `config.toml` in the app folder, and it holds only what you (or setup) changed. The defaults
+ship with the code in `undercover/config.default.toml`, so an update brings new defaults without touching your
+choices. The folder itself: `undercover/` (the app), `installer/`, `tools/` (the tests and the command-line cover tool,
+`tools\cover.bat`).
+
 ## First run
 
 **The First assignment** walks you through a cover in about ten minutes: a short sample song, *Hold On*, sung by
