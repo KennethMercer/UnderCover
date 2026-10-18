@@ -485,7 +485,7 @@ def status() -> dict:
         ev = j.events[-1] if j.events else {}
         running.append({"job": j.id, "kind": j.kind, "label": (j.resume_spec or {}).get("label") or j.kind,
                         "message": ev.get("message") or ev.get("note") or ev.get("label") or ev.get("stage"),
-                        "epoch": ev.get("epoch"), "epochs": ev.get("epochs"), "eta": ev.get("eta"),
+                        "epoch": ev.get("epoch"), "epochs": ev.get("epochs"), "planned": ev.get("planned"), "eta": ev.get("eta"),
                         "fraction": ev.get("fraction", ev.get("frac")), "pausing": j.pausing,
                         # P8-5: what a pause waits for (it lands at the end of the step under way)
                         "pausing_note": (f"Pausing at the end of this step ({ev.get('label') or ev.get('message') or 'the current step'})"
@@ -498,6 +498,14 @@ def status() -> dict:
     start = now
     if st["settings"].get("start_at") and not starts_now and not all(i.get("now") for i in left):
         start = _next_time(st["settings"]["start_at"], now)   # "done by" = the shown start time + the work, armed or stopped
+    # rc-fix3 (IA pass 11 B3): nothing runs while every item left waits to try again (YouTube blocked downloads): the
+    # queue starts at the earliest retry, and says so ("Waits for YouTube until 2:09 am"), not "starts now"
+    retry = {i["id"]: datetime.fromtimestamp(i["retry_after"]) for i in left
+             if i["state"] == "queued" and i.get("retry_after", 0) > now.timestamp()}
+    waits_until = None
+    if left and retry and not running and all(i["id"] in retry for i in left if i["state"] in ("queued", "paused")):
+        waits_until = min(retry.values())
+        start, starts_now = max(start, waits_until), False
     dl = _deadline(start) if st["armed"] and not st.get("start_now") else None
     t, waits = start, set()
     for i in left:   # as pick() goes: one that won't finish in time waits; the ones after it may still fit
@@ -508,8 +516,11 @@ def status() -> dict:
             t += m
     total = sum(i.get("estimate", {}).get("total", 0) for i in left if i["id"] not in waits)
     return {"held": st["held"], "resume": [_resume_row(s) for s in st["resume"]], "running": running,
-            "queue": [{**i, "display": _shown(i), **({"waits_next_night": True} if i["id"] in waits else {})}
+            "queue": [{**i, "display": _shown(i), **({"waits_next_night": True} if i["id"] in waits else {}),
+                       **({"retry_at": retry[i["id"]].strftime("%H:%M")} if i["id"] in retry else {})}
                       for i in st["queue"]], "armed": st["armed"],
+            "waits_until": waits_until.strftime("%H:%M") if waits_until else None,
+            "waits_for": "YouTube" if waits_until else None,
             "start_now": bool(st.get("start_now")), "starts_now": starts_now and bool(left), "settings": st["settings"],
             "report": st["report"], "total_min": total, "start": start.strftime("%H:%M") if left else None,
             "done_by": t.strftime("%H:%M") if left and len(waits) < len(left) else None, "waits": len(waits)}
@@ -657,6 +668,7 @@ def _run_item(item: dict):
     if est.get("total"):   # its time left: the whole item's, from its own estimate (P8-3, P8-10)
         job.planned_s = est["total"] * 60.0
         job.after_eta_s = max(0.0, est["total"] - est.get("prepare", 0) - est.get("train", 0)) * 60.0
+        job.plan_min = dict(est)
     label = KINDS[item["kind"]]["label"](item)
     job.resume_spec = {"kind": "night", "item": item["id"], "label": label}
     with _LOCK:
@@ -684,7 +696,8 @@ def _run_item(item: dict):
                     item.update(state="queued", retry_after=at,
                                 note=f"{e} Trying again at {time.strftime('%H:%M', time.localtime(at))}.")
                     _save()
-                job.finish("error", message=f"{e} The queue tries again at {time.strftime('%H:%M', time.localtime(at))}.")
+                job.finish("error", message=f"{e} The queue tries again at {time.strftime('%H:%M', time.localtime(at))}.",
+                           retry_at=time.strftime("%H:%M", time.localtime(at)))   # Recent: "will retry", not "failed" (B3)
                 return
             if type(e).__name__ == "Cancelled":
                 res, state = {"note": "cancelled"}, "skipped"

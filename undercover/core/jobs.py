@@ -167,6 +167,7 @@ class Job:
         self._p0 = None           # first whole-job progress (t, p)
         self.planned_s = None     # the whole job's own estimate, when it has one (queue items, Do it all)
         self.after_eta_s = 0.0    # what follows a training's own eta (export, compare, cadence)
+        self.plan_min = None      # the estimate behind planned_s, by step ({prepare, train, compare, total} minutes)
         self._left = None         # the last time left said (value, t): it never climbs fast (P8-3)
 
     def push(self, **ev):
@@ -189,6 +190,9 @@ class Job:
                 self.stage_secs[self._stage[0]] = now - self._stage[1]
             self._stage = (stage, now, None)
         if ev.get("total_left") is not None:
+            return
+        if ev.get("left_est") is not None:   # a step that knows its own remaining work (rc-fix3: Do it all's preparation)
+            ev["total_left"] = self._said(max(0.0, float(ev.pop("left_est"))), now)
             return
         if ev.get("eta") is not None:
             ev["total_left"] = self._said(ev["eta"] + (self.after_eta_s or 0.0), now)

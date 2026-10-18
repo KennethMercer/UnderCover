@@ -128,6 +128,15 @@ def choose_holdout(proj: Project) -> list[str]:
     return picked
 
 
+def epoch_line(ev: dict) -> str:
+    """ "Training: epoch 10 of about 525" for an auto run (it stops by itself near its planned end, up to the cap),
+    "Training: epoch 530, past the planned 525 (up to 1000)" once past it; "of N" for a run of a given length."""
+    e, n, p = ev.get("epoch", 0), ev.get("epochs"), ev.get("planned")
+    if p and n and p < n:
+        return f"Training: epoch {e} of about {p}" if e <= p else f"Training: epoch {e}, past the planned {p} (up to {n})"
+    return f"Training: epoch {e} of {n}"
+
+
 def data_key_for(proj: Project, sr: int) -> tuple[str, list[str], list[str]]:
     """(key, kept ids, holdout ids) for the current sample selection; the key changes when samples change."""
     kept = sorted(p.id for p in proj.training_phrases())   # an unticked source's phrases never train (smallfix7)
@@ -405,6 +414,9 @@ class Trainer:
             st["planned_epochs"] = int(np.clip(round(planned / steps_per_epoch), 1, st["epochs"]))
         max_epochs = int(st["epochs"])
         planned_epochs = int(st.get("planned_epochs") or max_epochs // 2 or 1)
+        # what the progress says: an auto run stops by itself past its planned epochs (rc-fix3: "epoch 10 of 1000" for a
+        # run that stopped near 525); a given length runs to its end
+        planned_shown = planned_epochs if length == "auto" and not st.get("steps") and planned_epochs < max_epochs else None
         save_every = max(1, round(SAVE_STEPS / steps_per_epoch))
         patience = max(10, planned_epochs // 4)     # auto: past the planned budget, stop when the held-out loss stalls
         st.update(state="training", steps_per_epoch=steps_per_epoch, error="")
@@ -469,7 +481,7 @@ class Trainer:
                             eta = st["sec_per_epoch"] * left                   # recent epochs: no warm-up skew
                         else:
                             eta = train_eta(left * len(batches), steps_run, time.time() - warm, prior_step)
-                        report(stage="training", epoch=epoch, epochs=max_epochs,
+                        report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown,
                                fraction=(epoch - 1 + (bi + 1) / len(batches)) / max_epochs, eta=eta,
                                sec_per_epoch=st.get("sec_per_epoch"))
                 if control.wants_out() and bi < len(batches) - 1:
@@ -512,7 +524,7 @@ class Trainer:
                         st["resume_step"] = epoch * steps_per_epoch
                     self._prune_saves()
                 proj.save_train()
-                report(stage="training", epoch=epoch, epochs=max_epochs, fraction=epoch / max_epochs,
+                report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown, fraction=epoch / max_epochs,
                        eta=st["sec_per_epoch"] * (max_epochs - epoch), saved=saved, history=h,
                        sec_per_epoch=st["sec_per_epoch"])
                 # auto: stop once held-out loss hasn't improved for 100 epochs (after at least 150)
