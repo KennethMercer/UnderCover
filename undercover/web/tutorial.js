@@ -49,7 +49,7 @@ async function assignBoot() {
   assignReady(s);
   assignBrief();
 }
-// The first-run download (~600 MB of voice tools), said on the brief where a new user is, not only in SafeHouse > System. A bar that moves when the
+// The first-run download (about 1.3 GB of voice tools: the status's models_mb), said on the brief where a new user is, not only in SafeHouse > System. A bar that moves when the
 // status carries models_progress (0-1); until then it shows that something is happening.
 function assignReady(s) {
   const box = $("#assign-ready"); if (!box) return;
@@ -57,6 +57,7 @@ function assignReady(s) {
   box.hidden = !on;
   if (!on) return;
   const p = s.models_progress, bar = $("#assign-ready-bar");
+  $("#assign-ready-size").textContent = modelsSize(s);   // the real size, from the status (app.js)
   bar.classList.toggle("indet", p == null);
   $("i", bar).style.width = p != null ? `${Math.round(p * 100)}%` : "";
 }
