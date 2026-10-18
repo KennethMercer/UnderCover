@@ -3192,8 +3192,8 @@ def u_installer_failure():
     assert "if CurStep = ssPostInstall then RunSetup;" in code and "ewWaitUntilTerminated, SetupCode" in code
     assert "if SetupOK then CreateLaunchers;" in code and "'Try again'" in code and "setup-result.txt" in code
     assert "isn''t ready yet" in code and "logs\\setup.log" in code
-    unin = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
-    assert '{group}\\{#AppName}.lnk' in unin and '{userdesktop}\\{#AppName}.lnk' in unin
+    # the launch shortcuts go at uninstall, only those that start this install (u_installer_quiet)
+    assert "RemoveOurLinks(ExpandConstant('{group}'))" in code and "RemoveOurLinks(ExpandConstant('{userdesktop}'))" in code
     assert all(ord(c) < 128 for c in iss + setup), "the installer's scripts must stay ASCII"
     if os.name != "nt":
         return "the code path (no Windows here to run setup.ps1)"
@@ -3295,6 +3295,129 @@ def u_installer_space():
     assert "ExecAndLogOutput('powershell.exe'" in e2e and "steps never reported" in e2e and "-CancelCheck" in e2e
     assert "$issFiles" in e2e and "UnderCover.iss') -Pattern" in e2e, "the release check keeps its own list of installer files (it missed space.ps1 once)"
     return f"one drive: {one} GB (22 = 9 + 10.5 + 1 + 1.5); a short drive said plainly; setup hidden, its status driving the bar; Cancel"
+
+
+@check("the installer shows only plain steps and touches only its own shortcuts, and a second copy is said plainly (installer-fix4, from the user's install: 'Press Enter to close' blocked the wizard, an add-on printed one line per MB, JSON reached the screen; a fresh copy's 'Start now' opened the user's everyday copy; uninstalling a test install would have deleted the everyday copy's desktop shortcut)")
+def u_installer_quiet():
+    import http.server
+    import io
+    import re
+    import subprocess
+    import tempfile
+    import threading
+    from undercover import addons as addons_cli
+    from undercover.app import server
+    # an add-on's install, as the installer sees it: one plain line per file, at most one status line a second
+    out, now = io.StringIO(), [0.0]
+    prog = addons_cli.status_printer(108, out=out, clock=lambda: now[0])
+    prog("Installing F5-TTS's Python packages", 0, 0)
+    for f in ("model.bin", "vocab.txt"):
+        for mb in range(1, 55):
+            now[0] += 0.25
+            prog(f"Downloading F5-TTS: {f}", mb * 1_000_000, 54_000_000)
+    lines = out.getvalue().splitlines()
+    plain = [x for x in lines if not x.startswith("@@P ")]
+    assert plain == ["Installing F5-TTS's Python packages", "Downloading F5-TTS: model.bin (54 MB)",
+                     "Downloading F5-TTS: vocab.txt (54 MB)"], plain
+    pm = [int(re.match(r"@@P (\d+)\|", x).group(1)) for x in lines if x.startswith("@@P ")]
+    assert 20 <= len(pm) <= 35, f"{len(pm)} status lines for 27 s of downloading (one a second, plus each file's end)"
+    assert pm == sorted(pm) and pm[-1] == 990 and pm[len(pm) // 2] > 300, pm
+    assert "@@P 500|Downloading F5-TTS: model.bin: 54 of 54 MB" in lines, "a file's end is always said"
+    cli = Path(addons_cli.__file__).read_text(encoding="utf-8")
+    assert "return 3" in cli and "--cancel-file" in cli and "except InterruptedError" in cli
+
+    # the port is taken: by this copy (open it), another copy (say so, never open it as this one), or another program
+    class Fake(http.server.BaseHTTPRequestHandler):
+        answer = None
+
+        def do_GET(self):   # noqa: N802
+            body = json.dumps(Fake.answer).encode() if Fake.answer is not None else b"<html>not here</html>"
+            self.send_response(200 if Fake.answer is not None else 404)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Fake)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        Fake.answer = {"build": "x", "app_folder": "X:\\Other <copy>"}
+        other = server.who_has_port("127.0.0.1", port)
+        assert other == {"kind": "other", "folder": "X:\\Other <copy>"}, other
+        head, advice = server.port_taken_text(port, other)
+        assert head == "Another copy of UnderCover is already running (X:\\Other <copy>)." and "Quit that one first" in advice
+        page = server.port_taken_page(port, other)
+        assert "X:\\Other &lt;copy&gt;" in page and f'href="http://127.0.0.1:{port}/">Open that copy' in page
+        Fake.answer = {"build": "x", "app_folder": str(server.ROOT)}
+        assert server.who_has_port("127.0.0.1", port) == {"kind": "this"}
+        Fake.answer = {"build": "x"}   # an UnderCover from before app_folder
+        assert server.port_taken_text(port, server.who_has_port("127.0.0.1", port))[0] == "Another copy of UnderCover is already running."
+        Fake.answer = None
+        foreign = server.who_has_port("127.0.0.1", port)
+        assert foreign["kind"] == "foreign", foreign
+        if os.name == "nt":
+            assert (foreign["owner"] or "").lower() in ("python.exe", "pythonw.exe"), ("the port's holder isn't named", foreign)
+        head = server.port_taken_text(port, foreign)[0]
+        assert head.startswith("Another program") and f"port {port}" in head and "Open that copy" not in server.port_taken_page(port, foreign)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    src = Path(server.__file__).read_text(encoding="utf-8")
+    start = src[src.index("    if srv is None:"):src.index("    srv.daemon_threads = True")]
+    assert "_say_port_taken(host, port)" in start and "webbrowser" not in start, "a taken port opens the page there, whoever has it"
+
+    # setup: nothing waits for input, no tool output or JSON on screen, the add-on's progress drives the bar
+    inst = ROOT / "installer"
+    setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
+    run_code = setup[setup.index("function RunCode"):setup.index("function Run(")]
+    assert "Out-Host" not in run_code and "Write-Host \"    [dry-run]" in run_code, "a tool's output reaches the screen"
+    assert "'--status', '--cancel-file', $CancelFile" in setup and "if ($code -eq 3) { Cancelled }" in setup
+    assert "RunStatus $Py @('-m', 'undercover.addons', 'install'" in setup and "Run $Py @('-m', 'undercover.addons'" not in setup
+    assert "1-3 GB" not in setup, "the closing words still guess the models' size"
+    if os.name == "nt":   # setup's own RunStatus, run for real on a child printing an add-on's progress
+        fn = setup[setup.index("function RunStatus"):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        tmp = Path(tempfile.mkdtemp(prefix="uc-runstatus-"))
+        try:
+            child = tmp / "child.py"
+            child.write_text("import sys\nprint('Downloading F5-TTS: model.bin (54 MB)', flush=True)\n"
+                             "print('@@P 250|Downloading F5-TTS: model.bin: 27 of 54 MB', flush=True)\n"
+                             "print('a warning', file=sys.stderr, flush=True)\n"
+                             "print('@@P 990|Downloading F5-TTS: model.bin: 54 of 54 MB', flush=True)\nsys.exit(3)\n", encoding="utf-8")
+            ps1 = tmp / "t.ps1"
+            ps1.write_text("$ErrorActionPreference = 'Stop'\n$DryRun = $false\n$script:logged = @(); $script:said = @()\n"
+                           "function Log([string]$m) { $script:logged += $m.Trim() }\n"
+                           "function Status([string]$d = '', [double]$f = -1) { $script:said += ('{0:0.000}|{1}' -f $f, $d) }\n"
+                           + fn.replace("\r\n", "\n") +
+                           f"\n$code = RunStatus '{sys.executable}' @('{child}') 0.5 0.5\n"
+                           "'code=' + $code\n$script:said | ForEach-Object { 'said=' + $_ }\n$script:logged | ForEach-Object { 'log=' + $_ }\n",
+                           encoding="utf-8")
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ps1)],
+                               capture_output=True, text=True, timeout=60)
+            got = r.stdout.splitlines()
+            assert "code=3" in got, (got, r.stderr)   # the add-on's "stopped" reaches setup, which then says Cancelled
+            assert [x for x in got if x.startswith("said=")] == ["said=0.625|Downloading F5-TTS: model.bin: 27 of 54 MB",
+                                                                 "said=0.995|Downloading F5-TTS: model.bin: 54 of 54 MB"], got
+            logs = [x for x in got if x.startswith("log=")]
+            assert sorted(logs[1:]) == ["log=Downloading F5-TTS: model.bin (54 MB)", "log=a warning"] and logs[0].startswith("log=RUN "), got
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    run = iss[iss.index("function RunSetup"):iss.index("procedure CancelButtonClick")]
+    assert "-NonInteractive" in run and "-Pause" not in run, "the hidden setup could wait for input no one sees"
+    e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
+    assert '$params = "-NoProfile -NonInteractive' in e2e, "the release check doesn't run setup as the wizard does"
+    # shortcuts: only ever this install's
+    undelete = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
+    assert ".lnk" not in undelete, "the uninstaller deletes a shortcut by name, whoever it belongs to"
+    assert iss.count("CreateShellLink(") == 1 and "CreateShellLink(P," in iss, "a shortcut made without the ownership check"
+    assert "if OurLink(LinkPath(Folder, I)) then DeleteFile(LinkPath(Folder, I));" in iss
+    assert "Pos(Lowercase(AddBackslash(ExpandConstant('{app}'))), Lowercase(LinkTarget(Path))) = 1" in iss
+    assert "(not FileExists(LinkPath(Folder, I))) or OurLink(LinkPath(Folder, I))" in iss
+    assert "CurUninstallStep = usUninstall" in iss and "RemoveOurLinks(ExpandConstant('{userdesktop}'))" in iss
+    assert "SetupMessage(msgFinishedLabel) + LinkNote" in iss
+    return "add-on: 3 plain lines, %d status lines for 108 MB; a taken port named (this copy / another / %s); shortcuts checked by target" % (len(pm), foreign["owner"])
 
 
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
@@ -8568,7 +8691,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
