@@ -16,7 +16,7 @@ A pause (the GPU wanted for something else) keeps the training: the project is c
 new sandbox (a pause on 2026-10-12 lost a training 10 epochs from the end, because the sandbox took resume.pt with it).
 The model files are git-ignored (too large for the repository, MasterPlan 2026-10-12): meta.json and manifest.json are
 committed, the installer (built on this PC) packs the folder from disk, and a fresh clone runs this script once
-(--manifest-only rewrites the manifest for files already there). app/tutorial.py seeds it into the user's voices on a
+(--manifest-only rewrites the manifest for files already there). app/firstrun.py seeds it into the user's voices on a
 first run and on Replay, after checking the files against the manifest.
 """
 import argparse

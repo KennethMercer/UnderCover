@@ -1,24 +1,19 @@
-"""The First assignment's backend (phase 17; the page side is tutorial.js, contract docs/handoffs/tutorial.md).
+"""The first run's backend (1.0: the First assignment is off and parked on branch tutorial-redesign; the page's simple
+first run is in tutorial.js and oneshot.js, rc-page6). The API keeps the names the page already uses:
 
     /api/status            tutorial: {done: "YYYY-MM-DD" | "existing install" | null,
                                       demo_update: {voice, display, made} | null, demo_previous: bool}
+    POST /api/tutorial/done          the first cover or one-shot finished: marks the first run done today -> {tutorial: {done}}
     POST /api/tutorial/demo/update   a newer Agent Smoke than the one installed ships: swap it in (the old one aside)
     POST /api/tutorial/demo/undo     the previous Agent Smoke back
-    POST /api/tutorial/done    marks it done today            -> {tutorial: {done}}
-    POST /api/tutorial/reset   seeds the sample song and the demo voice again if they're gone, done = null -> {tutorial}
-    GET  /api/tutorial/greetings         Agent Smoke's greeting clips -> {greetings: [{from, to, text, url}],
-                                         followon: {text, url} | null} ({greetings: [], followon: null} until shipped)
-    GET  /api/tutorial/greetings/<file>  one of those clips (only files greetings.json names), cached a day
 
-- **State:** `tutorial.json` next to the config file (git-ignored; a sandbox has its own).
-- **First run** (`first_run`, at startup): no state yet. An install that already has covers or trained voices is an
-  "existing install" (no brief, nothing seeded; Replay seeds). A fresh one gets done = null and both seeds.
+- **State:** `tutorial.json` next to the config file (git-ignored; a sandbox has its own): {done, since}. What's new
+  stays quiet for a new copy until done is set (whatsnew.js).
+- **At startup** (`first_run`): no state yet. An install that already has covers or trained voices is an "existing
+  install" (nothing seeded). A fresh one gets done = null and both seeds, which the page's first run uses ("Hold On as
+  Agent Smoke").
 - **The sample song** (`undercover/assets/sample/`: sample.json {title, artist, file, seconds, licence, notice} + the
-  audio): registered as a normal song with `sample: true`. No audio file = no sample song (the first step then says
-  "pick any song"). The user may delete it; Replay brings it back.
-- **The greetings** (`undercover/assets/demo-voice/greetings/`: greetings.json {greetings: [{file, from, to, text}],
-  followon: {file, text}} + the mp3s): the page picks one by the browser's local hour (from inclusive, to exclusive)
-  and plays the follow-on when the song and the voice are both on the desk. Nothing else in assets is reachable.
+  audio): registered as a normal song with `sample: true`. No audio file = no sample song. The user may delete it.
 - **A newer demo voice** (the user's words: "A newer Agent Smoke is available: Update"): the installed demo voice's
   build (extra.demo_build: the SHA-256 of its model.pth, written at seeding; an older seed is hashed once) against the
   shipped manifest's. Update is the user's choice: the installed folder moves aside to voices/.agent-smoke-previous (its
@@ -26,7 +21,7 @@
   Undo swaps them back. One previous build is kept; the next update replaces it.
 - **The demo voice** "Agent Smoke" (`undercover/assets/demo-voice/agent-smoke/`, made by scripts/make_demo_voice.py):
   copied into voices_dir when it isn't there. Its meta says demo: true, trained: false; nothing treats its "person" as
-  someone to search for (core/voices.is_demo). The user may delete it; Replay brings it back.
+  someone to search for (core/voices.is_demo). The user may delete it.
 Seeding only adds; it never replaces or deletes anything of the user's.
 """
 import json
@@ -44,8 +39,6 @@ SAMPLE = ASSETS / "sample"
 DEMO = ASSETS / "demo-voice" / "agent-smoke"
 PREVIOUS = ".agent-smoke-previous"   # the demo voice before its last update (meta.json renamed: not in the voice list)
 _BUILD: dict = {}                    # (model.pth, size, mtime) -> its SHA-256: hashed once
-GREETINGS = ASSETS / "demo-voice" / "greetings"
-GREETINGS_URL = "/api/tutorial/greetings/"
 _LOCK = threading.Lock()
 
 
@@ -117,16 +110,6 @@ def mark_done() -> dict:
         st["done"] = time.strftime("%Y-%m-%d")
         _save(st)
         return {"tutorial": status()}
-
-
-def reset() -> dict:
-    """Replay: the seeds back if they're gone, and the brief shows again."""
-    with _LOCK:
-        seeded = seed()
-        st = load() or {}
-        st["done"] = None
-        _save(st)
-        return {"tutorial": status(), "seeded": seeded}
 
 
 # ---------------------------------------------------------------- the seeds
@@ -379,70 +362,17 @@ def undo_demo() -> dict:
         return {"tutorial": status()}
 
 
-# ---------------------------------------------------------------- the greetings
-
-def _greetings_manifest() -> dict:
-    try:
-        m = json.loads((GREETINGS / "greetings.json").read_text(encoding="utf-8"))
-        return m if isinstance(m, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _shipped(entry) -> bool:
-    return (isinstance(entry, dict) and isinstance(entry.get("file"), str) and "/" not in entry["file"]
-            and "\\" not in entry["file"] and (GREETINGS / entry["file"]).is_file())
-
-
-def _url(name: str) -> str:
-    """The clip's address; ?v= changes when the file does (the clips are cached a day)."""
-    from urllib.parse import quote
-    return f"{GREETINGS_URL}{quote(name)}?v={int((GREETINGS / name).stat().st_mtime)}"
-
-
-def greetings() -> dict:
-    """greetings.json with a url in place of each file; entries whose clip isn't there are left out."""
-    m = _greetings_manifest()
-    out = [{"from": int(g["from"]), "to": int(g["to"]), "text": str(g.get("text") or ""), "url": _url(g["file"])}
-           for g in m.get("greetings") or [] if _shipped(g) and isinstance(g.get("from"), int) and isinstance(g.get("to"), int)]
-    f = m.get("followon")
-    follow = {"text": str(f.get("text") or ""), "url": _url(f["file"])} if out and _shipped(f) else None
-    return {"greetings": out, "followon": follow}
-
-
-def greeting_file(name: str) -> Path | None:
-    """A clip greetings.json names (the allow-list), or None."""
-    m = _greetings_manifest()
-    named = {g.get("file") for g in m.get("greetings") or [] if _shipped(g)}
-    if _shipped(m.get("followon")):
-        named.add(m["followon"]["file"])
-    return GREETINGS / name if name in named else None
-
-
 # ---------------------------------------------------------------- routes
 
 def handle(h, method: str, p: str) -> bool:
     if not p.startswith("/api/tutorial/"):
         return False
-    if method == "GET" and p == "/api/tutorial/greetings":
-        h._json(greetings())
-        return True
-    if method == "GET" and p.startswith(GREETINGS_URL):
-        from urllib.parse import unquote
-        f = greeting_file(unquote(p[len(GREETINGS_URL):]))
-        if f is None:
-            h._error("Not found", 404)
-        else:
-            h._send_file(f, cache="public, max-age=86400")
-        return True
     if method != "POST":
         h._error("Not found", 404)
         return True
     h._body()
     if p == "/api/tutorial/done":
         h._json(mark_done())
-    elif p == "/api/tutorial/reset":
-        h._json(reset())
     elif p in ("/api/tutorial/demo/update", "/api/tutorial/demo/undo"):
         try:
             h._json(update_demo() if p.endswith("update") else undo_demo())
