@@ -163,6 +163,7 @@ async function pollStatus() {
     $("#set-away-me-row").hidden = !s.away_ready || location.protocol === "https:";   // phase 20: ready on the PC
     if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
     sysStatus(s);
+    if (typeof assignReady === "function") assignReady(s);   // the first-run download on the brief (tutorial.js)
     if (s.stale) restartNeeded();
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident
       store.set("uc-abrupt-seen", s.last_abrupt.at);

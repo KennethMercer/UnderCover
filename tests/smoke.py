@@ -6608,6 +6608,8 @@ def u_page_rules():
     assert "aimTimer = setTimeout(reaim" in tut, "the tutorial's lit edge waits for a frame that a non-painting window never gives"
     # IA pass 11 B3: the retrying state says the time once, waits for YouTube in the header, the strip and the drawer, and Recent says "waiting to retry"
     assert "function retryWait" in work and "const willRetry" in work and "Waiting for YouTube" in work and "trying again at" in work, "the retrying state lost its words"
+    # rc-page3 (the user's fresh 1.0 install): a first run lands on the First assignment with the download said there, not on a stale tab
+    assert "s.first_run && !AS.done" in tut and 'showTab("frontman")' in tut and "function assignReady" in tut and 'id="assign-ready"' in ix, "a fresh install no longer lands on the brief"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
