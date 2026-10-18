@@ -419,6 +419,24 @@ def run_text(cmd: list, timeout: float = 20) -> str:
     return r.stdout
 
 
+def port_owner(port: int) -> str | None:
+    """The program listening on a local TCP port, by name ("python.exe"), or None when nothing is or it can't be told.
+    netstat's columns are read, not its words (they're translated): a listener's remote end is 0.0.0.0:0 or [::]:0."""
+    if not WINDOWS:
+        raise _not("Naming the program that holds a port")
+    pid = None
+    for line in run_text(["netstat", "-ano", "-p", "TCP"]).splitlines() + run_text(["netstat", "-ano", "-p", "TCPv6"]).splitlines():
+        parts = line.split()
+        if (len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].rsplit(":", 1)[-1] == str(port)
+                and parts[2] in ("0.0.0.0:0", "[::]:0") and parts[4].isdigit()):
+            pid = parts[4]
+            break
+    if not pid:
+        return None
+    row = run_text(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]).strip()
+    return row.split('","')[0].strip('"') if row.startswith('"') else None
+
+
 def network_and_firewall(addr: str) -> tuple[str, str, str]:
     """(the network profile of the connection holding `addr` as JSON, the firewall profiles' state, the inbound rules):
     the raw reports core/phone.py parses. Read only; run side by side (~1 s)."""
