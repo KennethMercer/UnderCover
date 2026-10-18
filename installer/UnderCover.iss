@@ -102,9 +102,8 @@ Type: filesandordirs; Name: "{app}\models\tailscale"
 Type: filesandordirs; Name: "{app}\cache\tailscale-fetch"
 Type: filesandordirs; Name: "{app}\cache\tailscale-state"
 Type: files; Name: "{app}\UnderCover.cmd"
-; the launch shortcuts the code made after a working setup (CreateLaunchers)
-Type: files; Name: "{group}\{#AppName}.lnk"
-Type: files; Name: "{userdesktop}\{#AppName}.lnk"
+; (the launch shortcuts go in [Code] at uninstall, and only those that start THIS install: a same-named shortcut on the
+; desktop can belong to another copy of UnderCover)
 
 [Code]
 // The optional add-ons (generated from undercover/core/addons.py by build.ps1): ADDON_COUNT, AddonId(i),
@@ -124,6 +123,7 @@ var
   Progress: Integer;     // the bar's furthest position (0-1000): it never goes back
   Backend: String;       // the graphics card's PyTorch build, detected once by space.ps1
   DetailsLink, FailDetailsLink: TNewStaticText;
+  LinkNote: String;      // the last page's word on a shortcut that had to take another name (CreateLaunchers)
 
 procedure RetryClick(Sender: TObject); forward;
 procedure OpenSetupLog(Sender: TObject); forward;
@@ -313,14 +313,91 @@ begin
   Result := SetupOK;
 end;
 
+// ---------------------------------------------------------------- shortcuts: only ever this install's
+// A desktop or Start-menu "UnderCover" may belong to another copy (the user's everyday one): it's never replaced or
+// removed. Ours is then "UnderCover (2)", and the uninstaller removes only the shortcuts that start this install.
+
+// a shortcut's target ('' when it can't be read)
+function LinkTarget(Path: String): String;
+var
+  Shell, Lnk: Variant;
+begin
+  Result := '';
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    Lnk := Shell.CreateShortcut(Path);
+    Result := Lnk.TargetPath;
+  except
+    Result := '';
+  end;
+end;
+
+// the shortcut exists and starts something in this install's folder
+function OurLink(Path: String): Boolean;
+begin
+  Result := FileExists(Path) and
+    (Pos(Lowercase(AddBackslash(ExpandConstant('{app}'))), Lowercase(LinkTarget(Path))) = 1);
+end;
+
+// the I-th name a shortcut of ours can have in Folder: "UnderCover", then "UnderCover (2)" .. "(9)"
+function LinkPath(Folder: String; I: Integer): String;
+begin
+  if I = 1 then Result := AddBackslash(Folder) + '{#AppName}.lnk'
+  else Result := AddBackslash(Folder) + '{#AppName} (' + IntToStr(I) + ').lnk';
+end;
+
+// where ours goes in Folder: the first name that is free or already ours ('' if none is)
+function FreeLinkPath(Folder: String): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 1 to 9 do
+    if (not FileExists(LinkPath(Folder, I))) or OurLink(LinkPath(Folder, I)) then begin
+      Result := LinkPath(Folder, I);
+      Exit;
+    end;
+end;
+
+// ours, made in Folder; a note for the last page when it had to take another name
+procedure MakeLink(Folder, Where: String);
+var
+  P: String;
+begin
+  P := FreeLinkPath(Folder);
+  if P = '' then begin
+    LinkNote := LinkNote + #13#10#13#10 + 'No shortcut was made ' + Where + ': its UnderCover shortcuts all start other copies.';
+    Exit;
+  end;
+  CreateShellLink(P, '{#AppName}', ExpandConstant('{app}\UnderCover.cmd'), '', ExpandConstant('{app}'), '', 0, SW_SHOWNORMAL);
+  if P <> LinkPath(Folder, 1) then
+    LinkNote := LinkNote + #13#10#13#10 + 'The shortcut called UnderCover ' + Where + ' starts another copy of ' +
+      'UnderCover, so it was left alone, and this one is called ' + ChangeFileExt(ExtractFileName(P), '') + '.';
+end;
+
 // The Start-menu (and, if ticked, desktop) shortcut, made once setup has worked
 procedure CreateLaunchers;
 begin
-  CreateShellLink(ExpandConstant('{group}\{#AppName}.lnk'), '{#AppName}', ExpandConstant('{app}\UnderCover.cmd'), '',
-    ExpandConstant('{app}'), '', 0, SW_SHOWNORMAL);
-  if WizardIsTaskSelected('desktopicon') then
-    CreateShellLink(ExpandConstant('{userdesktop}\{#AppName}.lnk'), '{#AppName}', ExpandConstant('{app}\UnderCover.cmd'), '',
-      ExpandConstant('{app}'), '', 0, SW_SHOWNORMAL);
+  LinkNote := '';
+  MakeLink(ExpandConstant('{group}'), 'in the Start menu');
+  if WizardIsTaskSelected('desktopicon') then MakeLink(ExpandConstant('{userdesktop}'), 'on the desktop');
+end;
+
+// at uninstall: the shortcuts that start this install, and no other
+procedure RemoveOurLinks(Folder: String);
+var
+  I: Integer;
+begin
+  for I := 1 to 9 do
+    if OurLink(LinkPath(Folder, I)) then DeleteFile(LinkPath(Folder, I));
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then begin
+    RemoveOurLinks(ExpandConstant('{group}'));
+    RemoveOurLinks(ExpandConstant('{userdesktop}'));
+  end;
 end;
 
 procedure OpenSetupLog(Sender: TObject);
@@ -379,7 +456,8 @@ function RunSetup: Boolean;
 var
   Params: String;
 begin
-  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\setup.ps1') + '" -InstallDir "' +
+  // (-NonInteractive: anything that would wait for input fails at once, with its error, instead of hanging unseen)
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\setup.ps1') + '" -InstallDir "' +
     ExpandConstant('{app}') + '" -LibraryDir "' + GetLibraryDir('') + '" -WorkDir "' + GetWorkDir('') + '" -ModelsDir "' +
     GetModelsDir('') + '" -Addons "' + GetAddons('') + '"';
   Progress := 0;
@@ -440,7 +518,7 @@ procedure ShowOutcome;
 begin
   if SetupOK then begin
     WizardForm.FinishedHeadingLabel.Caption := 'UnderCover is installed';
-    WizardForm.FinishedLabel.Caption := SetupMessage(msgFinishedLabel);
+    WizardForm.FinishedLabel.Caption := SetupMessage(msgFinishedLabel) + LinkNote;
     RetryButton.Visible := False;
   end else begin
     WizardForm.FinishedHeadingLabel.Caption := 'UnderCover isn''t ready yet';

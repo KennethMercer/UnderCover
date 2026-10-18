@@ -81,7 +81,7 @@ $launch = Join-Path $env:TEMP ('uc-e2e-launcher-' + [guid]::NewGuid().ToString('
 New-Item -ItemType Directory -Force $launch | Out-Null
 $codeFile = Join-Path $launch 'exit.txt'
 $linesFile = Join-Path $launch 'lines.txt'
-$params = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'installer\setup.ps1')`" -InstallDir `"$dir`" -Backend $Backend"
+$params = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'installer\setup.ps1')`" -InstallDir `"$dir`" -Backend $Backend"
 $iss = @'
 [Setup]
 AppName=UnderCover installer check

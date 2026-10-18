@@ -864,6 +864,84 @@ def _clean_old_previews(max_age_h: float = 24):
                 shutil.rmtree(sub, ignore_errors=True)
 
 
+def who_has_port(host: str, port: int, timeout: float = 2.0) -> dict:
+    """The port UnderCover wants is taken: by whom. Asks the holder's /api/status, which an UnderCover answers with its
+    app_folder. -> {"kind": "this"} (this same copy: open it), {"kind": "other", "folder"} (another copy of UnderCover:
+    never open it as if it were this one) or {"kind": "foreign", "owner"} (another program; its name when the OS says)."""
+    import urllib.request
+    probe = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    st = None
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # never through a proxy
+        with opener.open(f"http://{probe}:{port}/api/status", timeout=timeout) as r:
+            st = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:   # noqa: BLE001 - not answering, or not with JSON: not an UnderCover
+        st = None
+    if isinstance(st, dict) and "build" in st:
+        folder = st.get("app_folder")
+        if folder and os.path.normcase(os.path.realpath(folder)) == os.path.normcase(os.path.realpath(str(ROOT))):
+            return {"kind": "this"}
+        return {"kind": "other", "folder": folder or ""}
+    owner = None
+    try:
+        owner = platform.port_owner(port)
+    except Exception:   # noqa: BLE001 - NotOnThisOS, or a tool that failed: the page doesn't name it
+        owner = None
+    return {"kind": "foreign", "owner": owner}
+
+
+def port_taken_text(port: int, who: dict) -> tuple[str, str]:
+    """(the headline, what to do) for a port another copy or another program holds: plain words, for the page and log."""
+    if who["kind"] == "other":
+        where = f" ({who['folder']})" if who.get("folder") else ""
+        return (f"Another copy of UnderCover is already running{where}.",
+                "Only one copy can run at a time. Quit that one first (in its page: SafeHouse, then Quit UnderCover; or "
+                "from its tray icon), then start this one again. Or open that one instead.")
+    owner = f" ({who['owner']})" if who.get("owner") else ""
+    return (f"Another program{owner} is using port {port}, the one UnderCover needs.",
+            "Close that program, or restart the PC, then start UnderCover again. If it keeps happening, UnderCover can "
+            "use another port: change port in the [ui] part of config.toml in the UnderCover folder.")
+
+
+def port_taken_page(port: int, who: dict) -> str:
+    """The small page a start opens instead of someone else's: what's going on and what to do."""
+    import html
+    head, advice = port_taken_text(port, who)
+    link = (f'<p><a class="b" href="http://127.0.0.1:{port}/">Open that copy</a></p>' if who["kind"] == "other" else "")
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>UnderCover can't start</title>"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>"
+            ":root{color-scheme:light dark;--bg:#14161a;--fg:#e8e6e1;--mute:#9a978f;--acc:#c9a227}"
+            "@media (prefers-color-scheme: light){:root{--bg:#f6f4ef;--fg:#1d1c1a;--mute:#5d5a54;--acc:#8a6d12}}"
+            "body{background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif;margin:0;padding:12vh 20px}"
+            "main{max-width:34rem;margin:auto}h1{font-size:1.35rem;margin:0 0 .3rem}.k{color:var(--mute);margin:0 0 1.4rem}"
+            ".b{display:inline-block;padding:.55rem 1rem;border:1px solid var(--acc);color:var(--acc);border-radius:6px;"
+            "text-decoration:none}</style></head><body><main>"
+            "<p class=\"k\">UnderCover couldn't take its line.</p>"
+            f"<h1>{html.escape(head)}</h1><p>{html.escape(advice)}</p>{link}</main></body></html>")
+
+
+def _say_port_taken(host: str, port: int):
+    """A start that can't bind: this same copy already running is opened; anything else is said, never opened as if it
+    were this copy (a fresh install once opened the user's everyday copy, and they thought the new one was broken)."""
+    url = f"http://{host}:{port}/"
+    who = who_has_port(host, port)
+    if who["kind"] == "this":
+        print(f"UnderCover is already running at {url}. Opening it.", flush=True)
+        if UCFG["open_browser"]:
+            webbrowser.open(url)
+        return
+    head, advice = port_taken_text(port, who)
+    print(f"{head} {advice}", flush=True)
+    if UCFG["open_browser"] and "--no-browser" not in sys.argv:
+        try:
+            page = path("logs_dir") / "cant-start.html"
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text(port_taken_page(port, who), encoding="utf-8")
+            webbrowser.open(page.as_uri())
+        except OSError as e:
+            print(f"The page saying so couldn't be opened: {e}", flush=True)
+
+
 def _relaunch(extra_args: list[str]):
     """Hand off to undercover/core/relaunch.py, which waits for THIS process to exit before starting a fresh,
     windowless server (output in logs/server.log). Starting the new server while this one is still releasing
@@ -910,10 +988,7 @@ def main():
         except OSError:
             time.sleep(0.5)
     if srv is None:
-        url = f"http://{host}:{port}/"
-        print(f"UnderCover already seems to be running at {url} (port {port} is in use). Opening it.")
-        if UCFG["open_browser"]:
-            webbrowser.open(url)
+        _say_port_taken(host, port)
         return
     srv.daemon_threads = True
     SERVER = srv

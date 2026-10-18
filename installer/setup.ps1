@@ -141,7 +141,8 @@ function Cancelled {
     exit 3
 }
 
-# Run a native command and return its exit code; in -DryRun just print it (0).
+# Run a native command and return its exit code; in -DryRun just print it (0). Its output goes to the log only: on
+# screen there are only setup's own plain steps (no tool output, no JSON).
 function RunCode([string]$exe, [string[]]$argv) {
     $shown = ($argv | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
     if ($DryRun) { Write-Host "    [dry-run] $exe $shown" -ForegroundColor DarkGray; return 0 }
@@ -149,7 +150,7 @@ function RunCode([string]$exe, [string[]]$argv) {
     # Windows PowerShell 5.1 turns any stderr line into a terminating error under 'Stop', and uv
     # writes its progress to stderr, so relax it for the call and rely on the exit code.
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { & $exe @argv 2>&1 | ForEach-Object { $line = "$_"; Log "    $line"; $line } | Out-Host }
+    try { & $exe @argv 2>&1 | ForEach-Object { Log "    $_" } }
     finally { $ErrorActionPreference = $old }
     return $LASTEXITCODE
 }
@@ -158,6 +159,23 @@ function RunCode([string]$exe, [string[]]$argv) {
 function Run([string]$exe, [string[]]$argv) {
     $code = RunCode $exe $argv
     if ($code -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $code" }
+}
+
+# A child that reports its own progress ('@@P <per mille>|<text>' lines: python -m undercover.addons install --status):
+# those drive the wizard's bar within this step, from $from to $from + $span of it; every other line goes to the log.
+function RunStatus([string]$exe, [string[]]$argv, [double]$from, [double]$span) {
+    if ($DryRun) { return (RunCode $exe $argv) }
+    $shown = ($argv | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
+    Log "RUN $exe $shown"
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        & $exe @argv 2>&1 | ForEach-Object {
+            $line = "$_"
+            if ($line -match '^@@P (\d+)\|(.*)$') { Status $Matches[2] ($from + $span * [int]$Matches[1] / 1000) }
+            elseif ($line.Trim()) { Log "    $line" }
+        }
+    } finally { $ErrorActionPreference = $old }
+    return $LASTEXITCODE
 }
 
 # A long run (uv downloading and unpacking): its output to the log, and every 2 s a status line with the bytes that
@@ -554,7 +572,16 @@ Run $Py @((Join-Path $PSScriptRoot 'selftest.py'), '--backend', $Backend, '--rep
 $addonIds = @($Addons -split '[,; ]+' | Where-Object { $_ })
 if ($addonIds.Count) {
     Step "Adding the add-ons you accepted: $($addonIds -join ', ')"
-    foreach ($id in $addonIds) { Run $Py @('-m', 'undercover.addons', 'install', $id, '--accept-licence') }
+    $i = 0
+    foreach ($id in $addonIds) {
+        if (-not $DryRun) { Push-Location $InstallDir }   # python -m finds the app's package from here
+        try {
+            $code = RunStatus $Py @('-m', 'undercover.addons', 'install', $id, '--accept-licence', '--status', '--cancel-file', $CancelFile) ($i / $addonIds.Count) (1 / $addonIds.Count)
+        } finally { if (-not $DryRun) { Pop-Location } }
+        if ($code -eq 3) { Cancelled }
+        if ($code -ne 0) { Fail "the add-on '$id' couldn't be added (code $code)" }
+        $i++
+    }
 }
 
 # 8. Launcher --------------------------------------------------------------------------------
@@ -603,5 +630,5 @@ if (-not $Repair -or $Fix.torch -or $Fix.packages -or $Fix.models -or -not (Test
 Result "ok"
 Write-Host ""
 Write-Host "Done. Start UnderCover from the Start menu or with UnderCover.cmd." -ForegroundColor Green
-Write-Host "The first start downloads the voice and separation models (about 1-3 GB, depending on which features you use)."
+Write-Host "It fetches its AI models the first time each feature is used, up to about $(Format-GB (Round-Up ($Sizes.models_gb * $Sizes.margin))) GB in all."
 if ($Pause) { Read-Host "Press Enter to close" | Out-Null }
