@@ -140,12 +140,6 @@ function Cancelled {
     Remove-Item -LiteralPath $CancelFile -Force -ErrorAction SilentlyContinue
     exit 3
 }
-function DirBytes([string]$dir) {
-    if (-not (Test-Path -LiteralPath $dir)) { return 0 }
-    $n = 0
-    try { foreach ($f in [IO.Directory]::EnumerateFiles($dir, '*', 'AllDirectories')) { try { $n += ([IO.FileInfo]$f).Length } catch { } } } catch { }
-    return $n
-}
 
 # Run a native command and return its exit code; in -DryRun just print it (0).
 function RunCode([string]$exe, [string[]]$argv) {
@@ -178,7 +172,7 @@ function RunWatched([string]$exe, [string[]]$argv, [string]$watch, [double]$expe
     $line = ($argv | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
     $p = Start-Process -FilePath $exe -ArgumentList $line -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
     $null = $p.Handle   # (without it, ExitCode stays empty: a Start-Process quirk)
-    $base = DirBytes $watch
+    $base = Get-DirBytes $watch
     $t0 = Get-Date
     while (-not $p.WaitForExit(2000)) {
         if (Test-Path -LiteralPath $CancelFile) {
@@ -186,7 +180,7 @@ function RunWatched([string]$exe, [string[]]$argv, [string]$watch, [double]$expe
             $p.WaitForExit()
             Cancelled
         }
-        $gb = [math]::Max(0, (DirBytes $watch) - $base) / 1GB
+        $gb = [math]::Max([long]0, [long]((Get-DirBytes $watch) - $base)) / 1GB   # (typed: an untyped 0 makes it Int32, which fails past 2 GB)
         $min = [math]::Floor(((Get-Date) - $t0).TotalMinutes)
         $time = if ($min -ge 1) { ", $min min" } else { '' }
         if ($expectGb -gt 0) { Status ("{0}: {1:0.0} of about {2:0.0} GB{3}" -f $label, [math]::Min($gb, $expectGb), $expectGb, $time) ($gb / $expectGb) }
@@ -196,7 +190,7 @@ function RunWatched([string]$exe, [string[]]$argv, [string]$watch, [double]$expe
     foreach ($f in $outFile, $errFile) {
         if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f | ForEach-Object { Log "    $_" }; Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
     }
-    Log ("    measured: {0:0} MB added to {1}" -f (((DirBytes $watch) - $base) / 1MB), $watch)
+    Log ("    measured: {0:0} MB added to {1}" -f (((Get-DirBytes $watch) - $base) / 1MB), $watch)
     if ($p.ExitCode -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $($p.ExitCode)" }
 }
 
@@ -355,9 +349,10 @@ if ($Backend -eq 'cpu') {
 . (Join-Path $PSScriptRoot 'space.ps1')
 $Sizes = Read-Sizes $PSScriptRoot
 $StepGb = $Sizes.steps
-# (not on a repair or a re-run that has its venv: most of it is there already, and counting it again would refuse)
-if ((-not $DryRun) -and (-not $Repair) -and (-not (Test-Path $Py))) {
-    $needs = Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly
+# What an earlier run left (the venv, tools, uv's cache: a cancelled setup, a repair, a reinstall) is taken off, so a
+# re-run is checked for what it still has to download, and isn't refused for room it already uses.
+if (-not $DryRun) {
+    $needs = Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }
     $short = @(Find-Shortfalls $needs { param($r) Get-FreeGB $r })
     if ($short.Count) { Fail ("there isn't enough space. " + (Format-Shortfall $short[0]) + " Free some space, or install to another drive, then try again.") }
 }
@@ -428,7 +423,10 @@ if ($Backend -ne 'rocm') {
     $tag = $Backend -replace '^cuda', 'cu'
     $torchArgs += @('--index-url', "https://download.pytorch.org/whl/$tag")
 }
-RunWatched $Uv $torchArgs $env:UV_CACHE_DIR ([double]$StepGb.torch.$($Backend -replace '^cuda\d+$', 'cuda')) 'Downloading and unpacking PyTorch'
+# (a card whose PyTorch hasn't been measured gets the largest measured: the bar moves a little slow, never stands still)
+$torchGb = $StepGb.torch.$Backend
+if (-not $torchGb) { $torchGb = ($StepGb.torch.PSObject.Properties | ForEach-Object { $_.Value } | Measure-Object -Maximum).Maximum }
+RunWatched $Uv $torchArgs $env:UV_CACHE_DIR ([double]$torchGb) 'Downloading and unpacking PyTorch'
 }
 
 if (-not $Fix.packages) { Info "Python packages: as recorded, left alone" } else {

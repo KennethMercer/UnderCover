@@ -3211,6 +3211,7 @@ def u_installer_failure():
 def u_installer_space():
     import json as _json
     import math
+    import tempfile
     import re
     import subprocess
     inst = ROOT / "installer"
@@ -3245,14 +3246,36 @@ def u_installer_space():
         assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; @(Find-Shortfalls $n { param($r) -1 }).Count") == "0", "an unreadable drive was called full"
         label = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; Format-Needs $n { param($r) 190.5 }")
         assert label.startswith("UnderCover needs about 22 GB in all") and "D: has 190.5 GB free." in label and "AI models" in label, label
+        # what's there already comes off (a re-run after Cancel, a reinstall): 3 GB of venv/cache, all the models
+        BS = chr(92)
+        have = "{ param($k, $d) if ($k -eq 'setup') { 3 } else { 9 } }"
+        part = ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -Have " + have + "; $n['D:" + BS + "'].need")
+        assert float(part) == up(0.1 + 0.5 + 6.5 - 3) + up(0.5) + up(1.0), ("a re-run is asked for what it has", part)
+        done = ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -SetupOnly -Have { param($k, $d) 50 }; $n.Count")
+        assert done == "0", "a finished install still asks for room"
+        assert "already set up" in ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -SetupOnly -Have { param($k, $d) 50 }; Format-Needs $n { param($r) 5 }")
+        tmp = Path(tempfile.mkdtemp(prefix="uc-space-"))
+        try:
+            (tmp / ".venv" / "Lib").mkdir(parents=True)
+            (tmp / ".venv" / "Lib" / "a.bin").write_bytes(bytes(1024 * 1024))
+            (tmp / "cache" / "uv").mkdir(parents=True)
+            (tmp / "cache" / "uv" / "b.bin").write_bytes(bytes(512 * 1024))
+            (tmp / "models").mkdir()
+            got = ps(f"[math]::Round((Get-HaveGB 'setup' '{tmp}') * 1GB); [math]::Round((Get-HaveGB 'models' '{tmp}') * 1GB); Get-DirBytes '{tmp}" + BS + "nothing'")
+            assert got.split() == [str(1024 * 1024 + 512 * 1024), "0", "0"], got
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
         isi = (inst / "sizes.isi").read_text(encoding="utf-8")
         total = ps("$n = Get-SpaceNeeds 'C:\\UnderCover' '' '' '' '' $s; $t = 0; foreach ($k in $n.Keys) { $t += $n[$k].need }; Format-GB $t")
         assert f'#define SizeTotalGB "{total}"' in isi, ("sizes.isi is stale: run installer\\build.ps1", total, isi)
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
     assert setup.count("RunWatched $Uv") == 3, "a long uv step runs without progress"
-    assert "Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly" in setup and "Fail (\"there isn't enough space. \"" in setup
+    assert "Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }" in setup and "Fail (\"there isn't enough space. \"" in setup
     assert setup.index("Find-Shortfalls $needs") < setup.index('Step "Getting the Python installer'), "setup checks the space after it downloads"
-    assert "(-not $Repair) -and (-not (Test-Path $Py))" in setup, "a repair would be refused for space it already uses"
+    assert "Test-Path $Py" not in setup[setup.index("Space: what setup"):setup.index("Find-Shortfalls $needs")], "a re-run after Cancel skips the space check"
+    assert "function DirBytes" not in setup and "Get-DirBytes $watch" in setup
+    # an untyped 0 makes PowerShell pick Max(Int32, Int32): sizes past 2 GB fail, 7.1 GB becomes 7 (a real install died)
+    assert not re.search(r"\[math\]::M(ax|in)\(0,", setup + (inst / "space.ps1").read_text(encoding="utf-8")), "an untyped 0 in [math]::Max/Min"
     assert "(Test-Path -LiteralPath $CancelFile)) { Cancelled }" in setup and "& taskkill.exe /PID $p.Id /T /F" in setup, "Cancel is not checked between steps, or a running download is not stopped"
     assert 'Result "cancelled: $kept"' in setup and "exit 3" in setup
     assert "[Console]::Out.WriteLine($line)" in setup and "Add-Content -Path $StatusFile" in setup
