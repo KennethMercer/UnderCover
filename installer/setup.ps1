@@ -82,7 +82,6 @@ function Result([string]$line) {
 }
 
 function Step([string]$msg) {
-    if ($script:StepName) { $script:Kept += $script:StepName }
     if ((-not $DryRun) -and (Test-Path -LiteralPath $CancelFile)) { Cancelled }
     $script:StepNo++
     if ($script:StepNo -gt $script:StepsTotal) { $script:StepsTotal = $script:StepNo }
@@ -121,7 +120,6 @@ $StatusFile = Join-Path $InstallDir 'logs\setup-status.txt'
 $CancelFile = Join-Path $InstallDir 'logs\setup-cancel'
 $script:StepNo = 0
 $script:StepName = ''
-$script:Kept = @()
 $script:StepsTotal = 13
 function Status([string]$detail = '', [double]$frac = -1) {
     $f = if ($frac -ge 0) { [int][math]::Floor([math]::Min(0.99, $frac) * 1000) } else { '' }   # per mille: whole numbers for the wizard
@@ -132,8 +130,20 @@ function Status([string]$detail = '', [double]$frac = -1) {
         Add-Content -Path $StatusFile -Value ("{0:u}  {1}" -f (Get-Date), $line)
     }
 }
+# what a Cancel leaves for the next run, read from the disk: "Python 3.12.10, PyTorch and the downloads so far"
+function KeptNow {
+    $k = @()
+    if (Get-ChildItem -LiteralPath (Join-Path $InstallDir 'tools\python') -Directory -Filter "cpython-$PythonVer-*" -ErrorAction SilentlyContinue) { $k += "Python $PythonVer" }
+    if (Test-Path -LiteralPath (Join-Path $InstallDir '.venv\Lib\site-packages\torch')) { $k += 'PyTorch' }
+    if (Test-Path -LiteralPath (Join-Path $InstallDir 'tools\ffmpeg\bin')) { $k += 'ffmpeg' }
+    if (Test-Path -LiteralPath (Join-Path $InstallDir 'tools\deno')) { $k += 'Deno' }
+    if ((Get-DirBytes (Join-Path $InstallDir 'cache\uv')) -gt 0) { $k += 'the downloads so far' }
+    if ($k.Count -gt 1) { return (($k[0..($k.Count - 2)] -join ', ') + ' and ' + $k[-1]) }
+    return ($k -join '')
+}
 function Cancelled {
-    $kept = if ($script:Kept.Count) { "kept: " + ($script:Kept -join '; ') } else { 'nothing was finished yet' }
+    $what = KeptNow
+    $kept = if ($what) { "kept: $what" } else { 'nothing was finished yet' }
     Write-Host ""; Write-Host "Setup stopped, as asked ($kept)." -ForegroundColor Yellow
     Log "CANCELLED ($kept)"
     Result "cancelled: $kept"
