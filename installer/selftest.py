@@ -23,6 +23,23 @@ MODULES = {
 TOOLS = {"ffmpeg": "audio conversion and mixing", "deno": "YouTube (yt-dlp's JavaScript runtime)"}
 
 
+def private_python(base_prefix: str, app: Path, version: str) -> list[str]:
+    """Problems with where the venv's Python lives, for an installed copy (one with tools\\python): it must be the
+    installer's own full-version folder (tools\\python\\cpython-<version>-...), never the minor-version link uv makes
+    beside it (cpython-3.12-...) and never a Python from elsewhere."""
+    own = app / "tools" / "python"
+    if not own.is_dir():
+        return []   # the dev venv (or a copy without the installer's Python): nothing to check
+    base = Path(base_prefix).resolve(strict=False)
+    try:
+        rel = base.relative_to(own.resolve(strict=False))
+    except ValueError:
+        return [f"the Python environment is built on {base}, not on UnderCover's own Python in {own}"]
+    if not rel.parts or not rel.parts[0].lower().startswith(f"cpython-{version}-"):
+        return [f"the Python environment is built on {rel.parts[0] if rel.parts else own}, not on the full {version} install"]
+    return []
+
+
 def check_dtype(torch, dev, dtype) -> bool:
     """True if a small matmul in this dtype runs and gives finite numbers on this device."""
     try:
@@ -41,6 +58,7 @@ def main() -> int:
 
     rep = {"backend": args.backend, "python": sys.version.split()[0], "problems": [], "warnings": []}
     print(f"Python {rep['python']}")
+    rep["warnings"] += private_python(sys.base_prefix, Path(__file__).resolve().parent.parent, rep["python"])
 
     missing = []
     for mod, why in MODULES.items():
