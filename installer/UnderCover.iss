@@ -124,6 +124,10 @@ var
   Backend: String;       // the graphics card's PyTorch build, detected once by space.ps1
   DetailsLink, FailDetailsLink: TNewStaticText;
   LinkNote: String;      // the last page's word on a shortcut that had to take another name (CreateLaunchers)
+  StepGauge: TNewProgressBar;   // under the main bar: the current step's own progress (bytes), or a marquee
+  DirParts, FilesNeed, FilesParts: TNewStaticText;   // the size lines: folder page (second line), files page (both)
+  SpaceTimer: LongWord;  // the files page: a moment after the folders change, the size lines follow
+  KeptMsg: String;       // the uninstaller's last word: the folders it kept, and why
 
 procedure RetryClick(Sender: TObject); forward;
 procedure OpenSetupLog(Sender: TObject); forward;
@@ -137,13 +141,14 @@ function GetAddons(Param: String): String; forward;
 
 // space.ps1 from the wizard's temp folder: the real need per drive for these folders, and the drives that won't fit.
 // -> Lbl (what goes where, each drive's free space) and Short (a plain sentence per drive that won't fit, or '')
-procedure CheckSpace(Lib, Work, Models, Addons: String; var Lbl, Short: String);
+procedure CheckSpace(Lib, Work, Models, Addons: String; var Need, Parts, Short: String);
 var
   Lines: TArrayOfString;
   I, Code: Integer;
-  OutFile, Params: String;
+  OutFile, Params, S: String;
 begin
-  Lbl := '';
+  Need := '';
+  Parts := '';
   Short := '';
   ExtractTemporaryFile('space.ps1');
   ExtractTemporaryFile('sizes.json');
@@ -161,9 +166,14 @@ begin
   for I := 0 to GetArrayLength(Lines) - 1 do begin
     if Pos('backend|', Lines[I]) = 1 then begin
       if Copy(Lines[I], 9, Length(Lines[I])) <> '' then Backend := Copy(Lines[I], 9, Length(Lines[I]));
-    end else if Pos('label|', Lines[I]) = 1 then
-      Lbl := Copy(Lines[I], 7, Length(Lines[I]))
-    else if Pos('short|', Lines[I]) = 1 then begin
+    end else if Pos('need|', Lines[I]) = 1 then begin
+      if Need <> '' then Need := Need + #13#10;
+      Need := Need + Copy(Lines[I], 6, Length(Lines[I]));
+    end else if Pos('parts|', Lines[I]) = 1 then begin
+      S := Copy(Lines[I], 7, Length(Lines[I]));
+      StringChangeEx(S, '|', ' ' + #183 + ' ', True);   // "App 9 GB . AI models 10.5 GB . your files 2.5 GB"
+      Parts := S;
+    end else if Pos('short|', Lines[I]) = 1 then begin
       if Short <> '' then Short := Short + #13#10;
       Short := Short + Copy(Lines[I], 7, Length(Lines[I]));
     end;
@@ -175,21 +185,75 @@ function SpaceOK(Short: String): Boolean;
 begin
   Result := True;
   if Short <> '' then
-    Result := MsgBox(Short + #13#10#13#10 + 'Setting UnderCover up may stop when the drive is full. Pick another ' +
-      'folder, or go on anyway?' + #13#10#13#10 + 'Yes goes on anyway. No lets you pick another folder.',
+    Result := MsgBox(Short + #13#10#13#10 + 'Go on anyway? No lets you pick another folder.',
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
 end;
 
 // the folder page: the real size, per drive, instead of Inno's "at least ... MB" (the installer's own files only)
 procedure ShowDirSpace;
 var
-  Lbl, Short: String;
+  Need, Parts, Short: String;
 begin
   WizardForm.DiskSpaceLabel.Caption := 'Checking how much space UnderCover needs here...';
-  CheckSpace('', '', '', '', Lbl, Short);
-  if Lbl <> '' then WizardForm.DiskSpaceLabel.Caption := Lbl + ' The next page lets you put the models and your files on another drive.'
-  else   // the check couldn't run: the measured total, never a stuck "Checking"
-    WizardForm.DiskSpaceLabel.Caption := 'UnderCover needs about {#SizeTotalGB} GB of free space in all, more than this installer''s size suggests.';
+  DirParts.Caption := '';
+  CheckSpace('', '', '', '', Need, Parts, Short);
+  if Need = '' then Need := 'UnderCover needs about {#SizeTotalGB} GB of free space.';   // the check couldn't run: never a stuck "Checking"
+  WizardForm.DiskSpaceLabel.Caption := Need;
+  DirParts.Caption := Parts;
+end;
+
+// the files page: the same two lines, one line per drive when the folders are split
+procedure ShowFilesSpace;
+var
+  Need, Parts, Short: String;
+begin
+  CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], '', Need, Parts, Short);
+  FilesNeed.Caption := Need;
+  FilesParts.Caption := Parts;
+end;
+
+function SetTimer(hWnd: LongWord; nIDEvent, uElapse: LongWord; lpTimerFunc: LongWord): LongWord;
+  external 'SetTimer@user32.dll stdcall';
+function KillTimer(hWnd: LongWord; uIDEvent: LongWord): BOOL;
+  external 'KillTimer@user32.dll stdcall';
+
+procedure SpaceTimerFired(H: LongWord; Msg: LongWord; IdEvent: LongWord; Time: LongWord);
+begin
+  KillTimer(0, SpaceTimer);
+  SpaceTimer := 0;
+  if WizardForm.CurPageID = DataPage.ID then ShowFilesSpace;
+end;
+
+// a folder changed (typed or browsed): the size lines follow a moment later, not on every key
+procedure DataEditChange(Sender: TObject);
+begin
+  if SpaceTimer <> 0 then KillTimer(0, SpaceTimer);
+  SpaceTimer := SetTimer(0, 0, 900, CreateCallback(@SpaceTimerFired));
+end;
+
+// the wizard closing: no size check left to fire after it
+procedure DeinitializeSetup;
+begin
+  if SpaceTimer <> 0 then KillTimer(0, SpaceTimer);
+  SpaceTimer := 0;
+end;
+
+// a line of size text: the page's own font, or the smaller grey one for "App 9 GB . AI models ..."
+function SizeLine(Parent: TWinControl; Top, Height: Integer; Small: Boolean): TNewStaticText;
+begin
+  Result := TNewStaticText.Create(WizardForm);
+  Result.Parent := Parent;
+  Result.AutoSize := False;
+  Result.WordWrap := True;
+  Result.Left := 0;
+  Result.Width := Parent.Width;
+  Result.Top := Top;
+  Result.Height := Height;
+  Result.Caption := '';
+  if Small then begin
+    Result.Font.Size := Result.Font.Size - 1;
+    Result.Font.Color := clGrayText;
+  end;
 end;
 
 // one add-on's licence, from its own "Read the licence" link (the link's Tag is the add-on's number)
@@ -265,14 +329,32 @@ begin
   end;
 
   // the welcome page says the real size, plainly, before anything else
-  WizardForm.WelcomeLabel2.Caption := 'This installer is small, but UnderCover isn''t. Setting it up downloads Python and ' +
-    'PyTorch for your graphics card, about {#SizePythonGB} GB once unpacked, and UnderCover fetches its AI models the ' +
-    'first time each feature is used, up to about {#SizeModelsGB} GB more. Plan for about {#SizeTotalGB} GB of free space in all.' + #13#10#13#10 +
-    'The next pages show what goes where and check that it fits.';
+  WizardForm.WelcomeLabel2.Caption := 'UnderCover needs about {#SizeTotalGB} GB of free space in all, far more than this installer.' + #13#10#13#10 +
+    'Setup downloads Python and PyTorch (about {#SizePythonGB} GB). The AI models (up to {#SizeModelsGB} GB) ' +
+    'download the first time each feature is used.';
   WizardForm.DiskSpaceLabel.WordWrap := True;
-  // (from under the folder box to the page's foot: what goes on each drive takes several lines)
   WizardForm.DiskSpaceLabel.Top := WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(20);
-  WizardForm.DiskSpaceLabel.Height := WizardForm.SelectDirPage.Height - WizardForm.DiskSpaceLabel.Top;
+  WizardForm.DiskSpaceLabel.Height := ScaleY(30);
+  DirParts := SizeLine(WizardForm.SelectDirPage, WizardForm.DiskSpaceLabel.Top + WizardForm.DiskSpaceLabel.Height + ScaleY(2), ScaleY(30), True);
+  DirParts.Left := WizardForm.DiskSpaceLabel.Left;
+  DirParts.Width := WizardForm.DiskSpaceLabel.Width;
+  // the files page: under its last folder box, the same lines (one per drive once the folders are split)
+  FilesNeed := SizeLine(DataPage.Surface, DataPage.Edits[2].Top + DataPage.Edits[2].Height + ScaleY(14), ScaleY(44), False);
+  FilesParts := SizeLine(DataPage.Surface, FilesNeed.Top + FilesNeed.Height + ScaleY(2), ScaleY(18), True);
+  DataPage.Edits[0].OnChange := @DataEditChange;
+  DataPage.Edits[1].OnChange := @DataEditChange;
+  DataPage.Edits[2].OnChange := @DataEditChange;
+
+  // the installing page: under the main bar (the whole install), a bar for the current step
+  StepGauge := TNewProgressBar.Create(WizardForm);
+  StepGauge.Parent := WizardForm.InstallingPage;
+  StepGauge.Left := WizardForm.ProgressGauge.Left;
+  StepGauge.Width := WizardForm.ProgressGauge.Width;
+  StepGauge.Top := WizardForm.ProgressGauge.Top + WizardForm.ProgressGauge.Height + ScaleY(10);
+  StepGauge.Height := WizardForm.ProgressGauge.Height - ScaleY(6);
+  StepGauge.Min := 0;
+  StepGauge.Max := 1000;
+  StepGauge.Visible := False;
 
   // the setup's raw output, for anyone who wants it (installing page, and the failure page)
   DetailsLink := TNewStaticText.Create(WizardForm);
@@ -281,8 +363,8 @@ begin
   DetailsLink.Font.Color := clBlue;
   DetailsLink.Font.Style := [fsUnderline];
   DetailsLink.Cursor := crHand;
-  DetailsLink.Top := WizardForm.FilenameLabel.Top + WizardForm.FilenameLabel.Height + ScaleY(16);
-  DetailsLink.Left := WizardForm.FilenameLabel.Left;
+  DetailsLink.Top := StepGauge.Top + StepGauge.Height + ScaleY(16);   // below both bars (it once sat on the main one)
+  DetailsLink.Left := WizardForm.ProgressGauge.Left;
   DetailsLink.Visible := False;
   DetailsLink.OnClick := @OpenSetupLog;
 
@@ -392,19 +474,89 @@ begin
     if OurLink(LinkPath(Folder, I)) then DeleteFile(LinkPath(Folder, I));
 end;
 
+// ---------------------------------------------------------------- the uninstaller's last word: what it kept, and why
+
+// a folder from config.toml's [paths] (setup writes it there when the files page moved it), else the default
+function KeptPath(Key, Fallback: String): String;
+var
+  Lines: TArrayOfString;
+  I, Q: Integer;
+  S: String;
+begin
+  Result := Fallback;
+  if not LoadStringsFromFile(ExpandConstant('{app}\config.toml'), Lines) then Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do begin
+    S := Trim(Lines[I]);
+    if (Pos(Key, S) = 1) and (Pos('=', S) > 0) and (Trim(Copy(S, Length(Key) + 1, Pos('=', S) - Length(Key) - 1)) = '') then begin
+      S := Trim(Copy(S, Pos('=', S) + 1, Length(S)));
+      if Copy(S, 1, 1) <> '"' then Exit;
+      S := Copy(S, 2, Length(S));
+      Q := Pos('"', S);
+      if Q = 0 then Exit;
+      S := Copy(S, 1, Q - 1);
+      StringChangeEx(S, '\\', '\', True);   // a TOML string's escaped backslashes
+      StringChangeEx(S, '/', '\', True);
+      if (Copy(S, 2, 1) <> ':') and (Copy(S, 1, 2) <> '\\') then S := ExpandConstant('{app}\') + S;   // relative: in the app folder
+      Result := S;
+      Exit;
+    end;
+  end;
+end;
+
+// the folder holds at least one file or folder
+function HasSomething(Dir: String): Boolean;
+var
+  F: TFindRec;
+begin
+  Result := False;
+  if FindFirst(AddBackslash(Dir) + '*', F) then begin
+    try
+      repeat
+        if (F.Name <> '.') and (F.Name <> '..') then Result := True;
+      until Result or not FindNext(F);
+    finally
+      FindClose(F);
+    end;
+  end;
+end;
+
+function KeptLine(Dir, What: String): String;
+begin
+  Result := '';
+  if HasSomething(Dir) then Result := #13#10 + What + ': ' + Dir;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Mine, Models: String;
 begin
   if CurUninstallStep = usUninstall then begin
     RemoveOurLinks(ExpandConstant('{group}'));
     RemoveOurLinks(ExpandConstant('{userdesktop}'));
+    // (read now, while config.toml says where the files went)
+    Models := KeptPath('models_dir', ExpandConstant('{app}\models'));
+    Mine := KeptLine(KeptPath('uploads_dir', ExpandConstant('{app}\uploads')), 'Your songs') +
+      KeptLine(KeptPath('output_dir', ExpandConstant('{app}\output')), 'Your covers and speech') +
+      KeptLine(KeptPath('voices_dir', AddBackslash(Models) + 'voices'), 'Your voices') +
+      KeptLine(AddBackslash(KeptPath('cache_dir', ExpandConstant('{app}\cache'))) + 'training', 'Your training projects');
+    KeptMsg := '';
+    if Mine <> '' then
+      KeptMsg := 'These folders were kept, because they hold your own work, which can''t be downloaded again:' + #13#10 + Mine;
+    if HasSomething(Models) then
+      KeptMsg := KeptMsg + #13#10#13#10 + 'The AI models were kept too, so installing again doesn''t fetch them again:' + #13#10 +
+        Models;
+    if KeptMsg <> '' then KeptMsg := KeptMsg + #13#10#13#10 + 'Delete them yourself if you don''t need them.';
   end;
+  if (CurUninstallStep = usPostUninstall) and (KeptMsg <> '') and (not UninstallSilent) then
+    MsgBox('UnderCover is removed.' + #13#10#13#10 + KeptMsg, mbInformation, MB_OK);
 end;
 
 procedure OpenSetupLog(Sender: TObject);
 var
   Code: Integer;
 begin
-  ShellExec('open', ExpandConstant('{app}\logs\setup.log'), '', '', SW_SHOWNORMAL, ewNoWait, Code);
+  if FileExists(ExpandConstant('{app}\logs\setup.log')) then
+    Exec(ExpandConstant('{win}\notepad.exe'), AddQuotes(ExpandConstant('{app}\logs\setup.log')), '', SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
 // the N-th field (from 0) of "a|b|c"
@@ -426,7 +578,7 @@ end;
 procedure SetupLine(const S: String; const Error, FirstLine: Boolean);
 var
   K, N, F, Pos1: Integer;
-  Name, Detail, Line: String;
+  Name, Detail, Line, FText: String;
 begin
   if CancelAsked then SaveStringToFile(ExpandConstant('{app}\logs\setup-cancel'), 'stop', False);
   if Copy(S, 1, 3) <> '@@ ' then Exit;
@@ -434,7 +586,8 @@ begin
   K := StrToIntDef(Field(Line, 0), 0);
   N := StrToIntDef(Field(Line, 1), 0);
   Name := Field(Line, 2);
-  F := StrToIntDef(Field(Line, 3), 0);
+  FText := Field(Line, 3);
+  F := StrToIntDef(FText, 0);
   Detail := Field(Line, 4);
   if (K < 1) or (N < 1) then Exit;
   Pos1 := ((K - 1) * 1000 + F) div N;
@@ -447,6 +600,13 @@ begin
     WizardForm.ProgressGauge.Position := Progress;
     WizardForm.StatusLabel.Caption := Format('Step %d of %d: %s', [K, N, Name]);
     WizardForm.FilenameLabel.Caption := Detail;
+    StepGauge.Visible := True;
+    if FText = '' then
+      StepGauge.Style := npbstMarquee   // a step with no byte count: moving, without pretending to know how far
+    else begin
+      StepGauge.Style := npbstNormal;
+      StepGauge.Position := F;
+    end;
   end;
 end;
 
@@ -553,22 +713,25 @@ begin
       if (DataPage.Values[I] = '') or (DataPage.Values[I] = LastDefault) then
         DataPage.Values[I] := WizardDirValue;
     LastDefault := WizardDirValue;
+    if SpaceTimer <> 0 then KillTimer(0, SpaceTimer);
+    SpaceTimer := 0;
+    ShowFilesSpace;
   end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  Lbl, Short: String;
+  Need, Parts, Short: String;
 begin
   Result := True;
   if CurPageID = wpSelectDir then begin
-    CheckSpace('', '', '', '', Lbl, Short);
+    CheckSpace('', '', '', '', Need, Parts, Short);
     Result := SpaceOK(Short);
   end else if CurPageID = DataPage.ID then begin
-    CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], '', Lbl, Short);
+    CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], '', Need, Parts, Short);
     Result := SpaceOK(Short);
   end else if (CurPageID = AddonPage.ID) and (GetAddons('') <> '') then begin
-    CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Lbl, Short);
+    CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Need, Parts, Short);
     Result := SpaceOK(Short);
   end;
 end;

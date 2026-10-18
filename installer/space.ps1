@@ -14,7 +14,8 @@
                                [-Backend auto|rocm|cuda128|cuda126|cpu] [-Addons f5,...]
   writes lines:  backend|<backend>
                  total|<GB>
-                 label|<plain sentences: what goes where, and each drive's free space>
+                 need|<one short line per drive: "UnderCover needs about 22 GB on D: (188 GB free).">
+                 parts|App 9 GB|AI models 10.5 GB|your files 2.5 GB   (the wizard joins them with a middle dot)
                  short|<plain sentence>     (one per drive that won't fit)
 #>
 # (the variables have names of their own: setup.ps1 dot-sources this file, and a parameter called $InstallDir here
@@ -66,15 +67,15 @@ function Get-SpaceNeeds([string]$InstallDir, [string]$LibraryDir, [string]$WorkD
     $addonGb = 0.0
     foreach ($a in $Addons) { if ($a -and $Sizes.addons.$a) { $addonGb += $Sizes.addons.$a } }
     $setupHave = if ($Have) { [double](& $Have 'setup' $InstallDir) } else { 0.0 }
-    $parts = @(@{ dir = $InstallDir; gb = [math]::Max([double]0, [double]($Sizes.app_gb + $Sizes.tools_gb + $python - $setupHave)); what = 'the app, Python and PyTorch' })
+    $parts = @(@{ dir = $InstallDir; gb = [math]::Max([double]0, [double]($Sizes.app_gb + $Sizes.tools_gb + $python - $setupHave)); what = 'the app, Python and PyTorch'; short = 'App' })
     if (-not $SetupOnly) {
         $mdir = if ($ModelsDir) { $ModelsDir } else { $InstallDir }
         $modelsHave = if ($Have) { [double](& $Have 'models' $mdir) } else { 0.0 }
         $parts += @{ dir = $mdir; gb = [math]::Max([double]0, [double]($Sizes.models_gb + $addonGb - $modelsHave))
-                     what = 'the AI models, which UnderCover fetches the first time each feature is used' }
+                     what = 'the AI models, which UnderCover fetches the first time each feature is used'; short = 'AI models' }
         $parts += @{ dir = $(if ($LibraryDir) { $LibraryDir } else { $InstallDir }); gb = $Sizes.library_gb
-                     what = 'your songs, covers and voices to start with' }
-        $parts += @{ dir = $(if ($WorkDir) { $WorkDir } else { $InstallDir }); gb = $Sizes.work_gb; what = 'working files to start with' }
+                     what = 'your songs, covers and voices to start with'; short = 'your files' }
+        $parts += @{ dir = $(if ($WorkDir) { $WorkDir } else { $InstallDir }); gb = $Sizes.work_gb; what = 'working files to start with'; short = 'your files' }
     }
     $out = [ordered]@{}
     foreach ($p in $parts) {
@@ -83,7 +84,7 @@ function Get-SpaceNeeds([string]$InstallDir, [string]$LibraryDir, [string]$WorkD
         $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($p.dir)).ToUpperInvariant()
         if (-not $out.Contains($root)) { $out[$root] = @{ raw = 0.0; items = @() } }
         $out[$root].raw += $p.gb
-        $out[$root].items += @{ what = $p.what; gb = $gb }
+        $out[$root].items += @{ what = $p.what; short = $p.short; gb = $gb }
     }
     foreach ($k in @($out.Keys)) {   # the sum of the parts it lists, as said
         $n = 0.0; foreach ($i in $out[$k].items) { $n += $i.gb }; $out[$k].need = $n
@@ -109,21 +110,26 @@ function Format-Shortfall($s) {
     "$($s.drive.TrimEnd('\')) has $(Format-GB $s.free) GB free, and UnderCover needs about $(Format-GB $s.need) GB there."
 }
 
-function Format-Needs($Needs, [scriptblock]$Free) {
-    # the folder page's text: the total, then what goes on each drive and how much that drive has free
-    $total = 0.0
-    foreach ($k in $Needs.Keys) { $total += $Needs[$k].need }
-    if ($total -le 0) { return "UnderCover is already set up in these folders, so it needs no more room." }
-    $text = "UnderCover needs about $(Format-GB $total) GB in all, more than this installer's size suggests."
+# Free space as said on a page: whole GB from 10 up ("188 GB"), one decimal below
+function Format-Free([double]$gb) { if ($gb -ge 10) { Format-GB ([math]::Floor($gb)) } else { Format-GB ([math]::Floor($gb * 10) / 10) } }
+
+# the pages' first line, one per drive (the user: the paragraph was "excessively verbose, people will skip")
+function Format-NeedLines($Needs, [scriptblock]$Free) {
+    if (-not $Needs.Count) { return @("UnderCover is already set up in these folders, so it needs no more room.") }
+    $lines = @()
     foreach ($k in $Needs.Keys) {
         $d = $k.TrimEnd('\')
-        $list = @($Needs[$k].items | ForEach-Object { "about $(Format-GB $_.gb) GB for $($_.what)" })
-        $items = if ($list.Count -gt 1) { ($list[0..($list.Count - 2)] -join '; ') + '; and ' + $list[-1] } else { $list[0] }
         $f = & $Free $k
-        $text += " On $d it needs about $(Format-GB $Needs[$k].need) GB: $items."
-        if ($f -ge 0) { $text += " $d has $(Format-GB $f) GB free." }
+        $lines += "UnderCover needs about $(Format-GB $Needs[$k].need) GB on $d" + $(if ($f -ge 0) { " ($(Format-Free $f) GB free)." } else { "." })
     }
-    return $text
+    return $lines
+}
+
+# the second, smaller line: what it's for, summed over the drives ("App 9 GB", "AI models 10.5 GB", "your files 2.5 GB")
+function Format-Parts($Needs) {
+    $sum = [ordered]@{ 'App' = 0.0; 'AI models' = 0.0; 'your files' = 0.0 }
+    foreach ($k in $Needs.Keys) { foreach ($i in $Needs[$k].items) { $sum[$i.short] += $i.gb } }
+    return @($sum.Keys | Where-Object { $sum[$_] -gt 0 } | ForEach-Object { "$_ $(Format-GB $sum[$_]) GB" })
 }
 
 if ($SpOut) {
@@ -138,7 +144,10 @@ if ($SpOut) {
     $free = { param($r) Get-FreeGB $r }
     $total = 0.0
     foreach ($k in $needs.Keys) { $total += $needs[$k].need }
-    $lines = @("backend|$SpBackend", "total|$(Format-GB $total)", "label|$(Format-Needs $needs $free)")
+    $lines = @("backend|$SpBackend", "total|$(Format-GB $total)")
+    foreach ($l in (Format-NeedLines $needs $free)) { $lines += "need|$l" }
+    $parts = @(Format-Parts $needs)
+    if ($parts.Count) { $lines += "parts|" + ($parts -join '|') }
     foreach ($s in (Find-Shortfalls $needs $free)) { $lines += "short|$(Format-Shortfall $s)" }
     [IO.File]::WriteAllLines($SpOut, [string[]]$lines)
 }
