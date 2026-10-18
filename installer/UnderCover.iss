@@ -231,6 +231,13 @@ begin
   SpaceTimer := SetTimer(0, 0, 900, CreateCallback(@SpaceTimerFired));
 end;
 
+// the wizard closing: no size check left to fire after it
+procedure DeinitializeSetup;
+begin
+  if SpaceTimer <> 0 then KillTimer(0, SpaceTimer);
+  SpaceTimer := 0;
+end;
+
 // a line of size text: the page's own font, or the smaller grey one for "App 9 GB . AI models ..."
 function SizeLine(Parent: TWinControl; Top, Height: Integer; Small: Boolean): TNewStaticText;
 begin
