@@ -6183,6 +6183,8 @@ def u_page_rules():
     # RC pass 10: Train my own never searches for a display name (it asks whose voice it is); the tutorial's lit edge doesn't depend on a painted frame
     assert "const ownPerson" in da and "data-own-name" in da and "c.person || voiceDisplay(c.voice)" not in da, "Train my own would search YouTube for a voice's file name again"
     assert "aimTimer = setTimeout(reaim" in tut, "the tutorial's lit edge waits for a frame that a non-painting window never gives"
+    # IA pass 11 B3: the retrying state says the time once, waits for YouTube in the header, the strip and the drawer, and Recent says "waiting to retry"
+    assert "function retryWait" in work and "const willRetry" in work and "Waiting for YouTube" in work and "trying again at" in work, "the retrying state lost its words"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
