@@ -41,6 +41,23 @@ function Test-VenvBase([string]$Venv, [string]$Version) {
     return ((Split-Path $venvHome -Leaf) -like "cpython-$Version-*") -and (Test-Path -LiteralPath (Join-Path $venvHome 'python.exe'))
 }
 
+function Remove-MinorLink([string]$PythonDir, [string]$Version, [switch]$EvenIfUsable) {
+    # uv's minor-version link (cpython-3.12-..., a junction beside the full install). Where Windows won't let it be
+    # traversed it's removed, so nothing can pick it up: the link only (a non-recursive delete of a reparse point),
+    # never what it points at, and never a real folder. -EvenIfUsable: tests. -> the links removed
+    $mm = (($Version -split '\.')[0..1]) -join '.'
+    $gone = @()
+    foreach ($d in @(Get-ChildItem -LiteralPath $PythonDir -Directory -Force -Filter "cpython-$mm-*" -ErrorAction SilentlyContinue)) {
+        if ($d.Name -like "cpython-$Version-*") { continue }                               # the full install itself
+        if (-not ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }      # a real folder: not a link
+        $usable = $false
+        try { $usable = [bool](Test-Path -LiteralPath (Join-Path $d.FullName 'python.exe') -ErrorAction Stop) } catch { $usable = $false }
+        if ($usable -and -not $EvenIfUsable) { continue }
+        try { [IO.Directory]::Delete($d.FullName, $false); $gone += $d.Name } catch { }
+    }
+    return $gone
+}
+
 function Remove-OwnPythonRegistry([string]$InstallDir) {
     # An earlier setup (before --no-registry) registered this install's Python under HKCU\Software\Python\Astral.
     # Only keys whose InstallPath is inside this install's tools\python are removed: anything else is someone else's.
