@@ -334,12 +334,34 @@ def gpu_worker():
             STATUS["models"] = "error: " + STATUS["gpu_problem"]   # the loop below keeps running, refusing jobs
         elif CONFIG["ui"]["preload_models"]:
             from . import setup_models
-            mdir = path("models_dir")
-            STATUS["first_run"] = not all((mdir / f).exists() for f in setup_models.FILES)   # ~600 MB to fetch, once
+            from .separate import SEP, SEPARATOR_SIZE
+            # the first start fetches the separation model and the conversion models (about 1.3 GB, once): the status
+            # says how far (models_progress, 0-1) and how much (models_mb), and the First assignment's bar follows it
+            todo = setup_models.missing({**setup_models.FILE_SIZES,
+                                         **{k: n for k, n in SEPARATOR_SIZE.items() if k == f"separator/{SEP['vocal_model']}"}})
+            STATUS["first_run"] = bool(todo)
+            if todo:
+                STATUS["models_mb"] = round(sum(todo.values()) / 1e6)
             STATUS["models"] = "loading"
-            from .separate import SEP
-            MODELS.separator._get(SEP["vocal_model"])
-            MODELS.converter
+            fetched = threading.Event()
+
+            def watch():
+                while not fetched.wait(0.5):
+                    share = round(min(0.99, setup_models.fetched_share(todo)), 3)
+                    if not fetched.is_set():
+                        STATUS["models_progress"] = share
+            watcher = threading.Thread(target=watch, daemon=True, name="models-progress")
+            if todo:
+                STATUS["models_progress"] = 0.0
+                watcher.start()
+            try:
+                MODELS.separator._get(SEP["vocal_model"])
+                MODELS.converter
+            finally:
+                fetched.set()
+                if watcher.is_alive():
+                    watcher.join(5)   # (its last value must not land after the pop)
+                STATUS.pop("models_progress", None)
         if not STATUS.get("gpu_problem"):
             STATUS["models"] = "ready"
     except Exception as e:  # warm-up failure shouldn't kill the server; the job will report it
