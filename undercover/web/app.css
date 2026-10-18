@@ -195,6 +195,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .stage.skipped .ico { border-color: var(--ok); }
 @keyframes spin { to { transform: rotate(1turn); } }
 /* the brief's first-run line: a bar that moves with models_progress, or slides while there's no number */
+.assign-brief .assign-acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }   /* two buttons with room between them (they ran together) */
 .assign-ready { display: grid; gap: 8px; margin-top: 12px; padding: 12px 14px; background: var(--panel-2); border-radius: 9px; }
 .assign-ready p { margin: 0; }
 .assign-ready .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
