@@ -12,7 +12,7 @@ anywhere.
   - or an AMD RX 7000 / RX 9000.
 
   Other PCs still work on the processor alone, just slowly, and without voice training.
-- **About 15 GB free disk space**, and a good internet connection for the first hour.
+- **About 22 GB free disk space**, and a good internet connection for the first hour. The installer checks that it fits.
 
 ## Install
 
@@ -21,15 +21,15 @@ anywhere.
 2. **"Where should UnderCover keep your files?"** The defaults are fine. Pick another drive if your C: drive is
    short on space.
 3. **Optional add-ons:** you can skip these. Each one shows its licence, and only installs if you tick "I accept".
-4. **A setup window opens** and downloads Python, PyTorch for your graphics card, and the tools: **about 3 GB, 20-40
-   minutes.** Leave it running. It ends with "Done" and a self-test. If something goes wrong, it says what, in plain
-   words.
+4. **Setup runs inside the installer** and downloads Python, PyTorch for your graphics card, and the tools. It takes
+   10-40 minutes, and its two bars show the whole install and the current step. It ends with a self-test. If something
+   goes wrong, it says what, in plain words. Cancel keeps what's done, and running the installer again carries on.
 5. **Finish.** Start UnderCover from the Start menu. It runs in the background and opens in your browser.
 
 ## The first start
 
-- **The first cover downloads the separation and voice models** (about 1.2 GB, once). Training, de-reverb and speech
-  each fetch their own models the first time you use them (up to about 3 GB more in all).
+- **The first cover downloads the separation and voice models**, once. Training, de-reverb and speech each fetch
+  their own models the first time you use them, up to about 10.5 GB for all of them.
 - **The First assignment** walks you through a cover in about ten minutes. It uses a short sample song and Agent
   Smoke, a demo voice made for UnderCover (not a real person).
 - **To quit:** SafeHouse, then **Quit UnderCover**.
@@ -53,6 +53,7 @@ anywhere.
 
 Windows Settings, Apps, UnderCover, Uninstall.
 - **Removed:** the downloaded runtime and caches.
-- **Kept:** your voices, covers, songs and training projects (delete the folder yourself if you want them gone).
+- **Kept:** your voices, covers, songs and training projects, and the AI models. The uninstaller lists the folders at
+  the end; delete them yourself if you want them gone.
 - **Away from home:** this PC's private link ends. It shows as offline in your Tailscale account, and you can remove
   it there.

@@ -3244,8 +3244,14 @@ def u_installer_space():
         assert short == "D: has 12 GB free, and UnderCover needs about 22 GB there.", short
         assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; @(Find-Shortfalls $n { param($r) 500 }).Count") == "0"
         assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; @(Find-Shortfalls $n { param($r) -1 }).Count") == "0", "an unreadable drive was called full"
-        label = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; Format-Needs $n { param($r) 190.5 }")
-        assert label.startswith("UnderCover needs about 22 GB in all") and "D: has 190.5 GB free." in label and "AI models" in label, label
+        # the pages' two short lines (the user: the paragraph was "excessively verbose, people will skip")
+        lines = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Format-NeedLines $n { param($r) 190.5 }) -join '/'")
+        assert lines == "UnderCover needs about 22 GB on D: (190 GB free).", lines
+        parts = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Format-Parts $n) -join '/'")
+        assert parts == "App 9 GB/AI models 10.5 GB/your files 2.5 GB", parts
+        split2 = ps("$n = Get-SpaceNeeds 'C:\\UC' 'D:\\L' 'D:\\W' 'D:\\M' 'rocm' $s; (Format-NeedLines $n { param($r) 5.47 }) -join '/'")
+        assert split2 == "UnderCover needs about 9 GB on C: (5.4 GB free)./UnderCover needs about 13 GB on D: (5.4 GB free).", split2
+        assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Format-NeedLines $n { param($r) -1 }) -join '/'") == "UnderCover needs about 22 GB on D:."
         # what's there already comes off (a re-run after Cancel, a reinstall): 3 GB of venv/cache, all the models
         BS = chr(92)
         have = "{ param($k, $d) if ($k -eq 'setup') { 3 } else { 9 } }"
@@ -3253,7 +3259,7 @@ def u_installer_space():
         assert float(part) == up(0.1 + 0.5 + 6.5 - 3) + up(0.5) + up(1.0), ("a re-run is asked for what it has", part)
         done = ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -SetupOnly -Have { param($k, $d) 50 }; $n.Count")
         assert done == "0", "a finished install still asks for room"
-        assert "already set up" in ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -SetupOnly -Have { param($k, $d) 50 }; Format-Needs $n { param($r) 5 }")
+        assert "already set up" in ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -SetupOnly -Have { param($k, $d) 50 }; (Format-NeedLines $n { param($r) 5 }) -join '/'")
         tmp = Path(tempfile.mkdtemp(prefix="uc-space-"))
         try:
             (tmp / ".venv" / "Lib").mkdir(parents=True)
@@ -3285,7 +3291,24 @@ def u_installer_space():
     assert "-Pause" not in run, "the hidden setup would wait for Enter forever"
     assert "WizardForm.ProgressGauge.Position := Progress" in iss and "if Pos1 > Progress then Progress := Pos1" in iss
     assert "Show details" in iss and "logs\\setup.log" in iss and "procedure CancelButtonClick" in iss and "logs\\setup-cancel" in iss
-    assert "WizardForm.DiskSpaceLabel.Caption := Lbl" in iss and "{#SizeTotalGB} GB of free space in all" in iss
+    assert "WizardForm.DiskSpaceLabel.Caption := Need;" in iss and "DirParts.Caption := Parts;" in iss and "{#SizeTotalGB} GB of free space in all" in iss
+    assert "StringChangeEx(S, '|', ' ' + #183 + ' ', True);" in iss, "the parts line isn't joined with a middle dot"
+    assert "FilesNeed.Caption := Need;" in iss and iss.count("OnChange := @DataEditChange;") == 3 and "CreateCallback(@SpaceTimerFired)" in iss
+    # installer-fix5: a bar for the current step under the main one (bytes, or a marquee); Show details below both
+    assert "StepGauge := TNewProgressBar.Create(WizardForm);" in iss and "StepGauge.Style := npbstMarquee" in iss
+    assert "StepGauge.Top := WizardForm.ProgressGauge.Top + WizardForm.ProgressGauge.Height" in iss
+    assert "DetailsLink.Top := StepGauge.Top + StepGauge.Height" in iss, "Show details sits on a bar (it did, and a click there did nothing)"
+    assert "notepad.exe" in iss[iss.index("procedure OpenSetupLog"):iss.index("function Field")]
+    # the uninstaller's last word: the folders it kept (moved ones read from config.toml), and why
+    un = iss[iss.index("function KeptPath"):iss.index("procedure CurUninstallStepChanged")]
+    for key in ("'uploads_dir'", "'output_dir'", "'voices_dir'", "'cache_dir'", "'models_dir'"):
+        assert key in iss[iss.index("procedure CurUninstallStepChanged"):], key
+    assert "config.toml" in un and "StringChangeEx(S, '" + chr(92) * 2 + "', '" + chr(92) + "', True);" in un
+    assert "(CurUninstallStep = usPostUninstall) and (KeptMsg <> '') and (not UninstallSilent)" in iss
+    # the shipped docs give the measured size (installer/sizes.json through sizes.isi), not an old guess
+    tot = re.search(r'#define SizeTotalGB "([0-9.]+)"', (inst / "sizes.isi").read_text(encoding="utf-8")).group(1)
+    assert f"About {tot} GB of free disk space" in (ROOT / "README.md").read_text(encoding="utf-8"), "README's size"
+    assert f"About {tot} GB free disk space" in (inst / "FRIENDS.md").read_text(encoding="utf-8"), "the friends' briefing's size"
     nb = iss[iss.index("function NextButtonClick"):iss.index("function ShouldSkipPage")]
     assert nb.count("Result := SpaceOK(Short)") == 3 and "wpSelectDir" in nb and "DataPage.ID" in nb and "AddonPage.ID" in nb
     assert 'Source: "space.ps1"; Flags: dontcopy' in iss and '#include "sizes.isi"' in iss
