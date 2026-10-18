@@ -28,6 +28,36 @@ function Test-OwnPython([string]$Exe, [string]$Version) {
     return ($v -eq $Version)
 }
 
+function Test-VenvBase([string]$Venv, [string]$Version) {
+    # The venv is built on a full-version folder (pyvenv.cfg's home is "...\cpython-3.12.10-..." and its python.exe is
+    # there). uv's own venvs are built on the minor-version link instead (so a patch upgrade carries over), and where
+    # Windows refused that link (os error 448) every use of the venv fails the same way: the user's 1.0 test stopped at
+    # PyTorch with it. Setup makes the venv with Python's own venv module from the full-version python.exe.
+    $cfg = Join-Path $Venv 'pyvenv.cfg'
+    if (-not (Test-Path -LiteralPath $cfg)) { return $false }
+    $line = Get-Content -LiteralPath $cfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1
+    if (-not $line) { return $false }
+    $venvHome = ($line -replace '^\s*home\s*=\s*', '').Trim()
+    return ((Split-Path $venvHome -Leaf) -like "cpython-$Version-*") -and (Test-Path -LiteralPath (Join-Path $venvHome 'python.exe'))
+}
+
+function Remove-MinorLink([string]$PythonDir, [string]$Version, [switch]$EvenIfUsable) {
+    # uv's minor-version link (cpython-3.12-..., a junction beside the full install). Where Windows won't let it be
+    # traversed it's removed, so nothing can pick it up: the link only (a non-recursive delete of a reparse point),
+    # never what it points at, and never a real folder. -EvenIfUsable: tests. -> the links removed
+    $mm = (($Version -split '\.')[0..1]) -join '.'
+    $gone = @()
+    foreach ($d in @(Get-ChildItem -LiteralPath $PythonDir -Directory -Force -Filter "cpython-$mm-*" -ErrorAction SilentlyContinue)) {
+        if ($d.Name -like "cpython-$Version-*") { continue }                               # the full install itself
+        if (-not ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }      # a real folder: not a link
+        $usable = $false
+        try { $usable = [bool](Test-Path -LiteralPath (Join-Path $d.FullName 'python.exe') -ErrorAction Stop) } catch { $usable = $false }
+        if ($usable -and -not $EvenIfUsable) { continue }
+        try { [IO.Directory]::Delete($d.FullName, $false); $gone += $d.Name } catch { }
+    }
+    return $gone
+}
+
 function Remove-OwnPythonRegistry([string]$InstallDir) {
     # An earlier setup (before --no-registry) registered this install's Python under HKCU\Software\Python\Astral.
     # Only keys whose InstallPath is inside this install's tools\python are removed: anything else is someone else's.

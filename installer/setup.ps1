@@ -268,7 +268,9 @@ $env:UV_NO_CONFIG          = '1'      # ignore any uv.toml the user may have els
 # the venv is made from the full-version folder (a refused minor-version link isn't a failure: os error 448).
 . (Join-Path $PSScriptRoot 'python.ps1')
 Step "Installing Python $PythonVer"
-if ($Repair -and (Test-Path $Py)) { Info ".venv kept (repair never makes it again while it's there)" }
+# a venv this setup made on uv's minor-version link (installer-fix, before this) is made again: it can't be used
+$venvGood = (-not $DryRun) -and (Test-Path $Py) -and (Test-VenvBase $Venv $PythonVer)
+if ($Repair -and $venvGood) { Info ".venv kept (repair never makes it again while it works)" }
 else {
 $BasePy = $null
 if ($DryRun) {
@@ -289,10 +291,14 @@ if ($DryRun) {
     if (-not $BasePy) { Fail "Python $PythonVer couldn't be installed into $($env:UV_PYTHON_INSTALL_DIR). The details are in the log." }
     Info "Python: $BasePy"
     foreach ($k in @(Remove-OwnPythonRegistry $InstallDir)) { Info "removed the registry entry an earlier setup made for its Python ($k)" }
+    foreach ($l in @(Remove-MinorLink $env:UV_PYTHON_INSTALL_DIR $PythonVer)) { Info "removed $l, a link Windows won't let anything use" }
 }
-if ((Test-Path $Py) -and -not $Force -and -not $DryRun) { Info ".venv already exists" }
+if ($venvGood -and -not $Force) { Info ".venv already exists" }
 else {
-    Run $Uv @('venv', $Venv, '--python', $BasePy, '--clear')
+    if ((Test-Path $Py) -and -not $DryRun) { Info ".venv is built on a folder Windows won't let it use: making it again" }
+    # Python's own venv module, from the full-version python.exe: its home is that folder, never uv's minor-version link
+    # (no pip in it: uv installs the packages, as before)
+    Run $BasePy @('-m', 'venv', '--clear', '--without-pip', $Venv)
     if (-not $DryRun) { Set-Content -Path $Marker -Value "Made by UnderCover setup.ps1 on $(Get-Date -Format u)" -Encoding ascii }
 }
 }
