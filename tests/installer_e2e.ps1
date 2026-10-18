@@ -4,29 +4,34 @@
   selftest passing. Run it before any installer release. It downloads about 3 GB and takes 20-40 minutes; the GPU is
   only touched by selftest's quick check at the end.
 
-  powershell -ExecutionPolicy Bypass -File tests\installer_e2e.ps1 [-Root D:\] [-Backend auto] [-Keep]
+  powershell -ExecutionPolicy Bypass -File tests\installer_e2e.ps1 [-Root D:\] [-Backend auto] [-Keep] [-CancelCheck]
 
   -Root     the drive or folder the temp install goes in (default: this repo's drive; the user hit os error 448 on D:)
   -Backend  as setup.ps1's (auto: detected)
   -Keep     leave the temp install in place (default: deleted after the checks, pass or fail)
+  -CancelCheck  first cancel setup mid-download (as the wizard's Cancel does): it must stop with code 3 and say what
+                it kept; then the same folder is set up again and must finish (a re-run resumes)
 
   The app is laid out as the installer lays it out (UnderCover.iss [Files]); then installer\setup.ps1 runs for real,
   started from inside an Inno Setup process, as the installer starts it. That matters: Inno Setup blocks untrusted
   junctions in its own process and the processes it starts inherit that (a junction they make can't be traversed:
   the user's os error 448, which a run from a normal console never shows). The launcher is a throwaway Inno program
-  compiled here: it installs nothing, registers nothing, and only runs setup.ps1 and writes its exit code.
+  compiled here: it installs nothing, registers nothing, and only runs setup.ps1, hidden, with the wizard's own way of
+  reading its output (ExecAndLogOutput), and writes the status lines it received and the exit code.
   Checked afterwards:
     - setup exited 0 and logs\setup-result.txt says "ok";
     - logs\selftest.json has no problems;
     - .venv\pyvenv.cfg's home is the full-version Python folder (cpython-<version>-...), not uv's minor-version link;
     - no registry entry under HKCU\Software\Python points into the temp install;
-    - nothing new in %USERPROFILE%\.local\bin.
+    - nothing new in %USERPROFILE%\.local\bin;
+    - the status lines reached the launcher (as the wizard reads them) and went through every step, in order.
   Exit code 0 only when every check passes. The tail of setup.log is printed either way.
 #>
 param(
     [string]$Root = '',
     [string]$Backend = 'auto',
-    [switch]$Keep
+    [switch]$Keep,
+    [switch]$CancelCheck
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -59,7 +64,12 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 CopyTree (Join-Path $repo 'undercover') (Join-Path $dir 'undercover')
 New-Item -ItemType Directory -Force (Join-Path $dir 'scripts'), (Join-Path $dir 'installer\requirements') | Out-Null
 Copy-Item (Join-Path $repo 'scripts\check_env.py') (Join-Path $dir 'scripts')
-foreach ($f in 'setup.ps1', 'detect_gpu.ps1', 'python.ps1', 'selftest.py', 'constraints.txt') {
+# the files the installer puts in {app}\installer, read from UnderCover.iss [Files] itself (a hand-kept list here
+# missed space.ps1 once, and the release check failed for a reason the real installer doesn't have)
+$issFiles = @(Select-String -LiteralPath (Join-Path $repo 'installer\UnderCover.iss') -Pattern '^Source: "([^"*\\]+)"; DestDir: "\{app\}\\installer";' |
+    ForEach-Object { $_.Matches[0].Groups[1].Value })
+if ($issFiles -notcontains 'setup.ps1') { throw "couldn't read the installer's file list from UnderCover.iss" }
+foreach ($f in $issFiles) {
     Copy-Item (Join-Path $repo "installer\$f") (Join-Path $dir 'installer')
 }
 Copy-Item (Join-Path $repo 'installer\requirements\*.txt') (Join-Path $dir 'installer\requirements')
@@ -70,6 +80,7 @@ if (-not $iscc) { Write-Host "Inno Setup 6 (ISCC.exe) isn't installed: it's need
 $launch = Join-Path $env:TEMP ('uc-e2e-launcher-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force $launch | Out-Null
 $codeFile = Join-Path $launch 'exit.txt'
+$linesFile = Join-Path $launch 'lines.txt'
 $params = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'installer\setup.ps1')`" -InstallDir `"$dir`" -Backend $Backend"
 $iss = @'
 [Setup]
@@ -83,28 +94,70 @@ OutputBaseFilename=launcher
 DisableWelcomePage=yes
 
 [Code]
+procedure OnLine(const S: String; const Error, FirstLine: Boolean);
+begin
+  if Copy(S, 1, 3) = '@@ ' then SaveStringToFile('@LINESFILE@', S + #13#10, True);
+end;
+
 function InitializeSetup: Boolean;
 var
   Code: Integer;
 begin
-  if not Exec('powershell.exe', '@PARAMS@', '@DIR@', SW_HIDE, ewWaitUntilTerminated, Code) then Code := -1;
+  if not ExecAndLogOutput('powershell.exe', '@PARAMS@', '@DIR@', SW_HIDE, ewWaitUntilTerminated, Code, @OnLine) then Code := -1;
   SaveStringToFile('@CODEFILE@', IntToStr(Code), False);
   Result := False;
 end;
 '@
-$iss = $iss.Replace('@PARAMS@', $params.Replace("'", "''")).Replace('@DIR@', $dir).Replace('@CODEFILE@', $codeFile)
+$iss = $iss.Replace('@PARAMS@', $params.Replace("'", "''")).Replace('@DIR@', $dir).Replace('@CODEFILE@', $codeFile).Replace('@LINESFILE@', $linesFile)
 [IO.File]::WriteAllText((Join-Path $launch 'launcher.iss'), $iss, (New-Object Text.UTF8Encoding $false))
 & $iscc /Q "/O$launch" (Join-Path $launch 'launcher.iss') | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host "Couldn't compile the launcher." -ForegroundColor Red; exit 2 }
 
+$fails = @()
+$statusFile = Join-Path $dir 'logs\setup-status.txt'
+if ($CancelCheck) {
+    # cancel mid-download, as the wizard's Cancel does (logs\setup-cancel), once the PyTorch step has bytes moving
+    Write-Host "Cancel check: starting, then cancelling during the PyTorch download"
+    $lp = Start-Process -FilePath (Join-Path $launch 'launcher.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -PassThru
+    $deadline = (Get-Date).AddMinutes(20)
+    while (-not $lp.HasExited -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+        if ((Test-Path $statusFile) -and (Select-String -LiteralPath $statusFile -Pattern 'PyTorch: ([1-9]|0.[1-9])' -Quiet)) {
+            Set-Content -LiteralPath (Join-Path $dir 'logs\setup-cancel') -Value 'stop'; break
+        }
+    }
+    $lp.WaitForExit()
+    $ccode = if (Test-Path $codeFile) { [int](Get-Content -LiteralPath $codeFile -Raw).Trim() } else { -2 }
+    $cres = if (Test-Path (Join-Path $dir 'logs\setup-result.txt')) { (Get-Content -LiteralPath (Join-Path $dir 'logs\setup-result.txt') -Raw).Trim() } else { '' }
+    Write-Host "Cancel check: exit $ccode, said: $cres"
+    if ($ccode -ne 3) { $fails += "a cancelled setup exited $ccode, not 3" }
+    if ($cres -notmatch '^cancelled: kept: .*Python') { $fails += "a cancelled setup said: $cres" }
+    if (Test-Path (Join-Path $dir 'logs\setup-cancel')) { $fails += 'the cancel file was left behind' }
+    Remove-Item -LiteralPath $codeFile, $linesFile -Force -ErrorAction SilentlyContinue
+    Write-Host "Cancel check: setting the same folder up again (it should resume)"
+}
+
 $t0 = Get-Date
 Start-Process -FilePath (Join-Path $launch 'launcher.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
 $code = if (Test-Path $codeFile) { [int](Get-Content -LiteralPath $codeFile -Raw).Trim() } else { -2 }
+$seen = if (Test-Path $linesFile) { @(Get-Content -LiteralPath $linesFile) } else { @() }
 Remove-Item -LiteralPath $launch -Recurse -Force -ErrorAction SilentlyContinue
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
 
-$fails = @()
 if ($code -ne 0) { $fails += "setup exited $code" }
+# the status lines, as the wizard reads them: every step from 1 to the last, never going back
+$steps = @($seen | ForEach-Object { if ($_ -match '^@@ (\d+)\|(\d+)\|') { [int]$Matches[1] } })
+$of = if ($seen.Count -and ($seen[-1] -match '^@@ \d+\|(\d+)\|')) { [int]$Matches[1] } else { 0 }
+if (-not $steps.Count) { $fails += 'no status lines reached the launcher (the wizard would show nothing)' }
+else {
+    $back = @(for ($i = 1; $i -lt $steps.Count; $i++) { if ($steps[$i] -lt $steps[$i - 1]) { $i } })
+    $missing = @(1..$of | Where-Object { $steps -notcontains $_ })
+    if ($back.Count) { $fails += 'the status went back a step' }
+    if ($missing.Count) { $fails += "steps never reported: $($missing -join ', ') of $of" }
+    $moving = @($seen | Where-Object { $_ -match 'PyTorch: [0-9.]+ ' })
+    Write-Host "Status: $($seen.Count) lines, steps 1-$of, $($moving.Count) progress lines during the PyTorch download"
+    if (-not $moving.Count -and -not $CancelCheck) { $fails += 'no progress lines during the PyTorch download' }
+}
 $result = Join-Path $dir 'logs\setup-result.txt'
 $said = if (Test-Path $result) { (Get-Content -LiteralPath $result -Raw).Trim() } else { '(no result line)' }
 if ($said -ne 'ok') { $fails += "setup-result.txt says: $said" }
@@ -116,7 +169,7 @@ if (Test-Path $st) {
 } else { $fails += 'no selftest.json (selftest never ran)' }
 $cfg = Join-Path $dir '.venv\pyvenv.cfg'
 $venvHome = if (Test-Path $cfg) { ((Get-Content -LiteralPath $cfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1) -replace '^\s*home\s*=\s*', '').Trim() } else { '' }
-if ((Split-Path $venvHome -Leaf) -notmatch '^cpython-\d+\.\d+\.\d+-') { $fails += ".venv's home is '$venvHome', not the full-version Python folder" }
+if ((-not $venvHome) -or ((Split-Path $venvHome -Leaf) -notmatch '^cpython-\d+\.\d+\.\d+-')) { $fails += ".venv's home is '$venvHome', not the full-version Python folder" }
 $reg = @(Get-ChildItem 'HKCU:\Software\Python' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq 'InstallPath' } |
     Where-Object { "$((Get-ItemProperty -LiteralPath $_.PSPath).'(default)')".StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
 if ($reg.Count) { $fails += "registry entries point into the install: $(($reg | ForEach-Object { $_.Name }) -join ', ')" }

@@ -81,19 +81,64 @@ function Result([string]$line) {
     [IO.File]::WriteAllText($ResultFile, $line, (New-Object Text.UTF8Encoding $false))
 }
 
-function Step([string]$msg) { Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan; Log "STEP $msg" }
+function Step([string]$msg) {
+    if ($script:StepName) { $script:Kept += $script:StepName }
+    if ((-not $DryRun) -and (Test-Path -LiteralPath $CancelFile)) { Cancelled }
+    $script:StepNo++
+    if ($script:StepNo -gt $script:StepsTotal) { $script:StepsTotal = $script:StepNo }
+    $script:StepName = $msg
+    Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan; Log "STEP $msg"
+    Status
+}
 function Info([string]$msg) { Write-Host "    $msg"; Log $msg }
 function Log([string]$msg) {
     if ($DryRun) { return }
     New-Item -ItemType Directory -Force (Split-Path $LogFile) | Out-Null
     Add-Content -Path $LogFile -Value ("{0:u}  {1}" -f (Get-Date), $msg)
 }
+# anything unexpected: logged, and said to the wizard as a failure in plain words (never a bare exit code)
+trap {
+    $m = "$($_.Exception.Message)".Trim()
+    Write-Host ""; Write-Host "Setup failed: $m" -ForegroundColor Red
+    Log "ERROR $m"; Log "    at $($_.InvocationInfo.PositionMessage -replace '\s+', ' ')"
+    Result "failed: something went wrong ($m)"
+    exit 1
+}
+
 function Fail([string]$msg) {
     Write-Host ""; Write-Host "Setup failed: $msg" -ForegroundColor Red
     Write-Host "Details are in $LogFile"; Log "FAIL $msg"
     Result "failed: $msg"
     if ($Pause) { Read-Host "Press Enter to close" | Out-Null }
     exit 1
+}
+
+# ---- What the wizard shows (installer-fix4): setup runs hidden, and the wizard drives its own progress bar from the
+# status lines setup prints ("@@ <step>|<of>|<step name>|<per mille of the step, or empty>|<detail>"). The same lines
+# go to logs\setup-status.txt, so the release check can see every step pass. A file logs\setup-cancel (the wizard's
+# Cancel) stops setup between steps, or mid-download, keeping what's done.
+$StatusFile = Join-Path $InstallDir 'logs\setup-status.txt'
+$CancelFile = Join-Path $InstallDir 'logs\setup-cancel'
+$script:StepNo = 0
+$script:StepName = ''
+$script:Kept = @()
+$script:StepsTotal = 13
+function Status([string]$detail = '', [double]$frac = -1) {
+    $f = if ($frac -ge 0) { [int][math]::Floor([math]::Min(0.99, $frac) * 1000) } else { '' }   # per mille: whole numbers for the wizard
+    $line = "@@ $($script:StepNo)|$($script:StepsTotal)|$($script:StepName)|$f|$detail"
+    [Console]::Out.WriteLine($line); [Console]::Out.Flush()
+    if (-not $DryRun) {
+        New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
+        Add-Content -Path $StatusFile -Value ("{0:u}  {1}" -f (Get-Date), $line)
+    }
+}
+function Cancelled {
+    $kept = if ($script:Kept.Count) { "kept: " + ($script:Kept -join '; ') } else { 'nothing was finished yet' }
+    Write-Host ""; Write-Host "Setup stopped, as asked ($kept)." -ForegroundColor Yellow
+    Log "CANCELLED ($kept)"
+    Result "cancelled: $kept"
+    Remove-Item -LiteralPath $CancelFile -Force -ErrorAction SilentlyContinue
+    exit 3
 }
 
 # Run a native command and return its exit code; in -DryRun just print it (0).
@@ -115,6 +160,40 @@ function Run([string]$exe, [string[]]$argv) {
     if ($code -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $code" }
 }
 
+# A long run (uv downloading and unpacking): its output to the log, and every 2 s a status line with the bytes that
+# have arrived in $watch (uv's cache) against what that step adds there ($expectGb; 0: unknown, "so far" instead).
+# The wizard's Cancel stops it mid-download. Stops setup if it fails.
+function RunWatched([string]$exe, [string[]]$argv, [string]$watch, [double]$expectGb, [string]$label) {
+    if ($DryRun) { RunCode $exe $argv | Out-Null; return }
+    $shown = ($argv | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
+    Log "RUN $exe $shown"
+    $outFile = Join-Path $InstallDir 'logs\setup-run.out'
+    $errFile = Join-Path $InstallDir 'logs\setup-run.err'
+    $line = ($argv | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
+    $p = Start-Process -FilePath $exe -ArgumentList $line -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    $null = $p.Handle   # (without it, ExitCode stays empty: a Start-Process quirk)
+    $base = Get-DirBytes $watch
+    $t0 = Get-Date
+    while (-not $p.WaitForExit(2000)) {
+        if (Test-Path -LiteralPath $CancelFile) {
+            & taskkill.exe /PID $p.Id /T /F 2>&1 | Out-Null
+            $p.WaitForExit()
+            Cancelled
+        }
+        $gb = [math]::Max([long]0, [long]((Get-DirBytes $watch) - $base)) / 1GB   # (typed: an untyped 0 makes it Int32, which fails past 2 GB)
+        $min = [math]::Floor(((Get-Date) - $t0).TotalMinutes)
+        $time = if ($min -ge 1) { ", $min min" } else { '' }
+        if ($expectGb -gt 0) { Status ("{0}: {1:0.0} of about {2:0.0} GB{3}" -f $label, [math]::Min($gb, $expectGb), $expectGb, $time) ($gb / $expectGb) }
+        else { Status ("{0}: {1:0.0} GB so far{2}" -f $label, $gb, $time) }
+    }
+    $p.WaitForExit()
+    foreach ($f in $outFile, $errFile) {
+        if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f | ForEach-Object { Log "    $_" }; Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    }
+    Log ("    measured: {0:0} MB added to {1}" -f (((Get-DirBytes $watch) - $base) / 1MB), $watch)
+    if ($p.ExitCode -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $($p.ExitCode)" }
+}
+
 # Download into <dest>.part, resuming where an earlier try stopped (an HTTP Range request), then check the file's
 # SHA-256: a file that doesn't match is deleted and setup stops.
 function Fetch([string]$url, [string]$dest, [string]$sha256) {
@@ -133,7 +212,19 @@ function Fetch([string]$url, [string]$dest, [string]$sha256) {
             $mode = if ($have -gt 0 -and [int]$resp.StatusCode -eq 206) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
             $expect = if ($resp.ContentLength -ge 0) { $resp.ContentLength + $(if ($mode -eq [IO.FileMode]::Append) { $have } else { 0 }) } else { -1 }
             $in = $resp.GetResponseStream(); $out = [IO.File]::Open($part, $mode)
-            try { $in.CopyTo($out) } finally { $out.Close(); $in.Close(); $resp.Close() }
+            try {
+                $buf = New-Object byte[] 1048576; $got = $have; $last = Get-Date
+                while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                    $out.Write($buf, 0, $n); $got += $n
+                    if (((Get-Date) - $last).TotalSeconds -ge 1) {
+                        $last = Get-Date
+                        if (Test-Path -LiteralPath $CancelFile) { $out.Close(); $in.Close(); $resp.Close(); Cancelled }
+                        $name = Split-Path $dest -Leaf
+                        if ($expect -gt 0) { Status ("Downloading {0}: {1:0} of {2:0} MB" -f $name, ($got / 1MB), ($expect / 1MB)) ($got / $expect) }
+                        else { Status ("Downloading {0}: {1:0} MB so far" -f $name, ($got / 1MB)) }
+                    }
+                }
+            } finally { $out.Close(); $in.Close(); $resp.Close() }
             # a connection closed by the other end can end the copy without an error: a short file is an interruption
             if ($expect -ge 0 -and (Get-Item $part).Length -lt $expect) { throw "the connection closed after $((Get-Item $part).Length) of $expect bytes" }
             Move-Item -Force $part $dest
@@ -165,7 +256,11 @@ function Unzip([string]$zip, [string]$dest) {
 # ---------------------------------------------------------------------------------------------
 Write-Host "UnderCover setup" -ForegroundColor White
 Write-Host "Install folder: $InstallDir"
-if (-not $DryRun) { Remove-Item -LiteralPath $ResultFile -Force -ErrorAction SilentlyContinue }   # no answer from an earlier run
+if (-not $DryRun) {
+    Remove-Item -LiteralPath $ResultFile -Force -ErrorAction SilentlyContinue   # no answer from an earlier run
+    Remove-Item -LiteralPath $CancelFile -Force -ErrorAction SilentlyContinue   # nor a Cancel from one
+    Remove-Item -LiteralPath $StatusFile -Force -ErrorAction SilentlyContinue
+}
 if ($DryRun) { Write-Host "DRY RUN: nothing will be downloaded or installed." -ForegroundColor Yellow }
 if ($Repair -and ($LibraryDir -or $WorkDir -or $ModelsDir)) {
     Fail "-Repair keeps your files where they are. To move them, use SafeHouse > Storage in UnderCover."
@@ -249,6 +344,21 @@ if ($Backend -eq 'cpu') {
     Write-Host "    instead of seconds, and training voices isn't practical." -ForegroundColor Yellow
 }
 
+# Space: what setup itself writes in the install folder now (the app, Python, PyTorch with uv's cache), with the
+# margin. The wizard already warned about the models and the files that come later; this stops before downloading.
+. (Join-Path $PSScriptRoot 'space.ps1')
+$Sizes = Read-Sizes $PSScriptRoot
+$StepGb = $Sizes.steps
+# What an earlier run left (the venv, tools, uv's cache: a cancelled setup, a repair, a reinstall) is taken off, so a
+# re-run is checked for what it still has to download, and isn't refused for room it already uses.
+if (-not $DryRun) {
+    $needs = Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }
+    $short = @(Find-Shortfalls $needs { param($r) Get-FreeGB $r })
+    if ($short.Count) { Fail ("there isn't enough space. " + (Format-Shortfall $short[0]) + " Free some space, or install to another drive, then try again.") }
+}
+if ($LibraryDir -or $WorkDir -or $ModelsDir) { $script:StepsTotal += 1 }
+if ($Addons) { $script:StepsTotal += 1 }
+
 # 2. uv (Python + package manager, one exe) -----------------------------------------------------
 Step "Getting the Python installer (uv $UvVersion)"
 if ($Repair -and -not ($Fix.torch -or $Fix.packages)) { Info "not needed for this repair" }
@@ -306,14 +416,17 @@ else {
 # 4. PyTorch for this GPU, then everything else pinned around it -------------------------------
 $torchReq = Join-Path $Req "torch-$Backend.txt"
 if (-not $Fix.torch) { Info "PyTorch: as recorded, left alone" } else {
-Step "Installing PyTorch for $Backend (about 2-3 GB, this is the slow part)"
+Step "Installing PyTorch for your graphics card (the big download)"
 $torchArgs = @('pip', 'install', '--python', $Py, '-r', $torchReq)
 if ($Backend -ne 'rocm') {
     # Only the PyTorch index for this step: mixing it with PyPI lets uv pick wrong builds.
     $tag = $Backend -replace '^cuda', 'cu'
     $torchArgs += @('--index-url', "https://download.pytorch.org/whl/$tag")
 }
-Run $Uv $torchArgs
+# (a card whose PyTorch hasn't been measured gets the largest measured: the bar moves a little slow, never stands still)
+$torchGb = $StepGb.torch.$Backend
+if (-not $torchGb) { $torchGb = ($StepGb.torch.PSObject.Properties | ForEach-Object { $_.Value } | Measure-Object -Maximum).Maximum }
+RunWatched $Uv $torchArgs $env:UV_CACHE_DIR ([double]$torchGb) 'Downloading and unpacking PyTorch'
 }
 
 if (-not $Fix.packages) { Info "Python packages: as recorded, left alone" } else {
@@ -330,11 +443,11 @@ if (-not $DryRun) {
 # common.txt is the dev venv's complete package set (minus PyTorch and the cadence set), every line with its SHA-256
 # (installer/pin_hashes.py): installed exactly as listed (--no-deps; uv's hash mode needs every dependency listed up
 # front, and they are), and uv refuses any file that doesn't match its hash. The torch pins stop anything replacing it.
-Run $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'common.txt'), '-c', $pins)
+RunWatched $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'common.txt'), '-c', $pins) $env:UV_CACHE_DIR ([double]$StepGb.common) 'Downloading the other packages'
 
 Step "Installing the cadence engine (Chatterbox + Whisper)"
 # --no-deps, like on the dev PC: their metadata asks for torch 2.6 / numpy < 2, which would replace the GPU's torch.
-Run $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'cadence.txt'))
+RunWatched $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'cadence.txt')) $env:UV_CACHE_DIR ([double]$StepGb.cadence) 'Downloading the speech engine'
 }
 
 # 5. ffmpeg + Deno (portable, inside tools\) ---------------------------------------------------
