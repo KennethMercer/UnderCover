@@ -187,7 +187,9 @@ var
 begin
   WizardForm.DiskSpaceLabel.Caption := 'Checking how much space UnderCover needs here...';
   CheckSpace('', '', '', '', Lbl, Short);
-  if Lbl <> '' then WizardForm.DiskSpaceLabel.Caption := Lbl + ' The next page lets you put the models and your files on another drive.';
+  if Lbl <> '' then WizardForm.DiskSpaceLabel.Caption := Lbl + ' The next page lets you put the models and your files on another drive.'
+  else   // the check couldn't run: the measured total, never a stuck "Checking"
+    WizardForm.DiskSpaceLabel.Caption := 'UnderCover needs about {#SizeTotalGB} GB of free space in all, more than this installer''s size suggests.';
 end;
 
 // one add-on's licence, from its own "Read the licence" link (the link's Tag is the add-on's number)
@@ -268,8 +270,9 @@ begin
     'first time each feature is used, up to about {#SizeModelsGB} GB more. Plan for about {#SizeTotalGB} GB of free space in all.' + #13#10#13#10 +
     'The next pages show what goes where and check that it fits.';
   WizardForm.DiskSpaceLabel.WordWrap := True;
-  WizardForm.DiskSpaceLabel.Height := ScaleY(70);
-  WizardForm.DiskSpaceLabel.Top := WizardForm.DiskSpaceLabel.Top - ScaleY(40);
+  // (from under the folder box to the page's foot: what goes on each drive takes several lines)
+  WizardForm.DiskSpaceLabel.Top := WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(20);
+  WizardForm.DiskSpaceLabel.Height := WizardForm.SelectDirPage.Height - WizardForm.DiskSpaceLabel.Top;
 
   // the setup's raw output, for anyone who wants it (installing page, and the failure page)
   DetailsLink := TNewStaticText.Create(WizardForm);
