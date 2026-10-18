@@ -3431,6 +3431,12 @@ def u_installer_quiet():
     assert "-NonInteractive" in run and "-Pause" not in run, "the hidden setup could wait for input no one sees"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
     assert '$params = "-NoProfile -NonInteractive' in e2e, "the release check doesn't run setup as the wizard does"
+    # installer-fix6 (the user: the window couldn't be moved during setup): the release check's final run is a shown
+    # wizard running the real setup with UnderCover.iss's own SetupLine, timed from outside (answers, hung, title bar,
+    # minimise and restore mid-run)
+    assert "'/SILENT', '/SUPPRESSMSGBOXES', '/WIZARD=1'" in e2e and ".Replace('@SETUPLINE@', $setupLineCode)" in e2e
+    assert "IsHungAppWindow" in e2e and "if ([int]$r -eq 2) { $caption++ }" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
+    assert "if ([double]$resp['maxms'] -gt 1000)" in e2e and "Cut 'procedure SetupLine('" in e2e
     # shortcuts: only ever this install's
     undelete = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
     assert ".lnk" not in undelete, "the uninstaller deletes a shortcut by name, whoever it belongs to"
