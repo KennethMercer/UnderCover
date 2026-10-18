@@ -37,9 +37,28 @@ async function assignBoot() {
   AS.known = true; AS.done = s.tutorial.done || null;
   renderDemoOffer(s.tutorial);
   renderAssignSetting();
+  // A brand-new install (the voice tools still to download, the assignment not yet taken): what this browser remembers (the last tab and room, a step,
+  // a song or voice) belongs to another install on the same address, so it goes. It once opened a fresh 1.0 on SafeHouse > System (the user, rc-page3).
+  if (s.first_run && !AS.done) {
+    ["uc-tab", "uc-sh-room", "uc-assign-step", "uc-song", "uc-voice"].forEach(k => store.set(k, null));
+    AS.step = 0;
+  }
   if (AS.step > 0) return assignGo(AS.step, false);   // carry on where it was (a reload, a restart)
   if (AS.done) return;
+  showTab("frontman"); window.scrollTo({ top: 0 });   // the brief lives on FrontMan: a first run lands there, whatever tab was last open
+  assignReady(s);
   assignBrief();
+}
+// The first-run download (~600 MB of voice tools), said on the brief where a new user is, not only in SafeHouse > System. A bar that moves when the
+// status carries models_progress (0-1); until then it shows that something is happening.
+function assignReady(s) {
+  const box = $("#assign-ready"); if (!box) return;
+  const on = !!(s && s.first_run && s.models === "loading");
+  box.hidden = !on;
+  if (!on) return;
+  const p = s.models_progress, bar = $("#assign-ready-bar");
+  bar.classList.toggle("indet", p == null);
+  $("i", bar).style.width = p != null ? `${Math.round(p * 100)}%` : "";
 }
 // the briefing card and Agent Smoke's greeting: on a first run, and again on Replay
 async function assignBrief() {
