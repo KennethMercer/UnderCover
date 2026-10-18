@@ -22,8 +22,8 @@ which you switch on from the top bar.
 - An AMD graphics card supported by ROCm for Windows: Radeon RX 7700 or newer in the RX 7000 series, RX 9060 or
   RX 9070, or Radeon PRO W7800 or W7900. Without a supported card UnderCover runs on the processor, much more slowly
   and without voice training. NVIDIA cards have not been tested.
-- About 15 GB of free disk space. Setup uses 8.3 GB, and each feature downloads its models the first time you use it
-  (covers 1.2 GB, speech 2.8 GB, listen-back 1.6 GB, training about 2 GB).
+- About 22 GB of free disk space. Setup uses about 9 GB, and each feature downloads its AI models the first time you
+  use it, up to about 10.5 GB for all of them. The installer checks that this fits before it starts.
 - An internet connection for setup, which downloads about 2.5 to 3 GB.
 
 ## Installing
