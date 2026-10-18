@@ -64,7 +64,12 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 CopyTree (Join-Path $repo 'undercover') (Join-Path $dir 'undercover')
 New-Item -ItemType Directory -Force (Join-Path $dir 'scripts'), (Join-Path $dir 'installer\requirements') | Out-Null
 Copy-Item (Join-Path $repo 'scripts\check_env.py') (Join-Path $dir 'scripts')
-foreach ($f in 'setup.ps1', 'detect_gpu.ps1', 'python.ps1', 'selftest.py', 'constraints.txt') {
+# the files the installer puts in {app}\installer, read from UnderCover.iss [Files] itself (a hand-kept list here
+# missed space.ps1 once, and the release check failed for a reason the real installer doesn't have)
+$issFiles = @(Select-String -LiteralPath (Join-Path $repo 'installer\UnderCover.iss') -Pattern '^Source: "([^"*\\]+)"; DestDir: "\{app\}\\installer";' |
+    ForEach-Object { $_.Matches[0].Groups[1].Value })
+if ($issFiles -notcontains 'setup.ps1') { throw "couldn't read the installer's file list from UnderCover.iss" }
+foreach ($f in $issFiles) {
     Copy-Item (Join-Path $repo "installer\$f") (Join-Path $dir 'installer')
 }
 Copy-Item (Join-Path $repo 'installer\requirements\*.txt') (Join-Path $dir 'installer\requirements')
