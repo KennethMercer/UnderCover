@@ -77,7 +77,8 @@ function renderBar() {
            (w.queued ? ` · ${w.queued} for tonight` : "");
     state = "held";
   } else if (w.armed && w.queued) {
-    text = `Tonight: ${w.queued} job${w.queued > 1 ? "s" : ""}` + (w.start_at ? `, starts at ${clock(w.start_at)}` : ", starting when the GPU is free");
+    const rw = retryWait(W.last);
+    text = `Tonight: ${w.queued} job${w.queued > 1 ? "s" : ""}` + (rw ? `, waiting for YouTube, tries again at ${clockAt(rw)}` : (w.start || w.start_at) ? `, starts at ${clock(w.start || w.start_at)}` : ", starting when the GPU is free");
     state = "armed";
   }
   bar.hidden = !text;
@@ -157,7 +158,18 @@ function loadRunRoom() { renderRunRoom(); refreshJobs(true); loadQueue(); }   //
 const ENDED = { done: ["ok", "done"], error: ["bad", "failed"], cancelled: ["warn", "cancelled"], paused: ["warn", "paused"], lost: ["bad", "stopped"] };
 const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 // a source that wouldn't answer (YouTube blocked): the server says "Trying again in an hour"; the page says when (the item's retry_after)
-const queueNote = i => i.retry_after ? `${String(i.note || "").replace(/\s*(?:The queue t|T)rying again in an hour\.?|\s*The queue tries again in an hour\.?/i, "").trim()} Tries again at ${hhmm(i.retry_after)}.`.trim() : (i.note || "");
+const queueNote = i => !i.retry_after || /trying again at \d/i.test(i.note || "") ? (i.note || "")   // the time once (IA pass 11, B3)
+  : `${String(i.note || "").replace(/\s*(?:The queue t|T)rying again in an hour\.?|\s*The queue tries again in an hour\.?/i, "").trim()} Tries again at ${hhmm(i.retry_after)}.`.trim();
+// Tonight waits on a YouTube block: nothing runs, and every item still to go has a retry time ahead. -> the earliest retry (epoch s), else null
+function retryWait(w) {
+  const left = (w?.queue || []).filter(i => ["queued", "paused", "running"].includes(i.state));
+  if (!left.length || left.some(i => i.state === "running" || !(i.retry_after > Date.now() / 1000))) return null;
+  return Math.min(...left.map(i => i.retry_after));
+}
+// an epoch time in the room's own words ("2:09 am", as clock() says the start and done-by), not the locale's "2:09 AM"
+const clockAt = t => clock(new Date(t * 1000).toTimeString().slice(0, 5));
+// a job that ended on a YouTube block will run again by itself: it isn't "failed"
+const willRetry = j => (j.final?.state || j.state) === "error" && /tries again at \d|trying again at \d/i.test(j.final?.message || j.message || "");
 // the room redraws on every job event: a part is rewritten only when its HTML changed, so focus and clicks survive
 const shown = new WeakMap();
 const put = (el, html) => { if (shown.get(el) === html) return false; el.innerHTML = html; shown.set(el, html); return true; };
@@ -221,7 +233,10 @@ function renderRunRoom() {
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const at = !!(w?.armed && w.settings.start_at), going = !!(w?.armed && !w.settings.start_at);
   // the real start (status `start`, counted inside the night window from now), the time, done by; a job that waits says so on its row
-  $("#rn-total").textContent = !left.length ? "" : [w.armed ? (w.starts_now ? "Starts now" : w.start ? `Starts ${clock(w.start)}` : "") : "Not started yet",
+  const rwt = retryWait(w);   // waiting on YouTube: say so, and count "done by" from the retry, not from now
+  $("#rn-total").textContent = !left.length ? "" : rwt ? [`Waiting for YouTube · tries again at ${clockAt(rwt)}`, w.total_min ? `about ${fmtMin(w.total_min)}` : "",
+      w.total_min ? `done by about ${clockAt(rwt + w.total_min * 60)}` : ""].filter(Boolean).join(" · ")
+    : [w.armed ? (w.starts_now ? "Starts now" : w.start ? `Starts ${clock(w.start)}` : "") : "Not started yet",
     w.total_min ? `about ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : ""].filter(Boolean).join(" · ");
   $("#rn-opts").hidden = !left.length;
   $("#rn-when").hidden = false;   // one time control, "Starts at [11:00 PM]" (consult round 2, 4.1): settable any time; the word is a button only when a press would arm the queue
@@ -250,7 +265,7 @@ function renderRunRoom() {
   // recent: the last five finished, and how they ended (from each job's final event)
   const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);
   put($("#rn-recent"), ended.length ? ended.map(j => {
-    const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = ENDED[st] || ["warn", st];
+    const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = willRetry(j) ? ["warn", "waiting to retry"] : ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");
     return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}${how ? ` · ${esc(how)}` : ""}</small></span>
       <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span>${j.retry ? `<button class="linkbtn" type="button" data-retry="${esc(j.id)}">Retry</button>` : ""}<button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
@@ -309,8 +324,8 @@ function renderDrawer() {
   const left = w ? w.queue.filter(i => ["queued", "paused", "running"].includes(i.state)) : [];
   const tonight = !w ? `<small>Loading…</small>` : !left.length ? `<small>Nothing for tonight.</small>`
     : `<b>${left.length} job${left.length > 1 ? "s" : ""}${w.total_min ? ` · about ${fmtMin(w.total_min)}` : ""}</b><small>${[
-        w.armed ? (w.starts_now ? "starts now" : w.start ? `starts at ${clock(w.start)}` : "running") : "not started yet",   // the real start, not the saved setting
-        w.done_by ? `done by about ${clock(w.done_by)}` : "", w.waits ? `${w.waits} wait${w.waits > 1 ? "" : "s"} for the next night` : ""].filter(Boolean).join(" · ")}</small>`;
+        retryWait(w) ? `waiting for YouTube, tries again at ${clockAt(retryWait(w))}` : w.armed ? (w.starts_now ? "starts now" : w.start ? `starts at ${clock(w.start)}` : "running") : "not started yet",   // the real start, not the saved setting
+        retryWait(w) ? (w.total_min ? `done by about ${clockAt(retryWait(w) + w.total_min * 60)}` : "") : w.done_by ? `done by about ${clock(w.done_by)}` : "", w.waits ? `${w.waits} wait${w.waits > 1 ? "" : "s"} for the next night` : ""].filter(Boolean).join(" · ")}</small>`;
   put($("#qd-glance"), `${now}<div class="g"><span class="k">Tonight</span><div>${tonight}</div></div>`);
 }
 // what a queue job works from, where we know it (consult round 2, 4.4), else the kind
