@@ -274,7 +274,7 @@ def _improve(job, item) -> dict:
     from . import project as P
     from . import sources as srcmod
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import Trainer, export_voice
+    from .trainer import Trainer, epoch_line, export_voice
     push, control = worklist.pusher(job), worklist.control_for(job)
     old = get_voice(item["target"])
     proj = _project_for_item(item, create=True)
@@ -307,7 +307,8 @@ def _improve(job, item) -> dict:
         todo = [s.id for s in proj.sources if s.selected and s.status not in ("ready", "failed")]
         if todo:
             def prog(f, label, **kw):
-                push("night", 0.05 + 0.35 * f, f"Preparing clips: {label}" + (f" ({kw['index']}/{kw['count']})" if kw.get("count") else ""))
+                push("night", 0.05 + 0.35 * f, f"Preparing clips, source {kw['index']} of {kw['count']}: {label}" if kw.get("count")
+                     else f"Preparing clips: {label}")
             try:
                 P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=prog,
                                   between=control.service, cancel=lambda: job.cancel or job.pausing,
@@ -383,7 +384,7 @@ def _improve(job, item) -> dict:
         if ev.get("stage") == "training" and ev.get("epochs"):
             job.push(stage="training", frac=round(0.4 + 0.55 * ev.get("fraction", 0), 3), epoch=ev.get("epoch"),
                      epochs=ev["epochs"], eta=ev.get("eta"),
-                     message=f"Training: epoch {ev.get('epoch', 0)} of {ev['epochs']}")
+                     planned=ev.get("planned"), message=epoch_line(ev))
     st = Trainer(proj, conv.hubert, conv.rmvpe, device=str(conv.device), half=conv.half, converter=conv).run(control, progress=tprog)
     if st.get("state") == "paused":
         from ..core.jobs import Paused

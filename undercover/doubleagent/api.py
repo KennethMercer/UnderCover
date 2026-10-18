@@ -474,6 +474,7 @@ def start_auto(name: str, b: dict):
                         **({"mode": "speaking"} if proj.mode == "speaking" else {})})
         job.planned_s = est["total"] * 60.0
         job.after_eta_s = max(0.0, est["total"] - est.get("prepare", 0) - est.get("train", 0)) * 60.0
+        job.plan_min = dict(est)
     except Exception:   # noqa: BLE001 - extrapolated from its progress instead
         pass
     job.resume_spec = {"kind": "auto", "project": proj.name, "label": f"Making a voice of {proj.person or proj.name}"}

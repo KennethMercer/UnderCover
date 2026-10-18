@@ -343,7 +343,8 @@ class Handler(BaseHTTPRequestHandler):
                 w = worklist.status()
                 work = {"held": w["held"], "resume": w["resume"], "running": w["running"][:1],
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
-                        "start": w["start"], "start_at": w["settings"].get("start_at")}
+                        "start": w["start"], "start_at": w["settings"].get("start_at"),
+                        "waits_until": w.get("waits_until"), "waits_for": w.get("waits_for")}   # B3: the strip says the wait
                 from ..core import addons, gamepause
                 ga = gamepause.STATE.get("asking")   # the game pause's open question: every page and a paired phone show it
                 work["game_ask"] = {**ga, "reason": gamepause.STATE.get("reason") or ""} if ga else None
