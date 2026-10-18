@@ -291,6 +291,7 @@ if ($DryRun) {
     if (-not $BasePy) { Fail "Python $PythonVer couldn't be installed into $($env:UV_PYTHON_INSTALL_DIR). The details are in the log." }
     Info "Python: $BasePy"
     foreach ($k in @(Remove-OwnPythonRegistry $InstallDir)) { Info "removed the registry entry an earlier setup made for its Python ($k)" }
+    foreach ($l in @(Remove-MinorLink $env:UV_PYTHON_INSTALL_DIR $PythonVer)) { Info "removed $l, a link Windows won't let anything use" }
 }
 if ($venvGood -and -not $Force) { Info ".venv already exists" }
 else {
