@@ -42,7 +42,10 @@ for ($i = 0; $i -lt $addons.Count; $i++) {
     $a = $addons[$i]
     $gb = '{0:0.0}' -f ($a.size_mb / 1000)
     $ids  += "    $i`: Result := $(Pas $a.id);"
-    $caps += "    $i`: Result := $(Pas "$($a.name), about $gb GB ($($a.licence)): $($a.adds) $($a.licence_summary)");"
+    # one short line (the licence detail is behind its "Read the licence" link): name, size, what it adds, who may use it
+    $dot = " $([char]0xB7) "   # a middle dot (not typed here: Windows PowerShell reads this file as ANSI)
+    $line = if ($a.short -and $a.use) { "$($a.name)$dot$gb GB$dot$($a.short)$dot$($a.use)." } else { "$($a.name)$dot$gb GB$dot$($a.adds)" }
+    $caps += "    $i`: Result := $(Pas $line);"
     $urls += "    $i`: Result := $(Pas $a.licence_url);"
 }
 function Fn([string]$name, [string[]]$cases) {
