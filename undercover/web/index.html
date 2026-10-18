@@ -129,9 +129,7 @@
         <span><b>Agent Smoke</b><small id="assign-greet-say"></small></span></div>
       <p id="assign-brief-say">A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it,
       see where it lives, then get a voice of your own. The song is ours and the voice isn't anyone's, so nothing you make here is anyone else's.</p>
-      <ol class="assign-steps"><li>Make the cover</li><li>Listen</li><li>Keep it</li><li>SafeHouse</li><li>A voice of your own</li></ol>
-      <div class="assign-ready" id="assign-ready" hidden><p>Getting UnderCover ready: downloading the voice tools, <span id="assign-ready-size">about 1.3 GB</span>, once. The first cover starts when it's done.</p>
-        <div class="bar indet" id="assign-ready-bar"><i></i></div></div></div>
+      <ol class="assign-steps"><li>Make the cover</li><li>Listen</li><li>Keep it</li><li>SafeHouse</li><li>A voice of your own</li></ol></div>
     <div class="row assign-acts"><button class="btn primary" id="assign-take" type="button">Take the assignment</button><button class="btn" id="assign-later" type="button">Not now</button></div>
   </section>
 
@@ -149,6 +147,8 @@
         <label class="toggle" id="os-train-row" data-deep><input type="checkbox" id="os-train" aria-label="Prefer training a new voice"><span>Prefer training a new voice<small class="meta" id="os-train-eta"></small></span></label>
       </div>
       <p class="meta" id="os-plan">Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest.</p>
+      <div class="first-ready" id="first-ready" hidden><p>Getting UnderCover ready: downloading the voice tools, <span id="first-ready-size">about 1.3 GB</span>, once. Your first cover starts when it's done.</p>
+        <div class="bar indet" id="first-ready-bar"><i></i></div></div>
       <div id="auto-choices" hidden></div>
       <div class="os-foot"><button class="linkbtn quiet" id="build-toggle" type="button" aria-expanded="false" aria-controls="build">or set it up yourself &#8250;</button></div>
     </div>
@@ -693,7 +693,7 @@
       <div class="setting" id="set-ear-row" hidden><span><b>Your ear</b><small id="set-ear-say"></small></span>
         <button class="linkbtn quiet" id="set-ear-forget" type="button" hidden>Forget my thumbs</button>
         <div class="ear-deep" id="set-ear-deep" data-deep></div></div>
-      <div class="setting" id="set-assign-row"><span><b>First assignment</b><small id="set-assign-say">The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small>
+      <div class="setting" id="set-assign-row" hidden><span><b id="set-assign-h">First assignment</b><small id="set-assign-say">The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small>
         <small class="set-demo" id="set-demo" hidden></small></span>
         <button class="btn" id="set-assign-replay" type="button" disabled>Replay</button></div>
       <div class="setting" id="set-phone-row" data-pc><span><b>Phone access</b><small id="set-phone-say">Use UnderCover from your phone on your home Wi-Fi. Off until you switch it on; each phone pairs once with a code from here.</small></span>

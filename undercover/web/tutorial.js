@@ -6,9 +6,14 @@
 // Server: /api/status's {tutorial: {done}} (missing = no tutorial backend: nothing shows), POST /api/tutorial/done and
 // /api/tutorial/reset (re-seeds the sample song and the demo voice); songs carry `sample: true`, voices `demo: true`.
 // Uses app.js ($, $$, api, esc, showError, store, S, renderSong, refreshEstimate, loadVoices), shell.js (showTab),
-// jobs.js (onJobs, runningJobs).
+// jobs.js (onJobs, runningJobs), oneshot.js (previewPlan, syncGo, PLAN_IDLE).
+//
+// Off for 1.0 (the user, rc-page6: on a fresh install it wasn't clear the brief folds into the top bar, or how to go on). The code stays for the
+// redesign behind ASSIGNMENT_ON. While it's off: no brief, no strip, no greeting, no Replay; a new copy gets the simple first run instead (the
+// end of this file), and the Settings row stays only for the demo voice's update offer.
+const ASSIGNMENT_ON = false;
 
-const AS = { known: false, done: null, step: store.get("uc-assign-step", 0), finished: false,
+const AS = { known: false, done: null, step: ASSIGNMENT_ON ? store.get("uc-assign-step", 0) : 0, finished: false,
              desk: store.get("uc-assign-desk", { song: true, voice: true }) };   // what was on the desk when it started
 const DESK_SAY = { "11": "The song and the voice are already on your desk. Press Convert.",
                    "01": "The voice is on your desk; bring a song: drop one in, or search for one. Then press Convert.",
@@ -42,24 +47,13 @@ async function assignBoot() {
   if (s.first_run && !AS.done) {
     ["uc-tab", "uc-sh-room", "uc-assign-step", "uc-song", "uc-voice"].forEach(k => store.set(k, null));
     AS.step = 0;
+    if (!ASSIGNMENT_ON) { showTab("frontman"); window.scrollTo({ top: 0 }); }   // the first run lives on FrontMan, whatever tab was last open
   }
+  if (!ASSIGNMENT_ON) return firstBoot(s);   // 1.0: the simple first run, in the one-shot card
   if (AS.step > 0) return assignGo(AS.step, false);   // carry on where it was (a reload, a restart)
   if (AS.done) return;
   showTab("frontman"); window.scrollTo({ top: 0 });   // the brief lives on FrontMan: a first run lands there, whatever tab was last open
-  assignReady(s);
   assignBrief();
-}
-// The first-run download (about 1.3 GB of voice tools: the status's models_mb), said on the brief where a new user is, not only in SafeHouse > System. A bar that moves when the
-// status carries models_progress (0-1); until then it shows that something is happening.
-function assignReady(s) {
-  const box = $("#assign-ready"); if (!box) return;
-  const on = !!(s && s.first_run && s.models === "loading");
-  box.hidden = !on;
-  if (!on) return;
-  const p = s.models_progress, bar = $("#assign-ready-bar");
-  $("#assign-ready-size").textContent = modelsSize(s);   // the real size, from the status (app.js)
-  bar.classList.toggle("indet", p == null);
-  $("i", bar).style.width = p != null ? `${Math.round(p * 100)}%` : "";
 }
 // the briefing card and Agent Smoke's greeting: on a first run, and again on Replay
 async function assignBrief() {
@@ -112,6 +106,7 @@ function renderDemoOffer(t) {
   const made = up?.made ? new Date(up.made + "T12:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
   box.innerHTML = up ? `A newer ${esc(up.display || "Agent Smoke")} is available${made ? ` (made ${esc(made)})` : ""}. <button class="linkbtn" type="button" data-demo="update">Update</button>`
     : prev ? `<button class="linkbtn quiet" type="button" data-demo="undo">Go back to the previous Agent Smoke</button>` : "";
+  if (!ASSIGNMENT_ON) renderAssignSetting();   // the row is there for this offer alone
   $$("[data-demo]", box).forEach(b => b.onclick = async () => {
     const how = b.dataset.demo; b.disabled = true;
     try {
@@ -133,6 +128,12 @@ async function assignMarkDone() {
 }
 function renderAssignSetting() {
   const b = $("#set-assign-replay"), say = $("#set-assign-say");
+  if (!ASSIGNMENT_ON) {   // 1.0: nothing to replay; the row shows only while the demo voice has an update (or a previous one) to offer
+    $("#set-assign-row").hidden = $("#set-demo").hidden; b.hidden = true;
+    $("#set-assign-h").textContent = "Demo voice"; say.textContent = "The voice that comes with UnderCover.";
+    return;
+  }
+  $("#set-assign-row").hidden = false;
   b.disabled = !AS.known;
   const d = AS.done && /^\d{4}-\d\d-\d\d/.test(AS.done) ? new Date(AS.done.slice(0, 10) + "T12:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
   say.textContent = "The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around." +
@@ -251,5 +252,66 @@ $("#set-assign-replay").onclick = async () => {
   showTab("frontman"); window.scrollTo({ top: 0 });
   assignBrief();
 };
+
+// ------------------------------------------------------------ the simple first run (1.0, while the assignment is off)
+// A new copy (the status's tutorial.done still empty) with no covers yet: the one-shot field holds "Hold On as Agent Smoke", one line under it
+// says what Make it does and how long it takes (the estimator's time for the sample song in the demo voice), and the first start's download
+// sits just below until it's done. Make it with that text unchanged makes a plain cover of the sample song in the demo voice, as Convert
+// would: the planner reads neither name as the ones on this desk. The first cover that finishes ends it (POST /api/tutorial/done, so it
+// doesn't come back and What's new speaks again from the next update), and the normal placeholder is back.
+const FIRST = { on: false, text: "Hold On as Agent Smoke", desk: null, say: "" };
+async function firstBoot(s) {
+  if (!s.tutorial || s.tutorial.done) return;
+  let hist, desk;
+  try { [hist, desk] = await Promise.all([api("/api/history"), deskNow()]); } catch (e) { return; }
+  if (hist.length) return api("/api/tutorial/done", { method: "POST" }).catch(() => {});   // a first cover that finished with the page closed: the first run is over
+  if (!desk.song || !desk.voice) return;
+  FIRST.on = true; FIRST.desk = desk;
+  if (!$("#os-text").value.trim()) $("#os-text").value = FIRST.text;
+  FIRST.say = "New here? Press Make it to hear a short sample song in the demo voice.";
+  firstLine();
+  try {
+    const e = await api("/api/estimate", { json: { song: desk.song.id, voice: desk.voice.name, options: S.opts } });
+    const m = Math.max(1, Math.round(e.total / 60));
+    if (e.total > 0) FIRST.say += ` It takes about ${m} minute${m === 1 ? "" : "s"}.`;
+  } catch (e) {}
+  firstLine();
+}
+const firstHolds = () => FIRST.on && $("#os-text").value.trim() === FIRST.text;   // the field still says the sample (oneshot.js asks)
+function firstLine() { if (firstHolds()) { $("#os-plan").textContent = FIRST.say; syncGo(null); } }
+// typed over, or an example picked: the sample's line goes at once (the plan for the new text takes a few seconds to come)
+const firstGone = () => { if (FIRST.on && !firstHolds() && $("#os-plan").textContent === FIRST.say) $("#os-plan").textContent = PLAN_IDLE; };
+$("#os-text").addEventListener("input", firstGone);
+$$("#os-ex button").forEach(b => b.addEventListener("click", firstGone));
+async function firstGo() {
+  if (S.job || S.osBusy) return;
+  const btn = $("#os-go"); btn.disabled = true;
+  try {
+    S.song = await api(`/api/songs/${FIRST.desk.song.id}`); store.set("uc-song", S.song.id); renderSong();
+    await loadVoices(FIRST.desk.voice.name);
+    await $("#convert").onclick();   // the cover Convert makes (app.js): its progress and its player
+  } catch (e) { showError(e.message, "Couldn't start the cover"); }
+  finally { btn.disabled = false; }
+}
+document.addEventListener("uc:jobdone", e => {
+  const j = e.detail;
+  if (!FIRST.on || !["cover", "auto"].includes(j.kind) || (j.final?.state || j.state) !== "done") return;
+  FIRST.on = false;
+  if ($("#os-text").value.trim() === FIRST.text) $("#os-text").value = "";
+  if (j.kind === "cover") previewPlan();   // the card's own line again (a one-shot's "Done in…" stays)
+  api("/api/tutorial/done", { method: "POST" }).catch(() => {});
+});
+// The first start's download (about 1.3 GB of voice tools: the status's models_mb), in the one-shot card where a new user is, not only in
+// SafeHouse > System. The bar moves with models_progress (0-1); until there's a number it slides, to show that something is happening.
+function firstReady(s) {
+  const box = $("#first-ready"); if (!box) return;
+  const on = !!(s && s.first_run && s.models === "loading");
+  box.hidden = !on;
+  if (!on) return;
+  const p = s.models_progress, bar = $("#first-ready-bar");
+  $("#first-ready-size").textContent = modelsSize(s);   // the real size, from the status (app.js)
+  bar.classList.toggle("indet", p == null);
+  $("i", bar).style.width = p != null ? `${Math.round(p * 100)}%` : "";
+}
 
 setTimeout(assignBoot, 0);

@@ -194,15 +194,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .stage.done .ico { border-color: var(--ok); background: var(--ok); }
 .stage.skipped .ico { border-color: var(--ok); }
 @keyframes spin { to { transform: rotate(1turn); } }
-/* the brief's first-run line: a bar that moves with models_progress, or slides while there's no number */
 .assign-brief .assign-acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }   /* two buttons with room between them (they ran together) */
-.assign-ready { display: grid; gap: 8px; margin-top: 12px; padding: 12px 14px; background: var(--panel-2); border-radius: 9px; }
-.assign-ready p { margin: 0; }
-.assign-ready .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
-.assign-ready .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
-.assign-ready .bar.indet i { width: 30%; animation: uc-slide 1.6s ease-in-out infinite; }
+/* the first start's download in the one-shot card: a bar that moves with models_progress, or slides while there's no number */
+.first-ready { display: grid; gap: 8px; margin-top: 10px; padding: 12px 14px; background: var(--panel-2); border-radius: 9px; }
+.first-ready p { margin: 0; }
+.first-ready .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.first-ready .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+.first-ready .bar.indet i { width: 30%; animation: uc-slide 1.6s ease-in-out infinite; }
 @keyframes uc-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
-@media (prefers-reduced-motion: reduce) { .assign-ready .bar.indet i { animation: none; width: 100%; opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .first-ready .bar.indet i { animation: none; width: 100%; opacity: .5; } }
 @media (prefers-reduced-motion: reduce) { .stage.active .ico { animation: none; } }
 .bar { height: 6px; background: var(--panel-2); border-radius: 99px; overflow: hidden; margin-top: 5px; }
 .bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width .25s linear; }

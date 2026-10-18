@@ -136,13 +136,15 @@ function renderChoices(p) {
     $(".choice-q", box).innerHTML = going({ artist: b.dataset.name });
   });
 }
+const PLAN_IDLE = "Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest.";   // the card's line with nothing typed
 function planKey() { return $("#os-text").value.trim() + "|" + $("#os-train").checked + "|" + (OS.subject || ""); }
 function resetGo() { syncGo(OS.last?.plan && OS.last.key === planKey() ? OS.last.plan : null); }   // the button follows the plan in hand, else it's plain "Make it"
 async function previewPlan() {
   const text = $("#os-text").value.trim();
   const seq = ++OS.planSeq;
   const key = planKey();
-  if (!text) { $("#os-plan").innerHTML = "Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest."; syncGo(null); return; }
+  if (typeof firstHolds === "function" && firstHolds()) { OS.last = null; return firstLine(); }   // the first run's own line (tutorial.js)
+  if (!text) { $("#os-plan").textContent = PLAN_IDLE; syncGo(null); return; }
   try {
     const p = await api(`/api/auto/plan?text=${encodeURIComponent(text)}&train=${$("#os-train").checked ? 1 : 0}${OS.subject ? "&subject=" + encodeURIComponent(OS.subject) : ""}`);
     if (seq !== OS.planSeq) return;
@@ -177,6 +179,7 @@ $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.tex
 $("#os-go").onclick = async () => {
   const text = $("#os-text").value.trim();
   if (!text) return $("#os-text").focus();
+  if (typeof firstHolds === "function" && firstHolds()) return firstGo();   // the first run: the sample song in the demo voice (tutorial.js)
   const btn = $("#os-go"); btn.disabled = true;
   try {
     // Never start blind: wait for the plan, and ask once when it may train a voice (~45 min).

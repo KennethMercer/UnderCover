@@ -1,8 +1,8 @@
 // What's new (ARCHITECTURE "Ideas from MasterPlan" 6): after an update, a short note says what changed. The notes live in
 // whatsnew.json (newest first; whoever merges a change the user will notice adds one). This browser remembers the newest
 // note it showed (localStorage uc-whatsnew-seen); anything newer shows once in the card under the top bar (#wn), and
-// SafeHouse's System room lists them all (#sys-news). A new copy still on its First assignment starts from here, quietly:
-// nothing is "new" to someone who just arrived. Uses helpers from app.js ($, $$, esc, api, store).
+// SafeHouse's System room lists them all (#sys-news). A new copy, before its first cover (tutorial.done still empty), starts from here,
+// quietly: nothing is "new" to someone who just arrived. Uses helpers from app.js ($, $$, esc, api, store).
 const WN = { list: [], all: false };
 const WN_SEEN = "uc-whatsnew-seen", WN_SHOW = 3, WN_ROOM = 5;
 const wnDate = d => { try { return new Date(d + "T12:00").toLocaleDateString(undefined, { day: "numeric", month: "short" }); } catch (e) { return d; } };
@@ -17,7 +17,7 @@ async function wnBoot() {
   if (seen === newest) return;
   let s = null;
   try { s = await api("/api/status"); } catch (e) {}
-  if (s?.tutorial && !s.tutorial.done) { store.set(WN_SEEN, newest); return; }   // a new copy: its first assignment comes first
+  if (s?.tutorial && !s.tutorial.done) { store.set(WN_SEEN, newest); return; }   // a new copy: its first cover comes first
   if (typeof AS !== "undefined" && AS.step > 0) return;                          // mid-assignment: wait for the next visit
   const at = seen ? WN.list.findIndex(e => e.id === seen) : -1;
   const fresh = at > 0 ? WN.list.slice(0, at) : WN.list.slice(0, 1);   // never seen any (or an unknown one): just the newest

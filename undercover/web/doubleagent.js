@@ -26,7 +26,7 @@ function renderVoiceCards(cands) {
   DA.cands = cands || []; noteVoices(DA.cands);
   const box = $("#da-cards");
   if (!DA.cands.length) {
-    box.innerHTML = `<div class="empty"><b>No voices yet.</b>${typeof assignBrief === "function" ? `<button class="btn" type="button" id="da-empty-assign">Take the first assignment</button>` : ""}<small class="meta">or name someone above</small></div>`;
+    box.innerHTML = `<div class="empty"><b>No voices yet.</b>${typeof ASSIGNMENT_ON !== "undefined" && ASSIGNMENT_ON ? `<button class="btn" type="button" id="da-empty-assign">Take the first assignment</button>` : ""}<small class="meta">or name someone above</small></div>`;
     $("#da-empty-assign")?.addEventListener("click", () => assignBrief());
     $("#da-more").hidden = true; renderDaOutcome(); return;
   }
