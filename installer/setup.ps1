@@ -96,6 +96,15 @@ function Log([string]$msg) {
     New-Item -ItemType Directory -Force (Split-Path $LogFile) | Out-Null
     Add-Content -Path $LogFile -Value ("{0:u}  {1}" -f (Get-Date), $msg)
 }
+# anything unexpected: logged, and said to the wizard as a failure in plain words (never a bare exit code)
+trap {
+    $m = "$($_.Exception.Message)".Trim()
+    Write-Host ""; Write-Host "Setup failed: $m" -ForegroundColor Red
+    Log "ERROR $m"; Log "    at $($_.InvocationInfo.PositionMessage -replace '\s+', ' ')"
+    Result "failed: something went wrong ($m)"
+    exit 1
+}
+
 function Fail([string]$msg) {
     Write-Host ""; Write-Host "Setup failed: $msg" -ForegroundColor Red
     Write-Host "Details are in $LogFile"; Log "FAIL $msg"
