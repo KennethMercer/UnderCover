@@ -1,0 +1,16 @@
+{
+  "about": "UnderCover's real disk use in GB, measured and rounded up: a real install with tests/installer_e2e.ps1 on 2026-10-18 (ROCm: .venv and uv's cache 6.4, tools 0.5, app 0.1) and the dev PC's models folder (separation 2.6, voice conversion 0.8, Whisper 1.6, speech 3.2, speaker 0.03). CUDA hasn't been measured: it is given ROCm's size. installer/space.ps1 adds the margin. steps: what each long setup step adds to uv's cache, for its progress bar (a backend left out shows bytes so far, no total).",
+  "app_gb": 0.1,
+  "tools_gb": 0.5,
+  "python": { "rocm": 6.5, "cuda128": 6.5, "cuda126": 6.5, "cpu": 1.5 },
+  "models_gb": 8.5,
+  "addons": { "f5": 1.5 },
+  "library_gb": 0.5,
+  "work_gb": 1.0,
+  "margin": 1.2,
+  "steps": {
+    "torch": { "rocm": 5.9, "cpu": 0.6 },
+    "common": 0.4,
+    "cadence": 0.3
+  }
+}
