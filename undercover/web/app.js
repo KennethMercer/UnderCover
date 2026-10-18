@@ -185,6 +185,8 @@ async function pollStatus() {
   }
 }
 // SafeHouse's System room: the graphics card and the models in words, a GPU problem as an alert at the top of the room
+// the first start's download in words: "about 1.3 GB" from the status's models_mb (the backend's measured total), "about 1.3 GB" before it says
+const modelsSize = s => { const mb = +(s && s.models_mb) || 1283; return mb >= 950 ? `about ${(mb / 1024).toFixed(1)} GB` : `about ${Math.round(mb / 50) * 50} MB`; };
 function sysStatus(s) {
   const row = (id, text, st, word) => {
     $(`#sys-${id}`).textContent = text;
@@ -197,7 +199,7 @@ function sysStatus(s) {
   if (s.models === "ready") row("models", s.queue ? `${s.queue} cover${s.queue > 1 ? "s" : ""} waiting their turn` : s.gpu ? "Separation, voice engine and speech are warm" : "Loaded on the processor",
                                s.gpu ? "ok" : "warn", s.gpu ? "warm" : "slow");
   else if (s.models.startsWith("error")) row("models", s.models.replace(/^error: /, ""), "bad", "problem");
-  else row("models", s.first_run ? "First start: downloading the voice tools (~600 MB, once)" : "Loading…", "now", "loading");
+  else row("models", s.first_run ? `First start: downloading the voice tools (${modelsSize(s)}, once${s.models_progress != null ? `, ${Math.round(s.models_progress * 100)}%` : ""})` : "Loading…", "now", "loading");
   const bad = !!(s.gpu_problem || s.cpu_mode);
   $("#sys-alert").hidden = !bad;
   if (bad) $("#sys-alert-p").textContent = s.gpu_problem ||
