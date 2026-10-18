@@ -6661,8 +6661,20 @@ def u_page_rules():
     assert "aimTimer = setTimeout(reaim" in tut, "the tutorial's lit edge waits for a frame that a non-painting window never gives"
     # IA pass 11 B3: the retrying state says the time once, waits for YouTube in the header, the strip and the drawer, and Recent says "waiting to retry"
     assert "function retryWait" in work and "const willRetry" in work and "Waiting for YouTube" in work and "trying again at" in work, "the retrying state lost its words"
-    # rc-page3 (the user's fresh 1.0 install): a first run lands on the First assignment with the download said there, not on a stale tab
-    assert "s.first_run && !AS.done" in tut and 'showTab("frontman")' in tut and "function assignReady" in tut and 'id="assign-ready"' in ix and "600 MB" not in ix and "600 MB" not in app and "const modelsSize" in app and '<button class="btn" id="assign-later"' in ix and "It waits in Settings under First assignment" not in ix, "a fresh install no longer lands on the brief"
+    # rc-page3 (the user's fresh 1.0 install): a first run lands on FrontMan with the download said there, not on a stale tab
+    assert "s.first_run && !AS.done" in tut and 'showTab("frontman")' in tut and "function firstReady" in tut and 'id="first-ready"' in ix and "600 MB" not in ix and "600 MB" not in app and "const modelsSize" in app and '<button class="btn" id="assign-later"' in ix and "It waits in Settings under First assignment" not in ix, "a fresh install no longer lands on the brief"
+    # rc-page6 (the user: "remove the tutorial from 1.0"): the First assignment is off behind one switch, and nothing else leans on it. A new copy
+    # gets the simple first run: "Hold On as Agent Smoke" in the one-shot field, one line with the estimator's time, Make it makes the sample cover,
+    # and the first cover ends it (tutorial.done, which What's new also waits on)
+    assert "const ASSIGNMENT_ON = false;" in tut and "if (!ASSIGNMENT_ON) return firstBoot(s);" in tut, "the First assignment isn't switched off for 1.0"
+    assert 'id="set-assign-row" hidden' in ix and "typeof assignBrief" not in (web / "doubleagent.js").read_text(encoding="utf-8"), "something still offers the First assignment"
+    fb = tut[tut.index("async function firstBoot"):tut.index("function firstReady")]
+    assert 'text: "Hold On as Agent Smoke"' in tut and "/api/estimate" in fb and "hist.length" in fb and "s.tutorial.done" in fb and '"/api/tutorial/done"' in fb, "the simple first run lost a part"
+    assert "minute" in fb and "about 2 min" not in fb, "the first run's time must come from the estimator"
+    os_js = (web / "oneshot.js").read_text(encoding="utf-8")
+    assert os_js.count("firstHolds()") == 2 and "return firstGo();" in os_js, "Make it no longer makes the sample cover on a first run"
+    v1 = json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
+    assert not any(w in l.lower() for l in v1["lines"] for w in ("assignment", "tutorial")), "What's new 1.0 mentions the tutorial"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")

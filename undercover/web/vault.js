@@ -6,7 +6,7 @@
 // loadVoices), library.js (when, confirmClick, L, loadCat) and rooms.js (R: the drives from /api/storage).
 const VT = { s: null, c: null, pick: null, check: null, all: false, snap: null, ask: null, timer: 0, restoreSeen: null };
 const VT_KINDS = [["voice", "Voices you trained"], ["song", "Songs"], ["cover", "Covers"], ["speech", "Speech"], ["project", "Training projects"], ["settings", "Settings"]];
-const VT_SETTINGS = { "config.toml": "Your settings", "tutorial.json": "First assignment", "voice_quality.json": "Voice checks", "themes": "Your themes" };
+const VT_SETTINGS = { "config.toml": "Your settings", "tutorial.json": "First run", "voice_quality.json": "Voice checks", "themes": "Your themes" };
 const VT_RANK = { same: 0, missing: 1, different: 2 };
 const vtStamp = s => String(s || "").replace(/T(\d\d)-(\d\d)-(\d\d).*$/, " $1:$2:$3");   // 2026-10-13T01-02-03 -> 2026-10-13 01:02:03
 const vtWhen = s => { const t = vtStamp(s); return typeof when === "function" ? when(t) : t; };
