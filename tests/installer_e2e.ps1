@@ -10,7 +10,11 @@
   -Backend  as setup.ps1's (auto: detected)
   -Keep     leave the temp install in place (default: deleted after the checks, pass or fail)
 
-  The app is laid out as the installer lays it out (UnderCover.iss [Files]); then installer\setup.ps1 runs for real.
+  The app is laid out as the installer lays it out (UnderCover.iss [Files]); then installer\setup.ps1 runs for real,
+  started from inside an Inno Setup process, as the installer starts it. That matters: Inno Setup blocks untrusted
+  junctions in its own process and the processes it starts inherit that (a junction they make can't be traversed:
+  the user's os error 448, which a run from a normal console never shows). The launcher is a throwaway Inno program
+  compiled here: it installs nothing, registers nothing, and only runs setup.ps1 and writes its exit code.
   Checked afterwards:
     - setup exited 0 and logs\setup-result.txt says "ok";
     - logs\selftest.json has no problems;
@@ -60,9 +64,43 @@ foreach ($f in 'setup.ps1', 'detect_gpu.ps1', 'python.ps1', 'selftest.py', 'cons
 }
 Copy-Item (Join-Path $repo 'installer\requirements\*.txt') (Join-Path $dir 'installer\requirements')
 
+# the launcher: setup.ps1 as a child of an Inno Setup process (as UnderCover.iss runs it), its exit code to a file
+$iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $iscc) { Write-Host "Inno Setup 6 (ISCC.exe) isn't installed: it's needed to run setup the way the installer does." -ForegroundColor Red; exit 2 }
+$launch = Join-Path $env:TEMP ('uc-e2e-launcher-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force $launch | Out-Null
+$codeFile = Join-Path $launch 'exit.txt'
+$params = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'installer\setup.ps1')`" -InstallDir `"$dir`" -Backend $Backend"
+$iss = @'
+[Setup]
+AppName=UnderCover installer check
+AppVersion=0
+CreateAppDir=no
+Uninstallable=no
+PrivilegesRequired=lowest
+OutputDir=.
+OutputBaseFilename=launcher
+DisableWelcomePage=yes
+
+[Code]
+function InitializeSetup: Boolean;
+var
+  Code: Integer;
+begin
+  if not Exec('powershell.exe', '@PARAMS@', '@DIR@', SW_HIDE, ewWaitUntilTerminated, Code) then Code := -1;
+  SaveStringToFile('@CODEFILE@', IntToStr(Code), False);
+  Result := False;
+end;
+'@
+$iss = $iss.Replace('@PARAMS@', $params.Replace("'", "''")).Replace('@DIR@', $dir).Replace('@CODEFILE@', $codeFile)
+[IO.File]::WriteAllText((Join-Path $launch 'launcher.iss'), $iss, (New-Object Text.UTF8Encoding $false))
+& $iscc /Q "/O$launch" (Join-Path $launch 'launcher.iss') | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Host "Couldn't compile the launcher." -ForegroundColor Red; exit 2 }
+
 $t0 = Get-Date
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'installer\setup.ps1') -InstallDir $dir -Backend $Backend
-$code = $LASTEXITCODE
+Start-Process -FilePath (Join-Path $launch 'launcher.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
+$code = if (Test-Path $codeFile) { [int](Get-Content -LiteralPath $codeFile -Raw).Trim() } else { -2 }
+Remove-Item -LiteralPath $launch -Recurse -Force -ErrorAction SilentlyContinue
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
 
 $fails = @()
