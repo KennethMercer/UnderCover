@@ -88,17 +88,23 @@ function Fail([string]$msg) {
     exit 1
 }
 
-# Run a native command; in -DryRun just print it.
-function Run([string]$exe, [string[]]$argv) {
+# Run a native command and return its exit code; in -DryRun just print it (0).
+function RunCode([string]$exe, [string[]]$argv) {
     $shown = ($argv | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
-    if ($DryRun) { Write-Host "    [dry-run] $exe $shown" -ForegroundColor DarkGray; return }
+    if ($DryRun) { Write-Host "    [dry-run] $exe $shown" -ForegroundColor DarkGray; return 0 }
     Log "RUN $exe $shown"
     # Windows PowerShell 5.1 turns any stderr line into a terminating error under 'Stop', and uv
     # writes its progress to stderr, so relax it for the call and rely on the exit code.
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try { & $exe @argv 2>&1 | ForEach-Object { $line = "$_"; Log "    $line"; $line } | Out-Host }
     finally { $ErrorActionPreference = $old }
-    if ($LASTEXITCODE -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $LASTEXITCODE" }
+    return $LASTEXITCODE
+}
+
+# Run a native command; stop setup if it fails.
+function Run([string]$exe, [string[]]$argv) {
+    $code = RunCode $exe $argv
+    if ($code -ne 0) { Fail "'$(Split-Path $exe -Leaf) $($argv[0])' exited with code $code" }
 }
 
 # Download into <dest>.part, resuming where an earlier try stopped (an HTTP Range request), then check the file's
@@ -249,13 +255,35 @@ $env:UV_CACHE_DIR          = Join-Path $InstallDir 'cache\uv'
 $env:UV_NO_CONFIG          = '1'      # ignore any uv.toml the user may have elsewhere
 
 # 3. Python + venv -----------------------------------------------------------------------------
+# Python stays private to this install (installer\python.ps1): no shim in %USERPROFILE%, nothing in the registry, and
+# the venv is made from the full-version folder (a refused minor-version link isn't a failure: os error 448).
+. (Join-Path $PSScriptRoot 'python.ps1')
 Step "Installing Python $PythonVer"
 if ($Repair -and (Test-Path $Py)) { Info ".venv kept (repair never makes it again while it's there)" }
 else {
-Run $Uv @('python', 'install', $PythonVer)
+$BasePy = $null
+if ($DryRun) {
+    RunCode $Uv @('python', 'install', $PythonVer, '--no-bin', '--no-registry') | Out-Null
+    $BasePy = Join-Path $env:UV_PYTHON_INSTALL_DIR "cpython-$PythonVer-windows-x86_64-none\python.exe"
+} else {
+    for ($try = 1; ($try -le 2) -and (-not $BasePy); $try++) {
+        $code = RunCode $Uv @('python', 'install', $PythonVer, '--no-bin', '--no-registry')
+        $own = Get-OwnPython $env:UV_PYTHON_INSTALL_DIR $PythonVer
+        if ($own -and (Test-OwnPython $own $PythonVer)) {
+            if ($code -ne 0) {
+                Info "Python $PythonVer is installed. Windows refused only a shortcut folder uv makes beside it (made without admin rights); UnderCover doesn't use that folder, so setup goes on."
+                Log "uv python install exited $code; using $own"
+            }
+            $BasePy = $own
+        } elseif ($try -eq 1) { Info "Installing Python didn't finish (code $code). Trying once more." }
+    }
+    if (-not $BasePy) { Fail "Python $PythonVer couldn't be installed into $($env:UV_PYTHON_INSTALL_DIR). The details are in the log." }
+    Info "Python: $BasePy"
+    foreach ($k in @(Remove-OwnPythonRegistry $InstallDir)) { Info "removed the registry entry an earlier setup made for its Python ($k)" }
+}
 if ((Test-Path $Py) -and -not $Force -and -not $DryRun) { Info ".venv already exists" }
 else {
-    Run $Uv @('venv', $Venv, '--python', $PythonVer, '--clear')
+    Run $Uv @('venv', $Venv, '--python', $BasePy, '--clear')
     if (-not $DryRun) { Set-Content -Path $Marker -Value "Made by UnderCover setup.ps1 on $(Get-Date -Format u)" -Encoding ascii }
 }
 }

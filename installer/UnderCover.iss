@@ -53,6 +53,7 @@ Source: "constraints.txt"; DestDir: "{app}\installer"; Flags: ignoreversion
 ; Setup scripts + the pinned, hashed requirement files (installer/pin_hashes.py).
 Source: "setup.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "detect_gpu.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "python.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "selftest.py"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ignoreversion
 ; The friend-facing briefing (installer/FRIENDS.md): what to expect, Repair, the optional extras, uninstall
@@ -99,28 +100,24 @@ Type: files; Name: "{app}\UnderCover.cmd"
 
 var
   DataPage: TInputDirWizardPage;
-  AddonPage: TInputOptionWizardPage;
-  AcceptBox: TNewCheckBox;
+  AddonPage: TWizardPage;
+  AddonBoxes: array of TNewCheckBox;
   LastDefault: String;
 
-function AnyAddon: Boolean; forward;
-
-// the ticked add-ons' licences (all of them when none is ticked yet)
-procedure OpenLicences(Sender: TObject);
+// one add-on's licence, from its own "Read the licence" link (the link's Tag is the add-on's number)
+procedure OpenLicence(Sender: TObject);
 var
-  I, Code: Integer;
-  All: Boolean;
+  Code: Integer;
 begin
-  All := not AnyAddon;
-  for I := 0 to ADDON_COUNT - 1 do
-    if All or AddonPage.Values[I] then
-      ShellExec('open', AddonUrl(I), '', '', SW_SHOWNORMAL, ewNoWait, Code);
+  ShellExec('open', AddonUrl(TNewStaticText(Sender).Tag), '', '', SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
 procedure InitializeWizard;
 var
-  I: Integer;
-  Link: TNewStaticText;
+  I, Top, Cut: Integer;
+  Intro, Link, Desc: TNewStaticText;
+  Box: TNewCheckBox;
+  Caption, Name, Rest: String;
 begin
   DataPage := CreateInputDirPage(wpSelectDir, 'Where should UnderCover keep your files?',
     'Keep UnderCover on C: and its growing files somewhere roomier, if you like.',
@@ -130,30 +127,54 @@ begin
   DataPage.Add('Working files: training projects (your collected clips), song stems and caches');
   DataPage.Add('Model files: the AI models UnderCover downloads (they can be downloaded again)');
 
-  AddonPage := CreateInputOptionPage(DataPage.ID, 'Optional add-ons',
-    'Extra parts with their own licence. UnderCover works fully without them.',
-    'Tick an add-on only if you have read its licence and accept it. You can add or remove them later in SafeHouse, Add-ons.',
-    False, False);
-  for I := 0 to ADDON_COUNT - 1 do
-    AddonPage.Add(AddonCaption(I));
-  AddonPage.CheckListBox.Height := ScaleY(120);
-
-  Link := TNewStaticText.Create(AddonPage);
-  Link.Parent := AddonPage.Surface;
-  Link.Top := AddonPage.CheckListBox.Top + AddonPage.CheckListBox.Height + ScaleY(8);
-  Link.Caption := 'Read the licences (opens in your browser)';
-  Link.Font.Color := clBlue;
-  Link.Font.Style := [fsUnderline];
-  Link.Cursor := crHand;
-  Link.OnClick := @OpenLicences;
-
-  AcceptBox := TNewCheckBox.Create(AddonPage);
-  AcceptBox.Parent := AddonPage.Surface;
-  AcceptBox.Top := Link.Top + Link.Height + ScaleY(10);
-  AcceptBox.Width := AddonPage.SurfaceWidth;
-  AcceptBox.Height := ScaleY(34);
-  AcceptBox.Caption := 'I have read the licences of the add-ons I ticked above, and I accept them.';
-  AcceptBox.Checked := False;
+  AddonPage := CreateCustomPage(DataPage.ID, 'Optional add-ons',
+    'Extra parts with their own licence. UnderCover works fully without them.');
+  Intro := TNewStaticText.Create(AddonPage);
+  Intro.Parent := AddonPage.Surface;
+  Intro.WordWrap := True;
+  Intro.Width := AddonPage.SurfaceWidth;
+  Intro.Caption := 'Ticking an add-on accepts its licence. You can add or remove add-ons later in SafeHouse, Add-ons.';
+  Top := Intro.Top + Intro.Height + ScaleY(14);
+  SetArrayLength(AddonBoxes, ADDON_COUNT);
+  for I := 0 to ADDON_COUNT - 1 do begin
+    // "F5-TTS, 1.5 GB, what it adds, who may use it" (middle dots): the name on the checkbox, the rest under it
+    Caption := AddonCaption(I);
+    Cut := Pos(' ' + #183 + ' ', Caption);   // #183: the middle dot (the .iss stays ASCII)
+    if Cut > 0 then begin
+      Name := Copy(Caption, 1, Cut - 1);
+      Rest := Copy(Caption, Cut + 3, Length(Caption));
+    end else begin
+      Name := Caption;
+      Rest := '';
+    end;
+    Box := TNewCheckBox.Create(AddonPage);
+    Box.Parent := AddonPage.Surface;
+    Box.Top := Top;
+    Box.Left := 0;
+    Box.Width := AddonPage.SurfaceWidth - ScaleX(120);
+    Box.Height := ScaleY(17);
+    Box.Caption := 'Add ' + Name + ' and accept its licence';
+    Box.Checked := False;
+    AddonBoxes[I] := Box;
+    Desc := TNewStaticText.Create(AddonPage);
+    Desc.Parent := AddonPage.Surface;
+    Desc.Top := Top + Box.Height + ScaleY(2);
+    Desc.Left := ScaleX(18);
+    Desc.Width := AddonPage.SurfaceWidth - ScaleX(18);
+    Desc.WordWrap := True;
+    Desc.Caption := Rest;
+    Link := TNewStaticText.Create(AddonPage);
+    Link.Parent := AddonPage.Surface;
+    Link.Top := Top + ScaleY(2);
+    Link.Left := AddonPage.SurfaceWidth - ScaleX(110);
+    Link.Caption := 'Read the licence';
+    Link.Font.Color := clBlue;
+    Link.Font.Style := [fsUnderline];
+    Link.Cursor := crHand;
+    Link.Tag := I;
+    Link.OnClick := @OpenLicence;
+    Top := Desc.Top + Desc.Height + ScaleY(14);
+  end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -174,24 +195,6 @@ begin
   Result := (PageID = AddonPage.ID) and (ADDON_COUNT = 0);
 end;
 
-function AnyAddon: Boolean;
-var
-  I: Integer;
-begin
-  Result := False;
-  for I := 0 to ADDON_COUNT - 1 do
-    if AddonPage.Values[I] then Result := True;
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  Result := True;
-  if (CurPageID = AddonPage.ID) and AnyAddon and not AcceptBox.Checked then begin
-    MsgBox('To add the add-ons you ticked, read their licences and tick "I accept". Or untick them: UnderCover works fully without them.',
-      mbInformation, MB_OK);
-    Result := False;
-  end;
-end;
 
 // "E:\" would end the quoted argument with \", which escapes the quote: pass "E:\." instead
 function DirArg(S: String): String;
@@ -209,9 +212,8 @@ var
   I: Integer;
 begin
   Result := '';
-  if not AcceptBox.Checked then Exit;
   for I := 0 to ADDON_COUNT - 1 do
-    if AddonPage.Values[I] then begin
+    if AddonBoxes[I].Checked then begin   // ticked = added, its licence accepted (one checkbox, user 2026-10-18)
       if Result <> '' then Result := Result + ',';
       Result := Result + AddonId(I);
     end;

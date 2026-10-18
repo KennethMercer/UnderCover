@@ -3088,6 +3088,65 @@ def u_retry_status():
     return "all waiting: starts 02:09, done 03:16, waits_until/waits_for/retry_at; one runnable: starts now"
 
 
+@check("the installer's Python stays private and survives a refused link (the user's 1.0 install test: 'untrusted mount point', os error 448): uv installs it with --no-bin --no-registry; setup finds the full-version folder itself (never the minor link), checks it runs, and makes the venv from it; a failed install with a working Python goes on, else one retry then a plain stop; earlier registry entries inside this install are removed; selftest warns if the venv sits on anything else; the add-ons page has one checkbox per add-on that accepts its licence, with its own link")
+def u_installer_python():
+    import importlib.util
+    import re
+    import subprocess
+    import tempfile
+    inst = ROOT / "installer"
+    setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
+    installs = re.findall(r"@\('python', 'install'[^)]*\)", setup)
+    assert installs and all("'--no-bin', '--no-registry'" in x for x in installs), installs
+    assert "Run $Uv @('venv', $Venv, '--python', $BasePy, '--clear')" in setup, "the venv isn't made from the full-version python.exe"
+    assert ". (Join-Path $PSScriptRoot 'python.ps1')" in setup and "Get-OwnPython $env:UV_PYTHON_INSTALL_DIR $PythonVer" in setup
+    assert "Test-OwnPython $own $PythonVer" in setup and "$try -le 2" in setup and "Remove-OwnPythonRegistry $InstallDir" in setup
+    assert "--default" not in setup, "uv must never make this Python the user's default"
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    assert 'Source: "python.ps1"; DestDir: "{app}\\installer"' in iss
+    helper = (inst / "python.ps1").read_text(encoding="utf-8")
+    assert "StartsWith($root, [StringComparison]::OrdinalIgnoreCase)" in helper, "the registry cleanup must be limited to this install"
+    if os.name == "nt":
+        with tempfile.TemporaryDirectory(prefix="uc-py-") as td:
+            d = Path(td)
+            (d / "cpython-3.12-windows-x86_64-none").mkdir()           # the minor link (here a plain folder)
+            (d / "cpython-3.12-windows-x86_64-none" / "python.exe").write_bytes(b"x")
+
+            def ps(cmd):
+                r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                    f". '{inst / 'python.ps1'}'; {cmd}"], capture_output=True, text=True, timeout=60)
+                return r.stdout.strip()
+            assert ps(f"Get-OwnPython '{d}' '3.12.10'") == "", "the minor link was taken for the install"
+            (d / "cpython-3.12.10-windows-x86_64-none").mkdir()
+            (d / "cpython-3.12.10-windows-x86_64-none" / "python.exe").write_bytes(b"x")
+            assert ps(f"Get-OwnPython '{d}' '3.12.10'") == str(d / "cpython-3.12.10-windows-x86_64-none" / "python.exe")
+            ver = "%d.%d.%d" % sys.version_info[:3]
+            assert ps(f"Test-OwnPython '{sys.executable}' '{ver}'") == "True", "a working Python wasn't recognised"
+            assert ps(f"Test-OwnPython '{sys.executable}' '3.9.0'") == "False" and ps(f"Test-OwnPython '{d / 'cpython-3.12.10-windows-x86_64-none' / 'python.exe'}' '3.12.10'") == "False"
+    # selftest: the venv must sit on the installer's own full-version Python (an installed copy only)
+    spec = importlib.util.spec_from_file_location("uc_selftest", inst / "selftest.py")
+    st = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(st)
+    with tempfile.TemporaryDirectory(prefix="uc-app-") as td:
+        app = Path(td)
+        assert st.private_python(r"C:\Python312", app, "3.12.10") == []          # a dev copy: nothing to check
+        (app / "tools" / "python").mkdir(parents=True)
+        own = app / "tools" / "python"
+        assert st.private_python(str(own / "cpython-3.12.10-windows-x86_64-none"), app, "3.12.10") == []
+        assert "full 3.12.10" in st.private_python(str(own / "cpython-3.12-windows-x86_64-none"), app, "3.12.10")[0]
+        assert "not on UnderCover's own Python" in st.private_python(r"C:\Users\x\AppData\Local\Programs\Python\Python312", app, "3.12.10")[0]
+    # the add-ons page: one checkbox per add-on that accepts its licence, its own link; one short line from the registry
+    assert "AcceptBox" not in iss and "I have read the licences" not in iss
+    assert "'Add ' + Name + ' and accept its licence'" in iss and "'Read the licence'" in iss and "Link.Tag := I" in iss
+    build = (inst / "build.ps1").read_text(encoding="utf-8-sig")
+    assert "[char]0xB7" in build and all(ord(c) < 128 for c in build), "build.ps1 must stay ASCII (Windows PowerShell reads it as ANSI)"
+    from undercover.core import addons
+    f5 = addons.ADDONS["f5"]
+    assert f5.short and f5.use and "4x" not in f5.adds and "non-commercial" in f5.use, (f5.adds, f5.short, f5.use)
+    assert {"short", "use"} <= set(addons.info(f5))
+    return "--no-bin --no-registry; the full-version folder found, the link never; runs-and-version check; selftest rule; one licence checkbox per add-on"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -8359,7 +8418,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

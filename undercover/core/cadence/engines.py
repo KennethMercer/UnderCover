@@ -161,7 +161,10 @@ def weights_present(engine: str) -> bool:
 # ---------------------------------------------------------------- the add-ons (non-OSI weights)
 
 addons.register(addons.Addon(
-    id="f5", name="F5-TTS", adds="Makes SpeakEasy's \"own cadence\" speech about 4x faster to make, with slightly flatter intonation.",
+    # (no "about 4x faster" any more: that was against Chatterbox; the default, Turbo, makes speech about as fast)
+    id="f5", name="F5-TTS", adds="Another engine for SpeakEasy's speech in a person's own cadence. It needs less graphics memory, "
+                                 "and its intonation is slightly flatter.",
+    short="lighter on graphics memory, slightly flatter speech", use="personal, non-commercial use only",
     licence="CC-BY-NC-4.0", licence_url="https://huggingface.co/SWivid/F5-TTS",
     licence_summary=("The code is MIT, but the model weights are Creative Commons Attribution-NonCommercial 4.0: "
                      "you may use what it makes for personal, non-commercial purposes only."),
