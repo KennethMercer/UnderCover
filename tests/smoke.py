@@ -2997,6 +2997,97 @@ def u_character_check():
     return "no songs for a character; its project speaks; songs unticked (user's kept), voices found again, scenes searched if none; plain when unchecked"
 
 
+@check("Do it all's preparation reads as progress (IA pass 11 B2: '(1/2) / (2/2)' six times in 19 min, the time left climbing 3598 -> 4354 s): 'source k of n' over the whole job, the bar never goes back, the time left comes from the work and counts down, said through the job's rule; a check's verdict is kept per clip set (A3); an auto training says its planned end, not the cap")
+def u_prep_progress():
+    import inspect
+    from undercover.core import jobs as J
+    from undercover.doubleagent import night, service, trainer
+    plan = {"prepare": 24, "train": 45, "compare": 1, "total": 70}
+    t = service.PrepTime(plan, 30.0)
+    lines, lefts, fracs = [], [], []
+    kept = 0.0
+    for rnd in range(6):                                   # 12 ticked sources, two a round, 120 s and 2.5 clean min each
+        t.kept, t.total = kept, 12
+        n = 2
+        for f in (0.0, 0.5):
+            lines.append(t.line(int(f * n) + 1, "downloading"))
+            fracs.append(t.frac(0.02 + 0.08 * (t.done + f * n) / t.total))
+        lefts.append(t.left(batch_left=n))
+        t.finished(n, 240.0)
+        kept += 5.0
+    assert lines[0] == "Preparing clips, source 1 of 12: downloading" and lines[-1].startswith("Preparing clips, source 12 of 12"), lines
+    assert all("(1/2)" not in x for x in lines)
+    assert fracs == sorted(fracs), "the bar went backwards"
+    assert all(a > b for a, b in zip(lefts, lefts[1:])), f"the time left didn't count down: {lefts}"
+    assert abs(lefts[-1] - (2 * 120 + 46 * 60)) < 1, lefts[-1]          # the last batch, then training + compare
+    assert service.PrepTime(None, 30).left(2) is None                    # no plan: the job extrapolates as before
+    # more sources ticked later: the count grows, the bar stays
+    t2 = service.PrepTime(plan, 30.0)
+    t2.total = 2
+    assert t2.frac(0.06) == 0.06 and t2.frac(0.04) == 0.06
+    # the job says a step's own estimate through its rule: it counts down, and a rise is held to a few seconds
+    job = J.Job("night")
+    job.push(stage="voice", frac=0.05, message="x", left_est=1000.0)
+    assert job.events[-1]["total_left"] == 1000.0
+    job.push(stage="voice", frac=0.05, message="x", left_est=1400.0)
+    assert job.events[-1]["total_left"] <= 1006.0, job.events[-1]["total_left"]
+    job.push(stage="voice", frac=0.05, message="x", left_est=900.0)
+    assert job.events[-1]["total_left"] == 900.0 and "left_est" not in job.events[-1]
+    src = inspect.getsource(service.train_new_voice)
+    assert "PrepTime(" in src and "left_est" in src and "kw['index']}/{kw['count']}" not in src
+    assert "kw['index']}/{kw['count']}" not in inspect.getsource(night._improve)
+    # A3: a cached verdict is keyed to the clips it was judged on
+    with isolated_data():
+        proj = _fake_project("a3", "A3 Person", n_phrases=12, other=0, n_sources=2)
+        before = service.clip_set(proj)
+        proj.source("s1").selected = False
+        assert service.clip_set(proj) != before, "the clip set ignores what trains"
+    rv = inspect.getsource(service.resolve_voice)
+    assert 'cached.get("clips") == clips' in rv and "_remember(person, ident, q, clips)" in rv
+    # the training's line: the planned end of an auto run, "up to" the cap past it
+    assert trainer.epoch_line({"epoch": 10, "epochs": 1000, "planned": 525}) == "Training: epoch 10 of about 525"
+    assert trainer.epoch_line({"epoch": 530, "epochs": 1000, "planned": 525}) == "Training: epoch 530, past the planned 525 (up to 1000)"
+    assert trainer.epoch_line({"epoch": 10, "epochs": 300}) == "Training: epoch 10 of 300"
+    tsrc = inspect.getsource(trainer.Trainer.run)
+    assert tsrc.count("planned=planned_shown") == 2
+    return f"source 1..12 of 12, bar forward, time left {lefts[0]:.0f} -> {lefts[-1]:.0f} s; rises held; verdicts per clip set; 'of about 525'"
+
+
+@check("a queue that waits to try again says so (IA pass 11 B3, the backend's half): every item left waiting on a retry -> the status' start is the retry time, waits_until / waits_for are set, starts_now is off, done_by counts from the retry; each waiting row carries retry_at; the job's final event carries retry_at (Recent: 'will retry')")
+def u_retry_status():
+    import inspect
+    from datetime import datetime
+    from undercover.core import worklist
+    real = worklist.datetime
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 18, 1, 10)
+    worklist.datetime = Clock
+    try:
+        with isolated_data():
+            worklist._STATE = None
+            st = worklist._state()
+            st["settings"].update(start_at="23:00", finish_by=None)
+            st["armed"] = True
+            at = datetime(2026, 10, 18, 2, 9).timestamp()
+            st["queue"] = [{"id": "k1", "kind": "new", "target": "Someone", "state": "queued", "retry_after": at,
+                            "estimate": {"total": 67}}]
+            out = worklist.status()
+            assert out["waits_until"] == "02:09" and out["waits_for"] == "YouTube" and not out["starts_now"], out
+            assert out["start"] == "02:09" and out["done_by"] == "03:16", out
+            assert out["queue"][0]["retry_at"] == "02:09"
+            st["queue"].append({"id": "k2", "kind": "new", "target": "Another", "state": "queued", "estimate": {"total": 10}})
+            out = worklist.status()                                    # something can run now: no wait said
+            assert out["waits_until"] is None and out["starts_now"] and out["start"] == "01:10", out
+            worklist._STATE = None
+    finally:
+        worklist.datetime = real
+    assert 'retry_at=time.strftime("%H:%M", time.localtime(at))' in inspect.getsource(worklist._run_item)
+    return "all waiting: starts 02:09, done 03:16, waits_until/waits_for/retry_at; one runnable: starts now"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -8266,7 +8357,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

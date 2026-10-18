@@ -49,7 +49,8 @@ def job_line(j: dict) -> str:
     what = j.get("title") or WORDS.get(j.get("kind"), "Working")
     parts = [what]
     if j.get("epoch") and j.get("epochs"):
-        parts.append(f"epoch {j['epoch']} of {j['epochs']}")
+        parts.append(f"epoch {j['epoch']} of about {j['planned']}" if j.get("planned") and j["epoch"] <= j["planned"]
+                     else f"epoch {j['epoch']} of {j['epochs']}")
     if _left(j):
         parts.append(_left(j))
     return " · ".join(parts)[:120]
