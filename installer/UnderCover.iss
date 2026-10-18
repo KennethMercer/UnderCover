@@ -25,6 +25,9 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=UnderCover
 DefaultDirName={localappdata}\{#AppName}
+; the folder page always shows (a re-run too), with the previous install's folder as its default
+DisableDirPage=no
+UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -131,7 +134,7 @@ var
   Caption, Name, Rest: String;
 begin
   DataPage := CreateInputDirPage(wpSelectDir, 'Where should UnderCover keep your files?',
-    'Keep UnderCover on C: and its growing files somewhere roomier, if you like.',
+    'UnderCover stays where you installed it. Its growing files can go to a roomier drive, if you like.',
     'Each folder gets its own sub-folders. Leave them as they are to keep everything in the install folder. ' +
     'You can move them later in SafeHouse, Storage.', False, '');
   DataPage.Add('Your library: songs, covers, speech and voices (yours: they can''t be downloaded again)');

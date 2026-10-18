@@ -3098,7 +3098,12 @@ def u_installer_python():
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
     installs = re.findall(r"@\('python', 'install'[^)]*\)", setup)
     assert installs and all("'--no-bin', '--no-registry'" in x for x in installs), installs
-    assert "Run $Uv @('venv', $Venv, '--python', $BasePy, '--clear')" in setup, "the venv isn't made from the full-version python.exe"
+    # the venv: Python's own venv module from the full-version python.exe (uv's venvs sit on the minor link: the user's
+    # second run failed at PyTorch with os error 448 on .venv\Scripts\python.exe); one built on the link is made again
+    assert "Run $BasePy @('-m', 'venv', '--clear', '--without-pip', $Venv)" in setup and "@('venv'," not in setup
+    assert "$venvGood = (-not $DryRun) -and (Test-Path $Py) -and (Test-VenvBase $Venv $PythonVer)" in setup
+    assert "if ($Repair -and $venvGood)" in setup and "if ($venvGood -and -not $Force)" in setup
+    assert "DisableDirPage=no" in (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
     assert ". (Join-Path $PSScriptRoot 'python.ps1')" in setup and "Get-OwnPython $env:UV_PYTHON_INSTALL_DIR $PythonVer" in setup
     assert "Test-OwnPython $own $PythonVer" in setup and "$try -le 2" in setup and "Remove-OwnPythonRegistry $InstallDir" in setup
     assert "--default" not in setup, "uv must never make this Python the user's default"
@@ -3122,6 +3127,13 @@ def u_installer_python():
             assert ps(f"Get-OwnPython '{d}' '3.12.10'") == str(d / "cpython-3.12.10-windows-x86_64-none" / "python.exe")
             ver = "%d.%d.%d" % sys.version_info[:3]
             assert ps(f"Test-OwnPython '{sys.executable}' '{ver}'") == "True", "a working Python wasn't recognised"
+            full = d / "cpython-3.12.10-windows-x86_64-none"
+            for home, want in ((full, "True"), (d / "cpython-3.12-windows-x86_64-none", "False"), (d / "nowhere", "False")):
+                v = d / f"venv-{want}-{home.name}"
+                v.mkdir()
+                (v / "pyvenv.cfg").write_text(f"home = {home}" + chr(10) + "include-system-site-packages = false" + chr(10), encoding="utf-8")
+                assert ps(f"Test-VenvBase '{v}' '3.12.10'") == want, (home, want)
+            assert ps(f"Test-VenvBase '{d / 'no-venv'}' '3.12.10'") == "False"
             assert ps(f"Test-OwnPython '{sys.executable}' '3.9.0'") == "False" and ps(f"Test-OwnPython '{d / 'cpython-3.12.10-windows-x86_64-none' / 'python.exe'}' '3.12.10'") == "False"
     # selftest: the venv must sit on the installer's own full-version Python (an installed copy only)
     spec = importlib.util.spec_from_file_location("uc_selftest", inst / "selftest.py")
