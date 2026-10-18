@@ -238,7 +238,10 @@ function assignClose() {
 }
 $("#assign-skip").onclick = () => { if (!$("#assign").classList.contains("done")) assignMarkDone(); assignClose(); };
 $("#assign-take").onclick = () => { greetStop(); assignStart(); };
-$("#assign-later").onclick = () => { greetStop(); $("#assign-brief").hidden = true; assignMarkDone(); };
+$("#assign-later").onclick = () => {   // where it went, said once after the click (the note beside the button read as one muddled phrase: the user, rc-page3)
+  greetStop(); $("#assign-brief").hidden = true; assignMarkDone();
+  showError("The First assignment waits in SafeHouse's Settings room, under First assignment, whenever you want it.", "Later, then", null, true);
+};
 $("#set-assign-replay").onclick = async () => {
   if (S.job || S.osBusy) return showError("Wait for the cover that's being made to finish (or cancel it), then take the assignment.", "Busy");
   try { await api("/api/tutorial/reset", { method: "POST" }); } catch (e) { return showError(e.message, "Couldn't start the assignment"); }
