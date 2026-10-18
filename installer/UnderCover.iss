@@ -60,20 +60,19 @@ Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ig
 Source: "FRIENDS.md"; DestDir: "{app}"; DestName: "READ ME.md"; Flags: ignoreversion
 
 [Icons]
-; UnderCover.cmd started from a shortcut runs windowless in the background (quit it from SafeHouse).
-Name: "{group}\{#AppName}"; Filename: "{app}\UnderCover.cmd"; WorkingDir: "{app}"
+; The "UnderCover" shortcuts (Start menu, desktop) are made by the code below only once setup has worked
+; (CreateLaunchers): a failed setup never leaves a shortcut that looks like a working install.
 ; Repair: the Doctor checks the install against its record and setup fixes only what's wrong (files and settings kept)
 Name: "{group}\Repair {#AppName}"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup.ps1"" -InstallDir ""{app}"" -Repair -Pause"; WorkingDir: "{app}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\{#AppName}"; Filename: "{app}\UnderCover.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Run]
-; Visible window so people can watch the downloads (PyTorch alone is 2-3 GB).
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup.ps1"" -InstallDir ""{app}"" -LibraryDir ""{code:GetLibraryDir}"" -WorkDir ""{code:GetWorkDir}"" -ModelsDir ""{code:GetModelsDir}"" -Addons ""{code:GetAddons}"" -Pause"; WorkingDir: "{app}"; StatusMsg: "Setting up Python, PyTorch and tools for your graphics card (this takes a while)..."; Flags: waituntilterminated
-Filename: "{app}\UnderCover.cmd"; Parameters: "--background"; Description: "Start UnderCover now"; Flags: postinstall nowait skipifsilent unchecked runhidden
+; setup.ps1 itself runs from the code below (RunSetup), so its exit code is read: "Start UnderCover now" is offered
+; only when it worked.
+Filename: "{app}\UnderCover.cmd"; Parameters: "--background"; Description: "Start UnderCover now"; Flags: postinstall nowait skipifsilent unchecked runhidden; Check: SetupWorked
 
 [UninstallDelete]
 ; Downloaded runtime pieces and caches that are re-made when needed. Kept: voices, covers, songs (models, output,
@@ -92,6 +91,9 @@ Type: filesandordirs; Name: "{app}\models\tailscale"
 Type: filesandordirs; Name: "{app}\cache\tailscale-fetch"
 Type: filesandordirs; Name: "{app}\cache\tailscale-state"
 Type: files; Name: "{app}\UnderCover.cmd"
+; the launch shortcuts the code made after a working setup (CreateLaunchers)
+Type: files; Name: "{group}\{#AppName}.lnk"
+Type: files; Name: "{userdesktop}\{#AppName}.lnk"
 
 [Code]
 // The optional add-ons (generated from undercover/core/addons.py by build.ps1): ADDON_COUNT, AddonId(i),
@@ -103,6 +105,15 @@ var
   AddonPage: TWizardPage;
   AddonBoxes: array of TNewCheckBox;
   LastDefault: String;
+  SetupOK: Boolean;      // setup.ps1 exited 0 (RunSetup)
+  SetupCode: Integer;    // its exit code
+  RetryButton: TNewButton;
+
+procedure RetryClick(Sender: TObject); forward;
+function GetLibraryDir(Param: String): String; forward;
+function GetWorkDir(Param: String): String; forward;
+function GetModelsDir(Param: String): String; forward;
+function GetAddons(Param: String): String; forward;
 
 // one add-on's licence, from its own "Read the licence" link (the link's Tag is the add-on's number)
 procedure OpenLicence(Sender: TObject);
@@ -175,12 +186,96 @@ begin
     Link.OnClick := @OpenLicence;
     Top := Desc.Top + Desc.Height + ScaleY(14);
   end;
+
+  // the last page's "Try again", shown only when setup didn't work
+  RetryButton := TNewButton.Create(WizardForm);
+  RetryButton.Parent := WizardForm.FinishedPage;
+  RetryButton.Caption := 'Try again';
+  RetryButton.Width := ScaleX(100);
+  RetryButton.Height := ScaleY(24);
+  RetryButton.Left := WizardForm.FinishedLabel.Left;
+  RetryButton.Top := WizardForm.FinishedLabel.Top + ScaleY(150);
+  RetryButton.Visible := False;
+  RetryButton.OnClick := @RetryClick;
+end;
+
+function SetupWorked: Boolean;
+begin
+  Result := SetupOK;
+end;
+
+// The Start-menu (and, if ticked, desktop) shortcut, made once setup has worked
+procedure CreateLaunchers;
+begin
+  CreateShellLink(ExpandConstant('{group}\{#AppName}.lnk'), '{#AppName}', ExpandConstant('{app}\UnderCover.cmd'), '',
+    ExpandConstant('{app}'), '', 0, SW_SHOWNORMAL);
+  if WizardIsTaskSelected('desktopicon') then
+    CreateShellLink(ExpandConstant('{userdesktop}\{#AppName}.lnk'), '{#AppName}', ExpandConstant('{app}\UnderCover.cmd'), '',
+      ExpandConstant('{app}'), '', 0, SW_SHOWNORMAL);
+end;
+
+// setup.ps1 in its own window (people watch the downloads: PyTorch alone is 2-3 GB). A re-run continues past what's
+// done. -> it worked (exit code 0)
+function RunSetup: Boolean;
+var
+  Params: String;
+begin
+  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\setup.ps1') + '" -InstallDir "' +
+    ExpandConstant('{app}') + '" -LibraryDir "' + GetLibraryDir('') + '" -WorkDir "' + GetWorkDir('') + '" -ModelsDir "' +
+    GetModelsDir('') + '" -Addons "' + GetAddons('') + '" -Pause';
+  WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and tools for your graphics card (this takes a while)...';
+  if not Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_SHOW, ewWaitUntilTerminated, SetupCode) then
+    SetupCode := -1;
+  SetupOK := (SetupCode = 0);
+  if SetupOK then CreateLaunchers;
+  Result := SetupOK;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then RunSetup;
+end;
+
+// what stopped, in setup's own words (logs\setup-result.txt: "failed: <what>"), else its exit code
+function FailureText: String;
+var
+  S: AnsiString;
+begin
+  Result := Format('setup stopped (exit code %d)', [SetupCode]);
+  if LoadStringFromFile(ExpandConstant('{app}\logs\setup-result.txt'), S) then
+    if Pos('failed: ', String(S)) = 1 then Result := Trim(Copy(String(S), 9, Length(S)));
+end;
+
+// the last page: "installed" only when setup worked; else what stopped, where the log is, and Try again
+procedure ShowOutcome;
+begin
+  if SetupOK then begin
+    WizardForm.FinishedHeadingLabel.Caption := 'UnderCover is installed';
+    WizardForm.FinishedLabel.Caption := SetupMessage(msgFinishedLabel);
+    RetryButton.Visible := False;
+  end else begin
+    WizardForm.FinishedHeadingLabel.Caption := 'UnderCover isn''t ready yet';
+    WizardForm.FinishedLabel.Caption := 'Setting it up stopped: ' + FailureText + '.' + #13#10#13#10 +
+      'The details are in ' + ExpandConstant('{app}\logs\setup.log') + '.' + #13#10#13#10 +
+      'Try again continues where it stopped. You can also close this and run the installer again later.';
+    RetryButton.Visible := True;
+  end;
+end;
+
+procedure RetryClick(Sender: TObject);
+begin
+  RetryButton.Enabled := False;
+  WizardForm.FinishedLabel.Caption := 'Setting it up again. Its window shows the progress.';
+  RunSetup;
+  ShowOutcome;
+  RetryButton.Enabled := True;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 var
   I: Integer;
 begin
+  if CurPageID = wpFinished then ShowOutcome;
   // the folders default to the install folder; follow it if it changes, unless the user typed something else
   if CurPageID = DataPage.ID then begin
     for I := 0 to 2 do

@@ -73,6 +73,13 @@ $Venv    = Join-Path $InstallDir '.venv'
 $Py      = Join-Path $Venv 'Scripts\python.exe'
 $Uv      = Join-Path $Tools 'uv\uv.exe'
 $LogFile = Join-Path $InstallDir 'logs\setup.log'
+# The installer reads this one line after setup ("ok", or "failed: <what>"): it says "installed" only on "ok".
+$ResultFile = Join-Path $InstallDir 'logs\setup-result.txt'
+function Result([string]$line) {
+    if ($DryRun) { return }
+    New-Item -ItemType Directory -Force (Split-Path $ResultFile) | Out-Null
+    [IO.File]::WriteAllText($ResultFile, $line, (New-Object Text.UTF8Encoding $false))
+}
 
 function Step([string]$msg) { Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan; Log "STEP $msg" }
 function Info([string]$msg) { Write-Host "    $msg"; Log $msg }
@@ -84,6 +91,7 @@ function Log([string]$msg) {
 function Fail([string]$msg) {
     Write-Host ""; Write-Host "Setup failed: $msg" -ForegroundColor Red
     Write-Host "Details are in $LogFile"; Log "FAIL $msg"
+    Result "failed: $msg"
     if ($Pause) { Read-Host "Press Enter to close" | Out-Null }
     exit 1
 }
@@ -157,6 +165,7 @@ function Unzip([string]$zip, [string]$dest) {
 # ---------------------------------------------------------------------------------------------
 Write-Host "UnderCover setup" -ForegroundColor White
 Write-Host "Install folder: $InstallDir"
+if (-not $DryRun) { Remove-Item -LiteralPath $ResultFile -Force -ErrorAction SilentlyContinue }   # no answer from an earlier run
 if ($DryRun) { Write-Host "DRY RUN: nothing will be downloaded or installed." -ForegroundColor Yellow }
 if ($Repair -and ($LibraryDir -or $WorkDir -or $ModelsDir)) {
     Fail "-Repair keeps your files where they are. To move them, use SafeHouse > Storage in UnderCover."
@@ -472,6 +481,7 @@ if (-not $Repair -or $Fix.torch -or $Fix.packages -or $Fix.models -or -not (Test
     try { Run $Py @('-m', 'undercover.doctor', 'manifest', '--installed', '--json') } finally { if (-not $DryRun) { Pop-Location } }
 }
 
+Result "ok"
 Write-Host ""
 Write-Host "Done. Start UnderCover from the Start menu or with UnderCover.cmd." -ForegroundColor Green
 Write-Host "The first start downloads the voice and separation models (about 1-3 GB, depending on which features you use)."
