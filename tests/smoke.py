@@ -3207,6 +3207,96 @@ def u_installer_failure():
     return "setup exits 1 with 'failed: …'; the wizard reads it: no launchers, no 'Start now', what stopped + log + Try again"
 
 
+@check("the installer is honest about size and shows its progress (installer-fix4, the user: 'it just says it's like 84mb ... extremely misleading', 'to a dumb user it will look stuck'): installer\\space.ps1's need per drive from the measured sizes with a 20 % margin, each drive's figure the sum of what it lists, the shortfall said plainly (free space stubbed); setup checks before downloading; the wizard states the real size, checks each page's drives, runs setup hidden and drives its bar from setup's status lines, with Show details and Cancel")
+def u_installer_space():
+    import json as _json
+    import math
+    import tempfile
+    import re
+    import subprocess
+    inst = ROOT / "installer"
+    sizes = _json.loads((inst / "sizes.json").read_text(encoding="utf-8"))
+    assert sizes["margin"] >= 1.2 and sizes["python"]["rocm"] >= 6.4 and sizes["models_gb"] >= 8.2, "below what was measured"
+    if os.name == "nt":
+        def ps(body):
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                f". '{inst / 'space.ps1'}'; $s = Read-Sizes '{inst}'; {body}"], capture_output=True, text=True, timeout=60)
+            assert r.returncode == 0, r.stderr
+            return r.stdout.strip()
+        # dot-sourced by setup.ps1: it must leave setup's own variables alone (a $InstallDir parameter here emptied
+        # setup's, and setup died right after finding the graphics card: the first release check of installer-fix4)
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                            f"$InstallDir = 'KEEP'; $Backend = 'rocm'; $Out = 'x'; . '{inst / 'space.ps1'}'; $InstallDir + '|' + $Backend + '|' + $Out"],
+                           capture_output=True, text=True, timeout=60)
+        assert r.stdout.strip() == "KEEP|rocm|x", f"dot-sourcing space.ps1 changed the caller's variables: {r.stdout.strip()!r}"
+        one = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; $n['D:\\'].need")
+        parts = [0.1 + 0.5 + 6.5, 8.5, 0.5, 1.0]
+        up = lambda gb: math.ceil(gb * sizes["margin"] * 2) / 2          # noqa: E731
+        assert float(one) == sum(up(x) for x in parts), (one, [up(x) for x in parts])   # 9 + 10.5 + 1 + 1.5 = 22
+        split = ps("$n = Get-SpaceNeeds 'C:\\UC' 'D:\\Lib' 'D:\\Work' 'E:\\M' 'cpu' $s @('f5'); ($n.Keys | ForEach-Object { $_ + '=' + $n[$_].need }) -join ';'")
+        g = lambda gb: f"{gb:g}"   # noqa: E731  (PowerShell writes 3, not 3.0)
+        assert split == f"C:\\={g(up(0.1 + 0.5 + 1.5))};E:\\={g(up(8.5 + 1.5))};D:\\={g(up(0.5) + up(1.0))}", split
+        setup_only = ps("$n = Get-SpaceNeeds 'D:\\UC' 'E:\\L' 'E:\\W' 'E:\\M' 'rocm' $s -SetupOnly; $n.Keys -join ';'")
+        assert setup_only == "D:\\", "setup's own check counts the models and files that come later"
+        unknown = ps("(Get-SpaceNeeds 'D:\\UC' '' '' '' '' $s -SetupOnly)['D:\\'].need")
+        assert float(unknown) == up(0.1 + 0.5 + max(sizes["python"].values())), "an unknown card isn't sized as the largest"
+        short = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Find-Shortfalls $n { param($r) 12 } | ForEach-Object { Format-Shortfall $_ }) -join '/'")
+        assert short == "D: has 12 GB free, and UnderCover needs about 22 GB there.", short
+        assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; @(Find-Shortfalls $n { param($r) 500 }).Count") == "0"
+        assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; @(Find-Shortfalls $n { param($r) -1 }).Count") == "0", "an unreadable drive was called full"
+        label = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; Format-Needs $n { param($r) 190.5 }")
+        assert label.startswith("UnderCover needs about 22 GB in all") and "D: has 190.5 GB free." in label and "AI models" in label, label
+        # what's there already comes off (a re-run after Cancel, a reinstall): 3 GB of venv/cache, all the models
+        BS = chr(92)
+        have = "{ param($k, $d) if ($k -eq 'setup') { 3 } else { 9 } }"
+        part = ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -Have " + have + "; $n['D:" + BS + "'].need")
+        assert float(part) == up(0.1 + 0.5 + 6.5 - 3) + up(0.5) + up(1.0), ("a re-run is asked for what it has", part)
+        done = ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -SetupOnly -Have { param($k, $d) 50 }; $n.Count")
+        assert done == "0", "a finished install still asks for room"
+        assert "already set up" in ps("$n = Get-SpaceNeeds 'D:" + BS + "UC' '' '' '' 'rocm' $s -SetupOnly -Have { param($k, $d) 50 }; Format-Needs $n { param($r) 5 }")
+        tmp = Path(tempfile.mkdtemp(prefix="uc-space-"))
+        try:
+            (tmp / ".venv" / "Lib").mkdir(parents=True)
+            (tmp / ".venv" / "Lib" / "a.bin").write_bytes(bytes(1024 * 1024))
+            (tmp / "cache" / "uv").mkdir(parents=True)
+            (tmp / "cache" / "uv" / "b.bin").write_bytes(bytes(512 * 1024))
+            (tmp / "models").mkdir()
+            got = ps(f"[math]::Round((Get-HaveGB 'setup' '{tmp}') * 1GB); [math]::Round((Get-HaveGB 'models' '{tmp}') * 1GB); Get-DirBytes '{tmp}" + BS + "nothing'")
+            assert got.split() == [str(1024 * 1024 + 512 * 1024), "0", "0"], got
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        isi = (inst / "sizes.isi").read_text(encoding="utf-8")
+        total = ps("$n = Get-SpaceNeeds 'C:\\UnderCover' '' '' '' '' $s; $t = 0; foreach ($k in $n.Keys) { $t += $n[$k].need }; Format-GB $t")
+        assert f'#define SizeTotalGB "{total}"' in isi, ("sizes.isi is stale: run installer\\build.ps1", total, isi)
+    setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
+    assert setup.count("RunWatched $Uv") == 3, "a long uv step runs without progress"
+    assert "Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }" in setup and "Fail (\"there isn't enough space. \"" in setup
+    assert setup.index("Find-Shortfalls $needs") < setup.index('Step "Getting the Python installer'), "setup checks the space after it downloads"
+    assert "Test-Path $Py" not in setup[setup.index("Space: what setup"):setup.index("Find-Shortfalls $needs")], "a re-run after Cancel skips the space check"
+    assert "function DirBytes" not in setup and "Get-DirBytes $watch" in setup
+    # an untyped 0 makes PowerShell pick Max(Int32, Int32): sizes past 2 GB fail, 7.1 GB becomes 7 (a real install died)
+    assert not re.search(r"\[math\]::M(ax|in)\(0,", setup + (inst / "space.ps1").read_text(encoding="utf-8")), "an untyped 0 in [math]::Max/Min"
+    assert "(Test-Path -LiteralPath $CancelFile)) { Cancelled }" in setup and "& taskkill.exe /PID $p.Id /T /F" in setup, "Cancel is not checked between steps, or a running download is not stopped"
+    assert 'Result "cancelled: $kept"' in setup and "exit 3" in setup
+    assert "[Console]::Out.WriteLine($line)" in setup and "Add-Content -Path $StatusFile" in setup
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    run = iss[iss.index("function RunSetup"):iss.index("procedure CancelButtonClick")]
+    assert "ExecAndLogOutput('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, SetupCode, @SetupLine)" in run
+    assert "-Pause" not in run, "the hidden setup would wait for Enter forever"
+    assert "WizardForm.ProgressGauge.Position := Progress" in iss and "if Pos1 > Progress then Progress := Pos1" in iss
+    assert "Show details" in iss and "logs\\setup.log" in iss and "procedure CancelButtonClick" in iss and "logs\\setup-cancel" in iss
+    assert "WizardForm.DiskSpaceLabel.Caption := Lbl" in iss and "{#SizeTotalGB} GB of free space in all" in iss
+    nb = iss[iss.index("function NextButtonClick"):iss.index("function ShouldSkipPage")]
+    assert nb.count("Result := SpaceOK(Short)") == 3 and "wpSelectDir" in nb and "DataPage.ID" in nb and "AddonPage.ID" in nb
+    assert 'Source: "space.ps1"; Flags: dontcopy' in iss and '#include "sizes.isi"' in iss
+    assert not re.search(r"(?m)^\s*#13", iss), "a line starting with # is a preprocessor directive"
+    assert all(ord(c) < 128 for c in iss + setup), "the installer's scripts must stay ASCII"
+    e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
+    assert "ExecAndLogOutput('powershell.exe'" in e2e and "steps never reported" in e2e and "-CancelCheck" in e2e
+    assert "$issFiles" in e2e and "UnderCover.iss') -Pattern" in e2e, "the release check keeps its own list of installer files (it missed space.ps1 once)"
+    return f"one drive: {one} GB (22 = 9 + 10.5 + 1 + 1.5); a short drive said plainly; setup hidden, its status driving the bar; Cancel"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -8478,7 +8568,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
