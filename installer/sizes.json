@@ -10,7 +10,7 @@
   "margin": 1.2,
   "steps": {
     "torch": { "rocm": 5.9, "cpu": 0.6 },
-    "common": 0.4,
-    "cadence": 0.3
+    "common": 0.5,
+    "cadence": 0.2
   }
 }
