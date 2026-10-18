@@ -49,10 +49,9 @@ command-line cover tool `cover.bat` and the GPU check) and `tests/` (`python tes
 
 ## First run
 
-The first time you open UnderCover, a short tutorial called the First assignment takes you through making a cover.
-It uses a sample song, *Hold On*, and a demo voice named Agent Smoke that was made for UnderCover and is not based on
-a real person. It finishes by showing you how to train a voice of your own overnight. You can run it again from
-SafeHouse's Settings.
+The first time you open UnderCover it downloads the voice tools it needs, about 1.3 GB, once. FrontMan then suggests
+a first cover: *Hold On*, a short sample song, sung by Agent Smoke, a demo voice made for UnderCover that is not based
+on a real person. Press Make it to hear what UnderCover does in about two minutes.
 
 ## Privacy
 
