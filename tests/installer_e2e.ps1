@@ -24,7 +24,11 @@
     - .venv\pyvenv.cfg's home is the full-version Python folder (cpython-<version>-...), not uv's minor-version link;
     - no registry entry under HKCU\Software\Python points into the temp install;
     - nothing new in %USERPROFILE%\.local\bin;
-    - the status lines reached the launcher (as the wizard reads them) and went through every step, in order.
+    - the status lines reached the launcher (as the wizard reads them) and went through every step, in order;
+    - the wizard stayed responsive the whole time (installer-fix6, the user: the window couldn't be moved during setup):
+      the final run is a shown wizard (off-screen) that runs setup from its install step with UnderCover.iss's own
+      SetupLine, and a second process times its answers (WM_NULL), hit-tests its title bar and minimises and restores
+      it mid-run.
   Exit code 0 only when every check passes. The tail of setup.log is printed either way.
 #>
 param(
@@ -81,6 +85,19 @@ $launch = Join-Path $env:TEMP ('uc-e2e-launcher-' + [guid]::NewGuid().ToString('
 New-Item -ItemType Directory -Force $launch | Out-Null
 $codeFile = Join-Path $launch 'exit.txt'
 $linesFile = Join-Path $launch 'lines.txt'
+$hwndFile = Join-Path $launch 'hwnd.txt'
+$doneFile = Join-Path $launch 'done.txt'
+$respFile = Join-Path $launch 'responsive.txt'
+# the installer's own handling of setup's lines (both bars, the labels), copied from UnderCover.iss, so the wizard run
+# below does exactly what the installer's wizard does with them
+$src = [IO.File]::ReadAllText((Join-Path $repo 'installer\UnderCover.iss'))
+function Cut([string]$from, [string]$to) {
+    $a = $src.IndexOf($from); $b = $src.IndexOf($to)
+    if ($a -lt 0 -or $b -le $a) { Write-Host "Couldn't find '$from' in UnderCover.iss." -ForegroundColor Red; exit 2 }
+    return $src.Substring($a, $b - $a)
+}
+$fieldCode = Cut '// the N-th field (from 0)' "// one line of setup's output."
+$setupLineCode = (Cut 'procedure SetupLine(' "// setup.ps1, hidden: the wizard's own bar").Replace("ExpandConstant('{app}\logs\setup-cancel')", "'" + (Join-Path $dir 'logs\setup-cancel') + "'")
 $params = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'installer\setup.ps1')`" -InstallDir `"$dir`" -Backend $Backend"
 $iss = @'
 [Setup]
@@ -94,21 +111,59 @@ OutputBaseFilename=launcher
 DisableWelcomePage=yes
 
 [Code]
+var
+  Progress: Integer;
+  CancelAsked: Boolean;
+  StepGauge: TNewProgressBar;
+  Code: Integer;
+
 procedure OnLine(const S: String; const Error, FirstLine: Boolean);
 begin
   if Copy(S, 1, 3) = '@@ ' then SaveStringToFile('@LINESFILE@', S + #13#10, True);
 end;
 
-function InitializeSetup: Boolean;
-var
-  Code: Integer;
+@FIELD@
+@SETUPLINE@
+procedure WizardLine(const S: String; const Error, FirstLine: Boolean);
 begin
+  OnLine(S, Error, FirstLine);
+  SetupLine(S, Error, FirstLine);
+end;
+
+// /WIZARD=1: a shown wizard that runs setup from its install step, as UnderCover.iss does; else no wizard at all
+function InitializeSetup: Boolean;
+begin
+  Result := ExpandConstant('{param:wizard|0}') = '1';
+  if Result then Exit;
   if not ExecAndLogOutput('powershell.exe', '@PARAMS@', '@DIR@', SW_HIDE, ewWaitUntilTerminated, Code, @OnLine) then Code := -1;
   SaveStringToFile('@CODEFILE@', IntToStr(Code), False);
-  Result := False;
+end;
+
+procedure InitializeWizard;
+begin
+  StepGauge := TNewProgressBar.Create(WizardForm);
+  StepGauge.Parent := WizardForm.InstallingPage;
+  StepGauge.Left := WizardForm.ProgressGauge.Left;
+  StepGauge.Width := WizardForm.ProgressGauge.Width;
+  StepGauge.Top := WizardForm.ProgressGauge.Top + WizardForm.ProgressGauge.Height + ScaleY(10);
+  StepGauge.Height := WizardForm.ProgressGauge.Height - ScaleY(6);
+  StepGauge.Max := 1000;
+  StepGauge.Visible := False;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then WizardForm.Left := -6000;   // shown, as the installer's is, but on no screen
+  if CurStep = ssPostInstall then begin
+    WizardForm.Left := -6000;
+    SaveStringToFile('@HWNDFILE@', IntToStr(WizardForm.Handle), False);
+    if not ExecAndLogOutput('powershell.exe', '@PARAMS@', '@DIR@', SW_HIDE, ewWaitUntilTerminated, Code, @WizardLine) then Code := -1;
+    SaveStringToFile('@CODEFILE@', IntToStr(Code), False);
+    SaveStringToFile('@DONEFILE@', 'done', False);
+  end;
 end;
 '@
-$iss = $iss.Replace('@PARAMS@', $params.Replace("'", "''")).Replace('@DIR@', $dir).Replace('@CODEFILE@', $codeFile).Replace('@LINESFILE@', $linesFile)
+$iss = $iss.Replace('@PARAMS@', $params.Replace("'", "''")).Replace('@DIR@', $dir).Replace('@CODEFILE@', $codeFile).Replace('@LINESFILE@', $linesFile).Replace('@HWNDFILE@', $hwndFile).Replace('@DONEFILE@', $doneFile).Replace('@FIELD@', $fieldCode).Replace('@SETUPLINE@', $setupLineCode)
 [IO.File]::WriteAllText((Join-Path $launch 'launcher.iss'), $iss, (New-Object Text.UTF8Encoding $false))
 & $iscc /Q "/O$launch" (Join-Path $launch 'launcher.iss') | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host "Couldn't compile the launcher." -ForegroundColor Red; exit 2 }
@@ -137,14 +192,82 @@ if ($CancelCheck) {
     Write-Host "Cancel check: setting the same folder up again (it should resume)"
 }
 
+# the wizard's responsiveness, timed from outside while setup runs in it
+$measure = @'
+param([string]$HwndFile, [string]$DoneFile, [string]$Out)
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class W {
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
+  [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+}
+"@
 $t0 = Get-Date
-Start-Process -FilePath (Join-Path $launch 'launcher.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
+while (-not (Test-Path $HwndFile)) { Start-Sleep -Milliseconds 100; if (((Get-Date) - $t0).TotalMinutes -gt 5) { "error=the wizard never started setup" | Set-Content $Out; exit } }
+$h = [IntPtr][long](Get-Content $HwndFile -Raw).Trim()
+$visible = [W]::IsWindowVisible($h)
+$lat = New-Object System.Collections.Generic.List[double]; $hung = 0; $fails = 0; $caption = 0; $n = 0; $mini = @()
+$sw = New-Object Diagnostics.Stopwatch
+while (-not (Test-Path $DoneFile) -and [W]::IsWindow($h)) {
+    $r = [IntPtr]::Zero
+    $sw.Restart(); $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r); $sw.Stop()
+    if ($ok -eq [IntPtr]::Zero) { $fails++ } else { $lat.Add($sw.Elapsed.TotalMilliseconds) }
+    if ([W]::IsHungAppWindow($h)) { $hung++ }
+    $rc = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$rc)
+    $lp = [IntPtr]((($rc.T + 12) -band 0xFFFF) -shl 16 -bor (($rc.L + 60) -band 0xFFFF))   # a point in the title bar
+    [void][W]::SendMessageTimeout($h, 0x84, [IntPtr]::Zero, $lp, 2, 5000, [ref]$r)
+    if ([int]$r -eq 2) { $caption++ }   # HTCAPTION: a press there starts a move
+    $n++
+    if ($n % 600 -eq 100) {   # minimise and restore, posted as the title bar's buttons post them
+        [void][W]::PostMessage($h, 0x112, [IntPtr]0xF020, [IntPtr]::Zero); Start-Sleep -Milliseconds 500; $m = [W]::IsIconic($h)
+        [void][W]::PostMessage($h, 0x112, [IntPtr]0xF120, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
+        $mini += "$m/$(-not [W]::IsIconic($h))"
+    }
+    Start-Sleep -Milliseconds 100
+}
+$s = @($lat | Sort-Object)
+@("visible=$visible", "samples=$($lat.Count)", "timeouts=$fails", "hung=$hung", "caption=$caption", "n=$n",
+  "maxms=$(if ($s.Count) { [math]::Round($s[-1], 1) } else { -1 })",
+  "p99ms=$(if ($s.Count) { [math]::Round($s[[int][math]::Floor($s.Count * 0.99)], 1) } else { -1 })",
+  "minimise=$($mini -join ',')") | Set-Content $Out
+'@
+$measureFile = Join-Path $launch 'measure.ps1'
+[IO.File]::WriteAllText($measureFile, $measure, (New-Object Text.UTF8Encoding $false))
+
+$t0 = Get-Date
+$mp = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$measureFile`"", "`"$hwndFile`"", "`"$doneFile`"", "`"$respFile`"" -WindowStyle Hidden -PassThru
+Start-Process -FilePath (Join-Path $launch 'launcher.exe') -ArgumentList '/SILENT', '/SUPPRESSMSGBOXES', '/WIZARD=1' -Wait
+[void]$mp.WaitForExit(60000)
+$resp = @{}
+if (Test-Path $respFile) { Get-Content -LiteralPath $respFile | ForEach-Object { $k, $v = $_ -split '=', 2; $resp[$k] = $v } }
 $code = if (Test-Path $codeFile) { [int](Get-Content -LiteralPath $codeFile -Raw).Trim() } else { -2 }
 $seen = if (Test-Path $linesFile) { @(Get-Content -LiteralPath $linesFile) } else { @() }
 Remove-Item -LiteralPath $launch -Recurse -Force -ErrorAction SilentlyContinue
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
 
 if ($code -ne 0) { $fails += "setup exited $code" }
+# the wizard stayed responsive: it answered within a second every time, never counted as hung, its title bar was a title
+# bar throughout, and it minimised and restored when asked mid-run
+Write-Host ("Wizard: shown $($resp['visible']), $($resp['samples']) answers, slowest $($resp['maxms']) ms (99 % within " +
+            "$($resp['p99ms']) ms), $($resp['timeouts']) unanswered, hung $($resp['hung']) times, title bar $($resp['caption']) of " +
+            "$($resp['n']), minimise/restore $($resp['minimise'])")
+if ($resp['error']) { $fails += "wizard check: $($resp['error'])" }
+elseif (-not $resp.Count) { $fails += "the wizard's responsiveness wasn't measured" }
+else {
+    if ($resp['visible'] -ne 'True') { $fails += 'the wizard wasn''t shown' }
+    if ([int]$resp['samples'] -lt 100) { $fails += "too few answers to judge the wizard ($($resp['samples']))" }
+    if ([int]$resp['timeouts'] -gt 0 -or [int]$resp['hung'] -gt 0) { $fails += "the wizard stopped answering ($($resp['timeouts']) timeouts, hung $($resp['hung']) times)" }
+    if ([double]$resp['maxms'] -gt 1000) { $fails += "the wizard took $($resp['maxms']) ms to answer" }
+    if ($resp['caption'] -ne $resp['n']) { $fails += "the title bar wasn't a title bar $([int]$resp['n'] - [int]$resp['caption']) times" }
+    if (-not $resp['minimise'] -or $resp['minimise'] -match 'False') { $fails += "minimise/restore mid-run: $($resp['minimise'])" }
+}
 # the status lines, as the wizard reads them: every step from 1 to the last, never going back
 $steps = @($seen | ForEach-Object { if ($_ -match '^@@ (\d+)\|(\d+)\|') { [int]$Matches[1] } })
 $of = if ($seen.Count -and ($seen[-1] -match '^@@ \d+\|(\d+)\|')) { [int]$Matches[1] } else { 0 }
