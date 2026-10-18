@@ -17,14 +17,16 @@
                  label|<plain sentences: what goes where, and each drive's free space>
                  short|<plain sentence>     (one per drive that won't fit)
 #>
+# (the variables have names of their own: setup.ps1 dot-sources this file, and a parameter called $InstallDir here
+# would replace setup's own; the command line still takes -InstallDir and the rest)
 param(
-    [string]$Out = '',
-    [string]$InstallDir = '',
-    [string]$LibraryDir = '',
-    [string]$WorkDir = '',
-    [string]$ModelsDir = '',
-    [string]$Backend = 'auto',
-    [string]$Addons = ''
+    [Alias('Out')][string]$SpOut = '',
+    [Alias('InstallDir')][string]$SpInstallDir = '',
+    [Alias('LibraryDir')][string]$SpLibraryDir = '',
+    [Alias('WorkDir')][string]$SpWorkDir = '',
+    [Alias('ModelsDir')][string]$SpModelsDir = '',
+    [Alias('Backend')][string]$SpBackend = 'auto',
+    [Alias('Addons')][string]$SpAddons = ''
 )
 
 function Read-Sizes([string]$Folder) {
@@ -97,18 +99,18 @@ function Format-Needs($Needs, [scriptblock]$Free) {
     return $text
 }
 
-if ($Out) {
+if ($SpOut) {
     $here = $PSScriptRoot
     $sizes = Read-Sizes $here
-    if ($Backend -eq 'auto') {
-        try { $Backend = (& (Join-Path $here 'detect_gpu.ps1') | Out-String | ConvertFrom-Json).backend }
-        catch { $Backend = '' }   # unknown: the largest download is used (an overestimate, never an underestimate)
+    if ($SpBackend -eq 'auto') {
+        try { $SpBackend = (& (Join-Path $here 'detect_gpu.ps1') | Out-String | ConvertFrom-Json).backend }
+        catch { $SpBackend = '' }   # unknown: the largest download is used (an overestimate, never an underestimate)
     }
-    $needs = Get-SpaceNeeds $InstallDir $LibraryDir $WorkDir $ModelsDir $Backend $sizes @($Addons -split ',' | Where-Object { $_ })
+    $needs = Get-SpaceNeeds $SpInstallDir $SpLibraryDir $SpWorkDir $SpModelsDir $SpBackend $sizes @($SpAddons -split ',' | Where-Object { $_ })
     $free = { param($r) Get-FreeGB $r }
     $total = 0.0
     foreach ($k in $needs.Keys) { $total += $needs[$k].need }
-    $lines = @("backend|$Backend", "total|$(Format-GB $total)", "label|$(Format-Needs $needs $free)")
+    $lines = @("backend|$SpBackend", "total|$(Format-GB $total)", "label|$(Format-Needs $needs $free)")
     foreach ($s in (Find-Shortfalls $needs $free)) { $lines += "short|$(Format-Shortfall $s)" }
-    [IO.File]::WriteAllLines($Out, [string[]]$lines)
+    [IO.File]::WriteAllLines($SpOut, [string[]]$lines)
 }

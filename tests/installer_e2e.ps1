@@ -164,7 +164,7 @@ if (Test-Path $st) {
 } else { $fails += 'no selftest.json (selftest never ran)' }
 $cfg = Join-Path $dir '.venv\pyvenv.cfg'
 $venvHome = if (Test-Path $cfg) { ((Get-Content -LiteralPath $cfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1) -replace '^\s*home\s*=\s*', '').Trim() } else { '' }
-if ((Split-Path $venvHome -Leaf) -notmatch '^cpython-\d+\.\d+\.\d+-') { $fails += ".venv's home is '$venvHome', not the full-version Python folder" }
+if ((-not $venvHome) -or ((Split-Path $venvHome -Leaf) -notmatch '^cpython-\d+\.\d+\.\d+-')) { $fails += ".venv's home is '$venvHome', not the full-version Python folder" }
 $reg = @(Get-ChildItem 'HKCU:\Software\Python' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq 'InstallPath' } |
     Where-Object { "$((Get-ItemProperty -LiteralPath $_.PSPath).'(default)')".StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
 if ($reg.Count) { $fails += "registry entries point into the install: $(($reg | ForEach-Object { $_.Name }) -join ', ')" }
