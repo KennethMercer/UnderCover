@@ -3270,6 +3270,7 @@ def u_installer_space():
     assert all(ord(c) < 128 for c in iss + setup), "the installer's scripts must stay ASCII"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
     assert "ExecAndLogOutput('powershell.exe'" in e2e and "steps never reported" in e2e and "-CancelCheck" in e2e
+    assert "$issFiles" in e2e and "UnderCover.iss') -Pattern" in e2e, "the release check keeps its own list of installer files (it missed space.ps1 once)"
     return f"one drive: {one} GB (22 = 9 + 10.5 + 1 + 1.5); a short drive said plainly; setup hidden, its status driving the bar; Cancel"
 
 
