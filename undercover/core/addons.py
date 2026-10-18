@@ -59,6 +59,8 @@ class Addon:
     modules: list = field(default_factory=list)    # the suite modules that use it ("speakeasy", ...)
     paths: list = field(default_factory=list)      # folders/files under models/ it occupies (default: its files)
     open_note: str = ""        # included parts: anything to know about the licence ("credit the authors")
+    short: str = ""            # the installer's one-line what ("lighter on graphics memory, slightly flatter speech")
+    use: str = ""              # the installer's one-line who may use what it makes ("personal, non-commercial use only")
     hashes: dict = field(default_factory=dict)     # package name -> SHA-256 of its wheel: the pin "Update" installs
 
     def installed(self) -> bool:
@@ -147,6 +149,7 @@ def info(a: Addon, st: dict | None = None) -> dict:
     return {"id": a.id, "name": a.name, "adds": a.adds, "licence": a.licence, "licence_url": a.licence_url,
             "licence_summary": a.licence_summary, "size_mb": a.size_mb, "wired": a.wired, "installed": inst,
             "included": a.included, "optional": not a.included, "modules": a.modules, "open_note": a.open_note,
+            "short": a.short, "use": a.use,
             "installable": not a.included and a.wired, "disk": a.disk_bytes() if inst or a.included else 0,
             "packages": len(a.packages), "files": sorted(a.paths or a.files),
             "accepted": rec.get("accepted"), "accepted_licence": rec.get("licence"), "installed_on": rec.get("installed")}
