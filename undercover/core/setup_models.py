@@ -25,6 +25,13 @@ FILES = {  # local path under models_dir -> path in the RVC asset repo
     f"{CONFIG['conversion']['hubert_dir']}/pytorch_model.bin": "hubert_base/pytorch_model.bin",
     CONFIG["conversion"]["rmvpe"]: "rmvpe.pt",
 }
+FILE_SIZES = {   # bytes of the pinned copies (measured 2026-10-18): a cut-off download is found from its size, and the
+    # first start's progress (core/jobs) is measured against them
+    f"{CONFIG['conversion']['hubert_dir']}/config.json": 1492,
+    f"{CONFIG['conversion']['hubert_dir']}/preprocessor_config.json": 225,
+    f"{CONFIG['conversion']['hubert_dir']}/pytorch_model.bin": 189206711,
+    CONFIG["conversion"]["rmvpe"]: 181184272,
+}
 # Voice training: RVC v2 pitch-guided base models (generator + discriminator) per sample rate, and the
 # WeSpeaker ResNet34-LM speaker-embedding model (ONNX, runs on CPU) used to keep only the target's voice.
 SPEAKER_MODEL = "speaker/wespeaker_resnet34_lm.onnx"
@@ -68,6 +75,39 @@ def base_model_files(sr: int) -> dict:
     k = f"{sr // 1000}k"
     return {f"rvc/pretrained_v2/f0G{k}.pth": f"{SOURCE}/pretrained_v2/f0G{k}.pth",
             f"rvc/pretrained_v2/f0D{k}.pth": f"{SOURCE}/pretrained_v2/f0D{k}.pth"}
+
+
+def missing(files: dict) -> dict:
+    """{path under models_dir: expected bytes} -> those not fully there yet. A file shorter than expected counts as
+    missing: audio-separator writes straight to the final name, so a cut-off download looks present."""
+    m = path("models_dir")
+    out = {}
+    for f, n in files.items():
+        try:
+            have = (m / f).stat().st_size
+        except OSError:
+            have = 0
+        if have <= 0 or (n and have < n):
+            out[f] = n
+    return out
+
+
+def fetched_share(todo: dict) -> float:
+    """How much of `todo` ({path under models_dir: expected bytes}) has arrived, 0-1: each file, or its .part while
+    UnderCover's own download writes it. For a bar that moves while the models download."""
+    m = path("models_dir")
+    total = sum(todo.values()) or 1
+    got = 0
+    for f, n in todo.items():
+        p = m / f
+        have = 0
+        for q in (p, p.with_name(p.name + ".part")):
+            try:
+                have = max(have, q.stat().st_size)
+            except OSError:
+                pass
+        got += min(have, n)
+    return got / total
 
 
 class DownloadStopped(ModelError):
@@ -195,7 +235,8 @@ def refetch(local: str, progress=None) -> None:
 
 
 register_pinned({**{local: f"{SOURCE}/{remote}" for local, remote in FILES.items()},
-                 **{k: v for sr in (32000, 40000, 48000) for k, v in base_model_files(sr).items()}}, SHA256, "rvc")
+                 **{k: v for sr in (32000, 40000, 48000) for k, v in base_model_files(sr).items()}}, SHA256, "rvc",
+                sizes=FILE_SIZES)
 register_pinned({SPEAKER_MODEL: SPEAKER_URL}, SHA256, "speaker")
 
 

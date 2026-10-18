@@ -3443,6 +3443,36 @@ def u_installer_quiet():
     return "add-on: 3 plain lines, %d status lines for 108 MB; a taken port named (this copy / another / %s); shortcuts checked by target" % (len(pm), foreign["owner"])
 
 
+@check("the first start's model download has a moving bar (MasterPlan for the First assignment: its bar only slid): the status carries models_progress (0-1) and models_mb while the separation and conversion models download, from the files and their .part against the pinned sizes; a short file counts as missing")
+def u_models_progress():
+    from undercover.core import setup_models as S
+    from undercover.core.separate import SEP, SEPARATOR_SIZE
+    with isolated_data():
+        m = S.path("models_dir")
+        todo = {"a/full.bin": 100, "a/cut.bin": 200, "a/part.bin": 400, "a/none.bin": 300}
+        (m / "a").mkdir(parents=True)
+        (m / "a" / "full.bin").write_bytes(bytes(100))
+        (m / "a" / "cut.bin").write_bytes(bytes(50))        # audio-separator's way: the final name, cut off
+        (m / "a" / "part.bin.part").write_bytes(bytes(100))   # UnderCover's way: .part until it's whole
+        left = S.missing(todo)
+        assert left == {"a/cut.bin": 200, "a/part.bin": 400, "a/none.bin": 300}, left
+        share = S.fetched_share(left)
+        assert abs(share - (50 + 100) / 900) < 1e-9, share
+        assert S.fetched_share({}) == 0
+    # the first start's list: the vocal model and the conversion models, sized as pinned (about 1.3 GB)
+    vocal = f"separator/{SEP['vocal_model']}"
+    assert vocal in SEPARATOR_SIZE and all(S.PINNED[f]["size"] == n for f, n in S.FILE_SIZES.items())
+    assert set(S.FILE_SIZES) == set(S.FILES), "a first-start file without a size: the bar would ignore it"
+    mb = round((sum(S.FILE_SIZES.values()) + SEPARATOR_SIZE[vocal]) / 1e6)
+    src = (ROOT / "undercover" / "core" / "jobs.py").read_text(encoding="utf-8")
+    pre = src[src.index("setup_models.missing("):src.index("MODELS.converter")]
+    assert "share = round(min(0.99, setup_models.fetched_share(todo)), 3)" in pre and 'STATUS["models_progress"] = share' in pre
+    assert 'STATUS["models_mb"]' in pre and 'STATUS["first_run"] = bool(todo)' in pre
+    after = src[src.index("MODELS.converter"):]
+    assert after.index("watcher.join(5)") < after.index('STATUS.pop("models_progress", None)'), "the bar outlives the download"
+    return f"the first start fetches about {mb} MB; progress from the files and their .part"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -8716,7 +8746,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_models_progress, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_greetings, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
