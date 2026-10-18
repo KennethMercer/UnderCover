@@ -119,10 +119,21 @@ def _qkey(person: str, ident: str) -> str:
     return f"{slug(person)}|{ident}"
 
 
-def _remember(person: str, ident: str, q):
+def clip_set(proj) -> str:
+    """The real clips a check judges by: the reference voice and the kept phrases, as a short fingerprint. A verdict is
+    reused only on the same clips (rc-fix3, IA pass 11 A3: a verdict made on another artist's songs kept a good voice
+    out of every later check)."""
+    import hashlib
+    ids = sorted(p.id for p in proj.training_phrases())
+    ref = (proj.reference or {}).get("clip") or ""
+    return hashlib.sha1(("|".join([proj.name, ref] + ids)).encode("utf-8")).hexdigest()[:12]
+
+
+def _remember(person: str, ident: str, q, clips: str | None = None):
     import json
     c = _quality_cache()
-    c[_qkey(person, ident)] = {**q.to_json(), "v": CHECK_VERSION, "checked": time.strftime("%Y-%m-%d %H:%M")}
+    c[_qkey(person, ident)] = {**q.to_json(), "v": CHECK_VERSION, "checked": time.strftime("%Y-%m-%d %H:%M"),
+                               **({"clips": clips} if clips else {})}
     _quality_file().write_text(json.dumps(c, indent=1), encoding="utf-8")
 
 
@@ -562,14 +573,17 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         t_voices = time.time()
         conv, emb = gpu.MODELS.converter, SpeakerEmbedder()
 
+        clips = clip_set(proj)
+
         def test(v, ident):
             cached = _quality_cache().get(_qkey(person, ident))
-            if cached and cached.get("v") == CHECK_VERSION:   # older, weaker checks are redone once
+            # older, weaker checks are redone once, and so is one made on other clips (A3)
+            if cached and cached.get("v") == CHECK_VERSION and cached.get("clips") == clips:
                 return voicecheck.Quality(**{k: cached.get(k) for k in ("voice", "score", "baseline", "phrases", "seconds",
                                                                         "verdict", "target_hz", "low", "pitch_cents", "content", "test")})
             push("voice", 0.16 + 0.04 * len(checked), f"Checking whether “{display_name(v)}” sounds like {person}")
             q = voicecheck.check(v.name, proj, conv, emb)
-            _remember(person, ident, q)
+            _remember(person, ident, q, clips)
             return q
         downloaded = []
 
@@ -589,8 +603,8 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                     raise jobs.Cancelled()
                 ident = r.repo + "/" + r.file
                 cached = _quality_cache().get(_qkey(person, ident))
-                if cached and cached["verdict"] != "good":
-                    continue
+                if cached and (cached["verdict"] == "broken" or (cached["verdict"] != "good" and cached.get("clips") == clips)):
+                    continue   # judged on these clips already (a broken file stays broken whatever the clips)
                 push("voice", 0.16 + 0.04 * len(checked), f"Downloading the community voice “{r.name}” to check it")
                 try:
                     v = download_and_install(r, progress=lambda d, t: push("voice", 0.16, f"Downloading “{r.name}”"))
@@ -889,6 +903,43 @@ NOT_USABLE = ("may be", "a reaction", "edited", "no vocals", "probably", "talk a
 # ("may be in Spanish (a dub...)" starts with "may be" too)
 
 
+class PrepTime:
+    """Do it all's preparation, said over the whole job (rc-fix3, IA pass 11 B2: "(1/2)" and "(2/2)" again every round
+    for 19 min read like a loop, and the time left climbed from 3598 to 4354 s at "about 70 min").
+    - The count runs over the job: "Preparing clips, source 7 of 12", where 12 is every ticked source not prepared
+      yet plus the ones done (it grows when more are ticked, never resets).
+    - The time left comes from the work: seconds per source so far, times the sources still needed to reach the
+      target minutes at the clean minutes per source so far, then the rest of the plan (training, compare). The job
+      says it through its usual rule (jobs.Job._said): it counts down and rises at most slowly.
+    - Without a plan (a one-shot's own estimate covers it) there's no estimate here: the job extrapolates as before."""
+
+    def __init__(self, plan_min: dict | None, target_min: float):
+        self.plan = plan_min or {}
+        self.target = float(target_min)
+        self.done, self.secs, self.kept, self.total, self._frac = 0, 0.0, 0.0, 0, 0.02
+
+    def line(self, index: int, label: str) -> str:
+        return f"Preparing clips, source {self.done + index} of {max(self.total, self.done + index)}: {label}"
+
+    def frac(self, f: float) -> float:
+        self._frac = max(self._frac, f)   # never backwards, even when more sources are added
+        return self._frac
+
+    def finished(self, n: int, secs: float):
+        self.done += n
+        self.secs += secs
+
+    def left(self, batch_left: float = 0.0) -> float | None:
+        if not self.plan.get("total"):
+            return None
+        per = self.secs / self.done if self.done else self.plan.get("prepare", 0) * 60.0 / max(1, self.total)
+        if self.done and self.kept > 0:
+            need = max(0.0, self.target - self.kept) / (self.kept / self.done)
+        else:
+            need = max(0, self.total - self.done)
+        return per * max(batch_left, need) + max(0.0, self.plan["total"] - self.plan.get("prepare", 0)) * 60.0
+
+
 def train_new_voice(job, person: str, control, push, project: str | None = None,
                     target_minutes: float | None = None, prepare_only: bool = False, speaking: bool = False,
                     subject: dict | None = None, mode: str | None = None) -> str:
@@ -902,7 +953,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
     from . import project as P
     from . import sources as srcmod
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import Trainer, export_voice
+    from .trainer import Trainer, epoch_line, export_voice
     TC = {**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
     key = slug(person)
     if project:
@@ -942,10 +993,17 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         def songs_exhausted(pr):
             return not [s for s in pr.sources if srcmod.is_sung(s) and s.status == "found"
                         and not s.note.startswith(NOT_USABLE)]
+        # rc-fix3 (IA pass 11 B2): one count over the whole job and a time left from the work itself (PrepTime)
+        prep = PrepTime(getattr(job, "plan_min", None), TC["target_minutes"])
+
+        def said(frac, msg, batch_left=0.0):
+            left = prep.left(batch_left)
+            push("voice", prep.frac(frac), msg, **({"left_est": round(left, 1)} if left is not None else {}))
         for rnd in range(rounds):
             proj = P.Project.load(proj.name)
             if proj.reference.get("clip") and enough(proj):
                 break   # enough clean voice already (e.g. from the quality check's clips)
+            prep.kept = (proj.sung_seconds() if singer and not songs_exhausted(proj) else proj.kept_seconds()) / 60
             # a few sources at a time, re-checking the total in between, instead of everything that's ticked
             # a channel whose videos turned out unavailable here (whatever yt-dlp's reason: why_unavailable) goes
             # last, so the next tries are other uploads of the same scenes
@@ -958,11 +1016,13 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                     if s.selected and s.status not in ("ready", "failed")]
             if singer and not songs_exhausted(proj):
                 todo = [i for i in todo if srcmod.is_sung(proj.source(i))]
+            prep.total = prep.done + len(todo)   # every ticked source not prepared yet, and the ones done
             todo = todo[:3 if singer else 2]
             if todo:
-                def prog(f, label, rnd=rnd, **kw):
-                    push("voice", 0.02 + 0.08 * min(1, (rnd + f) / 2),
-                         f"Preparing clips: {label}" + (f" ({kw['index']}/{kw['count']})" if kw.get("count") else ""))
+                def prog(f, label, n=len(todo), **kw):
+                    said(0.02 + 0.08 * min(1.0, (prep.done + f * n) / max(1, prep.total)),
+                         prep.line(kw.get("index") or 1, label), batch_left=n * (1 - f))
+                t_batch = time.time()
                 try:
                     P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, progress=prog, between=control.service,
                                       cancel=lambda: job.cancel or job.pausing,
@@ -970,6 +1030,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                                       friendly=lambda e: jobs.friendly(e, "preparing a source"))
                 except P.Cancelled:
                     raise Paused() if job.pausing else jobs.Cancelled()
+                prep.finished(len(todo), time.time() - t_batch)
             with P.lock(proj.name):
                 proj = P.Project.load(proj.name)
                 if proj.speakers and not proj.reference.get("confirmed"):
@@ -1043,7 +1104,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                     if s.id in {m.id for m in more[:3 if singer else 2]}:
                         s.selected = True
                 proj.save()
-            push("voice", 0.1, f"{proj.sung_seconds() / 60:.1f} min of {person} singing so far; adding more songs"
+            prep.kept = (proj.sung_seconds() if singer and not songs_exhausted(proj) else proj.kept_seconds()) / 60
+            said(0.0, f"{proj.sung_seconds() / 60:.1f} min of {person} singing so far; adding more songs"
                  if singer else f"{mins:.1f} min of clean voice so far; adding more sources")
         proj = check_names(proj, person, push)
         mins = proj.kept_seconds() / 60
@@ -1073,7 +1135,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                 control.stop = True
             if ev.get("stage") == "training" and ev.get("epochs"):
                 push("voice", 0.12 + 0.85 * ev.get("fraction", 0),
-                     f"Training: epoch {ev.get('epoch', 0)} of {ev['epochs']}", eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"])
+                     epoch_line(ev), eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"], planned=ev.get("planned"))
             elif ev.get("stage") == "preparing":
                 push("voice", 0.12, f"Training: {ev.get('note', 'getting ready')}")
         st = tr.run(control, progress=tprog)
@@ -1104,7 +1166,7 @@ def run_project(job, name: str, control, push) -> str:
     from . import api as train_api
     from . import project as P
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import LENGTHS, Trainer, export_voice
+    from .trainer import LENGTHS, Trainer, epoch_line, export_voice
     proj = P.Project.load(name)
     busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
                  and (n == proj.name or a["kind"] in ("train", "auto"))), None)
@@ -1117,7 +1179,8 @@ def run_project(job, name: str, control, push) -> str:
         todo = [s.id for s in proj.sources if s.selected and s.status not in ("ready", "failed")]
         if todo:
             def prog(f, label, **kw):
-                push("voice", 0.02 + 0.1 * f, f"Preparing clips: {label}" + (f" ({kw['index']}/{kw['count']})" if kw.get("count") else ""))
+                push("voice", 0.02 + 0.1 * f, f"Preparing clips, source {kw['index']} of {kw['count']}: {label}" if kw.get("count")
+                     else f"Preparing clips: {label}")
             try:
                 P.prepare_sources(proj.name, todo, gpu.MODELS.separator, SpeakerEmbedder(), progress=prog,
                                   between=control.service, cancel=lambda: job.cancel or job.pausing,
@@ -1151,7 +1214,7 @@ def run_project(job, name: str, control, push) -> str:
                 control.stop = True
             if ev.get("stage") == "training" and ev.get("epochs"):
                 push("voice", 0.12 + 0.85 * ev.get("fraction", 0),
-                     f"Training: epoch {ev.get('epoch', 0)} of {ev['epochs']}", eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"])
+                     epoch_line(ev), eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"], planned=ev.get("planned"))
         st = tr.run(control, progress=tprog)
         if job.cancel:
             raise jobs.Cancelled()
