@@ -10,7 +10,7 @@ anywhere.
 - A graphics card helps a lot. AMD RX 7700 and up, and the RX 9000 cards, are supported. NVIDIA cards from the GTX 900 series on are
   set up for but untested. Other PCs still work on the processor alone, just slowly, and without voice training.
 - About 22.5 GB of free disk space. The installer checks that it fits.
-- An internet connection for the install, which downloads about 11.5 GB. After that, nothing downloads unless you add an extra, run a repair, switch on Away from home, or YouTube needs a fix.
+- An internet connection for the install, which downloads about 11.5 GB. After that, no more AI models download. Songs, clips and community voices you ask for come from YouTube or Hugging Face.
 
 ## Install
 
@@ -27,8 +27,7 @@ anywhere.
 
 ## The first start
 
-Type a song and a voice into FrontMan, such as "Pink Pony Club as Plankton", and press Make it. A song's first cover
-takes longer than the next ones, because UnderCover separates the song once and keeps the result. A short sample song
+Type a song and a voice into FrontMan, such as "Pink Pony Club as Plankton", and press Make it. If you don't have the voice yet, UnderCover first finds and checks one, or trains it, and the plan says how long before you press. A song's first cover also takes longer than the next ones, because UnderCover separates the song once and keeps the result. A short sample song
 and Agent Smoke, a demo voice made for UnderCover and not a real person, are there to try.
 
 To quit, use the icon near the clock, or SafeHouse's System room.
