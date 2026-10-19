@@ -3549,15 +3549,16 @@ def u_model_download_said():
     k.events[-1]["at"] = round(_t.time() - 60, 1)
     assert k.snapshot()["total_left"] == 5.0, "the strip said almost done before the job did"
     # a download inside a job: said once a second with real numbers, the step's and the job's time left included
-    real_current = J.CURRENT[0]
+    real_current, real_after, real_from = J.CURRENT[0], S.SAY_AFTER_S, S.SPEED_FROM_S
+    S.SAY_AFTER_S, S.SPEED_FROM_S = 1.0, 0.0   # (5 s and 2 s in real use: the test needn't wait that long)
     m = J.Job("cover", title="first cover")
     m.push(stage="separating", frac=0.3, total_left=40.0, stage_left=20.0, message="Separating vocals")
     J.CURRENT[0] = m
     try:
         say = S._say_download(S.SEP["karaoke_model"])
-        say(1_000_000, 913_000_000)        # under 3 s in: the speed isn't known yet (the first second is slow), nothing said
+        say(1_000_000, 913_000_000)        # too soon: the speed isn't known yet (a connection starts slowly), nothing said
         assert m.events[-1]["message"] == "Separating vocals"
-        _t.sleep(3.1)
+        _t.sleep(1.2)
         say(100_000_000, 913_000_000)
         ev = m.events[-1]
         assert ev["message"] == "Downloading the backing-vocal model: 100 of 913 MB, once", ev
@@ -3569,13 +3570,14 @@ def u_model_download_said():
         n.push(stage="song", frac=0.4, message="Separating the vocals")
         J.CURRENT[0] = n
         say2 = S._say_download(S.SEP["karaoke_model"])
-        _t.sleep(3.1)
+        say2(1_000_000, 913_000_000)
+        _t.sleep(1.2)
         say2(300_000_000, 913_000_000)
         ev2 = n.events[-1]
         assert ev2["message"].startswith("Downloading the backing-vocal model") and ev2["stage_left"] > 0, ev2
         assert ev2.get("total_left") is None, ev2
     finally:
-        J.CURRENT[0] = real_current
+        J.CURRENT[0], S.SAY_AFTER_S, S.SPEED_FROM_S = real_current, real_after, real_from
     J.CURRENT[0] = None
     try:
         assert S._say_download(S.SEP["karaoke_model"]) is None   # no job: the first start counts the bytes itself

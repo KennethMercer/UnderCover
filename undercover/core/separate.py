@@ -97,7 +97,7 @@ def _say_download(model: str):
     if job is None:
         return None
     what = MODEL_SAY.get(model, "a separation model")
-    st = {"t0": _t.time(), "last": 0.0, "left0": None, "stage0": None}
+    st = {"t0": _t.time(), "last": 0.0, "left0": None, "stage0": None, "anchor": None}
     for ev in reversed(job.events[-40:]):   # what the job had said was left before this download (all, and the step)
         if st["left0"] is None and ev.get("total_left") is not None:
             st["left0"] = float(ev["total_left"])
@@ -111,9 +111,11 @@ def _say_download(model: str):
         if now - st["last"] < 1 and done < total:
             return
         st["last"] = now
-        el = now - st["t0"]
-        rate = done / el if el >= 3 and done > 0 else None
-        if rate is None and done < total:   # said once the speed is known (3 s in; the first second is slow): never made up
+        if st["anchor"] is None and now - st["t0"] >= SPEED_FROM_S:
+            st["anchor"] = (now, done)   # the speed is measured from here: past the connection's slow start
+        t_a, d_a = st["anchor"] or (now, done)
+        rate = (done - d_a) / (now - t_a) if now - st["t0"] >= SAY_AFTER_S and now - t_a > 0.5 and done > d_a else None
+        if rate is None and done < total:   # said once the speed is known: never a time made up
             return
         left = (total - done) / rate if rate else 0.0
         ev = {"stage": stage, "frac": frac, "message": f"Downloading {what}: {done / 1e6:.0f} of {total / 1e6:.0f} MB, once",
@@ -124,6 +126,14 @@ def _say_download(model: str):
             ev["new_work"] = True   # a download found mid-step: the time left may rise for it
         job.push(**ev)
     return say
+
+
+# A download's time is said from 5 s in, from its speed since the 2 s mark: a connection starts slowly (the real first
+# cover's first estimates were 1045 s and 374 s for downloads of 100 s and 130 s). On those two real downloads, replayed:
+# mean error 3.4 s and 11.5 s (worst 13 s and 101 s), against 4.5 s and 12.7 s (worst 16 s and 161 s) from the start,
+# and 5.0 s and 27 s (worst 37 s and 188 s) from the last 5 s alone.
+SAY_AFTER_S = 5.0
+SPEED_FROM_S = 2.0
 
 
 class _QuietBar:
