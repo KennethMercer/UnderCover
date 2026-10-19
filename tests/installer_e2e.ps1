@@ -374,7 +374,7 @@ while (-not (Test-Path $DoneFile) -and [W]::IsWindow($h)) {
     [void][W]::SendMessageTimeout($h, 0x84, [IntPtr]::Zero, $lp, 2, 5000, [ref]$r)
     if ([int]$r -eq 2) { $caption++ }   # HTCAPTION: a press there starts a move
     $n++
-    if ($tick.ElapsedMilliseconds -ge 1000) {   # every second: a click on the wizard, or on Cancel, would reach it
+    if ($tick.ElapsedMilliseconds -ge 1000 -and -not [W]::IsIconic($h)) {   # every second: a click on the wizard, or on Cancel, would reach it
         $tick.Restart(); $secs++
         if (-not [W]::IsWindowEnabled($h)) { $wizOff++ }
         if (-not ([W]::IsWindowEnabled($cancel) -and [W]::IsWindowVisible($cancel))) { $canOff++ }
@@ -383,6 +383,7 @@ while (-not (Test-Path $DoneFile) -and [W]::IsWindow($h)) {
         [void][W]::PostMessage($h, 0x112, [IntPtr]0xF020, [IntPtr]::Zero); Start-Sleep -Milliseconds 500; $m = [W]::IsIconic($h)
         [void][W]::PostMessage($h, 0x112, [IntPtr]0xF120, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
         $mini += "$m/$(-not [W]::IsIconic($h))"
+        $tick.Restart()   # (the next second's check after the restore has settled)
     }
     if (-not $StopAt) {
         if ($n -eq 50) { $asks += Ask 'cancel' 7 }
@@ -411,7 +412,11 @@ function RunWizard([string]$StopAt) {
                "`"$hwndFile`"", "`"$doneFile`"", "`"$statusFile`"", "`"$respFile`"")
     if ($StopAt) { $margs += "`"$StopAt`"" }
     $mp = Start-Process powershell.exe -ArgumentList $margs -WindowStyle Hidden -PassThru
-    Start-Process -FilePath (Join-Path $launch 'launcher.exe') -Wait   # interactive, as a person runs the installer
+    $lp = Start-Process -FilePath (Join-Path $launch 'launcher.exe') -PassThru   # interactive, as a person runs the installer
+    while (-not $lp.WaitForExit(2000)) {
+        # the driver gave up before setup started: no one will click the wizard on, so close it (and its .tmp child)
+        if ($mp.HasExited -and -not (Test-Path $hwndFile)) { Start-Process taskkill.exe -ArgumentList "/PID $($lp.Id) /T /F" -WindowStyle Hidden -Wait; break }
+    }
     [void]$mp.WaitForExit(60000)
     $resp = @{}
     if (Test-Path $respFile) { Get-Content -LiteralPath $respFile | ForEach-Object { $k, $v = $_ -split '=', 2; $resp[$k] = $v } }

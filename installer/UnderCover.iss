@@ -243,8 +243,11 @@ function IsWindowEnabled(hWnd: LongWord): Integer;
 // While setup runs the wizard is turned back on, so Cancel, Show details, moving and minimising all work.
 procedure KeepWizardEnabled;
 begin
-  if SetupRunning and (not Asking) and (IsWindowEnabled(WizardForm.Handle) = 0) then
+  if SetupRunning and (not Asking) and (IsWindowEnabled(WizardForm.Handle) = 0) then begin
     EnableWindow(WizardForm.Handle, 1);
+    // (Inno also took the keyboard focus away: Cancel gets it back once the wizard is active, so Esc works too)
+    if WizardForm.CancelButton.CanFocus then WizardForm.ActiveControl := WizardForm.CancelButton;
+  end;
 end;
 
 procedure AwakeTimerFired(H: LongWord; Msg: LongWord; IdEvent: LongWord; Time: LongWord);
