@@ -40,7 +40,8 @@ param(
     [string]$Backend = 'auto',
     [switch]$Keep,
     [switch]$CancelCheck,
-    [switch]$NoFirstUse
+    [switch]$NoFirstUse,
+    [string]$FirstUseOnly = ''   # an install made by an earlier run (-Keep): only its first-use check
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -51,6 +52,82 @@ if ($admin) { Write-Host "Run this without admin rights: the check is a normal u
 
 if (-not $Root) { $Root = (Split-Path $repo -Qualifier) + '\' }
 $dir = Join-Path $Root ('uc-e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+if ($FirstUseOnly) { $dir = (Resolve-Path -LiteralPath $FirstUseOnly).Path }
+$vpy = Join-Path $dir '.venv\Scripts\python.exe'
+
+# a first cover and speech on the fresh install download nothing (the user: "we absolutely should not be downloading
+# modules the first time they're called")
+function CacheList {
+    $roots = @((Join-Path $dir 'models'), $(if ($env:HF_HOME) { $env:HF_HOME } else { Join-Path $env:USERPROFILE '.cache\huggingface' }),
+               (Join-Path $env:USERPROFILE '.cache\torch'), (Join-Path $env:USERPROFILE '.cache\whisper'))
+    @(foreach ($r in $roots) { if (Test-Path -LiteralPath $r) { Get-ChildItem -LiteralPath $r -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '\.lock$' } | ForEach-Object { "$($_.FullName)|$($_.Length)" } } })
+}
+function FirstUse {
+    $port = (7862..7869 | Where-Object { $c = New-Object Net.Sockets.TcpClient; try { $c.Connect('127.0.0.1', $_); $c.Close(); $false } catch { $true } } | Select-Object -First 1)
+    if (-not $port) { return 'no free port in 7862-7869' }
+    $base = "http://127.0.0.1:$port"
+    $h = @{ Origin = $base }
+    $before = CacheList
+    $out = Join-Path $dir 'logs\firstuse-server.log'
+    $saved = @{}
+    foreach ($k in @('UNDERCOVER_CONFIG', 'UNDERCOVER_DATA_ROOT', 'UNDERCOVER_TEST_ROOTS', 'UNDERCOVER_SANDBOX_PORT')) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $null)
+    }
+    try {
+        $srv = Start-Process -FilePath $vpy -ArgumentList '-m', 'undercover.server', '--no-browser', '--no-tray', '--port', "$port" -WorkingDirectory $dir `
+                             -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError "$out.err" -PassThru
+    } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+    $said = @()
+    try {
+        $deadline = (Get-Date).AddMinutes(10); $st = $null
+        while ((Get-Date) -lt $deadline -and -not $srv.HasExited) {
+            Start-Sleep -Seconds 2
+            try { $st = Invoke-RestMethod "$base/api/status" -TimeoutSec 5 } catch { continue }
+            if ($st.models -eq 'ready' -or "$($st.models)".StartsWith('error')) { break }
+        }
+        if (-not $st -or $st.models -ne 'ready') { return "the installed copy's models didn't load: $($st.models)" }
+        if ($st.first_run) { return "the installed copy's first start had models to fetch (models_mb $($st.models_mb))" }
+        $jobs = @()
+        $r = Invoke-RestMethod "$base/api/auto" -Method Post -Headers $h -ContentType 'application/json' -Body (@{ text = 'Hold On as Agent Smoke' } | ConvertTo-Json)
+        $jobs += @{ id = $r.job; what = 'the first cover (one-shot)' }
+        foreach ($cad in @($false, $true)) {
+            try {
+                $r = Invoke-RestMethod "$base/api/speak" -Method Post -Headers $h -ContentType 'application/json' `
+                     -Body (@{ text = 'This is the first thing I say.'; voice = 'agent-smoke'; cadence = $cad } | ConvertTo-Json)
+                $jobs += @{ id = $r.job; what = $(if ($cad) { 'speech with cadence (Chatterbox Turbo)' } else { 'speech (the Reader)' }) }
+            } catch { $said += "speech (cadence $cad) refused: $($_.ErrorDetails.Message)" }
+        }
+        foreach ($j in $jobs) {
+            $deadline = (Get-Date).AddMinutes(20); $snap = $null
+            while ((Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds 3
+                $all = Invoke-RestMethod "$base/api/jobs" -TimeoutSec 10   # (assigned first: PS 5.1 pipes a JSON array as one object)
+                $snap = $all | Where-Object { $_.id -eq $j.id } | Select-Object -First 1
+                if ($snap -and $snap.final) { break }
+            }
+            $state = if ($snap -and $snap.final) { $snap.final.state } else { 'still running' }
+            $said += "$($j.what): $state"
+            if ($state -ne 'done') { return "$($j.what) ended '$state': $($snap.final.message)" }
+        }
+    } finally {
+        try { Invoke-RestMethod "$base/api/quit" -Method Post -Headers $h -ContentType 'application/json' -Body '{}' -TimeoutSec 10 | Out-Null } catch { }
+        if (-not $srv.WaitForExit(60000)) { try { $srv.Kill() } catch { } }
+        Write-Host ("First use: " + ($said -join '; '))
+    }
+    $after = CacheList
+    $new = @(Compare-Object $before $after | Where-Object { $_.SideIndicator -eq '=>' } | ForEach-Object { ($_.InputObject -split '\|')[0] })
+    if ($new.Count) { return "files appeared during first use: $(($new | Select-Object -First 5) -join ', ')" }
+    $log = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$out.err" -Raw -ErrorAction SilentlyContinue)
+    if ($log -match 'Downloading|download_checks|iB/s') { return "the installed copy's log mentions a download" }
+    return $null
+}
+if ($FirstUseOnly) {
+    $why = FirstUse
+    if ($why) { Write-Host "FAILED: first use: $why" -ForegroundColor Red; exit 1 }
+    Write-Host "PASSED: first use downloaded nothing." -ForegroundColor Green; exit 0
+}
+
 Write-Host "Installer end-to-end check: a real install into $dir" -ForegroundColor White
 
 # what's there before, outside the install (it must stay the same)
@@ -319,72 +396,6 @@ if (Test-Path $vpy) {
     if ($mcode -ne 0) { $fails += "models missing after setup: $mcheck" }
 }
 
-# a first cover and speech on the fresh install download nothing (the user: "we absolutely should not be downloading
-# modules the first time they're called")
-function CacheList {
-    $roots = @((Join-Path $dir 'models'), $(if ($env:HF_HOME) { $env:HF_HOME } else { Join-Path $env:USERPROFILE '.cache\huggingface' }),
-               (Join-Path $env:USERPROFILE '.cache\torch'), (Join-Path $env:USERPROFILE '.cache\whisper'))
-    @(foreach ($r in $roots) { if (Test-Path -LiteralPath $r) { Get-ChildItem -LiteralPath $r -Recurse -File -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notmatch '\.lock$' } | ForEach-Object { "$($_.FullName)|$($_.Length)" } } })
-}
-function FirstUse {
-    $port = (7862..7869 | Where-Object { $c = New-Object Net.Sockets.TcpClient; try { $c.Connect('127.0.0.1', $_); $c.Close(); $false } catch { $true } } | Select-Object -First 1)
-    if (-not $port) { return 'no free port in 7862-7869' }
-    $base = "http://127.0.0.1:$port"
-    $h = @{ Origin = $base }
-    $before = CacheList
-    $out = Join-Path $dir 'logs\firstuse-server.log'
-    $saved = @{}
-    foreach ($k in @('UNDERCOVER_CONFIG', 'UNDERCOVER_DATA_ROOT', 'UNDERCOVER_TEST_ROOTS', 'UNDERCOVER_SANDBOX_PORT')) {
-        $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $null)
-    }
-    try {
-        $srv = Start-Process -FilePath $vpy -ArgumentList '-m', 'undercover.server', '--no-browser', '--no-tray', '--port', "$port" -WorkingDirectory $dir `
-                             -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError "$out.err" -PassThru
-    } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
-    $said = @()
-    try {
-        $deadline = (Get-Date).AddMinutes(10); $st = $null
-        while ((Get-Date) -lt $deadline -and -not $srv.HasExited) {
-            Start-Sleep -Seconds 2
-            try { $st = Invoke-RestMethod "$base/api/status" -TimeoutSec 5 } catch { continue }
-            if ($st.models -eq 'ready' -or "$($st.models)".StartsWith('error')) { break }
-        }
-        if (-not $st -or $st.models -ne 'ready') { return "the installed copy's models didn't load: $($st.models)" }
-        if ($st.first_run) { return "the installed copy's first start had models to fetch (models_mb $($st.models_mb))" }
-        $jobs = @()
-        $r = Invoke-RestMethod "$base/api/auto" -Method Post -Headers $h -ContentType 'application/json' -Body (@{ text = 'Hold On as Agent Smoke' } | ConvertTo-Json)
-        $jobs += @{ id = $r.job; what = 'the first cover (one-shot)' }
-        foreach ($cad in @($false, $true)) {
-            try {
-                $r = Invoke-RestMethod "$base/api/speak" -Method Post -Headers $h -ContentType 'application/json' `
-                     -Body (@{ text = 'This is the first thing I say.'; voice = 'agent-smoke'; cadence = $cad } | ConvertTo-Json)
-                $jobs += @{ id = $r.job; what = $(if ($cad) { 'speech with cadence (Chatterbox Turbo)' } else { 'speech (the Reader)' }) }
-            } catch { $said += "speech (cadence $cad) refused: $($_.ErrorDetails.Message)" }
-        }
-        foreach ($j in $jobs) {
-            $deadline = (Get-Date).AddMinutes(20); $snap = $null
-            while ((Get-Date) -lt $deadline) {
-                Start-Sleep -Seconds 3
-                $snap = @(Invoke-RestMethod "$base/api/jobs" -TimeoutSec 10) | Where-Object { $_.id -eq $j.id } | Select-Object -First 1
-                if ($snap -and $snap.final) { break }
-            }
-            $state = if ($snap -and $snap.final) { $snap.final.state } else { 'still running' }
-            $said += "$($j.what): $state"
-            if ($state -ne 'done') { return "$($j.what) ended '$state': $($snap.final.message)" }
-        }
-    } finally {
-        try { Invoke-RestMethod "$base/api/quit" -Method Post -Headers $h -ContentType 'application/json' -Body '{}' -TimeoutSec 10 | Out-Null } catch { }
-        if (-not $srv.WaitForExit(60000)) { try { $srv.Kill() } catch { } }
-        Write-Host ("First use: " + ($said -join '; '))
-    }
-    $after = CacheList
-    $new = @(Compare-Object $before $after | Where-Object { $_.SideIndicator -eq '=>' } | ForEach-Object { ($_.InputObject -split '\|')[0] })
-    if ($new.Count) { return "files appeared during first use: $(($new | Select-Object -First 5) -join ', ')" }
-    $log = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$out.err" -Raw -ErrorAction SilentlyContinue)
-    if ($log -match 'Downloading|download_checks|iB/s') { return "the installed copy's log mentions a download" }
-    return $null
-}
 if (-not $fails.Count -and -not $NoFirstUse -and (Test-Path $vpy)) {
     $why = FirstUse
     if ($why) { $fails += "first use: $why" } else { Write-Host "First use: nothing downloaded." }

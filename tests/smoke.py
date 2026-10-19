@@ -3299,8 +3299,11 @@ def u_installer_space():
     assert "(CurUninstallStep = usPostUninstall) and (KeptMsg <> '') and (not UninstallSilent)" in iss
     # the shipped docs give the measured size (installer/sizes.json through sizes.isi), not an old guess
     tot = re.search(r'#define SizeTotalGB "([0-9.]+)"', (inst / "sizes.isi").read_text(encoding="utf-8")).group(1)
-    assert f"About {tot} GB of free disk space" in (ROOT / "README.md").read_text(encoding="utf-8"), "README's size"
-    assert f"About {tot} GB free disk space" in (inst / "FRIENDS.md").read_text(encoding="utf-8"), "the friends' briefing's size"
+    dl = re.search(r'#define SizeDownloadGB "([0-9.]+)"', (inst / "sizes.isi").read_text(encoding="utf-8")).group(1)
+    for name, doc in (("README", (ROOT / "README.md").read_text(encoding="utf-8")), ("FRIENDS.md", (inst / "FRIENDS.md").read_text(encoding="utf-8"))):
+        assert f"About {tot} GB of free disk space" in doc, f"{name}'s disk size isn't sizes.isi's {tot} GB"
+        assert f"downloads about {dl} GB" in doc, f"{name}'s download isn't sizes.isi's {dl} GB (rc-fix4b: setup downloads everything)"
+        assert "{{TIME}}" not in doc and "first time each feature" not in doc and "First assignment" not in doc, name
     nb = iss[iss.index("function NextButtonClick"):iss.index("function ShouldSkipPage")]
     assert nb.count("Result := SpaceOK(Short)") == 3 and "wpSelectDir" in nb and "DataPage.ID" in nb and "AddonPage.ID" in nb
     assert 'Source: "space.ps1"; Flags: dontcopy' in iss and '#include "sizes.isi"' in iss
