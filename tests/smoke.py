@@ -3341,6 +3341,12 @@ def u_installer_quiet():
     assert 20 <= len(pm) <= 35, f"{len(pm)} status lines for 27 s of downloading (one a second, plus each file's end)"
     assert pm == sorted(pm) and pm[-1] == 990 and pm[len(pm) // 2] > 300, pm
     assert "@@P 500|Downloading F5-TTS: model.bin: 54 of 54 MB" in lines, "a file's end is always said"
+    # a small file (a model's config) says no MB at all: it read "0 of 0 MB" (MasterPlan, rc-fix5b)
+    small_out = io.StringIO()
+    small = addons_cli.status_printer(1, out=small_out, clock=lambda: 0.0)
+    small("Downloading the separation models (file 15 of 29)", 1726, 1726)
+    said = small_out.getvalue().splitlines()
+    assert said == ["Downloading the separation models (file 15 of 29)", "@@P 1|Downloading the separation models (file 15 of 29)"], said
     cli = Path(addons_cli.__file__).read_text(encoding="utf-8")
     assert "return 3" in cli and "--cancel-file" in cli and "except InterruptedError" in cli
 

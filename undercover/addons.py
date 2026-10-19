@@ -76,17 +76,20 @@ def status_printer(size_mb: float, out=None, clock=time.monotonic):
     st = {"msg": None, "before": 0, "t": 0, "last": None}
     whole = max(1.0, size_mb * 1e6)
 
+    def mb(n) -> bool:   # a size worth saying in MB (a small config file read "0 of 0 MB": say nothing for it)
+        return bool(n) and n >= 1e6
+
     def progress(msg: str, done: int, total: int):
         if msg != st["msg"]:   # a new file (or the packages step): its line, once
             st["before"] += st["t"]
             st["msg"], st["t"] = msg, total
-            print(msg + (f" ({total / 1e6:.0f} MB)" if total else ""), file=out, flush=True)
+            print(msg + (f" ({total / 1e6:.0f} MB)" if mb(total) else ""), file=out, flush=True)
         st["t"] = total or st["t"]
         now = clock()
         if st["last"] is None or now - st["last"] >= 1 or (total and done >= total):
             st["last"] = now
             pm = int(min(0.99, (st["before"] + done) / whole) * 1000)
-            print(f"@@P {pm}|{msg}" + (f": {done / 1e6:.0f} of {total / 1e6:.0f} MB" if total else ""), file=out, flush=True)
+            print(f"@@P {pm}|{msg}" + (f": {done / 1e6:.0f} of {total / 1e6:.0f} MB" if mb(total) else ""), file=out, flush=True)
     return progress
 
 
