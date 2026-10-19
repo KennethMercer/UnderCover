@@ -116,7 +116,7 @@
     {
       "id": "2026-10-14-qa2",
       "date": "2026-10-14",
-      "title": "Small fixes from Internal Affairs",
+      "title": "Small fixes",
       "lines": [
         "The Library says \"yesterday\" for yesterday, even a few hours ago.",
         "SpeakEasy's Recent keeps your thumb mark in view on a phone.",

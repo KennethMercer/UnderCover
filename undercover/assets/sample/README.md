@@ -1,4 +1,4 @@
-# The First assignment's sample song
+# The sample song
 
 `sample.json` names the audio file next to it and how the pages show it:
 
@@ -7,6 +7,7 @@
  "licence": "UnderCover's own recording", "notice": "one line for the NOTICE file"}
 ```
 
-No audio file here = no sample song: the First assignment's first step then asks for any song. Swapping the song = replacing
-the audio file and editing `sample.json`. On first run (and on Replay, if the user deleted it) it's added to the library as
-a normal song marked `sample: true` (undercover/app/tutorial.py).
+A fresh install adds it to the library once, as a normal song marked `sample: true` (undercover/app/firstrun.py), beside the
+demo voice Agent Smoke. If the user deletes it, it stays deleted. Nothing in 1.0 points a new user at it: the one-shot can
+use it by name ("Hold On as Agent Smoke" plans this copy, with nothing searched or downloaded), and the tutorial redesign
+will build on it. No audio file here means no sample song. To swap the song, replace the audio file and edit `sample.json`.
