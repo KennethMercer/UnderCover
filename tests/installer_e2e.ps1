@@ -393,9 +393,10 @@ Write-Host "Models: $($modelLines.Count) status lines, $($modelMoving.Count) wit
 if (-not $modelLines.Count) { $fails += 'the model step never reported' }
 elseif (-not $modelMoving.Count) { $fails += 'no progress lines during the model download' }
 $vpy = Join-Path $dir '.venv\Scripts\python.exe'
-if (Test-Path $vpy) {
+if ($code -eq 0 -and (Test-Path $vpy)) {   # (after a failed setup the venv may be half made: its failure is already said)
     Push-Location $dir
-    try { $mcheck = (& $vpy -m undercover.models check 2>&1 | Out-String).Trim(); $mcode = $LASTEXITCODE } finally { Pop-Location }
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # (PS 5.1: a native stderr line is not a stop)
+    try { $mcheck = (& $vpy -m undercover.models check 2>&1 | Out-String).Trim(); $mcode = $LASTEXITCODE } finally { $ErrorActionPreference = $eap; Pop-Location }
     Write-Host "Model check: $mcheck"
     if ($mcode -ne 0) { $fails += "models missing after setup: $mcheck" }
 }

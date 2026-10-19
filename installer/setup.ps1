@@ -399,6 +399,10 @@ else {
 # Keep uv's Python downloads and cache inside the install folder.
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $Tools 'python'
 $env:UV_CACHE_DIR          = Join-Path $InstallDir 'cache\uv'
+# patient on a slow or briefly stalled connection (the release check once met a 2-minute stall on AMD's server, and uv's
+# default 30 s timeout failed the step): a longer timeout and more retries; a re-run still resumes from uv's cache
+$env:UV_HTTP_TIMEOUT = '300'
+$env:UV_HTTP_RETRIES = '6'
 $env:UV_NO_CONFIG          = '1'      # ignore any uv.toml the user may have elsewhere
 
 # 3. Python + venv -----------------------------------------------------------------------------
