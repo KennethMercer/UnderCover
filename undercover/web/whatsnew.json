@@ -148,7 +148,6 @@
       "lines": [
         "Voices show their names, not their folder names, in covers, the Library and messages.",
         "On a phone, titles in History and Recent keep their room and the buttons sit under them.",
-        "The First assignment starts from clean settings and Replay opens on the briefing, with Agent Smoke's greeting.",
         "Make smaller's Before and After show which one is playing and pick up where the other left off."
       ]
     },
@@ -241,14 +240,6 @@
       "title": "Cartoon characters",
       "lines": [
         "Ask for a character (\"Toxic as SpongeBob\") and UnderCover looks for their scenes, not people talking about them."
-      ]
-    },
-    {
-      "id": "2026-10-12-first-assignment",
-      "date": "2026-10-12",
-      "title": "Your first assignment",
-      "lines": [
-        "A new copy of UnderCover starts with a short guided run: a cover, a listen, a keep. Replay it in SafeHouse's Settings."
       ]
     },
     {

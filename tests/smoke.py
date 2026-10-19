@@ -6716,9 +6716,9 @@ def u_page_rules():
     pages = {f.name: f.read_text(encoding="utf-8") for f in web.iterdir() if f.suffix in (".js", ".html", ".css")}
     left = sorted(n for n, src in pages.items() if re.search(r"/api/tutorial|\.tutorial\b|assign-|assignBrief|ASSIGNMENT_ON|wb-fold|First assignment", src))
     assert not left, f"the First assignment is still referenced in {left}"
-    assert 'text: "Hold On as Agent Smoke"' in osj and "/api/estimate" in fb and "hist.length" in fb and "x.sample" in fb and "v.demo" in fb, "the simple first run lost a part"
-    assert "minute" in fb and "about 2 min" not in fb, "the first run's time must come from the estimator"
-    assert osj.count("firstHolds()") >= 3 and "return firstGo();" in osj, "Make it no longer makes the sample cover on a first run"
+    assert 'text: "Hold On as Agent Smoke"' in osj and "/api/auto/plan" in fb and "planTime(p)" in fb and "hist.length" in fb and "x.sample" in fb and "v.demo" in fb, "the simple first run lost a part"
+    assert "about 2 min" not in fb and "minute" not in fb, "the first run's time must be the plan's (the button says the same), never the page's own"
+    assert "function firstGo" not in osj and "firstHolds()) return" not in osj, "Make it must be the normal one-shot on a first run (rc-page7: the planner knows the sample song and the demo voice)"
     assert "!hist.length) { store.set(WN_SEEN" in pages["whatsnew.js"], "What's new must stay quiet for a copy with no covers"
     v1 = json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
     assert not any(w in l.lower() for l in v1["lines"] for w in ("assignment", "tutorial")), "What's new 1.0 mentions the tutorial"
