@@ -13,25 +13,21 @@ $root = Split-Path $PSScriptRoot -Parent
 $py = Join-Path $root '.venv\Scripts\python.exe'
 
 # 0. What ships from disk is whole (phase 25): Agent Smoke's binaries aren't in git (scripts/make_demo_voice.py makes
-#    them), so they're checked against their manifest; the sample song, its classified full version and the greetings
-#    must be there. A build that would ship a broken First assignment stops here.
+#    them), so they're checked against their manifest; the sample song and its classified full version must be there.
+#    A build that would ship a broken first run stops here.
 Push-Location $root
 try {
-    $why = & $py -c "from undercover.app import tutorial; print(tutorial.demo_files() or '')"
+    $why = & $py -c "from undercover.app import firstrun; print(firstrun.demo_files() or '')"
     if ($LASTEXITCODE -ne 0) { throw "couldn't check the demo voice" }
     if ($why) { throw "The demo voice can't ship: $why" }
 } finally { Pop-Location }
 $assets = Join-Path $root 'undercover\assets'
 foreach ($f in @('sample\sample.json', 'sample\hold-on.mp3', 'sample\classified\hold-on (full).mp3',
-                 'demo-voice\greetings\greetings.json', 'demo-voice\agent-smoke\tts\ref.wav', 'reader-prints.json')) {
+                 'demo-voice\agent-smoke\tts\ref.wav', 'reader-prints.json')) {
     if (-not (Test-Path (Join-Path $assets $f))) { throw "Missing from the build: undercover\assets\$f" }
 }
-$greet = Get-Content (Join-Path $assets 'demo-voice\greetings\greetings.json') -Raw | ConvertFrom-Json
-foreach ($g in @($greet.greetings) + @($greet.followon)) {
-    if (-not (Test-Path (Join-Path $assets "demo-voice\greetings\$($g.file)"))) { throw "Missing greeting clip: $($g.file)" }
-}
 $mb = [math]::Round(((Get-ChildItem (Join-Path $root 'undercover') -Recurse -File | Where-Object { $_.FullName -notmatch '__pycache__' } | Measure-Object Length -Sum).Sum) / 1MB, 1)
-Write-Host "Shipped app files: $mb MB (Agent Smoke checked against its manifest; sample song, classified file, greetings present)"
+Write-Host "Shipped app files: $mb MB (Agent Smoke checked against its manifest; sample song and classified file present)"
 $json = & $py -m undercover.addons list --json
 if ($LASTEXITCODE -ne 0) { throw "python -m undercover.addons list --json failed" }
 $all = $json | Out-String | ConvertFrom-Json   # Windows PowerShell hands the whole array on as one item

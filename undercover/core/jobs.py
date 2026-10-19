@@ -336,7 +336,7 @@ def gpu_worker():
             from . import setup_models
             from .separate import SEP, SEPARATOR_SIZE
             # the first start fetches the separation model and the conversion models (about 1.3 GB, once): the status
-            # says how far (models_progress, 0-1) and how much (models_mb), and the First assignment's bar follows it
+            # says how far (models_progress, 0-1) and how much (models_mb), and the first run's bar follows it
             todo = setup_models.missing({**setup_models.FILE_SIZES,
                                          **{k: n for k, n in SEPARATOR_SIZE.items() if k == f"separator/{SEP['vocal_model']}"}})
             STATUS["first_run"] = bool(todo)

@@ -313,7 +313,11 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     song, person, artist = req["song"], req["person"], req["artist"]
     inst = service.installed_for(person)
     trained = [v for v in inst if v.extra.get("trained")]
-    if trained:
+    demo = service.demo_for(person, inst)   # "... as Agent Smoke": installed, nothing to check, look up or ask
+    if demo:
+        voice = {"how": "installed", "name": demo.name, "display": display_name(demo), "trained": False, "demo": True,
+                 "quality": {"ok": True, "problems": []}}
+    elif trained:
         q = service.voice_quality(trained[0])
         voice = {"how": "installed", "name": trained[0].name, "display": display_name(trained[0]), "trained": True,
                  "quality": service.train_note(trained[0], q) if prefer_train else q}   # said before anything starts (phase 15)
@@ -328,14 +332,19 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
                  if community or online else {"how": "train", "name": f"{slug(person)}-uc", "display": person})
     out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
            "style": req["style"], "voice": voice, "ask": False}
-    here = None if req["style"] else oneshot.library_song(song, artist)   # a version is someone else's cover
+    sample = None if req["style"] else oneshot.sample_song(song, artist)   # the first run's song, on the desk
+    here = (path("uploads_dir") / sample["file"]) if sample else None if req["style"] else oneshot.library_song(song, artist)
+    if sample:
+        out["from_library"] = {"id": sample["id"], "title": sample.get("title") or song, "artist": sample.get("artist") or ""}
+        out["note"] = (f"Using the sample song in your library. For another “{song}”, add its artist "
+                       f"(“{song} by <artist> as {person}”).")
     if voice["how"] == "installed":   # from the measured speeds (timings.jsonl), not a fixed "1-3 min"
         out["eta_s"] = oneshot.cover_eta(voice["name"], here)
     elif voice["how"] == "check" and community:   # "Ask me each time" (the user): use one now, check, or train first
         out["voice_ask"] = True
         out["voice_choices"] = oneshot.voice_choices(person, community, here,
                                                      others=len([k for k in cands if k not in {v.name for v in community}]))
-    if voice["how"] != "installed" or not voice["quality"]["ok"] or subject:
+    if (voice["how"] != "installed" or not voice["quality"]["ok"] or subject) and not demo:
         # what the request names, in plain words (phase 15): a person, a singer, a character, a band; asked when it
         # can't tell ("Which Chris Evans?"), correctable either way (subject=person / character / role:<role>)
         try:
@@ -345,7 +354,7 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     if req["by_only"]:   # "<song> by <name>": the name is the voice, said out loud because it could be the artist
         out["note"] = (f"I read “by {person}” as the voice. If {person} is the song's artist, say "
                        f"“{song} by {person} as <voice>”.")
-    if not artist:
+    if not artist and not sample:
         known = ambiguity.recall(ambiguity.song_key(song))
         if known:
             out.update(chosen=known["chosen"], others=known["others"], choices=known["choices"])

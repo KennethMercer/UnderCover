@@ -130,7 +130,7 @@ def _duplicate_voices(hist: list) -> list[dict]:
         ex = v.extra or {}
         cadence = bool(ex.get("tts")) or ((v.dir / "tts").is_dir() and any((v.dir / "tts").iterdir()))   # not empty
         records = any(ex.get(k) for k in ("improved_pending", "improved_previous", "improved_turned_down"))
-        # the demo voice the First assignment uses is always kept (a copy of it can't send it aside)
+        # the demo voice the first run uses is always kept (a copy of it can't send it aside)
         return (is_demo(v) and v.name == DEMO_VOICE, cadence, v.name in exported, bool((v.display or "").strip()),
                 records, used.get(v.name, 0))
     out = []
@@ -147,7 +147,7 @@ def _duplicate_voices(hist: list) -> list[dict]:
             same.sort(key=why, reverse=True)                            # stable: the strongest reason first
             keep = same[0]
             k = why(keep)
-            words = ("it's the demo voice the First assignment uses", "it has the cadence",
+            words = ("it's the demo voice the first run uses", "it has the cadence",
                      "it's the trained project's voice", "it has your name for it",
                      "it has an Undo or a retrained version", f"it's used for {k[5]} cover{'s' * (k[5] != 1)}")
             for v in same[1:]:
@@ -263,7 +263,7 @@ def songs() -> list[dict]:
             "size": _size(f), "stems": stems, "stems_size": sum(s["size"] for s in stems), "stems_old_model": old_model,
             "covers": len(used), "cover_titles": [Path(h["output"]).stem for h in used][:5], "last_used": last,
             "url": file_url(f) if f.exists() else None,
-            "sample": bool(m.get("sample")), "artist": m.get("artist") or "",   # the First assignment's song (phase 17)
+            "sample": bool(m.get("sample")), "artist": m.get("artist") or "",   # the sample song (the first run's)
         })
     out.sort(key=lambda x: -x["last_used"])
     return out

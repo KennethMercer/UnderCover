@@ -24,7 +24,7 @@ const store = {
 };
 
 // The first time a real person's voice is about to be made, one calm line, once (consult 6): on the one-shot's plan when it will train, and with
-// DoubleAgent's first Train press. The First assignment's brief keeps its own line.
+// DoubleAgent's first Train press.
 const PERSON_WARN = "For personal use: don't pass the result off as the real person.";
 const personWarned = () => !!store.get("uc-person-warned", false);
 // Deep Cover (ARCHITECTURE "UI backlog"): expert-only elements carry data-deep and stay hidden unless body.deep. The
@@ -163,7 +163,7 @@ async function pollStatus() {
     $("#set-away-me-row").hidden = !s.away_ready || location.protocol === "https:";   // phase 20: ready on the PC
     if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
     sysStatus(s);
-    if (typeof assignReady === "function") assignReady(s);   // the first-run download on the brief (tutorial.js)
+    if (typeof firstReady === "function") firstReady(s);   // the first start's download in the one-shot card (oneshot.js)
     if (s.stale) restartNeeded();
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident
       store.set("uc-abrupt-seen", s.last_abrupt.at);

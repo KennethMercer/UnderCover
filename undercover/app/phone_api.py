@@ -112,10 +112,6 @@ ROUTES = [
     ("GET", rf"/api/themes/{_ID}/(export|theme\.css|preview\.png|fonts/[^/]+)", "phone", "a theme's css, fonts, preview, file"),
     ("POST", r"/api/themes|/api/themes/import", "pc", "saving or importing a theme"),
     ("DELETE", rf"/api/themes/{_ID}", "pc", "deleting a theme"),
-    # the First assignment (the page side; its routes come with the tutorial backend): works at phone width too
-    ("POST", r"/api/tutorial/(done|reset)", "phone", "the First assignment's done mark and Replay"),
-    ("POST", r"/api/tutorial/demo/(update|undo)", "phone", "a newer Agent Smoke: Update, and back"),
-    ("GET", r"/api/tutorial/greetings(/[^/]+\.mp3)?", "phone", "Agent Smoke's greeting clips"),
     # Phone access itself
     ("GET|POST", r"/api/phone", "pc", "Phone access settings"),
     ("POST", r"/api/phone/(pair|pair/cancel|revoke)", "pc", "pairing and Revoke"),

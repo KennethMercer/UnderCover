@@ -845,7 +845,7 @@ def label_of(name: str | None, labels: dict[str, str] | None = None) -> str:
     return (labels if labels is not None else voice_labels()).get(name, name)
 
 
-DEMO_VOICE = "agent-smoke"   # the demo voice's folder (app/tutorial.py seeds it from assets/demo-voice/agent-smoke)
+DEMO_VOICE = "agent-smoke"   # the demo voice's folder (app/firstrun.py seeds it from assets/demo-voice/agent-smoke)
 
 
 def is_demo(v: Voice) -> bool:

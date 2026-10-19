@@ -26,8 +26,7 @@ function renderVoiceCards(cands) {
   DA.cands = cands || []; noteVoices(DA.cands);
   const box = $("#da-cards");
   if (!DA.cands.length) {
-    box.innerHTML = `<div class="empty"><b>No voices yet.</b>${typeof assignBrief === "function" ? `<button class="btn" type="button" id="da-empty-assign">Take the first assignment</button>` : ""}<small class="meta">or name someone above</small></div>`;
-    $("#da-empty-assign")?.addEventListener("click", () => assignBrief());
+    box.innerHTML = `<div class="empty"><b>No voices yet.</b><small class="meta">or name someone above</small></div>`;
     $("#da-more").hidden = true; renderDaOutcome(); return;
   }
   const running = new Set((W.last?.queue || []).filter(i => i.state === "running").map(i => i.target));
@@ -389,7 +388,6 @@ async function daBegin(person, mode, tonight, btn) {
     if (tonight) {
       if (!workMoved(r)) showError(`${person} is in tonight's work.${startsNote(r) || " It trains while the PC is free."} SafeHouse's Running room shows it.${first ? ` ${PERSON_WARN}` : ""}`, "Added to tonight", null, true);
       else if (first) showError(PERSON_WARN, "One thing", null, true);
-      document.dispatchEvent(new CustomEvent("uc:voicequeued", { detail: { person } }));   // the First assignment ends on it
     }
     else { daOutcomeClear(); renderDaWork(); if (first) showError(PERSON_WARN, "One thing", null, true); }
   } catch (e) { showError(e.message, tonight ? "Couldn't add it to tonight" : "Couldn't start the voice"); }

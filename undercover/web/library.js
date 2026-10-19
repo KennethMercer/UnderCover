@@ -201,7 +201,7 @@ function renderList() {
       side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag" data-deep>${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
       title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
-      side = (x.sample ? `<span class="tag ok" title="UnderCover's sample song, for the first assignment">sample song</span>` : "") + (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono" data-deep>${gb(x.size + x.stems_size)}</span>`;
+      side = (x.sample ? `<span class="tag ok" title="UnderCover's sample song">sample song</span>` : "") + (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono" data-deep>${gb(x.size + x.stems_size)}</span>`;
     } else if (L.cat === "voices") {
       const [cls, word] = quality(x);
       title = voiceDisplay(x.name); sub = [x.demo ? "demo voice · not a real person" : x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
@@ -374,7 +374,7 @@ function songDetail(d, s) {
     ${s.stems.length ? `<div class="stems">${s.stems.map((t, i) => `<div class="stem"><button class="tplay" data-i="${i}" aria-label="Play ${esc(t.label)}" aria-pressed="false">▶</button><span>${esc(t.label)}${t.quality !== "high" ? ` <span class="meta">(${t.quality})</span>` : ""}</span><span class="meta mono">${gb(t.size)}</span><a class="linkbtn" href="${t.url}?download">Download</a></div>`).join("")}</div>
       <p class="meta">${s.stems_old_model ? "Made with an older separation model; deleting them means the next cover separates again with the current one." : "Kept so new covers of this song skip separation."}</p>`
       : `<p class="meta">Not separated yet. The next cover of this song does it (about a minute).</p>`}
-    <dl class="kv">${s.sample ? `<dt>Sample</dt><dd>UnderCover's sample song, for the first assignment${s.artist ? ` · ${esc(s.artist)}` : ""}</dd>` : ""}<dt>Covers</dt><dd>${s.covers ? s.cover_titles.map(esc).join("<br>") : "none yet"}</dd>
+    <dl class="kv">${s.sample ? `<dt>Sample</dt><dd>UnderCover's sample song${s.artist ? ` · ${esc(s.artist)}` : ""}</dd>` : ""}<dt>Covers</dt><dd>${s.covers ? s.cover_titles.map(esc).join("<br>") : "none yet"}</dd>
       <dt>Size</dt><dd>${gb(s.size)} song${s.stems_size ? ` + ${gb(s.stems_size)} stems` : ""}</dd>
       ${s.source_url ? `<dt>From</dt><dd><a class="linkbtn" href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_url)}</a></dd>` : ""}</dl>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button>
@@ -405,7 +405,7 @@ function voiceDetail(d, v) {
   const [cls, word] = quality(v);
   const src = v.trained ? `trained in UnderCover${v.project ? ` · <button class="linkbtn" id="lib-open-proj">open project</button>` : ""}`
     : esc(v.source.replace(/^https?:\/\//, "").slice(0, 90));
-  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span> · RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"}</p><p class="meta">${v.demo ? "demo voice · made for UnderCover's first assignment, not a real person" : v.trained ? "trained in UnderCover" : "downloaded"} · added ${esc(when(v.installed))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span> · RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"}</p><p class="meta">${v.demo ? "demo voice · made for UnderCover, not a real person" : v.trained ? "trained in UnderCover" : "downloaded"} · added ${esc(when(v.installed))}</p></div></div>
     ${"display" in v ? `<div class="vname-edit"><label class="meta" for="lib-vname-edit">Shown as</label><div class="row"><input id="lib-vname-edit" type="text" autocomplete="off" value="${esc(v.display || "")}" placeholder="${esc(v.name)}"><button class="btn" id="lib-vname-save" type="button">Save</button></div></div>` : ""}
     ${v.sample ? `${playerHtml()}<p class="meta">A held-out phrase rebuilt by this voice</p>` : ""}
     <dl class="kv"><dt data-deep>Likeness</dt><dd data-deep><span class="tag ${cls}">${word}</span>${v.score != null ? ` <span class="meta">${v.score.toFixed(2)} (pass 0.45)</span>` : ""}</dd>
