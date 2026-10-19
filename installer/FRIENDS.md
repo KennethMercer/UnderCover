@@ -7,11 +7,10 @@ anywhere.
 ## Before you start
 
 - Windows 10 (version 2004 or later) or Windows 11, 64-bit.
-- A graphics card helps a lot. AMD RX 7000 and RX 9000 cards are supported. NVIDIA cards from the GTX 900 series on are
+- A graphics card helps a lot. AMD RX 7700 and up, and the RX 9000 cards, are supported. NVIDIA cards from the GTX 900 series on are
   set up for but untested. Other PCs still work on the processor alone, just slowly, and without voice training.
 - About 22.5 GB of free disk space. The installer checks that it fits.
-- An internet connection for the install, which downloads about 11.5 GB. After that, nothing downloads unless you add
-  an extra or run a repair.
+- An internet connection for the install, which downloads about 11.5 GB. After that, nothing downloads unless you add an extra, run a repair, switch on Away from home, or YouTube needs a fix.
 
 ## Install
 
@@ -52,7 +51,7 @@ pairs once with a QR code.
 Away from home reaches it from anywhere through a private link. It needs a free Tailscale account and downloads about
 39 MB when you switch it on. Nothing is installed on the phone. Pair the phone at home first.
 
-Vaulting, in SafeHouse, makes quiet backups of your voices and covers to another drive.
+Vaulting, in SafeHouse, makes quiet backups of your voices, songs, covers, speech and training projects to another drive.
 
 ## Updating and uninstalling
 
