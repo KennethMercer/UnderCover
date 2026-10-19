@@ -6895,6 +6895,11 @@ def u_page_rules():
     se_js = (web / "speakeasy.js").read_text(encoding="utf-8")
     assert "async function seEngineLine" in se_js and 'id="se-engine-deep" data-deep' in ix and "#safehouse/addons" in se_js and "/install" not in se_js, "Deep Cover's engine line lost its Add-ons offer, or SpeakEasy installs something"
     assert "const openAddon" in rooms_js and "freeLicence(a.licence)" in rooms_js and '["installed", "Installed", a => addonReady(a)]' in rooms_js and "opt.filter(addonReady)" in rooms_js and '"open": a.open' in (ROOT / "undercover" / "core" / "addons.py").read_text(encoding="utf-8"), "the Add-ons room no longer knows an open add-on"
+    # rc-page11 (the user's fresh install: "there is no ability to preview the song here"): the song on the desk has play / pause, a seekable waveform
+    # redrawn when its canvas gets a size (it drew nothing while the build path was folded), and a key on a button inside the drop zone isn't the drop zone's
+    assert 'id="song-play"' in ix and 'id="a-song"' in ix and 'id="wave-song"' in ix and "function drawSongWave" in app and "ResizeObserver(() => drawSongWave())" in app, "the song on the desk lost its play button or its waveform"
+    assert "if (open) drawSongWave();" in app and ".setup > .panel { grid-template-columns: minmax(0, 1fr); }" in css, "the song's waveform isn't drawn when the build path opens, or the song card sticks out at phone width"
+    assert "aSong.src = s.url" in app and "aSong.pause(); $(\"#play\")" in app and "e.target !== e.currentTarget) return; if (e.key" in app, "the song's player lost its source, its stop with the others, or the drop zone takes the play button's keys again"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
