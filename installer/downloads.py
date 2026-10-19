@@ -237,7 +237,7 @@ def write(rows: list[dict], out: Path = OUT) -> None:
             continue
         seen.add(key)
         lines.append("\t".join(str(r[c]) for c in COLUMNS))
-    out.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
+    out.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\r\n")   # (CRLF, like the repo's working copies)
 
 
 def read(path: Path = OUT) -> list[dict]:

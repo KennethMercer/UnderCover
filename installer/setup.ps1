@@ -428,7 +428,8 @@ if (-not $Offline) { $script:StepsTotal += 1 }
 
 # 2. The files: the tools and the packages for this graphics card, in cache\downloads -----------------------------
 $addonIds = @($Addons -split '[,; ]+' | Where-Object { $_ })
-$groups = @('base', "torch-$Backend", 'packages') + @($addonIds | ForEach-Object { "addon-$_" })
+# (a repair fetches PyTorch and the packages only when they need fixing: a working setup tidied them away)
+$groups = @('base') + $(if ($Fix.torch -or $Fix.packages) { @("torch-$Backend", 'packages') } else { @() }) + @($addonIds | ForEach-Object { "addon-$_" })
 Step $(if ($Offline) { "Checking the downloaded files" } else { "Downloading what setup needs" })
 if ($DryRun) { Info "[dry-run] $(@(Rows $groups | Where-Object { $_.dest -like 'cache/*' }).Count) files from installer\downloads.tsv into $Cache" }
 else { Get-Files $groups 'the tools and packages' }

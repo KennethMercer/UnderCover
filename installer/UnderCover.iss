@@ -799,10 +799,12 @@ begin
     Part := Dest + '.moving';
     Marker := ExpandConstant('{tmp}\moved.txt');
     DeleteFile(Marker);
+    DeleteFile(Marker + '.part');
     DeleteFile(Part);
-    if not Exec('powershell.exe', '-NoProfile -NonInteractive -Command "try { Move-Item -LiteralPath ' + PSQuote(Src) +
-        ' -Destination ' + PSQuote(Part) + ' -Force -ErrorAction Stop; Set-Content -LiteralPath ' + PSQuote(Marker) +
-        ' ok } catch { Set-Content -LiteralPath ' + PSQuote(Marker) + ' $_.Exception.Message }"', '', SW_HIDE, ewNoWait, Code) then begin
+    // (its answer is written whole to moved.txt.part, then named moved.txt: a read never sees half of it)
+    if not Exec('powershell.exe', '-NoProfile -NonInteractive -Command "$m = ' + PSQuote(Marker) + '; try { Move-Item -LiteralPath ' +
+        PSQuote(Src) + ' -Destination ' + PSQuote(Part) + ' -Force -ErrorAction Stop; $s = ''ok'' } catch { $s = $_.Exception.Message }; ' +
+        'Set-Content -LiteralPath ($m + ''.part'') $s; Move-Item -LiteralPath ($m + ''.part'') -Destination $m -Force"', '', SW_HIDE, ewNoWait, Code) then begin
       Result := SysErrorMessage(Code);
       Exit;
     end;
@@ -865,6 +867,7 @@ var
   I, K: Integer;
   Line, Dest, Name, Why, Short: String;
   Bytes, Have, Largest, Free, Total: Int64;
+  Stopped: Boolean;
 begin
   Result := False;
   ExtractTemporaryFile('downloads.tsv');
@@ -902,9 +905,11 @@ begin
     Exit;
   end;
   DownloadDone := 0;
+  Stopped := False;
   DownloadPage.Show;
   try
-    for K := 0 to DownloadCount - 1 do begin
+    K := 0;
+    while (K < DownloadCount) and not Stopped do begin
       DownloadIndex := K + 1;
       Line := Lines[Todo[K]];
       Dest := DownloadDest(TabField(Line, 1));
@@ -918,21 +923,21 @@ begin
         Why := FetchFile(TabField(Line, 2), Name, TabField(Line, 3));
         if Why = 'stopped' then begin
           WizardForm.ReadyLabel.Caption := 'The download stopped. What''s downloaded is kept: Install carries on from there.';
-          Exit;
-        end;
-        if Why = '' then begin
+          Stopped := True;
+        end else if Why = '' then begin
           Why := PlaceFile(ExpandConstant('{tmp}\') + Name, Dest, Bytes);
           if Why <> '' then Why := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + Why + ')';
         end;
-        if (Why <> '') and (Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
+        if (not Stopped) and (Why <> '') and (Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
             'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) <> IDRETRY) then begin
           WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Why + '. What''s downloaded is kept: Install carries on from there.';
-          Exit;
+          Stopped := True;
         end;
-      until Why = '';
-      DownloadDone := DownloadDone + Bytes;
+      until (Why = '') or Stopped;
+      if not Stopped then DownloadDone := DownloadDone + Bytes;
+      K := K + 1;
     end;
-    Result := True;
+    Result := not Stopped;
   finally
     DownloadPage.Hide;
   end;
