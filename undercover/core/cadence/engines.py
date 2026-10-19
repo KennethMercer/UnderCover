@@ -74,7 +74,7 @@ ENGINES = {
                          "pitch_to_target": True,
                          "about": "Resemble AI's open model (MIT code and weights), the faster successor: about twice as fast as "
                                   "Chatterbox and cleaner on hard words, same cadence. Every output carries Resemble's inaudible watermark."},
-    "chatterbox": {"name": "Chatterbox", "licence": "MIT", "addon": None, "ref_text": False, "rtf": 1.0,   # with RVC, measured phase 4
+    "chatterbox": {"name": "Chatterbox", "licence": "MIT", "addon": "chatterbox", "ref_text": False, "rtf": 1.0,   # with RVC, measured phase 4
                    "vram_gb": 3.6, "size_mb": 3200, "module": "chatterbox",
                    "about": "Resemble AI's open model (MIT code and weights); closest to each person's cadence in our tests. "
                             "Every output carries Resemble's inaudible watermark."},
@@ -180,12 +180,17 @@ addons.register(addons.Addon(
     size_mb=1900, wired=False, imports=["TTS"], packages=["coqui-tts==0.27.5"], modules=["speakeasy"]))
 
 # the open parts the cadence engine is built from (listed in the Add-ons room; never installed or removed there)
+# the original Chatterbox: an optional add-on since rc-fix4b (setup installs Turbo, the default; this one is 3.2 GB more
+# that only a Deep Cover engine choice uses). Open licence: nothing to accept, and a copy that had it keeps it.
 addons.register(addons.Addon(
-    id="chatterbox", name="Chatterbox", included=True, modules=["speakeasy", "doubleagent"],
-    adds="Reads text in a person's own cadence (SpeakEasy) from a short clip of them.",
+    id="chatterbox", name="Chatterbox", open=True, modules=["speakeasy", "doubleagent"],
+    adds="The original engine for SpeakEasy's speech in a person's own cadence. Turbo, which comes with UnderCover, "
+         "replaced it as the default: it is about twice as fast.",
+    short="the original cadence engine, which Turbo replaced as the default", use="open licence (MIT)",
     licence="MIT", licence_url="https://github.com/resemble-ai/chatterbox",
     licence_summary=addons.OPEN.format("MIT") + " Code and weights. Everything it makes carries Resemble AI's inaudible watermark.",
-    size_mb=3200, paths=["tts/chatterbox"], check=lambda: weights_present("chatterbox")))
+    size_mb=3190, files=CHATTERBOX_FILES, sha256=MODEL_SHA256, imports=["chatterbox"], paths=["tts/chatterbox"],
+    check=lambda: weights_present("chatterbox")))
 addons.register(addons.Addon(
     id="chatterbox-turbo", name="Chatterbox Turbo", included=True, modules=["speakeasy", "doubleagent"],
     adds="Reads text in a person's own cadence (SpeakEasy) from a short clip of them; the default cadence engine.",

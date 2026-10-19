@@ -120,7 +120,7 @@ $StatusFile = Join-Path $InstallDir 'logs\setup-status.txt'
 $CancelFile = Join-Path $InstallDir 'logs\setup-cancel'
 $script:StepNo = 0
 $script:StepName = ''
-$script:StepsTotal = 13
+$script:StepsTotal = 14
 function Status([string]$detail = '', [double]$frac = -1) {
     $f = if ($frac -ge 0) { [int][math]::Floor([math]::Min(0.99, $frac) * 1000) } else { '' }   # per mille: whole numbers for the wizard
     $line = "@@ $($script:StepNo)|$($script:StepsTotal)|$($script:StepName)|$f|$detail"
@@ -380,7 +380,7 @@ $StepGb = $Sizes.steps
 # What an earlier run left (the venv, tools, uv's cache: a cancelled setup, a repair, a reinstall) is taken off, so a
 # re-run is checked for what it still has to download, and isn't refused for room it already uses.
 if (-not $DryRun) {
-    $needs = Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }
+    $needs = Get-SpaceNeeds $InstallDir '' '' $ModelsDir $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }
     $short = @(Find-Shortfalls $needs { param($r) Get-FreeGB $r })
     if ($short.Count) { Fail ("there isn't enough space. " + (Format-Shortfall $short[0]) + " Free some space, or install to another drive, then try again.") }
 }
@@ -399,6 +399,10 @@ else {
 # Keep uv's Python downloads and cache inside the install folder.
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $Tools 'python'
 $env:UV_CACHE_DIR          = Join-Path $InstallDir 'cache\uv'
+# patient on a slow or briefly stalled connection (the release check once met a 2-minute stall on AMD's server, and uv's
+# default 30 s timeout failed the step): a longer timeout and more retries; a re-run still resumes from uv's cache
+$env:UV_HTTP_TIMEOUT = '300'
+$env:UV_HTTP_RETRIES = '6'
 $env:UV_NO_CONFIG          = '1'      # ignore any uv.toml the user may have elsewhere
 
 # 3. Python + venv -----------------------------------------------------------------------------
@@ -557,7 +561,18 @@ if ($paths.Count) {
 }
 }
 
-# 6c. Model files the record knew about that are missing or damaged (repair): fetched again from their pinned source,
+# 6c. The AI models every feature uses (rc-fix4b, the user: "it should be part of the install"): pinned, each checked
+# against its SHA-256, resumed from its .part, stopped by Cancel. After setup nothing downloads on first use, except an
+# add-on or a repair. A re-run or a repair fetches only what's missing.
+Step "Downloading the AI models"
+if (-not $DryRun) { Push-Location $InstallDir }   # python -m finds the app's package from here
+try {
+    $code = RunStatus $Py @('-m', 'undercover.models', 'install', '--status', '--cancel-file', $CancelFile) 0 1
+} finally { if (-not $DryRun) { Pop-Location } }
+if ($code -eq 3) { Cancelled }
+if ($code -ne 0) { Fail "the AI models couldn't be downloaded (code $code). Try again: what's downloaded is kept" }
+
+# 6c'. Model files the record knew about that are missing or damaged (repair): fetched again from their pinned source,
 # each checked against its SHA-256 before it replaces the old copy.
 if ($Repair -and $Fix.models) {
     Step "Downloading damaged or missing model files again"
@@ -640,5 +655,5 @@ if (-not $Repair -or $Fix.torch -or $Fix.packages -or $Fix.models -or -not (Test
 Result "ok"
 Write-Host ""
 Write-Host "Done. Start UnderCover from the Start menu or with UnderCover.cmd." -ForegroundColor Green
-Write-Host "It fetches its AI models the first time each feature is used, up to about $(Format-GB (Round-Up ($Sizes.models_gb * $Sizes.margin))) GB in all."
+Write-Host "Its AI models are installed: nothing downloads later, except add-ons you choose or a repair."
 if ($Pause) { Read-Host "Press Enter to close" | Out-Null }

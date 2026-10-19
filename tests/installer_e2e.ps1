@@ -24,6 +24,12 @@
     - .venv\pyvenv.cfg's home is the full-version Python folder (cpython-<version>-...), not uv's minor-version link;
     - no registry entry under HKCU\Software\Python points into the temp install;
     - nothing new in %USERPROFILE%\.local\bin;
+    - the AI models came with setup: its model step reported its progress, and every model is in place after it;
+    - the graphics driver never reset during the run (no Display 4101 in the System log, no LiveKernelEvent 141 / 117
+      in the Application log since the run started) and no log says the device was lost;
+    - a first cover and speech on the fresh install download nothing (the installed copy runs on a free port with its
+      own folders; its models folder and the Hugging Face, torch and Whisper caches are the same before and after, and
+      its log says no download). -NoFirstUse skips this part.
     - the status lines reached the launcher (as the wizard reads them) and went through every step, in order;
     - the wizard stayed responsive the whole time (installer-fix6, the user: the window couldn't be moved during setup):
       the final run is a shown wizard (off-screen) that runs setup from its install step with UnderCover.iss's own
@@ -35,7 +41,9 @@ param(
     [string]$Root = '',
     [string]$Backend = 'auto',
     [switch]$Keep,
-    [switch]$CancelCheck
+    [switch]$CancelCheck,
+    [switch]$NoFirstUse,
+    [string]$FirstUseOnly = ''   # an install made by an earlier run (-Keep): only its first-use check
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -46,6 +54,89 @@ if ($admin) { Write-Host "Run this without admin rights: the check is a normal u
 
 if (-not $Root) { $Root = (Split-Path $repo -Qualifier) + '\' }
 $dir = Join-Path $Root ('uc-e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$runStart = Get-Date
+if ($FirstUseOnly) { $dir = (Resolve-Path -LiteralPath $FirstUseOnly).Path }
+$vpy = Join-Path $dir '.venv\Scripts\python.exe'
+
+# a first cover and speech on the fresh install download nothing (the user: "we absolutely should not be downloading
+# modules the first time they're called")
+function CacheList {
+    $roots = @((Join-Path $dir 'models'), $(if ($env:HF_HOME) { $env:HF_HOME } else { Join-Path $env:USERPROFILE '.cache\huggingface' }),
+               (Join-Path $env:USERPROFILE '.cache\torch'), (Join-Path $env:USERPROFILE '.cache\whisper'))
+    @(foreach ($r in $roots) { if (Test-Path -LiteralPath $r) { Get-ChildItem -LiteralPath $r -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '\.lock$' } | ForEach-Object { "$($_.FullName)|$($_.Length)" } } })
+}
+function FirstUse {
+    $port = (7862..7869 | Where-Object { $c = New-Object Net.Sockets.TcpClient; try { $c.Connect('127.0.0.1', $_); $c.Close(); $false } catch { $true } } | Select-Object -First 1)
+    if (-not $port) { return 'no free port in 7862-7869' }
+    $base = "http://127.0.0.1:$port"
+    $h = @{ Origin = $base }
+    $before = CacheList
+    $out = Join-Path $dir 'logs\firstuse-server.log'
+    $saved = @{}
+    foreach ($k in @('UNDERCOVER_CONFIG', 'UNDERCOVER_DATA_ROOT', 'UNDERCOVER_TEST_ROOTS', 'UNDERCOVER_SANDBOX_PORT')) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $null)
+    }
+    try {
+        $srv = Start-Process -FilePath $vpy -ArgumentList '-m', 'undercover.server', '--no-browser', '--no-tray', '--port', "$port" -WorkingDirectory $dir `
+                             -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError "$out.err" -PassThru
+    } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+    $said = @()
+    try {
+        $deadline = (Get-Date).AddMinutes(10); $st = $null
+        while ((Get-Date) -lt $deadline -and -not $srv.HasExited) {
+            Start-Sleep -Seconds 2
+            try { $st = Invoke-RestMethod "$base/api/status" -TimeoutSec 5 } catch { continue }
+            if ($st.models -eq 'ready' -or "$($st.models)".StartsWith('error')) { break }
+        }
+        if (-not $st -or $st.models -ne 'ready') { return "the installed copy's models didn't load: $($st.models)" }
+        if ($st.first_run) { return "the installed copy's first start had models to fetch (models_mb $($st.models_mb))" }
+        $jobs = @()
+        $r = Invoke-RestMethod "$base/api/auto" -Method Post -Headers $h -ContentType 'application/json' -Body (@{ text = 'Hold On as Agent Smoke' } | ConvertTo-Json)
+        $jobs += @{ id = $r.job; what = 'the first cover (one-shot)' }
+        foreach ($cad in @($false, $true)) {
+            try {
+                $r = Invoke-RestMethod "$base/api/speak" -Method Post -Headers $h -ContentType 'application/json' `
+                     -Body (@{ text = 'This is the first thing I say.'; voice = 'agent-smoke'; cadence = $cad } | ConvertTo-Json)
+                $jobs += @{ id = $r.job; what = $(if ($cad) { 'speech with cadence (Chatterbox Turbo)' } else { 'speech (the Reader)' }) }
+            } catch { $said += "speech (cadence $cad) refused: $($_.ErrorDetails.Message)" }
+        }
+        foreach ($j in $jobs) {
+            $deadline = (Get-Date).AddMinutes(20); $snap = $null
+            while ((Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds 3
+                $all = Invoke-RestMethod "$base/api/jobs" -TimeoutSec 10   # (assigned first: PS 5.1 pipes a JSON array as one object)
+                $snap = $all | Where-Object { $_.id -eq $j.id } | Select-Object -First 1
+                if ($snap -and $snap.final) { break }
+            }
+            $state = if ($snap -and $snap.final) { $snap.final.state } else { 'still running' }
+            $said += "$($j.what): $state"
+            if ($state -ne 'done') { return "$($j.what) ended '$state': $($snap.final.message)" }
+        }
+    } finally {
+        try { Invoke-RestMethod "$base/api/quit" -Method Post -Headers $h -ContentType 'application/json' -Body '{}' -TimeoutSec 10 | Out-Null } catch { }
+        if (-not $srv.WaitForExit(60000)) { try { $srv.Kill() } catch { } }
+        Write-Host ("First use: " + ($said -join '; '))
+    }
+    $after = CacheList
+    # (not downloads: the first start seeds the demo voice into models\voices from the app's own assets, and diffusers
+    # writes a tiny version marker on import; anything else new in the models folder or the caches is a download)
+    $new = @(Compare-Object $before $after | Where-Object { $_.SideIndicator -eq '=>' } | ForEach-Object {
+        $f, $n = $_.InputObject -split '\|'; [pscustomobject]@{ f = $f; n = [long]$n } } |
+        Where-Object { $_.f -notlike (Join-Path $dir 'models\voices\*') -and -not ($_.n -le 1024 -and (Split-Path $_.f -Leaf) -like 'version_*.txt') } |
+        ForEach-Object { $_.f })
+    if ($new.Count) { return "files appeared during first use: $(($new | Select-Object -First 5) -join ', ')" }
+    $log = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$out.err" -Raw -ErrorAction SilentlyContinue)
+    if ($log -match 'Downloading|download_checks|iB/s') { return "the installed copy's log mentions a download" }
+    return $null
+}
+if ($FirstUseOnly) {
+    $runStart = Get-Date
+    $why = FirstUse
+    if ($why) { Write-Host "FAILED: first use: $why" -ForegroundColor Red; exit 1 }
+    Write-Host "PASSED: first use downloaded nothing." -ForegroundColor Green; exit 0
+}
+
 Write-Host "Installer end-to-end check: a real install into $dir" -ForegroundColor White
 
 # what's there before, outside the install (it must stay the same)
@@ -298,6 +389,48 @@ $reg = @(Get-ChildItem 'HKCU:\Software\Python' -Recurse -ErrorAction SilentlyCon
 if ($reg.Count) { $fails += "registry entries point into the install: $(($reg | ForEach-Object { $_.Name }) -join ', ')" }
 $binAfter = BinList
 if (@(Compare-Object $binBefore $binAfter).Count) { $fails += "$binDir changed" }
+
+# the AI models came with setup (rc-fix4b, the user: "it should be part of the install"): the step reported its
+# progress, and every model the app's features use is in place
+$modelLines = @($seen | Where-Object { $_ -match '^@@ \d+\|\d+\|Downloading the AI models\|' })
+$modelMoving = @($modelLines | Where-Object { $_ -match '\(file \d+ of \d+\): [0-9]+ of [0-9]+ MB' })
+Write-Host "Models: $($modelLines.Count) status lines, $($modelMoving.Count) with download progress"
+if (-not $modelLines.Count) { $fails += 'the model step never reported' }
+elseif (-not $modelMoving.Count) { $fails += 'no progress lines during the model download' }
+$vpy = Join-Path $dir '.venv\Scripts\python.exe'
+if ($code -eq 0 -and (Test-Path $vpy)) {   # (after a failed setup the venv may be half made: its failure is already said)
+    Push-Location $dir
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # (PS 5.1: a native stderr line is not a stop)
+    try { $mcheck = (& $vpy -m undercover.models check 2>&1 | Out-String).Trim(); $mcode = $LASTEXITCODE } finally { $ErrorActionPreference = $eap; Pop-Location }
+    Write-Host "Model check: $mcheck"
+    if ($mcode -ne 0) { $fails += "models missing after setup: $mcheck" }
+}
+
+# the graphics driver never reset and the device was never lost, through setup, the selftest and the first use (the
+# machine once came back from a reboot with LiveKernelEvent 141 reports; a release check must catch that, not pass it)
+function GpuTrouble {
+    $out = @()
+    $wer = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1001; StartTime = $runStart } -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -match 'LiveKernelEvent' -and $_.Message -match 'P1: (141|117)\b' })
+    if ($wer.Count) { $out += "$($wer.Count) LiveKernelEvent 141/117 report(s) (the GPU stopped answering) at $(($wer | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') }) -join ', ')" }
+    $tdr = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 4101; StartTime = $runStart } -ErrorAction SilentlyContinue)
+    if ($tdr.Count) { $out += "$($tdr.Count) display driver reset(s) (Display 4101) at $(($tdr | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') }) -join ', ')" }
+    foreach ($f in @('logs\setup.log', 'logs\firstuse-server.log', 'logs\firstuse-server.log.err', 'logs\selftest.json')) {
+        $p = Join-Path $dir $f
+        if ((Test-Path -LiteralPath $p) -and (Select-String -LiteralPath $p -Pattern 'device.?lost|hipErrorLaunchFailure|hipErrorIllegalAddress|unspecified launch failure|stopped answering' -Quiet)) {
+            $out += "$f says the graphics device was lost"
+        }
+    }
+    return $out
+}
+
+if (-not $fails.Count -and -not $NoFirstUse -and (Test-Path $vpy)) {
+    $why = FirstUse
+    if ($why) { $fails += "first use: $why" } else { Write-Host "First use: nothing downloaded." }
+}
+
+$gpu = @(GpuTrouble)
+if ($gpu.Count) { $fails += $gpu | ForEach-Object { "GPU: $_" } } else { Write-Host "GPU: no driver reset or lost device during the run." }
 
 Write-Host ""
 Write-Host "---- setup.log, last 25 lines ----"
