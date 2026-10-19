@@ -6595,13 +6595,6 @@ def u_page_syntax():
 def u_page_rules():
     web = ROOT / "undercover" / "web"
     import re
-    tut = (web / "tutorial.js").read_text(encoding="utf-8")
-    # M1: the First assignment starts from default settings (a one-shot's backing voice / octave once rode into the cover)
-    start = tut[tut.index("async function assignStart()"):tut.index("function assignGo(")]
-    assert start.index("S.opts = { ...S.defaults }") < start.index("assignGo(1"), "assignStart must reset S.opts to the defaults before step 1"
-    # m7: Replay opens on the briefing (with Agent Smoke's greeting), not straight on step 1
-    replay = tut[tut.index('$("#set-assign-replay").onclick'):]
-    assert "assignBrief()" in replay.split("setTimeout(assignBoot")[0] and "assignStart()" not in replay.split("setTimeout(assignBoot")[0], "Replay must show the briefing"
     # the Compare panel: one set of cards per tab, and the octave / key previews never ride with fit on (it overrides them)
     app = (web / "app.js").read_text(encoding="utf-8")
     assert "pv-set" in app and "pvByHand" in app and "Fit's pick" in app and "fit: false" not in app.split("function renderPreviews")[0].split("preview-go")[1], "the Compare panel lost its per-tab sets, or the fit:false workaround is back"
@@ -6627,7 +6620,7 @@ def u_page_rules():
             seen.setdefault(nm, []).append(src)
     clash = {k: v for k, v in seen.items() if len(v) > 1}
     assert not clash, f"page scripts declare the same top-level name twice (the second script won't load): {clash}"
-    assert "const ASIDE = {" in (web / "aside.js").read_text(encoding="utf-8"), "aside.js's state is ASIDE (tutorial.js owns AS)"
+    assert "const ASIDE = {" in (web / "aside.js").read_text(encoding="utf-8"), "aside.js's state is ASIDE"
     # qa14: the switch's 16 px box is for the checkbox only; the Finish by time field sits inside the same label and drew as a knob
     css = (web / "app.css").read_text(encoding="utf-8")
     # qa15: the one-shot asks which voice (voice_ask / voice_choice), a moved work item says so, Your voices has filters, Train my own opens Now / Tonight on the card
@@ -6657,28 +6650,28 @@ def u_page_rules():
     assert 'id="build"' in ix and "function syncBuild" in app and 'id="build-toggle"' in ix and ix.index('id="build"') > ix.index('id="oneshot"'), "the build path is no longer a section of the one-shot card"
     assert 'id="q-at-time"' not in ix and 'id="q-finish"' not in ix and 'id="q-start"' not in ix and 'id="qd-glance"' in ix and 'id="qd-list"' not in ix and "function jobSource" in work, "Tonight is edited in more than one place again, or the drawer is an editor again"
     assert 'class="frow"' in ix and "function stOpen" in rooms_js and 'id="st-make"' in ix and 'id="st-keep"' in ix, "Storage lost its two groups of rows"
-    assert 'id="wb-fold"' in ix and "function jobShort" in work or "const jobShort" in work, "the running strip lost its phone fold"
-    assert "say-short" in tut and "n === ASSIGN.length" in tut, "the First assignment band lost its one-clause phone form or shows Skip on the last step"
     assert "Starts ${clock(w.start)}" in work and "starts at ${clock(w.settings.start_at)}" not in work, "Tonight's start must be the status's real start (qa19), not the saved setting"
     # qa20 (phase 26's page side): Improve's words on the A/B, its numbers in Deep, "nothing new to learn from" in the report
     assert "function measuresText" in work and "nothing_new" in work and "ab-words" in da and "measuresText(st.measures)" in da, "Improve's words or its Deep numbers are gone from the page"
-    # RC pass 10: Train my own never searches for a display name (it asks whose voice it is); the tutorial's lit edge doesn't depend on a painted frame
+    # RC pass 10: Train my own never searches for a display name (it asks whose voice it is)
     assert "const ownPerson" in da and "data-own-name" in da and "c.person || voiceDisplay(c.voice)" not in da, "Train my own would search YouTube for a voice's file name again"
-    assert "aimTimer = setTimeout(reaim" in tut, "the tutorial's lit edge waits for a frame that a non-painting window never gives"
     # IA pass 11 B3: the retrying state says the time once, waits for YouTube in the header, the strip and the drawer, and Recent says "waiting to retry"
     assert "function retryWait" in work and "const willRetry" in work and "Waiting for YouTube" in work and "trying again at" in work, "the retrying state lost its words"
     # rc-page3 (the user's fresh 1.0 install): a first run lands on FrontMan with the download said there, not on a stale tab
-    assert "s.first_run && !AS.done" in tut and 'showTab("frontman")' in tut and "function firstReady" in tut and 'id="first-ready"' in ix and "600 MB" not in ix and "600 MB" not in app and "const modelsSize" in app and '<button class="btn" id="assign-later"' in ix and "It waits in Settings under First assignment" not in ix, "a fresh install no longer lands on the brief"
-    # rc-page6 (the user: "remove the tutorial from 1.0"): the First assignment is off behind one switch, and nothing else leans on it. A new copy
-    # gets the simple first run: "Hold On as Agent Smoke" in the one-shot field, one line with the estimator's time, Make it makes the sample cover,
-    # and the first cover ends it (tutorial.done, which What's new also waits on)
-    assert "const ASSIGNMENT_ON = false;" in tut and "if (!ASSIGNMENT_ON) return firstBoot(s);" in tut, "the First assignment isn't switched off for 1.0"
-    assert 'id="set-assign-row" hidden' in ix and "typeof assignBrief" not in (web / "doubleagent.js").read_text(encoding="utf-8"), "something still offers the First assignment"
-    fb = tut[tut.index("async function firstBoot"):tut.index("function firstReady")]
-    assert 'text: "Hold On as Agent Smoke"' in tut and "/api/estimate" in fb and "hist.length" in fb and "s.tutorial.done" in fb and '"/api/tutorial/done"' in fb, "the simple first run lost a part"
+    osj = (web / "oneshot.js").read_text(encoding="utf-8")
+    fb = osj[osj.index("async function firstBoot"):osj.index("const firstHolds")]
+    assert "s.first_run" in fb and 'showTab("frontman")' in fb and "function firstReady" in osj and 'id="first-ready"' in ix and "600 MB" not in ix and "600 MB" not in app and "const modelsSize" in app, "a fresh install no longer lands on FrontMan with the download said"
+    # rc-page6 (the user: "remove the tutorial from 1.0"; MasterPlan: remove it, it waits on the tutorial-redesign branch): no First assignment left in the
+    # page, and nothing calls its routes. A copy with no covers gets the simple first run: "Hold On as Agent Smoke" in the one-shot field, one line with
+    # the estimator's time, Make it makes the sample cover, the first cover ends it. What's new stays quiet for a copy with no covers.
+    assert not (web / "tutorial.js").exists() and "tutorial.js" not in ix, "tutorial.js is back"
+    pages = {f.name: f.read_text(encoding="utf-8") for f in web.iterdir() if f.suffix in (".js", ".html", ".css")}
+    left = sorted(n for n, src in pages.items() if re.search(r"/api/tutorial|\.tutorial\b|assign-|assignBrief|ASSIGNMENT_ON|wb-fold|First assignment", src))
+    assert not left, f"the First assignment is still referenced in {left}"
+    assert 'text: "Hold On as Agent Smoke"' in osj and "/api/estimate" in fb and "hist.length" in fb and "x.sample" in fb and "v.demo" in fb, "the simple first run lost a part"
     assert "minute" in fb and "about 2 min" not in fb, "the first run's time must come from the estimator"
-    os_js = (web / "oneshot.js").read_text(encoding="utf-8")
-    assert os_js.count("firstHolds()") == 2 and "return firstGo();" in os_js, "Make it no longer makes the sample cover on a first run"
+    assert osj.count("firstHolds()") >= 3 and "return firstGo();" in osj, "Make it no longer makes the sample cover on a first run"
+    assert "!hist.length) { store.set(WN_SEEN" in pages["whatsnew.js"], "What's new must stay quiet for a copy with no covers"
     v1 = json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
     assert not any(w in l.lower() for l in v1["lines"] for w in ("assignment", "tutorial")), "What's new 1.0 mentions the tutorial"
     assert ".toggle > input[type=checkbox] {" in css and "\n.toggle input {" not in css, "the .toggle switch styling must not reach the time field inside the label"
@@ -8048,10 +8041,10 @@ def a_page():
     for mod, view in views.items():
         assert f'id="tab-{mod}"' in html and f'data-tab="{mod}"' in html, f"no {mod} tab"
         assert f'id="view-{view}"' in html, f"no page for {mod}"
-    for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"', 'id="assign"', 'id="assign-brief"', 'id="set-assign-replay"',
+    for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"',
                  'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"',
                  'id="wn"', 'id="wn-ok"', 'id="sys-news"', 'id="ear-cover"', 'id="se-ear"', 'id="set-ear-row"',
-                 'id="vault"', 'id="vt-body"', 'id="smaller"', 'id="sm-body"', 'id="set-demo"', 'id="assign-greet"'):
+                 'id="vault"', 'id="vt-body"', 'id="smaller"', 'id="sm-body"', 'id="first-ready"'):
         assert part in html, f"missing {part}"
     # the overnight queue lives in SafeHouse's Running room (the DoubleAgent redesign); DoubleAgent keeps only its door
     room = html.index('id="room-running"')

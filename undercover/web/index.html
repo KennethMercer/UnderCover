@@ -62,14 +62,7 @@
 </header>
 
 <div class="workbar-wrap">
-  <div class="assign" id="assign" hidden role="status" aria-live="polite">
-    <div class="assign-in"><span class="assign-tag"><svg class="ico" aria-hidden="true"><use href="#g-file"/></svg>First assignment<small id="assign-n"></small></span>
-      <span class="say" id="assign-say"></span>
-      <span class="acts"><button class="linkbtn" id="assign-next" type="button" hidden></button><button class="linkbtn quiet" id="assign-skip" type="button">Skip the rest</button></span></div>
-    <div class="assign-line"><i id="assign-line"></i></div>
-  </div>
   <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
-    <button class="wb-fold" id="wb-fold" type="button" hidden aria-label="Open the Running room"></button>
     <span class="who" id="wb-who"></span>
     <div class="wb-main" id="wb-main"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
     <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-forget" type="button" hidden title="Forget the paused work instead of resuming it">Dismiss</button><button class="linkbtn" id="wb-open" type="button" title="Open SafeHouse's Running room">Running</button></div>
@@ -121,17 +114,6 @@
   <div class="view" id="view-covers">
   <div class="modhead"><div class="modmark"><svg class="ico" aria-hidden="true"><use href="#g-frontman"/></svg></div>
     <div><h1>FrontMan</h1><p>Any song, sung in any of your voices.</p></div></div>
-
-  <section class="panel assign-brief" id="assign-brief" hidden>
-    <span class="mark"><svg class="ico" aria-hidden="true"><use href="#g-file"/></svg></span>
-    <div><h2>Your first assignment</h2>
-      <div class="assign-greet" id="assign-greet" hidden><button class="play" type="button" id="assign-greet-play" aria-label="Play Agent Smoke's greeting">▶</button>
-        <span><b>Agent Smoke</b><small id="assign-greet-say"></small></span></div>
-      <p id="assign-brief-say">A song and a voice are on your desk. Five steps, about ten minutes: make a cover, hear it, keep it,
-      see where it lives, then get a voice of your own. The song is ours and the voice isn't anyone's, so nothing you make here is anyone else's.</p>
-      <ol class="assign-steps"><li>Make the cover</li><li>Listen</li><li>Keep it</li><li>SafeHouse</li><li>A voice of your own</li></ol></div>
-    <div class="row assign-acts"><button class="btn primary" id="assign-take" type="button">Take the assignment</button><button class="btn" id="assign-later" type="button">Not now</button></div>
-  </section>
 
   <section class="panel oneshot" id="oneshot">
     <div class="row spread"><h2 id="os-h">Make a cover in one go</h2>
@@ -693,9 +675,6 @@
       <div class="setting" id="set-ear-row" hidden><span><b>Your ear</b><small id="set-ear-say"></small></span>
         <button class="linkbtn quiet" id="set-ear-forget" type="button" hidden>Forget my thumbs</button>
         <div class="ear-deep" id="set-ear-deep" data-deep></div></div>
-      <div class="setting" id="set-assign-row" hidden><span><b id="set-assign-h">First assignment</b><small id="set-assign-say">The guided first run: a cover from the sample song, a listen, a Send to SafeHouse, a look around.</small>
-        <small class="set-demo" id="set-demo" hidden></small></span>
-        <button class="btn" id="set-assign-replay" type="button" disabled>Replay</button></div>
       <div class="setting" id="set-phone-row" data-pc><span><b>Phone access</b><small id="set-phone-say">Use UnderCover from your phone on your home Wi-Fi. Off until you switch it on; each phone pairs once with a code from here.</small></span>
         <button class="switch" id="set-phone" type="button" role="switch" aria-checked="false" aria-label="Phone access"></button></div>
       <div class="phone-box" id="phone-box" hidden data-pc>
@@ -829,7 +808,6 @@
 <script src="/static/speakeasy.js"></script>
 <script src="/static/ear.js"></script>
 <script src="/static/shell.js"></script>
-<script src="/static/tutorial.js"></script>
 <script src="/static/whatsnew.js"></script>
 <script src="/static/winamp.js"></script>
 </body>

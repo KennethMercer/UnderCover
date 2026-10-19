@@ -49,9 +49,6 @@ function jobLine(j, withLeft = true) {
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
-// the job in a word or two for the folded strip: the person or the title, not the verb ("Training a voice of Kristen Schaal" -> "Kristen Schaal")
-const jobShort = j => (jobName(j).replace(/^(Training a voice of|Making a voice of|Improving|Improve|Cadence for|Let|Installing|Preview:|One-shot:)\s+/i, "").replace(/\s+speak$/i, "").split(/ · | then /)[0] || jobName(j)).trim();
-$("#wb-fold").onclick = () => { if (typeof queueDrawer === "function") queueDrawer(false); location.hash = "#safehouse/running"; window.scrollTo({ top: 0 }); };
 // a voice id read as a person ("barack-obama-uc" -> "Barack Obama"): the voice's display name when it's listed, else the id's own words; anything else as it is
 const niceName = s => !s ? "" : VOICES.has(s) ? voiceDisplay(s) : /^[a-z0-9]+(-[a-z0-9]+)*-uc$/.test(s) ? s.slice(0, -3).split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ") : s;
 const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
@@ -90,9 +87,6 @@ function renderBar() {
   $("#wb-who").innerHTML = `${glyph(owner)}${MOD_NAME[owner]}`;
   $("#wb-text").textContent = text;
   if (main) $("#wb-text").innerHTML = `<span class="wb-t">${esc(jobName(main))}</span>${jobLine(main) ? `<span class="wb-l">${esc(jobLine(main))}</span>` : ""}`;   // two lines on a phone
-  // on a phone, while the First assignment is the band, the strip folds to its line of light, the owner's glyph, the job and the time left (consult 7)
-  const fold = $("#wb-fold"); fold.hidden = !main;
-  if (main) { const left = main.total_left ?? main.eta; fold.innerHTML = `${glyph(owner)}<b>${esc(jobShort(main))}</b>${left != null && !main.pausing ? `<span class="mono">${esc(leftText(left).replace(/^about /, ""))}</span>` : ""}<span class="arrow">&#9656;</span>`; }
   $("#wb-more").hidden = run.length < 2;
   $("#wb-more").textContent = run.length > 1 ? `+${run.length - 1} more` : "";
   const frac = main ? jobProgress(main) : null;
