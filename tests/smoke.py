@@ -6882,9 +6882,10 @@ def u_page_rules():
     pages = {f.name: f.read_text(encoding="utf-8") for f in web.iterdir() if f.suffix in (".js", ".html", ".css")}
     left = sorted(n for n, src in pages.items() if re.search(r"/api/tutorial|\.tutorial\b|assign-|assignBrief|ASSIGNMENT_ON|wb-fold|First assignment", src))
     assert not left, f"the First assignment is still referenced in {left}"
-    # rc-page8 (the user, on the fresh install: "Hold On as Agent Smoke ... with no tutorial it's just random words"): a copy with no covers gets an EMPTY
-    # field with "Pink Pony Club as Plankton" as the placeholder, no suggestion line; the first cover puts the usual placeholder back
-    assert 'placeholder: "Pink Pony Club as Plankton"' in osj and "f.placeholder = FIRST.placeholder" in fb and "hist.length" in fb, "the first run's placeholder is gone"
+    # rc-page8 (the user, on the fresh install: "Hold On as Agent Smoke ... with no tutorial it's just random words"): the field is EMPTY, no suggestion
+    # line. rc-page14 (the user): its placeholder is ALWAYS "Pink Pony Club as Plankton", on a first run and after; nothing in the page changes it
+    assert 'id="os-text" autocomplete="off" placeholder="Pink Pony Club as Plankton"' in ix and "Hello by Adele as Peter Griffin\"" not in ix.split('id="os-ex"')[0], "the one-shot placeholder isn't Pink Pony Club as Plankton"
+    assert not re.search(r'os-text"\)\.placeholder\s*=|f\.placeholder\s*=', osj), "something swaps the one-shot placeholder again"
     assert "Hold On as Agent Smoke" not in osj and "New here?" not in osj and ".value = FIRST" not in osj and "function firstGo" not in osj, "the first run fills in a suggestion again"
     assert "!hist.length) { store.set(WN_SEEN" in pages["whatsnew.js"], "What's new must stay quiet for a copy with no covers"
     v1 = json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
