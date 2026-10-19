@@ -45,6 +45,115 @@ SEPARATOR_SIZE = {   # bytes: a cut-off download is found from its size alone
 }
 
 
+# each model's files (the checkpoint and its config) and what a person calls it, for "Downloading the backing-vocal
+# model: 412 of 913 MB, once" (rc-fix4: a first cover silently fetched 913 MB while it said "Separating vocals")
+MODEL_FILES = {
+    "mel_band_roformer_kim_ft_unwa.ckpt": "config_mel_band_roformer_kim_ft_unwa.yaml",
+    "dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt": "dereverb_mel_band_roformer_anvuew.yaml",
+    "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml",
+}
+MODEL_SAY = {
+    "mel_band_roformer_kim_ft_unwa.ckpt": "the vocal separation model",
+    "dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt": "the de-reverb model",
+    "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": "the backing-vocal model",
+}
+
+
+def model_missing(model: str) -> dict:
+    """{path under models_dir: expected bytes (0 for a small config)} of this model's files not fully there."""
+    from . import setup_models
+    want = {f"separator/{model}": SEPARATOR_SIZE.get(f"separator/{model}", 0)}
+    if MODEL_FILES.get(model):
+        want[f"separator/{MODEL_FILES[model]}"] = 0
+    return setup_models.missing(want)
+
+
+def fetch_model(model: str, say=None) -> bool:
+    """Download a separation model's missing files from their pinned sources, checked against their SHA-256, before
+    audio-separator loads it (it would fetch them itself, silently, mid-step, behind a console progress bar).
+    say(done_bytes, total_bytes) while it downloads. -> True when something was downloaded. A model UnderCover
+    doesn't pin is left to audio-separator."""
+    from . import setup_models
+    todo = model_missing(model)
+    if not todo or any(f not in setup_models.PINNED for f in todo):
+        return False
+    total = sum(n for n in todo.values()) or 1
+    before = 0
+    for local, n in todo.items():
+        def cb(_f, d, t, before=before):
+            if say:
+                say(before + d, max(total, before + t))
+        setup_models.refetch(local, progress=cb)
+        before += n or 0
+    return True
+
+
+def _say_download(model: str):
+    """The running job hears about a model download: a plain message, how far it is, and the time it adds (measured
+    from the bytes so far), said once a second. Nothing when no job runs (the first start counts the bytes itself)."""
+    import time as _t
+    from . import jobs
+    job = jobs.CURRENT[0]
+    if job is None:
+        return None
+    what = MODEL_SAY.get(model, "a separation model")
+    st = {"t0": _t.time(), "last": 0.0, "left0": None, "stage0": None, "anchor": None}
+    for ev in reversed(job.events[-40:]):   # what the job had said was left before this download (all, and the step)
+        if st["left0"] is None and ev.get("total_left") is not None:
+            st["left0"] = float(ev["total_left"])
+        if st["stage0"] is None and ev.get("stage_left") is not None:
+            st["stage0"] = float(ev["stage_left"])
+    stage = (job._stage or (None,))[0]
+    frac = next((ev.get("frac") for ev in reversed(job.events[-40:]) if ev.get("stage") == stage and ev.get("frac") is not None), 0.0)
+
+    def say(done: int, total: int):
+        # Cancel (a cover, a one-shot) and Stop (a separation's): within a megabyte, the .part kept for the next try
+        if getattr(job, "cancel", False):
+            raise InterruptedError("cancel")
+        if _stop is not None and _stop():
+            raise InterruptedError("stop")
+        now = _t.time()
+        if now - st["last"] < 1 and done < total:
+            return
+        st["last"] = now
+        if st["anchor"] is None and now - st["t0"] >= SPEED_FROM_S:
+            st["anchor"] = (now, done)   # the speed is measured from here: past the connection's slow start
+        t_a, d_a = st["anchor"] or (now, done)
+        rate = (done - d_a) / (now - t_a) if now - st["t0"] >= SAY_AFTER_S and now - t_a > 0.5 and done > d_a else None
+        if rate is None and done < total:   # said once the speed is known: never a time made up
+            return
+        left = (total - done) / rate if rate else 0.0
+        ev = {"stage": stage, "frac": frac, "message": f"Downloading {what}: {done / 1e6:.0f} of {total / 1e6:.0f} MB, once",
+              "download": {"done": done, "total": total}}
+        ev["stage_left"] = round(left + (st["stage0"] or 0.0), 1)
+        if st["left0"] is not None:   # the job's whole time left, with the download in it; a job that hadn't said one
+            ev["left_est"] = round(left + st["left0"], 1)   # still hasn't (the download alone would end at "almost done")
+            ev["new_work"] = True   # a download found mid-step: the time left may rise for it
+        job.push(**ev)
+    return say
+
+
+# A download's time is said from 5 s in, from its speed since the 2 s mark: a connection starts slowly (the real first
+# cover's first estimates were 1045 s and 374 s for downloads of 100 s and 130 s). On those two real downloads, replayed:
+# mean error 3.4 s and 11.5 s (worst 13 s and 101 s), against 4.5 s and 12.7 s (worst 16 s and 161 s) from the start,
+# and 5.0 s and 27 s (worst 37 s and 188 s) from the last 5 s alone.
+SAY_AFTER_S = 5.0
+SPEED_FROM_S = 2.0
+
+
+class _QuietBar:
+    """audio-separator's own download bar (tqdm), silenced: UnderCover fetches the models itself and says so on the
+    page; a model it doesn't pin still downloads, without a console bar in the log."""
+    def __init__(self, *a, **k):
+        pass
+
+    def update(self, n=1):
+        pass
+
+    def close(self):
+        pass
+
+
 def _sources(name: str) -> list:
     return [f"{_UVR}/{name}", f"{_UVR}/mdx_model_data/mdx_c_configs/{name}", f"{_AS}/{name}"]
 
@@ -147,6 +256,16 @@ class StemSeparator:
 
     def _get(self, model: str):
         if model not in self._loaded:
+            try:   # the model's files first, from its pinned sources, with the progress said (rc-fix4)
+                fetch_model(model, _say_download(model))
+            except InterruptedError as e:   # Cancel or Stop during the download: that, never a second download
+                from .jobs import Cancelled
+                raise Cancelled() if str(e) == "cancel" else Stopped()
+            except Exception as e:   # noqa: BLE001 - audio-separator still tries its own download
+                print(f"Couldn't download {MODEL_SAY.get(model, model)} ahead ({type(e).__name__}: {e}); "
+                      "the separator will try its own source.", flush=True)
+            import importlib
+            importlib.import_module("audio_separator.separator.separator").tqdm = _QuietBar
             from audio_separator.separator import Separator
             from audio_separator.separator.architectures import mdxc_separator
             mdxc_separator.tqdm = _quiet_tqdm

@@ -3527,6 +3527,109 @@ def u_desk_plan():
     return "sample song + demo voice: no question, no check, no lookup; other titles and artists aren't the sample"
 
 
+@check("a model fetched mid-step is said, with its progress and its time (rc-fix4, the user's first cover: 913 MB came behind 'Separating vocals', the strip said 22 s left and the stage panel 'almost done'): the first start fetches every model a first cover uses; a download inside a job says 'Downloading the backing-vocal model: x of 913 MB, once' with a measured time left that may rise for it; the strip and the stage panel count down by one rule; audio-separator's own bar is silenced")
+def u_model_download_said():
+    import time as _t
+    from undercover.core import jobs as J, separate as S, setup_models
+    # one countdown rule (the snapshot here, countedDown on the page)
+    assert J.counted_down(22, 10) == 12 and J.counted_down(22, 30) == 5 and J.counted_down(4, 2) == 2 and J.counted_down(4, 9) == 0
+    # a measured new piece of work may raise the time left; anything else rises at most 5 % a minute
+    j = J.Job("cover", title="t")
+    j.push(stage="separating", frac=0.1, total_left=20.0)
+    j._left = (20.0, _t.time())
+    j.push(stage="separating", frac=0.1, left_est=120.0)
+    assert j.events[-1]["total_left"] <= 25.1, j.events[-1]
+    j.push(stage="separating", frac=0.1, left_est=120.0, new_work=True)
+    assert j.events[-1]["total_left"] == 120.0 and "new_work" not in j.events[-1], j.events[-1]
+    # the strip's snapshot counts down from when it was said, as the page does
+    k = J.Job("cover", title="t")
+    k.push(stage="separating", frac=0.2, total_left=30.0)
+    k.events[-1]["at"] = round(_t.time() - 10, 1)
+    assert 19 <= k.snapshot()["total_left"] <= 20.5, k.snapshot()
+    k.events[-1]["at"] = round(_t.time() - 60, 1)
+    assert k.snapshot()["total_left"] == 5.0, "the strip said almost done before the job did"
+    # a download inside a job: said once a second with real numbers, the step's and the job's time left included
+    real_current, real_after, real_from = J.CURRENT[0], S.SAY_AFTER_S, S.SPEED_FROM_S
+    S.SAY_AFTER_S, S.SPEED_FROM_S = 1.0, 0.0   # (5 s and 2 s in real use: the test needn't wait that long)
+    m = J.Job("cover", title="first cover")
+    m.push(stage="separating", frac=0.3, total_left=40.0, stage_left=20.0, message="Separating vocals")
+    J.CURRENT[0] = m
+    try:
+        say = S._say_download(S.SEP["karaoke_model"])
+        say(1_000_000, 913_000_000)        # too soon: the speed isn't known yet (a connection starts slowly), nothing said
+        assert m.events[-1]["message"] == "Separating vocals"
+        _t.sleep(1.2)
+        say(100_000_000, 913_000_000)
+        ev = m.events[-1]
+        assert ev["message"] == "Downloading the backing-vocal model: 100 of 913 MB, once", ev
+        assert ev["stage"] == "separating" and ev["frac"] == 0.3 and ev["download"] == {"done": 100_000_000, "total": 913_000_000}
+        assert ev["total_left"] > 40 and ev["stage_left"] > 20 and abs(ev["total_left"] - ev["stage_left"] - 20.0) <= 0.2, ev
+        # a job that hadn't said a time left (the one-shot's song step): the step's own, never a whole-job time that
+        # would run down to "almost done" while the cover is still to come
+        n = J.Job("auto", title="one-shot")
+        n.push(stage="song", frac=0.4, message="Separating the vocals")
+        J.CURRENT[0] = n
+        say2 = S._say_download(S.SEP["karaoke_model"])
+        say2(1_000_000, 913_000_000)
+        _t.sleep(1.2)
+        say2(300_000_000, 913_000_000)
+        ev2 = n.events[-1]
+        assert ev2["message"].startswith("Downloading the backing-vocal model") and ev2["stage_left"] > 0, ev2
+        assert ev2.get("total_left") is None, ev2
+        # Cancel during the download stops it (raised through refetch, which re-raises InterruptedError), never a
+        # fallback to audio-separator's own download
+        n.cancel = True
+        try:
+            say2(400_000_000, 913_000_000)
+            raise AssertionError("a cancelled job's download went on")
+        except InterruptedError as e:
+            assert str(e) == "cancel"
+        sep_src = (ROOT / "undercover" / "core" / "separate.py").read_text(encoding="utf-8")
+        g = sep_src[sep_src.index("    def _get(self, model: str):"):sep_src.index("from audio_separator.separator import Separator")]
+        assert g.index("except InterruptedError") < g.index("except Exception") and "raise Cancelled() if" in g
+    finally:
+        J.CURRENT[0], S.SAY_AFTER_S, S.SPEED_FROM_S = real_current, real_after, real_from
+    J.CURRENT[0] = None
+    try:
+        assert S._say_download(S.SEP["karaoke_model"]) is None   # no job: the first start counts the bytes itself
+    finally:
+        J.CURRENT[0] = real_current
+    # fetching a model: its checkpoint and config from the pinned sources, said as one download; unpinned: left alone
+    with isolated_data():
+        calls, said = [], []
+        real = setup_models.refetch
+
+        def fake(local, progress=None):
+            calls.append(local)
+            dest = setup_models.path("models_dir") / local
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            n = S.SEPARATOR_SIZE.get(local, 10)
+            if progress:
+                progress(local, n // 2, n)
+                progress(local, n, n)
+            dest.write_bytes(b"x")   # (a stand-in file; its size is the pinned one only in the say)
+        setup_models.refetch = fake
+        try:
+            model = S.SEP["karaoke_model"]
+            assert S.fetch_model(model, lambda d, t: said.append((d, t))) is True
+            assert calls == [f"separator/{model}", f"separator/{S.MODEL_FILES[model]}"], calls
+            assert said and 0 <= said[-1][1] - S.SEPARATOR_SIZE[f"separator/{model}"] < 1000, said   # (+ its small config)
+            assert S.fetch_model("not-pinned.ckpt") is False and calls[-1] != "separator/not-pinned.ckpt"
+        finally:
+            setup_models.refetch = real
+    # the first start fetches all three separation models; audio-separator's console bar is silenced
+    src = (ROOT / "undercover" / "core" / "jobs.py").read_text(encoding="utf-8")
+    assert 'first = [SEP["vocal_model"], SEP["dereverb_model"], SEP["karaoke_model"]]' in src and "fetch_model(m)" in src
+    sep = (ROOT / "undercover" / "core" / "separate.py").read_text(encoding="utf-8")
+    assert '"audio_separator.separator.separator").tqdm = _QuietBar' in sep and "fetch_model(model, _say_download(model))" in sep
+    assert set(S.MODEL_FILES) == {S.SEP["vocal_model"], S.SEP["dereverb_model"], S.SEP["karaoke_model"]}
+    assert all(f"separator/{c}" in setup_models.PINNED and f"separator/{y}" in setup_models.PINNED for c, y in S.MODEL_FILES.items())
+    page = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    assert "leftText(countedDown(totalLeft, (performance.now() - leftAt) / 1000))" in page
+    assert "countedDown(OS.eta, (performance.now() - OS.etaAt) / 1000)" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    return "one countdown rule; a measured download raises the time left; said once a second; fetched from the pins; first start fetches all three"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -8759,7 +8862,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_models_progress, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

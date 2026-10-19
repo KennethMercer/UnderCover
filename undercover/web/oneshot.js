@@ -245,7 +245,7 @@ function setRunning(on, title) {
     OS.t0 = performance.now();
     OS.timer = setInterval(() => {
       const el = (performance.now() - OS.t0) / 1000;
-      const left = OS.eta != null ? Math.max(0, OS.eta - (performance.now() - OS.etaAt) / 1000) : null;
+      const left = OS.eta != null ? countedDown(OS.eta, (performance.now() - OS.etaAt) / 1000) : null;
       $("#os-elapsed").textContent = (left != null ? leftText(left) + " · " : "") + `${fmtTime(el)} elapsed`;
     }, 500);
   }
