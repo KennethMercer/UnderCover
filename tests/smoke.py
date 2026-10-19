@@ -3431,6 +3431,11 @@ def u_installer_quiet():
     # minimise and restore mid-run)
     assert "'/SILENT', '/SUPPRESSMSGBOXES', '/WIZARD=1'" in e2e and ".Replace('@SETUPLINE@', $setupLineCode)" in e2e
     assert "IsHungAppWindow" in e2e and "if ([int]$r -eq 2) { $caption++ }" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
+    # rc-fix4b (the machine came back from a reboot with LiveKernelEvent 141 reports): the release check fails on a driver
+    # reset or a lost device during the run, and the selftest's GPU work is gentle (small steps, each waited for)
+    assert "function GpuTrouble" in e2e and "P1: (141|117)" in e2e and "Id = 4101" in e2e and "$gpu = @(GpuTrouble)" in e2e
+    st = (ROOT / "installer" / "selftest.py").read_text(encoding="utf-8")
+    assert "n, dt = 1024," in st and "if steps[-1] > 0.2:" in st and "stopped answering during the self-test" in st
     assert "if ([double]$resp['maxms'] -gt 1000)" in e2e and "Cut 'procedure SetupLine('" in e2e
     # shortcuts: only ever this install's
     undelete = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
@@ -4011,7 +4016,8 @@ def u_cadence():
     have = set()
     saved = (E.weights_present, E.engine_ready, E.CONFIG)
     E.weights_present = lambda e: e in have
-    E.engine_ready = lambda e: e in ENGINES and ENGINES[e].get("addon") is None
+    # (the original Chatterbox is an open add-on since rc-fix4b: ready when its files are there)
+    E.engine_ready = lambda e: e in ENGINES and (ENGINES[e].get("addon") is None or (e == "chatterbox" and e in have))
     try:
         E.CONFIG = {"cadence": {"engine": "chatterbox-turbo"}}
         assert E.default_engine() == "chatterbox-turbo" and E.reading_engine("chatterbox") == "chatterbox-turbo"   # a fresh install
@@ -4148,13 +4154,16 @@ def u_addons():
     rows = {r["id"]: r for r in json.loads(out.stdout)}
     assert {"f5", "xtts", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows), sorted(rows)
     assert rows["f5"]["installable"] and not rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["xtts"]
+    # rc-fix4b: the original Chatterbox is an optional add-on (open licence: nothing to accept; Turbo comes with setup)
+    assert rows["chatterbox"]["installable"] and not rows["chatterbox"]["included"] and rows["chatterbox-turbo"]["included"]
+    assert addons.ADDONS["chatterbox"].open and addons.ADDONS["chatterbox"].files
     with isolated_data() as t:
         src = t / "fake.bin"
         src.write_bytes(b"undercover smoke " * 4096)
         fake = addons.register_test_addon(src)
         dest = path("models_dir") / "_test" / "test-addon.bin"
         try:
-            for aid, ok in (("test", False), ("chatterbox", True)):   # no acceptance; an included part
+            for aid, ok in (("test", False), ("whisper", True)):   # no acceptance; an included part
                 try:
                     addons.install(aid, accept=ok)
                     raise AssertionError(f"{aid} installed (accept={ok})")

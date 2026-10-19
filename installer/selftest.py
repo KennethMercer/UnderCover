@@ -124,19 +124,31 @@ def main() -> int:
         if not rep["bf16_native"]:
             rep["warnings"].append("no fast bf16 on this GPU: training needs the fp16/fp32 fallback")
 
-    # Rough speed figure (also proves real GPU work, not just device enumeration).
-    n, dt = 2048, torch.float16 if rep["fp16"] else torch.float32
-    a = torch.randn(n, n, device=dev, dtype=dt)
-    for _ in range(3):
-        a @ a
+    # Rough speed figure (also proves real GPU work, not just device enumeration). Gentle: small matrices, each one
+    # waited for before the next, so no GPU dispatch runs anywhere near Windows' 2-second driver timeout (TDR) on any
+    # card, and a slow card stops early. A device that's lost or stops answering is said as a problem, never a crash.
+    n, dt = 1024, torch.float16 if rep["fp16"] else torch.float32
     sync = torch.cuda.synchronize if dev.type == "cuda" else (lambda: None)
-    sync()
-    t = time.perf_counter()
-    for _ in range(10):
-        a @ a
-    sync()
-    rep["tflops"] = round(10 * 2 * n**3 / (time.perf_counter() - t) / 1e12, 2)
-    print(f"Matmul {str(dt).split('.')[-1]}: {rep['tflops']} TFLOPS")
+    try:
+        a = torch.randn(n, n, device=dev, dtype=dt)
+        for _ in range(2):
+            a @ a
+            sync()
+        steps = []
+        for _ in range(20):
+            t = time.perf_counter()
+            a @ a
+            sync()
+            steps.append(time.perf_counter() - t)
+            if steps[-1] > 0.2:   # a slow card: measured enough, no longer steps
+                break
+        rep["tflops"] = round(len(steps) * 2 * n**3 / sum(steps) / 1e12, 2)
+        rep["longest_step_ms"] = round(max(steps) * 1000, 1)
+    except RuntimeError as e:
+        rep["problems"].append(f"The graphics card stopped answering during the self-test ({str(e).splitlines()[0][:160]}). "
+                               "Restart the PC, update the graphics driver, then run Repair UnderCover.")
+        return finish(rep, args.report)
+    print(f"Matmul {str(dt).split('.')[-1]}: {rep['tflops']} TFLOPS (longest step {rep['longest_step_ms']} ms)")
 
     return finish(rep, args.report)
 

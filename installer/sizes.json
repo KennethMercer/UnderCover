@@ -11,7 +11,8 @@
   "models_gb": 8.8,
   "download_gb": 11.4,
   "addons": {
-    "f5": 1.5
+    "f5": 1.5,
+    "chatterbox": 3.2
   },
   "library_gb": 0.5,
   "work_gb": 1.0,

@@ -56,6 +56,8 @@ class Addon:
     check: object = None       # () -> bool, installed? (default: its packages import and its files exist)
     imports: list = field(default_factory=list)    # module names that must import for it to count as installed
     included: bool = False     # comes with UnderCover (open source): listed, never installed or removed here
+    open: bool = False         # an optional add-on under an open licence (MIT): there once it's installed, nothing to accept
+                               # (a copy from before it was optional keeps working as it did)
     modules: list = field(default_factory=list)    # the suite modules that use it ("speakeasy", ...)
     paths: list = field(default_factory=list)      # folders/files under models/ it occupies (default: its files)
     open_note: str = ""        # included parts: anything to know about the licence ("credit the authors")
@@ -140,7 +142,7 @@ def available(addon_id: str) -> bool:
     a = ADDONS.get(addon_id)
     if not a:
         return False
-    return a.installed() and (a.included or bool(accepted(addon_id)))
+    return a.installed() and (a.included or a.open or bool(accepted(addon_id)))
 
 
 def info(a: Addon, st: dict | None = None) -> dict:

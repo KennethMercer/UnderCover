@@ -25,6 +25,8 @@
     - no registry entry under HKCU\Software\Python points into the temp install;
     - nothing new in %USERPROFILE%\.local\bin;
     - the AI models came with setup: its model step reported its progress, and every model is in place after it;
+    - the graphics driver never reset during the run (no Display 4101 in the System log, no LiveKernelEvent 141 / 117
+      in the Application log since the run started) and no log says the device was lost;
     - a first cover and speech on the fresh install download nothing (the installed copy runs on a free port with its
       own folders; its models folder and the Hugging Face, torch and Whisper caches are the same before and after, and
       its log says no download). -NoFirstUse skips this part.
@@ -52,6 +54,7 @@ if ($admin) { Write-Host "Run this without admin rights: the check is a normal u
 
 if (-not $Root) { $Root = (Split-Path $repo -Qualifier) + '\' }
 $dir = Join-Path $Root ('uc-e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$runStart = Get-Date
 if ($FirstUseOnly) { $dir = (Resolve-Path -LiteralPath $FirstUseOnly).Path }
 $vpy = Join-Path $dir '.venv\Scripts\python.exe'
 
@@ -123,6 +126,7 @@ function FirstUse {
     return $null
 }
 if ($FirstUseOnly) {
+    $runStart = Get-Date
     $why = FirstUse
     if ($why) { Write-Host "FAILED: first use: $why" -ForegroundColor Red; exit 1 }
     Write-Host "PASSED: first use downloaded nothing." -ForegroundColor Green; exit 0
@@ -396,10 +400,31 @@ if (Test-Path $vpy) {
     if ($mcode -ne 0) { $fails += "models missing after setup: $mcheck" }
 }
 
+# the graphics driver never reset and the device was never lost, through setup, the selftest and the first use (the
+# machine once came back from a reboot with LiveKernelEvent 141 reports; a release check must catch that, not pass it)
+function GpuTrouble {
+    $out = @()
+    $wer = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1001; StartTime = $runStart } -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -match 'LiveKernelEvent' -and $_.Message -match 'P1: (141|117)\b' })
+    if ($wer.Count) { $out += "$($wer.Count) LiveKernelEvent 141/117 report(s) (the GPU stopped answering) at $(($wer | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') }) -join ', ')" }
+    $tdr = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 4101; StartTime = $runStart } -ErrorAction SilentlyContinue)
+    if ($tdr.Count) { $out += "$($tdr.Count) display driver reset(s) (Display 4101) at $(($tdr | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') }) -join ', ')" }
+    foreach ($f in @('logs\setup.log', 'logs\firstuse-server.log', 'logs\firstuse-server.log.err', 'logs\selftest.json')) {
+        $p = Join-Path $dir $f
+        if ((Test-Path -LiteralPath $p) -and (Select-String -LiteralPath $p -Pattern 'device.?lost|hipErrorLaunchFailure|hipErrorIllegalAddress|unspecified launch failure|stopped answering' -Quiet)) {
+            $out += "$f says the graphics device was lost"
+        }
+    }
+    return $out
+}
+
 if (-not $fails.Count -and -not $NoFirstUse -and (Test-Path $vpy)) {
     $why = FirstUse
     if ($why) { $fails += "first use: $why" } else { Write-Host "First use: nothing downloaded." }
 }
+
+$gpu = @(GpuTrouble)
+if ($gpu.Count) { $fails += $gpu | ForEach-Object { "GPU: $_" } } else { Write-Host "GPU: no driver reset or lost device during the run." }
 
 Write-Host ""
 Write-Host "---- setup.log, last 25 lines ----"

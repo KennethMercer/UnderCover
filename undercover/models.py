@@ -11,8 +11,8 @@ them in its log) and '@@P <per mille>|<text>' at most once a second (setup turns
 
 The set: covers (the vocal, de-reverb and backing-vocal separation models; HuBERT and RMVPE), training (the base models
 for every sample rate; the speaker model), speech (the Reader's Kokoro voice and the Chatterbox Turbo engine) and
-listen-back (Whisper). Not here: the optional add-ons (their own step when ticked) and the standard Chatterbox engine,
-a Deep Cover choice that downloads when it's picked, saying so with its progress.
+listen-back (Whisper). Not here: the optional add-ons, their own step when ticked (F5-TTS, and the original Chatterbox,
+3.2 GB, a Deep Cover engine choice).
 """
 import argparse
 import json
