@@ -51,14 +51,14 @@ async function roomCounts() {
   try {
     if (!R.addons) R.addons = (await api("/api/addons")).addons;
     const opt = R.addons.filter(a => a.optional && a.installable);
-    const inst = opt.filter(a => a.installed).length;
+    const inst = opt.filter(addonReady).length;
     $("#room-n-addons").textContent = inst ? `${inst} added` : `${opt.length} optional`;
   } catch (e) { /* the room shows its own error */ }
 }
 
 // ------------------------------------------------------------ Add-ons
 const FILTERS = [["all", "All", () => true], ["included", "Included", a => a.included], ["optional", "Optional", a => a.optional],
-                 ["installed", "Installed", a => a.installed]];
+                 ["installed", "Installed", a => addonReady(a)]];   // (defined below: called, not read, at load)
 
 async function loadAddons() {
   try { R.addons = (await api("/api/addons")).addons; }
@@ -71,8 +71,13 @@ async function loadAddons() {
   roomCounts();
 }
 
-// an optional add-on under an open licence (the original Chatterbox, MIT): nothing to accept, it's there once installed (the server's `open`)
-const openAddon = a => a.optional && a.open;
+// an optional add-on under a licence free for any use (the original Chatterbox, MIT): nothing to accept, it's there once installed. The server's
+// `open` says so; the licence itself says it too (IA pass 12 B1: every optional add-on was tagged "personal use only")
+const freeLicence = l => /^(MIT|Apache|BSD|Unlicense)\b/i.test(l || "");
+const openAddon = a => a.optional && (a.open || freeLicence(a.licence));
+// there and usable: an included part on disk, an open add-on on disk, or an optional one installed with its licence accepted. The card, the
+// Installed filter and the room's count all use it (B1: an on-disk copy read "Not added" while counted under Installed)
+const addonReady = a => a.installed && (a.included || openAddon(a) || !!a.accepted);
 function licenceChip(a) {
   if (openAddon(a)) return `<span class="chip open">open source</span>`;
   if (a.optional) return `<span class="chip nc">personal use only</span>`;
@@ -91,7 +96,7 @@ function addonSide(a) {
   if (a.included) return `<span class="astate ${a.installed ? "ok" : ""}">${a.installed ? "Included ✓" : "Included · downloads when first used"}</span><a class="linkbtn" href="${esc(a.licence_url)}" target="_blank" rel="noopener">Licence</a>`;
   if (!a.installable) return `<span class="astate">Not available yet</span><a class="linkbtn" href="${esc(a.licence_url)}" target="_blank" rel="noopener">Read licence</a>`;
   if (job) return `<span class="astate">Installing…</span>`;
-  if (a.installed && (a.accepted || openAddon(a))) {
+  if (addonReady(a)) {
     const use = a.engine ? `<label class="check" style="font-size:13.5px" data-deep data-pc><input type="checkbox" data-use="${a.id}" ${a.in_use ? "checked" : ""}><span>Use for cadence speech</span></label>` : "";
     return `<span class="astate ok">Installed ✓</span><span class="meta">added ${day(a.installed_on) || "earlier"}${a.accepted ? ` · licence accepted ${day(a.accepted)}` : ""}</span>${use}
             <button class="btn danger" type="button" data-rm="${a.id}" data-pc>Remove · frees ${gb(a.disk || a.size_mb * 1e6)}</button>`;

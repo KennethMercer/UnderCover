@@ -6846,7 +6846,7 @@ def u_page_rules():
     assert "Downloading missing AI models" in ix and "Getting UnderCover ready" not in ix and "once." not in ix.split('id="first-ready"')[1][:200] and "First start: downloading" not in app, "the models line still talks of a first start"
     se_js = (web / "speakeasy.js").read_text(encoding="utf-8")
     assert "async function seEngineLine" in se_js and 'id="se-engine-deep" data-deep' in ix and "#safehouse/addons" in se_js and "/install" not in se_js, "Deep Cover's engine line lost its Add-ons offer, or SpeakEasy installs something"
-    assert "const openAddon" in rooms_js and '"open": a.open' in (ROOT / "undercover" / "core" / "addons.py").read_text(encoding="utf-8"), "the Add-ons room no longer knows an open add-on"
+    assert "const openAddon" in rooms_js and "freeLicence(a.licence)" in rooms_js and '["installed", "Installed", a => addonReady(a)]' in rooms_js and "opt.filter(addonReady)" in rooms_js and '"open": a.open' in (ROOT / "undercover" / "core" / "addons.py").read_text(encoding="utf-8"), "the Add-ons room no longer knows an open add-on"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
