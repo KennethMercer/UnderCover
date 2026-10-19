@@ -1,45 +1,43 @@
 <#
 .SYNOPSIS
-  Release check for the installer: a REAL install by a normal user (no admin) into a fresh folder, all the way to
-  selftest passing. Run it before any installer release. It downloads about 3 GB and takes 20-40 minutes; the GPU is
-  only touched by selftest's quick check at the end.
+  Release check for the installer: the REAL installer, run by a normal user (no admin) into a fresh folder, clicked
+  through as a person would, all the way to selftest passing and a first use. Run it before any installer release,
+  and only when MasterPlan has cleared it (nobody at the PC: its wizard runs on this desktop, off-screen). It downloads
+  about 11 GB and takes 30-60 minutes; the GPU is only touched by selftest's quick check and the first use.
 
-  powershell -ExecutionPolicy Bypass -File tests\installer_e2e.ps1 [-Root D:\] [-Backend auto] [-Keep] [-CancelCheck]
+  powershell -ExecutionPolicy Bypass -File tests\installer_e2e.ps1 [-Root D:\] [-Keep] [-CancelCheck] [-NoFirstUse]
 
-  -Root     the drive or folder the temp install goes in (default: this repo's drive; the user hit os error 448 on D:)
-  -Backend  as setup.ps1's (auto: detected)
-  -Keep     leave the temp install in place (default: deleted after the checks, pass or fail)
-  -CancelCheck  first cancel setup mid-download (as the wizard's Cancel does): it must stop with code 3 and say what
-                it kept; then the same folder is set up again and must finish (a re-run resumes)
+  -Root     the drive or folder the test install goes in (default: this repo's drive; the user hit os error 448 on D:)
+  -Keep     leave the test install in place (default: deleted after the checks, pass or fail)
+  -CancelCheck  first a silent run whose download page's Stop is clicked once 3 files are in: the installer must end
+                (code 2), keep what's downloaded and install nothing; the real run after it must carry on from there
+  -NoFirstUse   skip the first cover and speech
 
-  The app is laid out as the installer lays it out (UnderCover.iss [Files]); then installer\setup.ps1 runs for real,
-  started from inside an Inno Setup process, as the installer starts it. That matters: Inno Setup blocks untrusted
-  junctions in its own process and the processes it starts inherit that (a junction they make can't be traversed:
-  the user's os error 448, which a run from a normal console never shows). The launcher is a throwaway Inno program
-  compiled here: it installs nothing, registers nothing, and only runs setup.ps1, hidden, with the wizard's own way of
-  reading its output (ExecAndLogOutput), and writes the status lines it received and the exit code.
+  The installer is built here as its test variant (ISCC /DReleaseCheck on installer\UnderCover.iss): the same code
+  under its own name ("UnderCover release check (test)") and AppId, with no uninstaller, no shortcuts and no
+  registration. Its wizard is a tool window on no screen (not in the taskbar or Alt+Tab), its own message boxes are
+  written to a file instead of shown, and it tells the driver its window handles and progress through files (/HOOKS=).
+  A second process (the driver) clicks Next, Install and Finish with valid inputs only, and watches it.
   Checked afterwards:
-    - setup exited 0 and logs\setup-result.txt says "ok";
-    - logs\selftest.json has no problems;
-    - .venv\pyvenv.cfg's home is the full-version Python folder (cpython-<version>-...), not uv's minor-version link;
-    - no registry entry under HKCU\Software\Python points into the temp install;
-    - nothing new in %USERPROFILE%\.local\bin;
-    - the AI models came with setup: its model step reported its progress, and every model is in place after it;
-    - the graphics driver never reset during the run (no Display 4101 in the System log, no LiveKernelEvent 141 / 117
-      in the Application log since the run started) and no log says the device was lost;
+    - the installer exited 0 and logs\setup-result.txt says "ok"; no message box came up at all;
+    - on the download page (rc-fix6, the user's install: the wizard refused every click for all of setup), every
+      second: the wizard enabled and its Stop button there; it answered within a second (WM_NULL), never hung, moved
+      when moved (SetWindowPos) and minimised and restored;
+    - setup's offline steps: each one's time (setup.log), none over 5 minutes (the wizard is held still meanwhile);
+      every status step from 1 to the last, in order;
+    - logs\selftest.json has no problems; .venv's home is the full-version Python folder; no registry entry under
+      HKCU\Software\Python points into the install; nothing new in %USERPROFILE%\.local\bin; no shortcut made; no
+      uninstaller registered; cache\downloads tidied away;
+    - every model is in place (python -m undercover.models check);
     - a first cover and speech on the fresh install download nothing (the installed copy runs on a free port with its
       own folders; its models folder and the Hugging Face, torch and Whisper caches are the same before and after, and
-      its log says no download). -NoFirstUse skips this part.
-    - the status lines reached the launcher (as the wizard reads them) and went through every step, in order;
-    - the wizard stayed responsive the whole time (installer-fix6, the user: the window couldn't be moved during setup):
-      the final run is a shown wizard (off-screen) that runs setup from its install step with UnderCover.iss's own
-      SetupLine, and a second process times its answers (WM_NULL), hit-tests its title bar and minimises and restores
-      it mid-run.
+      its log says no download);
+    - the graphics driver never reset during the run (no Display 4101, no LiveKernelEvent 141 / 117) and no log says
+      the device was lost.
   Exit code 0 only when every check passes. The tail of setup.log is printed either way.
 #>
 param(
     [string]$Root = '',
-    [string]$Backend = 'auto',
     [switch]$Keep,
     [switch]$CancelCheck,
     [switch]$NoFirstUse,
@@ -143,235 +141,268 @@ Write-Host "Installer end-to-end check: a real install into $dir" -ForegroundCol
 $binDir = Join-Path $env:USERPROFILE '.local\bin'
 function BinList { if (Test-Path $binDir) { @(Get-ChildItem -LiteralPath $binDir -File | ForEach-Object { "$($_.Name)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) } else { @() } }
 $binBefore = BinList
+function Shortcuts { @(foreach ($d in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
+    Get-ChildItem -LiteralPath $d -Recurse -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName } }) }
+$linksBefore = Shortcuts
 
-# the installer's layout (UnderCover.iss [Files])
-function CopyTree([string]$from, [string]$to) {
-    New-Item -ItemType Directory -Force $to | Out-Null
-    Get-ChildItem -LiteralPath $from -Recurse -File | Where-Object { $_.FullName -notmatch '\\__pycache__\\' -and $_.Extension -ne '.pyc' } |
-        ForEach-Object {
-            $rel = $_.FullName.Substring($from.Length).TrimStart('\')
-            $dest = Join-Path $to $rel
-            New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
-            Copy-Item -LiteralPath $_.FullName -Destination $dest
-        }
-}
-New-Item -ItemType Directory -Force $dir | Out-Null
-CopyTree (Join-Path $repo 'undercover') (Join-Path $dir 'undercover')
-New-Item -ItemType Directory -Force (Join-Path $dir 'scripts'), (Join-Path $dir 'installer\requirements') | Out-Null
-Copy-Item (Join-Path $repo 'scripts\check_env.py') (Join-Path $dir 'scripts')
-# the files the installer puts in {app}\installer, read from UnderCover.iss [Files] itself (a hand-kept list here
-# missed space.ps1 once, and the release check failed for a reason the real installer doesn't have)
-$issFiles = @(Select-String -LiteralPath (Join-Path $repo 'installer\UnderCover.iss') -Pattern '^Source: "([^"*\\]+)"; DestDir: "\{app\}\\installer";' |
-    ForEach-Object { $_.Matches[0].Groups[1].Value })
-if ($issFiles -notcontains 'setup.ps1') { throw "couldn't read the installer's file list from UnderCover.iss" }
-foreach ($f in $issFiles) {
-    Copy-Item (Join-Path $repo "installer\$f") (Join-Path $dir 'installer')
-}
-Copy-Item (Join-Path $repo 'installer\requirements\*.txt') (Join-Path $dir 'installer\requirements')
-
-# the launcher: setup.ps1 as a child of an Inno Setup process (as UnderCover.iss runs it), its exit code to a file
+# the installer itself, built as its test variant (UnderCover.iss with ReleaseCheck): its own name and AppId, no
+# uninstaller, no shortcuts, no registration; its message boxes go to a file; its wizard out of the taskbar and Alt+Tab
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $iscc) { Write-Host "Inno Setup 6 (ISCC.exe) isn't installed: it's needed to run setup the way the installer does." -ForegroundColor Red; exit 2 }
-$launch = Join-Path $env:TEMP ('uc-e2e-launcher-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-New-Item -ItemType Directory -Force $launch | Out-Null
-$codeFile = Join-Path $launch 'exit.txt'
-$linesFile = Join-Path $launch 'lines.txt'
-$hwndFile = Join-Path $launch 'hwnd.txt'
-$doneFile = Join-Path $launch 'done.txt'
-$respFile = Join-Path $launch 'responsive.txt'
-# the installer's own handling of setup's lines (both bars, the labels), copied from UnderCover.iss, so the wizard run
-# below does exactly what the installer's wizard does with them
-$src = [IO.File]::ReadAllText((Join-Path $repo 'installer\UnderCover.iss'))
-function Cut([string]$from, [string]$to) {
-    $a = $src.IndexOf($from); $b = $src.IndexOf($to)
-    if ($a -lt 0 -or $b -le $a) { Write-Host "Couldn't find '$from' in UnderCover.iss." -ForegroundColor Red; exit 2 }
-    return $src.Substring($a, $b - $a)
-}
-$fieldCode = Cut '// the N-th field (from 0)' "// one line of setup's output."
-$setupLineCode = (Cut 'procedure SetupLine(' "// setup.ps1, hidden: the wizard's own bar").Replace("ExpandConstant('{app}\logs\setup-cancel')", "'" + (Join-Path $dir 'logs\setup-cancel') + "'")
-$params = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'installer\setup.ps1')`" -InstallDir `"$dir`" -Backend $Backend"
-$iss = @'
-[Setup]
-AppName=UnderCover installer check
-AppVersion=0
-CreateAppDir=no
-Uninstallable=no
-PrivilegesRequired=lowest
-OutputDir=.
-OutputBaseFilename=launcher
-DisableWelcomePage=yes
+if (-not $iscc) { Write-Host "Inno Setup 6 (ISCC.exe) isn't installed: it's needed to build the installer." -ForegroundColor Red; exit 2 }
+$launch = Join-Path $env:TEMP ('uc-e2e-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$hooks = Join-Path $launch 'hooks'
+New-Item -ItemType Directory -Force $hooks | Out-Null
+& $iscc /Q /DReleaseCheck=1 "/O$launch" (Join-Path $repo 'installer\UnderCover.iss') | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Host "Couldn't build the installer's test variant." -ForegroundColor Red; exit 2 }
+$exe = Join-Path $launch 'UnderCover-release-check.exe'
 
-[Code]
-var
-  Progress: Integer;
-  CancelAsked: Boolean;
-  StepGauge: TNewProgressBar;
-  Code: Integer;
-
-procedure OnLine(const S: String; const Error, FirstLine: Boolean);
-begin
-  if Copy(S, 1, 3) = '@@ ' then SaveStringToFile('@LINESFILE@', S + #13#10, True);
-end;
-
-@FIELD@
-@SETUPLINE@
-procedure WizardLine(const S: String; const Error, FirstLine: Boolean);
-begin
-  OnLine(S, Error, FirstLine);
-  SetupLine(S, Error, FirstLine);
-end;
-
-// /WIZARD=1: a shown wizard that runs setup from its install step, as UnderCover.iss does; else no wizard at all
-function InitializeSetup: Boolean;
-begin
-  Result := ExpandConstant('{param:wizard|0}') = '1';
-  if Result then Exit;
-  if not ExecAndLogOutput('powershell.exe', '@PARAMS@', '@DIR@', SW_HIDE, ewWaitUntilTerminated, Code, @OnLine) then Code := -1;
-  SaveStringToFile('@CODEFILE@', IntToStr(Code), False);
-end;
-
-procedure InitializeWizard;
-begin
-  StepGauge := TNewProgressBar.Create(WizardForm);
-  StepGauge.Parent := WizardForm.InstallingPage;
-  StepGauge.Left := WizardForm.ProgressGauge.Left;
-  StepGauge.Width := WizardForm.ProgressGauge.Width;
-  StepGauge.Top := WizardForm.ProgressGauge.Top + WizardForm.ProgressGauge.Height + ScaleY(10);
-  StepGauge.Height := WizardForm.ProgressGauge.Height - ScaleY(6);
-  StepGauge.Max := 1000;
-  StepGauge.Visible := False;
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep = ssInstall then WizardForm.Left := -6000;   // shown, as the installer's is, but on no screen
-  if CurStep = ssPostInstall then begin
-    WizardForm.Left := -6000;
-    SaveStringToFile('@HWNDFILE@', IntToStr(WizardForm.Handle), False);
-    if not ExecAndLogOutput('powershell.exe', '@PARAMS@', '@DIR@', SW_HIDE, ewWaitUntilTerminated, Code, @WizardLine) then Code := -1;
-    SaveStringToFile('@CODEFILE@', IntToStr(Code), False);
-    SaveStringToFile('@DONEFILE@', 'done', False);
-  end;
-end;
-'@
-$iss = $iss.Replace('@PARAMS@', $params.Replace("'", "''")).Replace('@DIR@', $dir).Replace('@CODEFILE@', $codeFile).Replace('@LINESFILE@', $linesFile).Replace('@HWNDFILE@', $hwndFile).Replace('@DONEFILE@', $doneFile).Replace('@FIELD@', $fieldCode).Replace('@SETUPLINE@', $setupLineCode)
-[IO.File]::WriteAllText((Join-Path $launch 'launcher.iss'), $iss, (New-Object Text.UTF8Encoding $false))
-& $iscc /Q "/O$launch" (Join-Path $launch 'launcher.iss') | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Host "Couldn't compile the launcher." -ForegroundColor Red; exit 2 }
-
-$fails = @()
-$statusFile = Join-Path $dir 'logs\setup-status.txt'
-if ($CancelCheck) {
-    # cancel mid-download, as the wizard's Cancel does (logs\setup-cancel), once the PyTorch step has bytes moving
-    Write-Host "Cancel check: starting, then cancelling during the PyTorch download"
-    $lp = Start-Process -FilePath (Join-Path $launch 'launcher.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -PassThru
-    $deadline = (Get-Date).AddMinutes(20)
-    while (-not $lp.HasExited -and (Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 2
-        if ((Test-Path $statusFile) -and (Select-String -LiteralPath $statusFile -Pattern 'PyTorch: ([1-9]|0.[1-9])' -Quiet)) {
-            Set-Content -LiteralPath (Join-Path $dir 'logs\setup-cancel') -Value 'stop'; break
-        }
-    }
-    $lp.WaitForExit()
-    $ccode = if (Test-Path $codeFile) { [int](Get-Content -LiteralPath $codeFile -Raw).Trim() } else { -2 }
-    $cres = if (Test-Path (Join-Path $dir 'logs\setup-result.txt')) { (Get-Content -LiteralPath (Join-Path $dir 'logs\setup-result.txt') -Raw).Trim() } else { '' }
-    Write-Host "Cancel check: exit $ccode, said: $cres"
-    if ($ccode -ne 3) { $fails += "a cancelled setup exited $ccode, not 3" }
-    if ($cres -notmatch '^cancelled: kept: .*Python') { $fails += "a cancelled setup said: $cres" }
-    if (Test-Path (Join-Path $dir 'logs\setup-cancel')) { $fails += 'the cancel file was left behind' }
-    Remove-Item -LiteralPath $codeFile, $linesFile -Force -ErrorAction SilentlyContinue
-    Write-Host "Cancel check: setting the same folder up again (it should resume)"
-}
-
-# the wizard's responsiveness, timed from outside while setup runs in it
+# the driver: clicks the wizard through as a person would (Next, Install, Finish; valid inputs only) and watches it.
+# While it downloads (Inno's download page) every second: the wizard and its Stop button are enabled; it answers within
+# a second (WM_NULL); once, it is moved (SetWindowPos) and minimised and restored. While setup runs offline: how long,
+# and how long Inno held the wizard still. -Mode abort (a silent run): Stop is clicked once 3 files are in, and the
+# installer must end. Any message box is written down and closed (there should be none).
 $measure = @'
-param([string]$HwndFile, [string]$DoneFile, [string]$Out)
+param([string]$Hooks, [string]$Out, [string]$Mode)
 Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class W {
   [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")] public static extern IntPtr SendText(IntPtr h, uint m, IntPtr w, StringBuilder l, uint f, uint t, out IntPtr r);
   [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint f);
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, EnumProc f, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
 }
 "@
+$res = [ordered]@{}
+function Quit([string]$why) { $res['error'] = $why; Save; exit }
+function Save { @($res.Keys | ForEach-Object { "$_=$($res[$_])" }) | Set-Content -LiteralPath $Out }
+function Read1([string]$name) { try { $f = Join-Path $Hooks $name; if (Test-Path $f) { return (Get-Content -LiteralPath $f -Raw).Trim() } } catch { }; return '' }
+function ClassOf($w) { $c = New-Object Text.StringBuilder 64; [void][W]::GetClassName($w, $c, 64); $c.ToString() }
 $t0 = Get-Date
-while (-not (Test-Path $HwndFile)) { Start-Sleep -Milliseconds 100; if (((Get-Date) - $t0).TotalMinutes -gt 5) { "error=the wizard never started setup" | Set-Content $Out; exit } }
-$h = [IntPtr][long](Get-Content $HwndFile -Raw).Trim()
-$visible = [W]::IsWindowVisible($h)
-$lat = New-Object System.Collections.Generic.List[double]; $hung = 0; $fails = 0; $caption = 0; $n = 0; $mini = @()
-$sw = New-Object Diagnostics.Stopwatch
-while (-not (Test-Path $DoneFile) -and [W]::IsWindow($h)) {
+while (-not (Read1 'handles.txt')) { Start-Sleep -Milliseconds 200; if (((Get-Date) - $t0).TotalMinutes -gt 5) { Quit 'the wizard never opened' } }
+$h, $next, $cancel, $abort = (Read1 'handles.txt') -split ' ' | ForEach-Object { [IntPtr][long]$_ }
+$script:wpid = [uint32]0; [void][W]::GetWindowThreadProcessId($h, [ref]$script:wpid)
+$res['toolwindow'] = [bool]([W]::GetWindowLong($h, -20) -band 0x80)   # out of the taskbar and Alt+Tab
+# a message box of the installer's process: written down, closed with No / Cancel (there should be none)
+$script:boxes = @()
+function Boxes {
+    $script:found = @()
+    $cb = [W+EnumProc]{ param($w, $l)
+        $p = [uint32]0; [void][W]::GetWindowThreadProcessId($w, [ref]$p)
+        if ($p -eq $script:wpid -and [W]::IsWindowVisible($w) -and (ClassOf $w) -eq '#32770') { $script:found += $w }
+        return $true }
+    [void][W]::EnumWindows($cb, [IntPtr]::Zero)
+    foreach ($b in $script:found) {
+        $script:said = @()
+        $cb2 = [W+EnumProc]{ param($w, $l)
+            if ((ClassOf $w) -eq 'Static') { $t = New-Object Text.StringBuilder 1024; $r = [IntPtr]::Zero
+                [void][W]::SendText($w, 0x0D, [IntPtr]1024, $t, 2, 2000, [ref]$r); if ($t.Length) { $script:said += $t.ToString() } }
+            return $true }
+        [void][W]::EnumChildWindows($b, $cb2, [IntPtr]::Zero)
+        $script:boxes += (($script:said -join ' ') -replace '\s+', ' ').Trim()
+        [void][W]::PostMessage($b, 0x111, [IntPtr]7, [IntPtr]::Zero); [void][W]::PostMessage($b, 0x111, [IntPtr]2, [IntPtr]::Zero)
+    }
+}
+$lat = New-Object System.Collections.Generic.List[double]; $sw = New-Object Diagnostics.Stopwatch
+$script:timeouts = 0; $script:hung = 0
+function Sample {
     $r = [IntPtr]::Zero
     $sw.Restart(); $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r); $sw.Stop()
-    if ($ok -eq [IntPtr]::Zero) { $fails++ } else { $lat.Add($sw.Elapsed.TotalMilliseconds) }
-    if ([W]::IsHungAppWindow($h)) { $hung++ }
-    $rc = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$rc)
-    $lp = [IntPtr]((($rc.T + 12) -band 0xFFFF) -shl 16 -bor (($rc.L + 60) -band 0xFFFF))   # a point in the title bar
-    [void][W]::SendMessageTimeout($h, 0x84, [IntPtr]::Zero, $lp, 2, 5000, [ref]$r)
-    if ([int]$r -eq 2) { $caption++ }   # HTCAPTION: a press there starts a move
-    $n++
-    if ($n % 600 -eq 100) {   # minimise and restore, posted as the title bar's buttons post them
-        [void][W]::PostMessage($h, 0x112, [IntPtr]0xF020, [IntPtr]::Zero); Start-Sleep -Milliseconds 500; $m = [W]::IsIconic($h)
-        [void][W]::PostMessage($h, 0x112, [IntPtr]0xF120, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
-        $mini += "$m/$(-not [W]::IsIconic($h))"
+    if ($ok -eq [IntPtr]::Zero) { $script:timeouts++ } else { $lat.Add($sw.Elapsed.TotalMilliseconds) }
+    if ([W]::IsHungAppWindow($h)) { $script:hung++ }
+}
+# 1. the pages up to Install: Next once on each (again after 3 s if the page didn't move: a click as a page changes
+#    can be lost); a silent run needs no clicks
+$clicked = ''; $clickedAt = Get-Date
+while ([W]::IsWindow($h) -and -not [W]::IsWindowVisible($abort) -and -not (Read1 'download.txt') -and (Read1 'page.txt') -notin @('12', '14')) {
+    if (((Get-Date) - $t0).TotalMinutes -gt 10) { Quit "the wizard never reached its downloads (page $(Read1 'page.txt'))" }
+    Boxes
+    $p = Read1 'page.txt'
+    if ($Mode -ne 'abort' -and $p -and $p -notin @('11', '12', '13', '14') -and [W]::IsWindowEnabled($next) -and
+        ($p -ne $clicked -or ((Get-Date) - $clickedAt).TotalSeconds -gt 3)) {
+        Start-Sleep -Milliseconds 300; [void][W]::PostMessage($next, 0xF5, [IntPtr]::Zero, [IntPtr]::Zero); $clicked = $p; $clickedAt = Get-Date
     }
+    Start-Sleep -Milliseconds 200
+}
+# 2. the downloads
+$dlSecs = 0; $wizOff = 0; $abortOff = 0; $moved = ''; $mini = ''; $tick = [Diagnostics.Stopwatch]::StartNew(); $dl0 = Get-Date
+while ([W]::IsWindow($h) -and (Read1 'page.txt') -notin @('12', '14')) {
+    Sample; Boxes
+    if ($tick.ElapsedMilliseconds -ge 1000) {
+        $tick.Restart(); $dlSecs++
+        if ($Mode -ne 'abort') {   # (a silent run's wizard is hidden until it installs)
+            if (-not [W]::IsWindowEnabled($h)) { $wizOff++ }
+            if (-not ([W]::IsWindowEnabled($abort) -and [W]::IsWindowVisible($abort))) { $abortOff++ }
+            if ($dlSecs -eq 5) {   # it moves: by a person's drag, here by SetWindowPos, and back
+                $a = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$a)
+                [void][W]::SetWindowPos($h, [IntPtr]::Zero, $a.L + 40, $a.T + 30, 0, 0, 0x15)   # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+                $b = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$b)
+                $moved = "$(($b.L - $a.L) -eq 40 -and ($b.T - $a.T) -eq 30)"
+                [void][W]::SetWindowPos($h, [IntPtr]::Zero, $a.L, $a.T, 0, 0, 0x15)
+            }
+            if ($dlSecs -eq 10) {
+                [void][W]::PostMessage($h, 0x112, [IntPtr]0xF020, [IntPtr]::Zero); Start-Sleep -Milliseconds 500; $m = [W]::IsIconic($h)
+                [void][W]::PostMessage($h, 0x112, [IntPtr]0xF120, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
+                $mini = "$m/$(-not [W]::IsIconic($h))"; $tick.Restart()
+            }
+        }
+    }
+    if ($Mode -eq 'abort' -and -not $res.Contains('abort')) {
+        $d = (Read1 'download.txt') -split ' '
+        if ($d.Count -eq 2 -and [int]$d[0] -ge 4) {   # 3 files are in: Stop (its "Stop downloading?" answers itself: /SUPPRESSMSGBOXES)
+            [void][W]::PostMessage($abort, 0xF5, [IntPtr]::Zero, [IntPtr]::Zero)
+            $res['abort'] = "clicked on file $($d[0]) of $($d[1])"; $abortAt = Get-Date
+        }
+    }
+    if ($Mode -eq 'abort' -and $res.Contains('abort') -and ((Get-Date) - $abortAt).TotalSeconds -gt 120) { Quit "Stop was clicked and the installer kept going for 2 minutes ($($res['abort']))" }
     Start-Sleep -Milliseconds 100
 }
+$res['dlsecs'] = $dlSecs; $res['dlwizoff'] = $wizOff; $res['dlabortoff'] = $abortOff; $res['moved'] = $moved; $res['minimise'] = $mini
+$res['dlmin'] = [math]::Round(((Get-Date) - $dl0).TotalMinutes, 1)
+# 3. setup, offline (only in a run that got that far): how long, and how long the wizard was held still
+$setupSecs = 0; $setupOff = 0; $tick.Restart()
+while ([W]::IsWindow($h) -and (Read1 'page.txt') -ne '14') {
+    Sample; Boxes
+    if ($tick.ElapsedMilliseconds -ge 1000) { $tick.Restart(); $setupSecs++; if (-not [W]::IsWindowEnabled($h)) { $setupOff++ } }
+    if ($setupSecs -gt 3600) { Quit 'setup ran for an hour' }
+    Start-Sleep -Milliseconds 100
+}
+$res['setupsecs'] = $setupSecs; $res['setupwizoff'] = $setupOff
+# 4. the last page: Finish (an interactive run)
+$f0 = Get-Date
+while ([W]::IsWindow($h)) {
+    Boxes
+    if ($Mode -ne 'abort' -and (Read1 'page.txt') -eq '14' -and [W]::IsWindowEnabled($next) -and ((Get-Date) - $f0).TotalSeconds -gt 2) {
+        [void][W]::PostMessage($next, 0xF5, [IntPtr]::Zero, [IntPtr]::Zero); $f0 = Get-Date
+    }
+    if (((Get-Date) - $f0).TotalMinutes -gt 5) { Quit "the wizard didn't close" }
+    Start-Sleep -Milliseconds 300
+}
 $s = @($lat | Sort-Object)
-@("visible=$visible", "samples=$($lat.Count)", "timeouts=$fails", "hung=$hung", "caption=$caption", "n=$n",
-  "maxms=$(if ($s.Count) { [math]::Round($s[-1], 1) } else { -1 })",
-  "p99ms=$(if ($s.Count) { [math]::Round($s[[int][math]::Floor($s.Count * 0.99)], 1) } else { -1 })",
-  "minimise=$($mini -join ',')") | Set-Content $Out
+$res['samples'] = $lat.Count; $res['timeouts'] = $script:timeouts; $res['hung'] = $script:hung
+$res['maxms'] = if ($s.Count) { [math]::Round($s[-1], 1) } else { -1 }
+$res['boxes'] = ($script:boxes -join ' | ')
+Save
 '@
 $measureFile = Join-Path $launch 'measure.ps1'
 [IO.File]::WriteAllText($measureFile, $measure, (New-Object Text.UTF8Encoding $false))
 
+# one run of the installer with the driver beside it -> @{ code; resp; log }
+function RunInstaller([string]$Mode, [string[]]$More) {
+    Get-ChildItem -LiteralPath $hooks -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    $resp = Join-Path $launch "driver-$Mode.txt"
+    $innoLog = Join-Path $launch "inno-$Mode.log"
+    $mp = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$measureFile`"",
+        "`"$hooks`"", "`"$resp`"", $Mode -WindowStyle Hidden -PassThru
+    $ip = Start-Process -FilePath $exe -ArgumentList (@("/DIR=`"$dir`"", "/HOOKS=`"$hooks`"", "/LOG=`"$innoLog`"") + $More) -PassThru
+    $null = $ip.Handle   # (without it, ExitCode stays empty: a Start-Process quirk)
+    while (-not $ip.WaitForExit(2000)) {
+        if ($mp.HasExited -and (Test-Path $resp) -and (Select-String -LiteralPath $resp -Pattern '^error=' -Quiet)) {
+            Start-Process taskkill.exe -ArgumentList "/PID $($ip.Id) /T /F" -WindowStyle Hidden -Wait; break   # the driver gave up: no one would click on
+        }
+    }
+    $ip.WaitForExit()
+    [void]$mp.WaitForExit(120000)
+    $r = @{}
+    if (Test-Path $resp) { Get-Content -LiteralPath $resp | ForEach-Object { $k, $v = $_ -split '=', 2; $r[$k] = $v } }
+    $boxFile = Join-Path $hooks 'boxes.txt'
+    if (Test-Path $boxFile) { $r['ourboxes'] = ((Get-Content -LiteralPath $boxFile) -join ' | ') }
+    return @{ code = $ip.ExitCode; resp = $r; log = $(if (Test-Path $innoLog) { Get-Content -LiteralPath $innoLog -Raw } else { '' }) }
+}
+function ToDownload($run) { if ($run.log -match '(\d+) files to download, ([0-9.]+) GB') { return [int]$Matches[1] } else { return -1 } }
+
+$fails = @()
+$cacheDir = Join-Path $dir 'cache\downloads'
+$firstTodo = -1
+if ($CancelCheck) {
+    # Stop on the download page, silently (its "Stop downloading?" answers itself), once 3 files are in: the installer
+    # ends, what's downloaded is kept, and the next run carries on from there
+    Write-Host "Stop check: a silent run, Stop clicked during the downloads"
+    $a = RunInstaller 'abort' @('/SILENT', '/SUPPRESSMSGBOXES')
+    $firstTodo = ToDownload $a
+    $kept = @(Get-ChildItem -LiteralPath $cacheDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ne '.moving' })
+    Write-Host "Stop check: $($a.resp['abort']); installer exit $($a.code); $($kept.Count) files kept of $firstTodo to download"
+    if ($a.resp['error']) { $fails += "Stop check: $($a.resp['error'])" }
+    if (-not $a.resp['abort']) { $fails += 'Stop check: Stop was never clicked' }
+    if ($a.code -ne 2) { $fails += "a stopped download ended the installer with code $($a.code), not 2 (cancelled before installing)" }
+    if ($kept.Count -lt 3) { $fails += "a stopped download kept $($kept.Count) files, not the 3 or more that were in" }
+    if (Test-Path (Join-Path $dir 'undercover')) { $fails += 'a stopped download installed the app anyway' }
+}
+
 $t0 = Get-Date
-$mp = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$measureFile`"", "`"$hwndFile`"", "`"$doneFile`"", "`"$respFile`"" -WindowStyle Hidden -PassThru
-Start-Process -FilePath (Join-Path $launch 'launcher.exe') -ArgumentList '/SILENT', '/SUPPRESSMSGBOXES', '/WIZARD=1' -Wait
-[void]$mp.WaitForExit(60000)
-$resp = @{}
-if (Test-Path $respFile) { Get-Content -LiteralPath $respFile | ForEach-Object { $k, $v = $_ -split '=', 2; $resp[$k] = $v } }
-$code = if (Test-Path $codeFile) { [int](Get-Content -LiteralPath $codeFile -Raw).Trim() } else { -2 }
-$seen = if (Test-Path $linesFile) { @(Get-Content -LiteralPath $linesFile) } else { @() }
+Write-Host "Install: the wizard, clicked through"
+$run = RunInstaller 'full' @()
+$resp = $run.resp
+$code = $run.code
+$todo = ToDownload $run
 Remove-Item -LiteralPath $launch -Recurse -Force -ErrorAction SilentlyContinue
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
 
-if ($code -ne 0) { $fails += "setup exited $code" }
-# the wizard stayed responsive: it answered within a second every time, never counted as hung, its title bar was a title
-# bar throughout, and it minimised and restored when asked mid-run
-Write-Host ("Wizard: shown $($resp['visible']), $($resp['samples']) answers, slowest $($resp['maxms']) ms (99 % within " +
-            "$($resp['p99ms']) ms), $($resp['timeouts']) unanswered, hung $($resp['hung']) times, title bar $($resp['caption']) of " +
-            "$($resp['n']), minimise/restore $($resp['minimise'])")
+if ($code -ne 0) { $fails += "the installer exited $code" }
 if ($resp['error']) { $fails += "wizard check: $($resp['error'])" }
-elseif (-not $resp.Count) { $fails += "the wizard's responsiveness wasn't measured" }
+elseif (-not $resp.Count) { $fails += "the wizard wasn't measured" }
 else {
-    if ($resp['visible'] -ne 'True') { $fails += 'the wizard wasn''t shown' }
-    if ([int]$resp['samples'] -lt 100) { $fails += "too few answers to judge the wizard ($($resp['samples']))" }
+    # the download page: the wizard enabled and Stop there every second, answering within a second, moved, minimised
+    Write-Host ("Downloads: $todo files in $($resp['dlmin']) min; wizard disabled $($resp['dlwizoff']) of $($resp['dlsecs']) s, Stop " +
+                "missing $($resp['dlabortoff']) s; moved $($resp['moved']); minimise/restore $($resp['minimise'])")
+    Write-Host ("Setup (offline): $($resp['setupsecs']) s, the wizard held still $($resp['setupwizoff']) s; answers: $($resp['samples']), " +
+                "slowest $($resp['maxms']) ms, $($resp['timeouts']) unanswered, hung $($resp['hung']) times")
+    if ($resp['toolwindow'] -ne 'True') { $fails += "the test wizard was in the taskbar and Alt+Tab" }
+    if ([int]$resp['dlsecs'] -lt 5) { $fails += "the download page was up $($resp['dlsecs']) s: too short to judge" }
+    if ([int]$resp['dlwizoff'] -gt 0) { $fails += "the wizard was disabled $($resp['dlwizoff']) of $($resp['dlsecs']) s on the download page" }
+    if ([int]$resp['dlabortoff'] -gt 0) { $fails += "the download page's Stop was disabled or hidden $($resp['dlabortoff']) s" }
+    if ($resp['moved'] -ne 'True') { $fails += "the wizard didn't move on the download page ($($resp['moved']))" }
+    if ($resp['minimise'] -ne 'True/True') { $fails += "minimise/restore on the download page: $($resp['minimise'])" }
     if ([int]$resp['timeouts'] -gt 0 -or [int]$resp['hung'] -gt 0) { $fails += "the wizard stopped answering ($($resp['timeouts']) timeouts, hung $($resp['hung']) times)" }
     if ([double]$resp['maxms'] -gt 1000) { $fails += "the wizard took $($resp['maxms']) ms to answer" }
-    if ($resp['caption'] -ne $resp['n']) { $fails += "the title bar wasn't a title bar $([int]$resp['n'] - [int]$resp['caption']) times" }
-    if (-not $resp['minimise'] -or $resp['minimise'] -match 'False') { $fails += "minimise/restore mid-run: $($resp['minimise'])" }
+    if ($resp['boxes'] -or $resp['ourboxes']) { $fails += "message boxes came up: $($resp['boxes']) $($resp['ourboxes'])" }
 }
-# the status lines, as the wizard reads them: every step from 1 to the last, never going back
+if ($CancelCheck -and $firstTodo -gt 0 -and ($todo -lt 0 -or $todo -ge $firstTodo)) { $fails += "the run after Stop downloaded $todo files again (of $firstTodo): it didn't carry on" }
+if (Test-Path $cacheDir) { $fails += "cache\downloads is still there after a working setup" }
+if (@(Compare-Object $linksBefore (Shortcuts)).Count) { $fails += 'the test install made shortcuts' }
+if (Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -like '*3F1A9C52-6B7E-4D21-9A43-5C0E7D2B8F61*' }) {
+    $fails += 'the test install registered an uninstaller'
+}
+# the status lines setup wrote (logs\setup-status.txt): every step from 1 to the last, never going back; and each
+# step's time (setup.log's STEP lines), which a person waits through with the wizard held still
+$statusFile = Join-Path $dir 'logs\setup-status.txt'
+$seen = if (Test-Path $statusFile) { @(Get-Content -LiteralPath $statusFile | ForEach-Object { if ($_ -match '(@@ .*)$') { $Matches[1] } }) } else { @() }
 $steps = @($seen | ForEach-Object { if ($_ -match '^@@ (\d+)\|(\d+)\|') { [int]$Matches[1] } })
 $of = if ($seen.Count -and ($seen[-1] -match '^@@ \d+\|(\d+)\|')) { [int]$Matches[1] } else { 0 }
-if (-not $steps.Count) { $fails += 'no status lines reached the launcher (the wizard would show nothing)' }
+if (-not $steps.Count) { $fails += 'setup wrote no status lines (the wizard would show nothing)' }
 else {
     $back = @(for ($i = 1; $i -lt $steps.Count; $i++) { if ($steps[$i] -lt $steps[$i - 1]) { $i } })
     $missing = @(1..$of | Where-Object { $steps -notcontains $_ })
     if ($back.Count) { $fails += 'the status went back a step' }
     if ($missing.Count) { $fails += "steps never reported: $($missing -join ', ') of $of" }
-    $moving = @($seen | Where-Object { $_ -match 'PyTorch: [0-9.]+ ' })
-    Write-Host "Status: $($seen.Count) lines, steps 1-$of, $($moving.Count) progress lines during the PyTorch download"
-    if (-not $moving.Count -and -not $CancelCheck) { $fails += 'no progress lines during the PyTorch download' }
 }
+$setupLog = Join-Path $dir 'logs\setup.log'
+if (Test-Path $setupLog) {
+    $stepTimes = @(Get-Content -LiteralPath $setupLog | ForEach-Object { if ($_ -match '^(\S+ \S+)\s+STEP (.*)$') { [pscustomobject]@{ t = [datetime]::Parse($Matches[1].TrimEnd('Z')); s = $Matches[2] } } })
+    $long = @()
+    for ($i = 0; $i -lt $stepTimes.Count; $i++) {
+        $end = if ($i + 1 -lt $stepTimes.Count) { $stepTimes[$i + 1].t } else { (Get-Item -LiteralPath $setupLog).LastWriteTime.ToUniversalTime() }
+        $secs = [math]::Round(($end - $stepTimes[$i].t).TotalSeconds)
+        Write-Host ("  {0,5} s  {1}" -f $secs, $stepTimes[$i].s)
+        if ($secs -gt 300) { $long += "$($stepTimes[$i].s) ($secs s)" }
+    }
+    if ($long.Count) { $fails += "setup steps longer than 5 minutes, with the wizard held still: $($long -join '; ')" }
+}
+if ($run.log -notmatch 'Downloads for backend (\w+)') { $fails += "the installer's log doesn't say which downloads it chose" }
 $result = Join-Path $dir 'logs\setup-result.txt'
 $said = if (Test-Path $result) { (Get-Content -LiteralPath $result -Raw).Trim() } else { '(no result line)' }
 if ($said -ne 'ok') { $fails += "setup-result.txt says: $said" }
@@ -390,13 +421,7 @@ if ($reg.Count) { $fails += "registry entries point into the install: $(($reg | 
 $binAfter = BinList
 if (@(Compare-Object $binBefore $binAfter).Count) { $fails += "$binDir changed" }
 
-# the AI models came with setup (rc-fix4b, the user: "it should be part of the install"): the step reported its
-# progress, and every model the app's features use is in place
-$modelLines = @($seen | Where-Object { $_ -match '^@@ \d+\|\d+\|Downloading the AI models\|' })
-$modelMoving = @($modelLines | Where-Object { $_ -match '\(file \d+ of \d+\): [0-9]+ of [0-9]+ MB' })
-Write-Host "Models: $($modelLines.Count) status lines, $($modelMoving.Count) with download progress"
-if (-not $modelLines.Count) { $fails += 'the model step never reported' }
-elseif (-not $modelMoving.Count) { $fails += 'no progress lines during the model download' }
+# every model the app's features use is in place (rc-fix4b, the user: "it should be part of the install")
 $vpy = Join-Path $dir '.venv\Scripts\python.exe'
 if ($code -eq 0 -and (Test-Path $vpy)) {   # (after a failed setup the venv may be half made: its failure is already said)
     Push-Location $dir

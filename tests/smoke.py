@@ -3311,8 +3311,9 @@ def u_installer_space():
     assert not re.search(r"(?m)^\s*#13", iss), "a line starting with # is a preprocessor directive"
     assert all(ord(c) < 128 for c in iss + setup), "the installer's scripts must stay ASCII"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
-    assert "ExecAndLogOutput('powershell.exe'" in e2e and "steps never reported" in e2e and "-CancelCheck" in e2e
-    assert "$issFiles" in e2e and "UnderCover.iss') -Pattern" in e2e, "the release check keeps its own list of installer files (it missed space.ps1 once)"
+    assert "steps never reported" in e2e and "-CancelCheck" in e2e
+    # rc-fix6: the release check runs the real installer (its test variant), so it can't miss a file the installer ships
+    assert "& $iscc /Q /DReleaseCheck=1 \"/O$launch\" (Join-Path $repo 'installer\\UnderCover.iss')" in e2e and "$issFiles" not in e2e
     return f"one drive: {one} GB (22 = 9 + 10.5 + 1 + 1.5); a short drive said plainly; setup hidden, its status driving the bar; Cancel"
 
 
@@ -3432,18 +3433,26 @@ def u_installer_quiet():
     run = iss[iss.index("function RunSetup"):iss.index("procedure CurStepChanged")]
     assert "-NonInteractive" in run and "-Pause" not in run, "the hidden setup could wait for input no one sees"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
-    assert '$params = "-NoProfile -NonInteractive' in e2e, "the release check doesn't run setup as the wizard does"
-    # installer-fix6 (the user: the window couldn't be moved during setup): the release check's final run is a shown
-    # wizard running the real setup with UnderCover.iss's own SetupLine, timed from outside (answers, hung, title bar,
-    # minimise and restore mid-run)
-    assert "'/SILENT', '/SUPPRESSMSGBOXES', '/WIZARD=1'" in e2e and ".Replace('@SETUPLINE@', $setupLineCode)" in e2e
-    assert "IsHungAppWindow" in e2e and "if ([int]$r -eq 2) { $caption++ }" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
+    # rc-fix6 (the user's install: the wizard refused every click; a check wizard on the user's desktop confused them):
+    # the real installer, interactive, clicked through by a driver; on the download page every second the wizard and
+    # Stop enabled, answers timed, moved and minimised; the test variant is out of the taskbar and Alt+Tab and shows no
+    # box; -CancelCheck clicks Stop in a silent run and the next run carries on
+    assert "$run = RunInstaller 'full' @()" in e2e and "$a = RunInstaller 'abort' @('/SILENT', '/SUPPRESSMSGBOXES')" in e2e
+    assert "if (-not [W]::IsWindowEnabled($h)) { $wizOff++ }" in e2e and "[W]::IsWindowEnabled($abort) -and [W]::IsWindowVisible($abort)" in e2e
+    assert "IsHungAppWindow" in e2e and "SetWindowPos($h, [IntPtr]::Zero, $a.L + 40, $a.T + 30" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
+    assert "if ($resp['toolwindow'] -ne 'True')" in e2e and "if ($resp['boxes'] -or $resp['ourboxes'])" in e2e
+    assert "it didn't carry on" in e2e and "if (Test-Path $cacheDir)" in e2e and "the test install made shortcuts" in e2e
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    assert "#ifdef ReleaseCheck" in iss and "AppName=UnderCover release check (test)" in iss and "Uninstallable=no" in iss
+    assert "SaveStringToFile(ExpandConstant('{param:hooks|}\\boxes.txt'), Text + #13#10, True);" in iss
+    assert "MsgBox(" not in iss.replace("SuppressibleMsgBox(", "").replace("MsgBox('UnderCover is removed.'", ""), "a box the test variant would show"
+    assert "#ifndef ReleaseCheck\n[Icons]" in iss and "#ifndef ReleaseCheck\n  MakeLink(" in iss, "the test variant makes shortcuts"
     # rc-fix4b (the machine came back from a reboot with LiveKernelEvent 141 reports): the release check fails on a driver
     # reset or a lost device during the run, and the selftest's GPU work is gentle (small steps, each waited for)
     assert "function GpuTrouble" in e2e and "P1: (141|117)" in e2e and "Id = 4101" in e2e and "$gpu = @(GpuTrouble)" in e2e
     st = (ROOT / "installer" / "selftest.py").read_text(encoding="utf-8")
     assert "n, dt = 1024," in st and "if steps[-1] > 0.2:" in st and "stopped answering during the self-test" in st
-    assert "if ([double]$resp['maxms'] -gt 1000)" in e2e and "Cut 'procedure SetupLine('" in e2e
+    assert "if ([double]$resp['maxms'] -gt 1000)" in e2e
     # shortcuts: only ever this install's
     undelete = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
     assert ".lnk" not in undelete, "the uninstaller deletes a shortcut by name, whoever it belongs to"

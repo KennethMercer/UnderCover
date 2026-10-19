@@ -22,19 +22,33 @@
 #endif
 
 [Setup]
+#ifdef ReleaseCheck
+; the release check's test build (tests\installer_e2e.ps1): its own name and AppId, no uninstaller, no registration
+AppId={{3F1A9C52-6B7E-4D21-9A43-5C0E7D2B8F61}
+AppName=UnderCover release check (test)
+Uninstallable=no
+CreateUninstallRegKey=no
+#else
 AppId={{E6B05D70-0109-4D65-8AEC-89622D0F5C91}
 AppName={#AppName}
+#endif
 AppVersion={#AppVersion}
 AppPublisher=UnderCover
 DefaultDirName={localappdata}\{#AppName}
 ; the folder page always shows (a re-run too), with the previous install's folder as its default
 DisableDirPage=no
+; an existing folder is the normal case for a re-run (a stopped download carries on there): no "install anyway?"
+DirExistsWarning=no
 UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=dist
+#ifdef ReleaseCheck
+OutputBaseFilename=UnderCover-release-check
+#else
 OutputBaseFilename=UnderCover-Setup-{#AppVersion}
+#endif
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -75,6 +89,7 @@ Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ig
 ; The friend-facing briefing (installer/FRIENDS.md): what to expect, Repair, the optional extras, uninstall
 Source: "FRIENDS.md"; DestDir: "{app}"; DestName: "READ ME.md"; Flags: ignoreversion
 
+#ifndef ReleaseCheck
 [Icons]
 ; The "UnderCover" shortcuts (Start menu, desktop) are made by the code below only once setup has worked
 ; (CreateLaunchers): a failed setup never leaves a shortcut that looks like a working install.
@@ -84,6 +99,8 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+
+#endif
 
 [Run]
 ; setup.ps1 itself runs from the code below (RunSetup), so its exit code is read: "Start UnderCover now" is offered
@@ -188,13 +205,64 @@ begin
   end;
 end;
 
+// A message box. The release check's test build (ISCC /DReleaseCheck, tests\installer_e2e.ps1) never shows one: it
+// writes the text to its hooks folder and takes the default answer, so a test run can't put a box on anyone's screen.
+function Say(Text: String; Typ: TMsgBoxType; Buttons, Default: Integer): Integer;
+begin
+#ifdef ReleaseCheck
+  SaveStringToFile(ExpandConstant('{param:hooks|}\boxes.txt'), Text + #13#10, True);
+  Result := Default;
+#else
+  Result := SuppressibleMsgBox(Text, Typ, Buttons, Default);
+#endif
+end;
+
+#ifdef ReleaseCheck
+// ---------------------------------------------------------------- the release check's hooks (test build only)
+// The test build is the real installer under its own name and AppId, with no uninstaller, no shortcuts and no
+// registration. Its wizard stays out of the taskbar and Alt+Tab (a tool window, on no screen), and it tells the
+// driver its window handles, its page and its download, through files in the folder /HOOKS= names.
+function GetWindowLong(hWnd: LongWord; nIndex: Integer): LongInt; external 'GetWindowLongW@user32.dll stdcall';
+function SetWindowLong(hWnd: LongWord; nIndex: Integer; dwNewLong: LongInt): LongInt; external 'SetWindowLongW@user32.dll stdcall';
+function FindWindowEx(Parent, After: LongWord; ClassName: String; Title: LongWord): LongWord; external 'FindWindowExW@user32.dll stdcall';
+function GetWindowThreadProcessId(hWnd: LongWord; var Pid: LongWord): LongWord; external 'GetWindowThreadProcessId@user32.dll stdcall';
+function GetCurrentProcessId: LongWord; external 'GetCurrentProcessId@kernel32.dll stdcall';
+
+procedure Hook(Name, Text: String);
+begin
+  SaveStringToFile(ExpandConstant('{param:hooks|}\') + Name, Text, False);
+end;
+
+// a tool window (WS_EX_TOOLWINDOW, not WS_EX_APPWINDOW): no taskbar button, not in Alt+Tab
+procedure ToolWindow(H: LongWord);
+begin
+  if H <> 0 then SetWindowLong(H, -20, (GetWindowLong(H, -20) or $80) and not $40000);
+end;
+
+// the wizard, and Inno's fallback window while a program it started runs ("Setup", shown in Alt+Tab otherwise)
+procedure HideTestWindows;
+var
+  H, Pid: LongWord;
+begin
+  ToolWindow(WizardForm.Handle);
+  WizardForm.Left := -6000;
+  H := FindWindowEx(0, 0, 'TWindowDisabler-Window', 0);
+  while H <> 0 do begin
+    Pid := 0;
+    GetWindowThreadProcessId(H, Pid);
+    if Pid = GetCurrentProcessId then ToolWindow(H);
+    H := FindWindowEx(0, H, 'TWindowDisabler-Window', 0);
+  end;
+end;
+#endif
+
 // a drive that won't fit: said plainly; Yes goes on anyway, No stays to pick another folder
 function SpaceOK(Short: String): Boolean;
 begin
   Result := True;
   if Short <> '' then
-    Result := MsgBox(Short + #13#10#13#10 + 'Go on anyway? No lets you pick another folder.',
-      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+    Result := Say(Short + #13#10#13#10 + 'Go on anyway? No lets you pick another folder.',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
 end;
 
 // the folder page: the real size, per drive, instead of Inno's "at least ... MB" (the installer's own files only)
@@ -378,6 +446,11 @@ begin
   DownloadPage := CreateDownloadPage('Downloading what UnderCover needs',
     'Python, PyTorch for your graphics card, the tools and the AI models.', @OnDownloadProgress);
   DownloadPage.ShowBaseNameInsteadOfUrl := True;
+#ifdef ReleaseCheck
+  HideTestWindows;
+  Hook('handles.txt', IntToStr(WizardForm.Handle) + ' ' + IntToStr(WizardForm.NextButton.Handle) + ' ' +
+    IntToStr(WizardForm.CancelButton.Handle) + ' ' + IntToStr(DownloadPage.AbortButton.Handle));
+#endif
 
   // the last page's "Try again", shown only when setup didn't work
   RetryButton := TNewButton.Create(WizardForm);
@@ -472,8 +545,10 @@ end;
 procedure CreateLaunchers;
 begin
   LinkNote := '';
+#ifndef ReleaseCheck
   MakeLink(ExpandConstant('{group}'), 'in the Start menu');
   if WizardIsTaskSelected('desktopicon') then MakeLink(ExpandConstant('{userdesktop}'), 'on the desktop');
+#endif
 end;
 
 // at uninstall: the shortcuts that start this install, and no other
@@ -600,6 +675,9 @@ var
   K, N, F, Pos1: Integer;
   Name, Detail, Line, FText: String;
 begin
+#ifdef ReleaseCheck
+  HideTestWindows;
+#endif
   if Copy(S, 1, 3) <> '@@ ' then Exit;
   Line := Copy(S, 4, Length(S));
   K := StrToIntDef(Field(Line, 0), 0);
@@ -791,7 +869,7 @@ begin
   Result := False;
   ExtractTemporaryFile('downloads.tsv');
   if not LoadStringsFromFile(ExpandConstant('{tmp}\downloads.tsv'), Lines) then begin
-    MsgBox('The installer''s download list is missing. Download the installer again.', mbError, MB_OK);
+    Say('The installer''s download list is missing. Download the installer again.', mbError, MB_OK, IDOK);
     Exit;
   end;
   if (Backend = '') or (Backend = 'auto') then CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Line, Line, Short);
@@ -819,8 +897,8 @@ begin
   end;
   // Inno's temp folder holds one file at a time, the largest included
   if GetSpaceOnDisk64(ExpandConstant('{tmp}'), Free, Total) and (Free < Largest + 209715200) then begin
-    MsgBox('The downloads pass through ' + ExtractFileDrive(ExpandConstant('{tmp}')) + ', which needs ' + GBText(Largest + 209715200) +
-      ' GB free for the largest file (it has ' + GBText(Free) + ' GB). Free some space there, then click Install again.', mbError, MB_OK);
+    Say('The downloads pass through ' + ExtractFileDrive(ExpandConstant('{tmp}')) + ', which needs ' + GBText(Largest + 209715200) +
+      ' GB free for the largest file (it has ' + GBText(Free) + ' GB). Free some space there, then click Install again.', mbError, MB_OK, IDOK);
     Exit;
   end;
   DownloadDone := 0;
@@ -833,6 +911,9 @@ begin
       Bytes := StrToInt64Def(TabField(Line, 4), 0);
       Name := ExtractFileName(Dest);
       DownloadPage.Description := DownloadLine(DownloadDone);
+#ifdef ReleaseCheck
+      Hook('download.txt', Format('%d %d', [DownloadIndex, DownloadCount]));
+#endif
       repeat
         Why := FetchFile(TabField(Line, 2), Name, TabField(Line, 3));
         if Why = 'stopped' then begin
@@ -843,7 +924,7 @@ begin
           Why := PlaceFile(ExpandConstant('{tmp}\') + Name, Dest, Bytes);
           if Why <> '' then Why := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + Why + ')';
         end;
-        if (Why <> '') and (SuppressibleMsgBox('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
+        if (Why <> '') and (Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
             'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) <> IDRETRY) then begin
           WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Why + '. What''s downloaded is kept: Install carries on from there.';
           Exit;
@@ -936,6 +1017,10 @@ procedure CurPageChanged(CurPageID: Integer);
 var
   I: Integer;
 begin
+#ifdef ReleaseCheck
+  HideTestWindows;
+  Hook('page.txt', IntToStr(CurPageID));
+#endif
   if CurPageID = wpFinished then ShowOutcome;
   if CurPageID = wpSelectDir then ShowDirSpace;
   // the folders default to the install folder; follow it if it changes, unless the user typed something else
