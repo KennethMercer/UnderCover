@@ -27,7 +27,7 @@ which you switch on from the top bar.
   training.
 - About 22.5 GB of free disk space. The installer checks that it fits before it starts.
 - An internet connection for setup, which downloads about 11.5 GB with an AMD card. That is everything: Python,
-  PyTorch for your card, the tools and all the AI models. Nothing downloads later, except an add-on you choose, a repair, Away from home's Tailscale, or a fix for the YouTube downloader.
+  PyTorch for your card, the tools and all the AI models. No more AI models download after setup. What you ask for later, such as songs, clips of a person or a voice from the community, comes from YouTube or Hugging Face, and an add-on, a repair, Away from home's Tailscale or a fix for the YouTube downloader download only when needed.
 
 ## Installing
 
@@ -58,8 +58,7 @@ command-line cover tool `cover.bat` and the GPU check), `tests/` (`python tests/
 
 ## First run
 
-Type a song and a voice into FrontMan, such as "Pink Pony Club as Plankton", and press Make it. A song's first cover
-takes longer than the next ones, because UnderCover separates the song once and keeps the result. UnderCover also
+Type a song and a voice into FrontMan, such as "Pink Pony Club as Plankton", and press Make it. If you don't have the voice yet, UnderCover first finds and checks one, or trains it, and the plan says how long before you press. A song's first cover also takes longer than the next ones, because UnderCover separates the song once and keeps the result. UnderCover also
 comes with a short excerpt of the song *Hold On*, included with permission, and a demo voice, Agent Smoke, made for
 UnderCover and not based on a real person.
 
