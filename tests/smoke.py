@@ -3642,6 +3642,48 @@ def u_model_download_said():
     return "one countdown rule; a measured download raises the time left; said once a second; fetched from the pins; first start fetches all three"
 
 
+@check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
+def u_uninstall_kept_paths():
+    import subprocess
+    import tempfile
+    import tomllib
+    from undercover.core import storage
+    from undercover.core.config import ROOT as APP
+    v = storage._toml_value("uploads_dir", "uploads", Path("D:/Lib dir/uploads"))
+    assert v == '"D:\\\\Lib dir\\\\uploads"' and tomllib.loads(f"a = {v}")["a"] == "D:\\Lib dir\\uploads", v
+    assert storage._toml_value("uploads_dir", "uploads", APP / "uploads") == '"uploads"'
+    iscc = next((c for c in (Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Inno Setup 6/ISCC.exe",
+                             Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6/ISCC.exe") if c.is_file()), None)
+    if os.name != "nt" or iscc is None:
+        return "values checked; the Inno probe needs Windows and Inno Setup 6 (skipped)"
+    iss = (ROOT / "installer" / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    fn = iss[iss.index("function KeptPath("):iss.index("// the folder holds at least one file or folder")]
+    fn = fn.replace("ExpandConstant('{app}\\config.toml')", "AppDir + '\\config.toml'").replace("ExpandConstant('{app}\\')", "AppDir + '\\'")
+    with tempfile.TemporaryDirectory(prefix="uc-keptpath-") as td:
+        t = Path(td)
+        app = t / "app"
+        app.mkdir()
+        (app / "config.toml").write_text("[paths]\n"
+                                         'uploads_dir = "D:\\\\Lib dir\\\\uploads"\n'      # basic (config set, Storage now)
+                                         "output_dir = 'E:\\Lib\\output'\n"              # literal (Storage before rc-fix5)
+                                         'voices_dir = "models/voices"\n', encoding="utf-8")   # relative: in the app folder
+        out = t / "out.txt"
+        probe = ("[Setup]\nAppName=probe\nAppVersion=1\nCreateAppDir=no\nUninstallable=no\nPrivilegesRequired=lowest\n"
+                 f"OutputDir={t}\nOutputBaseFilename=probe\n\n[Code]\nvar\n  AppDir: String;\n\n{fn}\n"
+                 "function InitializeSetup: Boolean;\nbegin\n"
+                 f"  AppDir := '{app}';\n"
+                 f"  SaveStringToFile('{out}', KeptPath('uploads_dir', 'U') + '|' + KeptPath('output_dir', 'O') + '|' + "
+                 "KeptPath('voices_dir', 'V') + '|' + KeptPath('models_dir', 'M-default') + '|' + KeptPath('cache_dir', 'C'), False);\n"
+                 "  Result := False;\nend;\n")
+        (t / "probe.iss").write_text(probe, encoding="utf-8")
+        r = subprocess.run([str(iscc), "/Q", str(t / "probe.iss")], capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+        subprocess.run([str(t / "probe.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES"], timeout=120)
+        got = out.read_text(encoding="utf-8").split("|")
+    assert got == ["D:\\Lib dir\\uploads", "E:\\Lib\\output", f"{app}\\models\\voices", "M-default", "C"], got
+    return "basic, literal, relative and missing [paths] values read as the app reads them, by the uninstaller's own code"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -8882,7 +8924,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
