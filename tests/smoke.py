@@ -3177,7 +3177,7 @@ def u_installer_failure():
     icons = iss[iss.index("[Icons]"):iss.index("[Tasks]")]
     assert 'Filename: "{app}\\UnderCover.cmd"' not in icons, "a launch shortcut is made before setup has worked"
     code = iss[iss.index("[Code]"):]
-    assert "if CurStep = ssPostInstall then RunSetup;" in code and "ewWaitUntilTerminated, SetupCode" in code
+    assert "if CurStep = ssPostInstall then RunSetup;" in code and "@SetupLine, SetupCode)" in code and "ewWaitUntilTerminated, Code, OnLog" in code
     assert "if SetupOK then CreateLaunchers;" in code and "'Try again'" in code and "setup-result.txt" in code
     assert "isn''t ready yet" in code and "logs\\setup.log" in code
     # the launch shortcuts go at uninstall, only those that start this install (u_installer_quiet)
@@ -3278,11 +3278,26 @@ def u_installer_space():
     assert 'Result "cancelled: $kept"' in setup and "exit 3" in setup
     assert "[Console]::Out.WriteLine($line)" in setup and "Add-Content -Path $StatusFile" in setup
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
-    run = iss[iss.index("function RunSetup"):iss.index("procedure CancelButtonClick")]
-    assert "ExecAndLogOutput('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, SetupCode, @SetupLine)" in run
+    run = iss[iss.index("function RunSetup"):iss.index("procedure CurStepChanged")]
+    assert "ExecAwake(Params, ExpandConstant('{app}'), @SetupLine, SetupCode)" in run
+    awake = iss[iss.index("function ExecAwake("):iss.index("function RunSetup")]
+    assert "ExecAndLogOutput('powershell.exe', Params, Dir, SW_HIDE, ewWaitUntilTerminated, Code, OnLog)" in awake
     assert "-Pause" not in run, "the hidden setup would wait for Enter forever"
+    # rc-fix6 (the user's install: every click, Cancel included, rang the "can't click" bell): Inno's Exec disables the
+    # wizard while setup runs, and its own Cancel does nothing once the files are copied. While setup runs a timer keeps
+    # the wizard enabled (not while the "Stop?" box is open), and Cancel and the close box are ours.
+    assert "AwakeTimer := SetTimer(0, 0, 200, CreateCallback(@AwakeTimerFired));" in awake and awake.count("StopAwakeTimer;") == 2
+    assert "WizardForm.CancelButton.OnClick := @SetupCancelClick;" in awake and "WizardForm.OnClose := @SetupWizardClose;" in awake
+    assert "WizardForm.CancelButton.OnClick := InnoCancel;" in awake and "WizardForm.OnClose := InnoClose;" in awake
+    keep = iss[iss.index("procedure KeepWizardEnabled"):iss.index("procedure AwakeTimerFired")]
+    assert "SetupRunning and (not Asking) and (IsWindowEnabled(WizardForm.Handle) = 0)" in keep and "EnableWindow(WizardForm.Handle, 1)" in keep
+    ask = iss[iss.index("procedure AskStop"):iss.index("procedure SetupCancelClick")]
+    assert "if Asking or CancelAsked then Exit;" in ask and "Asking := True;" in ask and "Asking := False;" in ask
+    assert "procedure CancelButtonClick" not in iss, "Inno never calls it while setup runs (after its files are copied)"
+    assert "KeepWizardEnabled;" in iss[iss.index("procedure SetupLine("):iss.index("procedure AskStop")]
+    assert "StopAwakeTimer;" in iss[iss.index("procedure DeinitializeSetup"):]
     assert "WizardForm.ProgressGauge.Position := Progress" in iss and "if Pos1 > Progress then Progress := Pos1" in iss
-    assert "Show details" in iss and "logs\\setup.log" in iss and "procedure CancelButtonClick" in iss and "logs\\setup-cancel" in iss
+    assert "Show details" in iss and "logs\\setup.log" in iss and "procedure AskStop" in iss and "logs\\setup-cancel" in iss
     assert "WizardForm.DiskSpaceLabel.Caption := Need;" in iss and "DirParts.Caption := Parts;" in iss and "{#SizeTotalGB} GB of free space in all" in iss
     assert "StringChangeEx(S, '|', ' ' + #183 + ' ', True);" in iss, "the parts line isn't joined with a middle dot"
     assert "FilesNeed.Caption := Need;" in iss and iss.count("OnChange := @DataEditChange;") == 3 and "CreateCallback(@SpaceTimerFired)" in iss
@@ -3310,7 +3325,15 @@ def u_installer_space():
     assert not re.search(r"(?m)^\s*#13", iss), "a line starting with # is a preprocessor directive"
     assert all(ord(c) < 128 for c in iss + setup), "the installer's scripts must stay ASCII"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
-    assert "ExecAndLogOutput('powershell.exe'" in e2e and "steps never reported" in e2e and "-CancelCheck" in e2e
+    assert "ExecAwake('@PARAMS@', '@DIR@', @WizardLine, Code)" in e2e and "steps never reported" in e2e and "-CancelCheck" in e2e
+    # rc-fix6: the release check runs UnderCover.iss's own code for setup (cut from it) in a real interactive wizard,
+    # clicked through as a person would; every second the wizard and Cancel are enabled; Cancel and the close box ask
+    assert "Cut 'function EnableWindow(' '// the wizard closing: no size check'" in e2e and "Cut 'function SetTimer(' 'procedure SpaceTimerFired('" in e2e
+    assert "Start-Process -FilePath (Join-Path $launch 'launcher.exe') -Wait" in e2e and "/SILENT" not in e2e
+    assert "if (-not [W]::IsWindowEnabled($h)) { $wizOff++ }" in e2e and "if ([int]$resp['wizoff'] -gt 0)" in e2e
+    assert "if ($n -eq 50) { $asks += Ask 'cancel' 7 }" in e2e and "if ($n -eq 150) { $asks += Ask 'close' 7 }" in e2e
+    assert "$stopText = 'Stop setting up UnderCover?'" in e2e and "Stop setting up UnderCover?' + #13#10" in iss
+    assert "$cresp = RunWizard 'PyTorch: " in e2e and "$asks += Ask 'cancel' 6" in e2e, "the cancel check doesn't click Cancel"
     assert "$issFiles" in e2e and "UnderCover.iss') -Pattern" in e2e, "the release check keeps its own list of installer files (it missed space.ps1 once)"
     return f"one drive: {one} GB (22 = 9 + 10.5 + 1 + 1.5); a short drive said plainly; setup hidden, its status driving the bar; Cancel"
 
@@ -3428,14 +3451,14 @@ def u_installer_quiet():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
-    run = iss[iss.index("function RunSetup"):iss.index("procedure CancelButtonClick")]
+    run = iss[iss.index("function RunSetup"):iss.index("procedure CurStepChanged")]
     assert "-NonInteractive" in run and "-Pause" not in run, "the hidden setup could wait for input no one sees"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
     assert '$params = "-NoProfile -NonInteractive' in e2e, "the release check doesn't run setup as the wizard does"
     # installer-fix6 (the user: the window couldn't be moved during setup): the release check's final run is a shown
     # wizard running the real setup with UnderCover.iss's own SetupLine, timed from outside (answers, hung, title bar,
     # minimise and restore mid-run)
-    assert "'/SILENT', '/SUPPRESSMSGBOXES', '/WIZARD=1'" in e2e and ".Replace('@SETUPLINE@', $setupLineCode)" in e2e
+    assert "DisableFinishedPage=yes" in e2e and ".Replace('@SETUPLINE@', $setupLineCode)" in e2e
     assert "IsHungAppWindow" in e2e and "if ([int]$r -eq 2) { $caption++ }" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
     # rc-fix4b (the machine came back from a reboot with LiveKernelEvent 141 reports): the release check fails on a driver
     # reset or a lost device during the run, and the selftest's GPU work is gentle (small steps, each waited for)

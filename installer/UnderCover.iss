@@ -127,6 +127,8 @@ var
   StepGauge: TNewProgressBar;   // under the main bar: the current step's own progress (bytes), or a marquee
   DirParts, FilesNeed, FilesParts: TNewStaticText;   // the size lines: folder page (second line), files page (both)
   SpaceTimer: LongWord;  // the files page: a moment after the folders change, the size lines follow
+  AwakeTimer: LongWord;  // while setup runs: the wizard kept clickable (see KeepWizardEnabled)
+  Asking: Boolean;       // the "Stop setting up?" box is open (it disables the wizard, as it should)
   KeptMsg: String;       // the uninstaller's last word: the folders it kept, and why
 
 procedure RetryClick(Sender: TObject); forward;
@@ -231,11 +233,37 @@ begin
   SpaceTimer := SetTimer(0, 0, 900, CreateCallback(@SpaceTimerFired));
 end;
 
+function EnableWindow(hWnd: LongWord; bEnable: Integer): Integer;
+  external 'EnableWindow@user32.dll stdcall';
+function IsWindowEnabled(hWnd: LongWord): Integer;
+  external 'IsWindowEnabled@user32.dll stdcall';
+
+// Inno disables all of its windows while a program it started runs (its Exec functions do, so you can't click
+// through), and setup runs for the whole install: every click, Cancel included, only rang the "can't click" bell.
+// While setup runs the wizard is turned back on, so Cancel, Show details, moving and minimising all work.
+procedure KeepWizardEnabled;
+begin
+  if SetupRunning and (not Asking) and (IsWindowEnabled(WizardForm.Handle) = 0) then
+    EnableWindow(WizardForm.Handle, 1);
+end;
+
+procedure AwakeTimerFired(H: LongWord; Msg: LongWord; IdEvent: LongWord; Time: LongWord);
+begin
+  KeepWizardEnabled;
+end;
+
+procedure StopAwakeTimer;
+begin
+  if AwakeTimer <> 0 then KillTimer(0, AwakeTimer);
+  AwakeTimer := 0;
+end;
+
 // the wizard closing: no size check left to fire after it
 procedure DeinitializeSetup;
 begin
   if SpaceTimer <> 0 then KillTimer(0, SpaceTimer);
   SpaceTimer := 0;
+  StopAwakeTimer;
 end;
 
 // a line of size text: the page's own font, or the smaller grey one for "App 9 GB . AI models ..."
@@ -589,6 +617,7 @@ var
   K, N, F, Pos1: Integer;
   Name, Detail, Line, FText: String;
 begin
+  KeepWizardEnabled;
   if CancelAsked then SaveStringToFile(ExpandConstant('{app}\logs\setup-cancel'), 'stop', False);
   if Copy(S, 1, 3) <> '@@ ' then Exit;
   Line := Copy(S, 4, Length(S));
@@ -619,6 +648,66 @@ begin
   end;
 end;
 
+// Cancel (or the window's close box) while setup works: setup stops (between steps, or mid-download) keeping what's
+// done; the last page says so. Inno's own Cancel does nothing once its files are copied, which is when setup runs (its
+// CancelButtonClick event never fires then), so while setup runs the button and the close box are ours.
+procedure AskStop;
+var
+  Stop: Boolean;
+begin
+  if Asking or CancelAsked then Exit;   // one box at a time
+  Asking := True;
+  try
+    Stop := MsgBox('Stop setting up UnderCover?' + #13#10#13#10 + 'What''s done is kept. Running the ' +
+      'installer again later continues from there.', mbConfirmation, MB_YESNO) = IDYES;
+  finally
+    Asking := False;
+  end;
+  if Stop then begin
+    CancelAsked := True;
+    SaveStringToFile(ExpandConstant('{app}\logs\setup-cancel'), 'stop', False);
+    WizardForm.StatusLabel.Caption := 'Stopping. What''s done is kept.';
+  end;
+end;
+
+procedure SetupCancelClick(Sender: TObject);
+begin
+  AskStop;
+end;
+
+procedure SetupWizardClose(Sender: TObject; var Action: TCloseAction);
+begin
+  Action := caNone;
+  AskStop;
+end;
+
+// setup.ps1 (Params) run hidden in Dir, its output lines to OnLog, with the wizard awake throughout: clickable, Cancel
+// and the close box asking to stop. (The release check, tests\installer_e2e.ps1, runs this function as it is here.)
+// -> it ran (Code: its exit code)
+function ExecAwake(const Params, Dir: String; OnLog: TOnLog; var Code: Integer): Boolean;
+var
+  InnoCancel: TNotifyEvent;
+  InnoClose: TCloseEvent;
+begin
+  SetupRunning := True;
+  WizardForm.CancelButton.Enabled := True;
+  InnoCancel := WizardForm.CancelButton.OnClick;
+  InnoClose := WizardForm.OnClose;
+  WizardForm.CancelButton.OnClick := @SetupCancelClick;
+  WizardForm.OnClose := @SetupWizardClose;
+  StopAwakeTimer;
+  AwakeTimer := SetTimer(0, 0, 200, CreateCallback(@AwakeTimerFired));   // fires in Inno's own wait loop
+  try
+    Result := ExecAndLogOutput('powershell.exe', Params, Dir, SW_HIDE, ewWaitUntilTerminated, Code, OnLog);
+  except
+    Result := False;
+  end;
+  StopAwakeTimer;
+  WizardForm.CancelButton.OnClick := InnoCancel;
+  WizardForm.OnClose := InnoClose;
+  SetupRunning := False;
+end;
+
 // setup.ps1, hidden: the wizard's own bar and status lines follow it (no console window to close by mistake). A
 // re-run continues past what's done. -> it worked (exit code 0)
 function RunSetup: Boolean;
@@ -631,38 +720,15 @@ begin
     GetModelsDir('') + '" -Addons "' + GetAddons('') + '"';
   Progress := 0;
   CancelAsked := False;
-  SetupRunning := True;
   WizardForm.ProgressGauge.Max := 1000;
   WizardForm.ProgressGauge.Position := 0;
   WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and tools for your graphics card...';
   WizardForm.FilenameLabel.Caption := '';
   DetailsLink.Visible := True;
-  WizardForm.CancelButton.Enabled := True;
-  try
-    if not ExecAndLogOutput('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, SetupCode, @SetupLine) then
-      SetupCode := -1;
-  except
-    SetupCode := -1;
-  end;
-  SetupRunning := False;
+  if not ExecAwake(Params, ExpandConstant('{app}'), @SetupLine, SetupCode) then SetupCode := -1;
   SetupOK := (SetupCode = 0);
   if SetupOK then CreateLaunchers;
   Result := SetupOK;
-end;
-
-// Cancel while setup works: setup stops (between steps, or mid-download) keeping what's done; the last page says so
-procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
-begin
-  if SetupRunning then begin
-    Cancel := False;
-    Confirm := False;
-    if (not CancelAsked) and (MsgBox('Stop setting up UnderCover?' + #13#10#13#10 + 'What''s done is kept. Running the ' +
-        'installer again later continues from there.', mbConfirmation, MB_YESNO) = IDYES) then begin
-      CancelAsked := True;
-      SaveStringToFile(ExpandConstant('{app}\logs\setup-cancel'), 'stop', False);
-      WizardForm.StatusLabel.Caption := 'Stopping. What''s done is kept.';
-    end;
-  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
