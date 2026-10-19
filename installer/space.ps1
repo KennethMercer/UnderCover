@@ -68,11 +68,12 @@ function Get-SpaceNeeds([string]$InstallDir, [string]$LibraryDir, [string]$WorkD
     foreach ($a in $Addons) { if ($a -and $Sizes.addons.$a) { $addonGb += $Sizes.addons.$a } }
     $setupHave = if ($Have) { [double](& $Have 'setup' $InstallDir) } else { 0.0 }
     $parts = @(@{ dir = $InstallDir; gb = [math]::Max([double]0, [double]($Sizes.app_gb + $Sizes.tools_gb + $python - $setupHave)); what = 'the app, Python and PyTorch'; short = 'App' })
+    # the AI models: setup downloads them (rc-fix4b), so setup's own check counts them too
+    $mdir = if ($ModelsDir) { $ModelsDir } else { $InstallDir }
+    $modelsHave = if ($Have) { [double](& $Have 'models' $mdir) } else { 0.0 }
+    $parts += @{ dir = $mdir; gb = [math]::Max([double]0, [double]($Sizes.models_gb + $addonGb - $modelsHave))
+                 what = 'the AI models, which setup downloads'; short = 'AI models' }
     if (-not $SetupOnly) {
-        $mdir = if ($ModelsDir) { $ModelsDir } else { $InstallDir }
-        $modelsHave = if ($Have) { [double](& $Have 'models' $mdir) } else { 0.0 }
-        $parts += @{ dir = $mdir; gb = [math]::Max([double]0, [double]($Sizes.models_gb + $addonGb - $modelsHave))
-                     what = 'the AI models, which UnderCover fetches the first time each feature is used'; short = 'AI models' }
         $parts += @{ dir = $(if ($LibraryDir) { $LibraryDir } else { $InstallDir }); gb = $Sizes.library_gb
                      what = 'your songs, covers and voices to start with'; short = 'your files' }
         $parts += @{ dir = $(if ($WorkDir) { $WorkDir } else { $InstallDir }); gb = $Sizes.work_gb; what = 'working files to start with'; short = 'your files' }

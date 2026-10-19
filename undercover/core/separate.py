@@ -141,6 +141,19 @@ SAY_AFTER_S = 5.0
 SPEED_FROM_S = 2.0
 
 
+def place_model_list() -> bool:
+    """audio-separator reads its list of models from models/separator/download_checks.json, and fetches it from GitHub
+    (unpinned, changing) when it isn't there: UnderCover ships the copy it was tested with and puts it in place
+    (setup's model step, and before any separation model loads). -> True when it was placed."""
+    src = Path(__file__).resolve().parents[1] / "assets" / "separator" / "download_checks.json"
+    dest = path("models_dir") / "separator" / "download_checks.json"
+    if dest.is_file() or not src.is_file():
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    return True
+
+
 class _QuietBar:
     """audio-separator's own download bar (tqdm), silenced: UnderCover fetches the models itself and says so on the
     page; a model it doesn't pin still downloads, without a console bar in the log."""
@@ -256,6 +269,7 @@ class StemSeparator:
 
     def _get(self, model: str):
         if model not in self._loaded:
+            place_model_list()   # never fetched from GitHub
             try:   # the model's files first, from its pinned sources, with the progress said (rc-fix4)
                 fetch_model(model, _say_download(model))
             except InterruptedError as e:   # Cancel or Stop during the download: that, never a second download

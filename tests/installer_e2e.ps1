@@ -24,6 +24,10 @@
     - .venv\pyvenv.cfg's home is the full-version Python folder (cpython-<version>-...), not uv's minor-version link;
     - no registry entry under HKCU\Software\Python points into the temp install;
     - nothing new in %USERPROFILE%\.local\bin;
+    - the AI models came with setup: its model step reported its progress, and every model is in place after it;
+    - a first cover and speech on the fresh install download nothing (the installed copy runs on a free port with its
+      own folders; its models folder and the Hugging Face, torch and Whisper caches are the same before and after, and
+      its log says no download). -NoFirstUse skips this part.
     - the status lines reached the launcher (as the wizard reads them) and went through every step, in order;
     - the wizard stayed responsive the whole time (installer-fix6, the user: the window couldn't be moved during setup):
       the final run is a shown wizard (off-screen) that runs setup from its install step with UnderCover.iss's own
@@ -35,7 +39,8 @@ param(
     [string]$Root = '',
     [string]$Backend = 'auto',
     [switch]$Keep,
-    [switch]$CancelCheck
+    [switch]$CancelCheck,
+    [switch]$NoFirstUse
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -298,6 +303,92 @@ $reg = @(Get-ChildItem 'HKCU:\Software\Python' -Recurse -ErrorAction SilentlyCon
 if ($reg.Count) { $fails += "registry entries point into the install: $(($reg | ForEach-Object { $_.Name }) -join ', ')" }
 $binAfter = BinList
 if (@(Compare-Object $binBefore $binAfter).Count) { $fails += "$binDir changed" }
+
+# the AI models came with setup (rc-fix4b, the user: "it should be part of the install"): the step reported its
+# progress, and every model the app's features use is in place
+$modelLines = @($seen | Where-Object { $_ -match '^@@ \d+\|\d+\|Downloading the AI models\|' })
+$modelMoving = @($modelLines | Where-Object { $_ -match '\(file \d+ of \d+\): [0-9]+ of [0-9]+ MB' })
+Write-Host "Models: $($modelLines.Count) status lines, $($modelMoving.Count) with download progress"
+if (-not $modelLines.Count) { $fails += 'the model step never reported' }
+elseif (-not $modelMoving.Count) { $fails += 'no progress lines during the model download' }
+$vpy = Join-Path $dir '.venv\Scripts\python.exe'
+if (Test-Path $vpy) {
+    Push-Location $dir
+    try { $mcheck = (& $vpy -m undercover.models check 2>&1 | Out-String).Trim(); $mcode = $LASTEXITCODE } finally { Pop-Location }
+    Write-Host "Model check: $mcheck"
+    if ($mcode -ne 0) { $fails += "models missing after setup: $mcheck" }
+}
+
+# a first cover and speech on the fresh install download nothing (the user: "we absolutely should not be downloading
+# modules the first time they're called")
+function CacheList {
+    $roots = @((Join-Path $dir 'models'), $(if ($env:HF_HOME) { $env:HF_HOME } else { Join-Path $env:USERPROFILE '.cache\huggingface' }),
+               (Join-Path $env:USERPROFILE '.cache\torch'), (Join-Path $env:USERPROFILE '.cache\whisper'))
+    @(foreach ($r in $roots) { if (Test-Path -LiteralPath $r) { Get-ChildItem -LiteralPath $r -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '\.lock$' } | ForEach-Object { "$($_.FullName)|$($_.Length)" } } })
+}
+function FirstUse {
+    $port = (7862..7869 | Where-Object { $c = New-Object Net.Sockets.TcpClient; try { $c.Connect('127.0.0.1', $_); $c.Close(); $false } catch { $true } } | Select-Object -First 1)
+    if (-not $port) { return 'no free port in 7862-7869' }
+    $base = "http://127.0.0.1:$port"
+    $h = @{ Origin = $base }
+    $before = CacheList
+    $out = Join-Path $dir 'logs\firstuse-server.log'
+    $saved = @{}
+    foreach ($k in @('UNDERCOVER_CONFIG', 'UNDERCOVER_DATA_ROOT', 'UNDERCOVER_TEST_ROOTS', 'UNDERCOVER_SANDBOX_PORT')) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $null)
+    }
+    try {
+        $srv = Start-Process -FilePath $vpy -ArgumentList '-m', 'undercover.server', '--no-browser', '--no-tray', '--port', "$port" -WorkingDirectory $dir `
+                             -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError "$out.err" -PassThru
+    } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+    $said = @()
+    try {
+        $deadline = (Get-Date).AddMinutes(10); $st = $null
+        while ((Get-Date) -lt $deadline -and -not $srv.HasExited) {
+            Start-Sleep -Seconds 2
+            try { $st = Invoke-RestMethod "$base/api/status" -TimeoutSec 5 } catch { continue }
+            if ($st.models -eq 'ready' -or "$($st.models)".StartsWith('error')) { break }
+        }
+        if (-not $st -or $st.models -ne 'ready') { return "the installed copy's models didn't load: $($st.models)" }
+        if ($st.first_run) { return "the installed copy's first start had models to fetch (models_mb $($st.models_mb))" }
+        $jobs = @()
+        $r = Invoke-RestMethod "$base/api/auto" -Method Post -Headers $h -ContentType 'application/json' -Body (@{ text = 'Hold On as Agent Smoke' } | ConvertTo-Json)
+        $jobs += @{ id = $r.job; what = 'the first cover (one-shot)' }
+        foreach ($cad in @($false, $true)) {
+            try {
+                $r = Invoke-RestMethod "$base/api/speak" -Method Post -Headers $h -ContentType 'application/json' `
+                     -Body (@{ text = 'This is the first thing I say.'; voice = 'agent-smoke'; cadence = $cad } | ConvertTo-Json)
+                $jobs += @{ id = $r.job; what = $(if ($cad) { 'speech with cadence (Chatterbox Turbo)' } else { 'speech (the Reader)' }) }
+            } catch { $said += "speech (cadence $cad) refused: $($_.ErrorDetails.Message)" }
+        }
+        foreach ($j in $jobs) {
+            $deadline = (Get-Date).AddMinutes(20); $snap = $null
+            while ((Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds 3
+                $snap = @(Invoke-RestMethod "$base/api/jobs" -TimeoutSec 10) | Where-Object { $_.id -eq $j.id } | Select-Object -First 1
+                if ($snap -and $snap.final) { break }
+            }
+            $state = if ($snap -and $snap.final) { $snap.final.state } else { 'still running' }
+            $said += "$($j.what): $state"
+            if ($state -ne 'done') { return "$($j.what) ended '$state': $($snap.final.message)" }
+        }
+    } finally {
+        try { Invoke-RestMethod "$base/api/quit" -Method Post -Headers $h -ContentType 'application/json' -Body '{}' -TimeoutSec 10 | Out-Null } catch { }
+        if (-not $srv.WaitForExit(60000)) { try { $srv.Kill() } catch { } }
+        Write-Host ("First use: " + ($said -join '; '))
+    }
+    $after = CacheList
+    $new = @(Compare-Object $before $after | Where-Object { $_.SideIndicator -eq '=>' } | ForEach-Object { ($_.InputObject -split '\|')[0] })
+    if ($new.Count) { return "files appeared during first use: $(($new | Select-Object -First 5) -join ', ')" }
+    $log = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$out.err" -Raw -ErrorAction SilentlyContinue)
+    if ($log -match 'Downloading|download_checks|iB/s') { return "the installed copy's log mentions a download" }
+    return $null
+}
+if (-not $fails.Count -and -not $NoFirstUse -and (Test-Path $vpy)) {
+    $why = FirstUse
+    if ($why) { $fails += "first use: $why" } else { Write-Host "First use: nothing downloaded." }
+}
 
 Write-Host ""
 Write-Host "---- setup.log, last 25 lines ----"

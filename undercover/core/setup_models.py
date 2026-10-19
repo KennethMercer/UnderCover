@@ -193,6 +193,40 @@ def fetch(url: str, dest, want: str | None, local: str = "", progress=None, trie
 # ---------------------------------------------------------------- every pinned model file (phase 10)
 
 PINNED: dict = {}   # path under models_dir -> {"urls": [...], "sha256": ..., "part": ..., "about": ...}
+# Bytes of every model file setup installs (measured 2026-10-18 from copies matching their SHA-256; the two 32 kHz base
+# models from their source's Content-Length): what setup's step and the first start measure progress against, and
+# how the Doctor finds a cut-off copy from its size alone.
+KNOWN_SIZES = {
+    "rvc/hubert_base/config.json": 1492,
+    "rvc/hubert_base/preprocessor_config.json": 225,
+    "rvc/hubert_base/pytorch_model.bin": 189206711,
+    "rvc/pretrained_v2/f0D32k.pth": 142875703,
+    "rvc/pretrained_v2/f0D40k.pth": 142875703,
+    "rvc/pretrained_v2/f0D48k.pth": 142875703,
+    "rvc/pretrained_v2/f0G32k.pth": 73950049,
+    "rvc/pretrained_v2/f0G40k.pth": 73106273,
+    "rvc/pretrained_v2/f0G48k.pth": 75465569,
+    "rvc/rmvpe.pt": 181184272,
+    "separator/config_mel_band_roformer_kim_ft_unwa.yaml": 1721,
+    "separator/dereverb_mel_band_roformer_anvuew.yaml": 1846,
+    "separator/dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt": 913107578,
+    "separator/mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": 913096801,
+    "separator/mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml": 1726,
+    "separator/mel_band_roformer_kim_ft_unwa.ckpt": 913100690,
+    "speaker/wespeaker_resnet34_lm.onnx": 26530309,
+    "tts/chatterbox-turbo/added_tokens.json": 418,
+    "tts/chatterbox-turbo/conds.pt": 169454,
+    "tts/chatterbox-turbo/merges.txt": 456318,
+    "tts/chatterbox-turbo/s3gen_meanflow.safetensors": 1064875036,
+    "tts/chatterbox-turbo/special_tokens_map.json": 470,
+    "tts/chatterbox-turbo/t3_turbo_v1.safetensors": 1915480052,
+    "tts/chatterbox-turbo/tokenizer_config.json": 3878,
+    "tts/chatterbox-turbo/ve.safetensors": 5695784,
+    "tts/chatterbox-turbo/vocab.json": 999186,
+    "tts/kokoro/kokoro-v1.0.onnx": 325532387,
+    "tts/kokoro/voices-v1.0.bin": 28214398,
+    "whisper/large-v3-turbo.pt": 1617941637,
+}
 
 
 def register_pinned(files: dict, sha256: dict, part: str, about: str = "", sizes: dict | None = None) -> None:
@@ -203,7 +237,7 @@ def register_pinned(files: dict, sha256: dict, part: str, about: str = "", sizes
         want = sha256.get(local) or _expected(urls if isinstance(urls, str) else urls[0], sha256)
         if want:
             PINNED[local] = {"urls": [urls] if isinstance(urls, str) else list(urls), "sha256": want, "part": part,
-                             "about": about, "size": (sizes or {}).get(local)}
+                             "about": about, "size": (sizes or {}).get(local) or KNOWN_SIZES.get(local)}
 
 
 def refetch(local: str, progress=None) -> None:

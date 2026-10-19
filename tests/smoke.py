@@ -3218,28 +3218,32 @@ def u_installer_space():
                            capture_output=True, text=True, timeout=60)
         assert r.stdout.strip() == "KEEP|rocm|x", f"dot-sourcing space.ps1 changed the caller's variables: {r.stdout.strip()!r}"
         one = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; $n['D:\\'].need")
-        parts = [0.1 + 0.5 + 6.5, 8.5, 0.5, 1.0]
+        M = sizes["models_gb"]   # the AI models setup installs (rc-fix4b)
+        g = lambda gb: f"{gb:g}"   # noqa: E731  (PowerShell writes 22, not 22.0)
+        parts = [0.1 + 0.5 + 6.5, M, 0.5, 1.0]
         up = lambda gb: math.ceil(gb * sizes["margin"] * 2) / 2          # noqa: E731
-        assert float(one) == sum(up(x) for x in parts), (one, [up(x) for x in parts])   # 9 + 10.5 + 1 + 1.5 = 22
+        total = sum(up(x) for x in parts)
+        assert float(one) == total, (one, [up(x) for x in parts])
         split = ps("$n = Get-SpaceNeeds 'C:\\UC' 'D:\\Lib' 'D:\\Work' 'E:\\M' 'cpu' $s @('f5'); ($n.Keys | ForEach-Object { $_ + '=' + $n[$_].need }) -join ';'")
         g = lambda gb: f"{gb:g}"   # noqa: E731  (PowerShell writes 3, not 3.0)
-        assert split == f"C:\\={g(up(0.1 + 0.5 + 1.5))};E:\\={g(up(8.5 + 1.5))};D:\\={g(up(0.5) + up(1.0))}", split
+        assert split == f"C:\\={g(up(0.1 + 0.5 + 1.5))};E:\\={g(up(M + 1.5))};D:\\={g(up(0.5) + up(1.0))}", split
         setup_only = ps("$n = Get-SpaceNeeds 'D:\\UC' 'E:\\L' 'E:\\W' 'E:\\M' 'rocm' $s -SetupOnly; $n.Keys -join ';'")
-        assert setup_only == "D:\\", "setup's own check counts the models and files that come later"
+        assert setup_only == "D:\\;E:\\", "setup's own check: the app on D:, the models it downloads on E:, never the files that come later"
         unknown = ps("(Get-SpaceNeeds 'D:\\UC' '' '' '' '' $s -SetupOnly)['D:\\'].need")
-        assert float(unknown) == up(0.1 + 0.5 + max(sizes["python"].values())), "an unknown card isn't sized as the largest"
+        assert float(unknown) == up(0.1 + 0.5 + max(sizes["python"].values())) + up(M), "an unknown card isn't sized as the largest"
         short = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Find-Shortfalls $n { param($r) 12 } | ForEach-Object { Format-Shortfall $_ }) -join '/'")
-        assert short == "D: has 12 GB free, and UnderCover needs about 22 GB there.", short
+        assert short == f"D: has 12 GB free, and UnderCover needs about {g(total)} GB there.", short
         assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; @(Find-Shortfalls $n { param($r) 500 }).Count") == "0"
         assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; @(Find-Shortfalls $n { param($r) -1 }).Count") == "0", "an unreadable drive was called full"
         # the pages' two short lines (the user: the paragraph was "excessively verbose, people will skip")
         lines = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Format-NeedLines $n { param($r) 190.5 }) -join '/'")
-        assert lines == "UnderCover needs about 22 GB on D: (190 GB free).", lines
+        assert lines == f"UnderCover needs about {g(total)} GB on D: (190 GB free).", lines
         parts = ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Format-Parts $n) -join '/'")
-        assert parts == "App 9 GB/AI models 10.5 GB/your files 2.5 GB", parts
+        assert parts == f"App {g(up(7.1))} GB/AI models {g(up(M))} GB/your files {g(up(0.5) + up(1.0))} GB", parts
         split2 = ps("$n = Get-SpaceNeeds 'C:\\UC' 'D:\\L' 'D:\\W' 'D:\\M' 'rocm' $s; (Format-NeedLines $n { param($r) 5.47 }) -join '/'")
-        assert split2 == "UnderCover needs about 9 GB on C: (5.4 GB free)./UnderCover needs about 13 GB on D: (5.4 GB free).", split2
-        assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Format-NeedLines $n { param($r) -1 }) -join '/'") == "UnderCover needs about 22 GB on D:."
+        assert split2 == (f"UnderCover needs about {g(up(7.1))} GB on C: (5.4 GB free)./UnderCover needs about "
+                          f"{g(up(M) + up(0.5) + up(1.0))} GB on D: (5.4 GB free)."), split2
+        assert ps("$n = Get-SpaceNeeds 'D:\\UC' '' '' '' 'rocm' $s; (Format-NeedLines $n { param($r) -1 }) -join '/'") == f"UnderCover needs about {g(total)} GB on D:."
         # what's there already comes off (a re-run after Cancel, a reinstall): 3 GB of venv/cache, all the models
         BS = chr(92)
         have = "{ param($k, $d) if ($k -eq 'setup') { 3 } else { 9 } }"
@@ -3264,7 +3268,7 @@ def u_installer_space():
         assert f'#define SizeTotalGB "{total}"' in isi, ("sizes.isi is stale: run installer\\build.ps1", total, isi)
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
     assert setup.count("RunWatched $Uv") == 3, "a long uv step runs without progress"
-    assert "Get-SpaceNeeds $InstallDir '' '' '' $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }" in setup and "Fail (\"there isn't enough space. \"" in setup
+    assert "Get-SpaceNeeds $InstallDir '' '' $ModelsDir $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }" in setup and "Fail (\"there isn't enough space. \"" in setup
     assert setup.index("Find-Shortfalls $needs") < setup.index('Step "Getting the Python installer'), "setup checks the space after it downloads"
     assert "Test-Path $Py" not in setup[setup.index("Space: what setup"):setup.index("Find-Shortfalls $needs")], "a re-run after Cancel skips the space check"
     assert "function DirBytes" not in setup and "Get-DirBytes $watch" in setup

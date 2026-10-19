@@ -44,7 +44,7 @@ MinVersion=10.0.19041
 UninstallDisplayName={#AppName}
 
 [Messages]
-FinishedLabel=UnderCover is installed. Start it from the Start menu: it runs in the background, and you quit it from SafeHouse. It fetches its AI models the first time each feature is used, up to about {#SizeModelsGB} GB in all.
+FinishedLabel=UnderCover is installed, with its AI models. Start it from the Start menu: it runs in the background, and you quit it from the icon near the clock or SafeHouse's System room.
 
 [Files]
 ; App code. __pycache__ and anything personal (models, cache, output, uploads, logs, test, .venv) stay out.
@@ -330,8 +330,8 @@ begin
 
   // the welcome page says the real size, plainly, before anything else
   WizardForm.WelcomeLabel2.Caption := 'UnderCover needs about {#SizeTotalGB} GB of free space in all, far more than this installer.' + #13#10#13#10 +
-    'Setup downloads Python and PyTorch (about {#SizePythonGB} GB). The AI models (up to {#SizeModelsGB} GB) ' +
-    'download the first time each feature is used.';
+    'Setup downloads everything it needs, about {#SizeDownloadGB} GB: Python, PyTorch for your graphics card, the tools ' +
+    'and the AI models. Nothing downloads later, except add-ons you choose or a repair.';
   WizardForm.DiskSpaceLabel.WordWrap := True;
   WizardForm.DiskSpaceLabel.Top := WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(20);
   WizardForm.DiskSpaceLabel.Height := ScaleY(30);
