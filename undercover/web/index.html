@@ -155,7 +155,10 @@
         <div id="drop-loaded" hidden>
           <div class="song-row"><strong id="song-name"></strong><button class="linkbtn" id="song-replace">Replace</button></div>
           <div class="meta mono" id="song-meta"></div>
-          <canvas class="wave" id="wave-song" aria-hidden="true"></canvas>
+          <div class="song-wave"><button class="play" id="song-play" type="button" aria-label="Play the song">▶</button>
+            <canvas class="wave seekable" id="wave-song" aria-label="The song's waveform, click to seek"></canvas>
+            <span class="mono meta" id="song-pos"></span></div>
+          <audio id="a-song" preload="none"></audio>
           <div class="cached" id="song-cached" hidden>✓ Stems already separated. This cover skips the separation step.</div>
         </div>
         <div id="drop-uploading" hidden>
