@@ -23,7 +23,7 @@ from ..core.config import path
 from ..core.voices import ModelError, label_of
 from . import ambiguity
 from .fit import pick_fit, pick_octave
-from ..doubleagent.service import (_prefetch_voice_sources, installed_for, resolve_voice, subject_of, voice_f0,
+from ..doubleagent.service import (demo_for, _prefetch_voice_sources, installed_for, resolve_voice, subject_of, voice_f0,
                                    voice_quality)
 
 PATTERNS = [
@@ -268,8 +268,10 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     req = ambiguity.settle(parse_request(text))
     title_q, person, style, artist = req["song"], req["person"], req["style"], req["artist"]
     search_q = f"{title_q} {artist}" if artist else title_q
+    # the library's sample song, named (the first run's "Hold On as Agent Smoke"): used from the library, nothing searched
+    lib = None if (song_url or choice or style) else sample_song(title_q, artist)
     # An ambiguous bare title ("Hello"): the answer the user gave, else the first choice, said out loud (never silent)
-    if not song_url and not artist:
+    if not song_url and not artist and not lib:
         pick, went = ambiguity.resolve(title_q, choice)
         if pick and pick["artist"] and pick["title"]:
             title_q, artist = pick["title"], pick["artist"]
@@ -288,15 +290,16 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     # Network work for the voice starts now, alongside the song's download and separation (review C6): if there's no
     # voice trained here for this person, find their clips and pre-download the first sources (no GPU involved).
     early = None
+    demo = demo_for(person)   # "... as Agent Smoke": nobody to look up, no clips to find
     trained_ok = [v for v in installed_for(person) if v.extra.get("trained") and voice_quality(v)["ok"]]
-    if not trained_ok or subject:
+    if (not trained_ok or subject) and not demo:
         # what the request names (a person, a singer, a character, a band...), said in the plan line, or the user's
         # correction or answer from it (phase 15): it decides how the voice's clips are found
         try:
             plan["subject"] = subject_of(person, subject)
         except Exception:
             plan["subject"] = None
-    if not [v for v in installed_for(person) if v.extra.get("trained")] and not (voice_choice or "").startswith("use:"):
+    if not demo and not [v for v in installed_for(person) if v.extra.get("trained")] and not (voice_choice or "").startswith("use:"):
         import threading
         early = threading.Thread(target=_prefetch_voice_sources, args=(person, plan.get("subject")), daemon=True,
                                  name="voice-prefetch")
@@ -306,8 +309,13 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     #    actually has singing in it)
     what = f"{style} version of “{song_q}”" if style else f"“{song_q}”"
     push("song", 0.0, (plan["went_with"] + ". " if plan.get("went_with") else "") +
-         (f"Finding the {what} on YouTube" if style else f"Finding {what} on YouTube"))
-    cands = [songs.from_link(song_url)] if song_url else songs.search(search_q, style=style, words=style_words(style))[:VERSIONS + 2]
+         (f"Using {what} from your library" if lib else f"Finding the {what} on YouTube" if style else f"Finding {what} on YouTube"))
+    if lib:
+        import types
+        cands = [types.SimpleNamespace(id=lib["id"], title=lib.get("title") or title_q, channel=lib.get("artist") or "",
+                                       url="", note="the sample song in your library", meta=lib)]
+    else:
+        cands = [songs.from_link(song_url)] if song_url else songs.search(search_q, style=style, words=style_words(style))[:VERSIONS + 2]
     # A version ("acoustic") is someone's cover, and they differ a lot: compare up to VERSIONS that have singing
     # and pick the one that suits the voice once it's known (melody range, clean separation). The album track
     # (no style) or a pasted link: the first one with singing.
@@ -333,9 +341,12 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     for ci, pick in enumerate(cands):
         n = len(versions)
         label = f"version {n + 1} of up to {VERSIONS}: " if compare else ""
-        push("song", 0.02 + 0.9 * n / per, f"Downloading {label}“{pick.title}”")
+        push("song", 0.02 + 0.9 * n / per, f"Getting “{pick.title}” from your library" if getattr(pick, "meta", None)
+             else f"Downloading {label}“{pick.title}”")
         try:
-            if pick.id in ahead:
+            if getattr(pick, "meta", None):   # the library's own copy (the sample song): nothing to download
+                had, meta = True, pick.meta
+            elif pick.id in ahead:
                 t, box = ahead.pop(pick.id)
                 t.join()
                 if "err" in box:
@@ -498,6 +509,27 @@ FETCH_S = 20.0           # finding and downloading it (measured 10-30 s)
 
 
 SEARCH_S = 8.0           # the YouTube search that finds a song already in the library (it isn't downloaded again)
+
+
+def sample_song(song: str, artist: str | None) -> dict | None:
+    """The library's sample song (sample: true, seeded on a fresh install) when a request names it: its title's words,
+    exactly, and the artist's too if one is given ("Hold On as Agent Smoke", the first run's suggestion). -> its meta
+    (id, file, title...), else None. Used before the ambiguity check: the song on the desk isn't a question."""
+    want = ambiguity._tokens(ambiguity.norm_title(song))
+    by = ambiguity._tokens(ambiguity.norm_artist(artist or ""))
+    if not want:
+        return None
+    for m in path("uploads_dir").glob("*.json"):
+        try:
+            meta = json.loads(m.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not meta.get("sample") or not meta.get("file") or not (path("uploads_dir") / meta["file"]).exists():
+            continue
+        if ambiguity._tokens(ambiguity.norm_title(meta.get("title") or "")) == want and \
+                by <= ambiguity._tokens(ambiguity.norm_artist(meta.get("artist") or "")):
+            return {**meta, "id": meta.get("id") or m.stem}
+    return None
 
 
 def library_song(song: str, artist: str | None) -> Path | None:

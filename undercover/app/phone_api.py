@@ -112,9 +112,6 @@ ROUTES = [
     ("GET", rf"/api/themes/{_ID}/(export|theme\.css|preview\.png|fonts/[^/]+)", "phone", "a theme's css, fonts, preview, file"),
     ("POST", r"/api/themes|/api/themes/import", "pc", "saving or importing a theme"),
     ("DELETE", rf"/api/themes/{_ID}", "pc", "deleting a theme"),
-    # the first run (app/firstrun.py): works at phone width too
-    ("POST", r"/api/tutorial/done", "phone", "the first run's done mark"),
-    ("POST", r"/api/tutorial/demo/(update|undo)", "phone", "a newer Agent Smoke: Update, and back"),
     # Phone access itself
     ("GET|POST", r"/api/phone", "pc", "Phone access settings"),
     ("POST", r"/api/phone/(pair|pair/cancel|revoke)", "pc", "pairing and Revoke"),

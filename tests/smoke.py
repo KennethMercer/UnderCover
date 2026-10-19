@@ -1282,7 +1282,7 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "core/storage.py::remove_tree::rmtree::p", "core/storage.py::remove_tree::rmtree::child",
     "core/storage.py::remove_files::rmtree::p", "core/storage.py::move::rmtree::c",
     "core/storage.py::remove_tree::remove_tree::child", "core/storage.py::move::remove_tree::now",
-    "app/firstrun.py::seed_voice::remove_files", "app/firstrun.py::update_demo::remove_files",
+    "app/firstrun.py::seed_voice::remove_files",
     "core/doctor.py::clear_stale::remove_files",
     "core/tailnet.py::fetch_binaries::remove_files", "core/tailnet.py::forget::remove_files",
     "core/themes.py::_drop::remove_files", "core/vault.py::prune::remove_files", "core/ytdlp.py::_drop::remove_files",
@@ -1724,25 +1724,13 @@ def u_move_rollback():
     return "copy (other drive) and move (same drive): setting back first, the original whole, the new place empty"
 
 
-@check("the last set-aside gaps (Internal Affairs pass 7): Undo of a demo update sets the newer Agent Smoke aside; a 30-day full index goes only when its project can rebuild it, else to Set aside (and back)")
+@check("the last set-aside gaps (Internal Affairs pass 7): a 30-day full index goes only when its project can rebuild it, else to Set aside (and back)")
 def u_aside_gaps():
     import time as _t
-    from undercover.app import firstrun
     from undercover.core.engine.rvc.index import EXPORT_ASIDE, EXPORT_RECORD
-    from undercover.core.voices import DEMO_VOICE, get_voice, voices_dir
+    from undercover.core.voices import voices_dir
     from undercover.safehouse import library, smaller
     with isolated_data():
-        # Undo of a demo update: the newer one is set aside, not deleted
-        cur = _voice_dir(DEMO_VOICE, {"demo": True})
-        prev = voices_dir() / firstrun.PREVIOUS
-        prev.mkdir(parents=True)
-        (prev / "model.pth").write_bytes(b"older")
-        (prev / "meta.json.previous").write_text(json.dumps({"name": DEMO_VOICE, "dir": str(cur), "pth": str(cur / "model.pth"),
-                                                             "version": "v2", "sr": 40000, "f0": True, "extra": {"demo": True}}), encoding="utf-8")
-        firstrun.undo_demo()
-        assert (get_voice(DEMO_VOICE).dir / "model.pth").read_bytes() == b"older"
-        rows = [x for x in library.aside() if x["voice"] == DEMO_VOICE]
-        assert rows and (voices_dir() / ".aside" / rows[0]["id"] / "model.pth").read_bytes() == b"m-" + DEMO_VOICE.encode(), rows
         # a full index past its 30 days: its project is gone -> set aside, listed, and Bring it back restores it
         v = _voice_dir("zed-uc", {"trained": True, "project": "zed"})
         (v / "model.index").write_bytes(b"10k")
@@ -1762,7 +1750,7 @@ def u_aside_gaps():
         (v / EXPORT_RECORD).write_text(json.dumps({"until": _t.time() - 10}), encoding="utf-8")
         assert smaller.expire_full_indexes() == ["zed-uc"] and not (v / EXPORT_ASIDE).exists()
         assert not [x for x in library.aside() if x["voice"] == "zed-uc"]
-    return "demo Undo -> newer one aside; full index: project gone -> aside + back; project there -> removed"
+    return "full index: project gone -> aside + back; project there -> removed"
 
 
 @check("a folder copy of a voice doesn't take the original's waiting candidate when it's set aside (Internal Affairs P7-1)")
@@ -3479,6 +3467,66 @@ def u_models_progress():
     return f"the first start fetches about {mb} MB; progress from the files and their .part"
 
 
+@check("the planner sees the desk (MasterPlan, from Q's rc-page6): 'Hold On as Agent Smoke' plans the library's sample song and the installed demo voice with no question, no voice check and no lookup; the sample matches only its own title (and artist); a real 'Smoke' isn't the demo voice")
+def u_desk_plan():
+    import numpy as np
+    import soundfile as sf
+    from undercover.app import firstrun
+    from undercover.doubleagent import service
+    from undercover.frontman import ambiguity, oneshot
+    from undercover.frontman import api as fm_api
+
+    class H:
+        def _json(self, o, status=200):
+            self.out = o
+
+        def _error(self, m, status=400):
+            self.out = {"error": m}
+
+    def plan(text):
+        h = H()
+        fm_api._auto_plan(h, text, False)
+        return h.out
+
+    def boom(*a, **k):
+        raise AssertionError("the plan looked something up for the desk")
+    saved = (firstrun.SAMPLE, firstrun.DEMO, service.online_for, service.subject_of, ambiguity.choices_for)
+    with isolated_data() as t:
+        try:
+            sample = t / "assets" / "sample"
+            sample.mkdir(parents=True)
+            sf.write(sample / "hold-on.wav", (0.1 * np.sin(np.linspace(0, 880 * np.pi, 44100 * 3))).astype(np.float32), 44100)
+            (sample / "sample.json").write_text(json.dumps({"title": "Hold On", "artist": "Ken Mercer", "file": "hold-on.wav",
+                                                            "seconds": 3, "licence": "ours", "notice": "n"}), encoding="utf-8")
+            _fake_demo_voice(t / "assets" / "demo-voice" / "agent-smoke")
+            firstrun.SAMPLE, firstrun.DEMO = sample, t / "assets" / "demo-voice" / "agent-smoke"
+            assert firstrun.seed()["voice"] == "agent-smoke"
+            sid = firstrun.sample_song_id()
+            service.online_for = service.subject_of = ambiguity.choices_for = boom
+            o = plan("Hold On as Agent Smoke")
+            assert "error" not in o, o
+            assert o["ask"] is False and not o.get("voice_ask") and "choices" not in o, o
+            assert o["voice"]["how"] == "installed" and o["voice"]["name"] == "agent-smoke" and o["voice"]["demo"], o
+            assert o["from_library"]["id"] == sid and "sample song in your library" in o["note"] and "subject" not in o, o
+            assert oneshot.sample_song("hold on", "Ken Mercer")["id"] == sid
+            for title, artist in (("Hold On", "Wilson Phillips"), ("Hold", None), ("Hold On Tight", None)):
+                assert oneshot.sample_song(title, artist) is None, (title, artist)
+            # the same song with someone else's voice: still the library's sample, the voice the usual way
+            service.online_for = lambda *a, **k: []
+            service.subject_of = lambda *a, **k: None
+            o = plan("Hold On as Morgan Freeman")
+            assert o["from_library"]["id"] == sid and o["ask"] is False and o["voice"]["how"] == "train", o
+            # a real "Smoke" never gets the demo voice
+            assert service.demo_for("Smoke") is None and service.demo_for("Agent Smoke").name == "agent-smoke"
+            src = (ROOT / "undercover" / "frontman" / "oneshot.py").read_text(encoding="utf-8")
+            assert "lib = None if (song_url or choice or style) else sample_song(title_q, artist)" in src
+            assert "if not song_url and not artist and not lib:" in src and "if (not trained_ok or subject) and not demo:" in src
+            assert 'if getattr(pick, "meta", None):   # the library\'s own copy' in src
+        finally:
+            firstrun.SAMPLE, firstrun.DEMO, service.online_for, service.subject_of, ambiguity.choices_for = saved
+    return "sample song + demo voice: no question, no check, no lookup; other titles and artists aren't the sample"
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -4272,7 +4320,7 @@ def u_rolloff_covers():
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
     # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and (improved.py) an improved voice's listening copies;
     # expired after its 30 days); a new caller must be added here on purpose
-    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == [*["app/firstrun.py"] * 3, "core/doctor.py", "core/tailnet.py",
+    assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/firstrun.py", "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/ytdlp.py", "doubleagent/improved.py",
                                                                         "frontman/history.py", "safehouse/library.py", *["safehouse/smaller.py"] * 10,
@@ -6696,7 +6744,7 @@ def u_page_rules():
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"
 
 
-@check("the first run (app/firstrun.py; the First assignment is off for 1.0): state once per install, the seeds (sample song, demo voice), done; the demo voice is nobody to search for")
+@check("a fresh install's seeds (app/firstrun.py; the First assignment is removed for 1.0): decided once per install, the sample song and the demo voice seeded once (a deleted one isn't brought back), an existing install gets none; the demo voice is nobody to search for")
 def u_firstrun():
     import numpy as np
     import soundfile as sf
@@ -6713,7 +6761,7 @@ def u_firstrun():
             (empty / "sample.json").write_text(json.dumps({"title": "x", "file": "sample.flac"}), encoding="utf-8")
             firstrun.SAMPLE, firstrun.DEMO = empty, t / "assets" / "no-voice"
             assert firstrun.sample_info() is None and firstrun.seed() == {"song": None, "voice": None}
-            # a fresh install: done = null, both seeds
+            # a fresh install: both seeds
             sample = t / "assets" / "sample"
             sample.mkdir(parents=True)
             sf.write(sample / "sample.wav", (0.1 * np.sin(np.linspace(0, 880 * np.pi, 44100 * 3))).astype(np.float32), 44100)
@@ -6722,7 +6770,8 @@ def u_firstrun():
             _fake_demo_voice(t / "assets" / "demo-voice" / "agent-smoke")
             firstrun.SAMPLE, firstrun.DEMO = sample, t / "assets" / "demo-voice" / "agent-smoke"
             assert firstrun.state_file().parent == t and firstrun.load() is None
-            assert firstrun.first_run()["done"] is None
+            st = firstrun.first_run()
+            assert st["install"] == "fresh" and st["seeded"]["song"] and st["seeded"]["voice"] == "agent-smoke", st
             sid = firstrun.sample_song_id()
             assert sid, "the sample song wasn't added"
             meta = json.loads((config_path("uploads_dir") / f"{sid}.json").read_text(encoding="utf-8"))
@@ -6732,62 +6781,7 @@ def u_firstrun():
             info = voices.voice_info(v)
             assert info["demo"] is True and info["trained"] is False, info
             assert not [d for d in voices.voices_dir().iterdir() if d.name.startswith(".")], "a seeding folder was left"
-            assert firstrun.first_run()["done"] is None   # once
-            # a newer Agent Smoke ships: offered, Update swaps it in (the old aside, out of the voice list, the user's
-            # name for it kept), Undo puts the old one back
-            assert firstrun.status()["demo_update"] is None and v.extra.get("demo_build")
-            vd = voices.voices_dir()
-            m = json.loads((vd / "agent-smoke" / "meta.json").read_text(encoding="utf-8"))
-            m["display"] = "My Smoke"
-            (vd / "agent-smoke" / "meta.json").write_text(json.dumps(m), encoding="utf-8")
-            import hashlib
-            ship = firstrun.DEMO
-            (ship / "model.pth").write_bytes(b"a newer build of the demo voice")
-            pth = (ship / "model.pth").read_bytes()
-            (ship / "manifest.json").write_text(json.dumps({"made": "2026-10-14", "files": {"model.pth": {
-                "size": len(pth), "sha256": hashlib.sha256(pth).hexdigest()}}}), encoding="utf-8")
-            offer = firstrun.status()["demo_update"]
-            assert offer == {"voice": "agent-smoke", "display": "My Smoke", "made": "2026-10-14"}, offer
-            r = firstrun.update_demo()
-            assert (vd / "agent-smoke" / "model.pth").read_bytes() == pth and r["tutorial"]["demo_update"] is None
-            assert voices.get_voice("agent-smoke").display == "My Smoke" and r["tutorial"]["demo_previous"] is True
-            assert (vd / firstrun.PREVIOUS / "model.pth").read_bytes() == b"not really a model"
-            assert [x.name for x in voices.list_voices()].count("agent-smoke") == 1, "the previous build shows as a voice"
-            firstrun.undo_demo()
-            assert (vd / "agent-smoke" / "model.pth").read_bytes() == b"not really a model"
-            assert not (vd / firstrun.PREVIOUS).exists() and firstrun.status()["demo_update"]["voice"] == "agent-smoke"
-            firstrun.update_demo()                                  # Update twice: one previous build kept, never more
-            try:
-                firstrun.update_demo()
-                raise AssertionError("updated when already the newest")
-            except ModelError:
-                pass
-            firstrun.undo_demo()                                    # back to the first build
-            calls, real_retry = [], firstrun.fsutil.retry           # the new one can't go in (a file held open): the
-            def failing(fn, *a, **k):                               # installed one is back, nothing goes missing
-                calls.append(1)
-                if len(calls) == 3:
-                    raise PermissionError("held open")
-                return real_retry(fn, *a, **k)
-            firstrun.fsutil.retry = failing
-            try:
-                firstrun.update_demo()
-                raise AssertionError("the update said it worked")
-            except PermissionError:
-                pass
-            finally:
-                firstrun.fsutil.retry = real_retry
-            assert (vd / "agent-smoke" / "model.pth").read_bytes() == b"not really a model"
-            assert voices.get_voice("agent-smoke").display == "My Smoke"
-            assert not (vd / firstrun.PREVIOUS / "meta.json.previous").exists(), "a half update was left"
-            assert not [d for d in vd.iterdir() if d.name.startswith(".agent-smoke-updating")], "the update's folder was left"
-            assert [x.name for x in voices.list_voices()].count("agent-smoke") == 1
-            # the shipped files back to the first build, as the rest of the check expects
-            old = b"not really a model"
-            (ship / "model.pth").write_bytes(old)
-            (ship / "manifest.json").write_text(json.dumps({"files": {"model.pth": {
-                "size": len(old), "sha256": hashlib.sha256(old).hexdigest()}}}), encoding="utf-8")
-            assert firstrun.status()["demo_update"] is None
+            assert firstrun.first_run() == st and v.extra.get("demo_build")   # once; the shipped build recorded
             # the demo voice is nobody to search for
             c = next(x for x in night.candidates() if x["voice"] == "agent-smoke")
             assert c["can"] is False and c["demo"] is True and "not a real person" in c["note"], c
@@ -6812,11 +6806,12 @@ def u_firstrun():
                 assert "real Smoke" in str(e), e
             finally:
                 service.online_for = real_ref
-            # done (the first cover finished); after the user deleted both, seeding brings them back once, never doubled
-            assert firstrun.mark_done()["tutorial"]["done"] == time.strftime("%Y-%m-%d")
+            # the user deleted both: the next start doesn't bring them back (decided once); seeding itself adds them once
             for f in config_path("uploads_dir").glob(f"{sid}.*"):
                 f.unlink()
             voices.remove_voice("agent-smoke")
+            assert firstrun.first_run() == st and firstrun.sample_song_id() is None
+            assert not voices.voices_dir().joinpath("agent-smoke").exists(), "a deleted demo voice came back at the next start"
             r = firstrun.seed()
             assert r["song"] and r["voice"] == "agent-smoke", r
             assert firstrun.seed() == {"song": firstrun.sample_song_id(), "voice": "agent-smoke"}   # nothing doubled
@@ -6852,13 +6847,16 @@ def u_firstrun():
             firstrun.SAMPLE, firstrun.DEMO = saved
     with isolated_data():   # an install that already made covers / trained voices: marked, nothing seeded
         _fake_voice("someone-uc", extra={"trained": True, "person": "Someone"})
-        assert firstrun.first_run()["done"] == "existing install" and firstrun.sample_song_id() is None
+        assert firstrun.first_run()["install"] == "existing install" and firstrun.sample_song_id() is None
         assert not voices.voices_dir().joinpath("agent-smoke").exists()
+    with isolated_data():   # an install from before 1.0 (the old {done} state): decided already, nothing seeded
+        firstrun.state_file().write_text(json.dumps({"done": None, "since": "2026-10-13"}), encoding="utf-8")
+        assert firstrun.first_run() == {"done": None, "since": "2026-10-13"} and firstrun.sample_song_id() is None
     import inspect
     from undercover.doubleagent import api as da_api   # "Do it all" called a local function named like the module it uses
     assert "def service(" not in inspect.getsource(da_api.start_auto), "start_auto shadows the service module again"
     why = firstrun.demo_files()   # the real shipped demo voice: its files are made by scripts/make_demo_voice.py, not kept in git
-    return ("fresh: done null + both seeds; existing install; done; seeding once; manifest checked; never searched for; "
+    return ("fresh: both seeds, once (a deleted one stays deleted); existing install and an old state: none; manifest checked; never searched for; "
             + ("the shipped demo voice matches its manifest" if why is None else f"NOTE: {why}"))
 
 
@@ -7030,7 +7028,6 @@ PHONE_SAMPLES = [
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
-    ("POST", "/api/tutorial/done"), ("POST", "/api/tutorial/demo/update"), ("POST", "/api/tutorial/demo/undo"),
     ("GET", "/api/library/smaller"), ("POST", "/api/library/smaller/start"), ("POST", "/api/library/smaller/keep"),
     ("POST", "/api/library/smaller/undo"),
     ("POST", "/api/library/voices/some-voice/full-index"),
@@ -7055,13 +7052,44 @@ def u_phone_routes():
         for lit in re.findall(r"""["'`](/api/[A-Za-z0-9_./-]*)""", f.read_text(encoding="utf-8")):
             lits.add(lit.rstrip("/."))
     paths = [p for _, p in PHONE_SAMPLES]
-    # the First assignment's own routes, parked with its page code (tutorial.js, ASSIGNMENT_ON = false) until its redesign:
-    # no server route in 1.0 (u_no_assignment checks the switch)
-    parked = {"/api/tutorial/greetings", "/api/tutorial/reset"}
-    missing = sorted(lit for lit in lits if lit not in parked and not any(p.startswith(lit) for p in paths))
+    missing = sorted(lit for lit in lits if not any(p.startswith(lit) for p in paths))
     assert not missing, f"/api paths in the code with no example (add a row to app/phone_api.ROUTES and PHONE_SAMPLES): {missing}"
     pc = sum(phone_api.policy(m, p)[0] == "pc" for m, p in PHONE_SAMPLES)
     return f"{len(phone_api.ROUTES)} rows, {len(PHONE_SAMPLES)} examples ({pc} PC-only), {len(lits)} paths in the code"
+
+
+@check("api: the first run's one-shot, for real (Q's Make it): 'Hold On as Agent Smoke' plans and makes a cover of the library's sample song in the demo voice, with nothing searched or downloaded")
+def a_desk_oneshot():
+    from undercover.app import firstrun
+    if firstrun.sample_info() is None or firstrun.demo_files():
+        return "skipped: the sample song or the demo voice isn't shipped in this checkout"
+    seeded = firstrun.seed()   # into the sandbox's folders (this process points at them)
+    assert seeded["song"] and seeded["voice"] == "agent-smoke", seeded
+    o = api("/api/auto/plan?text=" + urllib.parse.quote("Hold On as Agent Smoke"))
+    assert o["ask"] is False and not o.get("voice_ask") and o["voice"]["how"] == "installed", o
+    assert o["from_library"]["id"] == seeded["song"], o
+    before = {c["id"] for c in api("/api/library/covers")}
+    r = api("/api/auto", {"text": "Hold On as Agent Smoke"})
+    req = urllib.request.Request(BASE + f"/api/jobs/{r['job']}/events")
+    final, said, plan = None, [], {}
+    with urllib.request.urlopen(req, timeout=900) as resp:
+        for raw in resp:
+            line = raw.decode("utf-8").strip()
+            if not line.startswith("data: "):
+                continue
+            ev = json.loads(line[6:])
+            plan = ev.get("plan") or plan
+            if ev.get("message"):
+                said.append(ev["message"])
+            if ev.get("final"):
+                final = ev
+                break
+    assert final and final["state"] == "done", f"the one-shot ended {final and final.get('state')}: {final and final.get('message')}"
+    assert not [m for m in said if "YouTube" in m or "Downloading" in m or "Looking for" in m], said
+    assert (plan.get("song") or {}).get("id") == seeded["song"] and (plan.get("voice") or {}).get("name") == "agent-smoke", plan
+    new = [c for c in api("/api/library/covers") if c["id"] not in before]
+    assert new, "no new cover"
+    return f"plan and one-shot from the desk: a cover of the sample song in Agent Smoke ({len(said)} messages, none searched)"
 
 
 @check("api: the Doctor (fast report, the UnderCover row, the diagnostics file's contents and the file itself)")
@@ -7459,15 +7487,12 @@ def a_themes():
     return f"{len(r['themes'])} themes listed; import, css, export, refusal, delete; CSP on both pages"
 
 
-@check("api: the first run (status field, done; the First assignment's greetings and Replay are gone in 1.0)")
+@check("api: the First assignment's routes and status field are gone in 1.0; the seeds the first run uses are listed (sample: true, demo: true)")
 def a_firstrun():
-    from undercover.app import firstrun
-    t = api("/api/status").get("tutorial")   # (the name the page reads)
-    assert t is not None and "done" in t and "demo_update" in t, t
-    assert t["done"] == "existing install", t   # the sandbox holds a trained voice: an install from before the first run
-    assert api("/api/tutorial/done", {})["tutorial"]["done"] == time.strftime("%Y-%m-%d")
-    assert api("/api/status")["tutorial"]["done"] == time.strftime("%Y-%m-%d")
-    for path, body in (("/api/tutorial/greetings", None), ("/api/tutorial/greetings/good-morning.mp3", None), ("/api/tutorial/reset", {})):
+    assert "tutorial" not in api("/api/status"), "the status still carries the tutorial field"
+    for path, body in (("/api/tutorial/done", {}), ("/api/tutorial/reset", {}), ("/api/tutorial/demo/update", {}),
+                       ("/api/tutorial/demo/undo", {}), ("/api/tutorial/greetings", None),
+                       ("/api/tutorial/greetings/good-morning.mp3", None)):
         try:
             api(path, body)
             raise AssertionError(f"{path} still answers")
@@ -7480,7 +7505,7 @@ def a_firstrun():
         assert c["can"] is False, c
     songs = api("/api/library/songs")
     assert all("sample" in x for x in songs)
-    return f"existing install, then done; greetings and Replay 404; demo voice {'listed' if demo else 'not in this sandbox'}"
+    return f"6 routes 404, no status field; demo voice {'listed' if demo else 'not in this sandbox'}"
 
 
 @check("Make smaller (phase 24): a project's WAV clips become FLAC (bit-identical) and its data.pt waits aside, Undo puts them back, Keep deletes only what was set aside; a voice's index shrinks with the full one aside; never automatic")
@@ -7986,22 +8011,23 @@ def u_lossless():
     return "clips FLAC (bit-identical, WAV still read); key changes FLAC-24 / float over 1.0; save linked, each copy survives delete, move, restore"
 
 
-@check("the First assignment's server side is gone for 1.0 (MasterPlan: parked on branch tutorial-redesign): no greetings, no Replay, no clips; the first run keeps the seeds, the done mark and the demo voice update; the page's parked code calls the removed routes only behind ASSIGNMENT_ON = false")
+@check("the First assignment is removed for 1.0 (MasterPlan; parked on branch tutorial-redesign): no tutorial module, routes, status field, clips or page script; app/firstrun.py keeps only the seeds")
 def u_no_assignment():
     from undercover.app import firstrun, phone_api
     assert not (ROOT / "undercover" / "app" / "tutorial.py").exists()
+    assert not (ROOT / "undercover" / "web" / "tutorial.js").exists()
     assert not (ROOT / "undercover" / "assets" / "demo-voice" / "greetings").exists(), "the greeting clips still ship"
-    for gone in ("greetings", "greeting_file", "reset", "GREETINGS"):
+    for gone in ("greetings", "reset", "status", "mark_done", "handle", "demo_update", "update_demo", "undo_demo", "PREVIOUS"):
         assert not hasattr(firstrun, gone), gone
-    for keep in ("first_run", "mark_done", "seed", "seed_song", "seed_voice", "demo_update", "update_demo", "undo_demo", "status"):
+    for keep in ("first_run", "seed", "seed_song", "seed_voice", "sample_song_id", "demo_files"):
         assert callable(getattr(firstrun, keep)), keep
     rows = " ".join(rx for _, rx, _, _ in phone_api.ROUTES)
-    assert "greetings" not in rows and "reset" not in rows, rows
-    tjs = (ROOT / "undercover" / "web" / "tutorial.js").read_text(encoding="utf-8")
-    assert "const ASSIGNMENT_ON = false;" in tjs, "the page's First assignment is on, but its server side is gone"
+    assert "/api/tutorial" not in rows, rows
+    srv = (ROOT / "undercover" / "app" / "server.py").read_text(encoding="utf-8")
+    assert "firstrun.handle" not in srv and '"tutorial":' not in srv
     src = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
     assert "greeting" not in src.lower() and "from undercover.app import firstrun" in src
-    return "greetings, Replay and the clips gone; the first run's seeds, done mark and demo update kept"
+    return "module, routes, status field, clips and page script gone; the seeds kept"
 
 
 @check("api: the tray's client against the sandbox (status, jobs, phone, pause / resume, a refusal in plain words)")
@@ -8737,7 +8763,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_page_rules, u_page_syntax, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -8759,6 +8785,7 @@ def main():
                         fn()
                     if not a.no_cover:
                         a_cover()
+                        a_desk_oneshot()
                         a_speech()
                         a_jobs_feed()
                     if a.full:

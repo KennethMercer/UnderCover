@@ -317,8 +317,7 @@ class Handler(BaseHTTPRequestHandler):
                     or frontman_api.handle(self, "GET", p) or speakeasy_api.handle(self, "GET", p)
                     or doctor_api.handle(self, "GET", p) or phone_api.handle(self, "GET", p)
                     or themes_api.handle(self, "GET", p) or ear_api.handle(self, "GET", p)
-                    or vault_api.handle(self, "GET", p) or gamepause_api.handle(self, "GET", p)
-                    or firstrun.handle(self, "GET", p)):
+                    or vault_api.handle(self, "GET", p) or gamepause_api.handle(self, "GET", p)):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
@@ -353,7 +352,6 @@ class Handler(BaseHTTPRequestHandler):
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
                                    "away_ready": self.remote and _away_ready(),
-                                   "tutorial": firstrun.status(),   # (the name the page reads: app/firstrun.py)
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
                                    "app_folder": None if self.remote else str(ROOT)})
             if p == "/api/voices":
@@ -411,7 +409,7 @@ class Handler(BaseHTTPRequestHandler):
         if (train_api.handle(self, "POST", p) or safehouse_api.handle(self, "POST", p)
                 or frontman_api.handle(self, "POST", p) or speakeasy_api.handle(self, "POST", p)
                 or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)
-                or themes_api.handle(self, "POST", p) or firstrun.handle(self, "POST", p)
+                or themes_api.handle(self, "POST", p)
                 or ear_api.handle(self, "POST", p) or vault_api.handle(self, "POST", p)
                 or gamepause_api.handle(self, "POST", p)):
             return

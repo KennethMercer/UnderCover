@@ -497,6 +497,16 @@ def train_estimate_s(person: str) -> float:
     return estimate({"kind": "new", "target": person})["total"] * 60.0
 
 
+def demo_for(person: str, cands: list | None = None):
+    """The demo voice ("Agent Smoke"), when the request asks for it by its own name; else None. installed_for matches
+    name endings, and a real artist called "Smoke" must never get it. Asked for, it's used as it is: there are no clips
+    of nobody to check, nobody to look up, and nothing to ask (the plan, the one-shot and resolve_voice all use this)."""
+    from ..core.voices import display_name
+    if cands is None:
+        cands = installed_for(person) or []
+    return next((v for v in cands if (v.extra or {}).get("demo") and slug(person) in (v.name, slug(display_name(v)))), None)
+
+
 def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dict, choice: str | None = None):
     """-> installed Voice to use (training one if nothing measured good enough).
     choice: the user's answer to the plan's voice question ("Ask me each time"): "use:<voice>" uses that installed
@@ -505,10 +515,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     from ..core.voices import download_and_install, get_voice, remove_voice
     from ..core.speaker import SpeakerEmbedder
     cands = installed_for(person) or []
-    # the demo voice only when asked for by its own name ("... as Agent Smoke"): installed_for matches name endings, and a
-    # real artist called "Smoke" must never get it; asked for, it's used as it is (there are no clips of nobody to check)
-    demo = next((v for v in cands if (v.extra or {}).get("demo")
-                 and slug(person) in (v.name, slug(display_name(v)))), None)
+    demo = demo_for(person, cands)   # "... as Agent Smoke": used as it is
     cands = [v for v in cands if not (v.extra or {}).get("demo")]
     if demo is not None:
         plan["voice"] = {"name": demo.name, "display": display_name(demo), "how": "installed", "checked": "the demo voice"}
