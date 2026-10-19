@@ -114,7 +114,7 @@ def main():
     # the optional add-ons' packages (core/addons.py): requirements/addon-<id>.txt, used by addons.install when present
     sys.path.insert(0, str(ROOT))
     from undercover.core import addons
-    from undercover.core import cadence  # noqa: F401  (registers F5-TTS, XTTS-v2)
+    from undercover.core import cadence  # noqa: F401  (registers the add-ons)
     for a in addons.ADDONS.values():
         if a.included or not a.wired or not a.packages:
             continue
