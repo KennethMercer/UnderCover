@@ -13,8 +13,7 @@ improve it overnight.
 
 SpeakEasy reads text aloud in a voice, in that person's own manner of speaking once the voice has learnt it.
 
-SafeHouse keeps your covers, speech, songs and voices. Its rooms are Library, Running, Storage (with the Vault
-backups), Add-ons, System (with the Doctor) and Settings.
+SafeHouse keeps your covers, speech, songs and voices. Its rooms are Library, Running, Storage (where the Vault keeps backups), Add-ons, System (with the Doctor) and Settings.
 
 The standard pages show what you need to get a result. Scores, settings, logs and engine choices are in Deep Cover,
 which you switch on from the top bar.
@@ -28,8 +27,7 @@ which you switch on from the top bar.
   training.
 - About 22.5 GB of free disk space. The installer checks that it fits before it starts.
 - An internet connection for setup, which downloads about 11.5 GB with an AMD card. That is everything: Python,
-  PyTorch for your card, the tools and all the AI models. Nothing downloads later, except an add-on you choose or a
-  repair.
+  PyTorch for your card, the tools and all the AI models. Nothing downloads later, except an add-on you choose, a repair, Away from home's Tailscale, or a fix for the YouTube downloader.
 
 ## Installing
 
