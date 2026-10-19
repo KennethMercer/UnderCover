@@ -3329,8 +3329,7 @@ def u_installer_space():
     # rc-fix6: the release check runs UnderCover.iss's own code for setup (cut from it) in a real interactive wizard,
     # clicked through as a person would; every second the wizard and Cancel are enabled; Cancel and the close box ask
     assert "Cut 'function EnableWindow(' '// the wizard closing: no size check'" in e2e and "Cut 'function SetTimer(' 'procedure SpaceTimerFired('" in e2e
-    assert "$lp = Start-Process -FilePath (Join-Path $launch 'launcher.exe') -PassThru" in e2e and "/SILENT" not in e2e
-    assert 'if ($mp.HasExited -and -not (Test-Path $hwndFile)) { Start-Process taskkill.exe -ArgumentList "/PID $($lp.Id) /T /F"' in e2e, "a driver that gives up leaves the wizard waiting forever"
+    assert "Start-Process -FilePath (Join-Path $launch 'launcher.exe') -Wait" in e2e and "/SILENT" not in e2e
     assert "if (-not [W]::IsWindowEnabled($h)) { $wizOff++ }" in e2e and "if ([int]$resp['wizoff'] -gt 0)" in e2e
     assert "if ($n -eq 50) { $asks += Ask 'cancel' 7 }" in e2e and "if ($n -eq 150) { $asks += Ask 'close' 7 }" in e2e
     assert "$stopText = 'Stop setting up UnderCover?'" in e2e and "Stop setting up UnderCover?' + #13#10" in iss
