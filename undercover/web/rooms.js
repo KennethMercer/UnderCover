@@ -71,7 +71,10 @@ async function loadAddons() {
   roomCounts();
 }
 
+// an optional add-on under an open licence (the original Chatterbox, MIT): nothing to accept, it's there once installed (the server's `open`)
+const openAddon = a => a.optional && a.open;
 function licenceChip(a) {
+  if (openAddon(a)) return `<span class="chip open">open source</span>`;
   if (a.optional) return `<span class="chip nc">personal use only</span>`;
   if (a.open_note && a.id === "separation") return `<span class="chip open">open-source code · models being checked</span>`;
   if (a.licence.startsWith("CC-BY-4")) return `<span class="chip open">open · credit the authors</span>`;
@@ -88,9 +91,9 @@ function addonSide(a) {
   if (a.included) return `<span class="astate ${a.installed ? "ok" : ""}">${a.installed ? "Included ✓" : "Included · downloads when first used"}</span><a class="linkbtn" href="${esc(a.licence_url)}" target="_blank" rel="noopener">Licence</a>`;
   if (!a.installable) return `<span class="astate">Not available yet</span><a class="linkbtn" href="${esc(a.licence_url)}" target="_blank" rel="noopener">Read licence</a>`;
   if (job) return `<span class="astate">Installing…</span>`;
-  if (a.installed && a.accepted) {
+  if (a.installed && (a.accepted || openAddon(a))) {
     const use = a.engine ? `<label class="check" style="font-size:13.5px" data-deep data-pc><input type="checkbox" data-use="${a.id}" ${a.in_use ? "checked" : ""}><span>Use for cadence speech</span></label>` : "";
-    return `<span class="astate ok">Installed ✓</span><span class="meta">added ${day(a.installed_on) || "earlier"} · licence accepted ${day(a.accepted)}</span>${use}
+    return `<span class="astate ok">Installed ✓</span><span class="meta">added ${day(a.installed_on) || "earlier"}${a.accepted ? ` · licence accepted ${day(a.accepted)}` : ""}</span>${use}
             <button class="btn danger" type="button" data-rm="${a.id}" data-pc>Remove · frees ${gb(a.disk || a.size_mb * 1e6)}</button>`;
   }
   if (R.open === a.id) return `<span class="astate">Not added</span>`;

@@ -195,8 +195,9 @@ document.addEventListener("uc:jobdone", e => {
   if (!FIRST.on || !["cover", "auto"].includes(j.kind) || (j.final?.state || j.state) !== "done") return;
   FIRST.on = false; $("#os-text").placeholder = FIRST.usual;
 });
-// The first start's download (about 1.3 GB of voice tools: the status's models_mb), in the one-shot card where a new user is, not only in
-// SafeHouse > System. The bar moves with models_progress (0-1); until there's a number it slides, to show that something is happening.
+// Models still to download (the status's first_run and models_mb): setup installs every model since rc-fix4b, so this is a repair (a cut-off or
+// deleted model), said in the one-shot card, not only in SafeHouse > System. The bar moves with models_progress (0-1); until there's a number it
+// slides, to show that something is happening.
 // (app.js's status poll calls it)
 function firstReady(s) {
   const box = $("#first-ready"); if (!box) return;
