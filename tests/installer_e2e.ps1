@@ -119,7 +119,12 @@ function FirstUse {
         Write-Host ("First use: " + ($said -join '; '))
     }
     $after = CacheList
-    $new = @(Compare-Object $before $after | Where-Object { $_.SideIndicator -eq '=>' } | ForEach-Object { ($_.InputObject -split '\|')[0] })
+    # (not downloads: the first start seeds the demo voice into models\voices from the app's own assets, and diffusers
+    # writes a tiny version marker on import; anything else new in the models folder or the caches is a download)
+    $new = @(Compare-Object $before $after | Where-Object { $_.SideIndicator -eq '=>' } | ForEach-Object {
+        $f, $n = $_.InputObject -split '\|'; [pscustomobject]@{ f = $f; n = [long]$n } } |
+        Where-Object { $_.f -notlike (Join-Path $dir 'models\voices\*') -and -not ($_.n -le 1024 -and (Split-Path $_.f -Leaf) -like 'version_*.txt') } |
+        ForEach-Object { $_.f })
     if ($new.Count) { return "files appeared during first use: $(($new | Select-Object -First 5) -join ', ')" }
     $log = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$out.err" -Raw -ErrorAction SilentlyContinue)
     if ($log -match 'Downloading|download_checks|iB/s') { return "the installed copy's log mentions a download" }
