@@ -4129,7 +4129,9 @@ def u_cadence():
     st = DK._speech_stats(x, "one two three four")
     assert st and abs(st["dur"] - 1.0) < 0.1 and st["rate"] == st["syl"] / st["dur"] and DK._speech_stats(x[:100], "a") == {}, st
     ids = {a["id"] for a in addons.status()}
-    assert {"f5", "xtts"} <= ids, ids
+    assert "f5" in ids, ids
+    # nothing listed that can't be had (MasterPlan, the user's fresh install: XTTS-v2 sat there as 'Not available yet')
+    assert "xtts" not in ids and all(a.wired for a in addons.ADDONS.values()), [a.id for a in addons.ADDONS.values() if not a.wired]
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
     with isolated_data():
         _fake_addon_roundtrip(addons)
@@ -4200,8 +4202,8 @@ def u_addons():
                          text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-400:]
     rows = {r["id"]: r for r in json.loads(out.stdout)}
-    assert {"f5", "xtts", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows), sorted(rows)
-    assert rows["f5"]["installable"] and not rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["xtts"]
+    assert {"f5", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows) and "xtts" not in rows, sorted(rows)
+    assert rows["f5"]["installable"] and rows["kokoro"]["included"], rows["f5"]
     # rc-fix4b: the original Chatterbox is an optional add-on (open licence: nothing to accept; Turbo comes with setup)
     assert rows["chatterbox"]["installable"] and not rows["chatterbox"]["included"] and rows["chatterbox-turbo"]["included"]
     assert addons.ADDONS["chatterbox"].open and addons.ADDONS["chatterbox"].files
