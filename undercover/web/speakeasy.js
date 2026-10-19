@@ -181,7 +181,7 @@ function seShowPlan() {
   const cadOn = p.mode === "cadence";
   $("#se-cad").disabled = !c.has;
   $("#se-cad-field").classList.toggle("off", !c.has);
-  $("#se-cad-note").textContent = c.has ? (cadOn ? "Their pace and pauses, from their own clips. It starts playing after the first few sentences."
+  $("#se-cad-note").textContent = c.has ? (cadOn ? "Their pace and pauses, from their own clips."
       : "Off: the quick built-in Reader speaks, then the voice makes it sound like them.")
     : c.queue ? "They're learning to speak (DoubleAgent); it's used as soon as it's ready."
     : c.can ? `Their own pace and pauses, learned from their clips. "Let it speak" on the voice makes it (minutes).` : (c.why || "Not available for this voice.");
@@ -215,7 +215,7 @@ function seSummary() {
   const cad = est ? est.mode === "cadence" : SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
   const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${est.waiting ? ` (${est.waiting} ahead in the queue)` : ""}`
     : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
-  const when = `${cad ? "the way they really do" : "read by the Reader"}${ready} · starts playing after the ${cad ? "first few sentences" : "first sentence"}`;
+  const when = `${cad ? "the way they really do" : "read by the Reader"}${ready} · ready to play after the ${cad ? "first few sentences" : "first sentence"}`;
   $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
     : `<b>${vname(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
 }
@@ -231,11 +231,12 @@ $("#se-generate").onclick = async () => {
   catch (e) { seSummary(); return showError(e.message, "SpeakEasy couldn't start"); }
   seStart(r.job, r.plan, r.estimate);
 };
-// resumed: a speech that was being made when the page reloaded (shown again, but it doesn't start talking by itself)
+// Nothing plays by itself (the user, rc-page11): once enough is made to play through, the player is ready and says so; the user presses play.
+// SE.started = "ready to play". resumed: a speech that was being made when the page reloaded, shown again (it never played by itself either).
 function seStart(job, plan, estimate, resumed = false) {
   if (SE.es) SE.es();
   SE.audio.pause(); SE.rec.pause(); seRecIcons();
-  Object.assign(SE, { job, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: resumed, estimate, jobPlan: plan,
+  Object.assign(SE, { job, sents: [], parts: [], cur: -1, waiting: false, done: false, result: null, started: false, estimate, jobPlan: plan,
                       startAfter: 1 });
   $("#se-now").hidden = false;
   if (typeof earShow === "function") earShow($("#se-ear"), "speech", null);   // a new reading: the last one's thumbs go
@@ -258,14 +259,14 @@ function seStart(job, plan, estimate, resumed = false) {
     if (ev.stage === "reading") $("#se-progress").textContent = ev.message.toLowerCase();
     if (ev.stage === "speaking") {
       SE.parts[ev.index] = { url: ev.url, seconds: ev.seconds };
-      $("#se-progress").textContent = `sentence ${ev.index + 1} of ${ev.of} ready`;
       SE.left = ev.left;
       seReading();
-      const ready = SE.parts.filter(Boolean).length;
-      if (!SE.started && (ready >= SE.startAfter || ev.index + 1 >= ev.of)) { SE.started = true; sePlayPart(0); }   // talk once enough is made
-      else if (!SE.started) $("#se-progress").textContent = `sentence ${ev.index + 1} of ${ev.of} ready · starts playing at ${SE.startAfter}`;
-      else if (SE.waiting && SE.parts[SE.cur + 1]) { SE.waiting = false; sePlayPart(SE.cur + 1); }
-      seTrack();
+      const ready = SE.parts.filter(Boolean).length, last = ev.index + 1 >= ev.of;
+      if (!SE.started && (ready >= SE.startAfter || last)) SE.started = true;   // enough to play through: ready, never played by itself
+      $("#se-progress").textContent = `sentence ${ev.index + 1} of ${ev.of} ready` + (!SE.started ? ` · ready to play after sentence ${SE.startAfter}`
+        : SE.cur < 0 && SE.audio.paused && !last ? " · ready to play: the rest is still being made" : "");
+      if (SE.waiting && SE.parts[SE.cur + 1]) { SE.waiting = false; sePlayPart(SE.cur + 1); }   // playing (the user pressed play) caught up: carries on
+      sePlayIcon(); seTrack();
     }
     if (ev.final) {
       stop(); SE.es = null; SE.done = true;
@@ -322,8 +323,9 @@ SE.audio.addEventListener("ended", () => {
 });
 SE.audio.addEventListener("timeupdate", () => seTrack());
 function sePlayIcon() {
-  const on = !SE.audio.paused || SE.waiting;
-  $("#se-play").textContent = on ? "❚❚" : "▶"; $("#se-play").setAttribute("aria-label", on ? "Pause" : "Play");
+  const on = !SE.audio.paused || SE.waiting, fresh = SE.started && SE.cur < 0 && !on && !!SE.parts[0];   // ready and not played yet: the button says so
+  $("#se-play").textContent = on ? "❚❚" : "▶"; $("#se-play").setAttribute("aria-label", on ? "Pause" : fresh ? "Play: ready" : "Play");
+  $("#se-play").classList.toggle("ready", fresh);
 }
 $("#se-play").onclick = () => {
   if (SE.waiting) { SE.waiting = false; return sePlayIcon(); }
