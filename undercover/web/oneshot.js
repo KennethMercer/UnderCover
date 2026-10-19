@@ -175,11 +175,10 @@ document.addEventListener("DOMContentLoaded", () => estimateFor("new", "", "sing
 $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan(); $("#os-text").focus(); });
 
 // ------------------------------------------------------------ the first run
-// A copy with no covers yet: the field stays empty, with "Pink Pony Club as Plankton" as its placeholder (grey, never sent), and the first
-// start's download sits under the card's line until it's done. The first cover that finishes puts the usual placeholder back. A filled-in
-// suggestion read as random words once the tutorial was gone (the user, rc-page8). The sample song and Agent Smoke stay installed for the
-// tutorial redesign (the tutorial-redesign branch), where any first-run hint needs a dismiss, and skipping it makes it go for good.
-const FIRST = { on: false, placeholder: "Pink Pony Club as Plankton", usual: "" };
+// The field is always empty, with "Pink Pony Club as Plankton" as its placeholder (index.html: grey, never sent; the user, rc-page8 and
+// rc-page14: one placeholder, on a first run and after). A filled-in suggestion read as random words once the tutorial was gone. The first
+// start's download sits under the card's line until it's done. The sample song and Agent Smoke stay installed for the tutorial redesign (the
+// tutorial-redesign branch), where any first-run hint needs a dismiss, and skipping it makes it go for good.
 async function firstBoot() {
   let s, hist;
   try { [s, hist] = await Promise.all([api("/api/status"), api("/api/history")]); } catch (e) { return; }
@@ -187,14 +186,7 @@ async function firstBoot() {
   // A brand-new install (the voice tools still to download): what this browser remembers (the last tab and room, a song or voice) belongs to
   // another install on the same address, so it goes. It once opened a fresh 1.0 on SafeHouse > System (the user, rc-page3).
   if (s.first_run) { ["uc-tab", "uc-sh-room", "uc-song", "uc-voice"].forEach(k => store.set(k, null)); showTab("frontman"); window.scrollTo({ top: 0 }); }
-  const f = $("#os-text");
-  FIRST.on = true; FIRST.usual = f.placeholder; f.placeholder = FIRST.placeholder;
 }
-document.addEventListener("uc:jobdone", e => {
-  const j = e.detail;
-  if (!FIRST.on || !["cover", "auto"].includes(j.kind) || (j.final?.state || j.state) !== "done") return;
-  FIRST.on = false; $("#os-text").placeholder = FIRST.usual;
-});
 // Models still to download (the status's first_run and models_mb): setup installs every model since rc-fix4b, so this is a repair (a cut-off or
 // deleted model), said in the one-shot card, not only in SafeHouse > System. The bar moves with models_progress (0-1); until there's a number it
 // slides, to show that something is happening.
