@@ -3576,6 +3576,17 @@ def u_model_download_said():
         ev2 = n.events[-1]
         assert ev2["message"].startswith("Downloading the backing-vocal model") and ev2["stage_left"] > 0, ev2
         assert ev2.get("total_left") is None, ev2
+        # Cancel during the download stops it (raised through refetch, which re-raises InterruptedError), never a
+        # fallback to audio-separator's own download
+        n.cancel = True
+        try:
+            say2(400_000_000, 913_000_000)
+            raise AssertionError("a cancelled job's download went on")
+        except InterruptedError as e:
+            assert str(e) == "cancel"
+        sep_src = (ROOT / "undercover" / "core" / "separate.py").read_text(encoding="utf-8")
+        g = sep_src[sep_src.index("    def _get(self, model: str):"):sep_src.index("from audio_separator.separator import Separator")]
+        assert g.index("except InterruptedError") < g.index("except Exception") and "raise Cancelled() if" in g
     finally:
         J.CURRENT[0], S.SAY_AFTER_S, S.SPEED_FROM_S = real_current, real_after, real_from
     J.CURRENT[0] = None

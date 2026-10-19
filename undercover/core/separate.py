@@ -107,6 +107,11 @@ def _say_download(model: str):
     frac = next((ev.get("frac") for ev in reversed(job.events[-40:]) if ev.get("stage") == stage and ev.get("frac") is not None), 0.0)
 
     def say(done: int, total: int):
+        # Cancel (a cover, a one-shot) and Stop (a separation's): within a megabyte, the .part kept for the next try
+        if getattr(job, "cancel", False):
+            raise InterruptedError("cancel")
+        if _stop is not None and _stop():
+            raise InterruptedError("stop")
         now = _t.time()
         if now - st["last"] < 1 and done < total:
             return
@@ -253,6 +258,9 @@ class StemSeparator:
         if model not in self._loaded:
             try:   # the model's files first, from its pinned sources, with the progress said (rc-fix4)
                 fetch_model(model, _say_download(model))
+            except InterruptedError as e:   # Cancel or Stop during the download: that, never a second download
+                from .jobs import Cancelled
+                raise Cancelled() if str(e) == "cancel" else Stopped()
             except Exception as e:   # noqa: BLE001 - audio-separator still tries its own download
                 print(f"Couldn't download {MODEL_SAY.get(model, model)} ahead ({type(e).__name__}: {e}); "
                       "the separator will try its own source.", flush=True)
