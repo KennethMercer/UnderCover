@@ -109,6 +109,8 @@ a { color: inherit; }
 #drop-empty strong { font: 600 17px var(--display); }
 .song-row { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
 .song-row strong { font-size: 16px; overflow-wrap: anywhere; min-width: 0; }
+/* SpeakEasy's player when the first sentences are ready and nothing has played yet: it waits for the user (rc-page11: no autoplay) */
+#se-play.ready { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); }
 /* the song on the desk: play / pause, its waveform (click to seek) and the time (rc-page11) */
 .song-wave { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
 .song-wave .play { width: 36px; height: 36px; font-size: 12px; flex: none; }

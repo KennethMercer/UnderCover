@@ -6900,6 +6900,11 @@ def u_page_rules():
     assert 'id="song-play"' in ix and 'id="a-song"' in ix and 'id="wave-song"' in ix and "function drawSongWave" in app and "ResizeObserver(() => drawSongWave())" in app, "the song on the desk lost its play button or its waveform"
     assert "if (open) drawSongWave();" in app and ".setup > .panel { grid-template-columns: minmax(0, 1fr); }" in css, "the song's waveform isn't drawn when the build path opens, or the song card sticks out at phone width"
     assert "aSong.src = s.url" in app and "aSong.pause(); $(\"#play\")" in app and "e.target !== e.currentTarget) return; if (e.key" in app, "the song's player lost its source, its stop with the others, or the drop zone takes the play button's keys again"
+    # rc-page11 (the user): SpeakEasy never starts talking by itself; when the first sentences are made the player is ready and says so. The
+    # cadence note doesn't promise it starts playing. SafeHouse's examples: "Peter Griffin" on SpeakEasy's new-voice field
+    se_js11 = (web / "speakeasy.js").read_text(encoding="utf-8")
+    assert "SE.started = true; sePlayPart(0)" not in se_js11 and "starts playing" not in se_js11 and "ready to play: the rest is still being made" in se_js11 and '"Play: ready"' in se_js11, "SpeakEasy plays by itself again"
+    assert 'id="se-newname" placeholder="Peter Griffin"' in ix, "SpeakEasy's name field lost its example"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
