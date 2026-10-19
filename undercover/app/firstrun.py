@@ -1,6 +1,7 @@
-"""A fresh install's seeds (1.0: the First assignment is removed and parked on branch tutorial-redesign). The page's
-first run (oneshot.js) offers "Hold On as Agent Smoke" when /api/history is empty and both seeds are there; it reads
-`sample: true` on the song (/api/library/songs) and `demo: true` on the voice (/api/voices), nothing from here.
+"""A fresh install's seeds (1.0: the First assignment is removed and parked on branch tutorial-redesign). The sample
+song and the demo voice are there to try; the page's one-shot field starts empty, with an example placeholder (rc-page8).
+The page reads `sample: true` on the song (/api/library/songs) and `demo: true` on the voice (/api/voices), nothing
+from here; the one-shot planner knows them ("Hold On as Agent Smoke": the library's song, the installed voice).
 
 - **Once per install** (`first_run`, at startup): `tutorial.json` next to the config file (the name it always had: the
   vault backs it up and restores it under that name) records that the seeding was decided. An install that already has

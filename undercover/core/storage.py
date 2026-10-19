@@ -201,9 +201,13 @@ def check(group: str, folder: str) -> dict:
 # ---------------------------------------------------------------- config.toml
 
 def _toml_value(key: str, default: str, new: Path) -> str:
+    """A [paths] value as `config set` writes it: a TOML basic string (JSON's escapes are TOML's), so every reader of
+    config.toml sees one form (rc-fix5: the uninstaller read only basic strings and named the default folders after a
+    move written as a 'literal' string; it reads both now)."""
+    import json
     if _same(new, ROOT / default):
-        return f'"{default}"'
-    return "'" + str(new) + "'"   # a TOML literal string: backslashes stay as they are
+        return json.dumps(default)
+    return json.dumps(str(new))
 
 
 def write_paths(values: dict, config_file: Path = None):

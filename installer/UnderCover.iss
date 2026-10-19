@@ -476,7 +476,9 @@ end;
 
 // ---------------------------------------------------------------- the uninstaller's last word: what it kept, and why
 
-// a folder from config.toml's [paths] (setup writes it there when the files page moved it), else the default
+// a folder from config.toml's [paths] (setup and SafeHouse's Storage write it there), else the default. Both TOML string
+// forms: "basic" (escaped backslashes; config set, and Storage since rc-fix5) and 'literal' (as written; Storage before
+// rc-fix5, so an install moved then still lists the folders it moved to)
 function KeptPath(Key, Fallback: String): String;
 var
   Lines: TArrayOfString;
@@ -489,12 +491,19 @@ begin
     S := Trim(Lines[I]);
     if (Pos(Key, S) = 1) and (Pos('=', S) > 0) and (Trim(Copy(S, Length(Key) + 1, Pos('=', S) - Length(Key) - 1)) = '') then begin
       S := Trim(Copy(S, Pos('=', S) + 1, Length(S)));
-      if Copy(S, 1, 1) <> '"' then Exit;
-      S := Copy(S, 2, Length(S));
-      Q := Pos('"', S);
-      if Q = 0 then Exit;
-      S := Copy(S, 1, Q - 1);
-      StringChangeEx(S, '\\', '\', True);   // a TOML string's escaped backslashes
+      if Copy(S, 1, 1) = '"' then begin
+        S := Copy(S, 2, Length(S));
+        Q := Pos('"', S);
+        if Q = 0 then Exit;
+        S := Copy(S, 1, Q - 1);
+        StringChangeEx(S, '\\', '\', True);   // a basic string's escaped backslashes
+      end else if Copy(S, 1, 1) = #39 then begin   // a literal string: as written, no escapes
+        S := Copy(S, 2, Length(S));
+        Q := Pos(#39, S);
+        if Q = 0 then Exit;
+        S := Copy(S, 1, Q - 1);
+      end else
+        Exit;
       StringChangeEx(S, '/', '\', True);
       if (Copy(S, 2, 1) <> ':') and (Copy(S, 1, 2) <> '\\') then S := ExpandConstant('{app}\') + S;   // relative: in the app folder
       Result := S;
