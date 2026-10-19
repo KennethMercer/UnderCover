@@ -34,7 +34,7 @@
 .workbar #wb-main[data-goto] { cursor: pointer; }
 .workbar #wb-main[data-goto]:hover #wb-text { text-decoration: underline; text-underline-offset: 3px; }
 .workbar #wb-more { color: var(--jc); white-space: nowrap; }
-.workbar-wrap:has(> .workbar[hidden]):has(> .assign[hidden]) { display: none; }
+.workbar-wrap:has(> .workbar[hidden]) { display: none; }
 .workbar { --jc: var(--c-doubleagent); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center;
   background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--jc); border-radius: var(--r); padding: 9px 12px; font-size: 14px; }
 .workbar[data-owner="frontman"] { --jc: var(--c-frontman); }
@@ -48,7 +48,6 @@
 .workbar .bar i { background: var(--jc); }
 .workbar .wb-btns { display: flex; gap: 8px; align-items: center; }
 .workbar .wb-l::before { content: " · "; }
-.wb-fold { display: none; }
 .workbar .linkbtn { color: var(--jc); }
 
 /* ---------- module page heading ---------- */
@@ -171,16 +170,6 @@ body.drawer-open { overflow: hidden; }
   .workbar .wb-t, .workbar .wb-l { display: block; }
   .workbar .wb-l::before { content: none; }
   .workbar .wb-l { font: 12.5px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* one sticky band at a time (consult 7): while the First assignment is up, a running strip folds to its line of light, the owner's glyph, the job and the time left */
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] { grid-template-columns: minmax(0, 1fr); padding: 0; position: relative; }
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] > .who, .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] > .wb-btns,
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] #wb-text { display: none; }
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] .wb-fold { display: flex; justify-content: flex-end; align-items: center; gap: 8px; width: 100%; padding: 5px 16px 7px; background: none; border: 0; color: var(--muted); font: 500 12.5px var(--mono); cursor: pointer; }
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] .wb-fold b { color: var(--fg); font: 600 13px var(--body); }
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] .wb-fold .ico { width: 14px; height: 14px; color: var(--jc); }
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] .wb-fold .arrow { color: var(--jc); }
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] .wb-main { position: absolute; left: 0; right: 0; bottom: 0; }
-  .workbar-wrap:has(> .assign:not([hidden])) .workbar[data-state="run"] .wb-main .bar { margin: 0; height: 2px; }
   .workbar .who .ico { width: 18px; height: 18px; }
   .workbar #wb-open { display: none; }
   .wrap { padding-inline: 16px; padding-block: 14px 96px; }

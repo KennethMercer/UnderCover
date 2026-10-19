@@ -143,7 +143,7 @@ async function previewPlan() {
   const text = $("#os-text").value.trim();
   const seq = ++OS.planSeq;
   const key = planKey();
-  if (typeof firstHolds === "function" && firstHolds()) { OS.last = null; return firstLine(); }   // the first run's own line (tutorial.js)
+  if (firstHolds()) { OS.last = null; return firstLine(); }   // the first run's own line (below)
   if (!text) { $("#os-plan").textContent = PLAN_IDLE; syncGo(null); return; }
   try {
     const p = await api(`/api/auto/plan?text=${encodeURIComponent(text)}&train=${$("#os-train").checked ? 1 : 0}${OS.subject ? "&subject=" + encodeURIComponent(OS.subject) : ""}`);
@@ -175,11 +175,76 @@ $("#os-train").onchange = () => { resetGo(); previewPlan(); };
 document.addEventListener("DOMContentLoaded", () => estimateFor("new", "", "singing").then(e => { if (e?.total && $("#os-train-eta")) $("#os-train-eta").textContent = ` · ${etaWords({ low: e.total * 60, high: e.total * 60 })}`; }));   // the checkbox's time is the estimator's, not a fixed hour
 $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan(); $("#os-text").focus(); });
 
+// ------------------------------------------------------------ the first run
+// A copy with no covers yet, with the sample song (sample: true) and the demo voice (demo: true) on hand: the field holds "Hold On as Agent
+// Smoke", one line under it says what Make it does and how long it takes (the estimator's time for that cover), and the first start's
+// download sits just below until it's done. Make it with that text unchanged makes a plain cover of the sample song in the demo voice, as
+// Convert would: the planner reads neither name as the ones on this desk. The first cover that finishes ends it, and the normal line is back.
+// (1.0's first run, the user, rc-page6; the guided version waits on the tutorial-redesign branch.)
+const FIRST = { on: false, text: "Hold On as Agent Smoke", desk: null, say: "" };
+async function firstBoot() {
+  let s, hist, songs, voices;
+  try { [s, hist, songs, voices] = await Promise.all([api("/api/status"), api("/api/history"), api("/api/library/songs"), api("/api/voices")]); } catch (e) { return; }
+  if (hist.length) return;
+  // A brand-new install (the voice tools still to download): what this browser remembers (the last tab and room, a song or voice) belongs to
+  // another install on the same address, so it goes. It once opened a fresh 1.0 on SafeHouse > System (the user, rc-page3).
+  if (s.first_run) { ["uc-tab", "uc-sh-room", "uc-song", "uc-voice"].forEach(k => store.set(k, null)); showTab("frontman"); window.scrollTo({ top: 0 }); }
+  const desk = { song: (songs.songs || songs).find?.(x => x.sample), voice: (voices.voices || voices).find?.(v => v.demo) };
+  if (!desk.song || !desk.voice) return;
+  FIRST.on = true; FIRST.desk = desk;
+  if (!$("#os-text").value.trim()) $("#os-text").value = FIRST.text;
+  FIRST.say = "New here? Press Make it to hear a short sample song in the demo voice.";
+  firstLine();
+  try {
+    const e = await api("/api/estimate", { json: { song: desk.song.id, voice: desk.voice.name, options: S.opts } });
+    const m = Math.max(1, Math.round(e.total / 60));
+    if (e.total > 0) FIRST.say += ` It takes about ${m} minute${m === 1 ? "" : "s"}.`;
+  } catch (e) {}
+  firstLine();
+}
+const firstHolds = () => FIRST.on && $("#os-text").value.trim() === FIRST.text;   // the field still says the sample
+function firstLine() { if (firstHolds()) { $("#os-plan").textContent = FIRST.say; syncGo(null); } }
+// typed over, or an example picked: the sample's line goes at once (the plan for the new text takes a few seconds to come)
+const firstGone = () => { if (FIRST.on && !firstHolds() && $("#os-plan").textContent === FIRST.say) $("#os-plan").textContent = PLAN_IDLE; };
+$("#os-text").addEventListener("input", firstGone);
+$$("#os-ex button").forEach(b => b.addEventListener("click", firstGone));
+async function firstGo() {
+  if (S.job || S.osBusy) return;
+  const btn = $("#os-go"); btn.disabled = true;
+  try {
+    S.song = await api(`/api/songs/${FIRST.desk.song.id}`); store.set("uc-song", S.song.id); renderSong();
+    await loadVoices(FIRST.desk.voice.name);
+    await $("#convert").onclick();   // the cover Convert makes (app.js): its progress and its player
+  } catch (e) { showError(e.message, "Couldn't start the cover"); }
+  finally { btn.disabled = false; }
+}
+document.addEventListener("uc:jobdone", e => {
+  const j = e.detail;
+  if (!FIRST.on || !["cover", "auto"].includes(j.kind) || (j.final?.state || j.state) !== "done") return;
+  FIRST.on = false;
+  if ($("#os-text").value.trim() === FIRST.text) $("#os-text").value = "";
+  if (j.kind === "cover") previewPlan();   // the card's own line again (a one-shot's "Done in…" stays)
+});
+// The first start's download (about 1.3 GB of voice tools: the status's models_mb), in the one-shot card where a new user is, not only in
+// SafeHouse > System. The bar moves with models_progress (0-1); until there's a number it slides, to show that something is happening.
+// (app.js's status poll calls it)
+function firstReady(s) {
+  const box = $("#first-ready"); if (!box) return;
+  const on = !!(s && s.first_run && s.models === "loading");
+  box.hidden = !on;
+  if (!on) return;
+  const p = s.models_progress, bar = $("#first-ready-bar");
+  $("#first-ready-size").textContent = modelsSize(s);   // the real size, from the status (app.js)
+  bar.classList.toggle("indet", p == null);
+  $("i", bar).style.width = p != null ? `${Math.round(p * 100)}%` : "";
+}
+document.addEventListener("DOMContentLoaded", firstBoot);   // after shell.js (showTab) has loaded and opened the last tab
+
 // ------------------------------------------------------------ running
 $("#os-go").onclick = async () => {
   const text = $("#os-text").value.trim();
   if (!text) return $("#os-text").focus();
-  if (typeof firstHolds === "function" && firstHolds()) return firstGo();   // the first run: the sample song in the demo voice (tutorial.js)
+  if (firstHolds()) return firstGo();   // the first run: the sample song in the demo voice (below)
   const btn = $("#os-go"); btn.disabled = true;
   try {
     // Never start blind: wait for the plan, and ask once when it may train a voice (~45 min).
