@@ -49,9 +49,9 @@ command-line cover tool `cover.bat` and the GPU check) and `tests/` (`python tes
 
 ## First run
 
-The first time you open UnderCover it downloads the voice tools it needs, about 1.3 GB, once. FrontMan then suggests
-a first cover: *Hold On*, a short sample song, sung by Agent Smoke, a demo voice made for UnderCover that is not based
-on a real person. Press Make it to hear what UnderCover does in about two minutes.
+The first time you open UnderCover it downloads the voice tools it needs, about 1.3 GB, once. Type a song and a voice
+into FrontMan, such as "Pink Pony Club as Plankton", and press Make it. UnderCover also comes with a short sample song,
+*Hold On*, and a demo voice, Agent Smoke, made for UnderCover and not based on a real person.
 
 ## Privacy
 
