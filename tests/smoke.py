@@ -6707,18 +6707,18 @@ def u_page_rules():
     assert "function retryWait" in work and "const willRetry" in work and "Waiting for YouTube" in work and "trying again at" in work, "the retrying state lost its words"
     # rc-page3 (the user's fresh 1.0 install): a first run lands on FrontMan with the download said there, not on a stale tab
     osj = (web / "oneshot.js").read_text(encoding="utf-8")
-    fb = osj[osj.index("async function firstBoot"):osj.index("const firstHolds")]
+    fb = osj[osj.index("async function firstBoot"):osj.index("function firstReady")]
     assert "s.first_run" in fb and 'showTab("frontman")' in fb and "function firstReady" in osj and 'id="first-ready"' in ix and "600 MB" not in ix and "600 MB" not in app and "const modelsSize" in app, "a fresh install no longer lands on FrontMan with the download said"
     # rc-page6 (the user: "remove the tutorial from 1.0"; MasterPlan: remove it, it waits on the tutorial-redesign branch): no First assignment left in the
-    # page, and nothing calls its routes. A copy with no covers gets the simple first run: "Hold On as Agent Smoke" in the one-shot field, one line with
-    # the estimator's time, Make it makes the sample cover, the first cover ends it. What's new stays quiet for a copy with no covers.
+    # page, and nothing calls its routes. What's new stays quiet for a copy with no covers.
     assert not (web / "tutorial.js").exists() and "tutorial.js" not in ix, "tutorial.js is back"
     pages = {f.name: f.read_text(encoding="utf-8") for f in web.iterdir() if f.suffix in (".js", ".html", ".css")}
     left = sorted(n for n, src in pages.items() if re.search(r"/api/tutorial|\.tutorial\b|assign-|assignBrief|ASSIGNMENT_ON|wb-fold|First assignment", src))
     assert not left, f"the First assignment is still referenced in {left}"
-    assert 'text: "Hold On as Agent Smoke"' in osj and "/api/auto/plan" in fb and "planTime(p)" in fb and "hist.length" in fb and "x.sample" in fb and "v.demo" in fb, "the simple first run lost a part"
-    assert "about 2 min" not in fb and "minute" not in fb, "the first run's time must be the plan's (the button says the same), never the page's own"
-    assert "function firstGo" not in osj and "firstHolds()) return" not in osj, "Make it must be the normal one-shot on a first run (rc-page7: the planner knows the sample song and the demo voice)"
+    # rc-page8 (the user, on the fresh install: "Hold On as Agent Smoke ... with no tutorial it's just random words"): a copy with no covers gets an EMPTY
+    # field with "Pink Pony Club as Plankton" as the placeholder, no suggestion line; the first cover puts the usual placeholder back
+    assert 'placeholder: "Pink Pony Club as Plankton"' in osj and "f.placeholder = FIRST.placeholder" in fb and "hist.length" in fb, "the first run's placeholder is gone"
+    assert "Hold On as Agent Smoke" not in osj and "New here?" not in osj and ".value = FIRST" not in osj and "function firstGo" not in osj, "the first run fills in a suggestion again"
     assert "!hist.length) { store.set(WN_SEEN" in pages["whatsnew.js"], "What's new must stay quiet for a copy with no covers"
     v1 = json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
     assert not any(w in l.lower() for l in v1["lines"] for w in ("assignment", "tutorial")), "What's new 1.0 mentions the tutorial"

@@ -175,43 +175,25 @@ document.addEventListener("DOMContentLoaded", () => estimateFor("new", "", "sing
 $$("#os-ex button").forEach(b => b.onclick = () => { $("#os-text").value = b.textContent; previewPlan(); $("#os-text").focus(); });
 
 // ------------------------------------------------------------ the first run
-// A copy with no covers yet, with the sample song (sample: true) and the demo voice (demo: true) on hand: the field holds "Hold On as Agent
-// Smoke", one line under it says what Make it does and how long it takes (the plan's own time, the button's too), and the first start's
-// download sits just below until it's done. Make it is the normal one-shot: the planner reads that text as the library's sample song and the
-// installed demo voice (no question, no check, no download). The first cover that finishes ends it, and the normal line is back.
-// (1.0's first run, the user, rc-page6; the guided version waits on the tutorial-redesign branch.)
-const FIRST = { on: false, text: "Hold On as Agent Smoke", say: "" };
+// A copy with no covers yet: the field stays empty, with "Pink Pony Club as Plankton" as its placeholder (grey, never sent), and the first
+// start's download sits under the card's line until it's done. The first cover that finishes puts the usual placeholder back. A filled-in
+// suggestion read as random words once the tutorial was gone (the user, rc-page8). The sample song and Agent Smoke stay installed for the
+// tutorial redesign (the tutorial-redesign branch), where any first-run hint needs a dismiss, and skipping it makes it go for good.
+const FIRST = { on: false, placeholder: "Pink Pony Club as Plankton", usual: "" };
 async function firstBoot() {
-  let s, hist, songs, voices;
-  try { [s, hist, songs, voices] = await Promise.all([api("/api/status"), api("/api/history"), api("/api/library/songs"), api("/api/voices")]); } catch (e) { return; }
+  let s, hist;
+  try { [s, hist] = await Promise.all([api("/api/status"), api("/api/history")]); } catch (e) { return; }
   if (hist.length) return;
   // A brand-new install (the voice tools still to download): what this browser remembers (the last tab and room, a song or voice) belongs to
   // another install on the same address, so it goes. It once opened a fresh 1.0 on SafeHouse > System (the user, rc-page3).
   if (s.first_run) { ["uc-tab", "uc-sh-room", "uc-song", "uc-voice"].forEach(k => store.set(k, null)); showTab("frontman"); window.scrollTo({ top: 0 }); }
-  const desk = { song: (songs.songs || songs).find?.(x => x.sample), voice: (voices.voices || voices).find?.(v => v.demo) };
-  if (!desk.song || !desk.voice) return;
-  FIRST.on = true;
-  if (!$("#os-text").value.trim()) $("#os-text").value = FIRST.text;
-  FIRST.say = "New here? Press Make it to hear a short sample song in the demo voice.";
-  firstLine();
-  try {   // the plan for the sample, kept as the plan in hand: Make it starts from it, and the line and the button say the same time
-    const key = planKey(), p = await api(`/api/auto/plan?text=${encodeURIComponent(FIRST.text)}&train=${$("#os-train").checked ? 1 : 0}`);
-    if (planKey() === key && !p.ask && planPath(p) === "installed") { OS.last = { key, plan: p }; FIRST.say += ` It takes ${planTime(p)}.`; }
-  } catch (e) {}
-  firstLine();
+  const f = $("#os-text");
+  FIRST.on = true; FIRST.usual = f.placeholder; f.placeholder = FIRST.placeholder;
 }
-const firstHolds = () => FIRST.on && $("#os-text").value.trim() === FIRST.text;   // the field still says the sample
-function firstLine() { if (firstHolds()) { $("#os-plan").textContent = FIRST.say; resetGo(); } }
-// typed over, or an example picked: the sample's line goes at once (the plan for the new text takes a few seconds to come)
-const firstGone = () => { if (FIRST.on && !firstHolds() && $("#os-plan").textContent === FIRST.say) $("#os-plan").textContent = PLAN_IDLE; };
-$("#os-text").addEventListener("input", firstGone);
-$$("#os-ex button").forEach(b => b.addEventListener("click", firstGone));
 document.addEventListener("uc:jobdone", e => {
   const j = e.detail;
   if (!FIRST.on || !["cover", "auto"].includes(j.kind) || (j.final?.state || j.state) !== "done") return;
-  FIRST.on = false;
-  if ($("#os-text").value.trim() === FIRST.text) $("#os-text").value = "";
-  if (j.kind === "cover") previewPlan();   // the card's own line again (a one-shot's "Done in…" stays)
+  FIRST.on = false; $("#os-text").placeholder = FIRST.usual;
 });
 // The first start's download (about 1.3 GB of voice tools: the status's models_mb), in the one-shot card where a new user is, not only in
 // SafeHouse > System. The bar moves with models_progress (0-1); until there's a number it slides, to show that something is happening.
