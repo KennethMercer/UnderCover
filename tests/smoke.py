@@ -6905,6 +6905,8 @@ def u_page_rules():
     se_js11 = (web / "speakeasy.js").read_text(encoding="utf-8")
     assert "SE.started = true; sePlayPart(0)" not in se_js11 and "starts playing" not in se_js11 and "ready to play: the rest is still being made" in se_js11 and '"Play: ready"' in se_js11, "SpeakEasy plays by itself again"
     assert 'id="se-newname" placeholder="Peter Griffin"' in ix, "SpeakEasy's name field lost its example"
+    # rc-page12 (the user's install on D:): no copy assumes the app is on C: ("keep UnderCover on C: and its files somewhere roomier")
+    assert not re.search(r"\bon C:|\bC: drive|drive C\b", ix), "the page assumes UnderCover is on C: again"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
