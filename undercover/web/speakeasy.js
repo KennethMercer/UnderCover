@@ -163,6 +163,17 @@ function sePlan(soon) {
 function seCadName(name) { $("#se-cad-name").textContent = name || "they"; $("#se-cad-verb").textContent = name ? "does" : "do"; $("#se-cad").setAttribute("aria-label", `Speak the way ${name || "they"} really ${name ? "does" : "do"}`); }
 $("#se-cad").checked = store.get("uc-se-cad", true);
 $("#se-cad").onchange = () => { store.set("uc-se-cad", $("#se-cad").checked); sePlan(); };
+// Deep Cover's engine line under "Speak the way they really do": the engine that reads, and the original Chatterbox (an optional add-on since
+// Turbo became the default) offered where it can be added, with its size. Nothing downloads from here: SafeHouse > Add-ons installs it.
+async function seEngineLine(name, id) {
+  const el = $("#se-engine-deep");
+  if (!name) { el.hidden = true; return; }
+  if (!SE.addons) try { SE.addons = (await api("/api/addons")).addons; } catch (e) { SE.addons = []; }
+  const cb = SE.addons.find(a => a.id === "chatterbox"), go = `<a class="linkbtn" href="#safehouse/addons">SafeHouse › Add-ons</a>`;
+  el.innerHTML = `Engine: ${esc(name)}.` + (!cb || id === "chatterbox" ? "" : !cb.installed ? ` The original Chatterbox is an add-on (${gb(cb.size_mb * 1e6)}) in ${go}.`
+    : !cb.in_use ? ` The original Chatterbox is installed: switch to it in ${go}.` : "");
+  el.hidden = false;
+}
 function seShowPlan() {
   seEstimate();
   const p = SE.plan, st = v => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v)} st`;
@@ -175,6 +186,7 @@ function seShowPlan() {
     : c.queue ? "They're learning to speak (DoubleAgent); it's used as soon as it's ready."
     : c.can ? `Their own pace and pauses, learned from their clips. "Let it speak" on the voice makes it (minutes).` : (c.why || "Not available for this voice.");
   $("#se-cad-deep").textContent = c.has ? `${p.engine_name || c.engine} · from ${c.data_minutes ?? "?"} min of speech · likeness ${c.scores?.likeness ?? "?"} · cadence gap ${c.scores?.cadence_gap ?? "?"} · gap between sentences ${c.gap_s ?? "?"} s · tempo ${c.tempo ?? 1}` : "";
+  seEngineLine(c.has ? p.engine_name || c.engine : "", p.engine || c.engine);
   $("#se-reader-field").hidden = cadOn;
   $("#se-pace-deep").textContent = cadOn ? `${p.pace}: gap between sentences ${p.gap_s} s${p.engine === "chatterbox" ? ` · cfg_weight ${p.cfg_weight} · exaggeration ${p.exaggeration}` : ""} · no stretching`
     : `${p.pace}: the Reader reads at ${p.speed}× · pauses ×${p.gap_scale}`;

@@ -150,7 +150,7 @@ def info(a: Addon, st: dict | None = None) -> dict:
     inst = a.installed()
     return {"id": a.id, "name": a.name, "adds": a.adds, "licence": a.licence, "licence_url": a.licence_url,
             "licence_summary": a.licence_summary, "size_mb": a.size_mb, "wired": a.wired, "installed": inst,
-            "included": a.included, "optional": not a.included, "modules": a.modules, "open_note": a.open_note,
+            "included": a.included, "optional": not a.included, "open": a.open, "modules": a.modules, "open_note": a.open_note,
             "short": a.short, "use": a.use,
             "installable": not a.included and a.wired, "disk": a.disk_bytes() if inst or a.included else 0,
             "packages": len(a.packages), "files": sorted(a.paths or a.files),

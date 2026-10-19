@@ -202,7 +202,7 @@ function sysStatus(s) {
   if (s.models === "ready") row("models", s.queue ? `${s.queue} cover${s.queue > 1 ? "s" : ""} waiting their turn` : s.gpu ? "Separation, voice engine and speech are warm" : "Loaded on the processor",
                                s.gpu ? "ok" : "warn", s.gpu ? "warm" : "slow");
   else if (s.models.startsWith("error")) row("models", s.models.replace(/^error: /, ""), "bad", "problem");
-  else row("models", s.first_run ? `First start: downloading the voice tools (${modelsSize(s)}, once${s.models_progress != null ? `, ${Math.round(s.models_progress * 100)}%` : ""})` : "Loading…", "now", "loading");
+  else row("models", s.first_run ? `Downloading missing AI models (${modelsSize(s)}${s.models_progress != null ? `, ${Math.round(s.models_progress * 100)}%` : ""})` : "Loading…", "now", "loading");
   const bad = !!(s.gpu_problem || s.cpu_mode);
   $("#sys-alert").hidden = !bad;
   if (bad) $("#sys-alert-p").textContent = s.gpu_problem ||
