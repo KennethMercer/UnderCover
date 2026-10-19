@@ -144,6 +144,14 @@ def jobs_using(voice: str) -> list:
 ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
 
 
+def counted_down(said: float, since: float) -> float:
+    """The time left the job said, counted down since it said it: the one rule the strip (this snapshot) and the
+    stage panel (the page, from the same event) both follow (rc-fix4: they read 22 s and "almost done"). A said value
+    of 5 s or more holds at 5 ("about 5 s left"), never "almost done" before the job says so."""
+    left = max(0.0, float(said) - max(0.0, since))
+    return round(left if said < 5 else max(5.0, left), 1)
+
+
 class Job:
     def __init__(self, kind: str, title: str | None = None):
         self.id = uuid.uuid4().hex[:12]
@@ -173,6 +181,7 @@ class Job:
     def push(self, **ev):
         with self.cond:
             ev.setdefault("state", self.state)
+            ev.setdefault("at", round(time.time(), 1))   # when it was said: the snapshot counts down from it
             if not ev.get("final"):
                 self._time_left(ev)
             self.events.append(ev)
@@ -192,7 +201,8 @@ class Job:
         if ev.get("total_left") is not None:
             return
         if ev.get("left_est") is not None:   # a step that knows its own remaining work (rc-fix3: Do it all's preparation)
-            ev["total_left"] = self._said(max(0.0, float(ev.pop("left_est"))), now)
+            # (new_work: work found mid-step, a model download: measured, so the time left may rise for it)
+            ev["total_left"] = self._said(max(0.0, float(ev.pop("left_est"))), now, rise=bool(ev.pop("new_work", False)))
             return
         if ev.get("eta") is not None:
             ev["total_left"] = self._said(ev["eta"] + (self.after_eta_s or 0.0), now)
@@ -235,10 +245,10 @@ class Job:
         if left is not None:
             ev["total_left"] = self._said(left, now)
 
-    def _said(self, left: float, now: float) -> float:
+    def _said(self, left: float, now: float, rise: bool = False) -> float:
         """Time left as said: it counts down, and rises at most 5 % a minute (P8-3: 766 s -> 4817 s in two minutes
-        while one step's progress restarted)."""
-        if self._left is not None:
+        while one step's progress restarted). rise: measured new work (a model download found mid-step) is said as it is."""
+        if self._left is not None and not rise:
             v, t = self._left
             dt = max(0.0, now - t)
             left = min(left, max(0.0, v - dt) + max(5.0, v * 0.05 * dt / 60.0))
@@ -272,13 +282,18 @@ class Job:
                 "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs),
                 "target": getattr(self, "target", None)}   # what a job works on, as data ({kind, name, display}): no title parsing
         # the newest value of each progress field within the current stage (some events carry only a note)
+        said_at = None
         for ev in reversed(evs[-40:]):
             if ev.get("stage") != stage and not ev.get("final"):
                 break
+            if ev.get("total_left") is not None and "total_left" not in snap:
+                said_at = ev.get("at")
             for k in ("frac", "fraction", "epoch", "epochs", "eta", "total_left", "stage_left", "index", "of", "elapsed",
-                      "step", "step_n", "steps", "waits_for"):
+                      "step", "step_n", "steps", "waits_for", "download"):
                 if ev.get(k) is not None:
                     snap.setdefault(k, ev[k])
+        if snap.get("total_left") is not None and said_at and not last.get("final"):
+            snap["total_left"] = counted_down(snap["total_left"], time.time() - said_at)
         frac, fraction = snap.pop("frac", None), snap.pop("fraction", None)
         snap["progress"] = frac if frac is not None else fraction
         plan = next((ev["plan"] for ev in reversed(evs) if isinstance(ev.get("plan"), dict)), None)
@@ -334,11 +349,13 @@ def gpu_worker():
             STATUS["models"] = "error: " + STATUS["gpu_problem"]   # the loop below keeps running, refusing jobs
         elif CONFIG["ui"]["preload_models"]:
             from . import setup_models
-            from .separate import SEP, SEPARATOR_SIZE
-            # the first start fetches the separation model and the conversion models (about 1.3 GB, once): the status
-            # says how far (models_progress, 0-1) and how much (models_mb), and the first run's bar follows it
+            from .separate import SEP, SEPARATOR_SIZE, fetch_model
+            # the first start fetches every model a first cover or one-shot uses (rc-fix4: the backing-vocal model came
+            # mid-cover, 913 MB behind "Separating vocals"): the vocal, de-reverb and backing-vocal separation models and
+            # the conversion models, about 3 GB, once. The status says how far (models_progress) and how much (models_mb).
+            first = [SEP["vocal_model"], SEP["dereverb_model"], SEP["karaoke_model"]]
             todo = setup_models.missing({**setup_models.FILE_SIZES,
-                                         **{k: n for k, n in SEPARATOR_SIZE.items() if k == f"separator/{SEP['vocal_model']}"}})
+                                         **{k: n for k, n in SEPARATOR_SIZE.items() if k in {f"separator/{m}" for m in first}}})
             STATUS["first_run"] = bool(todo)
             if todo:
                 STATUS["models_mb"] = round(sum(todo.values()) / 1e6)
@@ -355,6 +372,11 @@ def gpu_worker():
                 STATUS["models_progress"] = 0.0
                 watcher.start()
             try:
+                for m in first[1:]:   # downloaded only (loaded when a cover needs them)
+                    try:
+                        fetch_model(m)
+                    except Exception as e:   # noqa: BLE001 - a cover fetches it then, and says so
+                        print(f"Couldn't download {m} at the first start ({type(e).__name__}: {e}).", flush=True)
                 MODELS.separator._get(SEP["vocal_model"])
                 MODELS.converter
             finally:

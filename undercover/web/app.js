@@ -113,6 +113,9 @@ const fmtTime = s => { s = Math.max(0, Math.round(s || 0)); return `${Math.floor
 const fmtSecs = s => s >= 90 ? `${Math.round(s / 60)} min` : `${Math.max(1, Math.round(s))} s`;
 // the one way every bar says how long is left (phase 4c): "about 3 min left", "about 40 s left", "almost done"
 const leftText = s => s == null ? "" : s < 5 ? "almost done" : `about ${fmtSecs(s)} left`;
+// the job's said time left counted down since it said it (the server's jobs.counted_down: the strip and the stage panel
+// read the same): a said 5 s or more holds at 5, so "almost done" comes only when the job says so (rc-fix4)
+const countedDown = (said, sinceS) => said == null ? null : said < 5 ? Math.max(0, said - sinceS) : Math.max(5, said - sinceS);
 // a job event as one line: what it's doing (the step, "n of m"), and the time left; a queued job says what it waits for
 function progressSay(ev) {
   const base = ev.label || ev.message || "";
@@ -668,7 +671,7 @@ function startProgress(job, elsewhere = false) {
   clearInterval(elapsedTimer);
   elapsedTimer = setInterval(() => {
     const el = (performance.now() - jobStart) / 1000;
-    $("#elapsed").textContent = (totalLeft != null ? leftText(Math.max(0, totalLeft - ((performance.now() - leftAt) / 1000))) + " · " : "") + `${el.toFixed(0)} s elapsed`;
+    $("#elapsed").textContent = (totalLeft != null ? leftText(countedDown(totalLeft, (performance.now() - leftAt) / 1000)) + " · " : "") + `${el.toFixed(0)} s elapsed`;
   }, 250);
   let current = null, lastStageStart = 0;
   if (S.es) S.es();
