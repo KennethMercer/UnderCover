@@ -6,7 +6,7 @@ build and the user's machine use the same default; engines whose weights aren't 
 (core/addons.py) that the user installs and accepts themselves.
 
 Measured 2026-10-11 on the RX 7900 XTX (docs/research/cadence.md): Chatterbox 0.5-0.6x realtime at cfg 0.3 (3.6 GB),
-F5-TTS 2.9-3.5x (0.9 GB), XTTS-v2 0.84x (2.1 GB).
+F5-TTS 2.9-3.5x (0.9 GB).
 """
 from .. import addons, setup_models
 from ..config import CONFIG, path
@@ -81,9 +81,6 @@ ENGINES = {
     "f5": {"name": "F5-TTS", "licence": "CC-BY-NC-4.0", "addon": "f5", "ref_text": True, "rtf": 3.0, "vram_gb": 0.9,
            "size_mb": 1400, "module": "f5_tts",
            "about": "Fast (3-4x realtime); flattens some intonation. Non-commercial weights: an add-on you accept."},
-    "xtts": {"name": "XTTS-v2", "licence": "CPML", "addon": "xtts", "ref_text": False, "rtf": 0.84, "vram_gb": 2.1,
-             "size_mb": 1900, "module": "TTS", "wired": False,
-             "about": "Coqui's model; registered only (not used by SpeakEasy yet)."},
 }
 
 
@@ -173,11 +170,6 @@ addons.register(addons.Addon(
               "frozendict==2.4.7", "torch-einops-utils==0.1.36", "torchdiffeq==0.2.5", "ema-pytorch==0.8.3",
               "hydra-core==1.3.7", "unidecode==1.4.0", "transformers-stream-generator==0.0.5", "loguru==0.7.3",
               "win32-setctime==1.2.0"]))
-addons.register(addons.Addon(
-    id="xtts", name="XTTS-v2", adds="Coqui's voice-cloning speech model. Not used by anything yet; it's listed so you know it's coming.",
-    licence="CPML", licence_url="https://coqui.ai/cpml",
-    licence_summary="Coqui Public Model License: non-commercial use of the model and what it makes.",
-    size_mb=1900, wired=False, imports=["TTS"], packages=["coqui-tts==0.27.5"], modules=["speakeasy"]))
 
 # the open parts the cadence engine is built from (listed in the Add-ons room; never installed or removed there)
 # the original Chatterbox: an optional add-on since rc-fix4b (setup installs Turbo, the default; this one is 3.2 GB more

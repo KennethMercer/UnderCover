@@ -121,11 +121,11 @@
       <span class="meta" id="os-alt" hidden></span></div>
     <div id="os-idle">
       <div class="row">
-        <input class="big" type="text" id="os-text" autocomplete="off" placeholder="Hello by Adele as Peter Griffin" aria-label="What cover to make">
+        <input class="big" type="text" id="os-text" autocomplete="off" placeholder="Pink Pony Club as Plankton" aria-label="What cover to make">
         <button class="btn primary go" id="os-go">Make it</button>
       </div>
       <div class="row spread os-sub">
-        <div class="ex" id="os-ex"><button type="button">Bohemian Rhapsody by Queen as Obama</button><button type="button">Toxic by Britney Spears as SpongeBob</button><button type="button">acoustic cover of Hello by Adele as Peter Griffin</button></div>
+        <div class="ex" id="os-ex"><button type="button">Pink Pony Club as Plankton</button><button type="button">Freek-a-Leek as Obama</button><button type="button">Hello by Adele as Peter Griffin</button></div>
         <label class="toggle" id="os-train-row" data-deep><input type="checkbox" id="os-train" aria-label="Prefer training a new voice"><span>Prefer training a new voice<small class="meta" id="os-train-eta"></small></span></label>
       </div>
       <p class="meta" id="os-plan">Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest.</p>
@@ -155,7 +155,10 @@
         <div id="drop-loaded" hidden>
           <div class="song-row"><strong id="song-name"></strong><button class="linkbtn" id="song-replace">Replace</button></div>
           <div class="meta mono" id="song-meta"></div>
-          <canvas class="wave" id="wave-song" aria-hidden="true"></canvas>
+          <div class="song-wave"><button class="play" id="song-play" type="button" aria-label="Play the song">▶</button>
+            <canvas class="wave seekable" id="wave-song" aria-label="The song's waveform, click to seek"></canvas>
+            <span class="mono meta" id="song-pos"></span></div>
+          <audio id="a-song" preload="none"></audio>
           <div class="cached" id="song-cached" hidden>✓ Stems already separated. This cover skips the separation step.</div>
         </div>
         <div id="drop-uploading" hidden>
@@ -564,7 +567,7 @@
     <section class="panel grp" id="st-keep"><h3 class="grp-h">Keep it safe</h3>
       <button class="frow" type="button" data-open="vault" aria-expanded="false"><b>Vault</b><span class="what">a copy of what can't be downloaded again, on another drive</span><span class="num" id="vt-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="vault" hidden><div class="vt-body" id="vt-body"><p class="meta">Loading…</p></div></div>
-      <button class="frow" type="button" data-open="st-places-wrap" aria-expanded="false"><b>Where your files live</b><span class="what">keep UnderCover on C: and its files somewhere roomier</span><span class="num" id="st-drive"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="st-places-wrap" aria-expanded="false"><b>Where your files live</b><span class="what">UnderCover's folders, and where to move them</span><span class="num" id="st-drive"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="st-places-wrap" hidden><div class="places" id="st-places"></div><p class="meta">Logs and settings stay with the app.</p></div>
     </section>
     </div>
@@ -729,7 +732,7 @@
         <div class="se-vlist" id="se-voices" role="listbox" aria-label="Voices"><p class="meta">Loading…</p></div>
         <div class="se-newv">
           <div class="row spread"><b>Someone who isn't here?</b><span class="meta">DoubleAgent builds the voice</span></div>
-          <div class="row"><input id="se-newname" placeholder="Dolly Parton" aria-label="Person's name"><button class="btn" id="se-newgo" type="button">New voice</button>
+          <div class="row"><input id="se-newname" placeholder="Peter Griffin" aria-label="Person's name"><button class="btn" id="se-newgo" type="button">New voice</button>
             <button class="linkbtn" id="se-newnight" type="button">Tonight</button></div>
           <p class="meta" id="se-newnote">DoubleAgent finds clips of them, trains the voice and learns how they talk<span id="se-new-eta-wrap" hidden>, about <span id="se-new-eta"></span></span>.
             It then appears here and in FrontMan. <button class="linkbtn" id="se-newsteps" type="button">Step by step in DoubleAgent</button></p>

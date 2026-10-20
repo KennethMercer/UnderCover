@@ -1,4 +1,5 @@
 "use strict";
+const aSong = document.getElementById("a-song");   // the song on the desk's player (with drawSongWave, below): first, since a theme redraw at load can reach it
 // UnderCover web UI. Talks to undercover/server.py (JSON API + Server-Sent Events).
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -308,7 +309,7 @@ async function peaksFromUrl(url, bins = 1200) {
 // ------------------------------------------------------------ song upload
 const fileInput = $("#file");
 $("#drop").addEventListener("click", e => { if (!S.song || e.target.id === "song-replace") fileInput.click(); });
-$("#drop").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+$("#drop").addEventListener("keydown", e => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });   // a key on a button inside (play, Replace) is the button's
 $("#song-replace").onclick = e => { e.stopPropagation(); fileInput.click(); };
 fileInput.onchange = () => { if (fileInput.files[0]) upload(fileInput.files[0]); fileInput.value = ""; };
 
@@ -390,6 +391,7 @@ function syncBuild() {
   S.deskWas = desk;
   const open = S.buildOpen != null ? S.buildOpen : desk;
   build.hidden = !open;
+  if (open) drawSongWave();   // its waveform gets its width now (the ResizeObserver needs a painted frame)
   tog.setAttribute("aria-expanded", open); tog.innerHTML = open ? "set it up yourself &#9662;" : "or set it up yourself &#8250;";
 }
 $("#build-toggle")?.addEventListener("click", () => { S.buildOpen = $("#build").hidden; syncBuild(); if (!$("#build").hidden) $("#build").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
@@ -410,7 +412,9 @@ function renderSong() {
     S.songKey = k; meta(keyName(k.tonic, k.mode));
     $("#key-o").textContent = keyLabel(S.opts.key || 0);
   }).catch(() => {});
-  drawWave($("#wave-song"), s.peaks, 0);
+  if (aSong.dataset.song !== s.id) { aSong.pause(); aSong.dataset.song = s.id; aSong.src = s.url || ""; }   // a new song on the desk: its own audio, from the start
+  $("#song-play").disabled = !s.url;
+  drawSongWave();
   summary();
 }
 
@@ -729,7 +733,7 @@ const aCover = $("#a-cover"), aOrig = $("#a-orig");
 const VOL = { level: store.get("uc-volume", 0.8), muted: store.get("uc-muted", false) };
 function applyVolume() {
   const v = VOL.muted ? 0 : VOL.level;
-  aCover.volume = aOrig.volume = v * v;  // squared: a slider position sounds closer to proportional loudness
+  aCover.volume = aOrig.volume = aSong.volume = v * v;  // squared: a slider position sounds closer to proportional loudness
   $$("#preview-list audio").forEach(a => { a.volume = v * v; });
   $("#volume").value = VOL.muted ? 0 : VOL.level;
   const silent = VOL.muted || VOL.level === 0;
@@ -792,11 +796,11 @@ function drawResultWave() {
   drawWave($("#wave-res"), wavePeaks[ab] || wavePeaks.cover, frac, ab === "cover" ? "--wave-on" : "--wave-alt");
   $("#pos").textContent = `${fmtTime(a.currentTime)} / ${fmtTime(a.duration || 0)}`;
 }
-function stopAll() { aCover.pause(); aOrig.pause(); $("#play").textContent = "▶"; $("#play").setAttribute("aria-label", "Play"); }
+function stopAll() { aCover.pause(); aOrig.pause(); aSong.pause(); $("#play").textContent = "▶"; $("#play").setAttribute("aria-label", "Play"); }
 function togglePlay() {
   const a = active();
   if (!a.src) return;
-  if (a.paused) { $$("#preview-list audio").forEach(x => x.pause()); a.play().catch(e => showError("The browser couldn't play this file. Try downloading it instead.", "Playback failed")); $("#play").textContent = "❚❚"; $("#play").setAttribute("aria-label", "Pause"); }
+  if (a.paused) { $$("#preview-list audio").forEach(x => x.pause()); aSong.pause(); a.play().catch(e => showError("The browser couldn't play this file. Try downloading it instead.", "Playback failed")); $("#play").textContent = "❚❚"; $("#play").setAttribute("aria-label", "Pause"); }
   else stopAll();
   renderHistory();
 }
@@ -994,7 +998,37 @@ function renderHistory() {
 }
 
 // ------------------------------------------------------------ boot
-function redrawAll() { if (S.song) drawWave($("#wave-song"), S.song.peaks, 0); if (!$("#result").hidden) drawResultWave(); }
+function redrawAll() { drawSongWave(); if (!$("#result").hidden) drawResultWave(); }
+
+// ------------------------------------------------------------ the song on the desk: play / pause, the waveform, seek (rc-page11)
+// The user: "there is no ability to preview the song here, which we used to have". The waveform had gone too: it's drawn from the canvas's width,
+// and since the build path folds into the one-shot card (qa18) the card is often hidden when the song loads, so it drew nothing and never again.
+// A ResizeObserver draws it whenever the canvas gets (or changes) its size.
+function drawSongWave() {
+  if (!S.song) return;
+  const d = aSong.duration || S.song.duration;   // the song's own length until the audio's has loaded (preload none)
+  drawWave($("#wave-song"), S.song.peaks, d ? Math.min(1, aSong.currentTime / d) : 0);
+  $("#song-pos").textContent = !aSong.paused || aSong.currentTime ? `${fmtTime(aSong.currentTime)} / ${fmtTime(aSong.duration || S.song.duration || 0)}` : "";
+}
+new ResizeObserver(() => drawSongWave()).observe($("#wave-song"));
+$("#song-play").onclick = () => {
+  if (!aSong.src) return;
+  if (!aSong.paused) return aSong.pause();
+  stopAll(); $$("#preview-list audio").forEach(x => x.pause());   // one thing plays at a time
+  aSong.play().catch(() => showError("The browser couldn't play this file.", "Playback failed"));
+};
+const songBtn = on => { $("#song-play").textContent = on ? "❚❚" : "▶"; $("#song-play").setAttribute("aria-label", on ? "Pause the song" : "Play the song"); };
+aSong.addEventListener("play", () => songBtn(true));
+aSong.addEventListener("pause", () => { songBtn(false); drawSongWave(); });
+aSong.addEventListener("ended", () => { aSong.currentTime = 0; songBtn(false); drawSongWave(); });
+aSong.addEventListener("timeupdate", drawSongWave);
+$("#wave-song").addEventListener("click", e => {
+  e.stopPropagation();   // the drop zone around it would open the file picker
+  const d = aSong.duration || S.song?.duration; if (!d || !aSong.src) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  aSong.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * d;
+  drawSongWave();
+});
 addEventListener("resize", redrawAll);
 (async function boot() {
   applyTheme();

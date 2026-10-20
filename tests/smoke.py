@@ -4255,7 +4255,9 @@ def u_cadence():
     st = DK._speech_stats(x, "one two three four")
     assert st and abs(st["dur"] - 1.0) < 0.1 and st["rate"] == st["syl"] / st["dur"] and DK._speech_stats(x[:100], "a") == {}, st
     ids = {a["id"] for a in addons.status()}
-    assert {"f5", "xtts"} <= ids, ids
+    assert "f5" in ids, ids
+    # nothing listed that can't be had (MasterPlan, the user's fresh install: XTTS-v2 sat there as 'Not available yet')
+    assert "xtts" not in ids and all(a.wired for a in addons.ADDONS.values()), [a.id for a in addons.ADDONS.values() if not a.wired]
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
     with isolated_data():
         _fake_addon_roundtrip(addons)
@@ -4326,8 +4328,8 @@ def u_addons():
                          text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-400:]
     rows = {r["id"]: r for r in json.loads(out.stdout)}
-    assert {"f5", "xtts", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows), sorted(rows)
-    assert rows["f5"]["installable"] and not rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["xtts"]
+    assert {"f5", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows) and "xtts" not in rows, sorted(rows)
+    assert rows["f5"]["installable"] and rows["kokoro"]["included"], rows["f5"]
     # rc-fix4b: the original Chatterbox is an optional add-on (open licence: nothing to accept; Turbo comes with setup)
     assert rows["chatterbox"]["installable"] and not rows["chatterbox"]["included"] and rows["chatterbox-turbo"]["included"]
     assert addons.ADDONS["chatterbox"].open and addons.ADDONS["chatterbox"].files
@@ -7008,9 +7010,10 @@ def u_page_rules():
     pages = {f.name: f.read_text(encoding="utf-8") for f in web.iterdir() if f.suffix in (".js", ".html", ".css")}
     left = sorted(n for n, src in pages.items() if re.search(r"/api/tutorial|\.tutorial\b|assign-|assignBrief|ASSIGNMENT_ON|wb-fold|First assignment", src))
     assert not left, f"the First assignment is still referenced in {left}"
-    # rc-page8 (the user, on the fresh install: "Hold On as Agent Smoke ... with no tutorial it's just random words"): a copy with no covers gets an EMPTY
-    # field with "Pink Pony Club as Plankton" as the placeholder, no suggestion line; the first cover puts the usual placeholder back
-    assert 'placeholder: "Pink Pony Club as Plankton"' in osj and "f.placeholder = FIRST.placeholder" in fb and "hist.length" in fb, "the first run's placeholder is gone"
+    # rc-page8 (the user, on the fresh install: "Hold On as Agent Smoke ... with no tutorial it's just random words"): the field is EMPTY, no suggestion
+    # line. rc-page14 (the user): its placeholder is ALWAYS "Pink Pony Club as Plankton", on a first run and after; nothing in the page changes it
+    assert 'id="os-text" autocomplete="off" placeholder="Pink Pony Club as Plankton"' in ix and "Hello by Adele as Peter Griffin\"" not in ix.split('id="os-ex"')[0], "the one-shot placeholder isn't Pink Pony Club as Plankton"
+    assert not re.search(r'os-text"\)\.placeholder\s*=|f\.placeholder\s*=', osj), "something swaps the one-shot placeholder again"
     assert "Hold On as Agent Smoke" not in osj and "New here?" not in osj and ".value = FIRST" not in osj and "function firstGo" not in osj, "the first run fills in a suggestion again"
     assert "!hist.length) { store.set(WN_SEEN" in pages["whatsnew.js"], "What's new must stay quiet for a copy with no covers"
     v1 = json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
@@ -7021,6 +7024,20 @@ def u_page_rules():
     se_js = (web / "speakeasy.js").read_text(encoding="utf-8")
     assert "async function seEngineLine" in se_js and 'id="se-engine-deep" data-deep' in ix and "#safehouse/addons" in se_js and "/install" not in se_js, "Deep Cover's engine line lost its Add-ons offer, or SpeakEasy installs something"
     assert "const openAddon" in rooms_js and "freeLicence(a.licence)" in rooms_js and '["installed", "Installed", a => addonReady(a)]' in rooms_js and "opt.filter(addonReady)" in rooms_js and '"open": a.open' in (ROOT / "undercover" / "core" / "addons.py").read_text(encoding="utf-8"), "the Add-ons room no longer knows an open add-on"
+    # rc-page11 (the user's fresh install: "there is no ability to preview the song here"): the song on the desk has play / pause, a seekable waveform
+    # redrawn when its canvas gets a size (it drew nothing while the build path was folded), and a key on a button inside the drop zone isn't the drop zone's
+    assert 'id="song-play"' in ix and 'id="a-song"' in ix and 'id="wave-song"' in ix and "function drawSongWave" in app and "ResizeObserver(() => drawSongWave())" in app, "the song on the desk lost its play button or its waveform"
+    assert "if (open) drawSongWave();" in app and ".setup > .panel { grid-template-columns: minmax(0, 1fr); }" in css, "the song's waveform isn't drawn when the build path opens, or the song card sticks out at phone width"
+    assert "aSong.src = s.url" in app and "aSong.pause(); $(\"#play\")" in app and "e.target !== e.currentTarget) return; if (e.key" in app, "the song's player lost its source, its stop with the others, or the drop zone takes the play button's keys again"
+    # rc-page11 (the user): SpeakEasy never starts talking by itself; when the first sentences are made the player is ready and says so. The
+    # cadence note doesn't promise it starts playing. SafeHouse's examples: "Peter Griffin" on SpeakEasy's new-voice field
+    se_js11 = (web / "speakeasy.js").read_text(encoding="utf-8")
+    assert "SE.started = true; sePlayPart(0)" not in se_js11 and "starts playing" not in se_js11 and "ready to play: the rest is still being made" in se_js11 and '"Play: ready"' in se_js11, "SpeakEasy plays by itself again"
+    assert 'id="se-newname" placeholder="Peter Griffin"' in ix, "SpeakEasy's name field lost its example"
+    # rc-page12 (the user's install on D:): no copy assumes the app is on C: ("keep UnderCover on C: and its files somewhere roomier")
+    assert not re.search(r"\bon C:|\bC: drive|drive C\b", ix), "the page assumes UnderCover is on C: again"
+    # rc-page13 (the user's pick, after Internal Affairs proved them on a fresh library): FrontMan's three examples, in this order
+    assert re.findall(r'<button type="button">([^<]+)</button>', ix[ix.index('id="os-ex"'):].split("</div>")[0]) == ["Pink Pony Club as Plankton", "Freek-a-Leek as Obama", "Hello by Adele as Peter Griffin"], "FrontMan's examples aren't the three the user picked"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
