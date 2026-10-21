@@ -781,9 +781,12 @@ begin
   Result := #39 + S + #39;
 end;
 
-// the downloaded file (in Inno's temp folder) into its place. A rename on the same drive; a small file is copied; a big
-// one to another drive is moved by a hidden PowerShell while this page keeps answering. -> '' or what went wrong
-function PlaceFile(Src, Dest: String; Bytes: Int64): String;
+// The downloaded file (in Inno's temp folder) into its place. A small file was checked by Inno itself (its SHA-256)
+// and is renamed or copied. A big one (64 MB and up) comes without Inno's check: Inno hashes on its own thread, and a
+// gigabyte kept the window from answering for seconds. A hidden PowerShell checks its size and SHA-256 instead, and
+// only then moves it into its place, while this page keeps answering. A file that fails is deleted, so nothing uses it,
+// and the caller fetches it again. -> '' or what went wrong
+function PlaceFile(Src, Dest: String; Bytes: Int64; Sha: String): String;
 var
   Part, Marker: String;
   Said: AnsiString;
@@ -792,9 +795,10 @@ var
 begin
   Result := '';
   ForceDirectories(ExtractFileDir(Dest));
-  if (CompareText(ExtractFileDrive(Src), ExtractFileDrive(Dest)) = 0) or (Bytes < 67108864) then begin
+  if Sha = '' then begin
     // MOVEFILE_REPLACE_EXISTING (an earlier copy of the wrong size), MOVEFILE_COPY_ALLOWED, MOVEFILE_WRITE_THROUGH
-    if MoveFileEx(Src, Dest, 1 or 2 or 8) = 0 then Result := SysErrorMessage(DLLGetLastError);
+    if MoveFileEx(Src, Dest, 1 or 2 or 8) = 0 then
+      Result := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + SysErrorMessage(DLLGetLastError) + ')';
   end else begin
     Part := Dest + '.moving';
     Marker := ExpandConstant('{tmp}\moved.txt');
@@ -802,26 +806,35 @@ begin
     DeleteFile(Marker + '.part');
     DeleteFile(Part);
     // (its answer is written whole to moved.txt.part, then named moved.txt: a read never sees half of it)
-    if not Exec('powershell.exe', '-NoProfile -NonInteractive -Command "$m = ' + PSQuote(Marker) + '; try { Move-Item -LiteralPath ' +
-        PSQuote(Src) + ' -Destination ' + PSQuote(Part) + ' -Force -ErrorAction Stop; $s = ''ok'' } catch { $s = $_.Exception.Message }; ' +
-        'Set-Content -LiteralPath ($m + ''.part'') $s; Move-Item -LiteralPath ($m + ''.part'') -Destination $m -Force"', '', SW_HIDE, ewNoWait, Code) then begin
+    if not Exec('powershell.exe', '-NoProfile -NonInteractive -Command "$m = ' + PSQuote(Marker) + '; $f = ' + PSQuote(Src) +
+        '; try { $n = (Get-Item -LiteralPath $f).Length; if ($n -ne ' + IntToStr(Bytes) + ') { throw (''it came to '' + $n + '' of ' +
+        IntToStr(Bytes) + ' bytes'') }; if ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() -ne ''' + Sha +
+        ''') { throw ''its SHA-256 is wrong'' }; Move-Item -LiteralPath $f -Destination ' + PSQuote(Part) +
+        ' -Force -ErrorAction Stop; $s = ''ok'' } catch { $s = $_.Exception.Message; Remove-Item -LiteralPath $f -Force ' +
+        '-ErrorAction SilentlyContinue }; Set-Content -LiteralPath ($m + ''.part'') $s; Move-Item -LiteralPath ($m + ''.part'') ' +
+        '-Destination $m -Force"', '', SW_HIDE, ewNoWait, Code) then begin
       Result := SysErrorMessage(Code);
       Exit;
     end;
     Waited := 0;
     Said := '';
     while (Trim(String(Said)) = '') and (Waited < 18000) do begin   // (30 minutes: a slow drive, never forever)
-      DownloadPage.SetText('Putting ' + ExtractFileName(Dest) + ' in its place...', '');
+      DownloadPage.SetText('Checking ' + ExtractFileName(Dest) + ' and putting it in its place...', '');
       DownloadPage.SetProgress(DownloadIndex, DownloadCount);   // (keeps the window answering)
       Sleep(100);
       Waited := Waited + 1;
       if FileExists(Marker) then LoadStringFromFile(Marker, Said);
     end;
     if Trim(String(Said)) <> 'ok' then begin
-      if Trim(String(Said)) = '' then Result := 'moving it took too long' else Result := Trim(String(Said));
+      Result := Trim(String(Said));
+      if Result = '' then Result := 'checking it took too long'
+      else if (Pos('its SHA-256', Result) <> 1) and (Pos('it came to', Result) <> 1) then
+        Result := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + Result + ')';
+      DeleteFile(Src);   // (the PowerShell deletes a file that fails; this covers one that never answered)
       Exit;
     end;
-    if MoveFileEx(Part, Dest, 1 or 8) = 0 then Result := SysErrorMessage(DLLGetLastError);
+    if MoveFileEx(Part, Dest, 1 or 8) = 0 then
+      Result := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + SysErrorMessage(DLLGetLastError) + ')';
   end;
   if (Result = '') and not (FileSize64(Dest, Have) and (Have = Bytes)) then Result := 'it isn''t the right size after moving';
 end;
@@ -865,10 +878,13 @@ var
   Lines: TArrayOfString;
   Todo: array of Integer;
   I, K: Integer;
-  Line, Dest, Name, Why, Short, Urls: String;
+  Line, Dest, Name, Why, Short, Urls, InnoSha, CheckSha: String;
   Bytes, Have, Largest, Free, Total: Int64;
-  Stopped: Boolean;
+  Stopped, Big: Boolean;
   Tries, W: Integer;
+#ifdef ReleaseCheck
+  BadServed: Boolean;
+#endif
 begin
   Result := False;
   ExtractTemporaryFile('downloads.tsv');
@@ -907,6 +923,9 @@ begin
   end;
   DownloadDone := 0;
   Stopped := False;
+#ifdef ReleaseCheck
+  BadServed := False;
+#endif
   DownloadPage.Show;
   try
     K := 0;
@@ -920,20 +939,29 @@ begin
 #ifdef ReleaseCheck
       Hook('download.txt', Format('%d %d', [DownloadIndex, DownloadCount]));
 #endif
+      // (a big file's SHA-256 is checked by PlaceFile, off Inno's thread; a small one's by Inno as it downloads)
+      Big := Bytes >= 67108864;
+      if Big then InnoSha := '' else InnoSha := TabField(Line, 3);
+      if Big then CheckSha := TabField(Line, 3) else CheckSha := '';
       Tries := 0;
       repeat
         Urls := TabField(Line, 2);
 #ifdef ReleaseCheck
-        // the release check's proof that a short read is retried: its first file's first try from a server that stops early
-        if (K = 0) and (Tries = 0) and (ExpandConstant('{param:shorturl|}') <> '') then Urls := ExpandConstant('{param:shorturl|}');
+        // the release check's proofs: its first file's first try from a server that stops early (a short read), and
+        // the first big file's first try from one that sends the right size of the wrong bytes (a bad hash)
+        if (K = 0) and (Tries = 0) and (ExpandConstant('{param:shorturl|}') <> '') then
+          Urls := ExpandConstant('{param:shorturl|}')
+        else if Big and (Tries = 0) and not BadServed and (ExpandConstant('{param:badurl|}') <> '') then begin
+          Urls := ExpandConstant('{param:badurl|}') + '?bytes=' + IntToStr(Bytes);
+          BadServed := True;
+        end;
 #endif
-        Why := FetchFile(Urls, Name, TabField(Line, 3));
+        Why := FetchFile(Urls, Name, InnoSha);
         if Why = 'stopped' then begin
           WizardForm.ReadyLabel.Caption := 'The download stopped. What''s downloaded is kept: Install carries on from there.';
           Stopped := True;
         end else if Why = '' then begin
-          Why := PlaceFile(ExpandConstant('{tmp}\') + Name, Dest, Bytes);
-          if Why <> '' then Why := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + Why + ')';
+          Why := PlaceFile(ExpandConstant('{tmp}\') + Name, Dest, Bytes, CheckSha);
         end;
         // a server that drops the connection part-way (AMD's did, at 6 of 645 MB, and Inno then found the hash wrong):
         // tried again by itself, three times, before the user is asked
@@ -942,7 +970,7 @@ begin
             Tries := Tries + 1;
             Log(Format('%s: %s; trying again by itself (%d of 3)', [Name, Why, Tries]));
             for W := 1 to Tries * 30 do begin   // 3, 6, 9 s, the page answering throughout
-              DownloadPage.SetText(Format('The download of %s broke off. Trying again (%d of 3)...', [Name, Tries]), '');
+              DownloadPage.SetText(Format('%s didn''t come through right. Trying again (%d of 3)...', [Name, Tries]), '');
               DownloadPage.SetProgress(DownloadIndex, DownloadCount);
               Sleep(100);
             end;

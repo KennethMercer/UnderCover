@@ -422,7 +422,12 @@ if (-not $DryRun) {
     $short = @(Find-Shortfalls $needs { param($r) Get-FreeGB $r })
     if ($short.Count) { Fail ("there isn't enough space. " + (Format-Shortfall $short[0]) + " Free some space, or install to another drive, then try again.") }
 }
-if ($LibraryDir -or $WorkDir -or $ModelsDir) { $script:StepsTotal += 1 }
+function SameDir([string]$a, [string]$b) {
+    if (-not $a) { return $true }
+    return ([IO.Path]::GetFullPath($a).TrimEnd('\') -ieq [IO.Path]::GetFullPath($b).TrimEnd('\'))
+}
+# (the installer always passes the three folders: the step counts only when one of them is another folder)
+if (-not ((SameDir $LibraryDir $InstallDir) -and (SameDir $WorkDir $InstallDir) -and (SameDir $ModelsDir $InstallDir))) { $script:StepsTotal += 1 }
 if ($Addons) { $script:StepsTotal += 1 }
 if (-not $Offline) { $script:StepsTotal += 1 }
 
@@ -557,10 +562,6 @@ else {
 
 # 6b. Where the files live (the installer's "Where should UnderCover keep your files?" page) ----------------------
 # Each group is one folder holding today's sub-folders; the install folder (the default) changes nothing.
-function SameDir([string]$a, [string]$b) {
-    if (-not $a) { return $true }
-    return ([IO.Path]::GetFullPath($a).TrimEnd('\') -ieq [IO.Path]::GetFullPath($b).TrimEnd('\'))
-}
 $paths = [ordered]@{}
 if (-not (SameDir $LibraryDir $InstallDir)) {   # your library: songs, covers + speech, voices (with their cadence)
     $paths['uploads_dir'] = Join-Path $LibraryDir 'uploads'

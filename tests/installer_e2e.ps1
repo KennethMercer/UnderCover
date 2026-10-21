@@ -24,6 +24,9 @@
     - the installer exited 0 and logs\setup-result.txt says "ok"; no message box came up at all;
     - a download that comes back short is tried again by itself (a local server answers the first file's first try
       with a 100 MB length, sends 1 MB and closes, as AMD's server once did);
+    - a big file that arrives whole with the wrong bytes is caught by its SHA-256 (checked off Inno's thread, before
+      anything uses it), deleted and fetched again by itself (the same server sends the first big file's exact size
+      in zeros);
     - on the download page (rc-fix6, the user's install: the wizard refused every click for all of setup), every
       second: the wizard enabled and its Stop button there; it answered within a second (WM_NULL), never hung, moved
       when moved (SetWindowPos) and minimised and restored;
@@ -225,11 +228,16 @@ function Boxes {
 }
 $lat = New-Object System.Collections.Generic.List[double]; $sw = New-Object Diagnostics.Stopwatch
 $script:timeouts = 0; $script:hung = 0
+$script:hangAt = [ordered]@{}
 function Sample {
     $r = [IntPtr]::Zero
     $sw.Restart(); $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r); $sw.Stop()
     if ($ok -eq [IntPtr]::Zero) { $script:timeouts++ } else { $lat.Add($sw.Elapsed.TotalMilliseconds) }
     if ([W]::IsHungAppWindow($h)) { $script:hung++ }
+    if ($ok -eq [IntPtr]::Zero -or $sw.ElapsedMilliseconds -gt 1000) {   # where: the download (file k), or setup's page
+        $at = if ((Read1 'page.txt') -eq '12') { 'setup' } else { 'file ' + ((Read1 'download.txt') -split ' ')[0] }
+        $script:hangAt[$at] = 1 + [int]$script:hangAt[$at]
+    }
 }
 # 1. the pages up to Install: Next once on each (again after 3 s if the page didn't move: a click as a page changes
 #    can be lost); a silent run needs no clicks
@@ -307,6 +315,7 @@ $s = @($lat | Sort-Object)
 $res['samples'] = $lat.Count; $res['timeouts'] = $script:timeouts; $res['hung'] = $script:hung
 $res['maxms'] = if ($s.Count) { [math]::Round($s[-1], 1) } else { -1 }
 $res['boxes'] = ($script:boxes -join ' | ')
+$res['hangs'] = (@($script:hangAt.Keys | ForEach-Object { "$_ x$($script:hangAt[$_])" }) -join ', ')
 Save
 '@
 $measureFile = Join-Path $launch 'measure.ps1'
@@ -378,18 +387,27 @@ $short = @'
 param([string]$PortFile)
 $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start()
 Set-Content -LiteralPath $PortFile $l.LocalEndpoint.Port
-$c = $l.AcceptTcpClient(); $s = $c.GetStream(); $b = New-Object byte[] 8192; [void]$s.Read($b, 0, $b.Length)
-$head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/octet-stream`r`nContent-Length: 104857600`r`nConnection: close`r`n`r`n")
-$s.Write($head, 0, $head.Length); $z = New-Object byte[] 1048576; $s.Write($z, 0, $z.Length); $s.Flush(); $c.Close(); $l.Stop()
-Set-Content -LiteralPath "$PortFile.served" 'served'
+$z = New-Object byte[] 1048576
+for ($i = 0; $i -lt 2; $i++) {
+    $c = $l.AcceptTcpClient(); $s = $c.GetStream(); $b = New-Object byte[] 8192; $n = $s.Read($b, 0, $b.Length)
+    $line = ([Text.Encoding]::ASCII.GetString($b, 0, $n) -split "`r`n")[0]   # GET /short HTTP/1.1, or GET /bad?bytes=N HTTP/1.1
+    if ($line -match '/bad\?bytes=(\d+)') { $size = [long]$Matches[1]; $send = $size; $what = 'bad' } else { $size = 104857600; $send = 1048576; $what = 'short' }
+    $head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/octet-stream`r`nContent-Length: $size`r`nConnection: close`r`n`r`n")
+    $s.Write($head, 0, $head.Length)
+    for ($left = $send; $left -gt 0; $left -= $z.Length) { $s.Write($z, 0, [int][math]::Min($z.Length, $left)) }
+    $s.Flush(); $c.Close()
+    Set-Content -LiteralPath "$PortFile.$what" "$line"
+}
+$l.Stop()
 '@
 $shortFile = Join-Path $launch 'short.ps1'; $portFile = Join-Path $launch 'short-port.txt'
 [IO.File]::WriteAllText($shortFile, $short, (New-Object Text.UTF8Encoding $false))
 $sp = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$shortFile`"", "`"$portFile`"" -WindowStyle Hidden -PassThru
 $w0 = Get-Date; while (-not (Test-Path $portFile) -and ((Get-Date) - $w0).TotalSeconds -lt 30) { Start-Sleep -Milliseconds 200 }
 $shortUrl = "http://127.0.0.1:$((Get-Content -LiteralPath $portFile -Raw).Trim())/short"
-$run = RunInstaller 'full' @("/SHORTURL=$shortUrl")
-$served = Test-Path "$portFile.served"
+$badUrl = $shortUrl -replace '/short$', '/bad'
+$run = RunInstaller 'full' @("/SHORTURL=$shortUrl", "/BADURL=$badUrl")
+$served = Test-Path "$portFile.short"; $badServed = if (Test-Path "$portFile.bad") { (Get-Content -LiteralPath "$portFile.bad" -Raw).Trim() } else { '' }
 if (-not $sp.HasExited) { Stop-Process -Id $sp.Id -Force -ErrorAction SilentlyContinue }
 $resp = $run.resp
 $code = $run.code
@@ -398,6 +416,12 @@ $retried = @([regex]::Matches($run.log, ': (.+); trying again by itself \(1 of 3
 Write-Host "Short read: served $served; retried by itself: $($retried.Count) ($(($retried | Select-Object -First 1) -replace '\s+', ' '))"
 if (-not $served) { $fails += "the short-read server was never asked (the test variant didn't use /SHORTURL)" }
 elseif (-not $retried.Count) { $fails += "a download that came back short wasn't tried again by itself" }
+# a big file of the right size and the wrong bytes: its SHA-256 (checked off Inno's thread) fails, it's deleted and
+# fetched again by itself, and the install goes on
+$badRetry = @([regex]::Matches($run.log, '(\S+): its SHA-256 is wrong; trying again by itself \(1 of 3\)') | ForEach-Object { $_.Groups[1].Value })
+Write-Host "Bad hash: served '$badServed'; deleted and fetched again: $($badRetry -join ', ')"
+if (-not $badServed) { $fails += "the bad-hash server was never asked (the test variant didn't use /BADURL)" }
+elseif (-not $badRetry.Count) { $fails += "a big file with the wrong bytes wasn't caught by its SHA-256 and fetched again" }
 if ($CancelCheck) {   # the run after Stop fetched none of the files the Stop run kept
     foreach ($n in $keptNames) {
         if ($run.log -match ("Downloading temporary file from \S+: \S+\\" + [regex]::Escape($n) + "\r?\n")) { $fails += "the run after Stop downloaded $n again" }
@@ -421,7 +445,7 @@ else {
     if ([int]$resp['dlabortoff'] -gt 0) { $fails += "the download page's Stop was disabled or hidden $($resp['dlabortoff']) s" }
     if ($resp['moved'] -ne 'True') { $fails += "the wizard didn't move on the download page ($($resp['moved']))" }
     if ($resp['minimise'] -ne 'True/True') { $fails += "minimise/restore on the download page: $($resp['minimise'])" }
-    if ([int]$resp['timeouts'] -gt 0 -or [int]$resp['hung'] -gt 0) { $fails += "the wizard stopped answering ($($resp['timeouts']) timeouts, hung $($resp['hung']) times)" }
+    if ([int]$resp['timeouts'] -gt 0 -or [int]$resp['hung'] -gt 0) { $fails += "the wizard stopped answering ($($resp['timeouts']) timeouts, hung $($resp['hung']) times; during: $($resp['hangs']))" }
     if ([double]$resp['maxms'] -gt 1000) { $fails += "the wizard took $($resp['maxms']) ms to answer" }
     if ($resp['boxes'] -or $resp['ourboxes']) { $fails += "message boxes came up: $($resp['boxes']) $($resp['ourboxes'])" }
 }
@@ -446,10 +470,11 @@ else {
 }
 $setupLog = Join-Path $dir 'logs\setup.log'
 if (Test-Path $setupLog) {
+    # (setup.log's times are local: PowerShell's "u" format writes a Z without converting to UTC)
     $stepTimes = @(Get-Content -LiteralPath $setupLog | ForEach-Object { if ($_ -match '^(\S+ \S+)\s+STEP (.*)$') { [pscustomobject]@{ t = [datetime]::Parse($Matches[1].TrimEnd('Z')); s = $Matches[2] } } })
     $long = @()
     for ($i = 0; $i -lt $stepTimes.Count; $i++) {
-        $end = if ($i + 1 -lt $stepTimes.Count) { $stepTimes[$i + 1].t } else { (Get-Item -LiteralPath $setupLog).LastWriteTime.ToUniversalTime() }
+        $end = if ($i + 1 -lt $stepTimes.Count) { $stepTimes[$i + 1].t } else { (Get-Item -LiteralPath $setupLog).LastWriteTime }
         $secs = [math]::Round(($end - $stepTimes[$i].t).TotalSeconds)
         Write-Host ("  {0,5} s  {1}" -f $secs, $stepTimes[$i].s)
         if ($secs -gt 300) { $long += "$($stepTimes[$i].s) ($secs s)" }

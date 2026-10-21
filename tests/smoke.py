@@ -3447,10 +3447,21 @@ def u_installer_quiet():
     # installer tries a broken-off download again by itself, the check proves it with a server that stops early, and
     # the driver ends the check on any box or a fall back to the Ready page
     assert "trying again by itself (%d of 3)" in iss and "if Tries < 3 then begin" in iss and "Tries := 0   // the user's Try again" in iss
-    assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\")" in e2e and "Content-Length: 104857600" in e2e
+    assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\", \"/BADURL=$badUrl\")" in e2e and "$size = 104857600; $send = 1048576" in e2e
     assert "a download that came back short wasn't tried again by itself" in e2e and "the run after Stop downloaded $n again" in e2e
     assert 'if ($logged) { Quit "a box came up:' in e2e and "the wizard went back to its Ready page during the downloads" in e2e
     assert "isn't the listed file (size or SHA-256)" in e2e
+    # the second release check: Inno hashing a gigabyte on its own thread kept the window from answering for seconds.
+    # A big file's SHA-256 is now checked by a hidden PowerShell before it is moved into place (a failure deletes it and
+    # the retry fetches it again), and the check proves it with a big file of the right size and the wrong bytes
+    assert "if Big then InnoSha := '' else InnoSha := TabField(Line, 3);" in iss and "Big := Bytes >= 67108864;" in iss
+    assert "throw ''its SHA-256 is wrong''" in iss and "Remove-Item -LiteralPath $f -Force" in iss and "Get-FileHash -Algorithm SHA256 -LiteralPath $f" in iss
+    assert "Why := PlaceFile(ExpandConstant('{tmp}\\') + Name, Dest, Bytes, CheckSha);" in iss
+    assert '"/BADURL=$badUrl"' in e2e and "a big file with the wrong bytes wasn't caught by its SHA-256 and fetched again" in e2e
+    assert "if ($line -match '/bad\\?bytes=(\\d+)')" in e2e and "$res['hangs']" in e2e
+    # the real installer passes the three folders even when they are its own: the step counts only when it runs
+    setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
+    assert "if (-not ((SameDir $LibraryDir $InstallDir) -and (SameDir $WorkDir $InstallDir) -and (SameDir $ModelsDir $InstallDir))) { $script:StepsTotal += 1 }" in setup
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
     assert "#ifdef ReleaseCheck" in iss and "AppName=UnderCover release check (test)" in iss and "Uninstallable=no" in iss
     assert "SaveStringToFile(ExpandConstant('{param:hooks|}\\boxes.txt'), Text + #13#10, True);" in iss
