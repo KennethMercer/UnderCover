@@ -75,15 +75,16 @@ function voiceAskHtml(p) {
 }
 function voiceLine(v, p) {
   const who = esc(p?.person || v?.display || v?.name || "");
+  const a = /^[aeiou]/i.test(p?.person || v?.display || v?.name || "") ? "an" : "a";   // "an Obama voice"
   if (p?.voice_ask) {
     const c = pickedVoice(p);
     return !c ? `<span class="warn">pick one below</span>` : c.voice ? `<b>${vname(c.voice)}</b>, used as it is`
-      : c.choice === "check" ? `a ${who} voice from the community, checked against real clips first`
+      : c.choice === "check" ? `${a} ${who} voice from the community, checked against real clips first`
       : `a new <b>${who}</b> voice, trained first`;
   }
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b>, your voice${v.trained ? ", trained here" : ""}`;
-  if (v.how === "check") return `a ${who} voice from the community, checked against real clips first<span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b>; none close enough trains one (~2 GB while training)</span>`;
+  if (v.how === "check") return `${a} ${who} voice from the community, checked against real clips first<span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b>; none close enough trains one (~2 GB while training)</span>`;
   return `none yet: a new <b>${who}</b> voice is trained first<span class="meta" data-deep> (~2 GB while training)</span>`;
 }
 // how the plan goes: "train" (a voice first), "check" (community voices first), "installed" (a voice of yours), or "" (no plan, or a pick missing)
