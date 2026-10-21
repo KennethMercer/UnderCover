@@ -5,6 +5,12 @@ the model, and compare speaker fingerprints (WeSpeaker) of the result with the t
 model turns an interviewer into the target; a poor or mislabelled one doesn't. Each phrase is shifted by whole
 octaves toward the target's pitch first, since fingerprints are partly pitch-sensitive. The other speakers'
 own similarity to the target (before conversion) is the baseline.
+
+The other voices must always be there (rc-fix7: a person whose best clips are solo speeches had none, and the check
+failed with "no other voices to test against"). The clips' own other speakers come first, when there are enough; else
+the Readers (the bundled Kokoro voices, 4 men and 4 women) read 8 fixed sentences, made once and kept. Measured
+2026-10-21 on three people and five voices: the Readers' phrases gave the same verdict as real interviewers' on all 15
+pairs, scores within 0.06 (own voices 0.80 / 0.65 / 0.67 / 0.69 good, every other one bad).
 """
 import math
 from dataclasses import asdict, dataclass
@@ -24,7 +30,8 @@ class Quality:
     low: float | None = None         # bootstrap 90% lower bound of `score` (few phrases = wide range)
     pitch_cents: float | None = None # median pitch error of the conversion vs the intended melody
     content: float | None = None     # mean HuBERT cosine, input vs output (how much of the words survive)
-    test: str = "speech"             # speech | sung (singers: other singers converted, vs their singing voice)
+    test: str = "speech"             # speech | sung (singers: other singers converted, vs their singing voice) |
+                                     # readers (the Readers' phrases converted, vs their speech)
 
     def to_json(self):
         return asdict(self)
@@ -94,9 +101,56 @@ def _sung_segments(x16: np.ndarray, n: int = 2, lo: float = 3.0, hi: float = 7.0
     return out[len(out) // 4: len(out) // 4 + n] if len(out) > n else out
 
 
+# The Readers' test: 8 Readers (American and British, men and women), one fixed conversational sentence each, so every
+# check made with them is made on the same phrases. A new set (other voices or lines) needs a new READERS_TEST.
+READERS_TEST = 1
+READER_LINES = [
+    ("am_michael", "Well, I think that's the question a lot of people have been asking for a while now."),
+    ("am_fenrir", "So tell me, what was it like the first time you walked out onto that stage?"),
+    ("bm_george", "We talked about this last week, and honestly, I still don't know what to make of it."),
+    ("bm_fable", "It's been a long road, but here we are, and I want to thank everyone who came tonight."),
+    ("af_heart", "Let me ask you something before we move on to the next part of the show."),
+    ("af_bella", "That's a fair point, and I'd love to hear more about how you got there."),
+    ("bf_emma", "People forget how much work goes into something like this behind the scenes."),
+    ("af_nicole", "Now, before we get into all that, let's take a quick look back at where it started."),
+]
+MIN_OTHERS = 4   # fewer of the clips' own other speakers than this: the Readers' phrases instead
+
+
+def reader_phrases() -> list:
+    """The Readers' 8 phrases (16 kHz), read once by the bundled Kokoro and kept in cache_dir/voicecheck; [] when the
+    Readers can't run (their model missing: the check then says it has nothing to test with)."""
+    from ..core.config import path
+    from .project import _resample16
+    f = path("cache_dir") / "voicecheck" / f"readers-{READERS_TEST}.npz"
+    try:
+        with np.load(f) as z:
+            out = [z[f"p{i}"] for i in range(len(READER_LINES))]
+        if all(len(x) > 16000 for x in out):
+            return out
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        from ..core import readers
+        if not readers.ready():
+            return []
+        out = [_resample16(readers.synth(line, reader), readers.SR) for reader, line in READER_LINES]
+    except Exception:   # noqa: BLE001 - no Readers here: no test, said by the caller
+        return []
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp.npz")
+        np.savez(tmp, **{f"p{i}": x for i, x in enumerate(out)})
+        tmp.replace(f)
+    except OSError:
+        pass   # made again next time
+    return out
+
+
 def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
     """(test phrases, target reference vector, kind) from a prepared project. Singers (a sung reference exists):
-    other singers' singing vs their sung voice; everyone else: other speakers in their clips vs their speech."""
+    other singers' singing vs their sung voice; everyone else: other speakers in their clips vs their speech, or the
+    Readers' phrases when the clips have fewer than MIN_OTHERS (kind "readers": the same thresholds as speech)."""
     import soundfile as sf
     from .project import _resample16
     emb = proj.load_embeddings()
@@ -110,6 +164,9 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
         return [], None, "speech"
     others = sorted([p for p in proj.phrases if p.reason == "other speaker" and 2.0 <= p.dur <= 8.0 and p.score < 0.2],
                     key=lambda p: -p.dur)
+    ref = ref / (np.linalg.norm(ref) + 1e-9)
+    if len(others) < MIN_OTHERS and (readers := reader_phrases()):   # (too few to pick from: none read for nothing)
+        return readers, ref, "readers"
     picked, total = [], 0.0
     used_sources: dict = {}
     for p in others:   # spread over sources and speakers
@@ -121,7 +178,11 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
         total += p.dur
         if len(picked) >= max_phrases or total >= max_seconds:
             break
-    return picked, ref / (np.linalg.norm(ref) + 1e-9), "speech"
+    if len(picked) < MIN_OTHERS:   # (spread over sources, 3 each at most: still too few)
+        readers = reader_phrases()
+        if readers:
+            return readers, ref, "readers"
+    return picked, ref, "speech"
 
 
 def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
@@ -149,7 +210,7 @@ def check(voice: str, proj, converter, embedder, tests: tuple | None = None) -> 
     from .project import _resample16
     phrases, ref, kind = tests or test_phrases(proj)
     if not phrases or ref is None:
-        raise ValueError("no test phrases (the clips had only one speaker)")
+        raise ValueError("no test phrases (the clips had only one speaker, and the Readers couldn't read)")
     import torch
     tgt_hz = target_pitch(proj, converter.rmvpe)
     sims, base, cents, content, secs = [], [], [], [], 0.0
