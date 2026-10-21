@@ -412,8 +412,8 @@ if (-not $sp.HasExited) { Stop-Process -Id $sp.Id -Force -ErrorAction SilentlyCo
 $resp = $run.resp
 $code = $run.code
 $todo = ToDownload $run
-$retried = @([regex]::Matches($run.log, ': (.+); trying again by itself \(1 of 3\)') | ForEach-Object { $_.Value })
-Write-Host "Short read: served $served; retried by itself: $($retried.Count) ($(($retried | Select-Object -First 1) -replace '\s+', ' '))"
+$retried = @([regex]::Matches($run.log, '(?m)\s(\S+): (.+); trying again by itself \(1 of 3\)') | ForEach-Object { "$($_.Groups[1].Value) ($($_.Groups[2].Value))" })
+Write-Host "Short read: served $served. Files tried again by themselves ($($retried.Count)): $($retried -join '; ')"
 if (-not $served) { $fails += "the short-read server was never asked (the test variant didn't use /SHORTURL)" }
 elseif (-not $retried.Count) { $fails += "a download that came back short wasn't tried again by itself" }
 # a big file of the right size and the wrong bytes: its SHA-256 (checked off Inno's thread) fails, it's deleted and
