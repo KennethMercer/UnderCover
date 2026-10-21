@@ -3476,6 +3476,9 @@ def u_installer_quiet():
     # rc-fix4b (the machine came back from a reboot with LiveKernelEvent 141 reports): the release check fails on a driver
     # reset or a lost device during the run, and the selftest's GPU work is gentle (small steps, each waited for)
     assert "function GpuTrouble" in e2e and "P1: (141|117)" in e2e and "Id = 4101" in e2e and "$gpu = @(GpuTrouble)" in e2e
+    # (MasterPlan, run 4: Windows resent 32 old reports during an update scan; a report fails the run only when its dump
+    # was made during the run, or it has no dump and real parameters; older ones are a warning)
+    assert "if (-not $made -or $made -ge $runStart.AddMinutes(-1)) { $new +=" in e2e and "Windows resent" in e2e
     st = (ROOT / "installer" / "selftest.py").read_text(encoding="utf-8")
     assert "n, dt = 1024," in st and "if steps[-1] > 0.2:" in st and "stopped answering during the self-test" in st
     assert "if ([double]$resp['maxms'] -gt 1000)" in e2e

@@ -39,8 +39,8 @@
     - a first cover and speech on the fresh install download nothing (the installed copy runs on a free port with its
       own folders; its models folder and the Hugging Face, torch and Whisper caches are the same before and after, and
       its log says no download);
-    - the graphics driver never reset during the run (no Display 4101, no LiveKernelEvent 141 / 117) and no log says
-      the device was lost.
+    - the graphics driver never reset during the run: no Display 4101, no LiveKernelEvent 141 / 117 whose dump was made
+      during the run (Windows resending older reports is said as a warning), and no log says the device was lost.
   Exit code 0 only when every check passes. The tail of setup.log is printed either way.
 #>
 param(
@@ -514,9 +514,32 @@ if ($code -eq 0 -and (Test-Path $vpy)) {   # (after a failed setup the venv may 
 # machine once came back from a reboot with LiveKernelEvent 141 reports; a release check must catch that, not pass it)
 function GpuTrouble {
     $out = @()
+    # A LiveKernelEvent 141 / 117 report fails the run when its dump was made during the run. Windows Error Reporting
+    # also resends its queue now and then (the fourth run: 32 reports in 13 s, during a Windows Update scan, attaching
+    # dumps from two days before): a report whose dump is older is said, not failed. One with no dump fails, unless its
+    # parameters are only placeholders (aaaa...), which a resent report has.
     $wer = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1001; StartTime = $runStart } -ErrorAction SilentlyContinue |
         Where-Object { $_.Message -match 'LiveKernelEvent' -and $_.Message -match 'P1: (141|117)\b' })
-    if ($wer.Count) { $out += "$($wer.Count) LiveKernelEvent 141/117 report(s) (the GPU stopped answering) at $(($wer | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') }) -join ', ')" }
+    $new = @(); $old = @{}
+    foreach ($e in $wer) {
+        $dumps = @([regex]::Matches($e.Message, '(?im)^\\\\\?\\(.*LiveKernelReports\\.*\.dmp)\s*$') | ForEach-Object { $_.Groups[1].Value.Trim() })
+        if ($dumps.Count) {
+            foreach ($d in $dumps) {
+                $made = $null
+                try { $made = (Get-Item -LiteralPath $d -ErrorAction Stop).CreationTime } catch { }   # (often needs admin to read)
+                if (-not $made -and (Split-Path $d -Leaf) -match '(\d{8})-(\d{4})') { $made = [datetime]::ParseExact($Matches[1] + $Matches[2], 'yyyyMMddHHmm', $null) }
+                if (-not $made -or $made -ge $runStart.AddMinutes(-1)) { $new += "$(Split-Path $d -Leaf) at $($e.TimeCreated.ToString('HH:mm:ss'))" }
+                else { $old["$(Split-Path $d -Leaf) (made $($made.ToString('yyyy-MM-dd HH:mm')))"] = 1 + [int]$old["$(Split-Path $d -Leaf) (made $($made.ToString('yyyy-MM-dd HH:mm')))"] }
+            }
+        } elseif ($e.Message -match '(?m)^P2: a{16}\s*$' -and $e.Message -match '(?m)^P3: a{16}\s*$') {
+            $old["a report with no dump and placeholder parameters at $($e.TimeCreated.ToString('HH:mm:ss'))"] = 1
+        } else { $new += "a report with no dump at $($e.TimeCreated.ToString('HH:mm:ss'))" }
+    }
+    if ($new.Count) { $out += "$($new.Count) LiveKernelEvent 141/117 report(s) made during the run (the GPU stopped answering): $($new -join ', ')" }
+    if ($old.Count) {
+        Write-Host ("GPU (warning, not a failure): Windows resent $($wer.Count - $new.Count) older LiveKernelEvent report(s): " +
+                    (@($old.Keys | ForEach-Object { "$_ x$($old[$_])" }) -join '; ')) -ForegroundColor Yellow
+    }
     $tdr = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 4101; StartTime = $runStart } -ErrorAction SilentlyContinue)
     if ($tdr.Count) { $out += "$($tdr.Count) display driver reset(s) (Display 4101) at $(($tdr | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') }) -join ', ')" }
     foreach ($f in @('logs\setup.log', 'logs\firstuse-server.log', 'logs\firstuse-server.log.err', 'logs\selftest.json')) {
