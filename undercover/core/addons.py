@@ -281,13 +281,17 @@ def _optional(a: Addon, doing: str) -> None:
         raise ModelError(f"{a.name} isn't used by anything yet, so there's nothing to {doing} for now.")
 
 
-def install(addon_id: str, accept: bool, progress=None, cancel=None) -> dict:
+def install(addon_id: str, accept: bool, progress=None, cancel=None, source: Path | None = None) -> dict:
     """Install an add-on. accept must be True: the user has read the licence summary and agreed (recorded with a date).
-    progress(message, done_bytes, total_bytes) while it installs; cancel() -> True stops between files."""
+    progress(message, done_bytes, total_bytes) while it installs; cancel() -> True stops between files.
+    source: the installer's download folder (rc-fix6): the packages come from there (uv --offline, each file's SHA-256
+    required) and the model files must already be in place (its download page put them there); nothing goes online."""
     a = get(addon_id)
     _optional(a, "install")
     if not accept:
         raise ModelError(f"{a.name} is under {a.licence}: {a.licence_summary} Accept its licence to install it.")
+    if source is not None and a.files and not _files_present(a):
+        raise ModelError(f"{a.name}'s model files weren't downloaded. Run the installer again: it downloads only what's missing.")
     st = _state()
     st[a.id] = {**(st.get(a.id) or {}), "accepted": time.strftime("%Y-%m-%d %H:%M"), "licence": a.licence}
     _save(st)
@@ -295,7 +299,12 @@ def install(addon_id: str, accept: bool, progress=None, cancel=None) -> dict:
         if progress:
             progress(f"Installing {a.name}'s Python packages", 0, 0)
         hashed = ROOT / "installer" / "requirements" / f"addon-{a.id}.txt"   # the same pins, each with its SHA-256
-        if hashed.exists():
+        if source is not None:
+            if not hashed.exists():
+                raise ModelError(f"{a.name} has no pinned list (installer/requirements/addon-{a.id}.txt) to install from.")
+            _pip("install", "--offline", "--no-index", "--find-links", str(source), "--no-deps", "--require-hashes",
+                 "-r", str(hashed), what=f"{a.name}'s Python packages")
+        elif hashed.exists():
             _pip("install", "--no-deps", "--require-hashes", "-r", str(hashed))
         else:
             _pip("install", "--no-deps", "-c", str(CONSTRAINTS), *a.packages)

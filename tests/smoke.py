@@ -3085,16 +3085,17 @@ def u_installer_python():
     import tempfile
     inst = ROOT / "installer"
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
-    installs = re.findall(r"@\('python', 'install'[^)]*\)", setup)
-    assert installs and all("'--no-bin', '--no-registry'" in x for x in installs), installs
+    # rc-fix6: setup unpacks the pinned python-build-standalone archive itself (no uv python install: no shim, no registry,
+    # no minor-version link at all)
+    assert not re.findall(r"@\('python', 'install'", setup) and "$BasePy = Join-Path $pyHome 'python.exe'" in setup
     # the venv: Python's own venv module from the full-version python.exe (uv's venvs sit on the minor link: the user's
     # second run failed at PyTorch with os error 448 on .venv\Scripts\python.exe); one built on the link is made again
     assert "Run $BasePy @('-m', 'venv', '--clear', '--without-pip', $Venv)" in setup and "@('venv'," not in setup
     assert "$venvGood = (-not $DryRun) -and (Test-Path $Py) -and (Test-VenvBase $Venv $PythonVer)" in setup
     assert "if ($Repair -and $venvGood)" in setup and "if ($venvGood -and -not $Force)" in setup
     assert "DisableDirPage=no" in (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
-    assert ". (Join-Path $PSScriptRoot 'python.ps1')" in setup and "Get-OwnPython $env:UV_PYTHON_INSTALL_DIR $PythonVer" in setup
-    assert "Test-OwnPython $own $PythonVer" in setup and "$try -le 2" in setup and "Remove-OwnPythonRegistry $InstallDir" in setup
+    assert ". (Join-Path $PSScriptRoot 'python.ps1')" in setup and "Test-OwnPython $BasePy $PythonVer" in setup
+    assert "Remove-OwnPythonRegistry $InstallDir" in setup
     assert "--default" not in setup, "uv must never make this Python the user's default"
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
     assert 'Source: "python.ps1"; DestDir: "{app}\\installer"' in iss
@@ -3267,9 +3268,9 @@ def u_installer_space():
         total = ps("$n = Get-SpaceNeeds 'C:\\UnderCover' '' '' '' '' $s; $t = 0; foreach ($k in $n.Keys) { $t += $n[$k].need }; Format-GB $t")
         assert f'#define SizeTotalGB "{total}"' in isi, ("sizes.isi is stale: run installer\\build.ps1", total, isi)
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
-    assert setup.count("RunWatched $Uv") == 3, "a long uv step runs without progress"
+    assert setup.count("RunWatched $Uv") == 1, "the packages' uv step runs without progress"
     assert "Get-SpaceNeeds $InstallDir '' '' $ModelsDir $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }" in setup and "Fail (\"there isn't enough space. \"" in setup
-    assert setup.index("Find-Shortfalls $needs") < setup.index('Step "Getting the Python installer'), "setup checks the space after it downloads"
+    assert setup.index("Find-Shortfalls $needs") < setup.index("# 2. The files"), "setup checks the space after it downloads"
     assert "Test-Path $Py" not in setup[setup.index("Space: what setup"):setup.index("Find-Shortfalls $needs")], "a re-run after Cancel skips the space check"
     assert "function DirBytes" not in setup and "Get-DirBytes $watch" in setup
     # an untyped 0 makes PowerShell pick Max(Int32, Int32): sizes past 2 GB fail, 7.1 GB becomes 7 (a real install died)
@@ -3278,11 +3279,11 @@ def u_installer_space():
     assert 'Result "cancelled: $kept"' in setup and "exit 3" in setup
     assert "[Console]::Out.WriteLine($line)" in setup and "Add-Content -Path $StatusFile" in setup
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
-    run = iss[iss.index("function RunSetup"):iss.index("procedure CancelButtonClick")]
+    run = iss[iss.index("function RunSetup"):iss.index("procedure CurStepChanged")]
     assert "ExecAndLogOutput('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, SetupCode, @SetupLine)" in run
     assert "-Pause" not in run, "the hidden setup would wait for Enter forever"
     assert "WizardForm.ProgressGauge.Position := Progress" in iss and "if Pos1 > Progress then Progress := Pos1" in iss
-    assert "Show details" in iss and "logs\\setup.log" in iss and "procedure CancelButtonClick" in iss and "logs\\setup-cancel" in iss
+    assert "Show details" in iss and "logs\\setup.log" in iss and "DownloadPage.Show;" in iss
     assert "WizardForm.DiskSpaceLabel.Caption := Need;" in iss and "DirParts.Caption := Parts;" in iss and "{#SizeTotalGB} GB of free space in all" in iss
     assert "StringChangeEx(S, '|', ' ' + #183 + ' ', True);" in iss, "the parts line isn't joined with a middle dot"
     assert "FilesNeed.Caption := Need;" in iss and iss.count("OnChange := @DataEditChange;") == 3 and "CreateCallback(@SpaceTimerFired)" in iss
@@ -3310,8 +3311,9 @@ def u_installer_space():
     assert not re.search(r"(?m)^\s*#13", iss), "a line starting with # is a preprocessor directive"
     assert all(ord(c) < 128 for c in iss + setup), "the installer's scripts must stay ASCII"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
-    assert "ExecAndLogOutput('powershell.exe'" in e2e and "steps never reported" in e2e and "-CancelCheck" in e2e
-    assert "$issFiles" in e2e and "UnderCover.iss') -Pattern" in e2e, "the release check keeps its own list of installer files (it missed space.ps1 once)"
+    assert "steps never reported" in e2e and "-CancelCheck" in e2e
+    # rc-fix6: the release check runs the real installer (its test variant), so it can't miss a file the installer ships
+    assert "& $iscc /Q /DReleaseCheck=1 \"/O$launch\" (Join-Path $repo 'installer\\UnderCover.iss')" in e2e and "$issFiles" not in e2e
     return f"one drive: {one} GB (22 = 9 + 10.5 + 1 + 1.5); a short drive said plainly; setup hidden, its status driving the bar; Cancel"
 
 
@@ -3428,21 +3430,58 @@ def u_installer_quiet():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
-    run = iss[iss.index("function RunSetup"):iss.index("procedure CancelButtonClick")]
+    run = iss[iss.index("function RunSetup"):iss.index("procedure CurStepChanged")]
     assert "-NonInteractive" in run and "-Pause" not in run, "the hidden setup could wait for input no one sees"
     e2e = (ROOT / "tests" / "installer_e2e.ps1").read_text(encoding="utf-8")
-    assert '$params = "-NoProfile -NonInteractive' in e2e, "the release check doesn't run setup as the wizard does"
-    # installer-fix6 (the user: the window couldn't be moved during setup): the release check's final run is a shown
-    # wizard running the real setup with UnderCover.iss's own SetupLine, timed from outside (answers, hung, title bar,
-    # minimise and restore mid-run)
-    assert "'/SILENT', '/SUPPRESSMSGBOXES', '/WIZARD=1'" in e2e and ".Replace('@SETUPLINE@', $setupLineCode)" in e2e
-    assert "IsHungAppWindow" in e2e and "if ([int]$r -eq 2) { $caption++ }" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
+    # rc-fix6 (the user's install: the wizard refused every click; a check wizard on the user's desktop confused them):
+    # the real installer, interactive, clicked through by a driver; on the download page every second the wizard and
+    # Stop enabled, answers timed, moved and minimised; the test variant is out of the taskbar and Alt+Tab and shows no
+    # box; -CancelCheck clicks Stop in a silent run and the next run carries on
+    assert "$run = RunInstaller 'full' @(" in e2e and "$a = RunInstaller 'abort' @('/SILENT', '/SUPPRESSMSGBOXES')" in e2e
+    assert "if (-not [W]::IsWindowEnabled($h)) { $wizOff++ }" in e2e and "[W]::IsWindowEnabled($abort) -and [W]::IsWindowVisible($abort)" in e2e
+    assert "IsHungAppWindow" in e2e and "SetWindowPos($h, [IntPtr]::Zero, $a.L + 40, $a.T + 30" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
+    assert "if ($resp['toolwindow'] -ne 'True')" in e2e and "if ($resp['boxes'] -or $resp['ourboxes'])" in e2e
+    assert "it didn't carry on" in e2e and "if (Test-Path $cacheDir)" in e2e and "the test install made shortcuts" in e2e
+    # the first release check hung: AMD's server closed a 645 MB download at 6 MB, the hash failed, and the error box
+    # (written down by the test variant) sent the wizard back to its Ready page while the driver waited. Now the
+    # installer tries a broken-off download again by itself, the check proves it with a server that stops early, and
+    # the driver ends the check on any box or a fall back to the Ready page
+    assert "trying again by itself (%d of 3)" in iss and "if Tries < 3 then begin" in iss and "Tries := 0   // the user's Try again" in iss
+    assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\", \"/BADURL=$badUrl\")" in e2e and "$size = 104857600; $send = 1048576" in e2e
+    assert "a download that came back short wasn't tried again by itself" in e2e and "the run after Stop downloaded $n again" in e2e
+    assert 'if ($logged) { Quit "a box came up:' in e2e and "the wizard went back to its Ready page during the downloads" in e2e
+    assert "isn't the listed file (size or SHA-256)" in e2e
+    # the second release check: Inno hashing a gigabyte on its own thread kept the window from answering for seconds.
+    # A big file's SHA-256 is now checked by a hidden PowerShell before it is moved into place (a failure deletes it and
+    # the retry fetches it again), and the check proves it with a big file of the right size and the wrong bytes
+    assert "if Big then InnoSha := '' else InnoSha := TabField(Line, 3);" in iss and "Big := Bytes >= 67108864;" in iss
+    place = iss[iss.index("function PlaceFile("):iss.index("function FetchFile(")]
+    assert "Shell := CreateOleObject('WScript.Shell');" in place and "Exec(" not in place, "Inno's Exec disables the wizard while it runs"
+    # started from PowerShell 7, Windows PowerShell inherits its module path and can't load Get-FileHash / Expand-Archive
+    assert "GetEnvironmentVariable(' +" in place and "''PSModulePath'', ''Machine'')" in place
+    for f in ("setup.ps1", "space.ps1", "detect_gpu.ps1"):
+        assert "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') }" in (inst / f).read_text(encoding="utf-8-sig"), f
+    assert "throw ''its SHA-256 is wrong''" in iss and "Remove-Item -LiteralPath $f -Force" in iss and "Get-FileHash -Algorithm SHA256 -LiteralPath $f" in iss
+    assert "Why := PlaceFile(ExpandConstant('{tmp}\\') + Name, Dest, Bytes, CheckSha);" in iss
+    assert '"/BADURL=$badUrl"' in e2e and "a big file with the wrong bytes wasn't caught by its SHA-256 and fetched again" in e2e
+    assert "if ($line -match '/bad\\?bytes=(\\d+)')" in e2e and "$res['hangs']" in e2e
+    # the real installer passes the three folders even when they are its own: the step counts only when it runs
+    setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
+    assert "if (-not ((SameDir $LibraryDir $InstallDir) -and (SameDir $WorkDir $InstallDir) -and (SameDir $ModelsDir $InstallDir))) { $script:StepsTotal += 1 }" in setup
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    assert "#ifdef ReleaseCheck" in iss and "AppName=UnderCover release check (test)" in iss and "Uninstallable=no" in iss
+    assert "SaveStringToFile(ExpandConstant('{param:hooks|}\\boxes.txt'), Text + #13#10, True);" in iss
+    assert "MsgBox(" not in iss.replace("SuppressibleMsgBox(", "").replace("MsgBox('UnderCover is removed.'", ""), "a box the test variant would show"
+    assert "#ifndef ReleaseCheck\n[Icons]" in iss and "#ifndef ReleaseCheck\n  MakeLink(" in iss, "the test variant makes shortcuts"
     # rc-fix4b (the machine came back from a reboot with LiveKernelEvent 141 reports): the release check fails on a driver
     # reset or a lost device during the run, and the selftest's GPU work is gentle (small steps, each waited for)
     assert "function GpuTrouble" in e2e and "P1: (141|117)" in e2e and "Id = 4101" in e2e and "$gpu = @(GpuTrouble)" in e2e
+    # (MasterPlan, run 4: Windows resent 32 old reports during an update scan; a report fails the run only when its dump
+    # was made during the run, or it has no dump and real parameters; older ones are a warning)
+    assert "if (-not $made -or $made -ge $runStart.AddMinutes(-1)) { $new +=" in e2e and "Windows resent" in e2e
     st = (ROOT / "installer" / "selftest.py").read_text(encoding="utf-8")
     assert "n, dt = 1024," in st and "if steps[-1] > 0.2:" in st and "stopped answering during the self-test" in st
-    assert "if ([double]$resp['maxms'] -gt 1000)" in e2e and "Cut 'procedure SetupLine('" in e2e
+    assert "if ([double]$resp['maxms'] -gt 1000)" in e2e
     # shortcuts: only ever this install's
     undelete = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
     assert ".lnk" not in undelete, "the uninstaller deletes a shortcut by name, whoever it belongs to"
@@ -3453,6 +3492,126 @@ def u_installer_quiet():
     assert "CurUninstallStep = usUninstall" in iss and "RemoveOurLinks(ExpandConstant('{userdesktop}'))" in iss
     assert "SetupMessage(msgFinishedLabel) + LinkNote" in iss
     return "add-on: 3 plain lines, %d status lines for 108 MB; a taken port named (this copy / another / %s); shortcuts checked by target" % (len(pm), foreign["owner"])
+
+
+@check("the installer downloads everything first, on Inno's own page, then sets up offline (rc-fix6, the user's install: the wizard refused every click for all of setup, Inno disables it while a program it started runs; the 200 ms re-enable was rejected, 'this absolutely cannot be how it is done by the pros'): installer/downloads.tsv lists every file (each pin's exact file by its SHA-256, the models, the add-ons, the tools), the wizard's download page fetches this PC's groups before anything is installed and puts each file in place (a file there at its size is skipped), setup.ps1 -Offline installs from them with uv --offline and never goes online; Cancel is off for its short steps")
+def u_installer_downloads():
+    import re
+    import subprocess
+    import tempfile
+    inst = ROOT / "installer"
+    sys.path.insert(0, str(inst))
+    try:
+        import downloads as D
+    finally:
+        sys.path.remove(str(inst))
+    rows = D.read()
+    assert rows and list(rows[0]) == list(D.COLUMNS), rows[:1]
+    for r in rows:
+        assert re.fullmatch(r"[0-9a-f]{64}", r["sha256"]) and int(r["bytes"]) > 0, r
+        assert r["dest"].startswith(("cache/", "models/")) and ".." not in r["dest"] and "\\" not in r["dest"], r
+        assert all(u.startswith("https://") for u in r["urls"].split(" ")), r
+        assert (r["pin"] != "") == (r["dest"].startswith("cache/") and r["group"] != "base"), r
+    groups = {r["group"] for r in rows}
+    assert {"base", "packages", "models", "torch-rocm", "torch-cuda128", "torch-cuda126", "torch-cpu"} <= groups, groups
+    # every pin has its file, the one its hash names, in its group (a stale list after pin_hashes.py fails here)
+    for g, req in [("packages", "common.txt"), ("packages", "cadence.txt")] + [(f"torch-{b}", f"torch-{b}.txt") for b in D.BACKENDS] + \
+            [(p.stem, p.name) for p in (inst / "requirements").glob("addon-*.txt")]:
+        mine = [r for r in rows if r["group"] == g]
+        for pin in D.read_pins(inst / "requirements" / req):
+            hit = [r for r in mine if r["sha256"] in pin["hashes"]]
+            assert len(hit) == 1, (req, pin["name"], "downloads.tsv is stale: run installer\\build.ps1")
+            assert re.sub(r"[-_.]+", "-", hit[0]["pin"].split("==")[0]).lower() == re.sub(r"[-_.]+", "-", pin["name"]).lower(), (pin, hit)
+    # every model a feature uses, and every add-on's files, with the registry's SHA-256 and size
+    from undercover import models
+    from undercover.core import addons as A, setup_models
+    for local in models.wanted():
+        hit = [r for r in rows if r["group"] == "models" and r["dest"] == f"models/{local}"]
+        assert len(hit) == 1 and hit[0]["sha256"] == setup_models.PINNED[local]["sha256"], local
+        assert int(hit[0]["bytes"]) == setup_models.PINNED[local]["size"], local
+        assert hit[0]["urls"].split(" ") == setup_models.PINNED[local]["urls"], local
+    for a in A.ADDONS.values():
+        if a.included or not a.wired:
+            continue
+        for local in a.files:
+            assert [r for r in rows if r["group"] == f"addon-{a.id}" and r["dest"] == f"models/{local}"], (a.id, local)
+        assert not a.packages or (inst / "requirements" / f"addon-{a.id}.txt").exists(), a.id
+    # the tools: the versions setup.ps1 names
+    setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
+    base = {r["dest"][len("cache/"):] for r in rows if r["group"] == "base"}
+    ver = {k: re.search(rf"\${k}\s*=\s*'([^']+)'", setup).group(1) for k in ("UvVersion", "DenoVersion", "PythonVer", "FfmpegVer")}
+    assert any(f"/{ver['UvVersion']}/" in r["urls"] for r in rows if r["dest"] == "cache/uv-x86_64-pc-windows-msvc.zip"), ver
+    assert any(f"/v{ver['DenoVersion']}/" in r["urls"] for r in rows if r["dest"] == "cache/deno-x86_64-pc-windows-msvc.zip"), ver
+    assert f"ffmpeg-{ver['FfmpegVer']}-essentials_build.zip" in base and D.PY_FILE in base and D.PY_FILE.startswith(f"cpython-{ver['PythonVer']}+"), base
+    assert f"CacheFile '{D.PY_FILE}'" in setup and "CacheFile \"ffmpeg-$FfmpegVer-essentials_build.zip\"" in setup
+    # setup -Offline: one uv run from the cache, hashes required, nothing online; Python unpacked by setup, not uv
+    assert "'--offline', '--no-index', '--find-links', $Cache, '--no-deps', '--require-hashes'" in setup and "$env:UV_OFFLINE            = '1'" in setup
+    assert setup.count("RunWatched $Uv") == 1 and "--index-url" not in setup and "'python', 'install'" not in setup
+    assert "Run (Join-Path $env:SystemRoot 'System32\\tar.exe') @('-xzf', $archive, '-C', $unpack)" in setup
+    assert "if ($Offline) { Info \"YouTube downloader: the pinned one" in setup, "the installer's setup goes online for yt-dlp"
+    assert "if ($Offline) { $code = RunCode $Py @('-m', 'undercover.models', 'install', '--offline') }" in setup
+    # the fourth release check: audio-separator's model list appeared at first use (the app copies it in from its
+    # assets before a separation; setup's model step always had): install --offline puts it there, fetches nothing
+    msrc = (ROOT / "undercover" / "models.py").read_text(encoding="utf-8")
+    assert "if a.offline and todo:" in msrc and msrc.index("if a.offline and todo:") < msrc.index("r = install(progress, cancel)")
+    assert "'--from', $Cache" in setup and "Fetch " in setup[setup.index("function Get-Files"):setup.index("# -----", setup.index("function Get-Files"))]
+    for line in setup.splitlines():   # nothing else fetches from the network
+        assert not re.search(r"\bFetch ['\"]https?:", line), line
+    # setup's list functions, run for real on a list of three files: the one at its size is in place, a short one isn't;
+    # -Offline names what's missing and stops
+    fn = setup[setup.index("$Downloads = @(Import-Csv"):setup.index("# -----", setup.index("$Downloads = @(Import-Csv"))]
+    d = Path(tempfile.mkdtemp(prefix="uc-dl-"))
+    try:
+        (d / "cache" / "downloads").mkdir(parents=True)
+        (d / "cache" / "downloads" / "a.whl").write_bytes(b"x" * 10)
+        (d / "cache" / "downloads" / "b.whl").write_bytes(b"x" * 3)
+        (d / "downloads.tsv").write_text("\t".join(D.COLUMNS) + "\n" + "".join(
+            f"packages\tcache/{n}.whl\thttps://example.invalid/{n}\t{'0' * 64}\t10\t{n}==1\n" for n in ("a", "b", "c")) +
+            f"models\tmodels/m.bin\thttps://example.invalid/m\t{'0' * 64}\t5\t\n", encoding="ascii")
+        script = (f"$ErrorActionPreference = 'Stop'; $Cache = '{d / 'cache' / 'downloads'}'; $Offline = $true\n"
+                  "function Fail($m) { Write-Output \"FAIL=$m\"; exit 1 }\nfunction Info($m) { Write-Output \"INFO=$m\" }\n"
+                  "function Status($a, $b) { }\n" + fn.replace("$PSScriptRoot", f"'{d}'") +
+                  "\nWrite-Output \"inplace=$(@(Rows @('packages') | Where-Object { InPlace $_ } | ForEach-Object { $_.pin }) -join ',')\"\n"
+                  "Get-Files @('packages', 'models') 'the packages'\n")
+        f = d / "t.ps1"
+        f.write_text(script, encoding="utf-8")
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(f)], capture_output=True, text=True, timeout=120)
+        assert "inplace=a==1" in r.stdout, (r.stdout, r.stderr)
+        assert "FAIL=2 of the files setup needs weren't downloaded (b.whl, ...). Run the installer again" in r.stdout, (r.stdout, r.stderr)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    # the wizard: the download page on Install, before anything is installed; setup -Offline with this card's backend;
+    # Cancel off for setup's short steps; no timer, no hooks re-enabling the wizard
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    assert "end else if CurPageID = wpReady then\n    Result := DownloadAll;" in iss.replace("\r\n", "\n")
+    assert "DownloadPage := CreateDownloadPage(" in iss and "DownloadPage.Add(Url, Name, Sha);" in iss and "DownloadPage.Download;" in iss
+    assert "if DownloadPage.AbortedByUser then" in iss and "MB_RETRYCANCEL" in iss
+    assert "if FileSize64(Dest, Have) and (Have = Bytes) then Continue;" in iss, "a file already downloaded is fetched again"
+    assert "DownloadPage.SetProgress(DownloadIndex, DownloadCount);   // (keeps the window answering)" in iss
+    assert "-Backend ' + Backend + ' -Offline';" in iss and "WizardForm.CancelButton.Enabled := False;" in iss
+    assert "EnableWindow" not in iss and "AwakeTimer" not in iss and "procedure CancelButtonClick" not in iss and "setup-cancel" not in iss
+    assert 'Source: "downloads.tsv"; Flags: dontcopy' in iss and 'Source: "downloads.tsv"; DestDir: "{app}\\installer"' in iss
+    assert 'Type: filesandordirs; Name: "{app}\\cache\\downloads"' in iss
+    code = iss.replace(chr(13), "")[iss.replace(chr(13), "").index(chr(10) + "[Code]" + chr(10)) + 8:]
+    assert not [ln for ln in code.splitlines() if ln.lstrip().startswith("[")], "a [Code] line starting with [ is read as a section"
+    assert "StopDownload=Stop downloading? What's downloaded is kept" in iss
+    # an add-on from the installer's downloads: packages offline from the folder, its files must be in place already
+    src = (ROOT / "undercover" / "core" / "addons.py").read_text(encoding="utf-8")
+    assert '_pip("install", "--offline", "--no-index", "--find-links", str(source), "--no-deps", "--require-hashes",' in src
+    fake = A.Addon(id="uc-smoke-dl", name="Smoke DL", adds="x", licence="MIT", licence_url="https://example.invalid",
+                   licence_summary="x", size_mb=1, files={"uc-smoke-dl/none.bin": "https://example.invalid/none.bin"})
+    A.register(fake)
+    try:
+        with isolated_data():
+            try:
+                A.install("uc-smoke-dl", True, source=Path(tempfile.gettempdir()))
+                raise AssertionError("an add-on with missing files installed from the downloads")
+            except A.ModelError as e:
+                assert "weren't downloaded" in str(e), e
+            A.forget("uc-smoke-dl")
+    finally:
+        A.ADDONS.pop("uc-smoke-dl", None)
+    return f"{len(rows)} files listed; every pin, model and add-on file matched; setup offline; the wizard downloads first"
 
 
 @check("the first start's model download has a moving bar (MasterPlan for the First assignment: its bar only slid): the status carries models_progress (0-1) and models_mb while the separation and conversion models download, from the files and their .part against the pinned sizes; a short file counts as missing")
@@ -8953,7 +9112,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Sets up UnderCover on this PC: picks the right PyTorch for the GPU, installs Python + packages,
-  fetches ffmpeg and Deno, writes the GPU settings, runs a self-test, and makes a launcher.
+  unpacks ffmpeg and Deno, writes the GPU settings, runs a self-test, and makes a launcher.
 
 .DESCRIPTION
   Everything goes inside -InstallDir (default: the folder above this script), so uninstalling is
@@ -10,6 +10,15 @@
   Inno Setup installer copies it there before running this.
 
   Re-running is safe: finished steps are skipped (use -Force to redo the Python packages).
+
+  Every file it uses is in installer\downloads.tsv (installer/downloads.py, at build time): uv, Python, the packages,
+  ffmpeg, Deno, the AI models and the add-ons, each with its SHA-256. The installer's own download page fetches them
+  (rc-fix6): the tools and packages into cache\downloads, the models straight into the models folder; it then runs
+  this with -Offline, and nothing goes online. Run by hand (or -Repair), setup fetches what's missing from the same
+  list first.
+
+.PARAMETER Offline
+  Use only files already downloaded (the installer's download page); a missing one fails setup with a plain word.
 
 .PARAMETER Backend
   auto (default) | rocm | cuda128 | cuda126 | cpu. auto runs detect_gpu.ps1.
@@ -45,8 +54,13 @@ param(
     [string]$ModelsDir = '',
     [string]$Addons = '',
     [switch]$Pause,     # keep the window open at the end (the installer runs setup in its own window)
-    [switch]$Repair     # check against the install record and fix only what's wrong (keeps files and settings)
+    [switch]$Repair,    # check against the install record and fix only what's wrong (keeps files and settings)
+    [switch]$Offline    # the installer downloaded everything already: nothing goes online
 )
+# Started from PowerShell 7 (a terminal, or anything started from one), Windows PowerShell inherits PowerShell 7's
+# module path and can't load its own modules: Get-FileHash, Expand-Archive, ConvertFrom-Json are "not recognized". Its
+# own path, then (only in Windows PowerShell: a PowerShell 7 session that dot-sources this keeps its own).
+if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') }
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is ~10x slower with the progress bar
@@ -56,19 +70,16 @@ foreach ($v in 'LibraryDir', 'WorkDir', 'ModelsDir') {
     if ($d) { Set-Variable $v ([IO.Path]::GetFullPath($d)) }
 }
 
-# Pinned tool versions + the SHA-256 of every download. Bump deliberately (releases at least 2 weeks old), take the
-# hash from the release page (GitHub shows each asset's sha256), then re-test with tests\smoke.py --full.
+# Pinned tool versions. Their files, URLs and SHA-256 are in installer/downloads.py (TOOLS, which writes downloads.tsv):
+# bump both together, deliberately (releases at least 2 weeks old), then re-test with tests\smoke.py --full.
 $UvVersion    = '0.12.18'   # 2026-09-22
-$UvSha256     = 'cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff'
 $DenoVersion  = '2.9.7'     # 2026-09-17
-$DenoSha256   = 'a0c3101b4158d1dfb7d6a78a7bf0f3de80c96bb423c152beec8beb22786f2238'
 $PythonVer    = '3.12.10'   # exact, the dev venv's (uv checks its own Python downloads against its built-in hashes)
 $FfmpegVer    = '8.0'       # the dev PC's ffmpeg; a fixed GyanD/codexffmpeg release instead of gyan.dev's "latest"
-$FfmpegUrl    = "https://github.com/GyanD/codexffmpeg/releases/download/$FfmpegVer/ffmpeg-$FfmpegVer-essentials_build.zip"
-$FfmpegSha256 = '647e467caf82b9fa200a562769b5ff4d736aaf725804ed2c64ea9752106fa569'
 
 $Req     = Join-Path $PSScriptRoot 'requirements'
 $Tools   = Join-Path $InstallDir 'tools'
+$Cache   = Join-Path $InstallDir 'cache\downloads'   # the installer's download page puts the tools and packages here
 $Venv    = Join-Path $InstallDir '.venv'
 $Py      = Join-Path $Venv 'Scripts\python.exe'
 $Uv      = Join-Path $Tools 'uv\uv.exe'
@@ -120,7 +131,7 @@ $StatusFile = Join-Path $InstallDir 'logs\setup-status.txt'
 $CancelFile = Join-Path $InstallDir 'logs\setup-cancel'
 $script:StepNo = 0
 $script:StepName = ''
-$script:StepsTotal = 14
+$script:StepsTotal = 12   # (the YouTube downloader's step, when it isn't -Offline, adds one)
 function Status([string]$detail = '', [double]$frac = -1) {
     $f = if ($frac -ge 0) { [int][math]::Floor([math]::Min(0.99, $frac) * 1000) } else { '' }   # per mille: whole numbers for the wizard
     $line = "@@ $($script:StepNo)|$($script:StepsTotal)|$($script:StepName)|$f|$detail"
@@ -137,7 +148,7 @@ function KeptNow {
     if (Test-Path -LiteralPath (Join-Path $InstallDir '.venv\Lib\site-packages\torch')) { $k += 'PyTorch' }
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'tools\ffmpeg\bin')) { $k += 'ffmpeg' }
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'tools\deno')) { $k += 'Deno' }
-    if ((Get-DirBytes (Join-Path $InstallDir 'cache\uv')) -gt 0) { $k += 'the downloads so far' }
+    if ((Get-DirBytes (Join-Path $InstallDir 'cache\downloads')) -gt 0) { $k += 'the downloads so far' }
     if ($k.Count -gt 1) { return (($k[0..($k.Count - 2)] -join ', ') + ' and ' + $k[-1]) }
     return ($k -join '')
 }
@@ -278,7 +289,38 @@ function Unzip([string]$zip, [string]$dest) {
     if ($DryRun) { Write-Host "    [dry-run] unzip $zip -> $dest" -ForegroundColor DarkGray; return }
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
     Expand-Archive -Path $zip -DestinationPath $dest -Force
-    Remove-Item -Force $zip -ErrorAction SilentlyContinue   # unpacked: the download (up to 106 MB) doesn't stay in %TEMP%
+}
+
+# The download list (installer\downloads.tsv): group, dest, urls, sha256, bytes, pin. A row's file is in place when it
+# is there at its size (the download page and Fetch check the SHA-256 before a file gets its name).
+$Downloads = @(Import-Csv -LiteralPath (Join-Path $PSScriptRoot 'downloads.tsv') -Delimiter "`t")
+function Rows([string[]]$groups) { @($Downloads | Where-Object { $groups -contains $_.group }) }
+function CachePath($row) { Join-Path $Cache ($row.dest.Substring('cache/'.Length)) }
+function InPlace($row) {
+    $f = CachePath $row
+    return (Test-Path -LiteralPath $f) -and ((Get-Item -LiteralPath $f).Length -eq [long]$row.bytes)
+}
+function CacheFile([string]$name) {   # a base tool's file in the cache, by its name
+    $r = @($Downloads | Where-Object { $_.dest -eq "cache/$name" })
+    if (-not $r.Count) { Fail "installer\downloads.tsv doesn't list $name" }
+    return (CachePath $r[0])
+}
+# the files these groups need in cache\downloads: -Offline, each must be there (the installer fetched them); else the
+# missing ones are fetched now, resumable, each checked against its SHA-256
+function Get-Files([string[]]$groups, [string]$what) {
+    $rows = @(Rows $groups | Where-Object { $_.dest -like 'cache/*' })
+    $todo = @($rows | Where-Object { -not (InPlace $_) })
+    if (-not $todo.Count) { Info "$what`: all $($rows.Count) files are here"; return }
+    if ($Offline) {
+        Fail ("$($todo.Count) of the files setup needs weren't downloaded ($($todo[0].dest.Substring(6))$(if ($todo.Count -gt 1) { ', ...' })). " +
+              "Run the installer again: it downloads only what's missing")
+    }
+    $i = 0
+    foreach ($r in $todo) {
+        $i++
+        Status ("Downloading {0} (file {1} of {2})" -f $what, $i, $todo.Count) ($i / ($todo.Count + 1))
+        Fetch (($r.urls -split ' ')[0]) (CachePath $r) $r.sha256
+    }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -384,53 +426,61 @@ if (-not $DryRun) {
     $short = @(Find-Shortfalls $needs { param($r) Get-FreeGB $r })
     if ($short.Count) { Fail ("there isn't enough space. " + (Format-Shortfall $short[0]) + " Free some space, or install to another drive, then try again.") }
 }
-if ($LibraryDir -or $WorkDir -or $ModelsDir) { $script:StepsTotal += 1 }
+function SameDir([string]$a, [string]$b) {
+    if (-not $a) { return $true }
+    return ([IO.Path]::GetFullPath($a).TrimEnd('\') -ieq [IO.Path]::GetFullPath($b).TrimEnd('\'))
+}
+# (the installer always passes the three folders: the step counts only when one of them is another folder)
+if (-not ((SameDir $LibraryDir $InstallDir) -and (SameDir $WorkDir $InstallDir) -and (SameDir $ModelsDir $InstallDir))) { $script:StepsTotal += 1 }
 if ($Addons) { $script:StepsTotal += 1 }
+if (-not $Offline) { $script:StepsTotal += 1 }
 
-# 2. uv (Python + package manager, one exe) -----------------------------------------------------
-Step "Getting the Python installer (uv $UvVersion)"
+# 2. The files: the tools and the packages for this graphics card, in cache\downloads -----------------------------
+$addonIds = @($Addons -split '[,; ]+' | Where-Object { $_ })
+# (a repair fetches PyTorch and the packages only when they need fixing: a working setup tidied them away)
+$groups = @('base') + $(if ($Fix.torch -or $Fix.packages) { @("torch-$Backend", 'packages') } else { @() }) + @($addonIds | ForEach-Object { "addon-$_" })
+Step $(if ($Offline) { "Checking the downloaded files" } else { "Downloading what setup needs" })
+if ($DryRun) { Info "[dry-run] $(@(Rows $groups | Where-Object { $_.dest -like 'cache/*' }).Count) files from installer\downloads.tsv into $Cache" }
+else { Get-Files $groups 'the tools and packages' }
+
+# 2b. uv (the package manager, one exe) -------------------------------------------------------
+Step "Unpacking the package manager (uv $UvVersion)"
 if ($Repair -and -not ($Fix.torch -or $Fix.packages)) { Info "not needed for this repair" }
 elseif ((Test-Path $Uv) -and -not $DryRun) { Info "already there" }
-else {
-    $zip = Join-Path $env:TEMP "uv-$UvVersion.zip"
-    Fetch "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" $zip $UvSha256
-    Unzip $zip (Join-Path $Tools 'uv')
-}
+else { Unzip (CacheFile 'uv-x86_64-pc-windows-msvc.zip') (Join-Path $Tools 'uv') }
 # Keep uv's Python downloads and cache inside the install folder.
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $Tools 'python'
 $env:UV_CACHE_DIR          = Join-Path $InstallDir 'cache\uv'
-# patient on a slow or briefly stalled connection (the release check once met a 2-minute stall on AMD's server, and uv's
-# default 30 s timeout failed the step): a longer timeout and more retries; a re-run still resumes from uv's cache
-$env:UV_HTTP_TIMEOUT = '300'
-$env:UV_HTTP_RETRIES = '6'
 $env:UV_NO_CONFIG          = '1'      # ignore any uv.toml the user may have elsewhere
+$env:UV_OFFLINE            = '1'      # every package comes from cache\downloads: uv never goes online
 
 # 3. Python + venv -----------------------------------------------------------------------------
-# Python stays private to this install (installer\python.ps1): no shim in %USERPROFILE%, nothing in the registry, and
-# the venv is made from the full-version folder (a refused minor-version link isn't a failure: os error 448).
+# Python stays private to this install (installer\python.ps1): unpacked by setup itself from the pinned
+# python-build-standalone archive (the one uv would install) into tools\python\cpython-<version>-windows-x86_64-none:
+# no shim in %USERPROFILE%, nothing in the registry, no minor-version link (os error 448 can't happen).
 . (Join-Path $PSScriptRoot 'python.ps1')
-Step "Installing Python $PythonVer"
+Step "Unpacking Python $PythonVer"
 # a venv this setup made on uv's minor-version link (installer-fix, before this) is made again: it can't be used
 $venvGood = (-not $DryRun) -and (Test-Path $Py) -and (Test-VenvBase $Venv $PythonVer)
 if ($Repair -and $venvGood) { Info ".venv kept (repair never makes it again while it works)" }
 else {
-$BasePy = $null
-if ($DryRun) {
-    RunCode $Uv @('python', 'install', $PythonVer, '--no-bin', '--no-registry') | Out-Null
-    $BasePy = Join-Path $env:UV_PYTHON_INSTALL_DIR "cpython-$PythonVer-windows-x86_64-none\python.exe"
-} else {
-    for ($try = 1; ($try -le 2) -and (-not $BasePy); $try++) {
-        $code = RunCode $Uv @('python', 'install', $PythonVer, '--no-bin', '--no-registry')
-        $own = Get-OwnPython $env:UV_PYTHON_INSTALL_DIR $PythonVer
-        if ($own -and (Test-OwnPython $own $PythonVer)) {
-            if ($code -ne 0) {
-                Info "Python $PythonVer is installed. Windows refused only a shortcut folder uv makes beside it (made without admin rights); UnderCover doesn't use that folder, so setup goes on."
-                Log "uv python install exited $code; using $own"
-            }
-            $BasePy = $own
-        } elseif ($try -eq 1) { Info "Installing Python didn't finish (code $code). Trying once more." }
-    }
-    if (-not $BasePy) { Fail "Python $PythonVer couldn't be installed into $($env:UV_PYTHON_INSTALL_DIR). The details are in the log." }
+$pyHome = Join-Path $env:UV_PYTHON_INSTALL_DIR "cpython-$PythonVer-windows-x86_64-none"
+$BasePy = Join-Path $pyHome 'python.exe'
+if ($DryRun) { Info "[dry-run] unpack the Python archive into $pyHome" }
+elseif (Test-OwnPython $BasePy $PythonVer) { Info "Python $PythonVer is already there" }
+else {
+    $archive = CacheFile 'cpython-3.12.10+20250529-x86_64-pc-windows-msvc-install_only_stripped.tar.gz'
+    $unpack = Join-Path $env:UV_PYTHON_INSTALL_DIR '.unpack'
+    if (Test-Path -LiteralPath $unpack) { Remove-Item -LiteralPath $unpack -Recurse -Force }
+    New-Item -ItemType Directory -Force $unpack | Out-Null
+    Run (Join-Path $env:SystemRoot 'System32\tar.exe') @('-xzf', $archive, '-C', $unpack)   # (the archive holds one folder, python\)
+    if (-not (Test-Path -LiteralPath (Join-Path $unpack 'python\python.exe'))) { Fail "the Python archive didn't hold python.exe" }
+    if (Test-Path -LiteralPath $pyHome) { Remove-Item -LiteralPath $pyHome -Recurse -Force }   # a broken earlier one: this install's own
+    Move-Item -LiteralPath (Join-Path $unpack 'python') -Destination $pyHome
+    Remove-Item -LiteralPath $unpack -Recurse -Force
+    if (-not (Test-OwnPython $BasePy $PythonVer)) { Fail "Python $PythonVer didn't start after unpacking. The details are in the log." }
+}
+if (-not $DryRun) {
     Info "Python: $BasePy"
     foreach ($k in @(Remove-OwnPythonRegistry $InstallDir)) { Info "removed the registry entry an earlier setup made for its Python ($k)" }
     foreach ($l in @(Remove-MinorLink $env:UV_PYTHON_INSTALL_DIR $PythonVer)) { Info "removed $l, a link Windows won't let anything use" }
@@ -445,53 +495,40 @@ else {
 }
 }
 
-# 4. PyTorch for this GPU, then everything else pinned around it -------------------------------
-$torchReq = Join-Path $Req "torch-$Backend.txt"
-if (-not $Fix.torch) { Info "PyTorch: as recorded, left alone" } else {
-Step "Installing PyTorch for your graphics card (the big download)"
-$torchArgs = @('pip', 'install', '--python', $Py, '-r', $torchReq)
-if ($Backend -ne 'rocm') {
-    # Only the PyTorch index for this step: mixing it with PyPI lets uv pick wrong builds.
-    $tag = $Backend -replace '^cuda', 'cu'
-    $torchArgs += @('--index-url', "https://download.pytorch.org/whl/$tag")
+# 4. PyTorch for this GPU and every other package, from cache\downloads -----------------------------------------
+# One uv run: the pinned files downloads.tsv names (requirements\torch-<backend>.txt, common.txt, cadence.txt), each
+# required to match its SHA-256, --no-deps (every dependency is pinned in the lists; the cadence set's metadata asks for
+# torch 2.6 / numpy < 2, which would replace the GPU's torch), --offline from that folder only. The three pins that
+# are source archives (openai-whisper, antlr4, AMD's rocm) are built here by uv with the pinned setuptools, offline too.
+if (-not ($Fix.torch -or $Fix.packages)) { Info "PyTorch and the packages: as recorded, left alone" } else {
+Step "Installing PyTorch and the packages (a minute or two)"
+$offlineReq = Join-Path $InstallDir 'cache\offline-requirements.txt'
+if (-not $DryRun) {
+    $lines = @(Rows @("torch-$Backend", 'packages') | Where-Object { $_.pin } | ForEach-Object { "$($_.pin) --hash=sha256:$($_.sha256)" } | Select-Object -Unique)
+    New-Item -ItemType Directory -Force (Split-Path $offlineReq) | Out-Null
+    Set-Content -LiteralPath $offlineReq -Value $lines -Encoding ascii
+    Info "$($lines.Count) packages, from $Cache"
 }
-# (a card whose PyTorch hasn't been measured gets the largest measured: the bar moves a little slow, never stands still)
+# (the bar follows uv's cache as uv unpacks the files into it, against what that measured: PyTorch for this card, the
+# rest; a card whose PyTorch hasn't been measured gets the largest measured, so the bar is a little slow, never stuck)
 $torchGb = $StepGb.torch.$Backend
 if (-not $torchGb) { $torchGb = ($StepGb.torch.PSObject.Properties | ForEach-Object { $_.Value } | Measure-Object -Maximum).Maximum }
-RunWatched $Uv $torchArgs $env:UV_CACHE_DIR ([double]$torchGb) 'Downloading and unpacking PyTorch'
-}
-
-if (-not $Fix.packages) { Info "Python packages: as recorded, left alone" } else {
-Step "Installing the other packages"
-# Constrain to the torch that is now installed, so no package can swap it for a different build.
-$pins = Join-Path $InstallDir 'cache\torch-pins.txt'
+RunWatched $Uv @('pip', 'install', '--python', $Py, '--offline', '--no-index', '--find-links', $Cache, '--no-deps', '--require-hashes', '-r', $offlineReq) $env:UV_CACHE_DIR ([double]$torchGb + [double]$StepGb.common + [double]$StepGb.cadence) 'Unpacking PyTorch and the packages'
 if (-not $DryRun) {
-    $ver = & $Py -c "import importlib.metadata as m; print('\n'.join(f'{p}=={m.version(p)}' for p in ('torch','torchaudio','torchvision')))"
+    $ver = & $Py -c "import importlib.metadata as m; print(m.version('torch'))"
     if ($LASTEXITCODE -ne 0) { Fail "PyTorch didn't install correctly" }
-    New-Item -ItemType Directory -Force (Split-Path $pins) | Out-Null
-    Set-Content -Path $pins -Value $ver -Encoding ascii
-    Info "pinned: $($ver -join ', ')"
+    Info "PyTorch $ver"
 }
-# common.txt is the dev venv's complete package set (minus PyTorch and the cadence set), every line with its SHA-256
-# (installer/pin_hashes.py): installed exactly as listed (--no-deps; uv's hash mode needs every dependency listed up
-# front, and they are), and uv refuses any file that doesn't match its hash. The torch pins stop anything replacing it.
-RunWatched $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'common.txt'), '-c', $pins) $env:UV_CACHE_DIR ([double]$StepGb.common) 'Downloading the other packages'
-
-Step "Installing the cadence engine (Chatterbox + Whisper)"
-# --no-deps, like on the dev PC: their metadata asks for torch 2.6 / numpy < 2, which would replace the GPU's torch.
-RunWatched $Uv @('pip', 'install', '--python', $Py, '--no-deps', '--require-hashes', '-r', (Join-Path $Req 'cadence.txt')) $env:UV_CACHE_DIR ([double]$StepGb.cadence) 'Downloading the speech engine'
 }
 
 # 5. ffmpeg + Deno (portable, inside tools\) ---------------------------------------------------
-Step "Getting ffmpeg $FfmpegVer"
+Step "Unpacking ffmpeg $FfmpegVer"
 $ffBin = Join-Path $Tools 'ffmpeg\bin'
 if (-not $Fix.ffmpeg) { Info "found and working: left alone" }
 elseif ((Test-Path (Join-Path $ffBin 'ffmpeg.exe')) -and -not $DryRun) { Info "already there" }
 else {
-    $zip = Join-Path $env:TEMP "ffmpeg-$FfmpegVer-essentials.zip"
-    $tmp = Join-Path $env:TEMP 'ffmpeg-unzip'
-    Fetch $FfmpegUrl $zip $FfmpegSha256
-    Unzip $zip $tmp
+    $tmp = Join-Path $Tools '.ffmpeg-unzip'
+    Unzip (CacheFile "ffmpeg-$FfmpegVer-essentials_build.zip") $tmp
     if (-not $DryRun) {
         # The zip holds one versioned folder (ffmpeg-8.x-essentials_build\bin\...).
         $src = Get-ChildItem $tmp -Directory | Select-Object -First 1
@@ -501,15 +538,11 @@ else {
     }
 }
 
-Step "Getting Deno $DenoVersion (lets yt-dlp read YouTube)"
+Step "Unpacking Deno $DenoVersion (lets yt-dlp read YouTube)"
 $denoDir = Join-Path $Tools 'deno'
 if (-not $Fix.deno) { Info "found and working: left alone" }
 elseif ((Test-Path (Join-Path $denoDir 'deno.exe')) -and -not $DryRun) { Info "already there" }
-else {
-    $zip = Join-Path $env:TEMP "deno-$DenoVersion.zip"
-    Fetch "https://github.com/denoland/deno/releases/download/v$DenoVersion/deno-x86_64-pc-windows-msvc.zip" $zip $DenoSha256
-    Unzip $zip $denoDir
-}
+else { Unzip (CacheFile 'deno-x86_64-pc-windows-msvc.zip') $denoDir }
 
 # 6. GPU settings in this install's config.toml ------------------------------------------------
 if (-not $Fix.config) { Info "Settings (config.toml): kept as they are" } else {
@@ -533,10 +566,6 @@ else {
 
 # 6b. Where the files live (the installer's "Where should UnderCover keep your files?" page) ----------------------
 # Each group is one folder holding today's sub-folders; the install folder (the default) changes nothing.
-function SameDir([string]$a, [string]$b) {
-    if (-not $a) { return $true }
-    return ([IO.Path]::GetFullPath($a).TrimEnd('\') -ieq [IO.Path]::GetFullPath($b).TrimEnd('\'))
-}
 $paths = [ordered]@{}
 if (-not (SameDir $LibraryDir $InstallDir)) {   # your library: songs, covers + speech, voices (with their cadence)
     $paths['uploads_dir'] = Join-Path $LibraryDir 'uploads'
@@ -562,14 +591,17 @@ if ($paths.Count) {
 }
 
 # 6c. The AI models every feature uses (rc-fix4b, the user: "it should be part of the install"): pinned, each checked
-# against its SHA-256, resumed from its .part, stopped by Cancel. After setup nothing downloads on first use, except an
-# add-on or a repair. A re-run or a repair fetches only what's missing.
-Step "Downloading the AI models"
+# against its SHA-256. The installer's download page put them in place (-Offline: only checked here); by hand, the
+# missing ones are fetched now, resumed from their .part. After setup nothing downloads on first use.
+Step $(if ($Offline) { "Checking the AI models" } else { "Downloading the AI models" })
 if (-not $DryRun) { Push-Location $InstallDir }   # python -m finds the app's package from here
 try {
-    $code = RunStatus $Py @('-m', 'undercover.models', 'install', '--status', '--cancel-file', $CancelFile) 0 1
+    # (install --offline: audio-separator's model list put in place from the app, as setup always did; nothing fetched)
+    if ($Offline) { $code = RunCode $Py @('-m', 'undercover.models', 'install', '--offline') }
+    else { $code = RunStatus $Py @('-m', 'undercover.models', 'install', '--status', '--cancel-file', $CancelFile) 0 1 }
 } finally { if (-not $DryRun) { Pop-Location } }
 if ($code -eq 3) { Cancelled }
+if ($Offline -and $code -ne 0) { Fail "some AI models weren't downloaded. Run the installer again: it downloads only what's missing" }
 if ($code -ne 0) { Fail "the AI models couldn't be downloaded (code $code). Try again: what's downloaded is kept" }
 
 # 6c'. Model files the record knew about that are missing or damaged (repair): fetched again from their pinned source,
@@ -584,24 +616,29 @@ if ($Repair -and $Fix.models) {
 # each wheel checked against PyPI's SHA-256, unpacked beside the venv (cache\ytdlp) and tested on known public videos;
 # used only if it does at least as well as the pinned pair common.txt just installed. If PyPI can't be reached, a hash
 # fails or the test does, the pinned pair stays in use (the command always succeeds). Repair runs it too.
+# The installer (-Offline) skips it: nothing goes online after its download page, and the app runs the same self-heal
+# once it starts.
 $env:PATH = "$ffBin;$denoDir;$env:PATH"
+if ($Offline) { Info "YouTube downloader: the pinned one; UnderCover brings it up to date once it runs" }
+else {
 Step "Bringing the YouTube downloader up to date"
 if (-not $DryRun) { Push-Location $InstallDir }
 try { Run $Py @('-m', 'undercover.ytdlp', 'install') } finally { if (-not $DryRun) { Pop-Location } }
+}
 
 # 7. Self-test --------------------------------------------------------------------------------
 Step "Testing"
 Run $Py @((Join-Path $PSScriptRoot 'selftest.py'), '--backend', $Backend, '--report', (Join-Path $InstallDir 'logs\selftest.json'))
 
 # 7b. Optional add-ons the user accepted on the installer's add-ons page ----------------------
-$addonIds = @($Addons -split '[,; ]+' | Where-Object { $_ })
 if ($addonIds.Count) {
     Step "Adding the add-ons you accepted: $($addonIds -join ', ')"
     $i = 0
     foreach ($id in $addonIds) {
         if (-not $DryRun) { Push-Location $InstallDir }   # python -m finds the app's package from here
         try {
-            $code = RunStatus $Py @('-m', 'undercover.addons', 'install', $id, '--accept-licence', '--status', '--cancel-file', $CancelFile) ($i / $addonIds.Count) (1 / $addonIds.Count)
+            # (its packages from cache\downloads, its model files already in place: nothing goes online)
+            $code = RunStatus $Py @('-m', 'undercover.addons', 'install', $id, '--accept-licence', '--status', '--cancel-file', $CancelFile, '--from', $Cache) ($i / $addonIds.Count) (1 / $addonIds.Count)
         } finally { if (-not $DryRun) { Pop-Location } }
         if ($code -eq 3) { Cancelled }
         if ($code -ne 0) { Fail "the add-on '$id' couldn't be added (code $code)" }
@@ -650,6 +687,18 @@ if (-not $Repair -or $Fix.torch -or $Fix.packages -or $Fix.models -or -not (Test
     Step "Writing the install record"
     if (-not $DryRun) { Push-Location $InstallDir }   # python -m finds the app's package from here
     try { Run $Py @('-m', 'undercover.doctor', 'manifest', '--installed', '--json') } finally { if (-not $DryRun) { Pop-Location } }
+}
+
+# 10. The downloads are installed: cache\downloads (the tools and packages) and uv's unpacked copies go, so they don't
+# keep gigabytes; a repair fetches what it needs again. (The models are in their place, not in the cache.)
+if (-not $DryRun) {
+    foreach ($d in @($Cache, $env:UV_CACHE_DIR)) {
+        $full = [IO.Path]::GetFullPath($d)
+        if ($full.StartsWith([IO.Path]::GetFullPath((Join-Path $InstallDir 'cache')) + '\', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $full)) {
+            Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue
+            Log "tidied $full"
+        }
+    }
 }
 
 Result "ok"

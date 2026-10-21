@@ -3,6 +3,7 @@
     python -m undercover.addons [list] [--json]
     python -m undercover.addons install <id> [--accept-licence]     (without it: shows the licence and asks)
         [--status] [--cancel-file <file>]   (the installer: progress as status lines; stops when the file appears)
+        [--from <folder>]                   (the installer: its packages from the files it downloaded, nothing online)
     python -m undercover.addons remove <id>
 
 The installer's optional add-ons step runs `install <id> --accept-licence` after the user ticked "I accept".
@@ -28,6 +29,8 @@ def main(argv=None) -> int:
     ap.add_argument("--status", action="store_true",
                     help="install, for the installer: '@@P <per mille>|<text>' progress lines and one plain line per file")
     ap.add_argument("--cancel-file", help="install: stop (exit code 3, what's downloaded kept) once this file exists")
+    ap.add_argument("--from", dest="source", help="install: the folder the installer downloaded its packages into (its "
+                                                  "model files are already in place): nothing goes online")
     args = ap.parse_args(argv)
     if args.action == "list":
         rows = addons.status()
@@ -57,7 +60,7 @@ def main(argv=None) -> int:
             lambda m, d, t: print(f"\r{m}" + (f": {d / 1e6:.0f}/{t / 1e6:.0f} MB" if t else ""), end="", flush=True))
         cancel = (lambda: Path(args.cancel_file).exists()) if args.cancel_file else None
         try:
-            addons.install(a.id, True, progress, cancel=cancel)
+            addons.install(a.id, True, progress, cancel=cancel, source=Path(args.source) if args.source else None)
         except InterruptedError:
             print(f"\n{a.name}: stopped, as asked. What's downloaded is kept, and adding it again carries on.")
             return 3

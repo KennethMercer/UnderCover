@@ -22,19 +22,33 @@
 #endif
 
 [Setup]
+#ifdef ReleaseCheck
+; the release check's test build (tests\installer_e2e.ps1): its own name and AppId, no uninstaller, no registration
+AppId={{3F1A9C52-6B7E-4D21-9A43-5C0E7D2B8F61}
+AppName=UnderCover release check (test)
+Uninstallable=no
+CreateUninstallRegKey=no
+#else
 AppId={{E6B05D70-0109-4D65-8AEC-89622D0F5C91}
 AppName={#AppName}
+#endif
 AppVersion={#AppVersion}
 AppPublisher=UnderCover
 DefaultDirName={localappdata}\{#AppName}
 ; the folder page always shows (a re-run too), with the previous install's folder as its default
 DisableDirPage=no
+; an existing folder is the normal case for a re-run (a stopped download carries on there): no "install anyway?"
+DirExistsWarning=no
 UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=dist
+#ifdef ReleaseCheck
+OutputBaseFilename=UnderCover-release-check
+#else
 OutputBaseFilename=UnderCover-Setup-{#AppVersion}
+#endif
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -44,6 +58,8 @@ MinVersion=10.0.19041
 UninstallDisplayName={#AppName}
 
 [Messages]
+StopDownload=Stop downloading? What's downloaded is kept, and clicking Install again carries on from there.
+ButtonStopDownload=&Stop
 FinishedLabel=UnderCover is installed, with its AI models. Start it from the Start menu: it runs in the background, and you quit it from the icon near the clock or SafeHouse's System room.
 
 [Files]
@@ -62,6 +78,9 @@ Source: "python.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "selftest.py"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "space.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "sizes.json"; DestDir: "{app}\installer"; Flags: ignoreversion
+; every file setup installs, with its SHA-256 (installer/downloads.py): the download page reads it, and setup.ps1
+Source: "downloads.tsv"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "downloads.tsv"; Flags: dontcopy
 ; the space check runs from the wizard too, before anything is installed (ExtractTemporaryFile)
 Source: "space.ps1"; Flags: dontcopy
 Source: "sizes.json"; Flags: dontcopy
@@ -70,6 +89,7 @@ Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ig
 ; The friend-facing briefing (installer/FRIENDS.md): what to expect, Repair, the optional extras, uninstall
 Source: "FRIENDS.md"; DestDir: "{app}"; DestName: "READ ME.md"; Flags: ignoreversion
 
+#ifndef ReleaseCheck
 [Icons]
 ; The "UnderCover" shortcuts (Start menu, desktop) are made by the code below only once setup has worked
 ; (CreateLaunchers): a failed setup never leaves a shortcut that looks like a working install.
@@ -79,6 +99,8 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+
+#endif
 
 [Run]
 ; setup.ps1 itself runs from the code below (RunSetup), so its exit code is read: "Start UnderCover now" is offered
@@ -91,6 +113,7 @@ Filename: "{app}\UnderCover.cmd"; Parameters: "--background"; Description: "Star
 Type: filesandordirs; Name: "{app}\.venv"
 Type: filesandordirs; Name: "{app}\tools"
 Type: filesandordirs; Name: "{app}\cache\uv"
+Type: filesandordirs; Name: "{app}\cache\downloads"
 Type: filesandordirs; Name: "{app}\cache\converted"
 Type: filesandordirs; Name: "{app}\cache\keyshift"
 Type: filesandordirs; Name: "{app}\cache\previews"
@@ -118,8 +141,9 @@ var
   SetupOK: Boolean;      // setup.ps1 exited 0 (RunSetup)
   SetupCode: Integer;    // its exit code
   RetryButton: TNewButton;
-  SetupRunning: Boolean; // setup.ps1 is working (its status lines drive the progress bar)
-  CancelAsked: Boolean;  // the user's Cancel while it works (setup stops, keeping what's done)
+  DownloadPage: TDownloadWizardPage;   // everything setup installs, fetched before anything is installed (rc-fix6)
+  DownloadIndex, DownloadCount: Integer;
+  DownloadDone, DownloadTotal: Int64;
   Progress: Integer;     // the bar's furthest position (0-1000): it never goes back
   Backend: String;       // the graphics card's PyTorch build, detected once by space.ps1
   DetailsLink, FailDetailsLink: TNewStaticText;
@@ -136,6 +160,7 @@ function GetLibraryDir(Param: String): String; forward;
 function GetWorkDir(Param: String): String; forward;
 function GetModelsDir(Param: String): String; forward;
 function GetAddons(Param: String): String; forward;
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean; forward;
 
 // ---------------------------------------------------------------- disk space (installer\space.ps1)
 
@@ -180,13 +205,64 @@ begin
   end;
 end;
 
+// A message box. The release check's test build (ISCC /DReleaseCheck, tests\installer_e2e.ps1) never shows one: it
+// writes the text to its hooks folder and takes the default answer, so a test run can't put a box on anyone's screen.
+function Say(Text: String; Typ: TMsgBoxType; Buttons, Default: Integer): Integer;
+begin
+#ifdef ReleaseCheck
+  SaveStringToFile(ExpandConstant('{param:hooks|}\boxes.txt'), Text + #13#10, True);
+  Result := Default;
+#else
+  Result := SuppressibleMsgBox(Text, Typ, Buttons, Default);
+#endif
+end;
+
+#ifdef ReleaseCheck
+// ---------------------------------------------------------------- the release check's hooks (test build only)
+// The test build is the real installer under its own name and AppId, with no uninstaller, no shortcuts and no
+// registration. Its wizard stays out of the taskbar and Alt+Tab (a tool window, on no screen), and it tells the
+// driver its window handles, its page and its download, through files in the folder /HOOKS= names.
+function GetWindowLong(hWnd: LongWord; nIndex: Integer): LongInt; external 'GetWindowLongW@user32.dll stdcall';
+function SetWindowLong(hWnd: LongWord; nIndex: Integer; dwNewLong: LongInt): LongInt; external 'SetWindowLongW@user32.dll stdcall';
+function FindWindowEx(Parent, After: LongWord; ClassName: String; Title: LongWord): LongWord; external 'FindWindowExW@user32.dll stdcall';
+function GetWindowThreadProcessId(hWnd: LongWord; var Pid: LongWord): LongWord; external 'GetWindowThreadProcessId@user32.dll stdcall';
+function GetCurrentProcessId: LongWord; external 'GetCurrentProcessId@kernel32.dll stdcall';
+
+procedure Hook(Name, Text: String);
+begin
+  SaveStringToFile(ExpandConstant('{param:hooks|}\') + Name, Text, False);
+end;
+
+// a tool window (WS_EX_TOOLWINDOW, not WS_EX_APPWINDOW): no taskbar button, not in Alt+Tab
+procedure ToolWindow(H: LongWord);
+begin
+  if H <> 0 then SetWindowLong(H, -20, (GetWindowLong(H, -20) or $80) and not $40000);
+end;
+
+// the wizard, and Inno's fallback window while a program it started runs ("Setup", shown in Alt+Tab otherwise)
+procedure HideTestWindows;
+var
+  H, Pid: LongWord;
+begin
+  ToolWindow(WizardForm.Handle);
+  WizardForm.Left := -6000;
+  H := FindWindowEx(0, 0, 'TWindowDisabler-Window', 0);
+  while H <> 0 do begin
+    Pid := 0;
+    GetWindowThreadProcessId(H, Pid);
+    if Pid = GetCurrentProcessId then ToolWindow(H);
+    H := FindWindowEx(0, H, 'TWindowDisabler-Window', 0);
+  end;
+end;
+#endif
+
 // a drive that won't fit: said plainly; Yes goes on anyway, No stays to pick another folder
 function SpaceOK(Short: String): Boolean;
 begin
   Result := True;
   if Short <> '' then
-    Result := MsgBox(Short + #13#10#13#10 + 'Go on anyway? No lets you pick another folder.',
-      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+    Result := Say(Short + #13#10#13#10 + 'Go on anyway? No lets you pick another folder.',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
 end;
 
 // the folder page: the real size, per drive, instead of Inno's "at least ... MB" (the installer's own files only)
@@ -367,6 +443,14 @@ begin
   DetailsLink.Left := WizardForm.ProgressGauge.Left;
   DetailsLink.Visible := False;
   DetailsLink.OnClick := @OpenSetupLog;
+  DownloadPage := CreateDownloadPage('Downloading what UnderCover needs',
+    'Python, PyTorch for your graphics card, the tools and the AI models.', @OnDownloadProgress);
+  DownloadPage.ShowBaseNameInsteadOfUrl := True;
+#ifdef ReleaseCheck
+  HideTestWindows;
+  Hook('handles.txt', IntToStr(WizardForm.Handle) + ' ' + IntToStr(WizardForm.NextButton.Handle) + ' ' +
+    IntToStr(WizardForm.CancelButton.Handle) + ' ' + IntToStr(DownloadPage.AbortButton.Handle));
+#endif
 
   // the last page's "Try again", shown only when setup didn't work
   RetryButton := TNewButton.Create(WizardForm);
@@ -461,8 +545,10 @@ end;
 procedure CreateLaunchers;
 begin
   LinkNote := '';
+#ifndef ReleaseCheck
   MakeLink(ExpandConstant('{group}'), 'in the Start menu');
   if WizardIsTaskSelected('desktopicon') then MakeLink(ExpandConstant('{userdesktop}'), 'on the desktop');
+#endif
 end;
 
 // at uninstall: the shortcuts that start this install, and no other
@@ -583,13 +669,15 @@ begin
 end;
 
 // one line of setup's output. Its status lines ("@@ step|of|name|per mille|detail") drive the bar and the two lines
-// under it; everything else is in setup.log already. A Cancel asked meanwhile reaches setup through logs\setup-cancel.
+// under it; everything else is in setup.log already.
 procedure SetupLine(const S: String; const Error, FirstLine: Boolean);
 var
   K, N, F, Pos1: Integer;
   Name, Detail, Line, FText: String;
 begin
-  if CancelAsked then SaveStringToFile(ExpandConstant('{app}\logs\setup-cancel'), 'stop', False);
+#ifdef ReleaseCheck
+  HideTestWindows;
+#endif
   if Copy(S, 1, 3) <> '@@ ' then Exit;
   Line := Copy(S, 4, Length(S));
   K := StrToIntDef(Field(Line, 0), 0);
@@ -601,7 +689,6 @@ begin
   if (K < 1) or (N < 1) then Exit;
   Pos1 := ((K - 1) * 1000 + F) div N;
   if Pos1 > Progress then Progress := Pos1;
-  if CancelAsked then Name := 'Stopping after this part. What''s done is kept';
   if WizardForm.CurPageID = wpFinished then
     WizardForm.FinishedLabel.Caption := Format('Setting it up again, step %d of %d: %s.', [K, N, Name]) + #13#10 + Detail
   else begin
@@ -619,8 +706,304 @@ begin
   end;
 end;
 
-// setup.ps1, hidden: the wizard's own bar and status lines follow it (no console window to close by mistake). A
-// re-run continues past what's done. -> it worked (exit code 0)
+// ---------------------------------------------------------------- the downloads (rc-fix6)
+// Everything setup installs is in installer\downloads.tsv (installer/downloads.py, at build time). Inno's own download
+// page fetches what this PC needs before anything is installed, each file checked against its SHA-256, and puts it in
+// place as it arrives: the tools and packages in {app}\cache\downloads, the AI models in the models folder. A file
+// already there at its size is skipped, so a stopped or failed download carries on where it stopped. The page answers
+// throughout (it pumps messages itself) and has its own Stop button. After it nothing goes online: setup.ps1 runs
+// -Offline from these files.
+
+function MoveFileEx(lpExistingFileName, lpNewFileName: String; dwFlags: Cardinal): Integer;
+  external 'MoveFileExW@kernel32.dll stdcall';
+
+// the N-th field (from 0) of a tab-separated line
+function TabField(S: String; N: Integer): String;
+var
+  I, P: Integer;
+begin
+  for I := 1 to N do begin
+    P := Pos(#9, S);
+    if P = 0 then begin Result := ''; Exit; end;
+    S := Copy(S, P + 1, Length(S));
+  end;
+  P := Pos(#9, S);
+  if P > 0 then Result := Copy(S, 1, P - 1) else Result := S;
+end;
+
+// where the AI models go: the files page's folder when it's another one, else this install's (config.toml's, when an
+// earlier install moved them with SafeHouse's Storage)
+function ModelsRoot: String;
+begin
+  if CompareText(RemoveBackslashUnlessRoot(DataPage.Values[2]), RemoveBackslashUnlessRoot(WizardDirValue)) <> 0 then
+    Result := AddBackslash(DataPage.Values[2]) + 'models'
+  else
+    Result := KeptPath('models_dir', AddBackslash(WizardDirValue) + 'models');
+end;
+
+function DownloadDest(Dest: String): String;
+begin
+  if Pos('cache/', Dest) = 1 then Result := AddBackslash(WizardDirValue) + 'cache\downloads\' + Copy(Dest, 7, Length(Dest))
+  else Result := AddBackslash(ModelsRoot) + Copy(Dest, 8, Length(Dest));
+  StringChangeEx(Result, '/', '\', True);
+end;
+
+// this PC's groups: every install's, the graphics card's PyTorch, the add-ons ticked
+function WantedGroup(Group: String): Boolean;
+begin
+  Result := (Group = 'base') or (Group = 'packages') or (Group = 'models') or (Group = 'torch-' + Backend) or
+    ((Pos('addon-', Group) = 1) and (Pos(',' + Copy(Group, 7, Length(Group)) + ',', ',' + GetAddons('') + ',') > 0));
+end;
+
+function GBText(N: Int64): String;
+var
+  E: Extended;
+begin
+  E := N;
+  Result := Format('%.1f', [E / 1000000000.0]);
+end;
+
+function DownloadLine(Done: Int64): String;
+begin
+  Result := Format('File %d of %d: %s of %s GB in all. If it stops, what''s downloaded is kept.', [DownloadIndex,
+    DownloadCount, GBText(Done), GBText(DownloadTotal)]);
+end;
+
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  DownloadPage.Description := DownloadLine(DownloadDone + Progress);
+  Result := True;
+end;
+
+function PSQuote(S: String): String;
+begin
+  StringChangeEx(S, #39, #39#39, True);
+  Result := #39 + S + #39;
+end;
+
+// The downloaded file (in Inno's temp folder) into its place. A small file was checked by Inno itself (its SHA-256)
+// and is renamed or copied. A big one (64 MB and up) comes without Inno's check: Inno hashes on its own thread, and a
+// gigabyte kept the window from answering for seconds. A hidden PowerShell checks its size and SHA-256 instead, and
+// only then moves it into its place, while this page keeps answering. A file that fails is deleted, so nothing uses it,
+// and the caller fetches it again. -> '' or what went wrong
+function PlaceFile(Src, Dest: String; Bytes: Int64; Sha: String): String;
+var
+  Part, Marker: String;
+  Said: AnsiString;
+  Waited: Integer;
+  Have: Int64;
+  Shell: Variant;
+begin
+  Result := '';
+  ForceDirectories(ExtractFileDir(Dest));
+  if Sha = '' then begin
+    // MOVEFILE_REPLACE_EXISTING (an earlier copy of the wrong size), MOVEFILE_COPY_ALLOWED, MOVEFILE_WRITE_THROUGH
+    if MoveFileEx(Src, Dest, 1 or 2 or 8) = 0 then
+      Result := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + SysErrorMessage(DLLGetLastError) + ')';
+  end else begin
+    Part := Dest + '.moving';
+    Marker := ExpandConstant('{tmp}\moved.txt');
+    DeleteFile(Marker);
+    DeleteFile(Marker + '.part');
+    DeleteFile(Part);
+    // (its answer is written whole to moved.txt.part, then named moved.txt: a read never sees half of it). Started
+    // through WScript.Shell, not Exec: Inno disables the wizard for as long as its Exec runs, even one that doesn't wait.
+    try
+      Shell := CreateOleObject('WScript.Shell');
+      // (its own module path first: an installer started from PowerShell 7 hands it PowerShell 7's)
+      Shell.Run('powershell.exe -NoProfile -NonInteractive -Command "$env:PSModulePath = [Environment]::GetEnvironmentVariable(' +
+        '''PSModulePath'', ''Machine''); $m = ' + PSQuote(Marker) + '; $f = ' + PSQuote(Src) +
+        '; try { $n = (Get-Item -LiteralPath $f).Length; if ($n -ne ' + IntToStr(Bytes) + ') { throw (''it came to '' + $n + '' of ' +
+        IntToStr(Bytes) + ' bytes'') }; if ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() -ne ''' + Sha +
+        ''') { throw ''its SHA-256 is wrong'' }; Move-Item -LiteralPath $f -Destination ' + PSQuote(Part) +
+        ' -Force -ErrorAction Stop; $s = ''ok'' } catch { $s = $_.Exception.Message; Remove-Item -LiteralPath $f -Force ' +
+        '-ErrorAction SilentlyContinue }; Set-Content -LiteralPath ($m + ''.part'') $s; Move-Item -LiteralPath ($m + ''.part'') ' +
+        '-Destination $m -Force"', 0, False);   // (0: hidden; False: don't wait)
+    except
+      Result := 'its check couldn''t start (' + GetExceptionMessage + ')';
+      DeleteFile(Src);
+      Exit;
+    end;
+    Waited := 0;
+    Said := '';
+    while (Trim(String(Said)) = '') and (Waited < 18000) do begin   // (30 minutes: a slow drive, never forever)
+      DownloadPage.SetText('Checking ' + ExtractFileName(Dest) + ' and putting it in its place...', '');
+      DownloadPage.SetProgress(DownloadIndex, DownloadCount);   // (keeps the window answering)
+      Sleep(100);
+      Waited := Waited + 1;
+      if FileExists(Marker) then LoadStringFromFile(Marker, Said);
+    end;
+    if Trim(String(Said)) <> 'ok' then begin
+      Result := Trim(String(Said));
+      if Result = '' then Result := 'checking it took too long'
+      else if (Pos('its SHA-256', Result) <> 1) and (Pos('it came to', Result) <> 1) then
+        Result := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + Result + ')';
+      DeleteFile(Src);   // (the PowerShell deletes a file that fails; this covers one that never answered)
+      Exit;
+    end;
+    if MoveFileEx(Part, Dest, 1 or 8) = 0 then
+      Result := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + SysErrorMessage(DLLGetLastError) + ')';
+  end;
+  if (Result = '') and not (FileSize64(Dest, Have) and (Have = Bytes)) then Result := 'it isn''t the right size after moving';
+end;
+
+// one file from its sources (a model's mirrors), in order. -> '' (in Inno's temp folder, checked), 'stopped', or the error
+function FetchFile(Urls, Name, Sha: String): String;
+var
+  P: Integer;
+  Url: String;
+begin
+  Result := 'no source';
+  while Urls <> '' do begin
+    P := Pos(' ', Urls);
+    if P > 0 then begin
+      Url := Copy(Urls, 1, P - 1);
+      Urls := Copy(Urls, P + 1, Length(Urls));
+    end else begin
+      Url := Urls;
+      Urls := '';
+    end;
+    DownloadPage.Clear;
+    DownloadPage.Add(Url, Name, Sha);
+    try
+      DownloadPage.Download;
+      Result := '';
+      Exit;
+    except
+      if DownloadPage.AbortedByUser then begin
+        Result := 'stopped';
+        Exit;
+      end;
+      Result := GetExceptionMessage;
+      Log('Download of ' + Url + ' failed: ' + Result);
+    end;
+  end;
+end;
+
+// everything this PC needs, from downloads.tsv, before anything is installed. -> True: all here
+function DownloadAll: Boolean;
+var
+  Lines: TArrayOfString;
+  Todo: array of Integer;
+  I, K: Integer;
+  Line, Dest, Name, Why, Short, Urls, InnoSha, CheckSha: String;
+  Bytes, Have, Largest, Free, Total: Int64;
+  Stopped, Big: Boolean;
+  Tries, W: Integer;
+#ifdef ReleaseCheck
+  BadServed: Boolean;
+#endif
+begin
+  Result := False;
+  ExtractTemporaryFile('downloads.tsv');
+  if not LoadStringsFromFile(ExpandConstant('{tmp}\downloads.tsv'), Lines) then begin
+    Say('The installer''s download list is missing. Download the installer again.', mbError, MB_OK, IDOK);
+    Exit;
+  end;
+  if (Backend = '') or (Backend = 'auto') then CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Line, Line, Short);
+  if (Backend = '') or (Backend = 'auto') then Backend := 'cpu';   // no graphics card could be read: the processor's PyTorch
+  Log('Downloads for backend ' + Backend + ', add-ons "' + GetAddons('') + '"');
+  DownloadTotal := 0;
+  Largest := 0;
+  SetArrayLength(Todo, 0);
+  for I := 1 to GetArrayLength(Lines) - 1 do begin
+    Line := Lines[I];
+    if (Trim(Line) = '') or not WantedGroup(TabField(Line, 0)) then Continue;
+    Dest := DownloadDest(TabField(Line, 1));
+    Bytes := StrToInt64Def(TabField(Line, 4), 0);
+    if FileSize64(Dest, Have) and (Have = Bytes) then Continue;   // there already (a re-run, or a stopped download)
+    SetArrayLength(Todo, GetArrayLength(Todo) + 1);
+    Todo[GetArrayLength(Todo) - 1] := I;
+    DownloadTotal := DownloadTotal + Bytes;
+    if Bytes > Largest then Largest := Bytes;
+  end;
+  DownloadCount := GetArrayLength(Todo);
+  Log(Format('%d files to download, %s GB', [DownloadCount, GBText(DownloadTotal)]));
+  if DownloadCount = 0 then begin
+    Result := True;
+    Exit;
+  end;
+  // Inno's temp folder holds one file at a time, the largest included
+  if GetSpaceOnDisk64(ExpandConstant('{tmp}'), Free, Total) and (Free < Largest + 209715200) then begin
+    Say('The downloads pass through ' + ExtractFileDrive(ExpandConstant('{tmp}')) + ', which needs ' + GBText(Largest + 209715200) +
+      ' GB free for the largest file (it has ' + GBText(Free) + ' GB). Free some space there, then click Install again.', mbError, MB_OK, IDOK);
+    Exit;
+  end;
+  DownloadDone := 0;
+  Stopped := False;
+#ifdef ReleaseCheck
+  BadServed := False;
+#endif
+  DownloadPage.Show;
+  try
+    K := 0;
+    while (K < DownloadCount) and not Stopped do begin
+      DownloadIndex := K + 1;
+      Line := Lines[Todo[K]];
+      Dest := DownloadDest(TabField(Line, 1));
+      Bytes := StrToInt64Def(TabField(Line, 4), 0);
+      Name := ExtractFileName(Dest);
+      DownloadPage.Description := DownloadLine(DownloadDone);
+#ifdef ReleaseCheck
+      Hook('download.txt', Format('%d %d', [DownloadIndex, DownloadCount]));
+#endif
+      // (a big file's SHA-256 is checked by PlaceFile, off Inno's thread; a small one's by Inno as it downloads)
+      Big := Bytes >= 67108864;
+      if Big then InnoSha := '' else InnoSha := TabField(Line, 3);
+      if Big then CheckSha := TabField(Line, 3) else CheckSha := '';
+      Tries := 0;
+      repeat
+        Urls := TabField(Line, 2);
+#ifdef ReleaseCheck
+        // the release check's proofs: its first file's first try from a server that stops early (a short read), and
+        // the first big file's first try from one that sends the right size of the wrong bytes (a bad hash)
+        if (K = 0) and (Tries = 0) and (ExpandConstant('{param:shorturl|}') <> '') then
+          Urls := ExpandConstant('{param:shorturl|}')
+        else if Big and (Tries = 0) and not BadServed and (ExpandConstant('{param:badurl|}') <> '') then begin
+          Urls := ExpandConstant('{param:badurl|}') + '?bytes=' + IntToStr(Bytes);
+          BadServed := True;
+        end;
+#endif
+        Why := FetchFile(Urls, Name, InnoSha);
+        if Why = 'stopped' then begin
+          WizardForm.ReadyLabel.Caption := 'The download stopped. What''s downloaded is kept: Install carries on from there.';
+          Stopped := True;
+        end else if Why = '' then begin
+          Why := PlaceFile(ExpandConstant('{tmp}\') + Name, Dest, Bytes, CheckSha);
+        end;
+        // a server that drops the connection part-way (AMD's did, at 6 of 645 MB, and Inno then found the hash wrong):
+        // tried again by itself, three times, before the user is asked
+        if (not Stopped) and (Why <> '') then begin
+          if Tries < 3 then begin
+            Tries := Tries + 1;
+            Log(Format('%s: %s; trying again by itself (%d of 3)', [Name, Why, Tries]));
+            for W := 1 to Tries * 30 do begin   // 3, 6, 9 s, the page answering throughout
+              DownloadPage.SetText(Format('%s didn''t come through right. Trying again (%d of 3)...', [Name, Tries]), '');
+              DownloadPage.SetProgress(DownloadIndex, DownloadCount);
+              Sleep(100);
+            end;
+          end else if Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
+              'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) = IDRETRY then
+            Tries := 0   // the user's Try again: three more by itself after this one
+          else begin
+            WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Why + '. What''s downloaded is kept: Install carries on from there.';
+            Stopped := True;
+          end;
+        end;
+      until (Why = '') or Stopped;
+      if not Stopped then DownloadDone := DownloadDone + Bytes;
+      K := K + 1;
+    end;
+    Result := not Stopped;
+  finally
+    DownloadPage.Hide;
+  end;
+end;
+
+// setup.ps1, hidden, from the downloaded files (-Offline: nothing goes online): the wizard's own bar and status lines
+// follow it (no console window to close by mistake). Its steps are short (unpacking and installing, a few minutes in
+// all), so Cancel is off while it runs: Inno keeps the wizard still while a program it started runs. A re-run
+// continues past what's done. -> it worked (exit code 0)
 function RunSetup: Boolean;
 var
   Params: String;
@@ -628,41 +1011,23 @@ begin
   // (-NonInteractive: anything that would wait for input fails at once, with its error, instead of hanging unseen)
   Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\setup.ps1') + '" -InstallDir "' +
     ExpandConstant('{app}') + '" -LibraryDir "' + GetLibraryDir('') + '" -WorkDir "' + GetWorkDir('') + '" -ModelsDir "' +
-    GetModelsDir('') + '" -Addons "' + GetAddons('') + '"';
+    GetModelsDir('') + '" -Addons "' + GetAddons('') + '" -Backend ' + Backend + ' -Offline';
   Progress := 0;
-  CancelAsked := False;
-  SetupRunning := True;
   WizardForm.ProgressGauge.Max := 1000;
   WizardForm.ProgressGauge.Position := 0;
-  WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and tools for your graphics card...';
-  WizardForm.FilenameLabel.Caption := '';
+  WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and the tools for your graphics card (a few minutes)...';
+  WizardForm.FilenameLabel.Caption := 'Everything is downloaded: this part works offline, and it can''t be stopped halfway.';
   DetailsLink.Visible := True;
-  WizardForm.CancelButton.Enabled := True;
+  WizardForm.CancelButton.Enabled := False;
   try
     if not ExecAndLogOutput('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, SetupCode, @SetupLine) then
       SetupCode := -1;
   except
     SetupCode := -1;
   end;
-  SetupRunning := False;
   SetupOK := (SetupCode = 0);
   if SetupOK then CreateLaunchers;
   Result := SetupOK;
-end;
-
-// Cancel while setup works: setup stops (between steps, or mid-download) keeping what's done; the last page says so
-procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
-begin
-  if SetupRunning then begin
-    Cancel := False;
-    Confirm := False;
-    if (not CancelAsked) and (MsgBox('Stop setting up UnderCover?' + #13#10#13#10 + 'What''s done is kept. Running the ' +
-        'installer again later continues from there.', mbConfirmation, MB_YESNO) = IDYES) then begin
-      CancelAsked := True;
-      SaveStringToFile(ExpandConstant('{app}\logs\setup-cancel'), 'stop', False);
-      WizardForm.StatusLabel.Caption := 'Stopping. What''s done is kept.';
-    end;
-  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -714,6 +1079,10 @@ procedure CurPageChanged(CurPageID: Integer);
 var
   I: Integer;
 begin
+#ifdef ReleaseCheck
+  HideTestWindows;
+  Hook('page.txt', IntToStr(CurPageID));
+#endif
   if CurPageID = wpFinished then ShowOutcome;
   if CurPageID = wpSelectDir then ShowDirSpace;
   // the folders default to the install folder; follow it if it changes, unless the user typed something else
@@ -742,7 +1111,8 @@ begin
   end else if (CurPageID = AddonPage.ID) and (GetAddons('') <> '') then begin
     CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Need, Parts, Short);
     Result := SpaceOK(Short);
-  end;
+  end else if CurPageID = wpReady then
+    Result := DownloadAll;   // Install: everything is downloaded first; stopped or failed, the wizard stays here
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
