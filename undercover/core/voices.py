@@ -683,8 +683,8 @@ def staging_dir() -> Path:
 
 
 def download_staged(src, name: str | None = None, progress: Progress | None = None) -> Voice:
-    """A search result / link -> a candidate in the staging folder (not in any voice list). An earlier candidate of the
-    same name there (a check that stopped) is discarded first."""
+    """A search result / link -> a candidate in the staging folder (not in any voice list). Another candidate of the
+    same name there (two community voices both called "obama") keeps its folder: this one takes <name>-2, -3..."""
     if isinstance(src, Result):
         name = name or src.name
         src = src.url
@@ -693,23 +693,13 @@ def download_staged(src, name: str | None = None, progress: Progress | None = No
         if not name:
             base = dl.name if dl.is_file() else dl.parent.name
             name = _guess_name("", base)
-        if (staging_dir() / slug(name)).exists():
-            discard_staged(slug(name))
-        return install(dl, name, source=src, root=staging_dir())
+        base, n, final = slug(name), 1, slug(name)
+        while (staging_dir() / final).exists():
+            n += 1
+            final = f"{base}-{n}"
+        return install(dl, final, source=src, root=staging_dir())
     finally:
         shutil.rmtree(dl if dl.is_dir() else dl.parent, ignore_errors=True)
-
-
-def staged_voice(name: str) -> Voice:
-    """The candidate waiting in the staging folder under this name."""
-    meta = staging_dir() / slug(name) / "meta.json"
-    if not meta.is_file():
-        raise ModelError(f"There's no candidate voice called {name!r} waiting to be checked.")
-    d = json.loads(meta.read_text(encoding="utf-8"))
-    here = meta.parent
-    d["dir"], d["pth"] = here, here / Path(d["pth"]).name
-    d["index"] = here / Path(d["index"]).name if d.get("index") else None
-    return Voice(**d)
 
 
 def promote(name: str) -> Voice:

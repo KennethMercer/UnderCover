@@ -294,7 +294,12 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
                 proj.save()
 
     from . import voicecheck
-    readers = bool(voicecheck.reader_phrases())   # (made once and kept: the check's other voices when the clips have none)
+    have: dict = {}
+
+    def readers() -> bool:   # (only asked when the clips have no other speakers; made once and kept)
+        if "r" not in have:
+            have["r"] = bool(voicecheck.reader_phrases())
+        return have["r"]
 
     def ready(pr, k):
         # The voice heard most could be an interviewer when only one source is in. Like the training page,
@@ -304,7 +309,7 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
         if k and not ref.get("scene_minutes") and not (ref.get("confirmed") and not ref.get("auto")):
             return False   # a character's voice comes from its scenes, unless the user picked the voice themselves
         return (ref.get("clip") and ref.get("sources", 0) >= 2
-                and (readers or any(x.reason == "other speaker" for x in pr.phrases)))
+                and (any(x.reason == "other speaker" for x in pr.phrases) or readers()))
     emb = SpeakerEmbedder()
     for _ in range(3):
         proj = P.Project.load(proj.name)

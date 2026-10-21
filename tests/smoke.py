@@ -3665,14 +3665,14 @@ def u_rcfix7():
         finally:
             voicecheck.reader_phrases = real_rp
         src = inspect.getsource(service.reference_clips)
-        assert "readers or any(x.reason == \"other speaker\"" in src, "reference_clips still waits for other speakers"
+        assert 'any(x.reason == "other speaker" for x in pr.phrases) or readers())' in src, "reference_clips still waits for other speakers"
         # 2. a candidate waits in staging: not listed; promoted only when chosen, never over a voice; discarded only there
         st = V.staging_dir() / "obama"
         st.mkdir(parents=True)
         (st / "model.pth").write_bytes(b"m")
         (st / "meta.json").write_text(json.dumps({"name": "obama", "dir": str(st), "pth": str(st / "model.pth"), "version": "v2",
                                                  "sr": 40000, "f0": True, "extra": {}}), encoding="utf-8")
-        assert [v.name for v in V.list_voices()] == [] and V.staged_voice("obama").pth == st / "model.pth"
+        assert [v.name for v in V.list_voices()] == []   # (waiting: no list sees it)
         _voice_dir("obama", {})   # a voice of that name is there already: the candidate takes the next free name
         got = V.promote("obama")
         assert got.name == "obama-2" and not st.exists() and (V.voices_dir() / "obama-2" / "model.pth").is_file(), got
@@ -3684,6 +3684,9 @@ def u_rcfix7():
         assert not (V.staging_dir() / "a").exists() and (V.staging_dir() / "b").exists()
         V.discard_staged()   # (what a stopped check left)
         assert not any(V.staging_dir().iterdir()) and (V.voices_dir() / "obama").is_dir() and (V.voices_dir() / "obama-2").is_dir()
+        # two candidates of one name (BananaBus223/Obama and 0x3e9/obama.zip): each keeps its own folder
+        ds = inspect.getsource(V.download_staged)
+        assert "while (staging_dir() / final).exists():" in ds and "discard_staged" not in ds, "a same-name candidate discards the first"
         rv = inspect.getsource(service.resolve_voice)
         assert "V.download_staged(r," in rv and "download_and_install" not in rv and "remove_voice" not in rv
         assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True)"), "a candidate is checked before it's tracked"
@@ -3695,7 +3698,7 @@ def u_rcfix7():
     assert 'out["train_s"] = round(service.train_estimate_s(person))' in inspect.getsource(FA._auto_plan)
     assert "if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s });" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
     run = inspect.getsource(oneshot.run)
-    assert 'job.stage_est["voice"] = (train_estimate_s(person) if prefer_train or voice_choice == "train"' in run
+    assert 'trains = prefer_train or voice_choice == "train" or not (n or online_for(person, 2))' in run
     assert 'job.after_eta_s = plan.get("cover_s", 60.0) + 60.0' in run
     # the job's countdown during the song step: past runs say a voice step takes 5 min (quick checks); this one-shot's
     # own estimate says 2 hours of training, and that's what the countdown carries
