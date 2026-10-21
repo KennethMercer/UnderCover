@@ -596,7 +596,8 @@ if ($paths.Count) {
 Step $(if ($Offline) { "Checking the AI models" } else { "Downloading the AI models" })
 if (-not $DryRun) { Push-Location $InstallDir }   # python -m finds the app's package from here
 try {
-    if ($Offline) { $code = RunCode $Py @('-m', 'undercover.models', 'check') }
+    # (install --offline: audio-separator's model list put in place from the app, as setup always did; nothing fetched)
+    if ($Offline) { $code = RunCode $Py @('-m', 'undercover.models', 'install', '--offline') }
     else { $code = RunStatus $Py @('-m', 'undercover.models', 'install', '--status', '--cancel-file', $CancelFile) 0 1 }
 } finally { if (-not $DryRun) { Pop-Location } }
 if ($code -eq 3) { Cancelled }

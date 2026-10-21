@@ -3546,7 +3546,11 @@ def u_installer_downloads():
     assert setup.count("RunWatched $Uv") == 1 and "--index-url" not in setup and "'python', 'install'" not in setup
     assert "Run (Join-Path $env:SystemRoot 'System32\\tar.exe') @('-xzf', $archive, '-C', $unpack)" in setup
     assert "if ($Offline) { Info \"YouTube downloader: the pinned one" in setup, "the installer's setup goes online for yt-dlp"
-    assert "if ($Offline) { $code = RunCode $Py @('-m', 'undercover.models', 'check') }" in setup
+    assert "if ($Offline) { $code = RunCode $Py @('-m', 'undercover.models', 'install', '--offline') }" in setup
+    # the fourth release check: audio-separator's model list appeared at first use (the app copies it in from its
+    # assets before a separation; setup's model step always had): install --offline puts it there, fetches nothing
+    msrc = (ROOT / "undercover" / "models.py").read_text(encoding="utf-8")
+    assert "if a.offline and todo:" in msrc and msrc.index("if a.offline and todo:") < msrc.index("r = install(progress, cancel)")
     assert "'--from', $Cache" in setup and "Fetch " in setup[setup.index("function Get-Files"):setup.index("# -----", setup.index("function Get-Files"))]
     for line in setup.splitlines():   # nothing else fetches from the network
         assert not re.search(r"\bFetch ['\"]https?:", line), line

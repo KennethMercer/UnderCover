@@ -2,6 +2,8 @@
 should not be downloading modules the first time they're called, it should be part of the install").
 
     python -m undercover.models install [--status] [--cancel-file <file>]   (setup's step; a repair runs it too)
+    python -m undercover.models install --offline                            (the installer downloaded them: put in
+                                                                              place what ships, fetch nothing)
     python -m undercover.models check [--json]                               (what's missing; exit 1 if anything is)
 
 Every file is pinned (core/setup_models.PINNED: its sources, its SHA-256, its size), fetched through a .part that a
@@ -68,6 +70,8 @@ def main(argv=None) -> int:
     ap.add_argument("--status", action="store_true", help="install, for the installer: '@@P' progress lines")
     ap.add_argument("--cancel-file", help="install: stop (exit code 3, what's downloaded kept) once this file exists")
     ap.add_argument("--json", action="store_true", help="check: machine-readable")
+    ap.add_argument("--offline", action="store_true", help="install: the installer's download page fetched the models; "
+                    "put audio-separator's model list in place, fetch nothing, fail if any model is missing")
     a = ap.parse_args(argv)
     if a.action == "check":
         todo = missing()
@@ -79,6 +83,9 @@ def main(argv=None) -> int:
         return 1 if todo else 0
     todo = missing()
     need = sum(todo.values())
+    if a.offline and todo:   # (rc-fix6: nothing goes online after the installer's download page)
+        print(f"Missing: {len(todo)} file(s), {need / 1e9:.1f} GB: " + ", ".join(todo), flush=True)
+        return 1
     if not todo:
         separate.place_model_list()
         print(f"Every model is in place ({sum(wanted().values()) / 1e9:.1f} GB).", flush=True)
