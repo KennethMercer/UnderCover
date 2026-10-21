@@ -3437,11 +3437,20 @@ def u_installer_quiet():
     # the real installer, interactive, clicked through by a driver; on the download page every second the wizard and
     # Stop enabled, answers timed, moved and minimised; the test variant is out of the taskbar and Alt+Tab and shows no
     # box; -CancelCheck clicks Stop in a silent run and the next run carries on
-    assert "$run = RunInstaller 'full' @()" in e2e and "$a = RunInstaller 'abort' @('/SILENT', '/SUPPRESSMSGBOXES')" in e2e
+    assert "$run = RunInstaller 'full' @(" in e2e and "$a = RunInstaller 'abort' @('/SILENT', '/SUPPRESSMSGBOXES')" in e2e
     assert "if (-not [W]::IsWindowEnabled($h)) { $wizOff++ }" in e2e and "[W]::IsWindowEnabled($abort) -and [W]::IsWindowVisible($abort)" in e2e
     assert "IsHungAppWindow" in e2e and "SetWindowPos($h, [IntPtr]::Zero, $a.L + 40, $a.T + 30" in e2e and "PostMessage($h, 0x112, [IntPtr]0xF020" in e2e
     assert "if ($resp['toolwindow'] -ne 'True')" in e2e and "if ($resp['boxes'] -or $resp['ourboxes'])" in e2e
     assert "it didn't carry on" in e2e and "if (Test-Path $cacheDir)" in e2e and "the test install made shortcuts" in e2e
+    # the first release check hung: AMD's server closed a 645 MB download at 6 MB, the hash failed, and the error box
+    # (written down by the test variant) sent the wizard back to its Ready page while the driver waited. Now the
+    # installer tries a broken-off download again by itself, the check proves it with a server that stops early, and
+    # the driver ends the check on any box or a fall back to the Ready page
+    assert "trying again by itself (%d of 3)" in iss and "if Tries < 3 then begin" in iss and "Tries := 0   // the user's Try again" in iss
+    assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\")" in e2e and "Content-Length: 104857600" in e2e
+    assert "a download that came back short wasn't tried again by itself" in e2e and "the run after Stop downloaded $n again" in e2e
+    assert 'if ($logged) { Quit "a box came up:' in e2e and "the wizard went back to its Ready page during the downloads" in e2e
+    assert "isn't the listed file (size or SHA-256)" in e2e
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
     assert "#ifdef ReleaseCheck" in iss and "AppName=UnderCover release check (test)" in iss and "Uninstallable=no" in iss
     assert "SaveStringToFile(ExpandConstant('{param:hooks|}\\boxes.txt'), Text + #13#10, True);" in iss

@@ -865,9 +865,10 @@ var
   Lines: TArrayOfString;
   Todo: array of Integer;
   I, K: Integer;
-  Line, Dest, Name, Why, Short: String;
+  Line, Dest, Name, Why, Short, Urls: String;
   Bytes, Have, Largest, Free, Total: Int64;
   Stopped: Boolean;
+  Tries, W: Integer;
 begin
   Result := False;
   ExtractTemporaryFile('downloads.tsv');
@@ -919,8 +920,14 @@ begin
 #ifdef ReleaseCheck
       Hook('download.txt', Format('%d %d', [DownloadIndex, DownloadCount]));
 #endif
+      Tries := 0;
       repeat
-        Why := FetchFile(TabField(Line, 2), Name, TabField(Line, 3));
+        Urls := TabField(Line, 2);
+#ifdef ReleaseCheck
+        // the release check's proof that a short read is retried: its first file's first try from a server that stops early
+        if (K = 0) and (Tries = 0) and (ExpandConstant('{param:shorturl|}') <> '') then Urls := ExpandConstant('{param:shorturl|}');
+#endif
+        Why := FetchFile(Urls, Name, TabField(Line, 3));
         if Why = 'stopped' then begin
           WizardForm.ReadyLabel.Caption := 'The download stopped. What''s downloaded is kept: Install carries on from there.';
           Stopped := True;
@@ -928,10 +935,24 @@ begin
           Why := PlaceFile(ExpandConstant('{tmp}\') + Name, Dest, Bytes);
           if Why <> '' then Why := 'it couldn''t be put in ' + ExtractFileDir(Dest) + ' (' + Why + ')';
         end;
-        if (not Stopped) and (Why <> '') and (Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
-            'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) <> IDRETRY) then begin
-          WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Why + '. What''s downloaded is kept: Install carries on from there.';
-          Stopped := True;
+        // a server that drops the connection part-way (AMD's did, at 6 of 645 MB, and Inno then found the hash wrong):
+        // tried again by itself, three times, before the user is asked
+        if (not Stopped) and (Why <> '') then begin
+          if Tries < 3 then begin
+            Tries := Tries + 1;
+            Log(Format('%s: %s; trying again by itself (%d of 3)', [Name, Why, Tries]));
+            for W := 1 to Tries * 30 do begin   // 3, 6, 9 s, the page answering throughout
+              DownloadPage.SetText(Format('The download of %s broke off. Trying again (%d of 3)...', [Name, Tries]), '');
+              DownloadPage.SetProgress(DownloadIndex, DownloadCount);
+              Sleep(100);
+            end;
+          end else if Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
+              'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) = IDRETRY then
+            Tries := 0   // the user's Try again: three more by itself after this one
+          else begin
+            WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Why + '. What''s downloaded is kept: Install carries on from there.';
+            Stopped := True;
+          end;
         end;
       until (Why = '') or Stopped;
       if not Stopped then DownloadDone := DownloadDone + Bytes;

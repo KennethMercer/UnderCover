@@ -10,7 +10,9 @@
   -Root     the drive or folder the test install goes in (default: this repo's drive; the user hit os error 448 on D:)
   -Keep     leave the test install in place (default: deleted after the checks, pass or fail)
   -CancelCheck  first a silent run whose download page's Stop is clicked once 3 files are in: the installer must end
-                (code 2), keep what's downloaded and install nothing; the real run after it must carry on from there
+                (as Inno does, exit 1, its log saying it aborted), keep what's downloaded (each file whole, its SHA-256
+                right, nothing half-made in place) and install nothing; the real run after it must carry on from there,
+                fetching none of those files again
   -NoFirstUse   skip the first cover and speech
 
   The installer is built here as its test variant (ISCC /DReleaseCheck on installer\UnderCover.iss): the same code
@@ -20,6 +22,8 @@
   A second process (the driver) clicks Next, Install and Finish with valid inputs only, and watches it.
   Checked afterwards:
     - the installer exited 0 and logs\setup-result.txt says "ok"; no message box came up at all;
+    - a download that comes back short is tried again by itself (a local server answers the first file's first try
+      with a 100 MB length, sends 1 MB and closes, as AMD's server once did);
     - on the download page (rc-fix6, the user's install: the wizard refused every click for all of setup), every
       second: the wizard enabled and its Stop button there; it answered within a second (WM_NULL), never hung, moved
       when moved (SetWindowPos) and minimised and restored;
@@ -200,6 +204,8 @@ $res['toolwindow'] = [bool]([W]::GetWindowLong($h, -20) -band 0x80)   # out of t
 # a message box of the installer's process: written down, closed with No / Cancel (there should be none)
 $script:boxes = @()
 function Boxes {
+    $logged = Read1 'boxes.txt'   # (the test variant writes its boxes down instead of showing them)
+    if ($logged) { Quit "a box came up: $($logged -replace '\s+', ' ')" }
     $script:found = @()
     $cb = [W+EnumProc]{ param($w, $l)
         $p = [uint32]0; [void][W]::GetWindowThreadProcessId($w, [ref]$p)
@@ -242,6 +248,11 @@ while ([W]::IsWindow($h) -and -not [W]::IsWindowVisible($abort) -and -not (Read1
 $dlSecs = 0; $wizOff = 0; $abortOff = 0; $moved = ''; $mini = ''; $tick = [Diagnostics.Stopwatch]::StartNew(); $dl0 = Get-Date
 while ([W]::IsWindow($h) -and (Read1 'page.txt') -notin @('12', '14')) {
     Sample; Boxes
+    if ($Mode -ne 'abort' -and (Read1 'download.txt') -and -not [W]::IsWindowVisible($abort) -and (Read1 'page.txt') -eq '10' -and
+        ((Get-Date) - $dl0).TotalSeconds -gt 5) {
+        Start-Sleep -Seconds 3   # (Stop is hidden for a moment between files: back on the Ready page for good?)
+        if (-not [W]::IsWindowVisible($abort) -and (Read1 'page.txt') -eq '10') { Quit "the wizard went back to its Ready page during the downloads (file $(Read1 'download.txt'))" }
+    }
     if ($tick.ElapsedMilliseconds -ge 1000) {
         $tick.Restart(); $dlSecs++
         if ($Mode -ne 'abort') {   # (a silent run's wizard is hidden until it installs)
@@ -338,17 +349,60 @@ if ($CancelCheck) {
     Write-Host "Stop check: $($a.resp['abort']); installer exit $($a.code); $($kept.Count) files kept of $firstTodo to download"
     if ($a.resp['error']) { $fails += "Stop check: $($a.resp['error'])" }
     if (-not $a.resp['abort']) { $fails += 'Stop check: Stop was never clicked' }
-    if ($a.code -ne 2) { $fails += "a stopped download ended the installer with code $($a.code), not 2 (cancelled before installing)" }
+    # (Inno 6.7, silent: the suppressed "Stop downloading?" says Yes, the download aborts, and a NextButtonClick that
+    # returns False ends setup with "Failed to proceed to next wizard page; aborting": exit code 1)
+    if ($a.code -eq 0 -or $a.log -notmatch 'Need to abort download' -or $a.log -notmatch 'Failed to proceed to next wizard page; aborting') {
+        $fails += "a stopped download didn't end the installer as Inno does (exit $($a.code); the log lacks its abort lines)"
+    }
     if ($kept.Count -lt 3) { $fails += "a stopped download kept $($kept.Count) files, not the 3 or more that were in" }
+    # every file kept is one of the list's, whole, with its SHA-256; nothing half-downloaded or half-moved in its place
+    $listed = @{}
+    Import-Csv -LiteralPath (Join-Path $repo 'installer\downloads.tsv') -Delimiter "`t" | ForEach-Object { if ($_.dest -like 'cache/*') { $listed[$_.dest.Substring(6)] = $_ } }
+    foreach ($f in @(Get-ChildItem -LiteralPath $cacheDir -File -ErrorAction SilentlyContinue)) {
+        $row = $listed[$f.Name]
+        if (-not $row) { $fails += "a stopped download left $($f.Name) in its place (not a listed file)"; continue }
+        if ($f.Length -ne [long]$row.bytes -or (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLower() -ne $row.sha256) {
+            $fails += "a stopped download kept $($f.Name), but it isn't the listed file (size or SHA-256)"
+        }
+    }
+    $keptNames = @($kept | ForEach-Object { $_.Name })
     if (Test-Path (Join-Path $dir 'undercover')) { $fails += 'a stopped download installed the app anyway' }
 }
 
 $t0 = Get-Date
 Write-Host "Install: the wizard, clicked through"
-$run = RunInstaller 'full' @()
+# the proof that a short read is retried (AMD's server once closed a 645 MB download at 6 MB, with no error): a local
+# server answers the first file's first try with a 100 MB length, sends 1 MB and closes; the installer must try again
+# by itself and go on
+$short = @'
+param([string]$PortFile)
+$l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start()
+Set-Content -LiteralPath $PortFile $l.LocalEndpoint.Port
+$c = $l.AcceptTcpClient(); $s = $c.GetStream(); $b = New-Object byte[] 8192; [void]$s.Read($b, 0, $b.Length)
+$head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/octet-stream`r`nContent-Length: 104857600`r`nConnection: close`r`n`r`n")
+$s.Write($head, 0, $head.Length); $z = New-Object byte[] 1048576; $s.Write($z, 0, $z.Length); $s.Flush(); $c.Close(); $l.Stop()
+Set-Content -LiteralPath "$PortFile.served" 'served'
+'@
+$shortFile = Join-Path $launch 'short.ps1'; $portFile = Join-Path $launch 'short-port.txt'
+[IO.File]::WriteAllText($shortFile, $short, (New-Object Text.UTF8Encoding $false))
+$sp = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$shortFile`"", "`"$portFile`"" -WindowStyle Hidden -PassThru
+$w0 = Get-Date; while (-not (Test-Path $portFile) -and ((Get-Date) - $w0).TotalSeconds -lt 30) { Start-Sleep -Milliseconds 200 }
+$shortUrl = "http://127.0.0.1:$((Get-Content -LiteralPath $portFile -Raw).Trim())/short"
+$run = RunInstaller 'full' @("/SHORTURL=$shortUrl")
+$served = Test-Path "$portFile.served"
+if (-not $sp.HasExited) { Stop-Process -Id $sp.Id -Force -ErrorAction SilentlyContinue }
 $resp = $run.resp
 $code = $run.code
 $todo = ToDownload $run
+$retried = @([regex]::Matches($run.log, ': (.+); trying again by itself \(1 of 3\)') | ForEach-Object { $_.Value })
+Write-Host "Short read: served $served; retried by itself: $($retried.Count) ($(($retried | Select-Object -First 1) -replace '\s+', ' '))"
+if (-not $served) { $fails += "the short-read server was never asked (the test variant didn't use /SHORTURL)" }
+elseif (-not $retried.Count) { $fails += "a download that came back short wasn't tried again by itself" }
+if ($CancelCheck) {   # the run after Stop fetched none of the files the Stop run kept
+    foreach ($n in $keptNames) {
+        if ($run.log -match ("Downloading temporary file from \S+: \S+\\" + [regex]::Escape($n) + "\r?\n")) { $fails += "the run after Stop downloaded $n again" }
+    }
+}
 Remove-Item -LiteralPath $launch -Recurse -Force -ErrorAction SilentlyContinue
 $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
 
