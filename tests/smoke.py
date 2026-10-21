@@ -1263,7 +1263,9 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     # aside (P5-1), and deleting for good is Storage's Set aside section (remove_aside, below)
     "core/voices.py::remove_voice::rmtree::v.dir",
     "core/voices.py::main::remove_voice::a.name",                                # the CLI's remove
-    "doubleagent/service.py::resolve_voice.drop_downloads::remove_voice::name",  # a one-shot's own fresh downloads
+    # a one-shot's own candidates (rc-fix7): downloads waiting in voices/.staging for their check, never a listed voice;
+    # deleted only inside the staging folder, through remove_files' allow-list
+    "core/voices.py::discard_staged::remove_files",
     "safehouse/library.py::_remove::rmtree::p",                                  # Clean up's files; refuses voices/ (P6-1)
     "safehouse/library.py::remove_aside::remove_files",                          # a set-aside voice the user deletes
     "doubleagent/cadence.py::remove_pack::rmtree::v.dir / 'tts'",                # a cadence the user deletes
@@ -1271,6 +1273,7 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "app/server.py::Handler._voice_upload::rmtree::work", "app/server.py::_clean_old_previews::rmtree::sub",
     "core/separate.py::StemSeparator.run::rmtree::self.work_dir", "core/voices.py::download::rmtree::dest",
     "core/voices.py::install::rmtree::work", "core/voices.py::download_and_install::rmtree::dl if dl.is_dir() else dl.parent",
+    "core/voices.py::download_staged::rmtree::dl if dl.is_dir() else dl.parent",
     "core/ytdlp.py::stage::rmtree::d", "core/ytdlp.py::stage::rmtree::dl", "core/ytdlp.py::heal::rmtree::tmp",
     "doubleagent/cadence.py::train::rmtree::work", "doubleagent/project.py::Project.delete::rmtree::self.dir",
     "doubleagent/project.py::process_source::rmtree::path('cache_dir') / 'stems' / file_hash(raw)",
@@ -4647,10 +4650,11 @@ def u_rolloff_covers():
     # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
     # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and (improved.py) an improved voice's listening copies;
-    # expired after its 30 days); a new caller must be added here on purpose
+    # expired after its 30 days); a one-shot's candidates that weren't chosen (rc-fix7: only inside voices/.staging); a
+    # new caller must be added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/firstrun.py", "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
-                                                                        "core/vault.py", "core/vault.py", "core/ytdlp.py", "doubleagent/improved.py",
+                                                                        "core/vault.py", "core/vault.py", "core/voices.py", "core/ytdlp.py", "doubleagent/improved.py",
                                                                         "frontman/history.py", "safehouse/library.py", *["safehouse/smaller.py"] * 10,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"

@@ -144,6 +144,18 @@ def jobs_using(voice: str) -> list:
 ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
 
 
+def eta_words(seconds: float) -> str:
+    """A time as the page says it (web/oneshot.js etaWords, for one value): "about 7 min", "about 2½ hours"."""
+    m = max(0.0, float(seconds)) / 60
+    if m < 1:
+        return "under a minute"
+    if m >= 90:
+        x = round(m / 30) / 2
+        h = str(int(x)) if x == int(x) else f"{int(x) or ''}½"
+        return f"about {h} hour{'' if h == '1' else 's'}"
+    return f"about {max(1, round(m))} min"
+
+
 def counted_down(said: float, since: float) -> float:
     """The time left the job said, counted down since it said it: the one rule the strip (this snapshot) and the
     stage panel (the page, from the same event) both follow (rc-fix4: they read 22 s and "almost done"). A said value
@@ -177,6 +189,8 @@ class Job:
         self.after_eta_s = 0.0    # what follows a training's own eta (export, compare, cadence)
         self.plan_min = None      # the estimate behind planned_s, by step ({prepare, train, compare, total} minutes)
         self._left = None         # the last time left said (value, t): it never climbs fast (P8-3)
+        self.stage_est = {}       # {stage: seconds} the job's own estimate of a stage still to come (the one-shot's
+                                  # training), over that stage's typical length (rc-fix7: "about 5 min" before a 2 h training)
 
     def push(self, **ev):
         with self.cond:
@@ -226,7 +240,7 @@ class Job:
                 left = (now - first[0]) * (1 - p) / (p - first[1])
             elif typical(self.kind, stage):
                 left = max(0.0, typical(self.kind, stage) - (now - t0))
-            later = [typical(self.kind, x) for x in order[order.index(stage) + 1:]]
+            later = [self.stage_est.get(x) or typical(self.kind, x) for x in order[order.index(stage) + 1:]]
             if left is not None and all(x is not None for x in later):
                 ev["total_left"] = round(left + sum(later), 1)
             return

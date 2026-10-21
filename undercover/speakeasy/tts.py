@@ -1,26 +1,19 @@
 """Kokoro text-to-speech (kokoro-onnx, Apache-2.0): text -> natural speech in a stock voice, the "Reader".
 
-Runs on the CPU (onnxruntime); the voice model then turns the Reader into the person (speak.py). Model files are
-fetched on first use into models/tts/kokoro/.
+Runs on the CPU (onnxruntime); the voice model then turns the Reader into the person (speak.py). The model itself
+(its files, the one loaded copy) is core/readers.py, which DoubleAgent's voice check reads with too.
 Measured 2026-10-10 (Ryzen CPU): fp32 model 5.8x realtime; the int8 model is 4.5x SLOWER on the CPU (1.3x realtime),
 so it isn't used.
 """
 import re
-import threading
 
 import numpy as np
 
-from ..core import addons, setup_models
+from ..core import addons, readers
 from ..core.config import path
+from ..core.readers import FILES, SHA256, SR, URL, kokoro, lang, ready   # noqa: F401 (SpeakEasy's names for them)
+from ..core.readers import trim as _trim   # noqa: F401
 from ..core.voices import ModelError
-
-SR = 24000
-URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
-FILES = {"tts/kokoro/kokoro-v1.0.onnx": f"{URL}/kokoro-v1.0.onnx",      # ~310 MB
-         "tts/kokoro/voices-v1.0.bin": f"{URL}/voices-v1.0.bin"}        # ~27 MB
-SHA256 = {"tts/kokoro/kokoro-v1.0.onnx": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
-          "tts/kokoro/voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"}
-setup_models.register_pinned(FILES, SHA256, "kokoro")   # the Doctor checks and re-fetches them (phase 10)
 addons.register(addons.Addon(
     id="kokoro", name="Kokoro", included=True, modules=["speakeasy"],
     adds="The quick Reader: SpeakEasy's speech for voices without a cadence.",
@@ -67,10 +60,6 @@ MALE_BELOW, MALE_LOW_BELOW = 165.0, 115.0
 DEFAULT = "am_michael"  # a voice whose pitch is unknown
 
 
-def lang(reader: str) -> str:
-    return "en-gb" if reader.startswith("b") else "en-us"
-
-
 PRINT_CLEAR = 3   # a voice-print vote this clear (4 of the 5 nearest Readers, or more) decides the sex; a closer one, the pitch
 
 
@@ -108,49 +97,13 @@ def pitch_for(reader: str, target_hz: float | None) -> float:
     return float(np.clip(round(st * 2) / 2, -12, 12))
 
 
-# ---------------------------------------------------------------- the model
-
-_K = None
-_LOCK = threading.Lock()
-
-
-def ready() -> bool:
-    return all((path("models_dir") / f).exists() for f in FILES)
-
-
-def kokoro(progress=None):
-    """The loaded Kokoro model (downloads ~340 MB the first time)."""
-    global _K
-    with _LOCK:
-        if _K is None:
-            try:
-                setup_models.ensure(progress, files=FILES, sha256=SHA256)
-            except Exception as e:
-                raise ModelError(f"Couldn't download the speech model ({e.__class__.__name__}). "
-                                 "Check your internet connection and try again.")
-            from kokoro_onnx import Kokoro
-            m = path("models_dir") / "tts" / "kokoro"
-            _K = Kokoro(str(m / "kokoro-v1.0.onnx"), str(m / "voices-v1.0.bin"))
-        return _K
-
+# ---------------------------------------------------------------- the model (core/readers.py)
 
 def synth(text: str, reader: str, speed: float = 1.0) -> np.ndarray:
     """One sentence -> float32 mono speech at 24 kHz, leading/trailing silence trimmed."""
     if reader not in READERS:
         raise ModelError(f"Unknown Reader '{reader}'.")
-    k = kokoro()
-    with _LOCK:   # one synthesis at a time (onnxruntime already uses every core)
-        a, _ = k.create(text, voice=reader, speed=float(np.clip(speed, 0.5, 2.0)), lang=lang(reader))
-    return _trim(np.asarray(a, np.float32))
-
-
-def _trim(a: np.ndarray, db: float = -45.0, keep: float = 0.05) -> np.ndarray:
-    lvl = 10 ** (db / 20) * max(1e-4, float(np.abs(a).max()))
-    on = np.where(np.abs(a) > lvl)[0]
-    if not len(on):
-        return a[:0]
-    k = int(SR * keep)
-    return a[max(0, on[0] - k):on[-1] + k]
+    return readers.synth(text, reader, speed)
 
 
 # ---------------------------------------------------------------- sentences

@@ -110,7 +110,8 @@ function planTime(p) {
   const v = p.voice?.how, tr = trainWords(p);   // no number of the page's own: training's is the estimator's, a quick cover's the plan's
   return v === "train" ? tr || "about an hour" : v === "check" ? `a few minutes to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
 }
-const trainWords = p => { const e = estWords("new", p.person, "singing"); if (!e && p.person && !EST.asked.has(estKey("new", p.person, "singing"))) estimateFor("new", p.person, "singing").then(() => { if (OS.last?.plan === p) drawPlan(p); }); return e; };
+// the plan's own training estimate (train_s: the one the job and the voice question use), else the estimator's
+const trainWords = p => { if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s }); const e = estWords("new", p.person, "singing"); if (!e && p.person && !EST.asked.has(estKey("new", p.person, "singing"))) estimateFor("new", p.person, "singing").then(() => { if (OS.last?.plan === p) drawPlan(p); }); return e; };
 // An ambiguous song title ("Hello"): the plan lists the songs it could be as a choice card (#auto-choices: a question, then one
 // button[data-choice] per song with artist, year and title); the one picked goes with the request. While an earlier answer is
 // in effect the plan returns it as `chosen`, the rest as `others`, and the card says so with the others offered as a switch.

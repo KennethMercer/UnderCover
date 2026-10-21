@@ -590,16 +590,17 @@ def _put_back(aside: Path, target: Path):
         os.replace(target / "meta.json.aside", target / "meta.json")
 
 
-def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bool = False) -> Voice:
-    """Unpack downloaded file(s), find the voice .pth/.index, validate, and register under `name`."""
+def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bool = False, root: Path | None = None) -> Voice:
+    """Unpack downloaded file(s), find the voice .pth/.index, validate, and register under `name`.
+    root: install under another folder than the voices (staging_dir(), for a candidate being checked)."""
     files = [files] if isinstance(files, Path) else files
     name = slug(name)
     if not name:
         raise ModelError("Give the voice a name using letters or numbers.")
-    target = voices_dir() / name
+    target = (root or voices_dir()) / name
     if target.exists() and not overwrite:
         raise ModelError(f"A voice called '{name}' is already installed. Pick another name or remove it first.")
-    owner = pending_candidate(name)
+    owner = pending_candidate(name) if root is None else None
     if owner:   # an unheard retrained voice: never written over, whatever overwrite says
         raise ModelError(f"\"{name}\" is the retrained {label_of(owner)} waiting to be heard. Give this one its own name, "
                          "or keep or set aside the waiting one first.")
@@ -669,6 +670,78 @@ def install(files: list[Path] | Path, name: str, source: str = "", overwrite: bo
         return voice
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- candidates being checked (rc-fix7)
+# A community voice downloaded for a one-shot's check waits in voices/.staging/<name> (one level deeper than the voices,
+# so no list sees it) and joins the voices only once its check passes (promote); one that fails, or a check that stops,
+# is discarded. These are downloads, never the user's voices: discard deletes only inside the staging folder, through
+# storage.remove_files' allow-list (refused in test mode outside the test's folders).
+
+def staging_dir() -> Path:
+    return voices_dir() / ".staging"
+
+
+def download_staged(src, name: str | None = None, progress: Progress | None = None) -> Voice:
+    """A search result / link -> a candidate in the staging folder (not in any voice list). An earlier candidate of the
+    same name there (a check that stopped) is discarded first."""
+    if isinstance(src, Result):
+        name = name or src.name
+        src = src.url
+    dl = download(src, progress)
+    try:
+        if not name:
+            base = dl.name if dl.is_file() else dl.parent.name
+            name = _guess_name("", base)
+        if (staging_dir() / slug(name)).exists():
+            discard_staged(slug(name))
+        return install(dl, name, source=src, root=staging_dir())
+    finally:
+        shutil.rmtree(dl if dl.is_dir() else dl.parent, ignore_errors=True)
+
+
+def staged_voice(name: str) -> Voice:
+    """The candidate waiting in the staging folder under this name."""
+    meta = staging_dir() / slug(name) / "meta.json"
+    if not meta.is_file():
+        raise ModelError(f"There's no candidate voice called {name!r} waiting to be checked.")
+    d = json.loads(meta.read_text(encoding="utf-8"))
+    here = meta.parent
+    d["dir"], d["pth"] = here, here / Path(d["pth"]).name
+    d["index"] = here / Path(d["index"]).name if d.get("index") else None
+    return Voice(**d)
+
+
+def promote(name: str) -> Voice:
+    """A candidate that passed its check joins the voices, under its own name, or the first free <name>-2, -3... when a
+    voice of that name is there already (nothing is ever written over). -> the voice, as listed."""
+    src = staging_dir() / slug(name)
+    if not (src / "meta.json").is_file():
+        raise ModelError(f"There's no candidate voice called {name!r} waiting to be checked.")
+    base, n, final = slug(name), 1, slug(name)
+    while (voices_dir() / final).exists() or pending_candidate(final):
+        n += 1
+        final = f"{base}-{n}"
+    os.replace(src, voices_dir() / final)
+    dst = voices_dir() / final
+    meta = json.loads((dst / "meta.json").read_text(encoding="utf-8"))
+    meta.update(name=final, dir=str(dst), pth=str(dst / Path(meta["pth"]).name))
+    if meta.get("index"):
+        meta["index"] = str(dst / Path(meta["index"]).name)
+    from . import fsutil
+    fsutil.write_text(dst / "meta.json", json.dumps(meta, indent=2))
+    return get_voice(final)
+
+
+def discard_staged(name: str | None = None):
+    """Delete a candidate from the staging folder (name), or every candidate there (None: what a stopped check left).
+    Only ever inside the staging folder (storage.remove_files refuses anything else)."""
+    root = staging_dir()
+    if not root.is_dir():
+        return
+    dirs = [root / slug(name)] if name else [d for d in root.iterdir() if d.is_dir()]
+    from . import storage
+    storage.remove_files([], within=[root], dirs=[d for d in dirs if d.is_dir()])
 
 
 def download_and_install(src: str, name: str | None = None, progress: Progress | None = None,

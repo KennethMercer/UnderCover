@@ -293,14 +293,18 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
                 proj.sources = found
                 proj.save()
 
+    from . import voicecheck
+    readers = bool(voicecheck.reader_phrases())   # (made once and kept: the check's other voices when the clips have none)
+
     def ready(pr, k):
         # The voice heard most could be an interviewer when only one source is in. Like the training page,
-        # trust it once it's in 2+ sources, and only when there's other people's speech to test with.
+        # trust it once it's in 2+ sources, and only when there's other speech to test with: the clips' own other
+        # speakers, or the Readers (rc-fix7: a person's solo speeches have none)
         ref = pr.reference
         if k and not ref.get("scene_minutes") and not (ref.get("confirmed") and not ref.get("auto")):
             return False   # a character's voice comes from its scenes, unless the user picked the voice themselves
         return (ref.get("clip") and ref.get("sources", 0) >= 2
-                and any(x.reason == "other speaker" for x in pr.phrases))
+                and (readers or any(x.reason == "other speaker" for x in pr.phrases)))
     emb = SpeakerEmbedder()
     for _ in range(3):
         proj = P.Project.load(proj.name)
@@ -512,7 +516,8 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     choice: the user's answer to the plan's voice question ("Ask me each time"): "use:<voice>" uses that installed
     voice now, unchecked; "check" checks the voices against real clips first; "train" trains a better one."""
     from . import voicecheck
-    from ..core.voices import download_and_install, get_voice, remove_voice
+    from ..core import voices as V
+    from ..core.voices import get_voice
     from ..core.speaker import SpeakerEmbedder
     cands = installed_for(person) or []
     demo = demo_for(person, cands)   # "... as Agent Smoke": used as it is
@@ -582,23 +587,34 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
 
         clips = clip_set(proj)
 
-        def test(v, ident):
+        def test(v, ident, staged=False):
             cached = _quality_cache().get(_qkey(person, ident))
             # older, weaker checks are redone once, and so is one made on other clips (A3)
             if cached and cached.get("v") == CHECK_VERSION and cached.get("clips") == clips:
                 return voicecheck.Quality(**{k: cached.get(k) for k in ("voice", "score", "baseline", "phrases", "seconds",
                                                                         "verdict", "target_hz", "low", "pitch_cents", "content", "test")})
             push("voice", 0.16 + 0.04 * len(checked), f"Checking whether “{display_name(v)}” sounds like {person}")
-            q = voicecheck.check(v.name, proj, conv, emb)
+            if staged:   # a candidate in the staging folder isn't a listed voice: loaded from there for its check
+                from ..core.engine.convert import LoadedVoice
+                lv = LoadedVoice(v, conv.device, conv.half)
+                try:
+                    q = voicecheck.check(lv, proj, conv, emb)
+                finally:
+                    del lv
+            else:
+                q = voicecheck.check(v.name, proj, conv, emb)
             _remember(person, ident, q, clips)
             return q
+        # rc-fix7: a community voice downloaded for this check waits in the staging folder and joins the voices only if
+        # it's the one chosen (promote); every other one, and all of them when the check fails or stops, is discarded.
+        # (A failed check once left BananaBus223/Obama installed, unchecked, offered next time: two Obamas.)
+        V.discard_staged()   # what a check that stopped before (the app closed mid-check) left there
         downloaded = []
 
         def drop_downloads(keep=None):
             for name in downloaded:
-                if name != keep:   # only the chosen download stays in the voice list
-                    remove_voice(name)
-                    gpu.forget_voice(name)
+                if name != keep:
+                    V.discard_staged(name)
         try:
             for v in community:
                 q = test(v, _ident(v))
@@ -614,14 +630,14 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                     continue   # judged on these clips already (a broken file stays broken whatever the clips)
                 push("voice", 0.16 + 0.04 * len(checked), f"Downloading the community voice “{r.name}” to check it")
                 try:
-                    v = download_and_install(r, progress=lambda d, t: push("voice", 0.16, f"Downloading “{r.name}”"))
+                    v = V.download_staged(r, progress=lambda d, t: push("voice", 0.16, f"Downloading “{r.name}”"))
                 except ModelError as e:   # broken/unsafe/unloadable file: note it, try the next one
                     checked.append({"name": r.name, "where": "online", "repo": r.repo, "verdict": "broken", "note": str(e)[:160]})
                     _remember_broken(person, ident, r.name, str(e))
                     continue
-                q = test(v, ident)
+                downloaded.append(v.name)   # (before its check: a check that fails or stops discards it)
+                q = test(v, ident, staged=True)
                 checked.append({"name": v.name, "where": "online", "repo": r.repo, **q.to_json()})
-                downloaded.append(v.name)
         except BaseException as e:
             if not isinstance(e, ValueError):   # cancelled or failed mid-check: remove the models fetched for it
                 drop_downloads()
@@ -646,6 +662,8 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                               name=lambda c: c["name"], score=lambda c: c["score"])[:1]
             quick = bool(good)
         drop_downloads(keep=good[0]["name"] if good else None)
+        if good and good[0]["where"] == "online":   # the chosen download joins the voices only now, checked
+            good[0]["name"] = V.promote(good[0]["name"]).name
         if good:
             # the person's pitch from their kept clips: singing for singers (no speech headroom then)
             rng = voicecheck.target_range(proj, conv.rmvpe)
@@ -656,7 +674,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                 plan["person_range"] = rng
                 _remember_range(v, rng, plan["person_speech"], person)
             plan["voice"] = {"name": v.name, "display": display_name(v), "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
-                             "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ''})"}
+                             "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ', tested with Reader voices' if good[0].get('test') == 'readers' else ''})"}
             if quick:
                 plan["voice"].update(quick=True, checked=f"sounds somewhat like {person}: {good[0]['score']:.2f} "
                                                          f"(a close match is {voicecheck.GOOD})")
@@ -678,8 +696,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         push("voice", 1.0, f"Using your voice “{display_name(weak_trained)}”, though it's weak")
         return weak_trained
     plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
-    plan["voice_until"] = time.time() + train_estimate_s(person)
-    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} (about 1 hour)"
+    tr = train_estimate_s(person)   # the plan's and the button's own estimate (rc-fix7: this line said "about 1 hour")
+    plan["voice_until"] = time.time() + tr
+    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} ({jobs.eta_words(tr)})"
          + (f". {plan['subject']['label']}" if (plan.get("subject") or {}).get("label") else ""))
     name = train_new_voice(job, person, control, push, subject=plan.get("subject"))
     v = get_voice(name)
@@ -700,7 +719,9 @@ def clips_missing(proj, subject: dict | None) -> str | None:
     if not ref.get("clip"):
         return f"no clean clips of {who} came through"
     if not any(p.reason == "other speaker" for p in proj.phrases):
-        return f"the clips of {who} had no other voices to test against"
+        from . import voicecheck
+        if not voicecheck.reader_phrases():   # (the Readers stand in for other speakers: rc-fix7)
+            return f"the clips of {who} had no other voices to test against"
     return None
 
 

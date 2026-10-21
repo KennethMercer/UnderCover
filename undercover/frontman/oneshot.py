@@ -305,6 +305,16 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
                                  name="voice-prefetch")
         early.start()
 
+    # The voice step's own estimate from the start (rc-fix7: the song step said "about 5 min" before a 2-hour training):
+    # the training when the plan trains, else the check; the one estimate the plan, the button and the countdown use
+    if not demo and not trained_ok and not (voice_choice or "").startswith("use:"):
+        try:
+            from ..doubleagent.service import check_estimate_s, train_estimate_s
+            job.stage_est["voice"] = (train_estimate_s(person) if prefer_train or voice_choice == "train"
+                                      else check_estimate_s(person, len(installed_for(person)) + 2))
+        except Exception:   # noqa: BLE001 - the stage's typical length, as before
+            pass
+
     # 1. song (a version like "acoustic" means a cover by someone else, so candidates are tried until one
     #    actually has singing in it)
     what = f"{style} version of “{song_q}”" if style else f"“{song_q}”"
@@ -401,6 +411,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
                                                       backing_voice="v", polish=True))["total"]
     except Exception:   # noqa: BLE001 - a minute, as before
         pass
+    job.stage_est["cover"] = plan.get("cover_s", 60.0)
+    # a training's own eta (epochs) is followed by adding the voice, checking it and the cover
+    job.after_eta_s = plan.get("cover_s", 60.0) + 60.0
 
     # 2. voice
     if early:

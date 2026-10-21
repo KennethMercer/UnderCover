@@ -419,6 +419,15 @@ class Trainer:
         planned_shown = planned_epochs if length == "auto" and not st.get("steps") and planned_epochs < max_epochs else None
         save_every = max(1, round(SAVE_STEPS / steps_per_epoch))
         patience = max(10, planned_epochs // 4)     # auto: past the planned budget, stop when the held-out loss stalls
+
+        def end_epoch(epoch: int) -> int:
+            """Where this run is expected to end, for its time left and its bar (rc-fix7: the time left ran to the cap,
+            6372 s at epoch 137 of about 141): a given length at its last epoch; an auto run at its planned epochs, or
+            past them where the stall rule stops it (patience epochs after its best so far), the cap at most."""
+            if planned_shown is None:
+                return max_epochs
+            best = st.get("best") or 0
+            return int(min(max_epochs, max(planned_epochs, best + patience, epoch)))
         st.update(state="training", steps_per_epoch=steps_per_epoch, error="")
         self._reprobe(st, sr)
         proj.save_train()
@@ -476,13 +485,14 @@ class Trainer:
                     else:
                         steps_run += 1
                     if bi % 5 == 0:
-                        left = max_epochs - epoch + 1 - (bi + 1) / len(batches)   # epochs still to run
+                        end = end_epoch(epoch)
+                        left = end - epoch + 1 - (bi + 1) / len(batches)   # epochs still to run, to the expected end
                         if st.get("sec_per_epoch") and epoch - epoch0 > 1:
                             eta = st["sec_per_epoch"] * left                   # recent epochs: no warm-up skew
                         else:
                             eta = train_eta(left * len(batches), steps_run, time.time() - warm, prior_step)
                         report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown,
-                               fraction=(epoch - 1 + (bi + 1) / len(batches)) / max_epochs, eta=eta,
+                               fraction=min(0.99, (epoch - 1 + (bi + 1) / len(batches)) / end), eta=eta,
                                sec_per_epoch=st.get("sec_per_epoch"))
                 if control.wants_out() and bi < len(batches) - 1:
                     epoch -= 1   # partial epoch: don't count it
@@ -524,8 +534,10 @@ class Trainer:
                         st["resume_step"] = epoch * steps_per_epoch
                     self._prune_saves()
                 proj.save_train()
-                report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown, fraction=epoch / max_epochs,
-                       eta=st["sec_per_epoch"] * (max_epochs - epoch), saved=saved, history=h,
+                end = end_epoch(epoch)
+                report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown,
+                       fraction=1.0 if epoch >= max_epochs else min(0.99, epoch / end),
+                       eta=st["sec_per_epoch"] * max(0, end - epoch), saved=saved, history=h,
                        sec_per_epoch=st["sec_per_epoch"])
                 # auto: stop once held-out loss hasn't improved for 100 epochs (after at least 150)
                 if length == "auto" and not st.get("steps") and epoch >= planned_epochs and st.get("best") and epoch - st["best"] >= patience:
