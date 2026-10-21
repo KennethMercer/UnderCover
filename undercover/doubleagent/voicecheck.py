@@ -164,6 +164,9 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
         return [], None, "speech"
     others = sorted([p for p in proj.phrases if p.reason == "other speaker" and 2.0 <= p.dur <= 8.0 and p.score < 0.2],
                     key=lambda p: -p.dur)
+    ref = ref / (np.linalg.norm(ref) + 1e-9)
+    if len(others) < MIN_OTHERS and (readers := reader_phrases()):   # (too few to pick from: none read for nothing)
+        return readers, ref, "readers"
     picked, total = [], 0.0
     used_sources: dict = {}
     for p in others:   # spread over sources and speakers
@@ -175,8 +178,7 @@ def test_phrases(proj, max_phrases: int = 8, max_seconds: float = 45.0):
         total += p.dur
         if len(picked) >= max_phrases or total >= max_seconds:
             break
-    ref = ref / (np.linalg.norm(ref) + 1e-9)
-    if len(picked) < MIN_OTHERS:
+    if len(picked) < MIN_OTHERS:   # (spread over sources, 3 each at most: still too few)
         readers = reader_phrases()
         if readers:
             return readers, ref, "readers"

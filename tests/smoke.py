@@ -3617,6 +3617,106 @@ def u_installer_downloads():
     return f"{len(rows)} files listed; every pin, model and add-on file matched; setup offline; the wizard downloads first"
 
 
+@check("the voice check always has other voices, its downloads wait in staging, and the training path says one time (rc-fix7, IA's examples: 'Freek-a-Leek as Obama' failed with 'no other voices to test against', left BananaBus223/Obama installed unchecked, and said 'about 1 hour' / 'about 5 min' / 6372 s at epoch 137 of 141 for a 2-hour training): fewer than 4 of the clips' own other speakers -> the Readers' 8 fixed phrases (made once, kept); a candidate waits in voices/.staging, joins the voices only when chosen (never over another), and is discarded only inside the staging folder; the job takes the one-shot's own estimate for its later stages; the trainer's time left runs to the expected end")
+def u_rcfix7():
+    import inspect
+    import numpy as np
+    from undercover.core import jobs, readers, voices as V
+    from undercover.doubleagent import service, trainer, voicecheck
+    from undercover.frontman import api as FA, oneshot
+    with isolated_data():
+        # 1. the Readers stand in when the clips have too few other speakers; their phrases are made once and kept
+        made = []
+        real = (readers.ready, readers.synth)
+        readers.ready = lambda: True
+        readers.synth = lambda text, reader, speed=1.0: (made.append(reader), np.full(48000, 0.1, np.float32))[1]
+        try:
+            first = voicecheck.reader_phrases()
+            again = voicecheck.reader_phrases()
+        finally:
+            readers.ready, readers.synth = real
+        assert len(first) == 8 and len(made) == 8 and len(again) == 8, (len(first), made)   # (the second time: from the file)
+        assert sorted(made) == sorted(r for r, _ in voicecheck.READER_LINES) and len({r[:2] for r in made}) == 4, made
+
+        class Ph:
+            def __init__(self, i, reason):
+                self.id, self.reason, self.dur, self.score, self.source = f"p{i}", reason, 4.0, 0.1, f"s{i % 2}"
+
+        class Proj:
+            person = name = "nobody"
+            reference = {"cluster": 0, "clip": "x"}
+            sources, mode = [], "speaking"   # a person (not a character), their speeches
+            phrases = [Ph(i, "target") for i in range(6)] + [Ph(9, "other speaker")]   # one other speaker: too few
+
+            def load_embeddings(self):
+                return {"speaker:0": np.ones(4, np.float32)}
+
+            def clip_path(self, pid):
+                return Path(__file__)   # (never read: the Readers' phrases are used)
+        real_rp = voicecheck.reader_phrases
+        voicecheck.reader_phrases = lambda: [np.zeros(32000, np.float32)] * 8
+        try:
+            ph, ref, kind = voicecheck.test_phrases(Proj())
+            assert kind == "readers" and len(ph) == 8 and abs(float(np.linalg.norm(ref)) - 1) < 1e-6, (kind, len(ph))
+            assert service.clips_missing(Proj(), None) is None, "the clips' lack of other speakers still stops the check"
+            voicecheck.reader_phrases = lambda: []   # no Readers: said as before, never a silent pass
+            Proj.phrases = [Ph(i, "target") for i in range(6)]
+            assert "no other voices to test against" in service.clips_missing(Proj(), None)
+        finally:
+            voicecheck.reader_phrases = real_rp
+        src = inspect.getsource(service.reference_clips)
+        assert "readers or any(x.reason == \"other speaker\"" in src, "reference_clips still waits for other speakers"
+        # 2. a candidate waits in staging: not listed; promoted only when chosen, never over a voice; discarded only there
+        st = V.staging_dir() / "obama"
+        st.mkdir(parents=True)
+        (st / "model.pth").write_bytes(b"m")
+        (st / "meta.json").write_text(json.dumps({"name": "obama", "dir": str(st), "pth": str(st / "model.pth"), "version": "v2",
+                                                 "sr": 40000, "f0": True, "extra": {}}), encoding="utf-8")
+        assert [v.name for v in V.list_voices()] == [] and V.staged_voice("obama").pth == st / "model.pth"
+        _voice_dir("obama", {})   # a voice of that name is there already: the candidate takes the next free name
+        got = V.promote("obama")
+        assert got.name == "obama-2" and not st.exists() and (V.voices_dir() / "obama-2" / "model.pth").is_file(), got
+        assert {v.name for v in V.list_voices()} == {"obama", "obama-2"} and got.pth == V.voices_dir() / "obama-2" / "model.pth"
+        for n in ("a", "b"):
+            (V.staging_dir() / n).mkdir(parents=True)
+            (V.staging_dir() / n / "model.pth").write_bytes(b"m")
+        V.discard_staged("a")
+        assert not (V.staging_dir() / "a").exists() and (V.staging_dir() / "b").exists()
+        V.discard_staged()   # (what a stopped check left)
+        assert not any(V.staging_dir().iterdir()) and (V.voices_dir() / "obama").is_dir() and (V.voices_dir() / "obama-2").is_dir()
+        rv = inspect.getsource(service.resolve_voice)
+        assert "V.download_staged(r," in rv and "download_and_install" not in rv and "remove_voice" not in rv
+        assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True)"), "a candidate is checked before it's tracked"
+        assert "V.discard_staged()   # what a check that stopped" in rv and 'good[0]["name"] = V.promote(good[0]["name"]).name' in rv
+    # 3. one estimate: the page's words; the plan carries the training's; the job uses the one-shot's own stage estimates
+    assert [jobs.eta_words(x) for x in (20, 300, 3660, 8180, 10800)] == [
+        "under a minute", "about 5 min", "about 61 min", "about 2\u00bd hours", "about 3 hours"]
+    assert "jobs.eta_words(tr)" in rv and "(about 1 hour)\"" not in inspect.getsource(service)
+    assert 'out["train_s"] = round(service.train_estimate_s(person))' in inspect.getsource(FA._auto_plan)
+    assert "if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s });" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    run = inspect.getsource(oneshot.run)
+    assert 'job.stage_est["voice"] = (train_estimate_s(person) if prefer_train or voice_choice == "train"' in run
+    assert 'job.after_eta_s = plan.get("cover_s", 60.0) + 60.0' in run
+    # the job's countdown during the song step: past runs say a voice step takes 5 min (quick checks); this one-shot's
+    # own estimate says 2 hours of training, and that's what the countdown carries
+    saved = jobs._ETA_FILE
+    jobs._ETA_FILE = {"auto": {"stages": {"song": [70.0] * 3, "voice": [300.0] * 3, "cover": [120.0] * 3}, "total": [490.0] * 3}}
+    try:
+        def song_left(est):
+            j = jobs.Job("auto")
+            j.stage_est = est
+            j.push(stage="song", frac=0.0, message="x")
+            return [e.get("total_left") for e in j.events if e.get("total_left") is not None][-1]
+        old, new = song_left({}), song_left({"voice": 7200.0, "cover": 120.0})
+    finally:
+        jobs._ETA_FILE = saved
+    assert old < 600 and new >= 7320, (old, new)   # was "about 5 min"; now the song + the training + the cover
+    tsrc = inspect.getsource(trainer.Trainer.run)
+    assert "left = end - epoch + 1 - (bi + 1) / len(batches)" in tsrc and "eta=st[\"sec_per_epoch\"] * max(0, end - epoch)" in tsrc
+    assert "return int(min(max_epochs, max(planned_epochs, best + patience, epoch)))" in tsrc
+    return "Readers stand in (8 phrases, made once); staging: promote never over a voice, discard only there; one estimate"
+
+
 @check("the first start's model download has a moving bar (MasterPlan for the First assignment: its bar only slid): the status carries models_progress (0-1) and models_mb while the separation and conversion models download, from the files and their .part against the pinned sizes; a short file counts as missing")
 def u_models_progress():
     from undercover.core import setup_models as S
@@ -9116,7 +9216,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
