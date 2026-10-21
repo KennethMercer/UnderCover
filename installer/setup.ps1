@@ -57,6 +57,10 @@ param(
     [switch]$Repair,    # check against the install record and fix only what's wrong (keeps files and settings)
     [switch]$Offline    # the installer downloaded everything already: nothing goes online
 )
+# Started from PowerShell 7 (a terminal, or anything started from one), Windows PowerShell inherits PowerShell 7's
+# module path and can't load its own modules: Get-FileHash, Expand-Archive, ConvertFrom-Json are "not recognized". Its
+# own path, then (only in Windows PowerShell: a PowerShell 7 session that dot-sources this keeps its own).
+if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') }
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is ~10x slower with the progress bar

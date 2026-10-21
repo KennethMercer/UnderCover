@@ -3455,6 +3455,12 @@ def u_installer_quiet():
     # A big file's SHA-256 is now checked by a hidden PowerShell before it is moved into place (a failure deletes it and
     # the retry fetches it again), and the check proves it with a big file of the right size and the wrong bytes
     assert "if Big then InnoSha := '' else InnoSha := TabField(Line, 3);" in iss and "Big := Bytes >= 67108864;" in iss
+    place = iss[iss.index("function PlaceFile("):iss.index("function FetchFile(")]
+    assert "Shell := CreateOleObject('WScript.Shell');" in place and "Exec(" not in place, "Inno's Exec disables the wizard while it runs"
+    # started from PowerShell 7, Windows PowerShell inherits its module path and can't load Get-FileHash / Expand-Archive
+    assert "GetEnvironmentVariable(' +" in place and "''PSModulePath'', ''Machine'')" in place
+    for f in ("setup.ps1", "space.ps1", "detect_gpu.ps1"):
+        assert "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') }" in (inst / f).read_text(encoding="utf-8-sig"), f
     assert "throw ''its SHA-256 is wrong''" in iss and "Remove-Item -LiteralPath $f -Force" in iss and "Get-FileHash -Algorithm SHA256 -LiteralPath $f" in iss
     assert "Why := PlaceFile(ExpandConstant('{tmp}\\') + Name, Dest, Bytes, CheckSha);" in iss
     assert '"/BADURL=$badUrl"' in e2e and "a big file with the wrong bytes wasn't caught by its SHA-256 and fetched again" in e2e

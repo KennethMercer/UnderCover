@@ -790,8 +790,9 @@ function PlaceFile(Src, Dest: String; Bytes: Int64; Sha: String): String;
 var
   Part, Marker: String;
   Said: AnsiString;
-  Code, Waited: Integer;
+  Waited: Integer;
   Have: Int64;
+  Shell: Variant;
 begin
   Result := '';
   ForceDirectories(ExtractFileDir(Dest));
@@ -805,15 +806,22 @@ begin
     DeleteFile(Marker);
     DeleteFile(Marker + '.part');
     DeleteFile(Part);
-    // (its answer is written whole to moved.txt.part, then named moved.txt: a read never sees half of it)
-    if not Exec('powershell.exe', '-NoProfile -NonInteractive -Command "$m = ' + PSQuote(Marker) + '; $f = ' + PSQuote(Src) +
+    // (its answer is written whole to moved.txt.part, then named moved.txt: a read never sees half of it). Started
+    // through WScript.Shell, not Exec: Inno disables the wizard for as long as its Exec runs, even one that doesn't wait.
+    try
+      Shell := CreateOleObject('WScript.Shell');
+      // (its own module path first: an installer started from PowerShell 7 hands it PowerShell 7's)
+      Shell.Run('powershell.exe -NoProfile -NonInteractive -Command "$env:PSModulePath = [Environment]::GetEnvironmentVariable(' +
+        '''PSModulePath'', ''Machine''); $m = ' + PSQuote(Marker) + '; $f = ' + PSQuote(Src) +
         '; try { $n = (Get-Item -LiteralPath $f).Length; if ($n -ne ' + IntToStr(Bytes) + ') { throw (''it came to '' + $n + '' of ' +
         IntToStr(Bytes) + ' bytes'') }; if ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() -ne ''' + Sha +
         ''') { throw ''its SHA-256 is wrong'' }; Move-Item -LiteralPath $f -Destination ' + PSQuote(Part) +
         ' -Force -ErrorAction Stop; $s = ''ok'' } catch { $s = $_.Exception.Message; Remove-Item -LiteralPath $f -Force ' +
         '-ErrorAction SilentlyContinue }; Set-Content -LiteralPath ($m + ''.part'') $s; Move-Item -LiteralPath ($m + ''.part'') ' +
-        '-Destination $m -Force"', '', SW_HIDE, ewNoWait, Code) then begin
-      Result := SysErrorMessage(Code);
+        '-Destination $m -Force"', 0, False);   // (0: hidden; False: don't wait)
+    except
+      Result := 'its check couldn''t start (' + GetExceptionMessage + ')';
+      DeleteFile(Src);
       Exit;
     end;
     Waited := 0;
