@@ -7755,7 +7755,7 @@ def u_page_rules():
     assert 'class="search sfield"' in voice_card and 'id="q-go" type="button">Search</button>' in voice_card and voice_card.count('href="#g-search"') == 1 and song_card.count('href="#g-search"') == 1, "the voice card's search isn't a search field"
     assert '<symbol id="g-search"' in ix and ".sfield {" in css and '$("#q-go").onclick = voiceSearchNow' in app, "the search fields lost their icon, border or button"
     # Low profile (the user's mockup, approved 2026-10-24): the control in the top bar, hidden without the backend's status field; the numbers behind the
-    # Deep "▾"; the strip's words; the game question's first answer; the hooks in ARCHITECTURE "UI"; a What's new entry
+    # Deep "▾"; the strip's words; the game question's first answer; the hooks in ARCHITECTURE "UI" (What's new says it with the 1.0.2 release, not before)
     lpj = (web / "lowprofile.js").read_text(encoding="utf-8")
     assert '<script src="/static/lowprofile.js">' in ix and 'id="lp-chip" hidden' in ix and 'id="lp-pop" hidden' in ix and 'id="gp-low" type="button" hidden' in ix and '<symbol id="g-lowprofile"' in ix, "the Low profile control lost its markup"
     assert 'id="lp-more"' in ix and 'data-deep>▾' in ix and 'id="set-lowprofile' not in ix, "the numbers must live behind the Deep ▾ only (no Settings row)"
@@ -7763,8 +7763,6 @@ def u_page_rules():
     assert '["gp-low", "low"]' in app and "Low profile while you play?" in app and "lowProfileOn()" in work and "Working at a low profile" in work, "the game question or the strip lost Low profile"
     arch = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert "POST /api/lowprofile" in arch and "`low_profile`" in arch, "ARCHITECTURE's UI section doesn't carry the Low profile hooks"
-    wn_lp = next((e for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] if e["title"] == "Low profile"), None)   # below the release's entry (the top is the version's)
-    assert wn_lp and all("Low profile" in l or "Deep Cover" in l for l in wn_lp["lines"]), "What's new doesn't say Low profile"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
