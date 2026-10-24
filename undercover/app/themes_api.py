@@ -1,4 +1,4 @@
-"""The theme routes (phase 14; core/themes.py has the checks, docs/design/themes.md the contract):
+"""The theme routes (phase 14; core/themes.py has the checks, docs/THEMES.md the contract):
 
     GET    /api/themes                       {themes: [{id, name, author, licence, version, modes, based_on, fonts, shipped,
                                              css, preview, ok, why}]} (shipped + library)

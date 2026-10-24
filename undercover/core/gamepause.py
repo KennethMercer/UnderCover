@@ -1,4 +1,4 @@
-"""The game pause (ARCHITECTURE ideas 2; plan docs/research/gamepause-plan.md): when a full-screen game starts while
+"""The game pause (ARCHITECTURE "UI": the game pause): when a full-screen game starts while
 UnderCover has GPU work, ask "Pause UnderCover while you play?" (Pause / Keep both running / Don't ask for this game),
 because some games leave enough GPU for both. Asked, never assumed: no answer changes nothing.
 

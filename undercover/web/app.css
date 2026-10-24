@@ -1,5 +1,5 @@
 /* Layout: one centered console column: song + voice side by side, one big Convert, progress, result, history.
-   Dark is the default; [data-theme=light] switches. The look ("Case File", phase 5: docs/design/look.md) is these tokens
+   Dark is the default; [data-theme=light] switches. The look ("Case File", phase 5: the maintainers' design notes) is these tokens
    plus look.css, which restyles the components and stays out of the WinAmp skin. */
 
 /* bundled fonts (SIL OFL 1.1, licences in fonts/): the page works offline */

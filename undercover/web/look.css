@@ -1,4 +1,4 @@
-/* The look, phase 5 ("Case File", docs/design/look.md, mockups docs/mockups/look_system.html). Tokens live in app.css;
+/* The look, phase 5 ("Case File", the maintainers' design notes, look, the maintainers' mockup, look_system). Tokens live in app.css;
    this layer restyles the components on top of app.css / shell.css / speakeasy.css:
    - tone instead of borders: surfaces are told apart by value, hairlines only between list rows;
    - the module's colour is the air in the room: page, panels and lines are mixed from its deep tone (--deep);

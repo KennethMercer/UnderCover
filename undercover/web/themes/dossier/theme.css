@@ -1,4 +1,4 @@
-/* Dossier: The file on the desk: kraft and sepia, the warmest grading, corners a step squarer. A theme is tokens only (docs/design/themes.md). */
+/* Dossier: The file on the desk: kraft and sepia, the warmest grading, corners a step squarer. A theme is tokens only (docs/THEMES.md). */
 :root[data-uc-theme="dossier"] {
   --base: #0e0b08; --panel-base: #171310; --panel-2-base: #1f1a16; --panel-3-base: #29231d; --line-base: #2c2620;
   --fg: #efe6d6; --muted: #9e9178; --accent-ink: #0e0b08;

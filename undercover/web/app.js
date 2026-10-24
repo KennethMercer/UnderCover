@@ -19,7 +19,7 @@ const disarm = el => { delete el.dataset.armedAt; };
 const armedFor = el => { const t = +el.dataset.armedAt; return t > 0 && Date.now() - t >= CONFIRM_MS; };   // true only for a deliberate second click
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const paceWord = x => x.pace ? x.pace[0].toUpperCase() + x.pace.slice(1) : `${(+x.speed).toFixed(1)}×`;
-// ------------------------------------------------------------ the line under a name, as chips (rc-ui1: the user's option A, docs/mockups/meta-options.html)
+// ------------------------------------------------------------ the line under a name, as chips (rc-ui1: the user's option A, the maintainers' mockup, meta-options)
 // facts([...]) -> one soft pill per fact, in plain words. A fact is a string, or {t, html, muted, deep, title, cls}: muted for the least important one, cls a state (ok / warn / bad),
 // deep for Deep Cover's (the key, the exact time, the sample rate, LUFS). Empty facts drop out; nothing at all gives "".
 function facts(list) {
@@ -50,7 +50,7 @@ const store = {
 // DoubleAgent's first Train press.
 const PERSON_WARN = "For personal use: don't pass the result off as the real person.";
 const personWarned = () => !!store.get("uc-person-warned", false);
-// Deep Cover (ARCHITECTURE "UI backlog"): expert-only elements carry data-deep and stay hidden unless body.deep. The
+// Deep Cover (ARCHITECTURE "UI"): expert-only elements carry data-deep and stay hidden unless body.deep. The
 // switch is remembered (localStorage uc-deep); a Settings room will carry it too.
 // The quick switch in the top bar (#deep-toggle, phase 5) and typing "deepcover" both flip it.
 function setDeep(on) {
@@ -67,7 +67,7 @@ $("#deep-first-ok")?.addEventListener("click", () => { store.set("uc-deep-seen",
 $("#set-deep")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
 let deepTyped = "";
 
-// Voice display names (ARCHITECTURE "UI backlog": voice display names). Wherever a voice is listed it shows the person's
+// Voice display names (ARCHITECTURE "UI": voice display names). Wherever a voice is listed it shows the person's
 // name, never its folder id; voices trained here carry a small voiceprint (CSS on .vname[data-trained="1"]). Every voice
 // list the page loads goes through noteVoices(); the backend adds `display` and `trained` to the voice APIs, and until
 // it does the id shows and the "-uc" ending marks a voice trained in UnderCover.

@@ -360,7 +360,7 @@ def unavailable_note(person: str, sources) -> str:
     return f"{sum(why.values())} of the {len(tried)} videos of {person} UnderCover tried couldn't be downloaded ({n}: {words})"
 
 
-# Other sites yt-dlp can search, for when YouTube can't supply enough (ARCHITECTURE "not one site"): a fallback only,
+# Other sites yt-dlp can search, for when YouTube can't supply enough (ARCHITECTURE "Resilience and self-healing": not one site): a fallback only,
 # and a find must name the subject in its title (these searches are loose: SoundCloud returns any "voice lines")
 OTHER_SITES = [("scsearch", "SoundCloud"), ("nicosearch", "Niconico"), ("bilisearch", "Bilibili")]
 

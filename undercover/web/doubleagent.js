@@ -1,5 +1,5 @@
 "use strict";
-// DoubleAgent's page (the approved redesign, docs/mockups/doubleagent2.html): the line to start a voice (Train the voice /
+// DoubleAgent's page (the approved redesign, the maintainers' mockup, doubleagent2): the line to start a voice (Train the voice /
 // Train tonight instead), the one voice in the works, the card after training, and "Your voices": each with its likeness
 // in a word and its dot (the server's likeness_word: fair / good / great), the trained-here and can-speak marks, and
 // Listen / Use in FrontMan / Improve tonight / Let it speak. Numbers are Deep Cover; so is the step-by-step path (train.js).

@@ -1,4 +1,4 @@
-/* Carbon: The darkroom: near-monochrome, each module a trace of its colour, the lamp dimmer. A theme is tokens only (docs/design/themes.md). */
+/* Carbon: The darkroom: near-monochrome, each module a trace of its colour, the lamp dimmer. A theme is tokens only (docs/THEMES.md). */
 :root[data-uc-theme="carbon"] {
   --base: #0b0b0b; --panel-base: #131313; --panel-2-base: #1a1a1a; --panel-3-base: #232323; --line-base: #262626;
   --fg: #e9e9e7; --muted: #929290; --accent-ink: #0b0b0b;

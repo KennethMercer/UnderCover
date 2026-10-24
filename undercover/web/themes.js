@@ -1,5 +1,5 @@
 "use strict";
-// Themes (docs/design/themes.md): a theme is a grading of the look plus its type, tokens only. index.html's head applies
+// Themes (docs/THEMES.md): a theme is a grading of the look plus its type, tokens only. index.html's head applies
 // the remembered one before first paint (html[data-uc-theme] + the #uc-theme-css link); this file lists the installed
 // themes in SafeHouse's Settings room (Deep Cover), imports and exports them as one file (Name.uctheme), and holds the
 // maker: pick a few things, see the page change, save, share. The maker works out the rest (deep tones, the light mode)
@@ -328,7 +328,7 @@ async function saveMaker(share) {
   const sel = `:root[data-uc-theme="${id}"]`;
   const fontCss = mk.fonts.map(f => `@font-face { font-family: "${f.family}"; src: url("fonts/${f.file}") format("woff2"); font-weight: 100 900; font-display: swap; }\n`).join("");
   const said = s => s.replace(/\*\/|\/\*/g, "");   // a name can't end the comment early
-  const css = `/* ${said(name)}${mk.author.trim() ? ` by ${said(mk.author.trim())}` : ""}: made in UnderCover's theme maker, from ${mk.from}. Tokens only (docs/design/themes.md). */\n` +
+  const css = `/* ${said(name)}${mk.author.trim() ? ` by ${said(mk.author.trim())}` : ""}: made in UnderCover's theme maker, from ${mk.from}. Tokens only (docs/THEMES.md). */\n` +
     fontCss + cssBlock(sel, mk.dark) + cssBlock(`${sel}[data-theme="light"]`, mk.light, true);
   const json = { id, name, author: mk.author.trim() || "someone", licence: "free to share", version: "1.0", modes: ["dark", "light"],
                  based_on: mk.from, fonts: [famOf(mk.dark["--body"]), famOf(mk.dark["--mono"])].filter(Boolean) };

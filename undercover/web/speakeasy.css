@@ -1,4 +1,4 @@
-/* SpeakEasy (docs/mockups/speakeasy.html): text, voice, how, Generate, Now speaking, Recent. Accent from body[data-module]. */
+/* SpeakEasy (the maintainers' mockup, speakeasy): text, voice, how, Generate, Now speaking, Recent. Accent from body[data-module]. */
 #view-speakeasy .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
 #view-speakeasy .spread { justify-content: space-between; }
 #view-speakeasy h2 { margin: 0; }

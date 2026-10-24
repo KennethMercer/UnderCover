@@ -1,5 +1,5 @@
 """Improve that improves (phase 26): the frozen test per voice, the score as a vector, the offer bar, the recipe and the
-budget, and the source gate. Built from the voice lab's research (docs/research/phase26-improve.md, R1-R8), whose ground
+budget, and the source gate. Built from the voice lab's research (the maintainers' notes, phase26-improve, R1-R8), whose ground
 truth is eleven blind verdicts.
 
 The user's words: "re-training shouldn't be able to make it worse like that". So:

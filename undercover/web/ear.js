@@ -1,5 +1,5 @@
-// The ear everywhere (ARCHITECTURE "Ideas from MasterPlan" 4; mockup docs/mockups/thumbs.html, the user's answers of
-// 2026-10-12; the voice lab's contract in docs/design/thumbs-contract.md). A thumb on every cover and speech: under
+// The ear everywhere (ARCHITECTURE "UI"; the maintainers' mockup, thumbs, the user's answers of
+// 2026-10-12; the voice lab's contract in the maintainers' notes, thumbs contract). A thumb on every cover and speech: under
 // FrontMan's and SpeakEasy's players and in SafeHouse's detail pane; the thumb you gave shows as a small mark in lists.
 // A thumbs down asks why (optional chips) and offers one fix when its reason has one. Liked voices rise in FrontMan's
 // voice list. "Your ear" in SafeHouse's Settings says what it's for and forgets on request. Nothing changes on its own.

@@ -1,8 +1,8 @@
 """DoubleAgent's overnight queue items: "improve a voice" and "train a new voice" (the queue itself is core.worklist).
 
-Improving a voice adds singing (the person's album tracks first) or more speech, re-checks every clip, retrains from
-scratch, and replaces the installed voice only if the new one measures better on the same likeness test. Also the
-pickers for the queue: candidates (voices that can be improved) and lookup (names for a new voice).
+Improving a voice adds singing (the person's album tracks first) or more speech, re-checks every clip, refines or
+retrains it (doubleagent/frozen.py), and offers the result beside the current voice only when it measures better on
+the person's own lines; the ear decides (doubleagent/improved.py). Also the pickers for the queue: candidates (voices that can be improved) and lookup (names for a new voice).
 """
 import json
 

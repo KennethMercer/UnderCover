@@ -1,4 +1,4 @@
-/* Midnight: The city at 3 am: a blue-black air, the four colours cooled a step. A theme is tokens only (docs/design/themes.md). */
+/* Midnight: The city at 3 am: a blue-black air, the four colours cooled a step. A theme is tokens only (docs/THEMES.md). */
 :root[data-uc-theme="midnight"] {
   --base: #07080c; --panel-base: #0f1116; --panel-2-base: #161a21; --panel-3-base: #1f242c; --line-base: #22272f;
   --fg: #e6e9ef; --muted: #8e96a3; --accent-ink: #07080c;

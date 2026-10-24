@@ -2795,7 +2795,7 @@ def u_layout():
     top = sorted({f.split("/")[0] for f in files})
     assert top == [".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "NOTICE", "README.md", "docs", "installer", "scripts", "tests",
                    "undercover"], top
-    assert sorted(f for f in files if f.startswith("docs/")) == ["docs/MASTERPLAN.md"]
+    assert sorted(f for f in files if f.startswith("docs/")) == ["docs/ARCHITECTURE.md", "docs/MASTERPLAN.md", "docs/THEMES.md"]
     # layout2 (user, 2026-10-17: "do it"): the tests and what they need in tests/, the things you run in scripts/
     assert sorted(f for f in files if f.startswith("tests/")) == ["tests/fake_tailscale.py", "tests/installer_e2e.ps1", "tests/smoke.py"]   # (installer_e2e: the installer's release check)
     assert sorted(f for f in files if f.startswith("scripts/")) == ["scripts/UnderCover.bat", "scripts/check_env.py", "scripts/cover.bat",
@@ -7717,7 +7717,7 @@ def u_page_rules():
     assert not re.search(r"\bon C:|\bC: drive|drive C\b", ix), "the page assumes UnderCover is on C: again"
     # rc-page13 (the user's pick, after Internal Affairs proved them on a fresh library): FrontMan's three examples, in this order
     assert re.findall(r'<button type="button">([^<]+)</button>', ix[ix.index('id="os-ex"'):].split("</div>")[0]) == ["Pink Pony Club as Plankton", "Freek-a-Leek as Obama", "Hello by Adele as Peter Griffin"], "FrontMan's examples aren't the three the user picked"
-    # rc-ui1 (the user's option A, docs/mockups/meta-options.html): the line under a name is chips (facts()), in plain words, Deep's facts as data-deep chips;
+    # rc-ui1 (the user's option A, the maintainers' mockup, meta-options): the line under a name is chips (facts()), in plain words, Deep's facts as data-deep chips;
     # FrontMan's two "Set it up yourself" cards open on a search field (icon, border, Search button), the song's above the chosen song
     assert "function facts(list)" in app and "const countWord" in app and "const sourceWord" in app and "function dayWord" in app and ".fact {" in css and ".fact.muted" in css, "the chips helper or their look is gone"
     lib_js = (web / "library.js").read_text(encoding="utf-8")

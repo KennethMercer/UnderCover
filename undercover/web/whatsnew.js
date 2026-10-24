@@ -1,4 +1,4 @@
-// What's new (ARCHITECTURE "Ideas from MasterPlan" 6): after an update, a short note says what changed. The notes live in
+// What's new (ARCHITECTURE "UI"): after an update, a short note says what changed. The notes live in
 // whatsnew.json (newest first; whoever merges a change the user will notice adds one). This browser remembers the newest
 // note it showed (localStorage uc-whatsnew-seen); anything newer shows once in the card under the top bar (#wn), and
 // SafeHouse's System room lists them all (#sys-news). A copy with no covers yet starts from here, quietly: nothing is "new" to someone

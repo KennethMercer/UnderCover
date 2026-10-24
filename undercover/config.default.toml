@@ -122,7 +122,7 @@ holdout_phrases = 3              # phrases kept out of training for the loss cha
 [cadence]
 # SpeakEasy reads with the person's own cadence (phase 4): a cloning text-to-speech engine, given a short clip of the
 # person, reads the text; their RVC voice goes on top. Engines: "chatterbox-turbo" (MIT; the default since phase 23: cleaner
-# and about twice as fast as Chatterbox, docs/research/phase23-outcome.md), "chatterbox" (MIT, the fallback while its
+# and about twice as fast as Chatterbox, the maintainers' notes, phase23-outcome), "chatterbox" (MIT, the fallback while its
 # files are there) or an add-on (python -m undercover.addons): "f5" (CC-BY-NC, ~3-4x faster). A voice can be kept on one
 # engine by the user's ear: the pack's engine_pin.
 engine = "chatterbox-turbo"

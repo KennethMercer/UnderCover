@@ -1,4 +1,4 @@
-"""Vaulting: a quiet, incremental backup of what can't be downloaded again, on another drive (docs/research/vaulting-plan.md;
+"""Vaulting: a quiet, incremental backup of what can't be downloaded again, on another drive (the maintainers' notes, vaulting-plan;
 the user's answers 2026-10-12: "What matters" by default, voices trained here only, after new keepers plus daily while
 the GPU queue is idle, no encryption, compression instead).
 

@@ -6,7 +6,7 @@ Ops: ping | load {engine} | tts {engine, text, ref, ref_text, out, seed, opts} |
 | free {what} | quit. Replies on the original stdout; everything libraries print goes to stderr (the log).
 Exits when stdin closes (the server quit or crashed), so it never outlives UnderCover.
 
-The import stand-ins phase 3 needed on AMD's Windows torch live here only (docs/research/cadence.md, "Facts"):
+The import stand-ins phase 3 needed on AMD's Windows torch live here only (the maintainers' notes, cadence, "Facts"):
 no torch.distributed (encodec names ReduceOp), torchaudio.load needs torchcodec (read with soundfile instead),
 setuptools 81+ has no pkg_resources (Chatterbox's watermarker), F5's package imports its trainer.
 """

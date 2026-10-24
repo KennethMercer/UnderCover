@@ -1,5 +1,5 @@
 // Vaulting, the page (a section of SafeHouse's Storage room; the backend is core/vault.py + app/vault_api.py, contract in
-// docs/handoffs/vaulting.md). Off until the user picks a drive. Then: where, the last copy, Vault now, what's in the vault
+// the maintainers' notes, vaulting). Off until the user picks a drive. Then: where, the last copy, Vault now, what's in the vault
 // (the basic view lists only what's missing or changed here) and Restore: missing things come back; a changed one asks
 // Keep both / Replace (the current one is vaulted first) / Cancel. Deep Cover: an older copy, the sizes. PC-only actions
 // carry data-pc (a phone sees the state). Uses helpers from app.js ($, $$, esc, api, showError, gb, voiceDisplay, store,
