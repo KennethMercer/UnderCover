@@ -3,7 +3,7 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## 1.0.1
+## 1.0.1 (2026-10-24)
 
 **Licence** (licence, v101)
 - UnderCover is licensed under the GNU Affero General Public License, version 3 or later (LICENSE, NOTICE,
