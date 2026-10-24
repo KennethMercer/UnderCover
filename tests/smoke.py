@@ -2793,7 +2793,7 @@ def u_layout():
     if not files:
         return "not a git checkout: skipped"
     top = sorted({f.split("/")[0] for f in files})
-    assert top == [".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "NOTICE", "README.md", "docs", "installer", "scripts", "tests",
+    assert top == [".github", ".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "NOTICE", "README.md", "docs", "installer", "scripts", "tests",
                    "undercover"], top
     assert sorted(f for f in files if f.startswith("docs/")) == ["docs/ARCHITECTURE.md", "docs/MASTERPLAN.md", "docs/THEMES.md"]
     # layout2 (user, 2026-10-17: "do it"): the tests and what they need in tests/, the things you run in scripts/
