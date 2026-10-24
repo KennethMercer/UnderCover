@@ -41,5 +41,6 @@
    "source": "Kokoro am_michael (Apache-2.0), synthetic"
   }
  },
- "display": "Agent Smoke"
+ "display": "Agent Smoke",
+ "licence": "CC0 1.0 (public domain): see ../../sample/LICENSE.txt"
 }

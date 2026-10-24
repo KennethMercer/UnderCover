@@ -3,6 +3,11 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## Unreleased
+
+- UnderCover is licensed under the GNU Affero General Public License, version 3 or later (LICENSE, NOTICE,
+  CONTRIBUTING.md). "Hold On" and Agent Smoke are public domain (CC0 1.0).
+
 ## 1.0.0 (2026-10-24)
 
 **An installer that does it all up front** (rc-fix6, rc-fix8, rc-polish1)

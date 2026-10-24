@@ -43,7 +43,7 @@ which you switch on from the top bar.
 4. Start UnderCover from the Start menu. It runs in the background with an icon near the clock and opens in your
    browser at `http://127.0.0.1:7860`. To quit, use the icon near the clock, or SafeHouse's System room.
 
-Step-by-step instructions are in [installer/FRIENDS.md](installer/FRIENDS.md). To run from a source checkout, use
+Step-by-step instructions are in [installer/GUIDE.md](installer/GUIDE.md). To run from a source checkout, use
 `powershell -ExecutionPolicy Bypass -File installer\setup.ps1` and then `scripts\UnderCover.bat`.
 
 To update, run a newer installer. It installs over the old one in the same folder and keeps your files and settings.
@@ -60,7 +60,7 @@ command-line cover tool `cover.bat` and the GPU check), `tests/` (`python tests/
 ## First run
 
 Type a song and a voice into FrontMan, such as "Pink Pony Club as Plankton", and press Make it. If you don't have the voice yet, UnderCover first finds and checks one, or trains it, and the plan says how long before you press. A song's first cover also takes longer than the next ones, because UnderCover separates the song once and keeps the result. UnderCover also
-comes with a short excerpt of the song *Hold On*, included with permission, and a demo voice, Agent Smoke, made for
+comes with a short excerpt of the song *Hold On*, which is public domain, and a demo voice, Agent Smoke, made for
 UnderCover and not based on a real person.
 
 You can use UnderCover from your phone on your home Wi-Fi. Turn it on in SafeHouse's Settings room and pair the phone
@@ -91,3 +91,7 @@ The Start menu's Repair UnderCover checks the installed Python, tools and AI mod
 what is wrong, without opening the app. Your voices, covers and settings are not affected.
 
 The history of changes is in [CHANGELOG.md](CHANGELOG.md).
+
+## Licence
+
+UnderCover is free software under the GNU Affero General Public License, version 3 or later: you may use, change and share it, and anyone who shares a changed version, or lets other people use one over a network, must offer them its source under the same licence. The text is in [LICENSE](LICENSE); [NOTICE](NOTICE) credits the projects and models UnderCover is built on and says what the licence does not cover. The AI models it downloads are under their publishers' terms, a voice carries the terms of whoever made it, and the names UnderCover, FrontMan, DoubleAgent, SpeakEasy, SafeHouse and Deep Cover identify this project. The song *Hold On* and the demo voice Agent Smoke are public domain (CC0). [CONTRIBUTING.md](CONTRIBUTING.md) has the house rules.

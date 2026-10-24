@@ -2606,7 +2606,7 @@ def u_version():
     assert 'undercover\\VERSION' in iss and "FileRead(" in iss, "the installer doesn't read undercover\\VERSION"
     assert not re.search(r'#define\s+AppVersion\s+"', iss), "the installer writes its own version again"
     assert "undercover\\VERSION" in (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
-    for doc in ("installer/FRIENDS.md", "README.md"):
+    for doc in ("installer/GUIDE.md", "README.md"):
         assert f"UnderCover-Setup-{v}.exe" in (ROOT / doc).read_text(encoding="utf-8"), f"{doc} names another installer"
     # no other file writes the app's version as a literal (the System room reads about.version from the Doctor's report)
     for f in [ROOT / "undercover" / "core" / "about.py", ROOT / "undercover" / "core" / "manifest.py", ROOT / "undercover" / "core" / "diagnostics.py",
@@ -2793,11 +2793,11 @@ def u_layout():
     if not files:
         return "not a git checkout: skipped"
     top = sorted({f.split("/")[0] for f in files})
-    assert top == [".gitignore", "CHANGELOG.md", "README.md", "docs", "installer", "scripts", "tests", "undercover"], top
+    assert top == [".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "NOTICE", "README.md", "docs", "installer", "scripts", "tests",
+                   "undercover"], top
     assert sorted(f for f in files if f.startswith("docs/")) == ["docs/MASTERPLAN.md"]
     # layout2 (user, 2026-10-17: "do it"): the tests and what they need in tests/, the things you run in scripts/
-    assert sorted(f for f in files if f.startswith("tests/")) == ["tests/fake_tailscale.py", "tests/golden.py", "tests/installer_e2e.ps1",
-                                                                  "tests/smoke.py"]   # (installer_e2e: the installer's release check)
+    assert sorted(f for f in files if f.startswith("tests/")) == ["tests/fake_tailscale.py", "tests/installer_e2e.ps1", "tests/smoke.py"]   # (installer_e2e: the installer's release check)
     assert sorted(f for f in files if f.startswith("scripts/")) == ["scripts/UnderCover.bat", "scripts/check_env.py", "scripts/cover.bat",
                                                                     "scripts/make_demo_voice.py", "scripts/reader_prints.py"]
     for f in ("installer/constraints.txt", "undercover/config.default.toml"):
@@ -3337,7 +3337,7 @@ def u_installer_space():
         assert dl[k] == f"{round(n / 1e9, 1):.1f}", f"sizes.isi's {k} download {dl[k]} GB isn't downloads.tsv's {n / 1e9:.2f} GB (run build.ps1)"
     assert "SizeDownloadGB" not in iss and "function UpdateReadyMemo" in iss and "Pending(Lines[I], Bytes)" in iss[iss.index("function UpdateReadyMemo"):]
     assert "if CurPageID = wpReady then Hook('ready.txt', WizardForm.ReadyMemo.Text);" in iss, "the release check can't read the Ready page"
-    for name, doc in (("README", (ROOT / "README.md").read_text(encoding="utf-8")), ("FRIENDS.md", (inst / "FRIENDS.md").read_text(encoding="utf-8"))):
+    for name, doc in (("README", (ROOT / "README.md").read_text(encoding="utf-8")), ("GUIDE.md", (inst / "GUIDE.md").read_text(encoding="utf-8"))):
         assert f"About {tot} GB of free disk space" in doc, f"{name}'s disk size isn't sizes.isi's {tot} GB"
         flat = " ".join(doc.split())
         assert (f"downloads about {dl['AMD']} GB with an AMD card, {dl['NVIDIA']} GB with an NVIDIA card or {dl['CPU']} GB without a supported card"
@@ -5788,6 +5788,11 @@ def u_ear():
 def u_golden():
     import os
     import tempfile
+    # the golden set lives in the dev repo since the repo went public (2026-10-24): it reads the maker's own voices
+    dev = Path(os.environ.get("UNDERCOVER_DEV_ROOT") or r"D:\UnderCover-work\dev") / "tools" / "research"
+    if not (dev / "golden.py").is_file():
+        return "skipped: no dev repo with tools/research/golden.py here"
+    sys.path.insert(0, str(dev))
     import golden as G
     # words kept: the share of the lead's words that come through in order; extra words (moved choruses) aren't errors
     assert G._kept("i'm loving it".split(), "so i'm really loving it baby".split()) == 1.0 and G._kept("a b c d".split(), "a x c".split()) == 0.5

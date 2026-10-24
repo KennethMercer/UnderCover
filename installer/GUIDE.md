@@ -1,4 +1,4 @@
-# UnderCover: your briefing
+# Installing UnderCover
 
 UnderCover makes song covers in other voices (FrontMan), trains voices (DoubleAgent), reads text aloud in a voice
 (SpeakEasy) and keeps it all in one place (SafeHouse). Everything runs on your own PC, and nothing you make is uploaded
