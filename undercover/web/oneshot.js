@@ -163,6 +163,7 @@ async function previewPlan() {
 }
 // the plan card from a plan (again on a pick, from the plan already in hand: no new request, so "pick one below" is gone at once)
 function drawPlan(p) {
+  if (p.train_s != null && $("#os-train-eta")) $("#os-train-eta").textContent = ` · ${etaWords({ low: p.train_s, high: p.train_s })}`;   // (one number: the plan's, rc-eta)
   // three plain lines (consult 2): the song, the voice, the time. No emoji, no branch list; the branches are Deep Cover's.
   const songLine = p.style ? `<b>${esc(p.song_query)}</b>, ${/^[aeiou]/i.test(p.style) ? "an" : "a"} ${esc(p.style)} version (a cover with singing in it)`
                            : `<b>${esc(p.song_query)}</b>, the album version`;

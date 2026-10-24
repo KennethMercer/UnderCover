@@ -3737,7 +3737,7 @@ def u_rcfix7():
     assert [jobs.eta_words(x) for x in (20, 300, 3660, 8180, 10800)] == [
         "under a minute", "about 5 min", "about 61 min", "about 2\u00bd hours", "about 3 hours"]
     assert "jobs.eta_words(tr)" in rv and "(about 1 hour)\"" not in inspect.getsource(service)
-    assert 'out["train_s"] = round(service.train_estimate_s(person))' in inspect.getsource(FA._auto_plan)
+    assert 'out["train_s"] = round(service.train_estimate_s(person) + oneshot.cover_eta("", here)["high"])' in inspect.getsource(FA._auto_plan)
     assert "if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s });" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
     run = inspect.getsource(oneshot.run)
     assert 'trains = prefer_train or voice_choice == "train" or not (n or online_for(person, 2))' in run
@@ -3757,9 +3757,90 @@ def u_rcfix7():
         jobs._ETA_FILE = saved
     assert old < 600 and new >= 7320, (old, new)   # was "about 5 min"; now the song + the training + the cover
     tsrc = inspect.getsource(trainer.Trainer.run)
-    assert "left = end - epoch + 1 - (bi + 1) / len(batches)" in tsrc and "eta=st[\"sec_per_epoch\"] * max(0, end - epoch)" in tsrc
+    assert "left = end - epoch + 1 - (bi + 1) / len(batches)" in tsrc and "eta=spe * max(0, end - epoch)" in tsrc
     assert "return int(min(max_epochs, max(planned_epochs, best + patience, epoch)))" in tsrc
     return "Readers stand in (8 phrases, made once); staging: promote never over a voice, discard only there; one estimate"
+
+
+@check("a training's time, said once and kept (rc-eta, IA's training proof: 'about 61 min' planned, 2 h 22 min taken; +53 min at the voice step, +29 min at epoch 2; past the plan the bar went 0.927 -> 0.799 and the time left 382 -> 1174 s): one estimator for a new voice from this PC's measured shape (kept minutes against the target, preparation rate, epochs past the plan, step speed), the same before and after the search; the job keeps the plan's number; a first epoch's speed blends in; the bar never goes back and the time left rises only by epochs added, said as such; an install with no name is named from its source")
+def u_rceta():
+    import inspect
+    import tempfile
+    import types
+    from undercover.core import jobs, voices as V
+    from undercover.doubleagent import night, service, trainer
+    from undercover.doubleagent.frozen import budget_steps
+    from undercover.frontman import api as FA, oneshot
+    # the name from the source, never the temp folder ("cache": a model and its index came down to cache_dir/dl_x/)
+    hf = "https://huggingface.co/binant/Plankton__SpongeBob___RVC_v2__1K_Epochs_69K_Steps/resolve/main/model.pth"
+    assert V.name_from_source(hf, Path("C:/x/cache/dl_ab")) == "plankton-spongebob"
+    assert V.name_from_source("https://example.com/files/barack%20obama.zip") == "barack-obama"
+    with tempfile.TemporaryDirectory() as td:   # a Drive link's file keeps its own name (its URL ends in "uc")
+        f = Path(td) / "Trump_RVC_v2.zip"
+        f.write_bytes(b"z")
+        assert V.name_from_source("https://drive.google.com/uc?id=1AbC", f) == "trump"
+        (Path(td) / "dl").mkdir()
+        (Path(td) / "dl" / "Morgan_Freeman_e300.pth").write_bytes(b"p")
+        assert V.name_from_source("https://pixeldrain.com/l/abc", Path(td) / "dl").startswith("morgan-freeman")
+    ds = inspect.getsource(V.download_staged) + inspect.getsource(V.download_and_install)
+    assert ds.count("name = name or name_from_source(src, dl)") == 2 and "dl.parent.name" not in ds
+    # one estimator: the same whether the search has run yet (no project) or found 13 sources (nothing kept yet)
+    with isolated_data():
+        sps = 42 / (budget_steps(42.2)[0] / 142)   # 2d: 142 planned epochs at about 42 s
+        real = night._sec_per_step
+        night._sec_per_step = lambda: sps
+        try:
+            bare = night._estimate_new(None, {"kind": "new", "target": "Obama"})
+            src = types.SimpleNamespace(extra={}, title="Obama speech", channel="", note="", selected=True, status="found", duration=600.0)
+            found = types.SimpleNamespace(kept_seconds=lambda: 0.0, sources=[src] * 13, mode="speaking", person="Obama", name="obama", reference={})
+            assert night._estimate_new(found, {"kind": "new", "target": "Obama"}) == bare, "the search's finds change the estimate"
+            total = bare["total"] + (80 + 80) / 60   # (+ 2d's song step and its cover)
+            # 2d: 142 min (was "about 61"), 2b: 118 min the other way, rc-eta's own proof: 121 min (each within 15 %)
+            assert all(abs(total - real) / real < 0.15 for real in (142, 118, 121)), (bare, total)
+            enough = types.SimpleNamespace(kept_seconds=lambda: 35 * 60.0, sources=[], mode="speaking", person="Obama", name="obama", reference={})
+            assert night._estimate_new(enough, {"kind": "new", "target": "x"})["prepare"] == 0
+            assert night.estimate({"kind": "new", "target": "Nobody Yet"})["total"] == night._estimate_new(None, {"kind": "new"})["total"]
+            # the shape is measured from every training (medians of the last 12), the defaults until then
+            assert night.train_shape() == night.TRAIN_SHAPE
+            assert night.train_shape("character")["kept_per_prep_min"] == night.KIND_PREP["character"]   # (scenes yield less)
+            night.record_shape("character", kept_per_prep_min=0.5)
+            assert night.train_shape("character")["kept_per_prep_min"] == 0.5 and night.train_shape()["kept_per_prep_min"] == 3.2
+            for k in (1.2, 1.6, 1.5):
+                night.record_shape(kept_over_target=k, past_plan=None)
+            assert night.train_shape()["kept_over_target"] == 1.5 and night.train_shape()["past_plan"] == night.TRAIN_SHAPE["past_plan"]
+        finally:
+            night._sec_per_step = real
+    tn = inspect.getsource(service.train_new_voice)
+    assert "record_shape(person_kind(proj), kept_over_target=" in tn and "past_plan=(st.get(\"epoch\") or 0) / st[\"planned_epochs\"]" in tn
+    # the plan's number is the job's: taken once at the start, the voice step trains by it (no +53 min)
+    run = inspect.getsource(oneshot.run)
+    assert 'plan["train_est_s"] = train_estimate_s(person)' in run and '"train_est_s"):' in inspect.getsource(oneshot)
+    assert 'tr = plan.get("train_est_s") or train_estimate_s(person)' in inspect.getsource(service.resolve_voice)
+    assert 'plan["voice_until"] = time.time() + float(kw["eta"]) + AFTER_TRAINING_S' in run, "after the last epoch the old deadline comes back"
+    assert 'round(service.train_estimate_s(person) + oneshot.cover_eta("", here)["high"])' in inspect.getsource(FA._auto_plan)
+    # a first epoch's speed blends in (no +29 min): the run's first epoch left out once there are more
+    hist = [{"epoch": 1, "secs": 120.0}]
+    assert trainer.epoch_speed([], 0, 40.0) is None and trainer.epoch_speed(hist, 0, None) == 120.0
+    assert trainer.epoch_speed(hist, 0, 40.0) == 0.2 * 120 + 0.8 * 40   # one epoch: a fifth of the way
+    hist += [{"epoch": e, "secs": 42.0} for e in range(2, 8)]
+    assert trainer.epoch_speed(hist, 0, 40.0) == 42.0   # the warm-up epoch gone, five measured: the measured speed
+    assert trainer.epoch_speed([{"epoch": 3, "secs": 99.0}], 3, 40.0) is None   # (a resumed run's earlier epochs aren't its own)
+    # the job holds every time left to what it said last, whoever said it: the first eta can't jump
+    j = jobs.Job("auto")
+    j.push(stage="voice", frac=0.1, message="x", total_left=6000.0)
+    j.push(stage="voice", frac=0.2, message="x", eta=7700.0)
+    assert j.events[-1]["total_left"] <= 6000 + 10, j.events[-1]["total_left"]
+    # ... but a training extended past its plan says its added epochs at once (and only those)
+    j.push(stage="voice", frac=0.3, message="x", eta=7700.0, new_work=True)
+    assert j.events[-1]["total_left"] == 7700.0 and "new_work" not in j.events[-1]
+    # past the plan: the bar holds, the extension is said
+    tsrc = inspect.getsource(trainer.Trainer.run)
+    assert tsrc.count('shown["frac"] = ') == 2 and "max(shown[\"frac\"]" in tsrc and tsrc.count("end >= shown[\"end\"] + EXTEND_SAID") == 2
+    assert tsrc.count("extended=extended") == 2 and tsrc.count("fraction=shown[\"frac\"]") == 2
+    assert trainer.epoch_line({"epoch": 136, "epochs": 283, "planned": 142, "end": 171}) == \
+        "Training: epoch 136 of about 171: a little longer, it's still improving (planned 142)"
+    assert inspect.getsource(service).count('new_work=bool(ev.get("extended"))') == 2 and 'new_work=bool(ev.get("extended"))' in inspect.getsource(night)
+    return f"2d said {total:.0f} min (took 142, was 61); one number from plan to job; first epoch blended; the bar holds past the plan"
 
 
 @check("every voice's preview line (rc-preview, the user's ask for 1.0): 'Go undercover as <its name>.' kept in the voice's folder, fresh by what it was made from; made as the last step of each path that adds or changes a voice (a training's export, an import in staging before it's listed, the one-shot's chosen candidate, Improve's Keep, a pack kept, a rename), never off the GPU thread; an idle backfill for voices from before; not part of the model's size; a ▶ in the five voice lists only when the clip is there; the check's estimate and countdown from its real work (IA pass 13)")
@@ -9547,7 +9628,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
