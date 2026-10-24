@@ -829,7 +829,7 @@ begin
     Waited := 0;
     Said := '';
     while (Trim(String(Said)) = '') and (Waited < 18000) do begin   // (30 minutes: a slow drive, never forever)
-      DownloadPage.SetText('Checking ' + ExtractFileName(Dest) + ' and putting it in its place...', '');
+      DownloadPage.SetText('Checking ' + ExtractFileName(Dest) + ' and putting everything in its right place...', '');
       DownloadPage.SetProgress(DownloadIndex, DownloadCount);   // (keeps the window answering)
       Sleep(100);
       Waited := Waited + 1;
