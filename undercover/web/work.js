@@ -571,6 +571,11 @@ function workMoved(r) {
 }
 document.addEventListener("uc:jobdone", e => {
   const k = e.detail.kind;
+  if (k === "voicepreview") {   // a voice's preview line is made (rc-preview): its ▶ shows
+    if (typeof loadVoices === "function") loadVoices();
+    if (typeof seLoad === "function" && !$("#view-speakeasy").hidden) seLoad();
+    return;
+  }
   if (!["train", "train-auto", "train-export", "train-prepare", "train-transcribe", "night", "install", "auto"].includes(k)) return;
   if (typeof loadVoices === "function" && ["train", "train-auto", "train-export", "night", "install", "auto"].includes(k)) loadVoices();
   loadQueue(); loadCandidates();

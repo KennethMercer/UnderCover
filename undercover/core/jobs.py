@@ -132,7 +132,7 @@ def _eta_learn(job: "Job"):
 
 # ---------------------------------------------------------------- jobs
 
-USES_VOICES = ("cover", "speech", "auto")   # job kinds that read with a voice
+USES_VOICES = ("cover", "speech", "auto", "voicepreview")   # job kinds that read with a voice
 
 
 def jobs_using(voice: str) -> list:
