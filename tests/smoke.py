@@ -3884,7 +3884,8 @@ def u_rcfix10():
     assert [listenback._clean(w) for w in ("realised", "realized", "colour", "four", "your", "hour")] == ["realized", "realized", "color", "four", "your", "hour"]
     assert listenback.problems("I realised it", [["I", 0, .1, .9], ["realized", .1, .5, .9], ["it", .5, .6, .9]]) == []
     es = inspect.getsource(speak.eta_seconds)
-    assert "cadence_pieces(tts.sentences(text))" in es and "CALIBRATE_S" in es and "per_word(p)" in es
+    assert "cadence_pieces(tts.sentences(text))" in es and "start_cost(p)[0]" in es and "per_word(p)" in es
+    assert "CALIBRATE_S" in inspect.getsource(speak.start_cost) and "COLD_ENGINE_S" in inspect.getsource(speak.start_cost)
     return f"a stuck worker gone in {took:.1f} s (and by a raising cancel); Stop checked in listen-back and the finish; run-ons in {len(pieces)} pieces"
 
 
@@ -8038,7 +8039,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/train/voices/v-uc/cadence/sample/pending"), ("POST", "/api/train/voices/v-uc/cadence/ab"),
     ("POST", "/api/train/voices/v-uc/cadence/verdict"),
     *[("GET", f"/api/speak/{a}") for a in ("voices", "readers", "recent", "plan", "estimate")],
-    ("POST", "/api/speak"), ("POST", "/api/speak/estimate"), ("POST", "/api/speak/cadence"), ("POST", "/api/speak/newvoice"),
+    ("POST", "/api/speak"), ("POST", "/api/speak/estimate"), ("POST", "/api/speak/warm"), ("POST", "/api/speak/cadence"), ("POST", "/api/speak/newvoice"),
     *[("POST", f"/api/speak/0123456789/{a}") for a in ("rename", "keep", "unkeep")], ("DELETE", "/api/speak/0123456789"),
     *[("GET", f"/api/library/{a}") for a in ("summary", "covers", "speech", "songs", "voices", "training")],
     ("GET", "/api/library/covers/zip"),
