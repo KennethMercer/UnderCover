@@ -745,9 +745,15 @@ def report_words(kind: str, res: dict, display: str) -> dict:
         tried = res.get("tried") or {}
         left = tried.get("left_out") or []
         out = "not_better"
-        plain = (f"Improve tried {display}: no improvement, so yours is kept"
-                 + (f" ({tried.get('added_min')} min of new clips" + (f"; {len(left)} source{'s' if len(left) != 1 else ''} left out" if left else "") + ")."
-                    if tried.get("added_min") is not None else "."))
+        # (the page's line already says "<voice> · tried": this one starts at the outcome; whole minutes, 1.0.1: it said
+        # "Improve tried <voice>" again and "0.0 min of new clips")
+        bits = []
+        if tried.get("added_min") is not None:
+            m = float(tried["added_min"] or 0)
+            bits.append("no new clips" if m < 0.5 else f"{round(m)} min of new clips")
+        if left:
+            bits.append(f"{len(left)} source{'s' if len(left) != 1 else ''} left out")
+        plain = "No improvement, so yours is kept" + (f" ({'; '.join(bits)})." if bits else ".")
     elif res.get("pending") or res.get("pending_for"):
         out, plain = "waiting", (f"A retrained {display} waits beside the current one"
                                  + (f" ({aw} against {bw})" if aw and bw else "") + ". Listen to both and keep the one you like.")
