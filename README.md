@@ -22,8 +22,8 @@ which you switch on from the top bar.
 
 - Windows 10 (version 2004 or later) or Windows 11, 64-bit. It has been tested on Windows 11.
 - An AMD graphics card supported by ROCm for Windows: Radeon RX 7700 or newer in the RX 7000 series, RX 9060, RX 9070,
-  Radeon AI PRO R9700, or Radeon PRO W7800 or W7900. NVIDIA cards from the GTX 900 series on are set up for, but have
-  not been tested. Without a supported card UnderCover runs on the processor, much more slowly and without voice
+  Radeon AI PRO R9700, or Radeon PRO W7800 or W7900. NVIDIA cards from the GTX 900 series on are supported
+  too, and it has been tested on an RTX 2080. Without a supported card UnderCover runs on the processor, much more slowly and without voice
   training.
 - About 22.5 GB of free disk space. The installer checks that it fits before it starts.
 - An internet connection for setup, which downloads about 11.4 GB with an AMD card, 12.0 GB with an NVIDIA card or 9.3 GB
