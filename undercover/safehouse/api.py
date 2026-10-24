@@ -178,6 +178,8 @@ def _route(h, method, p):
     if m and method == "POST":
         from ..core.voices import display_name, set_display
         v = set_display(m.group(1), str(h._body().get("display") or ""))   # no _guard: a label, no file is touched
+        from ..core import voicepreview
+        voicepreview.after_add(v)   # its line says the new name
         return h._json({"ok": True, "name": v.name, "display": display_name(v), "custom": bool(v.display)})
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
     if m:

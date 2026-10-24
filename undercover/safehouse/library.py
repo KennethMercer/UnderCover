@@ -27,6 +27,13 @@ def _size(p: Path) -> int:
         return 0
 
 
+def _voice_size(d: Path) -> int:
+    """A voice's size as shown: its model, index and cadence, not its preview line (core.voicepreview.FILES: ours,
+    not part of the model)."""
+    from ..core.voicepreview import FILES
+    return _size(d) - sum(_size(d / f) for f in FILES if (d / f).is_file())
+
+
 def _mtime(p: Path) -> float:
     try:
         return p.stat().st_mtime
@@ -155,7 +162,7 @@ def _duplicate_voices(hist: list) -> list[dict]:
                 i = next((i for i in range(len(k)) if k[i] != w[i]), None)
                 out.append({"voice": v.name, "display": display_name(v), "keeps": keep.name,
                             "keeps_display": display_name(keep), "because": words[i] if i is not None else
-                            "it was installed first", "size": _size(v.dir)})
+                            "it was installed first", "size": _voice_size(v.dir)})
     return out
 
 
@@ -411,7 +418,7 @@ def voices() -> list[dict]:
             "source": v.source, **voice_info(v), "project": ex.get("project"),
             "epoch": ex.get("epoch"), "train_minutes": ex.get("train_minutes"), "from_speech": ex.get("from_speech"),
             "f0_range": ex.get("f0_range"), "undertrained": undertrained(v), "score": score, "verdict": verdict,
-            "size": _size(v.dir), "covers": len(used), "cover_titles": [h.get("title") or Path(h["output"]).stem for h in used][:5],
+            "size": _voice_size(v.dir), "covers": len(used), "cover_titles": [h.get("title") or Path(h["output"]).stem for h in used][:5],
             "sample": sample, "cadence": cad, "full_index": _full_index(v.dir),
         })
     out.sort(key=lambda x: x["name"])

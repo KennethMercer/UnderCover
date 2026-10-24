@@ -318,25 +318,35 @@ def apply_mode(proj, person: str, mode: str | None):
     return proj
 
 
-def reference_clips(job, person: str, control, push, subject: dict | None = None):
+def reference_clips(job, person: str, control, push, subject: dict | None = None, left=None):
     """Make sure the person's project has the real voice identified and some phrases by other people (the
     test material): prepares one source at a time, at most three. These are training clips too. For a character
     the reference must be the voice heard in its scenes (phase 15: community SpongeBob voices were judged against
-    a podcast host), so scenes are prepared first and a reference without scene minutes isn't trusted."""
+    a podcast host), so scenes are prepared first and a reference without scene minutes isn't trusted.
+    left(seconds): told the clip work still to do as it goes (IA pass 13: the countdown sat at 27 s for 1½ min), from
+    the sources still needed at this PC's measured rate, and how far the current one is."""
     from . import project as P
     from . import sources as srcmod
     from .subject import search_kind
     from ..core.speaker import SpeakerEmbedder
+    m = _check_speed()
+    per = m.get("per_source") or CHECK_PER_SOURCE_S
     proj = project_for(person, subject=subject)
+    need = clip_work(proj)[1] or 0
+    say = left or (lambda s: None)
     if not proj.sources:
+        say((m.get("search") or CHECK_SEARCH_S) + need * per)
         push("voice", 0.02, f"Finding clips of {person} to check voices against")
+        t = time.time()
         force, words = search_kind(subject)
         found = srcmod.search(person, proj.mode, force=force, words=words)
+        _record_check("search", time.time() - t)
         with P.lock(proj.name):
             proj = P.Project.load(proj.name)
             if not proj.sources:
                 proj.sources = found
                 proj.save()
+        need = clip_work(proj)[1] or need
 
     from . import voicecheck
     have: dict = {}
@@ -356,7 +366,7 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
         return (ref.get("clip") and ref.get("sources", 0) >= 2
                 and (any(x.reason == "other speaker" for x in pr.phrases) or readers()))
     emb = SpeakerEmbedder()
-    for _ in range(3):
+    for done in range(3):
         proj = P.Project.load(proj.name)
         k = srcmod.kinds(proj)
         if ready(proj, k):
@@ -367,15 +377,23 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
         todo = [s.id for s in todo]
         if not todo:
             break
+        n = max(need, done + 1)   # (a source that didn't make it ready yet: one more is needed)
+        say((n - done) * per)
         push("voice", 0.04, f"Getting real clips of {person} to check voices against")
+        t = time.time()
+
+        def prog(f, label, n=n, done=done, **kw):
+            say(max(0.0, n - done - f) * per)
+            push("voice", 0.04 + 0.1 * f, f"Getting real clips of {person}: {label}")
         try:
             P.prepare_sources(proj.name, todo, gpu.MODELS.separator, emb, cancel=lambda: job.cancel or job.pausing,
                               stop=lambda: job.cancel or getattr(control, "stop", False),
-                              progress=lambda f, label, **kw: push("voice", 0.04 + 0.1 * f, f"Getting real clips of {person}: {label}"),
-                              between=control.service,
+                              progress=prog, between=control.service,
                               friendly=lambda e: jobs.friendly(e, "preparing a source"))
         except P.Cancelled:
             raise Paused() if job.pausing else jobs.Cancelled()
+        _record_check("per_source", time.time() - t)
+    say(0.0)
     proj = P.Project.load(proj.name)
     if proj.speakers and not proj.reference.get("confirmed"):
         with P.lock(proj.name):
@@ -510,22 +528,37 @@ def _prefetch_voice_sources(person: str, subject: dict | None = None):
         pass   # best effort: the normal path does all of this again if needed
 
 
-CHECK_CLIPS_S = 300.0     # finding and preparing a few clips of the person when there are none yet (~5 min)
-CHECK_CLIPS_READY_S = 60.0
-CHECK_PER_VOICE_S = 50.0  # one voice checked against them (the reading tests, ~45 s on a free GPU)
+CHECK_SEARCH_S = 15.0       # finding sources of the person when the project has none yet
+CHECK_PER_SOURCE_S = 75.0   # one source fetched and prepared for the check (2026-10-24, Obama's speeches, a free GPU)
+CHECK_PER_VOICE_S = 90.0    # one voice downloaded and checked against the clips (the same run: about 1½ min each)
+
+
+def clip_work(proj) -> tuple[int, int]:
+    """What the check's clip step will do for this project (reference_clips): (searches, sources to prepare). It
+    prepares one source at a time until the person's voice is heard in two of them, three at most."""
+    if proj is None or not proj.sources:
+        return 1, 2
+    ref = proj.reference or {}
+    if ref.get("clip") and ref.get("sources", 0) >= 2:
+        return 0, 0
+    left = [s for s in proj.sources if s.selected and s.status not in ("ready", "failed")]
+    return 0, min(len(left), 3, max(1, 2 - int(ref.get("sources", 0) or 0)))
 
 
 def check_estimate_s(person: str, voices: int) -> float:
-    """Seconds to check this many voices against real clips of the person (the clips first, when there are none)."""
+    """Seconds to check this many voices against real clips of the person, from the work it will do (IA pass 13: "a
+    few minutes" said, about 10 min taken, 7 of them getting clips): the search when there's nothing yet, the
+    sources still to prepare, each candidate downloaded and checked, at the rates measured on this PC; then the chosen
+    one's preview line."""
     from .night import _project_named
-    proj = _project_named(person)
+    from ..core.voicepreview import ESTIMATE_S
     try:
-        ready = proj is not None and proj.kept_seconds() >= 60
-    except Exception:   # noqa: BLE001 - an odd project: the longer way
-        ready = False
+        searches, sources = clip_work(_project_named(person))
+    except Exception:   # noqa: BLE001 - an odd project: the fresh case
+        searches, sources = 1, 2
     m = _check_speed()   # measured on this PC (P8-4: 213-253 s promised, about 400 s measured)
-    clips = m.get("clips_ready" if ready else "clips_new") or (CHECK_CLIPS_READY_S if ready else CHECK_CLIPS_S)
-    return clips + (m.get("per_voice") or CHECK_PER_VOICE_S) * max(1, voices)
+    return (searches * (m.get("search") or CHECK_SEARCH_S) + sources * (m.get("per_source") or CHECK_PER_SOURCE_S)
+            + (m.get("per_voice") or CHECK_PER_VOICE_S) * max(1, voices) + ESTIMATE_S)
 
 
 def _check_speed() -> dict:
@@ -548,7 +581,8 @@ def _record_check(key: str, seconds: float):
 def train_estimate_s(person: str) -> float:
     """Seconds to train a new voice of the person (the queue's own estimate: find, prepare, train)."""
     from .night import estimate
-    return estimate({"kind": "new", "target": person})["total"] * 60.0
+    from ..core.voicepreview import ESTIMATE_S
+    return estimate({"kind": "new", "target": person})["total"] * 60.0 + ESTIMATE_S   # (+ the new voice's line)
 
 
 def demo_for(person: str, cands: list | None = None):
@@ -625,17 +659,20 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         # said as it is, with the check's own time (not a training's worst case: "about 177 min left" looked hung)
         n = len(community)
         plan["voice_until"] = time.time() + check_estimate_s(person, n + len(online))
+        from ..core.voicepreview import ESTIMATE_S
+        per_voice = _check_speed().get("per_voice") or CHECK_PER_VOICE_S
+        voices_left = [n + len(online)]   # (each one done comes off: the countdown moves with the work, IA pass 13)
+
+        def until(clips_left: float, part: float = 0.0):   # the clip work left, every candidate not done yet (part: how
+            # far the current one is; its download counts as half of it), then the line
+            plan["voice_until"] = time.time() + clips_left + per_voice * (max(1, voices_left[0]) - part) + ESTIMATE_S
+
+        def one_done():
+            voices_left[0] = max(0, voices_left[0] - 1)
+            until(0.0)
         push("voice", 0.02, f"Checking your {n} {person} voice{'s' if n != 1 else ''} against real clips" if n
              else f"Checking community voices of {person} against real clips")
-        t_clips = time.time()
-        from .night import _project_named
-        before = _project_named(person)
-        try:
-            ready_before = before is not None and before.kept_seconds() >= 60
-        except Exception:   # noqa: BLE001 - as check_estimate_s
-            ready_before = False
-        proj = reference_clips(job, person, control, push, plan.get("subject"))
-        _record_check("clips_ready" if ready_before else "clips_new", time.time() - t_clips)
+        proj = reference_clips(job, person, control, push, plan.get("subject"), left=until)
         why = clips_missing(proj, plan.get("subject"))
         if why:   # rc-fix2: no clips to judge by is said plainly, never a failed check that goes on to train
             return no_check(person, why, community, plan, push, proj)
@@ -677,6 +714,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             for v in community:
                 q = test(v, _ident(v))
                 checked.append({"name": v.name, "where": "installed", **q.to_json()})
+                one_done()
             if any(c["verdict"] == "good" for c in checked):
                 online = []   # an installed voice already passes: no need to download more
             for r in online:
@@ -685,23 +723,28 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                 ident = r.repo + "/" + r.file
                 cached = _quality_cache().get(_qkey(person, ident))
                 if cached and (cached["verdict"] == "broken" or (cached["verdict"] != "good" and cached.get("clips") == clips)):
+                    one_done()
                     continue   # judged on these clips already (a broken file stays broken whatever the clips)
                 owner = (r.repo or "").split("/")[0] or None
+                until(0.0)
                 push("voice", 0.16 + 0.04 * len(checked), f"Downloading a community voice of {person}"
                      + (f" (from {owner})" if owner else "") + " to check it")
                 try:
-                    v = V.download_staged(r, progress=lambda d, t: push("voice", 0.16, f"Downloading a community voice of {person}"
-                                                                         + (f" (from {owner})" if owner else "")))
+                    v = V.download_staged(r, progress=lambda d, t: (until(0.0, 0.5 * d / t if t else 0.0), push(
+                        "voice", 0.16, f"Downloading a community voice of {person}" + (f" (from {owner})" if owner else ""))))
                 except ModelError as e:   # broken/unsafe/unloadable file: note it, try the next one
                     checked.append({"name": r.name, "where": "online", "repo": r.repo, "verdict": "broken", "note": str(e)[:160]})
                     _remember_broken(person, ident, r.name, str(e))
+                    one_done()
                     continue
                 downloaded.append(v.name)   # (before its check: a check that fails or stops discards it)
                 # named as it will be listed if it's chosen (rc-polish1: "Plankton Spongebob", its folder, then
                 # "Plankton"): a community voice checked for a person is shown as that person (_remember_range)
                 v.extra = {**(v.extra or {}), "person": person}
+                until(0.0, 0.5)
                 q = test(v, ident, staged=True, owner=owner)
                 checked.append({"name": v.name, "where": "online", "repo": r.repo, **q.to_json()})
+                one_done()
         except BaseException as e:
             if not isinstance(e, ValueError):   # cancelled or failed mid-check: remove the models fetched for it
                 drop_downloads()
@@ -738,6 +781,11 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             if rng:
                 plan["person_range"] = rng
                 _remember_range(v, rng, plan["person_speech"], person)
+            if good[0]["where"] == "online":   # its preview line, now it's listed (the losers were discarded unrendered)
+                from ..core import voicepreview
+                push("voice", 0.98, f"Making “{display_name(get_voice(v.name))}”'s preview line")
+                voicepreview.after_add(get_voice(v.name), job)
+                v = get_voice(v.name)
             plan["voice"] = {"name": v.name, "display": display_name(v), "how": good[0]["where"] if good[0]["where"] == "online" else "installed",
                              "repo": good[0].get("repo"), "checked": f"sounds like {person}: {good[0]['score']:.2f} (pass {voicecheck.SUNG_GOOD if good[0].get('test') == 'sung' else voicecheck.GOOD}{', tested on singing' if good[0].get('test') == 'sung' else ', tested with Reader voices' if good[0].get('test') == 'readers' else ''})"}
             if quick:

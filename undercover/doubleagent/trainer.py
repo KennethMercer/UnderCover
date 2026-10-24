@@ -812,4 +812,6 @@ def export_voice(proj: Project, epoch: int | None = None, name: str | None = Non
             (tdir / "previews" / f"e{s['epoch']}.wav").unlink(missing_ok=True)
             st["saves"].remove(s)
     proj.save_train()
+    from ..core import voicepreview   # its preview line, the last step of every training (in its job on the GPU; queued
+    voicepreview.after_add(v)         # when the export came from a page: "Use this one")
     return v

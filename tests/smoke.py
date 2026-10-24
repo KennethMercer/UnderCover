@@ -2167,9 +2167,12 @@ def u_p8_small():
         except ModelError as e:
             assert "python" not in str(e) and "installed:" not in str(e), e
         # measured check times lead the estimate
-        service._record_check("clips_new", 280.0)
+        service._record_check("search", 20.0)
+        service._record_check("per_source", 130.0)
         service._record_check("per_voice", 120.0)
-        assert service.check_estimate_s("Nobody Here", 3) == 280.0 + 360.0
+        from undercover.core.voicepreview import ESTIMATE_S
+        # (a fresh person: one search, two sources, three candidates, the chosen one's line; IA pass 13)
+        assert service.check_estimate_s("Nobody Here", 3) == 20.0 + 2 * 130.0 + 360.0 + ESTIMATE_S
         ch = oneshot.voice_choices("plankton", [get_voice("spongebob-uc")], others=2)
         assert ch[1]["label"].startswith("Check them")
         e = worklist.estimate_for("new", "Kristen Schaal", "speaking")
@@ -3711,7 +3714,7 @@ def u_rcfix7():
         assert not any(V.staging_dir().iterdir()) and (V.voices_dir() / "obama").is_dir() and (V.voices_dir() / "obama-2").is_dir()
         # two candidates of one name (BananaBus223/Obama and 0x3e9/obama.zip): each keeps its own folder
         ds = inspect.getsource(V.download_staged)
-        assert "while (staging_dir() / final).exists():" in ds and "discard_staged" not in ds, "a same-name candidate discards the first"
+        assert "staged_name(name)" in ds and "while (staging_dir() / final).exists():" in inspect.getsource(V.staged_name) and "discard_staged" not in ds, "a same-name candidate discards the first"
         rv = inspect.getsource(service.resolve_voice)
         assert "V.download_staged(r," in rv and "download_and_install" not in rv and "remove_voice" not in rv
         assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True, owner=owner)"), "a candidate is checked before it's tracked"
@@ -3757,6 +3760,170 @@ def u_rcfix7():
     assert "left = end - epoch + 1 - (bi + 1) / len(batches)" in tsrc and "eta=st[\"sec_per_epoch\"] * max(0, end - epoch)" in tsrc
     assert "return int(min(max_epochs, max(planned_epochs, best + patience, epoch)))" in tsrc
     return "Readers stand in (8 phrases, made once); staging: promote never over a voice, discard only there; one estimate"
+
+
+@check("every voice's preview line (rc-preview, the user's ask for 1.0): 'Go undercover as <its name>.' kept in the voice's folder, fresh by what it was made from; made as the last step of each path that adds or changes a voice (a training's export, an import in staging before it's listed, the one-shot's chosen candidate, Improve's Keep, a pack kept, a rename), never off the GPU thread; an idle backfill for voices from before; not part of the model's size; a ▶ in the five voice lists only when the clip is there; the check's estimate and countdown from its real work (IA pass 13)")
+def u_rcpreview():
+    import inspect
+    import threading
+    import numpy as np
+    from undercover.core import gamepause, jobs, voicepreview as VP, voices as V
+    from undercover.app import server as srv
+    from undercover.doubleagent import cadence, improved, service, trainer
+    from undercover.safehouse import api as sh_api, library
+    from undercover.speakeasy import speak
+    from undercover.frontman import api as FA
+    web = ROOT / "undercover" / "web"
+    assert VP.LINE == "Go undercover as {name}." and VP.FILES == ("preview.mp3", "preview.json")
+    saved_render = VP.RENDER[0]
+    try:
+        with isolated_data():
+            _voice_dir("plankton-spongebob", {"person": "Plankton"})
+            v = V.get_voice("plankton-spongebob")
+            assert VP.line_for(v) == "Go undercover as Plankton." and not VP.fresh(v)
+            # no renderer (a tool, a unit test): nothing is queued, the backfill makes it later
+            VP.RENDER[0] = None
+            n0 = jobs.GPU_QUEUE.qsize()
+            assert VP.after_add(v) is False and jobs.GPU_QUEUE.qsize() == n0
+            # a renderer: made in the voice's folder, fresh; the voice's API says so
+            said = []
+            VP.RENDER[0] = lambda job, vv: (said.append((vv.name, job.cancel)), (np.zeros(16000, np.float32) + 0.01, 16000))[1]
+            if shutil.which("ffmpeg"):
+                assert VP.make(v) and VP.fresh(v) and VP.clip(v).is_file() and said == [("plankton-spongebob", False)]
+                rec = json.loads((v.dir / "preview.json").read_text(encoding="utf-8"))
+                assert rec["line"] == "Go undercover as Plankton." and rec["seconds"] == 1.0
+                assert V.voice_info(V.get_voice("plankton-spongebob"))["preview"] is True
+                # stale when what it says or is made from changes: a rename, another model
+                V.set_display("plankton-spongebob", "Sheldon Plankton")
+                assert not VP.fresh(V.get_voice("plankton-spongebob"))
+                V.set_display("plankton-spongebob", "")
+                assert VP.fresh(V.get_voice("plankton-spongebob"))
+                (v.dir / "model.pth").write_bytes(b"another model, another size")
+                assert not VP.fresh(V.get_voice("plankton-spongebob"))
+                # not part of the model: the size shown leaves the clip out
+                vd = V.get_voice("plankton-spongebob").dir
+                assert library._voice_size(vd) == library._size(vd) - sum(library._size(vd / f) for f in VP.FILES)
+                assert library._voice_size(vd) < library._size(vd)
+            # off the GPU thread it never renders: it queues a GPU job (a page's Keep, a rename) ...
+            said.clear()
+            q = VP.after_add(V.get_voice("plankton-spongebob"))
+            assert q is None and not said
+            job, fn = jobs.GPU_QUEUE.get_nowait()
+            assert job.kind == "voicepreview" and job.title == "Preview line for Plankton" and job.voices == {"plankton-spongebob"}
+            jobs.JOBS.pop(job.id, None)
+            # ... and on the GPU worker's thread it renders there and then, in the job that added the voice
+            out = {}
+            t = threading.Thread(target=lambda: out.update(r=VP.after_add(V.get_voice("plankton-spongebob"), force=True)), name="gpu")
+            t.start(); t.join(30)
+            assert said and (out.get("r") is True or not shutil.which("ffmpeg"))
+            # an import: staged, its clip made there (on the GPU thread here), then listed with it
+            st = V.staging_dir()
+            def stage():
+                d = st / V.staged_name("obama")
+                d.mkdir(parents=True)
+                (d / "model.pth").write_bytes(b"m-obama")
+                (d / "meta.json").write_text(json.dumps({"name": "obama", "dir": str(d), "pth": str(d / "model.pth"), "version": "v2",
+                                                          "sr": 40000, "f0": True, "extra": {}}), encoding="utf-8")
+                return V.Voice(**{**json.loads((d / "meta.json").read_text(encoding="utf-8")), "dir": d, "pth": d / "model.pth", "index": None})
+            out.clear()
+            t = threading.Thread(target=lambda: out.update(v=VP.import_voice(stage)), name="gpu")
+            t.start(); t.join(30)
+            got = out["v"]
+            assert got.name == "obama" and (got.dir / "model.pth").is_file() and not (st / "obama").exists()
+            if shutil.which("ffmpeg"):
+                assert VP.fresh(got) and (got.dir / "preview.mp3").is_file(), "the import is listed before its clip"
+            # a taken name is refused as a direct install would be, and the staged copy is discarded
+            try:
+                VP.import_voice(stage)
+                raise AssertionError("an import over a voice")
+            except V.ModelError as e:
+                assert "already installed" in str(e)
+            assert not any(p.is_dir() for p in st.iterdir())
+            # off the GPU thread, an import waits a while for its job; one that hasn't started is called off untouched
+            def stage2():
+                d = st / V.staged_name("trump")
+                d.mkdir(parents=True)
+                (d / "model.pth").write_bytes(b"m-trump")
+                (d / "meta.json").write_text(json.dumps({"name": "trump", "dir": str(d), "pth": str(d / "model.pth"), "version": "v2",
+                                                          "sr": 40000, "f0": True, "extra": {}}), encoding="utf-8")
+                return V.Voice(**{**json.loads((d / "meta.json").read_text(encoding="utf-8")), "dir": d, "pth": d / "model.pth", "index": None})
+            v2 = VP.import_voice(stage2, wait=0.5)
+            job, fn = jobs.GPU_QUEUE.get_nowait()
+            assert v2.name == "trump" and job.cancel and not VP.fresh(v2), "an import's line wasn't called off"
+            jobs.JOBS.pop(job.id, None)
+            # the backfill: what's missing, the liked first; a voice that failed on these files is skipped
+            names = [x.name for x in VP.todo()]
+            assert "trump" in names and "obama" not in names, names
+            VP._broken("trump", VP.key(V.get_voice("trump")))
+            assert "trump" not in [x.name for x in VP.todo()]
+            VP._broken("trump", None)
+            assert "trump" in [x.name for x in VP.todo()]
+            # idle only: nothing queued or running, no hold, no Storage move, no game on the screen
+            real = gamepause._look
+            gamepause._look = lambda: None
+            try:
+                assert VP.idle() == (jobs.GPU_QUEUE.empty() and not any(not j.finished for j in jobs.JOBS.values()))
+                gamepause._look = lambda: {"exe": "game.exe", "title": "A game"}
+                assert gamepause.game_up() and not VP.idle()
+                gamepause._look = lambda: {"exe": "chrome.exe", "title": "UnderCover"}
+                assert not gamepause.game_up()
+            finally:
+                gamepause._look = real
+            # the check's estimate from its work: nothing yet (a search, two sources), a reference in two (none)
+            assert service.clip_work(None) == (1, 2)
+
+            class P1:
+                sources, reference = [], {}
+            assert service.clip_work(P1()) == (1, 2)
+
+            class S1:
+                selected, status = True, "found"
+
+            class P2:
+                sources, reference = [S1(), S1(), S1()], {"clip": "x", "sources": 1}
+
+            class P3:
+                sources, reference = [S1()], {"clip": "x", "sources": 2}
+            assert service.clip_work(P2()) == (0, 1) and service.clip_work(P3()) == (0, 0)
+    finally:
+        VP.RENDER[0] = saved_render
+    # wiring: SpeakEasy renders (the app registers it), the paths that add or change a voice end with it
+    m = inspect.getsource(srv.main)
+    assert "voicepreview.RENDER[0] = speak_mod.render_line" in m and "voicepreview.start()" in m
+    ms = inspect.getsource(speak.make_speech)
+    assert "if not save:" in ms and 'return {"y": np.concatenate(pieces)' in ms and "raise SpeakError(\"The speech model isn't here" in ms
+    assert "make_speech(job, voicepreview.line_for(v), v.name, save=False, v=v)" in inspect.getsource(speak.render_line)
+    assert "if not save:" in inspect.getsource(speak._make_cadence), "a pack voice's line is saved as a speech"
+    ex = inspect.getsource(trainer.export_voice)
+    assert ex.rindex("voicepreview.after_add(v)") > ex.rindex("proj.save_train()"), "a training's export doesn't end with the line"
+    rv = inspect.getsource(service.resolve_voice)
+    assert rv.index('good[0]["name"] = V.promote(good[0]["name"]).name') < rv.index("voicepreview.after_add(get_voice(v.name), job)")
+    assert "voicepreview.after_add(get_voice(voice), force=which == \"new\")" in inspect.getsource(improved.keep)
+    assert "voicepreview.after_add(get_voice(voice), force=False)" in inspect.getsource(improved.undo)
+    assert "voicepreview.after_add(get_voice(v.name))" in inspect.getsource(cadence.verdict)
+    assert "voicepreview.after_add(v)   # its line says the new name" in inspect.getsource(sh_api)
+    si = inspect.getsource(srv.Handler._start_install)
+    assert "voicepreview.import_voice(lambda: download_staged(src, name, progress), job)" in si and "download_and_install(src" not in si
+    assert "voicepreview.import_voice(lambda: install(f, staged_name(name)" in inspect.getsource(srv.Handler._voice_upload)
+    assert 'm = re.fullmatch(r"/api/voices/([a-z0-9-]+)/preview", p)' in inspect.getsource(srv.Handler)
+    # the check's countdown moves with the work: the clip step says what's left, each candidate comes off
+    rc = inspect.getsource(service.reference_clips)
+    assert "def prog(f, label, n=n, done=done, **kw):" in rc and "say(max(0.0, n - done - f) * per)" in rc and '_record_check("per_source"' in rc
+    assert "reference_clips(job, person, control, push, plan.get(\"subject\"), left=until)" in rv and rv.count("one_done()") >= 4
+    assert "until(0.0, 0.5 * d / t if t else 0.0)" in rv
+    assert 'out["check_s"] = round(service.check_estimate_s(person, len(cands))' in inspect.getsource(FA._auto_plan)
+    page = {f: (web / f).read_text(encoding="utf-8") for f in ("app.js", "oneshot.js", "speakeasy.js", "doubleagent.js")}
+    assert "const chk = p.check_s != null ? etaWords" in page["oneshot.js"]
+    # the ▶: one player, in the five lists, never picking the card it sits on
+    app = page["app.js"]
+    assert "if (!v?.preview) return \"\";" in app and "e.stopPropagation(); e.preventDefault(); playVoiceLine(b);" in app
+    assert '$$("audio").forEach(x => { if (!x.paused) x.pause(); });' in app and 'document.addEventListener("play", e =>' in app
+    assert '<span class="vside">${voiceLineButton(v.name)}' in app and 'e.target.closest(".remove, .vline")' in app
+    assert 'hear.innerHTML = on ? voiceLineButton(S.opts.backing_voice) : "";' in app
+    assert '${c.voice ? voiceLineButton(c.voice) : ""}</span>' in page["oneshot.js"] and 'bindVoiceLines($("#os-plan"))' in page["oneshot.js"]
+    assert "${voiceLineButton(v.name)}${act}" in page["speakeasy.js"] and 'bindVoiceLines($("#se-voices"))' in page["speakeasy.js"]
+    assert "${voiceLineButton(c.voice)}</div>" in page["doubleagent.js"] and "bindVoiceLines(box);" in page["doubleagent.js"]
+    return "made with the voice, in its folder; staged imports listed with it; the backfill when idle; five lists; the check's real work"
 
 
 @check("the one-shot's polish for 1.0 (rc-polish1, IA's examples): the song step has a time left on a fresh install; a stopped one-shot's alert goes when the next starts; a check that couldn't be done isn't offered again on the same clips (training or adding clips instead); a source the engine left out for a reason is never ticked back in to top up a training; a candidate is named by its display name throughout the check")
@@ -5806,8 +5973,8 @@ def u_display_names():
         got = {v.name: V.display_name(v) for v in V.list_voices()}
         assert got == {"barack-obama-uc": "Barack Obama", "ac-dc-uc": "AC/DC", "mj": "Michael Jackson",
                        "michael-jackson-botdf-era": "Michael Jackson Botdf Era", "kermit": "The Frog"}, got
-        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "likeness_word": None, "ear": None, "waiting_beside": None}
-        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "likeness_word": None, "ear": None, "waiting_beside": None}
+        assert V.voice_info(V.get_voice("barack-obama-uc")) == {"display": "Barack Obama", "trained": True, "demo": False, "likeness_word": None, "ear": None, "waiting_beside": None, "preview": False}
+        assert V.voice_info(V.get_voice("mj")) == {"display": "Michael Jackson", "trained": False, "demo": False, "likeness_word": None, "ear": None, "waiting_beside": None, "preview": False}
         # the route: set, read back through the APIs, clear
         h = _FakeHandler(body={"display": "  Barry   O  "})
         assert shapi.handle(h, "POST", "/api/library/voices/barack-obama-uc/display") and h.out["display"] == "Barry O", (h.out, h.err)
@@ -7326,7 +7493,7 @@ def u_page_rules():
     # qa13: the Preview panel sits above the convert card; Remove survives a redraw and Enter on it is its own (the row's key handler ate it)
     idx = (web / "index.html").read_text(encoding="utf-8")
     assert idx.index('id="preview"') < idx.index('id="summary"'), "the Preview panel goes above the summary / Convert card"
-    assert 'if (e.target.closest(".remove")) return;' in app and "S.rmArm" in app and "rmArmed(v.name)" in app, "FrontMan's Remove lost its keyboard path or its armed state across a redraw"
+    assert 'if (e.target.closest(".remove, .vline")) return;' in app and "S.rmArm" in app and "rmArmed(v.name)" in app, "FrontMan's Remove lost its keyboard path or its armed state across a redraw"
     # IA pass 7: two Set aside / Clean up rows that read the same carry their folder name; nothing ticked never reads "Free 1 kB"
     asd = (web / "aside.js").read_text(encoding="utf-8")
     assert "same(x)" in asd and '"Nothing ticked"' in lib and "const same = n =>" in lib, "identical Set aside / Clean up rows lost their folder name, or the empty Clean up button its words"
@@ -9359,7 +9526,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

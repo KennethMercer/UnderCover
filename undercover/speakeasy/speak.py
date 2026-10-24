@@ -67,11 +67,12 @@ def parts_dir(job_id: str) -> Path:
 
 # ---------------------------------------------------------------- plan: which Reader, which pitch
 
-def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0, cadence=None, pace: str | None = None) -> dict:
+def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0, cadence=None, pace: str | None = None,
+         v=None) -> dict:
     """How a voice will read: with the person's cadence when the voice has one (and cadence isn't False), else the
     Reader (auto-picked from the voice's speaking pitch unless chosen) and the pitch shift that puts the Reader's
-    speech at the person's speaking pitch (+ nudge semitones)."""
-    v = get_voice(voice)
+    speech at the person's speaking pitch (+ nudge semitones). v: the voice itself (a staged import isn't listed yet)."""
+    v = v or get_voice(voice)
     sp = service.speaking_pitch(v)
     pack = service.cadence_pack(v)
     pace = pace_of(pace, speed)
@@ -135,9 +136,28 @@ def _level(y: np.ndarray, rms_db: float = -20.0, peak: float = 0.89) -> np.ndarr
     return render.level(y, rms_db, peak)
 
 
+def _loaded(conv, v):
+    """The converter's copy of a listed voice; a staged one (an import before it's listed) is loaded from its folder."""
+    from ..core.engine.convert import LoadedVoice
+    from ..core.voices import voices_dir
+    if Path(v.dir).parent == voices_dir():
+        return conv.voice(v.name)
+    return LoadedVoice(v, conv.device, conv.half)
+
+
+def render_line(job, v) -> tuple[np.ndarray, int]:
+    """The voice's preview line (core.voicepreview), read exactly as SpeakEasy reads anything with this voice, and not
+    saved as a speech. Registered with core.voicepreview by the app."""
+    from ..core import voicepreview
+    r = make_speech(job, voicepreview.line_for(v), v.name, save=False, v=v)
+    return r["y"], r["sr"]
+
+
 def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0,
-                cadence=None, pace: str | None = None) -> dict:
-    """The speech job: sentences out as they're made (events with a URL each), then the finished WAV + MP3."""
+                cadence=None, pace: str | None = None, save: bool = True, v=None) -> dict:
+    """The speech job: sentences out as they're made (events with a URL each), then the finished WAV + MP3.
+    save=False (a voice's preview line): nothing is saved or listed and nothing downloads; -> {y, sr}. v: the voice
+    itself, when it isn't listed yet."""
     from scipy.signal import resample_poly
     from ..core import gpu
     from ..core.engine.convert import Settings
@@ -147,21 +167,23 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     if len(text) > MAX_CHARS:
         raise SpeakError(f"That's {len(text):,} characters; SpeakEasy reads up to {MAX_CHARS:,} at a time (about two hours). "
                          "Split it into parts.")
-    p = plan(voice, reader, speed, nudge, cadence, pace)
+    p = plan(voice, reader, speed, nudge, cadence, pace, v=v)
     sents = tts.sentences(text)
     if not sents:
         raise SpeakError("There's nothing to read in that text.")
     if p["mode"] == "cadence":
-        return _make_cadence(job, text, sents, p)
+        return _make_cadence(job, text, sents, p, save)
     t0 = time.perf_counter()
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents], start_after=1,
              total_left=eta_seconds(text, p))   # from the engine's measured speed
+    if not tts.ready() and not save:
+        raise SpeakError("The speech model isn't here (setup installs it): Repair in SafeHouse puts it back.")
     if not tts.ready():
         job.push(stage="reading", frac=0.0, message="Downloading the speech model (about 340 MB, once)")
         tts.kokoro(lambda f, d, t: job.push(stage="reading", frac=0.0, message=f"Downloading the speech model: {d / 1e6:.0f} of {t / 1e6:.0f} MB")
                    if t else None)
     conv = gpu.MODELS.converter
-    lv = conv.voice(p["voice"])
+    lv = _loaded(conv, v) if v is not None else conv.voice(p["voice"])
     sr = lv.tgt_sr
     settings = Settings(pitch=p["pitch"])
     pdir = parts_dir(job.id)
@@ -221,6 +243,9 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
         stop.set()
         shutil.rmtree(pdir, ignore_errors=True)
         raise
+    if not save:
+        shutil.rmtree(pdir, ignore_errors=True)
+        return {"y": np.concatenate(pieces) if pieces else np.zeros(sr, np.float32), "sr": sr}
     job.push(stage="saving", frac=1.0, message="Saving")
     item = _save(np.concatenate(pieces) if pieces else np.zeros(sr, np.float32), sr, text, p,
                  {"total": round(time.perf_counter() - t0, 2), "reader": round(t_tts, 2), "voice": round(t_rvc, 2)}, job.id)
@@ -230,7 +255,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
 START_AFTER = 3   # cadence engines read slower than realtime: playback starts once this many sentences are ready
 
 
-def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
+def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> dict:
     """The person's cadence: the engine reads each sentence (worker process, one sentence ahead), the voice's RVC
     model makes it their exact timbre, and their own gap between sentences follows."""
     from ..core import gpu
@@ -308,6 +333,9 @@ def _make_cadence(job, text: str, sents: list, p: dict) -> dict:
             fut.add_done_callback(lambda _f, wav=wav: Path(wav).unlink(missing_ok=True))
         shutil.rmtree(pdir, ignore_errors=True)
         raise
+    if not save:
+        shutil.rmtree(pdir, ignore_errors=True)
+        return {"y": np.concatenate(pieces) if pieces else np.zeros(sr, np.float32), "sr": sr}
     job.push(stage="saving", frac=1.0, message="Saving")
     return _save(np.concatenate(pieces) if pieces else np.zeros(sr, np.float32), sr, text, p,
                  {"total": round(time.perf_counter() - t0, 2), "reader": round(t_tts, 2), "voice": round(t_rvc, 2), "listen": round(t_lb, 2)}, job.id)

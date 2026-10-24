@@ -173,6 +173,13 @@ def _look():
         return None
 
 
+def game_up() -> bool:
+    """A full-screen program other than UnderCover's own page is up right now (work that can wait, the preview lines'
+    backfill, doesn't start then and never asks)."""
+    app = _look()
+    return bool(app and not _ours(app) and app.get("exe"))
+
+
 def start():
     """The watcher (the server starts it on Windows): every POLL_S seconds, one look at the screen."""
     if not platform.supports("fullscreen")[0]:

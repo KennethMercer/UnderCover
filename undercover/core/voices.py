@@ -693,13 +693,18 @@ def download_staged(src, name: str | None = None, progress: Progress | None = No
         if not name:
             base = dl.name if dl.is_file() else dl.parent.name
             name = _guess_name("", base)
-        base, n, final = slug(name), 1, slug(name)
-        while (staging_dir() / final).exists():
-            n += 1
-            final = f"{base}-{n}"
-        return install(dl, final, source=src, root=staging_dir())
+        return install(dl, staged_name(name), source=src, root=staging_dir())
     finally:
         shutil.rmtree(dl if dl.is_dir() else dl.parent, ignore_errors=True)
+
+
+def staged_name(name: str) -> str:
+    """A free folder name in the staging folder: <name>, else <name>-2, -3..."""
+    base, n, final = slug(name), 1, slug(name)
+    while (staging_dir() / final).exists():
+        n += 1
+        final = f"{base}-{n}"
+    return final
 
 
 def promote(name: str) -> Voice:
@@ -1052,9 +1057,10 @@ def voice_info(v: Voice) -> dict:
     """The keys every voice API carries: `display` (string, may equal the id), `trained` (bool), `demo` (bool),
     `likeness_word` (see likeness_word) and `ear` ({up, down}: the user's thumbs on its covers and speech, or null;
     FrontMan's basic voice list puts liked voices first)."""
-    from . import ear
+    from . import ear, voicepreview
     return {"display": display_name(v), "trained": bool((v.extra or {}).get("trained")), "demo": is_demo(v),
-            "likeness_word": likeness_word(v), "ear": ear.taste(v.name), "waiting_beside": waiting(v)}
+            "likeness_word": likeness_word(v), "ear": ear.taste(v.name), "waiting_beside": waiting(v),
+            "preview": voicepreview.fresh(v)}   # its "Go undercover as ..." clip (the ▶ shows only then)
 
 
 def set_display(name: str, text: str) -> Voice:

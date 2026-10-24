@@ -60,7 +60,7 @@ function renderVoiceCards(cands) {
     const cadBtn = !cd.can || cd.queue ? "" : cd.has ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}" data-deep>Retrain its cadence</button>`
       : `<button class="mini" type="button" data-cad="${esc(c.voice)}" aria-expanded="${DA.cad?.voice === c.voice}" title="${esc(cd.why || "")}">${DA.cad?.voice === c.voice ? "Close" : "Let it speak"}</button>`;
     return `<div class="vc ${busy ? "busy" : ""}">
-      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice, false)}${speaks}</b><small>${origin}</small></div></div>
+      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice, false)}${speaks}</b><small>${origin}</small></div>${voiceLineButton(c.voice)}</div>
       ${status ? `<div class="vc-status">${status}</div>` : ""}${facts ? `<small class="meta" data-deep>${facts}</small>` : ""}${cadDeep}
       <div class="vc-acts">${DA.samples[c.voice] ? `<button class="mini" type="button" data-listen="${esc(c.voice)}" aria-pressed="${DA.playing === c.voice}">${DA.playing === c.voice ? "Stop" : "Listen"}</button>` : ""}
         <button class="mini" type="button" data-use="${esc(c.voice)}">Use in FrontMan</button>${improve}
@@ -69,6 +69,7 @@ function renderVoiceCards(cands) {
   $("#da-more").hidden = list.length <= 6;
   $("#da-more").textContent = DA.all ? "Show fewer" : `Show all ${list.length} voices`;
   $$("[data-listen]", box).forEach(b => b.onclick = () => listen(b.dataset.listen));
+  bindVoiceLines(box);
   $$("[data-use]", box).forEach(b => b.onclick = async () => { await loadVoices(b.dataset.use); showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" }); });
   $$("[data-improve]", box).forEach(b => b.onclick = async () => {
     const c = DA.cands.find(x => x.voice === b.dataset.improve);
