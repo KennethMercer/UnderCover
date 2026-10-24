@@ -392,7 +392,8 @@ def reference_clips(job, person: str, control, push, subject: dict | None = None
                               friendly=lambda e: jobs.friendly(e, "preparing a source"))
         except P.Cancelled:
             raise Paused() if job.pausing else jobs.Cancelled()
-        _record_check("per_source", time.time() - t)
+        if all(s.status == "ready" for s in P.Project.load(proj.name).sources if s.id in todo):
+            _record_check("per_source", time.time() - t)   # (a source that failed in seconds would make the rate too quick)
     say(0.0)
     proj = P.Project.load(proj.name)
     if proj.speakers and not proj.reference.get("confirmed"):
@@ -665,7 +666,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
 
         def until(clips_left: float, part: float = 0.0):   # the clip work left, every candidate not done yet (part: how
             # far the current one is; its download counts as half of it), then the line
-            plan["voice_until"] = time.time() + clips_left + per_voice * (max(1, voices_left[0]) - part) + ESTIMATE_S
+            plan["voice_until"] = time.time() + clips_left + per_voice * max(0.0, voices_left[0] - part) + ESTIMATE_S
 
         def one_done():
             voices_left[0] = max(0, voices_left[0] - 1)

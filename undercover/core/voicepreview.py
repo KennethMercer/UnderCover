@@ -43,8 +43,11 @@ def _stat(p) -> int:
 def key(v) -> str:
     """What the clip was made from: the line as said, the model, the index and the live speech pack (when it was made,
     by which engine: a pack still waiting to be heard, tts/pending, isn't the voice's yet)."""
+    from .cadence import pack_ready
     rec = (v.extra or {}).get("tts") or {}
     pack = {k: rec.get(k) for k in ("made", "engine", "engine_pin", "project")} if (Path(v.dir) / "tts").is_dir() and rec else None
+    if pack is not None:   # (a pack whose engine isn't installed reads nothing: the Reader said the line instead)
+        pack["ready"] = bool(pack_ready(rec.get("engine", "chatterbox"), rec.get("engine_pin")))
     raw = json.dumps([line_for(v), _stat(v.pth), _stat(v.index), pack], sort_keys=True)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -191,18 +194,21 @@ def _broken_file() -> Path:
     return path("cache_dir") / "voicepreview.json"
 
 
+RETRY_S = 86400.0   # a voice whose line failed is tried again a day later (or at once when its files change)
+
+
 def _broken(name: str, k: str | None):
-    """A voice whose clip couldn't be made, by the key it had (skipped until its files change); None clears it."""
+    """A voice whose clip couldn't be made, by the key it had and when; None clears it."""
     from . import fsutil
     with _LOCK:
         try:
             d = json.loads(_broken_file().read_text(encoding="utf-8"))
         except (OSError, ValueError):
             d = {}
-        if (d.get(name) == k) if k else name not in d:
+        if not k and name not in d:
             return
         if k:
-            d[name] = k
+            d[name] = {"key": k, "at": round(time.time())}
         else:
             d.pop(name, None)
         try:
@@ -221,7 +227,9 @@ def todo() -> list:
         broken = {}
     out = []
     for v in listed_voices():
-        if not fresh(v) and broken.get(v.name) != key(v):
+        b = broken.get(v.name)
+        held = isinstance(b, dict) and b.get("key") == key(v) and time.time() - b.get("at", 0) < RETRY_S
+        if not fresh(v) and not held:
             out.append(v)
     taste = {v.name: (ear.taste(v.name) or {}).get("up", 0) for v in out}
     return sorted(out, key=lambda v: (-taste[v.name], v.name))
@@ -236,16 +244,27 @@ def idle() -> bool:
 
 def start(period: float = 60.0, between: float = 10.0):
     """The backfill's watcher (the server starts it): while idle, one voice's clip at a time, re-checking in between;
-    resumable by nature (each voice's own fresh clip is the record)."""
+    resumable by nature (each voice's own fresh clip is the record). Off when UNDERCOVER_NO_BACKFILL is set (smoke's
+    sandbox: its checks expect the queue as they left it). Its finished jobs leave the job feed after two minutes (the
+    page has seen them end by then: a first start's thirty would fill the Running room's list for an hour)."""
+    import os
+    if os.environ.get("UNDERCOVER_NO_BACKFILL"):
+        return
+    from . import jobs
+    made: list = []
 
     def loop():
         while True:
             wait = period
             try:
+                for j in [j for j in made if j.finished and j.ended and time.time() - j.ended > 120]:
+                    jobs.JOBS.pop(j.id, None)
+                    made.remove(j)
                 if RENDER[0] is not None and idle():
                     left = todo()
                     if left:
                         j = queue_job(left[0], force=False)
+                        made.append(j)
                         while not j.finished:
                             time.sleep(1)
                         wait = between if len(left) > 1 else period

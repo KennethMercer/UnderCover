@@ -774,7 +774,8 @@ class Handler(BaseHTTPRequestHandler):
             try:   # staged, its preview line made there, then listed (rc-preview)
                 from ..core import voicepreview
                 from ..core.voices import staged_name, staging_dir
-                v = voicepreview.import_voice(lambda: install(f, staged_name(name), source=f"file: {fname}", root=staging_dir()))
+                v = voicepreview.import_voice(lambda: install(f, staged_name(name), source=f"file: {fname}", root=staging_dir()),
+                                              wait=20.0)   # (this request waits: past that the backfill makes it)
             except ModelError as e:
                 return self._error(str(e))
             self._json({"voice": v.name})

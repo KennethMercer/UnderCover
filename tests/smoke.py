@@ -3858,6 +3858,12 @@ def u_rcpreview():
             assert "trump" not in [x.name for x in VP.todo()]
             VP._broken("trump", None)
             assert "trump" in [x.name for x in VP.todo()]
+            # (skipped for a day, not for good: a GPU out of memory at an export passes)
+            VP._broken("trump", VP.key(V.get_voice("trump")))
+            bf = json.loads(VP._broken_file().read_text(encoding="utf-8"))
+            bf["trump"]["at"] -= VP.RETRY_S + 1
+            VP._broken_file().write_text(json.dumps(bf), encoding="utf-8")
+            assert "trump" in [x.name for x in VP.todo()], "a voice whose line failed once is never tried again"
             # idle only: nothing queued or running, no hold, no Storage move, no game on the screen
             real = gamepause._look
             gamepause._look = lambda: None
@@ -3911,6 +3917,12 @@ def u_rcpreview():
     assert "def prog(f, label, n=n, done=done, **kw):" in rc and "say(max(0.0, n - done - f) * per)" in rc and '_record_check("per_source"' in rc
     assert "reference_clips(job, person, control, push, plan.get(\"subject\"), left=until)" in rv and rv.count("one_done()") >= 4
     assert "until(0.0, 0.5 * d / t if t else 0.0)" in rv
+    assert "per_voice * max(0.0, voices_left[0] - part)" in rv, "the countdown adds a candidate after the last one"
+    assert 'if all(s.status == "ready" for s in P.Project.load(proj.name).sources if s.id in todo):' in rc
+    st = inspect.getsource(VP.start)
+    assert 'if os.environ.get("UNDERCOVER_NO_BACKFILL"):' in st and "jobs.JOBS.pop(j.id, None)" in st
+    assert '"UNDERCOVER_NO_BACKFILL": "1"' in inspect.getsource(sys.modules[__name__])
+    assert 'pack["ready"] = bool(pack_ready(' in inspect.getsource(VP.key) and "wait=20.0)" in inspect.getsource(srv.Handler._voice_upload)
     assert 'out["check_s"] = round(service.check_estimate_s(person, len(cands))' in inspect.getsource(FA._auto_plan)
     page = {f: (web / f).read_text(encoding="utf-8") for f in ("app.js", "oneshot.js", "speakeasy.js", "doubleagent.js")}
     assert "const chk = p.check_s != null ? etaWords" in page["oneshot.js"]
@@ -9435,7 +9447,8 @@ def sandbox_server(port: int):
     try:
         cfg, mine = _sandbox_config(root, real)
         _sandbox_fixtures(root, real, mine)
-        env = {**os.environ, "UNDERCOVER_CONFIG": str(cfg), "UNDERCOVER_TEST_ROOTS": str(root), "UNDERCOVER_PHONE_ADDR": PHONE_ADDR}
+        env = {**os.environ, "UNDERCOVER_CONFIG": str(cfg), "UNDERCOVER_TEST_ROOTS": str(root), "UNDERCOVER_PHONE_ADDR": PHONE_ADDR,
+               "UNDERCOVER_NO_BACKFILL": "1"}   # (rc-preview: the checks expect the queue as they left it)
         env.pop("UNDERCOVER_TEST_ADDON", None)
         log = open(root / "server.log", "w", encoding="utf-8")
         proc = subprocess.Popen([sys.executable, "-m", "undercover.server", "--no-browser", "--port", str(port)], cwd=ROOT, env=env,
