@@ -145,6 +145,51 @@ def _remember_broken(person: str, ident: str, name: str, why: str):
     _quality_file().write_text(json.dumps(c, indent=1), encoding="utf-8")
 
 
+def _failed_file():
+    return path("cache_dir") / "voice_check_failed.json"
+
+
+def _failed_all() -> dict:
+    try:
+        return json.loads(_failed_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _clips_of(person: str) -> str:
+    from .night import _project_named
+    proj = _project_named(person)
+    return clip_set(proj) if proj is not None else ""
+
+
+def check_failed(person: str) -> str | None:
+    """Why the last check of this person's voices couldn't be done, while it still holds: on the same clips, within 30
+    days. The plan then offers what can work instead (training, or adding clips; MASTERPLAN principle 10), not the same
+    check again (rc-polish1: the retry offered "Check them against real clips first", which had just failed)."""
+    rec = _failed_all().get(slug(person))
+    if not rec or time.time() - rec.get("at", 0) > 30 * 86400:
+        return None
+    try:
+        return rec["why"] if rec.get("clips") == _clips_of(person) else None   # clips added since: worth checking again
+    except Exception:   # noqa: BLE001 - unreadable project: as if it held
+        return rec["why"]
+
+
+def _remember_failed(person: str, why: str | None, proj=None):
+    """A check that couldn't be done (why), on these clips; why=None: one that ran, forgotten."""
+    c = _failed_all()
+    if why is None and slug(person) not in c:
+        return
+    if why is None:
+        c.pop(slug(person), None)
+    else:
+        c[slug(person)] = {"why": why, "clips": clip_set(proj) if proj is not None else "", "at": round(time.time())}
+    try:
+        fsutil.write_text(_failed_file(), json.dumps(c, indent=1))
+    except OSError:
+        pass
+
+
 def _ident(v) -> str:
     return f"installed:{v.name}:{v.installed}"
 
@@ -558,7 +603,10 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         push("voice", 0.05, f"Your voice “{display_name(weak_trained)}” is weak ({tq['problems'][0]}); checking others first")
         cands = [v for v in cands if v.name != weak_trained.name]
     community = [] if prefer_train else cands
-    online = [] if prefer_train else online_for(person, 2)
+    # the last check couldn't be done on these clips (rc-polish1): with no voice of theirs here, it isn't tried again
+    # unless asked; it trains, as the plan said
+    failed = None if prefer_train or choice == "check" or community else check_failed(person)
+    online = [] if prefer_train or failed else online_for(person, 2)
     have = {slug(v.name) for v in community} | {v.source for v in community if v.source}
     seen, uniq = set(), []
     for r in online:   # P8-4: the same candidate was downloaded twice (installed already, or listed twice)
@@ -586,19 +634,20 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         _record_check("clips_ready" if ready_before else "clips_new", time.time() - t_clips)
         why = clips_missing(proj, plan.get("subject"))
         if why:   # rc-fix2: no clips to judge by is said plainly, never a failed check that goes on to train
-            return no_check(person, why, community, plan, push)
+            return no_check(person, why, community, plan, push, proj)
         t_voices = time.time()
         conv, emb = gpu.MODELS.converter, SpeakerEmbedder()
 
         clips = clip_set(proj)
 
-        def test(v, ident, staged=False):
+        def test(v, ident, staged=False, owner=None):
             cached = _quality_cache().get(_qkey(person, ident))
             # older, weaker checks are redone once, and so is one made on other clips (A3)
             if cached and cached.get("v") == CHECK_VERSION and cached.get("clips") == clips:
                 return voicecheck.Quality(**{k: cached.get(k) for k in ("voice", "score", "baseline", "phrases", "seconds",
                                                                         "verdict", "target_hz", "low", "pitch_cents", "content", "test")})
-            push("voice", 0.16 + 0.04 * len(checked), f"Checking whether “{display_name(v)}” sounds like {person}")
+            push("voice", 0.16 + 0.04 * len(checked), f"Checking whether “{display_name(v)}”"
+                 + (f" (from {owner})" if owner else "") + f" sounds like {person}")
             if staged:   # a candidate in the staging folder isn't a listed voice: loaded from there for its check
                 from ..core.engine.convert import LoadedVoice
                 lv = LoadedVoice(v, conv.device, conv.half)
@@ -633,15 +682,21 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                 cached = _quality_cache().get(_qkey(person, ident))
                 if cached and (cached["verdict"] == "broken" or (cached["verdict"] != "good" and cached.get("clips") == clips)):
                     continue   # judged on these clips already (a broken file stays broken whatever the clips)
-                push("voice", 0.16 + 0.04 * len(checked), f"Downloading the community voice “{r.name}” to check it")
+                owner = (r.repo or "").split("/")[0] or None
+                push("voice", 0.16 + 0.04 * len(checked), f"Downloading a community voice of {person}"
+                     + (f" (from {owner})" if owner else "") + " to check it")
                 try:
-                    v = V.download_staged(r, progress=lambda d, t: push("voice", 0.16, f"Downloading “{r.name}”"))
+                    v = V.download_staged(r, progress=lambda d, t: push("voice", 0.16, f"Downloading a community voice of {person}"
+                                                                         + (f" (from {owner})" if owner else "")))
                 except ModelError as e:   # broken/unsafe/unloadable file: note it, try the next one
                     checked.append({"name": r.name, "where": "online", "repo": r.repo, "verdict": "broken", "note": str(e)[:160]})
                     _remember_broken(person, ident, r.name, str(e))
                     continue
                 downloaded.append(v.name)   # (before its check: a check that fails or stops discards it)
-                q = test(v, ident, staged=True)
+                # named as it will be listed if it's chosen (rc-polish1: "Plankton Spongebob", its folder, then
+                # "Plankton"): a community voice checked for a person is shown as that person (_remember_range)
+                v.extra = {**(v.extra or {}), "person": person}
+                q = test(v, ident, staged=True, owner=owner)
                 checked.append({"name": v.name, "where": "online", "repo": r.repo, **q.to_json()})
         except BaseException as e:
             if not isinstance(e, ValueError):   # cancelled or failed mid-check: remove the models fetched for it
@@ -652,10 +707,11 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         plan["checked"] = checked
         if checked and all(c.get("verdict") in ("unknown", "broken") for c in checked) and any(c.get("verdict") == "unknown" for c in checked):
             drop_downloads()
-            return no_check(person, f"the clips of {person} had no other voices to test against", community, plan, push)
+            return no_check(person, f"the clips of {person} had no other voices to test against", community, plan, push, proj)
         tested = [c for c in checked if c.get("verdict") not in (None, "broken", "unknown")]
         if tested:
             _record_check("per_voice", (time.time() - t_voices) / len(tested))
+            _remember_failed(person, None)   # a check that ran: the next plan may offer it again
         good = sorted([c for c in checked if c.get("verdict") == "good"], key=lambda c: -c["score"])
         from ..core import ear
         good = ear.prefer(good, name=lambda c: c["name"], score=lambda c: c["score"])   # equally good: the liked one
@@ -703,7 +759,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
     tr = train_estimate_s(person)   # the plan's and the button's own estimate (rc-fix7: this line said "about 1 hour")
     plan["voice_until"] = time.time() + tr
-    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} ({jobs.eta_words(tr)})"
+    push("voice", 0.2 if checked else 0.0, (f"The last check couldn't be done ({failed}), so this trains a voice for "
+                                             f"{person} ({jobs.eta_words(tr)})" if failed
+                                             else f"Training a voice for {person} ({jobs.eta_words(tr)})")
          + (f". {plan['subject']['label']}" if (plan.get("subject") or {}).get("label") else ""))
     name = train_new_voice(job, person, control, push, subject=plan.get("subject"))
     v = get_voice(name)
@@ -730,11 +788,13 @@ def clips_missing(proj, subject: dict | None) -> str | None:
     return None
 
 
-def no_check(person: str, why: str, installed: list, plan: dict, push):
+def no_check(person: str, why: str, installed: list, plan: dict, push, proj=None):
     """The check couldn't be done: said plainly. With a voice of theirs installed, it's used as it is (the quick cover
     the user was promised, marked unchecked); with none, the job stops and says what to do. Never a training the user
-    didn't ask for (rc-fix2: a failed check trained for "about 104 min" after "about 8-9 min")."""
+    didn't ask for (rc-fix2: a failed check trained for "about 104 min" after "about 8-9 min"). Remembered on these
+    clips (check_failed): the next plan offers training or adding clips instead of the same check."""
     from ..core import ear
+    _remember_failed(person, why, proj)
     plan["checked"] = [{"name": "-", "verdict": "unknown", "note": f"couldn't check: {why}"}]
     if installed:
         v = ear.prefer(list(installed), name=lambda x: x.name)[0]   # the liked one first, else installed_for's order
@@ -1087,8 +1147,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
             if enough(proj):
                 break
             character = srcmod.is_character_project(proj)
-            more = sorted([s for s in proj.sources if not s.selected and not s.note.startswith(NOT_USABLE)
-                           and s.note != srcmod.ABOUT_NOTE   # talk about them is never ticked back in (smallfix7)
+            more = sorted([s for s in proj.sources if not s.selected
+                           and not srcmod.left_out_for_a_reason(s)   # (talk about them, a younger voice...: rc-polish1)
                            and s.status == "found" and s.duration >= (90 if singer and srcmod.is_sung(s) else 120)],
                           key=lambda s: (sung_first(s), -srcmod.expected_clean(s, person, proj.mode, character)))
             if singer and not searched_more and not [s for s in more if srcmod.is_sung(s)]:

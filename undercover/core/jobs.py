@@ -238,8 +238,8 @@ class Job:
             left = None
             if first and p - first[1] > 0.01 and now - first[0] > 2:
                 left = (now - first[0]) * (1 - p) / (p - first[1])
-            elif typical(self.kind, stage):
-                left = max(0.0, typical(self.kind, stage) - (now - t0))
+            elif self.stage_est.get(stage) or typical(self.kind, stage):   # (the job's own estimate first, rc-polish1)
+                left = max(0.0, (self.stage_est.get(stage) or typical(self.kind, stage)) - (now - t0))
             later = [self.stage_est.get(x) or typical(self.kind, x) for x in order[order.index(stage) + 1:]]
             if left is not None and all(x is not None for x in later):
                 ev["total_left"] = round(left + sum(later), 1)

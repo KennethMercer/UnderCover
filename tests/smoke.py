@@ -2474,7 +2474,9 @@ def u_person_search():
     assert "{name} talks" not in S.QUERIES["speaking"] and "{name} address" in S.QUERIES["speaking"]
     src = inspect.getsource(service.train_new_voice)
     assert "expected_clean(" in src and 'by="DoubleAgent"' in src and "not s.user" in src, "Do it all lost its rank or its gate"
-    assert "s.note != srcmod.ABOUT_NOTE" in src, "Do it all may tick talk about the person back in when it's short"
+    import types
+    assert "and not srcmod.left_out_for_a_reason(s)" in src and S.left_out_for_a_reason(types.SimpleNamespace(note=S.ABOUT_NOTE)), \
+        "Do it all may tick talk about the person back in when it's short"
     return "3 'about him' and 1980 unticked; addresses > rally > chamber; recent > 1980; Do it all ranks and gates"
 
 
@@ -3711,7 +3713,7 @@ def u_rcfix7():
         assert "while (staging_dir() / final).exists():" in ds and "discard_staged" not in ds, "a same-name candidate discards the first"
         rv = inspect.getsource(service.resolve_voice)
         assert "V.download_staged(r," in rv and "download_and_install" not in rv and "remove_voice" not in rv
-        assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True)"), "a candidate is checked before it's tracked"
+        assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True, owner=owner)"), "a candidate is checked before it's tracked"
         assert "V.discard_staged()   # what a check that stopped" in rv and 'good[0]["name"] = V.promote(good[0]["name"]).name' in rv
         # rc-polish1: what a crash left goes at server start too (Storage counted it), once the port is this server's
         from undercover.app import server as srv_mod
@@ -3727,7 +3729,7 @@ def u_rcfix7():
     assert 'out["train_s"] = round(service.train_estimate_s(person))' in inspect.getsource(FA._auto_plan)
     assert "if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s });" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
     run = inspect.getsource(oneshot.run)
-    assert 'trains = prefer_train or voice_choice == "train" or not (n or online_for(person, 2))' in run
+    assert 'trains = (prefer_train or voice_choice == "train" or not (n or online_for(person, 2))' in run
     assert 'job.after_eta_s = plan.get("cover_s", 60.0) + 60.0' in run
     # the job's countdown during the song step: past runs say a voice step takes 5 min (quick checks); this one-shot's
     # own estimate says 2 hours of training, and that's what the countdown carries
@@ -3747,6 +3749,89 @@ def u_rcfix7():
     assert "left = end - epoch + 1 - (bi + 1) / len(batches)" in tsrc and "eta=st[\"sec_per_epoch\"] * max(0, end - epoch)" in tsrc
     assert "return int(min(max_epochs, max(planned_epochs, best + patience, epoch)))" in tsrc
     return "Readers stand in (8 phrases, made once); staging: promote never over a voice, discard only there; one estimate"
+
+
+@check("the one-shot's polish for 1.0 (rc-polish1, IA's examples): the song step has a time left on a fresh install; a stopped one-shot's alert goes when the next starts; a check that couldn't be done isn't offered again on the same clips (training or adding clips instead); a source the engine left out for a reason is never ticked back in to top up a training; a candidate is named by its display name throughout the check")
+def u_rcpolish1():
+    import inspect
+    import types
+    from undercover.core import jobs, voices as V
+    from undercover.doubleagent import service, sources as srcmod
+    from undercover.frontman import api as FA, oneshot
+    page = (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    run = inspect.getsource(oneshot.run)
+    rv = inspect.getsource(service.resolve_voice)
+    # 1. a fresh install (no past runs): the song step's time left from the one-shot's own estimates of each stage
+    saved = jobs._ETA_FILE
+    jobs._ETA_FILE = {}
+    try:
+        def first_left(est):
+            j = jobs.Job("auto")
+            j.stage_est = est
+            j.push(stage="song", frac=0.02, message="x")
+            return j.events[-1].get("total_left")
+        bare, own = first_left({}), first_left({"song": 80.0, "voice": 10.0, "cover": 60.0})
+    finally:
+        jobs._ETA_FILE = saved
+    assert bare is None and own is not None and 145 <= own <= 150, (bare, own)   # (was: no time left at all)
+    assert 'job.stage_est["song"] = e["separating"] + (5.0 if here else FETCH_S)' in run and 'job.stage_est["cover"] = e["converting"] + e["mixing"]' in run
+    assert run.index('job.stage_est["song"]') < run.index('push("song", 0.02 + 0.9 * n / per'), "the song's estimate comes after the song step starts"
+    assert 'job.stage_est["voice"] = 10.0' in run
+    # 2. a stopped one-shot's alert belongs to that run
+    fol = page[page.index("function osFollow("):]
+    assert fol.index("osClearStopped();") < fol.index("OS.job = id;") and "showError(ev.message, OS_STOPPED);" in page
+    assert '$("#err-title").textContent === OS_STOPPED' in page
+    # 3. a check that couldn't be done: remembered on its clips, not offered again until clips change
+    with isolated_data():
+        real = service._clips_of
+        service._clips_of = lambda person: "clips-1"
+        try:
+            assert service.check_failed("Obama") is None
+            service._remember_failed("Obama", "no clean clips of Obama came through", None)
+            assert service.check_failed("Obama") is None, "a failure without its clips held on other clips"
+            service._remember_failed("Obama", "the clips had no other voices", types.SimpleNamespace(
+                name="obama", reference={"clip": "r"}, training_phrases=lambda: []))
+            service._clips_of = lambda person: service.clip_set(types.SimpleNamespace(name="obama", reference={"clip": "r"}, training_phrases=lambda: []))
+            assert service.check_failed("obama") == "the clips had no other voices"
+            service._clips_of = lambda person: "clips-2"   # clips added since: worth checking again
+            assert service.check_failed("Obama") is None
+            service._remember_failed("Obama", None)
+            assert "obama" not in service._failed_all()
+        finally:
+            service._clips_of = real
+        est = (service.check_estimate_s, service.train_estimate_s)
+        service.check_estimate_s, service.train_estimate_s = (lambda person, n: 300.0), (lambda person: 3600.0)
+        try:
+            vs = [types.SimpleNamespace(name="obama", display="Obama", extra={})]
+            plain = [c["choice"] for c in oneshot.voice_choices("Obama", vs)]
+            after = oneshot.voice_choices("Obama", vs, failed="the clips had no other voices")
+        finally:
+            service.check_estimate_s, service.train_estimate_s = est
+        assert plain == ["use:obama", "check", "train"] and [c["choice"] for c in after] == ["use:obama", "train"], (plain, after)
+        assert "couldn't be done (the clips had no other voices)" in after[-1]["detail"] and "Adding clips" in after[-1]["detail"]
+    assert 'failed = None if prefer_train or choice == "check" or community else check_failed(person)' in rv
+    assert "online = [] if prefer_train or failed else online_for(person, 2)" in rv and "_remember_failed(person, None)" in rv
+    assert "_remember_failed(person, why, proj)" in inspect.getsource(service.no_check) and rv.count("community, plan, push, proj)") == 2
+    ap = inspect.getsource(FA._auto_plan)
+    assert 'online = [] if prefer_train or (failed and not inst) else service.online_for(person, 2)' in ap and '"after_failed": failed' in ap and "failed=failed)" in ap
+    assert "or (not n and voice_choice != \"check\" and check_failed(person))" in run and "if (v.after_failed)" in page
+    # 4. left out for a reason: stays out, the reason shown; a training short of voice tops up only from the rest
+    S = lambda note: types.SimpleNamespace(note=note)
+    flagged = ["from 2004, decades before their newest (2020): a younger voice", srcmod.ABOUT_NOTE, service.SONG_NOTE,
+               "left out by DoubleAgent: another voice", "may be in Spanish (a dub or another language)", srcmod.TALK_NOTE, "yours"]
+    assert all(srcmod.left_out_for_a_reason(S(n)) for n in flagged), [n for n in flagged if not srcmod.left_out_for_a_reason(S(n))]
+    assert not any(srcmod.left_out_for_a_reason(S(n)) for n in ("", "interview", "speech", "scenes", "acapella", "voice lines"))
+    tn = inspect.getsource(service.train_new_voice)
+    assert "and not srcmod.left_out_for_a_reason(s)" in tn and "NOT_USABLE)\n" not in tn[tn.index("more = sorted("):tn.index("more = sorted(") + 200]
+    old = types.SimpleNamespace(id="a", title="Barack Obama 2004 DNC keynote", extra={}, selected=True, user=False, note="")
+    new = types.SimpleNamespace(id="b", title="Obama interview 2020", extra={}, selected=True, user=False, note="")
+    srcmod.mark_era([old, new], "Barack Obama")
+    assert not old.selected and "a younger voice" in old.note and srcmod.left_out_for_a_reason(old) and new.selected
+    # 5. one name for a candidate: the one it's listed under once chosen (the person, _remember_range)
+    assert 'v.extra = {**(v.extra or {}), "person": person}' in rv and rv.index('"person": person}') < rv.index("q = test(v, ident, staged=True, owner=owner)")
+    assert V.display_name(types.SimpleNamespace(name="plankton-spongebob", display="", extra={"person": "Plankton"})) == "Plankton"
+    assert "“{r.name}”" not in rv, "a candidate is named by its search result while it downloads"
+    return "song step said from the start; the stopped alert clears; a failed check offers training; left-out sources stay out; one name"
 
 
 @check("the first start's model download has a moving bar (MasterPlan for the First assignment: its bar only slid): the status carries models_progress (0-1) and models_mb while the separation and conversion models download, from the files and their .part against the pinned sizes; a short file counts as missing")
@@ -9248,7 +9333,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

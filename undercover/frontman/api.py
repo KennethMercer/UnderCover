@@ -314,6 +314,7 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     inst = service.installed_for(person)
     trained = [v for v in inst if v.extra.get("trained")]
     demo = service.demo_for(person, inst)   # "... as Agent Smoke": installed, nothing to check, look up or ask
+    failed = None
     if demo:
         voice = {"how": "installed", "name": demo.name, "display": display_name(demo), "trained": False, "demo": True,
                  "quality": {"ok": True, "problems": []}}
@@ -322,14 +323,18 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
         voice = {"how": "installed", "name": trained[0].name, "display": display_name(trained[0]), "trained": True,
                  "quality": service.train_note(trained[0], q) if prefer_train else q}   # said before anything starts (phase 15)
     else:
-        online = [] if prefer_train else service.online_for(person, 2)
+        # the last check couldn't be done on these clips (rc-polish1): not offered again as it was; with no voice of
+        # theirs here the plan trains, and says why and how a check can work (adding clips)
+        failed = None if prefer_train else service.check_failed(person)
+        online = [] if prefer_train or (failed and not inst) else service.online_for(person, 2)
         community = [] if prefer_train else inst
         cands = {}   # id -> what people read; an online result already installed is listed once
         for k, d in [(v.name, display_name(v)) for v in community] + [(r.name, r.name) for r in online]:
             cands.setdefault(k, d)
         voice = ({"how": "check", "candidates": list(cands.values()), "candidate_ids": list(cands),
                   "name": f"{slug(person)}-uc", "display": person}
-                 if community or online else {"how": "train", "name": f"{slug(person)}-uc", "display": person})
+                 if community or online else {"how": "train", "name": f"{slug(person)}-uc", "display": person,
+                                              **({"after_failed": failed} if failed else {})})
     out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
            "style": req["style"], "voice": voice, "ask": False}
     sample = None if req["style"] else oneshot.sample_song(song, artist)   # the first run's song, on the desk
@@ -343,7 +348,8 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     elif voice["how"] == "check" and community:   # "Ask me each time" (the user): use one now, check, or train first
         out["voice_ask"] = True
         out["voice_choices"] = oneshot.voice_choices(person, community, here,
-                                                     others=len([k for k in cands if k not in {v.name for v in community}]))
+                                                     others=len([k for k in cands if k not in {v.name for v in community}]),
+                                                     failed=failed)
     if voice["how"] != "installed" and not demo:
         # the training's estimate, the one the job says too (rc-fix7: the plan said 61 min, the question 2½ hours)
         try:
