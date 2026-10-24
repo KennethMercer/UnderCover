@@ -1,4 +1,4 @@
-"""Themes (phase 14; the contract is docs/design/themes.md): a theme is a grading of the look plus a type change, tokens
+"""Themes (phase 14; the contract is docs/THEMES.md): a theme is a grading of the look plus a type change, tokens
 only, so a friend's theme can't break a page or hide anything. Nothing in a theme executes.
 
     themes/<id>/   theme.json, theme.css (two token blocks + @font-face), fonts/*.woff2 (+ OFL .txt), preview.png
@@ -36,7 +36,7 @@ TOP_FILES = {"theme.json", "theme.css", "preview.png"}
 FONT_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(woff2|txt)")
 TXT_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.txt")
 
-# the public token contract (docs/design/themes.md, "theme.css: the token contract")
+# the public token contract (docs/THEMES.md, "theme.css: the token contract")
 TOKENS = frozenset(
     "--base --panel-base --panel-2-base --panel-3-base --line-base --fg --muted --accent-ink "
     "--c-frontman --c-doubleagent --c-speakeasy --c-safehouse "

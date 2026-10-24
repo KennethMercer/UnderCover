@@ -5,7 +5,7 @@ time their speech from it) -> 24 kHz speech. The best-measured engine is also MI
 build and the user's machine use the same default; engines whose weights aren't OSI-licensed are add-ons
 (core/addons.py) that the user installs and accepts themselves.
 
-Measured 2026-10-11 on the RX 7900 XTX (docs/research/cadence.md): Chatterbox 0.5-0.6x realtime at cfg 0.3 (3.6 GB),
+Measured 2026-10-11 on the RX 7900 XTX (the maintainers' notes, cadence): Chatterbox 0.5-0.6x realtime at cfg 0.3 (3.6 GB),
 F5-TTS 2.9-3.5x (0.9 GB).
 """
 from .. import addons, setup_models
@@ -23,7 +23,7 @@ F5_REV, VOCOS_REV = "84e5a410d9cead4de2f847e7c9369a6440bdfaca", "0feb3fdd929bcd6
 F5_FILES = {"tts/f5/model_1250000.safetensors": f"{HF}/SWivid/F5-TTS/resolve/{F5_REV}/F5TTS_v1_Base/model_1250000.safetensors",
             "tts/f5/vocos/config.yaml": f"{HF}/charactr/vocos-mel-24khz/resolve/{VOCOS_REV}/config.yaml",
             "tts/f5/vocos/pytorch_model.bin": f"{HF}/charactr/vocos-mel-24khz/resolve/{VOCOS_REV}/pytorch_model.bin"}
-# Chatterbox-Turbo (phase 23, the default; docs/research/phase23-outcome.md): the same chatterbox-tts package, its own weights,
+# Chatterbox-Turbo (phase 23, the default; the maintainers' notes, phase23-outcome): the same chatterbox-tts package, its own weights,
 # pinned (9 of the repo's 12 files: s3gen.safetensors, the plain decoder, isn't read by Turbo) -> models/tts/chatterbox-turbo/
 TURBO_REV = "749d1c1a46eb10492095d68fbcf55691ccf137cd"
 TURBO_FILES = {f"tts/chatterbox-turbo/{f}": f"{HF}/ResembleAI/chatterbox-turbo/resolve/{TURBO_REV}/{f}"

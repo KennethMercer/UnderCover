@@ -944,7 +944,7 @@ def is_demo(v: Voice) -> bool:
 # weak from 0.30; the ones it called bad or broken sit near 0, so they're "poor", not unmeasured).
 # One scale for every voice, trained or downloaded (Internal Affairs P8-11: a downloaded Plankton at 0.757 read "great"
 # beside Morgan Freeman's 0.795 "good"). Both numbers are the same kind: speaker-embedding likeness to the person. The
-# voice lab's frozen test (docs/research/phase26-improve.md, branch phase26-improve) finds a person's voices saturate
+# voice lab's frozen test (the maintainers' notes, phase26-improve, branch phase26-improve) finds a person's voices saturate
 # at 0.75-0.85 with about +-0.01-0.015 scoring noise, so "great" starts at 0.80, "good" covers the usual 0.70-0.80
 # band, "fair" is a voice that's like them but clearly short, and "poor" is unlike them.
 LIKENESS_WORDS = ((0.80, "great"), (0.70, "good"), (0.55, "fair"), (-9.0, "poor"))

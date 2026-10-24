@@ -1055,7 +1055,7 @@ def main():
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
         _hb_write({"event": "stop"})
-        _hard_exit()   # a normal exit can hang forever in the GPU runtime's DLL teardown (see PLAN.md)
+        _hard_exit()   # a normal exit can hang forever in the GPU runtime's DLL teardown
     if RESTART.is_set():
         _hb_write({"event": "stop", "reason": "restart"})
         srv.server_close()  # free the port for the new process

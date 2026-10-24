@@ -5,7 +5,9 @@ A few house rules first. Most of them were paid for, some with somebody's data.
 ## Read before you touch anything
 
 1. [docs/MASTERPLAN.md](docs/MASTERPLAN.md): what UnderCover is for and how decisions get made.
-2. The code you're changing, and the checks around it in `tests/smoke.py`.
+2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the names, the layout, the dependency rules, the data contracts and the
+   engine choices.
+3. The code you're changing, and the checks around it in `tests/smoke.py`.
 
 If the docs seem wrong for the problem in front of you, say so in your pull request and make the case. The vision is
 allowed to grow, just not by accident.

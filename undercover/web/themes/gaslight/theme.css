@@ -1,4 +1,4 @@
-/* Gaslight: A lamp through fog: green-black air, brass and verdigris. A theme is tokens only (docs/design/themes.md). */
+/* Gaslight: A lamp through fog: green-black air, brass and verdigris. A theme is tokens only (docs/THEMES.md). */
 :root[data-uc-theme="gaslight"] {
   --base: #080a09; --panel-base: #101312; --panel-2-base: #171b19; --panel-3-base: #202522; --line-base: #232927;
   --fg: #e8ebe6; --muted: #91998f; --accent-ink: #080a09;

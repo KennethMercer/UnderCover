@@ -1,5 +1,5 @@
 "use strict";
-// SpeakEasy (docs/mockups/speakeasy.html): text -> pick a voice -> Generate. Speech is made sentence by sentence and
+// SpeakEasy (the maintainers' mockup, speakeasy): text -> pick a voice -> Generate. Speech is made sentence by sentence and
 // "Now speaking" plays each one as soon as it's ready (played / ready / striped = still being made). Recent lists saved
 // speech (SafeHouse has them all). Listens for the shell's "uc:module" event. Uses helpers from app.js ($, $$, esc, api,
 // showError, store, fmtTime, VOL), jobs.js (watchJob), train.js (newVoice) and shell.js (showTab, via the event's timing).

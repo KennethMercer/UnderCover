@@ -59,16 +59,16 @@ These are the principles that have settled every argument so far. When the docs 
 
 ## How the work is done
 
-- **Phases, one at a time, each a chat.** `RUNBOOK.md` is the sequence; `docs/prompts/` holds each phase's brief;
-  `docs/handoffs/` is what each one learned. A phase tags its start, works on a branch, runs `tests/smoke.py --full`,
-  runs the built-in code review on its whole diff, writes its handoff, asks the architect for the merge, and tags its end.
-  Between phases the app is always working on `main`.
+- **Phases, one at a time, each a chat.** Each phase got a written brief, worked on a branch, ran `tests/smoke.py
+  --full`, ran a code review on its whole diff, wrote a handoff of what it learned, and asked the architect for the
+  merge. The briefs, handoffs and runbook are the maintainers' working notes and are not in this repository; what a
+  builder needs from them is in `docs/ARCHITECTURE.md`. Between phases the app is always working on `main`.
 - **The architect reviews every merge** (diff, handoff, its own smoke run, its own check of the phase's claims, and the
   delete paths read by hand), then restarts the user's server. The front-end lead (a separate chat) owns the look and
   talks to the maker directly; the two coordinate on timing, hooks and anything that changes behaviour.
-- **The maker's notes go into `ARCHITECTURE.md` the same turn they're said.** Its "UI backlog", "Known bugs",
-  "Open-source goal" and "Resilience" sections are the running vision. When you build, check them so you don't build
-  something a planned phase will move.
+- **The maker's notes go into the architecture document the same turn they're said.** The public part is
+  `docs/ARCHITECTURE.md`: the names, the layout, the dependency rules, the data contracts, the engine choices and the
+  resilience design. Check it before you build, so you don't build something a planned change will move.
 - **Rules every session keeps:** installs only with an OK and pinned; tests on the test server (7861), muted; never start
   the user's server (restart it with `/api/restart` when idle); never push; never delete the user's voices, projects,
   songs or covers; never accept a licence on the user's behalf; never bypass a block; never work around a permission
@@ -95,7 +95,7 @@ is good. Decisions of taste are theirs; when a change is more product than code,
 
 ## If you're an agent reading this
 
-Read `ARCHITECTURE.md` and `RUNBOOK.md` next, then the latest handoff in `docs/handoffs/`. Keep the names. Keep the
+Read `docs/ARCHITECTURE.md` next, then `CONTRIBUTING.md`. Keep the names. Keep the
 rules above even when they're inconvenient; they were paid for. If something here seems wrong for the problem in front
 of you, say so in your handoff and make the case; the vision is allowed to grow, but not by accident.
 

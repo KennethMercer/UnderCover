@@ -34,7 +34,7 @@ from ..core.voices import ModelError
 from ..core.engine.rvc.index import ASIDE as INDEX_ASIDE, SHRINK_RESULT as RESULT   # shared with export
 
 ASIDE = "before-smaller"
-CLIP_FLAC_RATIO = 0.44   # measured on 7,178 clips (docs/research/phase24-audit.md)
+CLIP_FLAC_RATIO = 0.44   # measured on 7,178 clips (the maintainers' notes, phase24-audit)
 ALIKE_SAME = 0.98        # both indexes' readings at least this alike (Agent Smoke: 0.996): "sounds the same"
 LIKENESS_DROP = 0.02     # likeness to the person may fall this much (the golden set's band for likeness)
 TEST_LINE = Path(__file__).resolve().parents[1] / "assets" / "demo-voice" / "agent-smoke" / "tts" / "ref.wav"

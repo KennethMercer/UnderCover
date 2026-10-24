@@ -1,4 +1,4 @@
-"""Crash-safe file writes. This PC has had sudden power-offs (PLAN.md, incident 2026-10-09): a file written in place
+"""Crash-safe file writes. The maker's PC has had sudden power-offs: a file written in place
 can be left half-written. These write to a temporary file in the same folder, flush it to disk, then swap it in,
 so a power cut leaves either the old version or the new one, never a broken file.
 

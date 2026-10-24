@@ -9,14 +9,14 @@ Plain numpy / scipy, a few milliseconds per clip. Four measures, each from the c
   decay_db_s how fast the sound dies after the voice stops (dB/s, the steep end): slow = a reverberant room
 
 `penalty(m)` turns them into one number in score units (0 = clean, larger = worse), calibrated in
-docs/research/clip-sound.md on clips the user judged and on degraded copies.
+the maintainers' notes, clip-sound on clips the user judged and on degraded copies.
 """
 import math
 from pathlib import Path
 
 import numpy as np
 
-# Calibration (docs/research/clip-sound.md): where a clean clip of a person talking sits, as UnderCover's clips come
+# Calibration (the maintainers' notes, clip-sound): where a clean clip of a person talking sits, as UnderCover's clips come
 # (the speaking projects' 103 reference candidates: hf_db median -16.5, floor_db -34.6, decay_db_s -304)
 HF_OK = -22.0        # hf_db at or above this is not muffled (Freeman's approved clip -14.9, the rejected v2 -26.5)
 EDGE_OK = 9000.0     # Hz: a full-band clip reaches well past this (one Obama source stops at 5.4 kHz)

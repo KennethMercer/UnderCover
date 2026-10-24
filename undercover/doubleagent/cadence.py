@@ -1,7 +1,7 @@
 """DoubleAgent's cadence work (phase 4): transcripts of a project's clips, the person's measured cadence, and a
 voice's cadence pack (the reference clip a cloning engine imitates, with the numbers SpeakEasy reads by).
 
-No training: phase 3 found zero-shot Chatterbox + RVC closest to each person's delivery (docs/research/cadence.md),
+No training: phase 3 found zero-shot Chatterbox + RVC closest to each person's delivery (the maintainers' notes, cadence),
 so "Train cadence" means: transcribe the person's clips (Whisper), rebuild stretches of their real talk and measure
 how they speak (rate, pauses, gaps between sentences), then try a few reference clips, read the same test sentences
 with each (engine + the voice's RVC) and keep the one that sounds most like them. A new pack replaces the voice's
@@ -69,14 +69,14 @@ W_GAP, W_WER = 0.25, 1.0
 # selection (W_GAP 0.25, cfg 0.3 only, three clips) made the pack the user approved; later tuning (cadence weighed more,
 # a cfg 0.2 try, a clip-sound score) measured better but sounded worse, so it was reverted (PLAN Phase 18).
 # Phase 9: how the reference clip *sounds* (clipsound.py: muffled, bandlimited, noisy, roomy, clipped) costs its
-# penalty in full, in the clips tried first and in the score (calibrated in docs/research/clip-sound.md: the muffled
+# penalty in full, in the clips tried first and in the score (calibrated in the maintainers' notes, clip-sound: the muffled
 # Freeman v2 clip loses to the approved one by it). Only new picks see it, and a new pick waits for the user's ear
 # (tts/pending/) whenever the voice already has a cadence.
 W_SOUND = 1.0
 # A new pack is offered only when it beats the live one by more than the test's own noise: the same clip scores 0.02-0.03
 # apart between runs (phase 9b: 0.668 and 0.694), and the best of five noisy scores is biased upward (was 0.005 with three)
 KEEP_MARGIN = 0.02
-# Phase 12: pace and pitch of a pack's readings against the person (docs/research/pace-pitch.md). Pitch is a property
+# Phase 12: pace and pitch of a pack's readings against the person (the maintainers' notes, pace-pitch). Pitch is a property
 # of the pack (steady across readings) and a register: the user heard Obama at 235 Hz as "a fire speech" and at 182 Hz
 # as "a calmer interview", both like him (phase 12b). So a pitch inside the range of the person's own sources (his
 # debate 137 Hz .. his rallies 233 Hz) is on pitch; only a pitch past it gets the nudge back to the nearest edge of it,

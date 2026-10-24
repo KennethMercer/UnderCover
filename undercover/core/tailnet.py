@@ -1,4 +1,4 @@
-"""Away from home (phase 20; docs/research/phase20-plan.md, the spike in docs/research/tailscale.md): Tailscale, hidden.
+"""Away from home (phase 20; the maintainers' notes, phase20-plan, the spike in the maintainers' notes, tailscale): Tailscale, hidden.
 People never meet it: one switch in SafeHouse, one sign-in, one approval, then a link that works anywhere.
 
   - the binaries: tailscaled + tailscale from the pinned MSI (downloaded on first use, the user's answer; SHA-256 of the

@@ -1,4 +1,4 @@
-"""The tray icon (phase 18; not core/tray.py, which is the recent tray of covers and speech; ARCHITECTURE "System tray", plan docs/research/tray-plan.md).
+"""The tray icon (phase 18; not core/tray.py, which is the recent tray of covers and speech; ARCHITECTURE "System tray", plan the maintainers' notes, tray-plan).
 
     pythonw -m undercover.tray [--port N]      (the server starts it; one per user, core/platform.single_instance)
 
