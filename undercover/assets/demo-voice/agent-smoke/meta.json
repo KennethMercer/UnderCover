@@ -39,8 +39,8 @@
    "para_gap_s": 0.8,
    "made": "2026-10-13",
    "source": "Kokoro am_michael (Apache-2.0), synthetic"
-  }
+  },
+  "licence": "CC0 1.0 (public domain): see ../../sample/LICENSE.txt"
  },
- "display": "Agent Smoke",
- "licence": "CC0 1.0 (public domain): see ../../sample/LICENSE.txt"
+ "display": "Agent Smoke"
 }
