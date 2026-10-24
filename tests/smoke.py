@@ -3781,6 +3781,113 @@ def u_rcfix7():
     return "Readers stand in (8 phrases, made once); staging: promote never over a voice, discard only there; one estimate"
 
 
+@check("SpeakEasy's Stop ends the GPU work (rc-fix10, the friend's PC: a long paste, Stop did nothing, the GPU at 100 % and 'about 10 min' left): a cancelled wait ends the cadence worker mid-request (a worker that never answers is gone within 2 s, by a cancel that says so or one that raises), the next request starts it again; listen-back, its re-reads and the RVC finish check Stop; a Stop between requests ends the one read ahead; no piece of a run-on paste is longer than 40 words or 280 characters; the page drops its time left at Stop")
+def u_rcfix10():
+    import inspect
+    import subprocess
+    import threading
+    from undercover.core.cadence import client
+    from undercover.core.jobs import Cancelled
+    from undercover.speakeasy import listenback, speak, tts
+    started = []
+
+    def fake_start(self):   # a worker that reads requests and never answers (an engine stuck on a run-on sentence)
+        self.proc = subprocess.Popen([sys.executable, "-c", "import sys, time\nfor line in sys.stdin:\n    time.sleep(3600)"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        started.append(self.proc)
+        threading.Thread(target=self._reader, args=(self.proc,), daemon=True).start()
+    w = client.Worker()
+    w._start = fake_start.__get__(w)
+    saved = client.WORKER
+    client.WORKER = w
+    try:
+        flag = [False]
+        fut = w.submit("tts", text="a sentence that never ends")
+        threading.Timer(0.3, lambda: flag.__setitem__(0, True)).start()
+        t0 = time.time()
+        try:
+            client.wait(fut, cancel=lambda: flag[0])
+            raise AssertionError("the wait didn't stop")
+        except Cancelled:
+            pass
+        first = started[-1]
+        for _ in range(40):
+            if first.poll() is not None and fut.done():
+                break
+            time.sleep(0.05)
+        took = time.time() - t0
+        assert first.poll() is not None and fut.done() and took < 2.0, (first.poll(), fut.done(), took)
+        assert w.proc is None or w.proc is not first
+        # a job's own check that raises (cadence training's check(), calibration's _stop): the same
+        fut2 = w.submit("tts", text="again")   # (a new worker: the next request starts one)
+        assert len(started) == 2 and started[1] is not first
+
+        def raising():
+            raise Cancelled()
+        try:
+            client.wait(fut2, cancel=raising)
+            raise AssertionError("a raising cancel didn't stop the wait")
+        except Cancelled:
+            pass
+        for _ in range(40):
+            if started[1].poll() is not None:
+                break
+            time.sleep(0.05)
+        assert started[1].poll() is not None, "a raising cancel left the worker generating"
+        # idle (nothing in it), a Stop leaves the worker alone
+        w2 = client.Worker()
+        assert w2.abort("x") is False
+    finally:
+        client.WORKER = saved
+        for p in started:
+            if p.poll() is None:
+                p.kill()
+    # every slow step checks Stop
+    mc = inspect.getsource(speak._make_cadence)
+    assert 'render.client.WORKER.abort("speech stopped")' in mc and mc.index("if job.cancel:\r\n                raise Cancelled()") < mc.index("render.finish(") if "\r\n" in mc else mc.index("if job.cancel:\n                raise Cancelled()") < mc.index("render.finish(")
+    assert "cancel=lambda: job.cancel)\n                except Cancelled:\n                    raise" in mc.replace("\r\n", "\n"), "listen-back swallows a Stop"
+    rv = inspect.getsource(listenback.review)
+    assert "client.wait(fut, cancel=cancel)" in rv and "if stopped():\n            raise Cancelled()" in rv.replace("\r\n", "\n")
+    # no piece of a run-on paste is huge: at a comma or dash first, else at a word limit
+    runon = " ".join(["and then the thing happened again" for _ in range(30)])   # 180 words, no stop at all
+    pieces = [s["text"] for s in tts.sentences(runon)]
+    assert len(pieces) >= 5 and all(len(p.split()) <= tts.MAX_WORDS and len(p) <= tts.MAX_CHARS for p in pieces), [len(p.split()) for p in pieces]
+    assert " ".join(pieces) == runon, "the split lost words"
+    commas = "this goes on, " * 25 + "and ends"
+    cp = [s["text"] for s in tts.sentences(commas)]
+    assert all(p.endswith(",") for p in cp[:-1]) and all(len(p.split()) <= tts.MAX_WORDS for p in cp), cp
+    assert tts.sentences("A short one. Another.")[0]["text"].startswith("A short one."), "normal text changed"
+    page = (ROOT / "undercover" / "web" / "speakeasy.js").read_text(encoding="utf-8")
+    assert '$("#se-stop").textContent = "Stopping…"; SE.left = null; seTrack();' in page
+    assert "SE.left = ev.total_left ?? ev.left;" in page, "the page shows the raw time left, not the job's"
+    # the time left while reading: planned seconds a word until measured; the first piece (the engine's start, the
+    # calibration) isn't a measurement; measured pieces blend in over five; the start estimate counts the pieces
+    clock = speak.PieceClock([30] * 31, 0.2, 0.8)
+    first = clock.done(0, 100.0)   # (piece 0 after 90 s of start-up: not counted)
+    assert abs(first - (30 * 30 * 0.2 + 30 * 0.8)) < 1e-6, first   # (the old way: 90 s x 30 pieces = 2700 s)
+    lefts = [clock.done(i, 100.0 + i * 9.0) for i in range(1, 11)]   # really 9 s a piece: 0.3 s a word, all costs in
+    assert lefts[0] > lefts[-1] and abs(lefts[-1] - 20 * 30 * 0.3) < 1e-6, lefts[-1]   # measured, after five
+    assert clock.measured() and abs(clock.measured() - 0.3) < 1e-6
+    quick = speak.PieceClock([30] * 5, 0.2, 0.8)   # (pieces 1 s apart, the engine reading ahead: a real speed, not 0)
+    for i in range(5):
+        quick.done(i, float(i))
+    assert abs(quick.measured() - 1 / 30) < 1e-6, quick.rates
+    ms = inspect.getsource(speak._make_cadence)
+    assert "clock = PieceClock(" in ms and "left_est=round(left, 1)" in ms and "el / (i + 1)" not in ms
+    assert "honest = clock.n >= 2 and shown is not None and left > max(shown * 1.25, shown + 10)" in ms and "new_work=honest" in ms
+    slow = speak.PieceClock([40] * 10, 0.1, 1.0)
+    for i, t in enumerate((0, 15, 30, 200, 215)):   # one piece took 170 s: the median keeps the rest's speed
+        slow.done(i, float(t))
+    assert abs(slow.measured() - (15 / 40)) < 1e-6, slow.rates
+    # listen-back hears British and American spellings as one (every "realised" piece was read three times)
+    assert [listenback._clean(w) for w in ("realised", "realized", "colour", "four", "your", "hour")] == ["realized", "realized", "color", "four", "your", "hour"]
+    assert listenback.problems("I realised it", [["I", 0, .1, .9], ["realized", .1, .5, .9], ["it", .5, .6, .9]]) == []
+    es = inspect.getsource(speak.eta_seconds)
+    assert "cadence_pieces(tts.sentences(text))" in es and "CALIBRATE_S" in es and "per_word(p)" in es
+    return f"a stuck worker gone in {took:.1f} s (and by a raising cancel); Stop checked in listen-back and the finish; run-ons in {len(pieces)} pieces"
+
+
 @check("a training's time, said once and kept (rc-eta, IA's training proof: 'about 61 min' planned, 2 h 22 min taken; +53 min at the voice step, +29 min at epoch 2; past the plan the bar went 0.927 -> 0.799 and the time left 382 -> 1174 s): one estimator for a new voice from this PC's measured shape (kept minutes against the target, preparation rate, epochs past the plan, step speed), the same before and after the search; the job keeps the plan's number; a first epoch's speed blends in; the bar never goes back and the time left rises only by epochs added, said as such; an install with no name is named from its source")
 def u_rceta():
     import inspect
@@ -9662,7 +9769,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

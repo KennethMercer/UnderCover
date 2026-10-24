@@ -111,6 +111,7 @@ def synth(text: str, reader: str, speed: float = 1.0) -> np.ndarray:
 _END = re.compile(r'(?<=[.!?…])["\')\]]*\s+(?=["\'(\[]?[A-Z0-9])')
 _ABBR = re.compile(r"\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Prof|Mt|Gen|Col|Lt|Sgt|Rev|vs|etc|e\.g|i\.e|[A-Z])\.$")
 MAX_CHARS = 280   # Kokoro reads up to ~510 phonemes at once; long sentences are split at a comma or semicolon
+MAX_WORDS = 40    # and no piece longer than this many words (rc-fix10: a run-on paste's "sentence" read for minutes)
 
 
 def sentences(text: str) -> list[dict]:
@@ -141,11 +142,15 @@ def sentences(text: str) -> list[dict]:
 
 
 def _split_long(s: str) -> list[str]:
-    if len(s) <= MAX_CHARS:
+    """A sentence too long to read in one breath, at the last comma, semicolon, colon or dash inside the limit (not too
+    near its start), else at a space: within MAX_CHARS characters and MAX_WORDS words."""
+    words = s.split()
+    if len(s) <= MAX_CHARS and len(words) <= MAX_WORDS:
         return [s]
-    cut = max((m.end() for m in re.finditer(r"[;:,—–]\s", s[:MAX_CHARS])), default=0)
+    limit = min(MAX_CHARS, len(" ".join(words[:MAX_WORDS])) + 1)
+    cut = max((m.end() for m in re.finditer(r"[;:,—–-]\s", s[:limit])), default=0)
     if cut < 40:
-        cut = s.rfind(" ", 0, MAX_CHARS) + 1 or MAX_CHARS
+        cut = s.rfind(" ", 0, limit) + 1 or limit
     return [s[:cut].strip()] + _split_long(s[cut:].strip())
 
 

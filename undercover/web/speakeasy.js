@@ -260,7 +260,7 @@ function seStart(job, plan, estimate, resumed = false) {
     if (ev.stage === "reading") $("#se-progress").textContent = ev.message.toLowerCase();
     if (ev.stage === "speaking") {
       SE.parts[ev.index] = { url: ev.url, seconds: ev.seconds };
-      SE.left = ev.left;
+      SE.left = ev.total_left ?? ev.left;   // (the job's own, held to its count-down rule: rc-fix10)
       seReading();
       const ready = SE.parts.filter(Boolean).length, last = ev.index + 1 >= ev.of;
       if (!SE.started && (ready >= SE.startAfter || last)) SE.started = true;   // enough to play through: ready, never played by itself
@@ -294,7 +294,7 @@ function seStart(job, plan, estimate, resumed = false) {
 }
 $("#se-stop").onclick = async () => {
   SE.audio.pause(); SE.waiting = false; sePlayIcon();
-  if (SE.job && !SE.done) { $("#se-stop").textContent = "Stopping…"; try { await api(`/api/jobs/${SE.job}/cancel`, { json: {} }); } catch (e) {} }
+  if (SE.job && !SE.done) { $("#se-stop").textContent = "Stopping…"; SE.left = null; seTrack(); try { await api(`/api/jobs/${SE.job}/cancel`, { json: {} }); } catch (e) {} }   // (no "about 10 min to make" after a Stop: rc-fix10)
 };
 
 function seReading() {

@@ -127,10 +127,14 @@ def settings() -> dict:
 
 
 def _clean(w: str) -> str:
-    """A word as compared: lower case, letters / digits / apostrophes only, and a number Whisper wrote as digits
-    ("9") read as the word it says ("nine")."""
+    """A word as compared: lower case, letters / digits / apostrophes only, a number Whisper wrote as digits ("9")
+    read as the word it says ("nine"), and British and American spellings as one (rc-fix10: Whisper writes
+    "realized" for "realised", and every piece with it was read three times over a word said right)."""
     w = re.sub(r"[^a-z0-9']", "", w.lower())
-    return NUMBERS.get(w, w)
+    w = NUMBERS.get(w, w)
+    w = re.sub(r"(?<=\w\w)is(e|ed|es|ing|ation|ations|er|ers)$", r"iz\1", w)   # realise / realize
+    w = re.sub(r"(?<=\w\w\w)our(s|ed|ing|ite|ites|able|ful)?$", r"or\1", w)   # colour / color (not four, your, hour)
+    return w
 
 
 def text_words(text: str) -> list[tuple[str, bool]]:
@@ -254,8 +258,11 @@ def insert_pause(x: np.ndarray, sr: int, at: float, seconds: float) -> np.ndarra
     return np.concatenate([x[:i], np.zeros(int(seconds * sr), np.float32), x[i:]])
 
 
-def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, log: dict) -> Path:
-    """The listen-back for one sentence: -> the take to convert (a new WAV when something was mended)."""
+def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, log: dict, cancel=None) -> Path:
+    """The listen-back for one sentence: -> the take to convert (a new WAV when something was mended). cancel() -> True:
+    Stop, between its steps and during a re-read (rc-fix10)."""
+    from ..core.jobs import Cancelled
+    stopped = lambda: cancel is not None and cancel()
     s = settings()
     t0 = time.perf_counter()
     timing = s["stretch_words"] or s["comma_lengthen"]   # Kokoro's timing reference only when a stretch may follow
@@ -268,9 +275,11 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     best = (Path(wav), seed, heard[0]["words"], problems(text, heard[0]["words"]))
     tries = 1
     while best[3] and tries < max(1, s["tries"]):   # read again with a new seed; keep the take with fewest problems
+        if stopped():
+            raise Cancelled()
         nseed = seed + 1000 * tries
         fut, w2 = render.request(text, pack, ref, seed=nseed)
-        client.wait(fut)
+        client.wait(fut, cancel=cancel)
         h = hear([str(w2)])[0]["words"]
         p = problems(text, h)
         takes.append((Path(w2), nseed))
