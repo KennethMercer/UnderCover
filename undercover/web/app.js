@@ -48,7 +48,7 @@ function aOrAn(word) {
   if (lead && (lead.length <= 3 || !/[AEIOU]/.test(lead))) return /^[AEFHILMNORSX]/.test(lead) ? "an" : "a";
   const l = w.toLowerCase();
   if (/^(hour|honest|honou?r|heir|herb)/.test(l)) return "an";
-  if (/^(uni(?![nm])|us[aeu]|ut[eio]|uk|ur[aeiou]|eu|ewe|one\b|one-|once|ouija)/.test(l)) return "a";
+  if (/^(uni(?![nm])|us[aeu]|ut[eio]|uk|ur[aeiou]|eu|ewe|one\b|once|ouija)/.test(l)) return "a";
   return /^[aeiou]/.test(l) ? "an" : "a";
 }
 // "No covers yet" / "1 cover" / "3 covers": never "0 covers"

@@ -3,12 +3,32 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## Unreleased
+## 1.0.1
 
+**Licence** (licence, v101)
 - UnderCover is licensed under the GNU Affero General Public License, version 3 or later (LICENSE, NOTICE,
   CONTRIBUTING.md). "Hold On" and Agent Smoke are public domain (CC0 1.0).
+- The install folder has LICENSE, NOTICE and README.md.
+
+**The installer** (v101)
+- A long file name on the download page is shortened in the middle, so the line fits.
+- Files kept from an earlier run are checked against their SHA-256 again before they're used; a damaged one is
+  downloaded again.
+
+**Honest times** (v101)
+- The speech engine gets ready while UnderCover is idle, so the first speech of a session starts sooner. When it
+  isn't ready yet, the time SpeakEasy says includes the start-up and names it.
+- Improve's estimate comes from how this PC trains: its preparation rate, its training speed, and whether it refines
+  or retrains.
+- The overnight report's Improve line says whole minutes, or "no new clips", once.
+
+**Small things** (hotfix-meta, v101)
 - Running from source, a fresh library's voice list failed: the demo voice's settings file carried a note the
-  voice list didn't expect. Voices now load whatever extra notes their settings carry (hotfix-meta).
+  voice list didn't expect. Voices now load whatever extra notes their settings carry.
+- An import's Install button names its second round (the voice's index) and its preview line, instead of counting
+  to 100 % twice.
+- A community voice chosen by the one-shot's check is listed under the name the check used.
+- "A" or "an" goes by the sound of the word: a unique voice, an R&B version.
 
 ## 1.0.0 (2026-10-24)
 
