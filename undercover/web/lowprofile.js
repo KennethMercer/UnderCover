@@ -35,11 +35,11 @@ async function lpSet(patch) {
   catch (e) { showError(e.message, "Low profile"); api("/api/status").then(s => renderLowProfile(s.low_profile, s)).catch(() => {}); }
   if (typeof pollStatusSoon === "function") pollStatusSoon();   // the strip's words follow (work.js)
 }
-function lpOpen() {
+function lpOpen(focus = true) {
   const pop = $("#lp-pop"), r = $("#lp-chip").getBoundingClientRect();
   LP.open = true; lpFill(); pop.hidden = false; $("#lp-more").setAttribute("aria-expanded", "true");
   pop.style.top = `${Math.round(r.bottom + 10)}px`; pop.style.right = `${Math.max(12, Math.round(innerWidth - r.right))}px`;
-  $("#lp-switch").focus();
+  if (focus) $("#lp-switch").focus();
 }
 function lpClose() { LP.open = false; $("#lp-pop").hidden = true; $("#lp-more")?.setAttribute("aria-expanded", "false"); }
 $("#lp-toggle").onclick = () => lpSet({ on: !LP.on });
@@ -52,4 +52,4 @@ $("#lp-burst").addEventListener("input", () => { $("#lp-burst-out").textContent 
 $("#lp-burst").addEventListener("change", () => lpSet({ burst: +$("#lp-burst").value / 100 }));
 document.addEventListener("keydown", e => { if (e.key === "Escape" && LP.open) { lpClose(); $("#lp-more").focus(); } });
 document.addEventListener("click", e => { if (LP.open && !$("#lp-pop").contains(e.target) && !$("#lp-chip").contains(e.target)) lpClose(); });
-addEventListener("resize", () => { if (LP.open) lpOpen(); });
+addEventListener("resize", () => { if (LP.open) lpOpen(false); });   // re-placed under the chip, the focus left where it is
