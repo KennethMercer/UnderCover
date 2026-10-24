@@ -260,7 +260,7 @@ function seStart(job, plan, estimate, resumed = false) {
     if (ev.stage === "reading") $("#se-progress").textContent = ev.message.toLowerCase();
     if (ev.stage === "speaking") {
       SE.parts[ev.index] = { url: ev.url, seconds: ev.seconds };
-      SE.left = ev.left;
+      SE.left = ev.total_left ?? ev.left;   // (the job's own, held to its count-down rule: rc-fix10)
       seReading();
       const ready = SE.parts.filter(Boolean).length, last = ev.index + 1 >= ev.of;
       if (!SE.started && (ready >= SE.startAfter || last)) SE.started = true;   // enough to play through: ready, never played by itself

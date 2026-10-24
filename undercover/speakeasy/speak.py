@@ -255,6 +255,82 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
 START_AFTER = 3   # cadence engines read slower than realtime: playback starts once this many sentences are ready
 
 
+def cadence_pieces(sents: list) -> list:
+    """The pieces the cadence engine reads, one request each: a sentence's comma clauses when [speakeasy] clause_split is
+    on, a very short sentence joined to its neighbour."""
+    from ..core.cadence import render
+    if (CONFIG.get("speakeasy") or {}).get("clause_split"):
+        sents = render.split_clauses(sents)
+    return render.join_short(sents)
+
+
+class PieceClock:
+    """The time left while a speech is read, piece by piece (rc-fix10, the friend's PC: "about 10 min" on a paste the
+    engine read in a few; a run-on here said 1222 s after two pieces against 130 s planned). The old way divided the
+    time so far by the pieces made, the engine's start and the pace calibration included, and multiplied by the
+    pieces left. Now: the planned seconds a word (this PC's measured speed) until pieces are measured; from the second
+    piece on (the first carries the start) the measured speed blends in over five pieces, as a training's epochs do
+    (rc-eta). The job says it by its usual rule: it counts down, and rises only slowly."""
+
+    def __init__(self, words: list, per_word: float, overhead: float):
+        self.words, self.per_word, self.overhead = [max(1, w) for w in words], per_word, overhead
+        self.last = None   # when the last piece was made
+        self.meas_s, self.meas_w, self.n = 0.0, 0, 0
+
+    def done(self, i: int, now: float) -> float:
+        """Piece i is made: -> seconds left for the pieces after it."""
+        if self.last is not None:   # (piece i's own time, from the one before it)
+            self.meas_s += max(0.0, now - self.last - self.overhead)
+            self.meas_w += self.words[i]
+            self.n += 1
+        self.last = now
+        w = min(1.0, self.n / 5)
+        rate = w * (self.meas_s / self.meas_w) + (1 - w) * self.per_word if self.meas_w else self.per_word
+        rest = self.words[i + 1:]
+        return sum(rest) * rate + len(rest) * self.overhead
+
+    def measured(self) -> float | None:
+        return self.meas_s / self.meas_w if self.n >= 3 and self.meas_w else None
+
+
+SPEED_FILE = "speak_speed.json"   # cache/: the cadence engines' measured seconds a word, by engine (and listen-back)
+PIECE_S = 0.8          # a piece's own cost besides its words: the RVC finish and levelling (measured 0.5-1 s)
+CALIBRATE_S = 45.0     # a pack's pace calibration, once per pack and engine (measured about 40 s, Agent Smoke)
+
+
+def _speed_key(p: dict) -> str:
+    from . import listenback
+    return f"{p.get('engine')}{'+lb' if listenback.settings().get('listen_back') else ''}"
+
+
+def per_word(p: dict) -> float:
+    """This PC's seconds a word for this engine (the median of the last speeches), else the engine's own speed: about
+    3 words a second of speech, at its realtime factor, listen-back's re-reads on top."""
+    from . import listenback
+    try:
+        xs = sorted(json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(_speed_key(p), []))
+    except (OSError, ValueError):
+        xs = []
+    if xs:
+        return xs[len(xs) // 2]
+    base = (1 / 3.0) / max(float(p.get("rtf") or 1.0), 0.05)
+    return base * (LISTEN_BACK if listenback.settings().get("listen_back") else 1.0)
+
+
+def _record_speed(p: dict, sec_per_word: float):
+    d = {}
+    try:
+        d = json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    k = _speed_key(p)
+    d[k] = (d.get(k, []) + [round(sec_per_word, 4)])[-12:]
+    try:
+        fsutil.write_text(path("cache_dir") / SPEED_FILE, json.dumps(d))
+    except OSError:
+        pass
+
+
 def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> dict:
     """The person's cadence: the engine reads each sentence (worker process, one sentence ahead), the voice's RVC
     model makes it their exact timbre, and their own gap between sentences follows."""
@@ -263,9 +339,7 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
     t0 = time.perf_counter()
     from . import listenback
     lb = listenback.settings()
-    if (CONFIG.get("speakeasy") or {}).get("clause_split"):
-        sents = render.split_clauses(sents)
-    sents = render.join_short(sents)   # a sentence of a word or two is read with its neighbour (no stray sound before it)
+    sents = cadence_pieces(sents)   # (comma clauses when asked; a sentence of a word or two read with its neighbour)
     v = get_voice(p["voice"])
     if service.pace_needs_calibration(v):   # once per pack and engine: its natural pace is matched to the person's own
         job.push(stage="reading", frac=0.0, message="Matching their pace (once, about a minute)")
@@ -289,6 +363,7 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
 
     def progress(msg, done=0, total=0):
         job.push(stage="reading", frac=0.0, message=msg)
+    clock = PieceClock([len(s["text"].split()) for s in sents], per_word(p), PIECE_S)
     reqs: list = []
     pieces, made, t_tts, t_rvc, t_lb = [], 0.0, 0.0, 0.0, 0.0
     pitch_hist: list = []   # each sentence's offset from the person's pitch (an engine that reads off it, Turbo)
@@ -330,11 +405,12 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
             sf.write(str(f), y, sr, subtype="PCM_16")
             pieces.append(y)
             made += len(y) / sr
-            el = time.perf_counter() - t0
-            left = el / (i + 1) * (len(sents) - i - 1)
+            left = clock.done(i, time.perf_counter())
             job.push(stage="speaking", frac=round((i + 1) / len(sents), 3), index=i, of=len(sents), url=file_url(f),
-                     seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1), total_left=round(left, 1),
+                     seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1), left_est=round(left, 1),
                      message=f"Sentence {i + 1} of {len(sents)} ready")
+        if clock.measured():   # this PC's speed, for the next speech's first estimate
+            _record_speed(p, clock.measured())
     except BaseException:
         if job.cancel:   # Stop: the sentence the worker reads ahead is ended too, not left to finish (rc-fix10)
             render.client.WORKER.abort("speech stopped")
@@ -410,16 +486,22 @@ def eta_seconds(text: str, p: dict) -> float:
     """How long making this speech takes (Internal Affairs m10: one sentence promised 0:05 was made in 39 s: the
     audio's length had been given as the time, and listen-back and the models' start weren't counted)."""
     from ..core.cadence import client
-    audio = tts.seconds_estimate(text, p.get("speed") or 1.0)
-    t = audio / max(float(p.get("rtf") or 1.0), 0.05) + VOICE_S
-    if p.get("mode") == "cadence":
+    if p.get("mode") == "cadence":   # (rc-fix10) the pieces it will read, by their words, at this PC's speed
         from . import listenback
-        t *= LISTEN_BACK if listenback.settings().get("listen_back") else 1.0
+        pieces = cadence_pieces(tts.sentences(text))
+        t = sum(len(s["text"].split()) for s in pieces) * per_word(p) + len(pieces) * PIECE_S + VOICE_S
         if not client.WORKER.running():
             t += COLD_ENGINE_S
         if listenback.settings().get("listen_back") and listenback._ASR.get("model") is None:
             t += COLD_EAR_S
-    return round(t, 1)
+        try:
+            if service.pace_needs_calibration(get_voice(p["voice"])):
+                t += CALIBRATE_S
+        except Exception:   # noqa: BLE001 - only the estimate
+            pass
+        return round(t, 1)
+    audio = tts.seconds_estimate(text, p.get("speed") or 1.0)
+    return round(audio / max(float(p.get("rtf") or 1.0), 0.05) + VOICE_S, 1)
 
 
 def _item(m: dict) -> dict:

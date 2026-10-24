@@ -33,7 +33,7 @@ class Worker:
     def __init__(self):
         self.proc = None
         self.lock = threading.RLock()
-        self.pending: dict[int, tuple[Future, object]] = {}
+        self.pending: dict[int, tuple[Future, object, object]] = {}   # id -> (future, progress, the process it went to)
         self.n = 0
         self.last = time.time()
         self.log = None
@@ -67,7 +67,7 @@ class Worker:
                 entry = self.pending.get(msg.get("id"))
             if entry is None:
                 continue
-            fut, on_progress = entry
+            fut, on_progress, _ = entry
             if "progress" in msg:
                 if on_progress:
                     try:
@@ -87,9 +87,10 @@ class Worker:
         with self.lock:
             if self.proc is proc:
                 self.proc = None
-            lost = list(self.pending.values())
-            self.pending.clear()
-        for fut, _ in lost:
+            # only this process's requests: after a Stop ended it, a new one may already be reading the next speech
+            mine = [k for k, e in self.pending.items() if e[2] is proc]
+            lost = [self.pending.pop(k) for k in mine]
+        for fut, _, _ in lost:
             if not fut.done():
                 fut.set_exception(WorkerError(f"The speech engine stopped unexpectedly (exit code {code}). "
                                               "Details are in logs/cadence-worker.log; try again.", "Crashed"))
@@ -109,7 +110,7 @@ class Worker:
         alone. -> True when it was ended."""
         with self.lock:
             proc = self.proc
-            if proc is None or proc.poll() is not None or not self.pending:
+            if proc is None or proc.poll() is not None or not any(e[2] is proc for e in self.pending.values()):
                 return False
             self.proc = None   # (a request after this starts a new one, never writes to the dying one)
         try:
@@ -143,7 +144,7 @@ class Worker:
                 self._start()
             self.n += 1
             rid = self.n
-            self.pending[rid] = (fut, progress)
+            self.pending[rid] = (fut, progress, self.proc)
             self.last = time.time()
             try:
                 self.proc.stdin.write((json.dumps({"id": rid, "op": op, **kw}) + "\n").encode("utf-8"))

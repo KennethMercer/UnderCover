@@ -3860,6 +3860,19 @@ def u_rcfix10():
     assert tts.sentences("A short one. Another.")[0]["text"].startswith("A short one."), "normal text changed"
     page = (ROOT / "undercover" / "web" / "speakeasy.js").read_text(encoding="utf-8")
     assert '$("#se-stop").textContent = "Stopping…"; SE.left = null; seTrack();' in page
+    assert "SE.left = ev.total_left ?? ev.left;" in page, "the page shows the raw time left, not the job's"
+    # the time left while reading: planned seconds a word until measured; the first piece (the engine's start, the
+    # calibration) isn't a measurement; measured pieces blend in over five; the start estimate counts the pieces
+    clock = speak.PieceClock([30] * 31, 0.2, 0.8)
+    first = clock.done(0, 100.0)   # (piece 0 after 90 s of start-up: not counted)
+    assert abs(first - (30 * 30 * 0.2 + 30 * 0.8)) < 1e-6, first   # (the old way: 90 s x 30 pieces = 2700 s)
+    lefts = [clock.done(i, 100.0 + i * (30 * 0.3 + 0.8)) for i in range(1, 11)]   # really 0.3 s a word
+    assert lefts[0] > lefts[-1] and abs(lefts[-1] - (20 * 30 * 0.3 + 20 * 0.8)) < 1, lefts[-1]   # measured, after five
+    assert clock.measured() and abs(clock.measured() - 0.3) < 1e-6
+    ms = inspect.getsource(speak._make_cadence)
+    assert "clock = PieceClock(" in ms and "left_est=round(left, 1)" in ms and "el / (i + 1)" not in ms
+    es = inspect.getsource(speak.eta_seconds)
+    assert "cadence_pieces(tts.sentences(text))" in es and "CALIBRATE_S" in es and "per_word(p)" in es
     return f"a stuck worker gone in {took:.1f} s (and by a raising cancel); Stop checked in listen-back and the finish; run-ons in {len(pieces)} pieces"
 
 
