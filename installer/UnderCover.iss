@@ -86,8 +86,8 @@ Source: "space.ps1"; Flags: dontcopy
 Source: "sizes.json"; Flags: dontcopy
 Source: "detect_gpu.ps1"; Flags: dontcopy
 Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ignoreversion
-; The friend-facing briefing (installer/FRIENDS.md): what to expect, Repair, the optional extras, uninstall
-Source: "FRIENDS.md"; DestDir: "{app}"; DestName: "READ ME.md"; Flags: ignoreversion
+; The install guide (installer/GUIDE.md): what to expect, Repair, the optional extras, uninstall
+Source: "GUIDE.md"; DestDir: "{app}"; DestName: "READ ME.md"; Flags: ignoreversion
 
 #ifndef ReleaseCheck
 [Icons]

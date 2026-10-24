@@ -1,0 +1,71 @@
+UnderCover
+Copyright (C) 2026 Ken Mercer and the UnderCover contributors
+
+UnderCover is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General
+Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option)
+any later version. See LICENSE. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY.
+
+The names UnderCover, FrontMan, DoubleAgent, SpeakEasy, SafeHouse and Deep Cover identify this project. The licence
+does not grant their use: a fork should use its own names.
+
+This licence covers the code in this repository. It does not cover:
+
+- the AI models UnderCover downloads at setup, each under its publisher's terms (listed below);
+- voices: a trained voice model, and any voice pack shared later, carries its own licence and consent statement,
+  stated by whoever made it;
+- the song "Hold On" and the demo voice Agent Smoke, which are dedicated to the public domain under CC0 1.0
+  (undercover/assets/sample/LICENSE.txt).
+
+
+INCLUDED IN THIS REPOSITORY
+===========================
+
+Retrieval-based-Voice-Conversion-WebUI (RVC), parts vendored at commit 81eed5e8f6
+  undercover/core/engine/rvc/ (attentions, commons, modules, synth, transforms, rmvpe, train_parts)
+  Copyright (c) 2023 liujing04, 源文雨, Ftps. MIT License: undercover/core/engine/rvc/LICENSE-RVC
+  Changes: inference and training parts only, imports made package-relative, RMVPE trimmed to the torch path.
+
+Schibsted Grotesk: Copyright 2023 The Schibsted-Grotesk Project Authors. SIL Open Font License 1.1
+JetBrains Mono:    Copyright 2020 The JetBrains Mono Project Authors.    SIL Open Font License 1.1
+VT323:             Copyright 2011, The VT323 Project Authors.            SIL Open Font License 1.1
+  undercover/web/fonts/ (WOFF2 files; the licence texts sit next to them)
+
+
+MODELS UNDERCOVER DOWNLOADS (from their publishers; not included here)
+=====================================================================
+
+RVC v2 base models, HuBERT base and RMVPE: lj1995/VoiceConversionWebUI (Hugging Face), MIT.
+
+WeSpeaker ResNet34-LM speaker model: by the WeSpeaker project (wenet-e2e), trained on VoxCeleb,
+  Creative Commons Attribution 4.0 International. Used unchanged (ONNX).
+  https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM
+
+Chatterbox and Chatterbox-Turbo: Resemble AI, MIT. Their output carries Resemble AI's Perth watermark
+  (resemble-perth, MIT).
+Whisper large-v3-turbo: OpenAI, MIT.
+Kokoro-82M: hexgrad, Apache License 2.0; ONNX files from kokoro-onnx (thewh1teagle), MIT.
+
+Vocal separation models (Mel-Band Roformer), from the UVR community, through audio-separator's model sources:
+  vocals:    mel_band_roformer_kim_ft_unwa: a fine-tune by unwa of Kimberley Jensen's Mel-Band Roformer (MIT).
+             No licence stated for the fine-tune.
+  de-reverb: dereverb_mel_band_roformer_anvuew by anvuew, GNU GPL 3.0.
+  karaoke:   mel_band_roformer_karaoke by aufr33 and viperx. No licence stated.
+
+Optional add-ons (never installed unless the user accepts their licence):
+  F5-TTS: SWivid, code MIT, weights Creative Commons Attribution-NonCommercial 4.0.
+  Vocos mel-24khz: charactr, MIT.
+
+
+SOFTWARE UNDERCOVER INSTALLS (from their publishers; not included here)
+======================================================================
+
+Python 3.12 (PSF License), through uv (MIT or Apache 2.0) and python-build-standalone.
+PyTorch, torchaudio, torchvision (BSD-3-Clause); AMD ROCm for Windows or NVIDIA CUDA builds, under their vendors'
+  terms.
+FFmpeg 8.0, the GyanD "essentials" build: GNU GPL 3.0. https://ffmpeg.org
+Deno (MIT), used by yt-dlp.
+yt-dlp (The Unlicense).
+eSpeak NG (GNU GPL 3.0 or later), through espeakng-loader; phonemizer (GNU GPL 3.0 or later); both used by Kokoro.
+pystray (LGPL 3.0), for the icon near the clock. soxr (LGPL 2.1 or later).
+audio-separator (MIT), librosa (ISC), onnxruntime (MIT), transformers (Apache 2.0), and the other Python packages
+  pinned in installer/requirements/, each under its own licence.

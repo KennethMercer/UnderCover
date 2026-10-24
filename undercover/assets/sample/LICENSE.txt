@@ -1,0 +1,11 @@
+The song "Hold On" by Ken Mercer (from the album No Enemy But Time), both the excerpt (hold-on.mp3) and the whole
+song (classified/hold-on (full).mp3), and the demo voice Agent Smoke (../demo-voice/agent-smoke/, made for UnderCover
+from Kokoro's am_michael reading public-domain text; not a real person) are dedicated to the public domain.
+
+To the extent possible under law, Ken Mercer has waived all copyright and related or neighbouring rights to these
+works. You can copy, change, share and use them, for any purpose, without asking.
+
+CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
+
+This dedication covers these files only. UnderCover's code is under the GNU Affero General Public License (see the
+LICENSE file at the top of the repository), and voices you train or download carry their own terms.
