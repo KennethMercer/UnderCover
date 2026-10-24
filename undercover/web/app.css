@@ -128,7 +128,6 @@ canvas.seekable { cursor: pointer; height: 64px; }
    only in Deep (data-deep). Plain words; sentences, plans and button labels stay sentences. */
 .facts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; min-width: 0; }
 .fact { display: inline-block; max-width: 100%; overflow-wrap: anywhere; padding: 1px 9px; border-radius: 11px;   /* a long fact wraps inside its pill (never cut off) */
- 
   background: color-mix(in srgb, var(--fg) 8%, transparent); color: color-mix(in srgb, var(--fg) 80%, var(--muted)); font: 500 12.5px/1.6 var(--body); }
 .fact.muted { color: color-mix(in srgb, var(--fg) 22%, var(--muted)); }   /* the least important, still readable on the pill (4.5:1 in both modes) */
 .fact.ok { color: var(--ok); } .fact.warn { color: var(--warn); } .fact.bad { color: var(--err); }
