@@ -133,6 +133,38 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .fact.ok { color: var(--ok); } .fact.warn { color: var(--warn); } .fact.bad { color: var(--err); }
 .fact[data-deep] { font: 500 12px/1.65 var(--mono); }
 .fact .like { font-weight: 600; }
+/* Low profile (lowprofile.js): the chip is one switch and, in Deep Cover, a "▾" for the numbers; on, the mark lights in the accent with a small ½ */
+.lp-chip { gap: 4px; }
+.lp-chip[hidden] { display: none; }
+.lp-chip button { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.lp-chip .lp-btn .ico { width: 18px; height: 18px; }
+.lp-chip .lp-btn[aria-checked="true"] { color: var(--accent); }
+.lp-chip .lp-btn[aria-checked="true"] .ico { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 75%, transparent)); }
+.lp-chip .lp-half { display: none; font: 700 11.5px/1 var(--body); padding: 2px 5px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); }
+.lp-chip .lp-btn[aria-checked="true"] .lp-half { display: inline-block; }
+.lp-chip .lp-more { font-size: 10px; opacity: .75; padding: 2px; }
+.lp-chip .lp-more:hover, .lp-chip .lp-more[aria-expanded="true"] { opacity: 1; color: var(--fg); }
+.lp-pop { position: fixed; z-index: 60; width: 344px; padding: 16px 18px 18px; border-radius: 12px; background: var(--panel); color: var(--fg);
+  box-shadow: 0 22px 48px -16px rgba(0, 0, 0, .6), 0 0 0 1px var(--line); display: grid; gap: 14px; }
+.lp-pop[hidden] { display: none; }
+.lp-pop .lp-h { display: flex; align-items: center; gap: 10px; }
+.lp-pop .lp-h .ico { width: 22px; height: 22px; color: var(--accent); }
+.lp-pop .lp-h b { flex: 1; font: 650 16px/1.2 var(--display); }
+.lp-pop p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.lp-row { display: grid; gap: 6px; }
+.lp-row .lp-k { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; font-size: 13.5px; }
+.lp-row .lp-k b { font-weight: 600; }
+.lp-row .lp-k span { font: 500 12.5px var(--mono); color: var(--muted); }
+.lp-row input[type=range] { width: 100%; accent-color: var(--accent); }
+.lp-row .lp-ends { display: flex; justify-content: space-between; font: 500 11.5px var(--mono); color: var(--muted); }
+.lp-row.lp-auto { grid-template-columns: 1fr auto; align-items: center; }
+.lp-row.lp-auto small { display: block; color: var(--muted); font-size: 12.5px; }
+.lp-sep { height: 1px; background: var(--line); }
+.lp-wbmark { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
+.lp-wbmark .ico { width: 15px; height: 15px; }
+.gp-ask .btn.lp-primary { background: var(--accent); color: var(--accent-ink); display: inline-flex; align-items: center; gap: 6px; }
+.gp-ask .btn.lp-primary .ico { width: 15px; height: 15px; }
+@media (max-width: 520px) { .lp-chip .lp-label { display: none; } .lp-pop { left: 12px !important; right: 12px !important; width: auto; } }
 /* a search field (FrontMan's two "Set it up yourself" cards): the icon inside, a visible border, its Search button */
 .sfield { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border: 1px solid color-mix(in srgb, var(--muted) 60%, transparent); border-radius: 10px;
   background: var(--panel-2); }

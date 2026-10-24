@@ -181,10 +181,13 @@ function gameAsk(a) {
   const box = $("#gp-ask");
   box.hidden = !a;
   if (!a) return;
-  $("#gp-q").textContent = `${a.title || a.exe} is full-screen while ${a.reason || "UnderCover is working on the graphics card"}. Pause UnderCover while you play?`;
+  const low = typeof LP !== "undefined" && LP.known;   // with Low profile there (lowprofile.js), it's the first answer
+  $("#gp-q").textContent = `${a.title || a.exe} is full-screen while ${a.reason || "UnderCover is working on the graphics card"}. ` +
+    (low ? "Low profile while you play? UnderCover keeps to half the graphics card and works in bursts." : "Pause UnderCover while you play?");
+  $("#gp-low").hidden = !low;
   $("#gp-never").textContent = `Don't ask for ${a.exe}`;
 }
-for (const [id, answer] of [["gp-pause", "pause"], ["gp-both", "both"], ["gp-never", "never"]]) {
+for (const [id, answer] of [["gp-low", "low"], ["gp-pause", "pause"], ["gp-both", "both"], ["gp-never", "never"]]) {
   $("#" + id).onclick = async () => {
     try { await api("/api/gamepause", { json: { answer } }); $("#gp-ask").hidden = true; }
     catch (e) { showError(e.message, "Couldn't answer the game question"); }
@@ -203,6 +206,7 @@ async function pollStatus() {
     $("#set-away-me-row").hidden = !s.away_ready || location.protocol === "https:";   // phase 20: ready on the PC
     if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
     sysStatus(s);
+    if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)
     if (typeof firstReady === "function") firstReady(s);   // the first start's download in the one-shot card (oneshot.js)
     if (s.stale) restartNeeded();
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident

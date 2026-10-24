@@ -2793,7 +2793,7 @@ def u_layout():
     if not files:
         return "not a git checkout: skipped"
     top = sorted({f.split("/")[0] for f in files})
-    assert top == [".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "NOTICE", "README.md", "docs", "installer", "scripts", "tests",
+    assert top == [".github", ".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "NOTICE", "README.md", "docs", "installer", "scripts", "tests",
                    "undercover"], top
     assert sorted(f for f in files if f.startswith("docs/")) == ["docs/ARCHITECTURE.md", "docs/MASTERPLAN.md", "docs/THEMES.md"]
     # layout2 (user, 2026-10-17: "do it"): the tests and what they need in tests/, the things you run in scripts/
@@ -7866,6 +7866,15 @@ def u_page_rules():
     assert song_card.index('class="search sfield"') < song_card.index('id="drop"') and 'id="yt-go" type="button">Search</button>' in song_card, "the song card's search isn't at the top"
     assert 'class="search sfield"' in voice_card and 'id="q-go" type="button">Search</button>' in voice_card and voice_card.count('href="#g-search"') == 1 and song_card.count('href="#g-search"') == 1, "the voice card's search isn't a search field"
     assert '<symbol id="g-search"' in ix and ".sfield {" in css and '$("#q-go").onclick = voiceSearchNow' in app, "the search fields lost their icon, border or button"
+    # Low profile (the user's mockup, approved 2026-10-24): the control in the top bar, hidden without the backend's status field; the numbers behind the
+    # Deep "▾"; the strip's words; the game question's first answer; the hooks in ARCHITECTURE "UI" (What's new says it with the 1.0.2 release, not before)
+    lpj = (web / "lowprofile.js").read_text(encoding="utf-8")
+    assert '<script src="/static/lowprofile.js">' in ix and 'id="lp-chip" hidden' in ix and 'id="lp-pop" hidden' in ix and 'id="gp-low" type="button" hidden' in ix and '<symbol id="g-lowprofile"' in ix, "the Low profile control lost its markup"
+    assert 'id="lp-more"' in ix and 'data-deep>▾' in ix and 'id="set-lowprofile' not in ix, "the numbers must live behind the Deep ▾ only (no Settings row)"
+    assert "renderLowProfile(s.low_profile, s)" in app and 'if (!lp) { LP.known = false; chip.hidden = true;' in lpj and '"/api/lowprofile"' in lpj and "const lowProfileOn" in lpj, "the page doesn't follow the status's low_profile"
+    assert '["gp-low", "low"]' in app and "Low profile while you play?" in app and "lowProfileOn()" in work and "Working at a low profile" in work, "the game question or the strip lost Low profile"
+    arch = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    assert "POST /api/lowprofile" in arch and "`low_profile`" in arch, "ARCHITECTURE's UI section doesn't carry the Low profile hooks"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
@@ -8168,7 +8177,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
     ("GET", "/api/vault"), ("GET", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
-    ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"),
+    ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"), ("POST", "/api/lowprofile"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
     ("POST", "/api/phone/revoke"), ("GET", "/api/away"), ("POST", "/api/away"), ("POST", "/api/away/forget"),
@@ -9218,7 +9227,7 @@ def a_page():
     for part in ('id="suite-logo"', 'id="uc-updated"', 'id="room-running"', 'id="workbar"', 'id="q-drawer"', 'id="q-panel"', 'id="wa-main"',
                  'id="da-start"', 'id="da-person"', 'id="da-train"', 'id="da-tonight"', 'id="da-work"', 'id="da-outcome"', 'id="da-steps"',
                  'id="wn"', 'id="wn-ok"', 'id="sys-news"', 'id="ear-cover"', 'id="se-ear"', 'id="set-ear-row"',
-                 'id="vault"', 'id="vt-body"', 'id="smaller"', 'id="sm-body"', 'id="first-ready"'):
+                 'id="vault"', 'id="vt-body"', 'id="smaller"', 'id="sm-body"', 'id="first-ready"', 'id="lp-chip"', 'id="lp-pop"', 'id="gp-low"'):
         assert part in html, f"missing {part}"
     # the overnight queue lives in SafeHouse's Running room (the DoubleAgent redesign); DoubleAgent keeps only its door
     room = html.index('id="room-running"')

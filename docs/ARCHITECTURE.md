@@ -410,6 +410,15 @@ into the queue drawer. Every waiting state says what it waits for (the GPU, a qu
 hung. A tab left open across an update compares `/api/status`'s `build` with the one it loaded and offers a reload
 (`#uc-updated`); `whatsnew.js` shows the newest note from `whatsnew.json` once.
 
+Low profile (1.0.2) sits in the top bar beside the glasses: one click keeps UnderCover to half the graphics card and
+working in bursts, so a game gets the card most of the time; on, the mark lights with a small ½, and the strip reads
+"Working at a low profile". The numbers are Deep Cover's, behind a "▾" on the control (no Settings row): the memory
+limit in whole GB (the card's size as the top), the share of the time it works, and "on by itself for games". The
+page reads `/api/status`'s `low_profile` {on, limit_gb, burst (a 0–1 share), auto} and `vram_gb` for the top of the
+slider, and changes it with `POST /api/lowprofile` {on?, limit_gb?, burst?, auto?}; without `low_profile` in the
+status the control stays hidden. The game pause's question offers "Low profile" first (`/api/gamepause` answer `low`)
+when the control is there. The tray menu carries the same switch (`core/trayicon.py`).
+
 ### The modules
 
 FrontMan: the one-shot line as the page ("Pink Pony Club as Plankton"), a plan card in three plain lines before anything

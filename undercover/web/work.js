@@ -86,7 +86,9 @@ function renderBar() {
   bar.dataset.owner = owner;
   $("#wb-who").innerHTML = `${glyph(owner)}${MOD_NAME[owner]}`;
   $("#wb-text").textContent = text;
-  if (main) $("#wb-text").innerHTML = `<span class="wb-t">${esc(jobName(main))}</span>${jobLine(main) ? `<span class="wb-l">${esc(jobLine(main))}</span>` : ""}`;   // two lines on a phone
+  // the strip while Low profile is on (lowprofile.js): the mark and "Working at a low profile" before the time; the short form on a phone, where the line never wraps
+  const low = typeof lowProfileOn === "function" && lowProfileOn() ? `<span class="lp-wbmark">${glyph("lowprofile")}${matchMedia("(max-width: 520px)").matches ? "Low profile" : "Working at a low profile"}</span>${jobLine(main) ? " · " : ""}` : "";
+  if (main) $("#wb-text").innerHTML = `<span class="wb-t">${esc(jobName(main))}</span>${low || jobLine(main) ? `<span class="wb-l">${low}${esc(jobLine(main) || "")}</span>` : ""}`;   // two lines on a phone
   $("#wb-more").hidden = run.length < 2;
   $("#wb-more").textContent = run.length > 1 ? `+${run.length - 1} more` : "";
   const frac = main ? jobProgress(main) : null;
