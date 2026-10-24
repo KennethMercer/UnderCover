@@ -101,6 +101,8 @@ def estimate(item: dict) -> dict:
     proj = _project_for_item(item, create=False)
     if item["kind"] == "new":
         return _estimate_new(proj, item)
+    if item["kind"] == "improve" and proj is not None:
+        return _estimate_improve(proj, item)
     if proj is not None:
         raw_min = sum(min(s.duration, CONFIG["training"]["max_minutes_per_source"] * 60) for s in proj.sources
                       if s.selected and s.status != "ready") / 60
@@ -156,6 +158,36 @@ def _estimate_new(proj, item: dict) -> dict:
         from .cadence import CADENCE_MIN
         out["cadence"] = CADENCE_MIN
     out["total"] = round(prep + train + 1 + out.get("cadence", 0))
+    return out
+
+
+def _estimate_improve(proj, item: dict) -> dict:
+    """An Improve, in minutes, on the new voice's estimator (1.0.1, IA pass 11: 31 min said, 14 taken: every selected
+    source's raw minutes were priced at the old preparation rate): the clean minutes it should add (about a quarter of
+    the new raw) at this PC's measured preparation rate for this kind of person; then a refine's fixed budget, or a
+    retrain's budget for all the kept minutes run past its plan as trainings here do; then the export and the frozen
+    test, priced by its size."""
+    from .frozen import EXPORT_S, budget_steps, compare_seconds, load_test
+    raw = sum(min(s.duration, CONFIG["training"]["max_minutes_per_source"] * 60) for s in proj.sources
+              if s.selected and s.status != "ready") / 60 + _improve_extra_minutes(proj)
+    new_kept = raw / 4
+    sh = train_shape(person_kind(proj, item.get("target")))
+    prep = new_kept / sh["kept_per_prep_min"]
+    refine = _improve_steps(item["target"], proj, new_kept)
+    if refine:   # (a given budget: it runs exactly that, no further)
+        steps = refine
+    else:
+        steps = budget_steps(proj.kept_seconds() / 60 + new_kept)[0] * sh["past_plan"]
+    train = steps * _sec_per_step() / 60
+    try:
+        from ..core.voices import get_voice
+        test = load_test(get_voice(item["target"]))
+    except ModelError:
+        test = None
+    c = compare_seconds(test)
+    compare = (EXPORT_S + c["ensure"] + c["judge"]) / 60
+    out = {"prepare": round(prep), "train": round(train), "compare": round(compare), "refine": bool(refine)}
+    out["total"] = round(prep + train + compare)
     return out
 
 

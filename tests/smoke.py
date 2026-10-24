@@ -4531,9 +4531,11 @@ def u_improve_estimate():
         thin = night.estimate({"kind": "improve", "target": "thin-uc"})
         new_min = night._improve_extra_minutes(proj) / 4                                        # the estimate's own growth guess
         assert well["train"] == round(refine_steps(new_min) * spe / 60), (well, refine_steps(new_min), spe)
-        assert thin["train"] == round(budget_steps(kept + new_min)[0] * spe / 60), (thin, spe)
+        sh = night.train_shape(night.person_kind(proj))   # (1.0.1: rc-eta's estimator: the measured shape)
+        assert thin["train"] == round(budget_steps(kept + new_min)[0] * sh["past_plan"] * spe / 60), (thin, spe)
         assert well["train"] * 4 < thin["train"], (well, thin)
-        assert well["prepare"] == thin["prepare"] and well["compare"] == thin["compare"]
+        assert well["prepare"] == thin["prepare"] == round(new_min / sh["kept_per_prep_min"]) and well["compare"] == thin["compare"]
+        assert well["refine"] and not thin["refine"]
     src = inspect.getsource(da_api.start_train)
     pops = src[src.index("for k in (") : src.index("st.pop(k, None)")]
     assert all(k in pops for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
