@@ -2,6 +2,17 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-24-v101",
+      "date": "2026-10-24",
+      "title": "UnderCover 1.0.1",
+      "lines": [
+        "The install folder has the licence files: LICENSE, NOTICE and the README.",
+        "On the installer's download page, long file names fit, and files kept from an earlier run are checked again before they're used.",
+        "The first speech of a session starts sooner: the speech engine gets ready while UnderCover is idle, and when it isn't ready yet, the time it says includes the start-up.",
+        "Improve's time comes from how this PC trains, so it's closer to what it takes."
+      ]
+    },
+    {
       "id": "2026-10-17-v1",
       "date": "2026-10-17",
       "title": "UnderCover 1.0",

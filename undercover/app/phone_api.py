@@ -72,6 +72,7 @@ ROUTES = [
     # SpeakEasy
     ("GET", r"/api/speak/(voices|readers|recent|plan|estimate)", "phone", "speech page data"),
     ("POST", r"/api/speak/estimate", "phone", "how long a speech would take"),
+    ("POST", r"/api/speak/warm", "phone", "SpeakEasy opened: its speech engine warmed while idle"),
     ("POST", r"/api/speak|/api/speak/(cadence|newvoice)", "phone", "make speech"),
     ("POST", rf"/api/speak/{_ID}/(rename|keep|unkeep)", "phone", "rename / keep speech"),
     ("DELETE", rf"/api/speak/{_ID}", "phone", "remove speech (the page asks twice)"),

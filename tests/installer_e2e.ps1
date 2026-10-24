@@ -409,6 +409,14 @@ if ($CancelCheck) {
     }
     $keptNames = @($kept | ForEach-Object { $_.Name })
     if (Test-Path (Join-Path $dir 'undercover')) { $fails += 'a stopped download installed the app anyway' }
+    # 1.0.1: a kept file is checked by its SHA-256 on the next run, not trusted by its size: one is damaged here (the
+    # same size, other bytes), and the next run must find it, delete it and download it again
+    $damaged = $null
+    if ($kept.Count) {
+        $damaged = $kept[0].Name
+        $fs = [IO.File]::Open($kept[0].FullName, 'Open', 'ReadWrite'); try { $fs.Position = [math]::Min(4096, $fs.Length - 1); $fs.WriteByte(0x5A) } finally { $fs.Close() }
+        $keptNames = @($keptNames | Where-Object { $_ -ne $damaged })
+    }
 }
 
 $t0 = Get-Date
@@ -455,9 +463,15 @@ $badRetry = @([regex]::Matches($run.log, '(\S+): its SHA-256 is wrong; trying ag
 Write-Host "Bad hash: served '$badServed'; deleted and fetched again: $($badRetry -join ', ')"
 if (-not $badServed) { $fails += "the bad-hash server was never asked (the test variant didn't use /BADURL)" }
 elseif (-not $badRetry.Count) { $fails += "a big file with the wrong bytes wasn't caught by its SHA-256 and fetched again" }
-if ($CancelCheck) {   # the run after Stop fetched none of the files the Stop run kept
+if ($CancelCheck) {   # the run after Stop fetched none of the files the Stop run kept, but the one damaged in between
     foreach ($n in $keptNames) {
         if ($run.log -match ("Downloading temporary file from \S+: \S+\\" + [regex]::Escape($n) + "\r?\n")) { $fails += "the run after Stop downloaded $n again" }
+    }
+    if ($run.log -notmatch 'files kept from an earlier run: checking their SHA-256') { $fails += "the kept files weren't checked by their SHA-256" }
+    elseif ($damaged) {
+        Write-Host "Kept files: $(([regex]::Match($run.log, 'Kept files checked: [^\r\n]*')).Value); damaged on purpose: $damaged"
+        if ($run.log -notmatch ('Kept files checked: [^\r\n]*' + [regex]::Escape($damaged))) { $fails += "a damaged kept file ($damaged) passed its check" }
+        elseif ($run.log -notmatch ("Downloading temporary file from \S+: \S+\\" + [regex]::Escape($damaged) + "\r?\n")) { $fails += "the damaged kept file ($damaged) wasn't downloaded again" }
     }
 }
 Remove-Item -LiteralPath $launch -Recurse -Force -ErrorAction SilentlyContinue
@@ -540,6 +554,9 @@ $reg = @(Get-ChildItem 'HKCU:\Software\Python' -Recurse -ErrorAction SilentlyCon
 if ($reg.Count) { $fails += "registry entries point into the install: $(($reg | ForEach-Object { $_.Name }) -join ', ')" }
 $binAfter = BinList
 if (@(Compare-Object $binBefore $binAfter).Count) { $fails += "$binDir changed" }
+# the licence, the notices and the README in the install folder (1.0.1: an AGPL program carries its licence)
+$legal = @('LICENSE', 'NOTICE', 'README.md') | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dir $_)) }
+if ($legal) { $fails += "not in the install folder: $($legal -join ', ')" } else { Write-Host 'Licence files: LICENSE, NOTICE and README.md in the install folder' }
 
 # every model the app's features use is in place (rc-fix4b, the user: "it should be part of the install")
 $vpy = Join-Path $dir '.venv\Scripts\python.exe'

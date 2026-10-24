@@ -660,16 +660,24 @@ class Handler(BaseHTTPRequestHandler):
         JOBS[job.id] = job
 
         def run():
-            last = [0.0]
+            last, seen = [0.0], []
 
             def progress(done, total):
                 if job.cancel:
                     raise Cancelled()
+                if progress.file not in seen:
+                    seen.append(progress.file)
                 now = time.time()
                 if now - last[0] > 0.25 or (total and done >= total):
                     last[0] = now
-                    job.push(stage="downloading", frac=round(done / total, 3) if total else None,
-                             message=f"Downloading {done / 1e6:.0f} MB" + (f" of {total / 1e6:.0f} MB" if total else ""))
+                    # each file is its own round, named (1.0.1: the button counted 0-100 % twice, the second time
+                    # for the voice's index, with no word for it)
+                    part = ("index" if progress.file.lower().endswith(".index") else "file") if len(seen) > 1 else ""
+                    what = {"index": "its index", "file": "its next file"}.get(part)
+                    job.push(stage="downloading", frac=round(done / total, 3) if total else None, part=part,
+                             message=f"Downloading {what + ': ' if what else ''}{done / 1e6:.0f} MB"
+                                     + (f" of {total / 1e6:.0f} MB" if total else ""))
+            progress.file = ""   # (set by the download for each file it fetches)
             try:
                 with job.cond:
                     job.state = "running"
@@ -1029,6 +1037,7 @@ def main():
     from ..speakeasy import speak as speak_mod
     voicepreview.RENDER[0] = speak_mod.render_line   # (core and DoubleAgent add voices; only the app may reach SpeakEasy)
     voicepreview.start()   # voices from before get their preview line, one at a time, only while nothing else runs
+    speak_mod.start_warm_up()   # the speech engine ready before the first speech, once idle (1.0.1)
     worklist.start()
     vault.start()   # Vaulting: quiet backups when the GPU queue is idle (off until a vault folder is picked)
     try:   # phase 24: the full indexes kept 30 days after an export go when their time is up (daily)

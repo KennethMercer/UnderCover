@@ -782,6 +782,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             if rng:
                 plan["person_range"] = rng
                 _remember_range(v, rng, plan["person_speech"], person)
+            elif good[0]["where"] == "online":   # listed as the check named it, with or without a range (1.0.1: the
+                _remember_person(v, person)      # check said "Plankton", the list "Plankton Spongebob")
+                v = get_voice(v.name)
             if good[0]["where"] == "online":   # its preview line, now it's listed (the losers were discarded unrendered)
                 from ..core import voicepreview
                 push("voice", 0.98, f"Making “{display_name(get_voice(v.name))}”'s preview line")
@@ -942,6 +945,18 @@ def _remember_range(v, rng: list, from_speech: bool, person: str):
         v.extra.update(person_range=rng, person_range_speech=bool(from_speech), person=person)
         fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     except Exception:
+        pass
+
+
+def _remember_person(v, person: str):
+    """A downloaded voice chosen by the check for a person: that person kept with it (extra.person), so it's listed as
+    the check named it."""
+    import json
+    from ..core import fsutil
+    try:
+        v.extra = {**(v.extra or {}), "person": person}
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+    except Exception:   # noqa: BLE001 - only its name in the lists
         pass
 
 

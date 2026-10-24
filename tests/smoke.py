@@ -3884,7 +3884,8 @@ def u_rcfix10():
     assert [listenback._clean(w) for w in ("realised", "realized", "colour", "four", "your", "hour")] == ["realized", "realized", "color", "four", "your", "hour"]
     assert listenback.problems("I realised it", [["I", 0, .1, .9], ["realized", .1, .5, .9], ["it", .5, .6, .9]]) == []
     es = inspect.getsource(speak.eta_seconds)
-    assert "cadence_pieces(tts.sentences(text))" in es and "CALIBRATE_S" in es and "per_word(p)" in es
+    assert "cadence_pieces(tts.sentences(text))" in es and "start_cost(p)[0]" in es and "per_word(p)" in es
+    assert "CALIBRATE_S" in inspect.getsource(speak.start_cost) and "COLD_ENGINE_S" in inspect.getsource(speak.start_cost)
     return f"a stuck worker gone in {took:.1f} s (and by a raising cancel); Stop checked in listen-back and the finish; run-ons in {len(pieces)} pieces"
 
 
@@ -4469,6 +4470,115 @@ def u_meta_keys():
     return f"seeded {seeded or '(no demo model here)'} and a meta with a newer key both list; the key kept in extra"
 
 
+@check("1.0.1: the install folder gets LICENSE, NOTICE and README.md; the download page shortens a long name in the middle; kept files are re-checked by SHA-256 (keptcheck.ps1 keeps a good file, deletes a damaged one, says which); the speech warm-up and its estimate (a cold worker's start-up said as what it is, nothing when warm); the overnight report's Improve line in whole minutes or 'no new clips', said once; an import names its rounds; 'a' or 'an' by sound; VERSION, CHANGELOG and What's new say 1.0.1")
+def u_v101():
+    import hashlib
+    import re
+    import subprocess
+    import tempfile
+    from undercover.core import voices as V
+    from undercover.core import worklist
+    from undercover.core.cadence import client
+    from undercover.speakeasy import listenback, speak
+    service = speak.service   # (DoubleAgent's, as SpeakEasy reaches it)
+    inst = ROOT / "installer"
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8")
+    for f in ("LICENSE", "NOTICE", "README.md"):
+        assert re.search(rf'Source: "\.\.\\{re.escape(f)}"; DestDir: "{{app}}"', iss), f"the install folder lost {f}"
+        assert (ROOT / f).is_file(), f
+    assert "function FitName(" in iss and iss.count("FitName(") >= 3, "the download page's long names aren't fitted"
+    assert "CheckKept(" in iss and "keptcheck.ps1" in iss, "kept files aren't re-checked"
+    kc = inst / "keptcheck.ps1"
+    raw = kc.read_bytes()
+    assert raw.isascii() and b"\r\n" in raw, "keptcheck.ps1 must be ASCII with CRLF (Windows PowerShell 5.1 reads it)"
+    if sys.platform == "win32":   # (a real run: one good file kept, one damaged deleted, the marker names it)
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            good, bad = td / "good.bin", td / "bad.bin"
+            good.write_bytes(b"undercover" * 1000)
+            bad.write_bytes(b"undercover" * 1000)
+            sha = hashlib.sha256(good.read_bytes()).hexdigest()
+            bad.write_bytes(b"Z" + bad.read_bytes()[1:])
+            (td / "kept.tsv").write_text(f"{good}\t{sha}\n{bad}\t{sha}\n", encoding="ascii")
+            r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(kc), "-List", str(td / "kept.tsv"),
+                                "-Done", str(td / "count.txt"), "-Marker", str(td / "done.txt")], capture_output=True, text=True, timeout=120,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            said = (td / "done.txt").read_text(encoding="utf-8", errors="replace") if (td / "done.txt").is_file() else ""
+            assert good.is_file() and not bad.is_file() and "bad.bin" in said and "good.bin" not in said, (r.returncode, r.stderr[-300:], said)
+    # the warm-up: a cold worker's start-up said, nothing once warm
+    p = {"mode": "cadence", "voice": "x"}
+    saved = (client.WORKER.running, service.pace_needs_calibration, listenback.settings)
+    try:
+        service.pace_needs_calibration = lambda v: False
+        listenback.settings = lambda: {"listen_back": False}
+        client.WORKER.running = lambda: False
+        cold, why = speak.start_cost(p)
+        assert cold == speak.COLD_ENGINE_S and "engine" in why, (cold, why)
+        client.WORKER.running = lambda: True
+        assert speak.start_cost(p) == (0.0, ""), speak.start_cost(p)
+        assert speak.start_cost({"mode": "reader"}) == (0.0, "")
+    finally:
+        client.WORKER.running, service.pace_needs_calibration, listenback.settings = saved
+    api = (ROOT / "undercover" / "speakeasy" / "api.py").read_text(encoding="utf-8")
+    assert '"first_s"' in api and 'rest == "warm"' in api and "queue_warm_up" in api
+    assert "start_warm_up()" in (ROOT / "undercover" / "app" / "server.py").read_text(encoding="utf-8")
+    se = (ROOT / "undercover" / "web" / "speakeasy.js").read_text(encoding="utf-8")
+    assert "/api/speak/warm" in se and "first_why" in se, "SpeakEasy doesn't warm its engine or say the first speech's start-up"
+    # the overnight report: whole minutes or no new clips; the voice's name not said twice
+    for added, want in ((0.0, "(no new clips)"), (0.3, "(no new clips)"), (6.4, "(6 min of new clips)")):
+        w = worklist.report_words("improve", {"kept": True, "tried": {"added_min": added}}, "Someone")
+        line = w.get("note_plain") or ""
+        assert want in line and "0.0" not in line and "Improve tried" not in line and "Someone" not in line, (added, line)
+    # an import names its rounds: the download tells the callback which file it's on; the preview step isn't a bar
+    class Resp:
+        headers = {"content-length": "4"}
+        def iter_content(self, n):
+            yield b"abcd"
+    seen = []
+    def cb(done, total):
+        seen.append((cb.file, done, total))
+    cb.file = ""
+    with tempfile.TemporaryDirectory() as td:
+        V._stream(Resp(), Path(td), "model.index", cb)
+    assert seen == [("model.index", 4, 4)], seen
+    with tempfile.TemporaryDirectory() as td:
+        V._stream(Resp(), Path(td), "model.pth", lambda d, t: None)   # (a plain callback still works: the CLI's, the check's)
+    srv = (ROOT / "undercover" / "app" / "server.py").read_text(encoding="utf-8")
+    assert '"its index"' in srv and "part=part" in srv, "the install's second round isn't named"
+    assert 'stage="preview", frac=None' in (ROOT / "undercover" / "core" / "voicepreview.py").read_text(encoding="utf-8")
+    app = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    assert 'ev.stage === "preview"' in app and "ev.part" in app
+    assert "_remember_person(v, person)" in (ROOT / "undercover" / "doubleagent" / "service.py").read_text(encoding="utf-8")
+    # a / an by sound, in a real browser when there is one
+    one = (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    assert "/^[aeiou]/i.test" not in one and one.count("aOrAn(") == 2, "the one-shot still picks a / an by the letter"
+    fn = re.search(r"function aOrAn[\s\S]*?\n}\r?\n", app).group(0)
+    words = {"oboe": "an", "unique": "a", "unicorn": "a", "umbrella": "an", "unimportant": "an", "honest": "an", "hour": "an",
+             "Hulk": "a", "echo": "an", "European": "a", "one-man": "a", "R&B": "an", "UK": "a", "80s": "an", "1980s": "a",
+             "11": "an", "acoustic": "an", "upbeat": "an", "usual": "a", "ukulele": "a", "urban": "an", "EDM": "an", "NASA": "a",
+             "U2": "a", "FBI": "an", "opera": "an", "user": "a", "under": "an", "Plankton": "a", "ABBA": "an", "Agent Smoke": "an"}
+    exe = _chrome()
+    browsed = "no Chrome here: a / an not run"
+    if exe:
+        with tempfile.TemporaryDirectory() as td:
+            page = Path(td) / "aan.html"
+            page.write_text("<!doctype html><body><pre id=o></pre><script>" + fn + "const t=" + json.dumps(words)
+                            + ";document.getElementById('o').textContent='RESULT '+JSON.stringify(Object.entries(t)"
+                              ".filter(([w,e])=>aOrAn(w)!==e).map(([w,e])=>w+':'+aOrAn(w)))+' END';</script>", encoding="utf-8")
+            with tempfile.TemporaryDirectory() as prof:
+                r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--dump-dom",
+                                    page.as_uri()], capture_output=True, text=True, timeout=90)
+        m = re.search(r"RESULT (.*?) END", r.stdout)
+        assert m and json.loads(m.group(1)) == [], m.group(1) if m else r.stdout[-300:]
+        browsed = f"a / an right on {len(words)} words"
+    # the release
+    assert (ROOT / "undercover" / "VERSION").read_text(encoding="utf-8").strip() == "1.0.1"
+    assert "\n## 1.0.1" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    top = json.loads((ROOT / "undercover" / "web" / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
+    assert top["title"] == "UnderCover 1.0.1" and 1 <= len(top["lines"]) <= 4, top
+    return f"installer files, kept-file check, warm-up, report line, import rounds, release files; {browsed}"
+
+
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
 def u_uninstall_kept_paths():
     import subprocess
@@ -4530,9 +4640,11 @@ def u_improve_estimate():
         thin = night.estimate({"kind": "improve", "target": "thin-uc"})
         new_min = night._improve_extra_minutes(proj) / 4                                        # the estimate's own growth guess
         assert well["train"] == round(refine_steps(new_min) * spe / 60), (well, refine_steps(new_min), spe)
-        assert thin["train"] == round(budget_steps(kept + new_min)[0] * spe / 60), (thin, spe)
+        sh = night.train_shape(night.person_kind(proj))   # (1.0.1: rc-eta's estimator: the measured shape)
+        assert thin["train"] == round(budget_steps(kept + new_min)[0] * sh["past_plan"] * spe / 60), (thin, spe)
         assert well["train"] * 4 < thin["train"], (well, thin)
-        assert well["prepare"] == thin["prepare"] and well["compare"] == thin["compare"]
+        assert well["prepare"] == thin["prepare"] == round(new_min / sh["kept_per_prep_min"]) and well["compare"] == thin["compare"]
+        assert well["refine"] and not thin["refine"]
     src = inspect.getsource(da_api.start_train)
     pops = src[src.index("for k in (") : src.index("st.pop(k, None)")]
     assert all(k in pops for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
@@ -8047,7 +8159,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/train/voices/v-uc/cadence/sample/pending"), ("POST", "/api/train/voices/v-uc/cadence/ab"),
     ("POST", "/api/train/voices/v-uc/cadence/verdict"),
     *[("GET", f"/api/speak/{a}") for a in ("voices", "readers", "recent", "plan", "estimate")],
-    ("POST", "/api/speak"), ("POST", "/api/speak/estimate"), ("POST", "/api/speak/cadence"), ("POST", "/api/speak/newvoice"),
+    ("POST", "/api/speak"), ("POST", "/api/speak/estimate"), ("POST", "/api/speak/warm"), ("POST", "/api/speak/cadence"), ("POST", "/api/speak/newvoice"),
     *[("POST", f"/api/speak/0123456789/{a}") for a in ("rename", "keep", "unkeep")], ("DELETE", "/api/speak/0123456789"),
     *[("GET", f"/api/library/{a}") for a in ("summary", "covers", "speech", "songs", "voices", "training")],
     ("GET", "/api/library/covers/zip"),
@@ -9805,7 +9917,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

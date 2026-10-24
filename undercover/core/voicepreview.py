@@ -179,7 +179,7 @@ def import_voice(stage, job=None, wait: float = 120.0):
         if (voices_dir() / v.name).exists() or pending_candidate(v.name):
             raise ModelError(f"A voice called '{v.name}' is already installed. Pick another name or remove it first.")
         if job is not None:
-            job.push(stage="preview", frac=1.0, message="Making its preview line", total_left=ESTIMATE_S)
+            job.push(stage="preview", frac=None, message="Making its preview line", total_left=ESTIMATE_S)   # (a step, not a third bar)
         after_add(v, job, force=True, wait=wait)
         return promote(v.name)
     except BaseException:

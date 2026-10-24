@@ -37,6 +37,20 @@ function dayWord(s) {
 }
 const dayTime = s => { const d = dateOf(s); return d ? d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""; };
 const upFirst = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+// "a" or "an" by the sound the word starts with, not its letter (1.0.1: "an unique"): a "you"/"w" sound takes "a"
+// (unique, European, one), a silent h "an" (honest, hour), letters read one by one go by the letter's name (an MJ, an
+// R&B, a UK), and numbers by how they're said (an 80s, an 11, a 1980s)
+function aOrAn(word) {
+  const w = String(word || "").trim().replace(/^[^a-z0-9]+/i, "");
+  if (!w) return "a";
+  if (/^\d/.test(w)) return /^(8|1[18](\D|$))/.test(w) ? "an" : "a";
+  const lead = w.match(/^[A-Z&]{1,4}(?=$|[^a-z])/)?.[0];   // initials (MJ, R&B, UK, EDM): letter by letter
+  if (lead && (lead.length <= 3 || !/[AEIOU]/.test(lead))) return /^[AEFHILMNORSX]/.test(lead) ? "an" : "a";
+  const l = w.toLowerCase();
+  if (/^(hour|honest|honou?r|heir|herb)/.test(l)) return "an";
+  if (/^(uni(?![nm])|us[aeu]|ut[eio]|uk|ur[aeiou]|eu|ewe|one\b|once|ouija)/.test(l)) return "a";
+  return /^[aeiou]/.test(l) ? "an" : "a";
+}
 // "No covers yet" / "1 cover" / "3 covers": never "0 covers"
 const countWord = (n, one, many = one + "s") => n ? `${n} ${n === 1 ? one : many}` : `No ${many} yet`;
 // a song's source in plain words: "Your file" or "From YouTube" (the server says "dropped file" / "YouTube")
@@ -555,7 +569,10 @@ function install(btn, body) {
   btn.disabled = true; btn.textContent = "Starting…";
   api("/api/voices/install", { json: body }).then(({ job }) => {
     const stop = watchJob(job, async ev => {
-      if (ev.stage === "downloading") btn.textContent = ev.frac != null ? `${Math.round(ev.frac * 100)}%` : (ev.message || "").replace("Downloading ", "");
+      // each round named (1.0.1: it counted 0-100 % twice, the second for the index, with no word for it)
+      const part = { index: "Index ", file: "Next file " }[ev.part] || "";
+      if (ev.stage === "downloading") btn.textContent = ev.frac != null ? `${part}${Math.round(ev.frac * 100)}%` : (ev.message || "").replace("Downloading ", "");
+      else if (ev.stage === "preview") btn.textContent = "Preview line…";
       if (ev.final) {
         stop();
         if (ev.state === "done") { btn.textContent = "Installed"; $("#q").value = ""; S.online = []; await loadVoices(ev.voice); }

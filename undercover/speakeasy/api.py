@@ -58,6 +58,10 @@ def _route(h, method, p):
         return _start(h, h._body())
     if method == "POST" and rest == "estimate":
         return h._json(_estimate(h._body()))
+    if method == "POST" and rest == "warm":   # SpeakEasy opened: its engine warmed while idle, if it isn't (1.0.1)
+        h._body()
+        from ..core import voicepreview
+        return h._json({"queued": voicepreview.idle() and speak.queue_warm_up()})
     if method == "POST" and rest == "cadence":
         b = h._body()
         return h._json(service.start_cadence(b.get("voice") or "", now=b.get("now", True) is not False))
@@ -83,8 +87,10 @@ def _estimate(a: dict) -> dict:
     cadence = False if a.get("mode") == "reader" or cadence is False or cadence in ("0", "false") else None
     p = speak.plan(a.get("voice") or "", a.get("reader") or "auto", _num(a.get("speed"), 1.0), _num(a.get("nudge"), 0.0),
                    cadence, a.get("pace"))
+    first_s, first_why = speak.start_cost(p)   # (the first speech of a session: said as what it is, 1.0.1)
     return {"estimate": speak.eta_seconds(text, p), "audio_seconds": round(tts.seconds_estimate(text, p["speed"]), 1),
-            "sentences": len(tts.sentences(text)) if text else 0, "mode": p["mode"], "waiting": GPU_QUEUE.qsize()}
+            "sentences": len(tts.sentences(text)) if text else 0, "mode": p["mode"], "waiting": GPU_QUEUE.qsize(),
+            "first_s": round(first_s), "first_why": first_why}
 
 
 def _num(v, default: float) -> float:

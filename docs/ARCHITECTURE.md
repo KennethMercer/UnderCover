@@ -1,6 +1,6 @@
 # UnderCover architecture
 
-This document describes how UnderCover is built, as of 1.0.0: the names, the modules, the code layout, the data on
+This document describes how UnderCover is built, as of 1.0.1: the names, the modules, the code layout, the data on
 disk, the engines and why they were chosen, the page, and how the app looks after itself. It is the contract a change
 is measured against. What the project is for and how decisions are made is in [MASTERPLAN.md](MASTERPLAN.md); how to
 install is in [README.md](../README.md) and [installer/GUIDE.md](../installer/GUIDE.md); how to contribute is in
@@ -89,7 +89,12 @@ tests/                     smoke.py, fake_tailscale.py, installer_e2e.ps1
 
 The cadence engines and Whisper run in a worker process (`python -m undercover.core.cadence.worker`): one JSON object
 per line over pipes, audio through files. The server starts it on first use and stops it after `[cadence] idle_minutes`,
-on `gpu.free()` and at exit. The import stand-ins AMD's Windows build of torch needs live in the worker only.
+on `gpu.free()` and at exit. A warm-up loads it ahead of the first speech: a `speakwarm` GPU job
+(`speakeasy.speak.queue_warm_up`) that loads each engine the speech packs read with and runs every pack's one-off pace
+calibration, queued once the server is idle after its start (the preview backfill's rules) and again by
+`POST /api/speak/warm` when the page opens SpeakEasy. It gives way at once to any other GPU work. SpeakEasy's estimate
+(`speak.start_cost`) adds the start-up only when the worker is cold, and `/api/speak/estimate` returns it as `first_s`
+and `first_why` so the page says it. The import stand-ins AMD's Windows build of torch needs live in the worker only.
 
 ### Adding to the suite
 
@@ -241,7 +246,10 @@ ask before a queued GPU job starts.
 `core/worklist.py` runs items one after another when the GPU is free, from a start time if set, and only items whose
 estimate finishes before "finish by". A paused item is resumed first when the queue next starts; an item that does not
 fit lets a shorter one go ahead. DoubleAgent's kinds are `improve`, `new`, `cadence` (follows its voice's item) and
-`newcad`. An Improve's retrained voice waits as `<voice>-next` beside the current one (`doubleagent/improved.py`):
+`newcad`. An Improve is estimated on the new voice's estimator (`night._estimate_improve`): the clean minutes it
+should add (about a quarter of the new raw minutes) at this PC's measured preparation rate for the kind of person, a
+refine's fixed budget or a retrain's budget run past its plan as trainings here do, then the export and the frozen test.
+An Improve's retrained voice waits as `<voice>-next` beside the current one (`doubleagent/improved.py`):
 `GET /api/train/voices/<v>/improved`, `POST .../improved/ab`, `POST .../improved/keep {keep: "new"|"current"}`,
 `POST .../improved/undo`. The voice not kept is set aside, never deleted.
 
@@ -550,7 +558,9 @@ a Kokoro Reader reading a public-domain text, inside smoke's sandbox; `scripts/r
 The installer (`installer/UnderCover.iss`, Inno Setup) installs per user with no admin prompt. `build.ps1` writes
 `addons.isi` from the add-ons registry and `downloads.tsv` from the pinned lists (one line per file: group, destination,
 URLs, SHA-256, bytes, pin), then runs ISCC. The wizard's download page fetches every file and checks each hash; after it
-nothing goes online. `setup.ps1` installs a private Python (`python.ps1`, via uv), the packages for the detected backend
+nothing goes online. Files kept from an earlier run (Stop, or a run that broke off) are checked by SHA-256 again before
+they count (`keptcheck.ps1`, run hidden so the page stays live); a damaged one is deleted and downloaded again. LICENSE,
+NOTICE and README.md go into the install folder. `setup.ps1` installs a private Python (`python.ps1`, via uv), the packages for the detected backend
 (`detect_gpu.ps1`: rocm, cuda128, cuda126 or cpu; `requirements/*.txt`, hashed by `pin_hashes.py` and constrained by
 `constraints.txt`), ffmpeg and Deno, puts the models in place (`python -m undercover.models install --offline`), writes
 the GPU settings, runs `selftest.py`, writes the manifest and makes a launcher. `space.ps1` and `sizes.json` give the
