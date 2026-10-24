@@ -315,6 +315,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             job.stage_est["voice"] = train_estimate_s(person) if trains else check_estimate_s(person, n + 2)
         except Exception:   # noqa: BLE001 - the stage's typical length, as before
             pass
+    else:
+        job.stage_est["voice"] = 10.0   # a voice that's here (trained here, picked, the demo): chosen in seconds
 
     # 1. song (a version like "acoustic" means a cover by someone else, so candidates are tried until one
     #    actually has singing in it)
@@ -327,6 +329,19 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
                                        url="", note="the sample song in your library", meta=lib)]
     else:
         cands = [songs.from_link(song_url)] if song_url else songs.search(search_q, style=style, words=style_words(style))[:VERSIONS + 2]
+    # the song and cover steps' own estimates from the start (rc-polish1: a fresh install has no past runs to learn them
+    # from, so the song step said no time left through its separation, about 70 s): this song's length, measured speeds
+    try:
+        from .pipeline import CoverOptions, estimate, estimate_for
+        o = CoverOptions(voice="v", quality="high", dereverb=True, karaoke=True, backing_voice="v", polish=True)
+        here = Path(path("uploads_dir")) / lib["file"] if lib and lib.get("file") else None
+        e = (estimate(here, o) if here and here.exists()
+             else estimate_for(getattr(cands[0], "duration", 0) or TYPICAL_SONG_S, o) if cands else None)
+        if e:
+            job.stage_est["song"] = e["separating"] + (5.0 if here else FETCH_S)
+            job.stage_est["cover"] = e["converting"] + e["mixing"]
+    except Exception:   # noqa: BLE001 - the stages' typical lengths, as before
+        pass
     # A version ("acoustic") is someone's cover, and they differ a lot: compare up to VERSIONS that have singing
     # and pick the one that suits the voice once it's known (melody range, clean separation). The album track
     # (no style) or a pasted link: the first one with singing.
@@ -593,9 +608,11 @@ def cover_options_of(opts: "CoverOptions") -> dict:
 VOICE_CHOICE = re.compile(r"check|train|use:[a-z0-9][a-z0-9-]*")
 
 
-def voice_choices(person: str, voices: list, song: Path | None = None, others: int = 0) -> list[dict]:
+def voice_choices(person: str, voices: list, song: Path | None = None, others: int = 0, failed: str | None = None) -> list[dict]:
     """The plan's voice question ("Ask me each time", the user's decision) when installed voices that weren't trained
     here match: use one now, check them against real clips first, or train a better one first, each with its time.
+    failed: why the last check couldn't be done on these clips (service.check_failed): the check isn't offered again
+    until clips are added; training says why (rc-polish1).
     -> [{choice, label, voice?, eta_s: {low, high}, detail?}] (the page sends `choice` back as voice_choice)."""
     from ..core.voices import display_name
     from ..doubleagent.service import check_estimate_s, train_estimate_s
@@ -604,12 +621,15 @@ def voice_choices(person: str, voices: list, song: Path | None = None, others: i
     cover = out[0]["eta_s"] if out else cover_eta("", song)
     n = len(voices) + others   # the check also downloads and tests the community voices found online
     chk, tr = check_estimate_s(person, n), train_estimate_s(person)
-    out.append({"choice": "check", "label": f"Check {'them' if n > 1 else 'it'} against real clips first",
-                "eta_s": {"low": round(chk + cover["low"]), "high": round(chk + cover["high"])},
-                "detail": f"Uses one if it sounds like {person}; if none does, it trains one (about "
-                          f"{round(tr / 60)} min more)."})
+    if not failed:
+        out.append({"choice": "check", "label": f"Check {'them' if n > 1 else 'it'} against real clips first",
+                    "eta_s": {"low": round(chk + cover["low"]), "high": round(chk + cover["high"])},
+                    "detail": f"Uses one if it sounds like {person}; if none does, it trains one (about "
+                              f"{round(tr / 60)} min more)."})
     out.append({"choice": "train", "label": f"Train a better {person} voice first",
-                "eta_s": {"low": round(tr + cover["low"]), "high": round(tr + cover["high"])}})
+                "eta_s": {"low": round(tr + cover["low"]), "high": round(tr + cover["high"])},
+                **({"detail": f"The last check couldn't be done ({failed}). Adding clips of {person} in DoubleAgent "
+                              "lets it check again."} if failed else {})})
     return out
 
 

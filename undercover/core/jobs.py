@@ -235,8 +235,14 @@ class Job:
             if first is None and p > 0:
                 self._stage = (name, t0, (now, p))
                 first = self._stage[2]
-            left = None
-            if first and p - first[1] > 0.01 and now - first[0] > 2:
+            left, own = None, self.stage_est.get(stage)
+            if own:   # the job's own estimate leads (rc-polish1): the song step's quick download (0.02 -> 0.38 in 10 s)
+                # extrapolated to 17 s for a 70 s separation. Measured progress takes over from halfway
+                el = now - t0
+                plan_left = max(own * (1 - p), own - el, 0.0)
+                w = min(1.0, max(0.0, (p - 0.4) / 0.5))
+                left = w * (el / p * (1 - p)) + (1 - w) * plan_left if p > 0.05 else plan_left
+            elif first and p - first[1] > 0.01 and now - first[0] > 2:
                 left = (now - first[0]) * (1 - p) / (p - first[1])
             elif typical(self.kind, stage):
                 left = max(0.0, typical(self.kind, stage) - (now - t0))

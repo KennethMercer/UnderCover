@@ -723,13 +723,17 @@ def promote(name: str) -> Voice:
     return get_voice(final)
 
 
-def discard_staged(name: str | None = None):
+def discard_staged(name: str | None = None, older_than: float | None = None):
     """Delete a candidate from the staging folder (name), or every candidate there (None: what a stopped check left).
-    Only ever inside the staging folder (storage.remove_files refuses anything else)."""
+    older_than (seconds): only candidates staged at least that long ago (server start: another server on the same
+    folders may be checking one right now). Only ever inside the staging folder (storage.remove_files refuses anything
+    else)."""
     root = staging_dir()
     if not root.is_dir():
         return
     dirs = [root / slug(name)] if name else [d for d in root.iterdir() if d.is_dir()]
+    if older_than is not None:
+        dirs = [d for d in dirs if d.is_dir() and time.time() - d.stat().st_mtime >= older_than]
     from . import storage
     storage.remove_files([], within=[root], dirs=[d for d in dirs if d.is_dir()])
 

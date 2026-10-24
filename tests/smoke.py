@@ -2474,7 +2474,9 @@ def u_person_search():
     assert "{name} talks" not in S.QUERIES["speaking"] and "{name} address" in S.QUERIES["speaking"]
     src = inspect.getsource(service.train_new_voice)
     assert "expected_clean(" in src and 'by="DoubleAgent"' in src and "not s.user" in src, "Do it all lost its rank or its gate"
-    assert "s.note != srcmod.ABOUT_NOTE" in src, "Do it all may tick talk about the person back in when it's short"
+    import types
+    assert "and not srcmod.left_out_for_a_reason(s)" in src and S.left_out_for_a_reason(types.SimpleNamespace(note=S.ABOUT_NOTE)), \
+        "Do it all may tick talk about the person back in when it's short"
     return "3 'about him' and 1980 unticked; addresses > rally > chamber; recent > 1980; Do it all ranks and gates"
 
 
@@ -3303,10 +3305,25 @@ def u_installer_space():
     assert "(CurUninstallStep = usPostUninstall) and (KeptMsg <> '') and (not UninstallSilent)" in iss
     # the shipped docs give the measured size (installer/sizes.json through sizes.isi), not an old guess
     tot = re.search(r'#define SizeTotalGB "([0-9.]+)"', (inst / "sizes.isi").read_text(encoding="utf-8")).group(1)
-    dl = re.search(r'#define SizeDownloadGB "([0-9.]+)"', (inst / "sizes.isi").read_text(encoding="utf-8")).group(1)
+    # the download per graphics card (rc-polish1: one size, AMD's, was said for every card): sizes.isi = downloads.tsv's
+    # rows, and the docs say each
+    isi_txt = (inst / "sizes.isi").read_text(encoding="utf-8")
+    dl = {k: re.search(rf'#define SizeDownload{k} "([0-9.]+)"', isi_txt).group(1) for k in ("AMD", "NVIDIA", "CPU")}
+    by: dict = {}
+    for r in (inst / "downloads.tsv").read_text(encoding="utf-8").splitlines()[1:]:
+        if r.strip():
+            by[r.split("\t")[0]] = by.get(r.split("\t")[0], 0) + int(r.split("\t")[4] or 0)
+    common = by["base"] + by["packages"] + by["models"]
+    want = {"AMD": common + by["torch-rocm"], "NVIDIA": common + max(by["torch-cuda128"], by["torch-cuda126"]), "CPU": common + by["torch-cpu"]}
+    for k, n in want.items():
+        assert dl[k] == f"{round(n / 1e9, 1):.1f}", f"sizes.isi's {k} download {dl[k]} GB isn't downloads.tsv's {n / 1e9:.2f} GB (run build.ps1)"
+    assert "SizeDownloadGB" not in iss and "function UpdateReadyMemo" in iss and "Pending(Lines[I], Bytes)" in iss[iss.index("function UpdateReadyMemo"):]
+    assert "if CurPageID = wpReady then Hook('ready.txt', WizardForm.ReadyMemo.Text);" in iss, "the release check can't read the Ready page"
     for name, doc in (("README", (ROOT / "README.md").read_text(encoding="utf-8")), ("FRIENDS.md", (inst / "FRIENDS.md").read_text(encoding="utf-8"))):
         assert f"About {tot} GB of free disk space" in doc, f"{name}'s disk size isn't sizes.isi's {tot} GB"
-        assert f"downloads about {dl} GB" in doc, f"{name}'s download isn't sizes.isi's {dl} GB (rc-fix4b: setup downloads everything)"
+        flat = " ".join(doc.split())
+        assert (f"downloads about {dl['AMD']} GB with an AMD card, {dl['NVIDIA']} GB with an NVIDIA card or {dl['CPU']} GB without a supported card"
+                in flat), f"{name}'s download sizes aren't sizes.isi's {dl} (rc-fix4b: setup downloads everything)"
         assert "{{TIME}}" not in doc and "first time each feature" not in doc and "First assignment" not in doc, name
     nb = iss[iss.index("function NextButtonClick"):iss.index("function ShouldSkipPage")]
     assert nb.count("Result := SpaceOK(Short)") == 3 and "wpSelectDir" in nb and "DataPage.ID" in nb and "AddonPage.ID" in nb
@@ -3466,6 +3483,12 @@ def u_installer_quiet():
         assert "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') }" in (inst / f).read_text(encoding="utf-8-sig"), f
     assert "throw ''its SHA-256 is wrong''" in iss and "Remove-Item -LiteralPath $f -Force" in iss and "Get-FileHash -Algorithm SHA256 -LiteralPath $f" in iss
     assert "Why := PlaceFile(ExpandConstant('{tmp}\\') + Name, Dest, Bytes, CheckSha);" in iss
+    # the user's box says it in plain words; the log keeps the reason (rc-polish1: "its SHA-256 is wrong" was shown)
+    ask = iss[iss.index("Log(Format('%s: %s; asking the user'"):iss.index("until (Why = '') or Stopped;")]
+    assert "': ' + PlainWhy(Why) + '.'" in ask and "+ Why +" not in ask and "+ Why)" not in ask, "the download box shows the technical reason"
+    pw = iss[iss.index("function PlainWhy"):iss.index("function FetchFile")]
+    assert "Result := 'it arrived damaged'" in pw and "(Pos('sha-256', L) > 0)" in pw and "(Pos('it came to', L) = 1)" in pw
+    assert "(a few minutes)" not in iss and "(a minute or two)" not in (inst / "setup.ps1").read_text(encoding="utf-8-sig"), "a fixed time in setup's lines"
     assert '"/BADURL=$badUrl"' in e2e and "a big file with the wrong bytes wasn't caught by its SHA-256 and fetched again" in e2e
     assert "if ($line -match '/bad\\?bytes=(\\d+)')" in e2e and "$res['hangs']" in e2e
     # the real installer passes the three folders even when they are its own: the step counts only when it runs
@@ -3589,7 +3612,9 @@ def u_installer_downloads():
     assert "end else if CurPageID = wpReady then\n    Result := DownloadAll;" in iss.replace("\r\n", "\n")
     assert "DownloadPage := CreateDownloadPage(" in iss and "DownloadPage.Add(Url, Name, Sha);" in iss and "DownloadPage.Download;" in iss
     assert "if DownloadPage.AbortedByUser then" in iss and "MB_RETRYCANCEL" in iss
-    assert "if FileSize64(Dest, Have) and (Have = Bytes) then Continue;" in iss, "a file already downloaded is fetched again"
+    pend = iss[iss.index("function Pending("):iss.index("procedure EnsureBackend")]
+    assert "Result := not (FileSize64(DownloadDest(TabField(Line, 1)), Have) and (Have = Bytes));" in pend, "a file already downloaded is fetched again"
+    assert "if not Pending(Lines[I], Bytes) then Continue;" in iss[iss.index("function DownloadAll"):], "a file already downloaded is fetched again"
     assert "DownloadPage.SetProgress(DownloadIndex, DownloadCount);   // (keeps the window answering)" in iss
     assert "-Backend ' + Backend + ' -Offline';" in iss and "WizardForm.CancelButton.Enabled := False;" in iss
     assert "EnableWindow" not in iss and "AwakeTimer" not in iss and "procedure CancelButtonClick" not in iss and "setup-cancel" not in iss
@@ -3689,8 +3714,22 @@ def u_rcfix7():
         assert "while (staging_dir() / final).exists():" in ds and "discard_staged" not in ds, "a same-name candidate discards the first"
         rv = inspect.getsource(service.resolve_voice)
         assert "V.download_staged(r," in rv and "download_and_install" not in rv and "remove_voice" not in rv
-        assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True)"), "a candidate is checked before it's tracked"
+        assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True, owner=owner)"), "a candidate is checked before it's tracked"
         assert "V.discard_staged()   # what a check that stopped" in rv and 'good[0]["name"] = V.promote(good[0]["name"]).name' in rv
+        # rc-polish1: what a crash left goes at server start too (Storage counted it), once the port is this server's
+        from undercover.app import server as srv_mod
+        sm = inspect.getsource(srv_mod.main)
+        # (only what's been staged for hours: a server on another port with the same folders may be checking one now)
+        (V.staging_dir() / "fresh").mkdir(parents=True)
+        (V.staging_dir() / "stale").mkdir(parents=True)
+        os.utime(V.staging_dir() / "stale", (time.time() - 7 * 3600, time.time() - 7 * 3600))
+        V.discard_staged(older_than=6 * 3600)
+        assert (V.staging_dir() / "fresh").is_dir() and not (V.staging_dir() / "stale").exists()
+        V.discard_staged()
+        assert "voices_mod.discard_staged(older_than=6 * 3600)" in sm and sm.index("SERVER = srv") < sm.index("voices_mod.discard_staged(") < sm.index("gpu_worker"), \
+            "the staging leftovers aren't cleared at start, or are cleared before the port is ours"
+        from undercover.core import readers as rd
+        assert "the first time" not in (rd.kokoro.__doc__ or ""), "readers.kokoro() says it downloads the first time (setup installs it)"
     # 3. one estimate: the page's words; the plan carries the training's; the job uses the one-shot's own stage estimates
     assert [jobs.eta_words(x) for x in (20, 300, 3660, 8180, 10800)] == [
         "under a minute", "about 5 min", "about 61 min", "about 2\u00bd hours", "about 3 hours"]
@@ -3718,6 +3757,107 @@ def u_rcfix7():
     assert "left = end - epoch + 1 - (bi + 1) / len(batches)" in tsrc and "eta=st[\"sec_per_epoch\"] * max(0, end - epoch)" in tsrc
     assert "return int(min(max_epochs, max(planned_epochs, best + patience, epoch)))" in tsrc
     return "Readers stand in (8 phrases, made once); staging: promote never over a voice, discard only there; one estimate"
+
+
+@check("the one-shot's polish for 1.0 (rc-polish1, IA's examples): the song step has a time left on a fresh install; a stopped one-shot's alert goes when the next starts; a check that couldn't be done isn't offered again on the same clips (training or adding clips instead); a source the engine left out for a reason is never ticked back in to top up a training; a candidate is named by its display name throughout the check")
+def u_rcpolish1():
+    import inspect
+    import types
+    from undercover.core import jobs, voices as V
+    from undercover.doubleagent import service, sources as srcmod
+    from undercover.frontman import api as FA, oneshot
+    page = (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    run = inspect.getsource(oneshot.run)
+    rv = inspect.getsource(service.resolve_voice)
+    # 1. a fresh install (no past runs): the song step's time left from the one-shot's own estimates of each stage
+    saved = jobs._ETA_FILE
+    jobs._ETA_FILE = {}
+    try:
+        def first_left(est):
+            j = jobs.Job("auto")
+            j.stage_est = est
+            j.push(stage="song", frac=0.02, message="x")
+            return j.events[-1].get("total_left")
+        bare, own = first_left({}), first_left({"song": 80.0, "voice": 10.0, "cover": 60.0})
+    finally:
+        jobs._ETA_FILE = saved
+    assert bare is None and own is not None and 145 <= own <= 150, (bare, own)   # (was: no time left at all)
+    # the quick download (0.02 -> 0.38 in 10 s) doesn't make a 70 s separation "almost done": the estimate leads
+    clock = [1000.0]
+    real_time = jobs.time
+    jobs.time = types.SimpleNamespace(time=lambda: clock[0])
+    try:
+        j = jobs.Job("auto")
+        j.stage_est = {"song": 80.0, "voice": 10.0, "cover": 60.0}
+        for t, p in ((0, 0.02), (5, 0.2), (10, 0.38), (40, 0.65)):
+            clock[0] = 1000.0 + t
+            j.push(stage="song", frac=p, message="x")
+        said = [e["total_left"] for e in j.events]
+    finally:
+        jobs.time = real_time
+    assert said[2] - 70 >= 60 and said[3] - 70 >= 25, said   # (the song's own part: about 70 s, then about 40 s; extrapolated, 17 s)
+    assert 'job.stage_est["song"] = e["separating"] + (5.0 if here else FETCH_S)' in run and 'job.stage_est["cover"] = e["converting"] + e["mixing"]' in run
+    assert run.index('job.stage_est["song"]') < run.index('push("song", 0.02 + 0.9 * n / per'), "the song's estimate comes after the song step starts"
+    assert 'job.stage_est["voice"] = 10.0' in run
+    # 2. a stopped one-shot's alert belongs to that run
+    fol = page[page.index("function osFollow("):]
+    assert fol.index("osClearStopped();") < fol.index("OS.job = id;") and "showError(ev.message, OS_STOPPED);" in page
+    assert '$("#err-title").textContent === OS_STOPPED' in page
+    # 3. a check that couldn't be done: remembered on its clips, not offered again until clips change
+    with isolated_data():
+        real = service._clips_of
+        service._clips_of = lambda person: "clips-1"
+        try:
+            assert service.check_failed("Obama") is None
+            service._remember_failed("Obama", "no clean clips of Obama came through", None)
+            assert service.check_failed("Obama") is None, "a failure without its clips held on other clips"
+            service._remember_failed("Obama", "the clips had no other voices", types.SimpleNamespace(
+                name="obama", reference={"clip": "r"}, training_phrases=lambda: []))
+            service._clips_of = lambda person: service.clip_set(types.SimpleNamespace(name="obama", reference={"clip": "r"}, training_phrases=lambda: []))
+            assert service.check_failed("obama") == "the clips had no other voices"
+            service._clips_of = lambda person: "clips-2"   # clips added since: worth checking again
+            assert service.check_failed("Obama") is None
+            service._remember_failed("Obama", None)
+            assert "obama" not in service._failed_all()
+        finally:
+            service._clips_of = real
+        est = (service.check_estimate_s, service.train_estimate_s)
+        service.check_estimate_s, service.train_estimate_s = (lambda person, n: 300.0), (lambda person: 3600.0)
+        try:
+            vs = [types.SimpleNamespace(name="obama", display="Obama", extra={})]
+            plain = [c["choice"] for c in oneshot.voice_choices("Obama", vs)]
+            after = oneshot.voice_choices("Obama", vs, failed="the clips had no other voices")
+        finally:
+            service.check_estimate_s, service.train_estimate_s = est
+        assert plain == ["use:obama", "check", "train"] and [c["choice"] for c in after] == ["use:obama", "train"], (plain, after)
+        assert "couldn't be done (the clips had no other voices)" in after[-1]["detail"] and "Adding clips" in after[-1]["detail"]
+    assert 'failed = None if prefer_train or choice == "check" or community else check_failed(person)' in rv
+    # never a training nobody asked for (rc-fix2): without the plan's "train", a held failure stops the job and says so
+    fl = rv[rv.index("failed = None if prefer_train"):]
+    assert fl.index("if failed:\n        raise ModelError(") < fl.index("online = [] if prefer_train else online_for(person, 2)") and "_remember_failed(person, None)" in rv
+    assert rv.index('if choice == "train":\n        prefer_train = True') < rv.index("failed = None if prefer_train")
+    assert 'voice_choice: last.plan.voice_ask ? OS.vchoice : last.plan.voice?.after_failed ? "train" : undefined' in page
+    assert "_remember_failed(person, why, proj)" in inspect.getsource(service.no_check) and rv.count("community, plan, push, proj)") == 2
+    ap = inspect.getsource(FA._auto_plan)
+    assert 'online = [] if prefer_train or (failed and not inst) else service.online_for(person, 2)' in ap and '"after_failed": failed' in ap and "failed=failed)" in ap
+    assert "if (v.after_failed)" in page
+    # 4. left out for a reason: stays out, the reason shown; a training short of voice tops up only from the rest
+    S = lambda note: types.SimpleNamespace(note=note)
+    flagged = ["from 2004, decades before their newest (2020): a younger voice", srcmod.ABOUT_NOTE, service.SONG_NOTE,
+               "left out by DoubleAgent: another voice", "may be in Spanish (a dub or another language)", srcmod.TALK_NOTE, "yours"]
+    assert all(srcmod.left_out_for_a_reason(S(n)) for n in flagged), [n for n in flagged if not srcmod.left_out_for_a_reason(S(n))]
+    assert not any(srcmod.left_out_for_a_reason(S(n)) for n in ("", "interview", "speech", "scenes", "acapella", "voice lines", "album track"))
+    tn = inspect.getsource(service.train_new_voice)
+    assert "and not srcmod.left_out_for_a_reason(s)" in tn and "NOT_USABLE)\n" not in tn[tn.index("more = sorted("):tn.index("more = sorted(") + 200]
+    old = types.SimpleNamespace(id="a", title="Barack Obama 2004 DNC keynote", extra={}, selected=True, user=False, note="")
+    new = types.SimpleNamespace(id="b", title="Obama interview 2020", extra={}, selected=True, user=False, note="")
+    srcmod.mark_era([old, new], "Barack Obama")
+    assert not old.selected and "a younger voice" in old.note and srcmod.left_out_for_a_reason(old) and new.selected
+    # 5. one name for a candidate: the one it's listed under once chosen (the person, _remember_range)
+    assert 'v.extra = {**(v.extra or {}), "person": person}' in rv and rv.index('"person": person}') < rv.index("q = test(v, ident, staged=True, owner=owner)")
+    assert V.display_name(types.SimpleNamespace(name="plankton-spongebob", display="", extra={"person": "Plankton"})) == "Plankton"
+    assert "“{r.name}”" not in rv, "a candidate is named by its search result while it downloads"
+    return "song step said from the start; the stopped alert clears; a failed check offers training; left-out sources stay out; one name"
 
 
 @check("the first start's model download has a moving bar (MasterPlan for the First assignment: its bar only slid): the status carries models_progress (0-1) and models_mb while the separation and conversion models download, from the files and their .part against the pinned sizes; a short file counts as missing")
@@ -9219,7 +9359,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

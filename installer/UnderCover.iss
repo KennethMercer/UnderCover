@@ -405,9 +405,11 @@ begin
   end;
 
   // the welcome page says the real size, plainly, before anything else
+  // (Inno shows no welcome page by default; were it shown, this is the real size. The download, which depends on the
+  // graphics card, is on the Ready page: UpdateReadyMemo)
   WizardForm.WelcomeLabel2.Caption := 'UnderCover needs about {#SizeTotalGB} GB of free space in all, far more than this installer.' + #13#10#13#10 +
-    'Setup downloads everything it needs, about {#SizeDownloadGB} GB: Python, PyTorch for your graphics card, the tools ' +
-    'and the AI models. Nothing downloads later, except add-ons you choose or a repair.';
+    'Setup downloads everything it needs first: Python, PyTorch for your graphics card, the tools and the AI models. ' +
+    'Nothing downloads later, except add-ons you choose or a repair.';
   WizardForm.DiskSpaceLabel.WordWrap := True;
   WizardForm.DiskSpaceLabel.Top := WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(20);
   WizardForm.DiskSpaceLabel.Height := ScaleY(30);
@@ -847,6 +849,25 @@ begin
   if (Result = '') and not (FileSize64(Dest, Have) and (Have = Bytes)) then Result := 'it isn''t the right size after moving';
 end;
 
+// what went wrong with a download, in the user's words (rc-polish1: the box said "its SHA-256 is wrong"); the log keeps
+// the technical reason. Failed its check, came short, or Inno found its hash wrong: it arrived damaged. Our own reasons
+// (a folder it can't be put in) are plain already. Inno's download errors: the connection's, or said as they are
+function PlainWhy(Why: String): String;
+var
+  L: String;
+begin
+  L := Lowercase(Why);
+  if (Pos('sha-256', L) > 0) or (Pos('hash', L) > 0) or (Pos('it came to', L) = 1) or (Pos('the right size', L) > 0) then
+    Result := 'it arrived damaged'
+  else if (Pos('it couldn''t be put in', L) = 1) or (Pos('checking it took too long', L) = 1) or (Pos('its check couldn''t start', L) = 1) then
+    Result := Why
+  else if (Pos('http', L) > 0) or (Pos('connect', L) > 0) or (Pos('timed out', L) > 0) or (Pos('timeout', L) > 0) or
+      (Pos('server', L) > 0) or (Pos('resolve', L) > 0) or (Pos('no source', L) = 1) then
+    Result := 'the connection to its server failed'
+  else
+    Result := 'it couldn''t be saved (' + Why + ')';   // (a full drive, a file in use: not the connection's)
+end;
+
 // one file from its sources (a model's mirrors), in order. -> '' (in Inno's temp folder, checked), 'stopped', or the error
 function FetchFile(Urls, Name, Sha: String): String;
 var
@@ -880,6 +901,60 @@ begin
   end;
 end;
 
+// a downloads.tsv line this PC needs and doesn't have yet (Bytes: its size)
+function Pending(Line: String; var Bytes: Int64): Boolean;
+var
+  Have: Int64;
+begin
+  Result := False;
+  if (Trim(Line) = '') or not WantedGroup(TabField(Line, 0)) then Exit;
+  Bytes := StrToInt64Def(TabField(Line, 4), 0);
+  Result := not (FileSize64(DownloadDest(TabField(Line, 1)), Have) and (Have = Bytes));   // there already: a re-run
+end;
+
+// the graphics card's PyTorch build, read once (space.ps1, from the folder page); none readable: the processor's
+procedure EnsureBackend;
+var
+  Need, Parts, Short: String;
+begin
+  if (Backend = '') or (Backend = 'auto') then CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Need, Parts, Short);
+  if (Backend = '') or (Backend = 'auto') then Backend := 'cpu';
+end;
+
+// what the downloads are for, in plain words
+function BackendWords: String;
+begin
+  if Pos('cuda', Backend) = 1 then Result := 'an NVIDIA graphics card'
+  else if Backend = 'rocm' then Result := 'an AMD graphics card'
+  else Result := 'the processor (no supported graphics card)';
+end;
+
+// the Ready page, just before Install: the download for THIS PC (its graphics card's PyTorch, the add-ons ticked, less
+// what's here already), from downloads.tsv, instead of one size for every card (rc-polish1: NVIDIA's is 12.0 GB)
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo,
+  MemoTasksInfo: String): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+  Bytes, Total: Int64;
+begin
+  Result := MemoDirInfo;
+  if MemoTasksInfo <> '' then Result := Result + NewLine + NewLine + MemoTasksInfo;
+  ExtractTemporaryFile('downloads.tsv');
+  if not LoadStringsFromFile(ExpandConstant('{tmp}\downloads.tsv'), Lines) then Exit;
+  EnsureBackend;
+  Total := 0;
+  for I := 1 to GetArrayLength(Lines) - 1 do
+    if Pending(Lines[I], Bytes) then Total := Total + Bytes;
+  Result := Result + NewLine + NewLine + 'Downloads first, before anything is installed:' + NewLine + Space;
+  if Total = 0 then
+    Result := Result + 'nothing: everything is downloaded already'
+  else begin
+    Result := Result + 'about ' + GBText(Total) + ' GB: Python, PyTorch for ' + BackendWords + ', the tools and the AI models';
+    if GetAddons('') <> '' then Result := Result + ', with the add-ons you ticked';
+  end;
+end;
+
 // everything this PC needs, from downloads.tsv, before anything is installed. -> True: all here
 function DownloadAll: Boolean;
 var
@@ -887,7 +962,7 @@ var
   Todo: array of Integer;
   I, K: Integer;
   Line, Dest, Name, Why, Short, Urls, InnoSha, CheckSha: String;
-  Bytes, Have, Largest, Free, Total: Int64;
+  Bytes, Largest, Free, Total: Int64;
   Stopped, Big: Boolean;
   Tries, W: Integer;
 #ifdef ReleaseCheck
@@ -900,18 +975,13 @@ begin
     Say('The installer''s download list is missing. Download the installer again.', mbError, MB_OK, IDOK);
     Exit;
   end;
-  if (Backend = '') or (Backend = 'auto') then CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Line, Line, Short);
-  if (Backend = '') or (Backend = 'auto') then Backend := 'cpu';   // no graphics card could be read: the processor's PyTorch
+  EnsureBackend;
   Log('Downloads for backend ' + Backend + ', add-ons "' + GetAddons('') + '"');
   DownloadTotal := 0;
   Largest := 0;
   SetArrayLength(Todo, 0);
   for I := 1 to GetArrayLength(Lines) - 1 do begin
-    Line := Lines[I];
-    if (Trim(Line) = '') or not WantedGroup(TabField(Line, 0)) then Continue;
-    Dest := DownloadDest(TabField(Line, 1));
-    Bytes := StrToInt64Def(TabField(Line, 4), 0);
-    if FileSize64(Dest, Have) and (Have = Bytes) then Continue;   // there already (a re-run, or a stopped download)
+    if not Pending(Lines[I], Bytes) then Continue;   // not this PC's, or there already (a re-run, a stopped download)
     SetArrayLength(Todo, GetArrayLength(Todo) + 1);
     Todo[GetArrayLength(Todo) - 1] := I;
     DownloadTotal := DownloadTotal + Bytes;
@@ -982,12 +1052,15 @@ begin
               DownloadPage.SetProgress(DownloadIndex, DownloadCount);
               Sleep(100);
             end;
-          end else if Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
-              'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) = IDRETRY then
-            Tries := 0   // the user's Try again: three more by itself after this one
-          else begin
-            WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Why + '. What''s downloaded is kept: Install carries on from there.';
-            Stopped := True;
+          end else begin
+            Log(Format('%s: %s; asking the user', [Name, Why]));
+            if Say('Couldn''t download ' + Name + ': ' + PlainWhy(Why) + '.' + #13#10#13#10 +
+                'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) = IDRETRY then
+              Tries := 0   // the user's Try again: three more by itself after this one
+            else begin
+              WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Name + ': ' + PlainWhy(Why) + '. What''s downloaded is kept: Install carries on from there.';
+              Stopped := True;
+            end;
           end;
         end;
       until (Why = '') or Stopped;
@@ -1001,9 +1074,8 @@ begin
 end;
 
 // setup.ps1, hidden, from the downloaded files (-Offline: nothing goes online): the wizard's own bar and status lines
-// follow it (no console window to close by mistake). Its steps are short (unpacking and installing, a few minutes in
-// all), so Cancel is off while it runs: Inno keeps the wizard still while a program it started runs. A re-run
-// continues past what's done. -> it worked (exit code 0)
+// follow it (no console window to close by mistake). Its steps are short (unpacking and installing), so Cancel is off
+// while it runs: Inno keeps the wizard still while a program it started runs. A re-run continues past what's done. -> it worked (exit code 0)
 function RunSetup: Boolean;
 var
   Params: String;
@@ -1015,7 +1087,7 @@ begin
   Progress := 0;
   WizardForm.ProgressGauge.Max := 1000;
   WizardForm.ProgressGauge.Position := 0;
-  WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and the tools for your graphics card (a few minutes)...';
+  WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and the tools for your graphics card...';
   WizardForm.FilenameLabel.Caption := 'Everything is downloaded: this part works offline, and it can''t be stopped halfway.';
   DetailsLink.Visible := True;
   WizardForm.CancelButton.Enabled := False;
@@ -1081,6 +1153,7 @@ var
 begin
 #ifdef ReleaseCheck
   HideTestWindows;
+  if CurPageID = wpReady then Hook('ready.txt', WizardForm.ReadyMemo.Text);   // (the download said for this PC: rc-polish1)
   Hook('page.txt', IntToStr(CurPageID));
 #endif
   if CurPageID = wpFinished then ShowOutcome;

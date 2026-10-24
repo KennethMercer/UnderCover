@@ -997,6 +997,13 @@ def main():
         doctor.heal_at_startup(hb, STATUS, hash_new_manifest=storage.ALLOWED_ROOTS is None)
     except Exception as e:   # noqa: BLE001 - never block startup
         print(f"The Doctor's startup check failed: {e}", flush=True)
+    try:   # candidates a check left in voices\.staging when the app stopped mid-check (Storage counted them): only inside
+        # .staging, through storage.remove_files, once the port is ours; only ones staged hours ago (a check takes
+        # minutes), so a server on another port with the same folders keeps the one it's checking
+        from ..core import voices as voices_mod
+        voices_mod.discard_staged(older_than=6 * 3600)
+    except Exception as e:   # noqa: BLE001 - never block startup
+        print(f"Couldn't clear the voice check's leftovers: {e}", flush=True)
     _install_console_handler()
     _clean_old_previews()
     threading.Thread(target=gpu_worker, daemon=True, name="gpu").start()

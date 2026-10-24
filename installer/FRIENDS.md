@@ -10,7 +10,7 @@ anywhere.
 - A graphics card helps a lot. AMD RX 7700 and up, and the RX 9000 cards, are supported. NVIDIA cards from the GTX 900 series on are
   set up for but untested. Other PCs still work on the processor alone, just slowly, and without voice training.
 - About 22.5 GB of free disk space. The installer checks that it fits.
-- An internet connection for the install, which downloads about 11.5 GB. After that, no more AI models download. Songs, clips and community voices you ask for come from YouTube or Hugging Face.
+- An internet connection for the install, which downloads about 11.4 GB with an AMD card, 12.0 GB with an NVIDIA card or 9.3 GB without a supported card. After that, no more AI models download. Songs, clips and community voices you ask for come from YouTube or Hugging Face.
 
 ## Install
 

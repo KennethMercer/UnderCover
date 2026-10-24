@@ -85,6 +85,8 @@ function voiceLine(v, p) {
   if (!v) return "";
   if (v.how === "installed") return `<b>${vname(v.name)}</b>, your voice${v.trained ? ", trained here" : ""}`;
   if (v.how === "check") return `${a} ${who} voice from the community, checked against real clips first<span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b>; none close enough trains one (~2 GB while training)</span>`;
+  // the last check couldn't be done on these clips (rc-polish1): what works instead, not the same check again
+  if (v.after_failed) return `a new <b>${who}</b> voice is trained first: the last check couldn't be done (${esc(v.after_failed)}). Adding clips of ${who} in DoubleAgent lets it check again`;
   return `none yet: a new <b>${who}</b> voice is trained first<span class="meta" data-deep> (~2 GB while training)</span>`;
 }
 // how the plan goes: "train" (a voice first), "check" (community voices first), "installed" (a voice of yours), or "" (no plan, or a pick missing)
@@ -221,7 +223,7 @@ $("#os-go").onclick = async () => {
     if (planPath(last.plan) === "train") store.set("uc-person-warned", true);   // the line was on the card; said once
     const picked = last.plan.voice_ask ? pickedVoice(last.plan) : null;
     OS.pathEta = picked ? (picked.eta_s.low + picked.eta_s.high) / 2 : null; OS.pathAt = performance.now();   // the countdown starts from the whole picked path
-    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined, subject: OS.subject || undefined, voice_choice: last.plan.voice_ask ? OS.vchoice : undefined } });
+    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined, subject: OS.subject || undefined, voice_choice: last.plan.voice_ask ? OS.vchoice : last.plan.voice?.after_failed ? "train" : undefined } });   // (after a check that couldn't be done, the plan's training is what's asked for: rc-polish1)
     osFollow(r.job, text);
   } catch (e) { showError(e.message, "Can't make that cover"); }
   finally { btn.disabled = false; }
@@ -351,8 +353,13 @@ function osOctAB(list, cur, item) {
     } catch (e) { b.disabled = false; showError(e.message, "Couldn't make it again"); }
   });
 }
+// a stopped one-shot's alert belongs to that run: the next one clears it, as Convert clears its own (rc-polish1: it
+// stayed up through the next runs until dismissed). Any other alert stays
+const OS_STOPPED = "The one-shot cover stopped";
+function osClearStopped() { if (!$("#err").hidden && $("#err-title").textContent === OS_STOPPED) $("#err").hidden = true; }
 function osFollow(id, title) {
   if (OS.es) OS.es();
+  osClearStopped();
   OS.job = id; OS.plan = null;
   store.set("uc-os-seen", id);
   setRunning(true, title || "Making your cover");
@@ -404,7 +411,7 @@ function osFollow(id, title) {
     } else if (ev.state === "paused") {
       $("#os-plan").textContent = "Paused while training the voice. Resume (top of the page) carries on from the same point and then makes the cover.";
     } else {
-      showError(ev.message, "The one-shot cover stopped");
+      showError(ev.message, OS_STOPPED);
       previewPlan();
     }
   });
