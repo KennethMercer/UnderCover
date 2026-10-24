@@ -3486,7 +3486,7 @@ def u_installer_quiet():
     assert "trying again by itself (%d of 3)" in iss and "if Tries < 3 then begin" in iss and "Tries := 0   // the user's Try again" in iss
     assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\", \"/BADURL=$badUrl\", '/SETUPHOLD=40')" in e2e and "$size = 104857600; $send = 1048576" in e2e
     # rc-fix8: the release check fails on any disabled second while setup runs, and moves, minimises and opens Show details then
-    for k in ("if ([int]$resp['setupwizoff'] -gt 0)", "if ([int]$resp['setupsecs'] -lt 30)", "if ($resp['setupmoved'] -ne 'True')",
+    for k in ("if ([int]$resp['setupwizoff'] -gt 0)", "if ([int]$resp['setupsecs'] -lt 60)", "if ($resp['setupmoved'] -ne 'True')",
               "if ($resp['setupminimise'] -ne 'True/True')", "if ($resp['setupdetails'] -ne 'True')"):
         assert k in e2e, k
     assert "a download that came back short wasn't tried again by itself" in e2e and "the run after Stop downloaded $n again" in e2e

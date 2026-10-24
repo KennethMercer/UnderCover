@@ -314,7 +314,8 @@ while ([W]::IsWindow($h) -and (Read1 'page.txt') -ne '14') {
                 [void][W]::PostMessage($h, 0x112, [IntPtr]0xF120, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
                 $smini = "$m/$(-not [W]::IsIconic($h))"; $tick.Restart()
             }
-            if ($setupSecs -eq 15 -and $details -ne [IntPtr]::Zero) {   # a click on Show details: Notepad with setup.log
+            # a click on Show details: Notepad with setup.log (after the 40 s hold: setup has written its log by then)
+            if ($setupSecs -eq 55 -and $details -ne [IntPtr]::Zero) {
                 [void][W]::PostMessage($details, 0x201, [IntPtr]1, [IntPtr]::Zero); [void][W]::PostMessage($details, 0x202, [IntPtr]0, [IntPtr]::Zero)
                 $np = $null
                 for ($i = 0; $i -lt 30 -and -not $np; $i++) {
@@ -479,7 +480,7 @@ else {
     # rc-fix8: setup's step, the whole of it: never disabled, it moves and minimises, Show details opens the log
     Write-Host ("Setup's wizard: disabled $($resp['setupwizoff']) of $($resp['setupsecs']) s; moved $($resp['setupmoved']); " +
                 "minimise/restore $($resp['setupminimise']); Show details $($resp['setupdetails'])")
-    if ([int]$resp['setupsecs'] -lt 30) { $fails += "setup's step was up $($resp['setupsecs']) s: too short to judge" }
+    if ([int]$resp['setupsecs'] -lt 60) { $fails += "setup's step was up $($resp['setupsecs']) s: too short to judge" }
     if ([int]$resp['setupwizoff'] -gt 0) { $fails += "the wizard was disabled $($resp['setupwizoff']) of $($resp['setupsecs']) s while setup ran" }
     if ($resp['setupmoved'] -ne 'True') { $fails += "the wizard didn't move while setup ran ($($resp['setupmoved']))" }
     if ($resp['setupminimise'] -ne 'True/True') { $fails += "minimise/restore while setup ran: $($resp['setupminimise'])" }
