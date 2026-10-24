@@ -1156,6 +1156,10 @@ begin
   DeleteFile(ExitFile);
   DeleteFile(ExitFile + '.part');
   DeleteFile(PidFile);
+  // the log is there from the first moment, so Show details always opens something (rc-fix8: pressed before setup.ps1
+  // had written its first line, it did nothing); setup appends to it
+  SaveStringToFile(Logs + '\setup.log', GetDateTimeString('yyyy/mm/dd hh:nn:ss', '-', ':') +
+    '  Setting up: starting (the steps follow here)' + #13#10, True);
   Seen := 0;
   if LoadStringsFromFile(StatusFile, Lines) then Seen := GetArrayLength(Lines);   // (a Try again: only the new lines)
   // (-NonInteractive: anything that would wait for input fails at once, with its error, instead of hanging unseen.

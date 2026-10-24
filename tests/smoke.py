@@ -3300,6 +3300,7 @@ def u_installer_space():
     hold = run[run.index("#ifdef ReleaseCheck"):run.index("#endif")]
     assert "{param:setuphold|0}" in hold and "Start-Sleep -Seconds" in hold, "the release check can't hold setup long enough to judge"
     assert "WizardForm.CancelButton.Enabled := False;" in run
+    assert run.index("SaveStringToFile(Logs + '" + chr(92) + "setup.log'") < run.index("Shell.Run(Cmd, 0, False);"), "Show details opens nothing until setup writes its log"
     pump = iss[iss.index("procedure PumpMessages"):iss.index("function ProcessEnded")]
     assert "while PeekMessage(Msg, 0, 0, 0, 1) do begin" in pump and "DispatchMessage(Msg);" in pump
     assert "IntToStr(DownloadPage.AbortButton.Handle) + ' ' + IntToStr(DetailsLink.Handle));" in iss
@@ -3487,7 +3488,7 @@ def u_installer_quiet():
     assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\", \"/BADURL=$badUrl\", '/SETUPHOLD=40')" in e2e and "$size = 104857600; $send = 1048576" in e2e
     # rc-fix8: the release check fails on any disabled second while setup runs, and moves, minimises and opens Show details then
     for k in ("if ([int]$resp['setupwizoff'] -gt 0)", "if ([int]$resp['setupsecs'] -lt 60)", "if ($resp['setupmoved'] -ne 'True')",
-              "if ($resp['setupminimise'] -ne 'True/True')", "if ($resp['setupdetails'] -ne 'True')"):
+              "if ($resp['setupminimise'] -ne 'True/True')", "if ($resp['setupdetails'] -ne 'True/True')"):
         assert k in e2e, k
     assert "a download that came back short wasn't tried again by itself" in e2e and "the run after Stop downloaded $n again" in e2e
     assert 'if ($logged) { Quit "a box came up:' in e2e and "the wizard went back to its Ready page during the downloads" in e2e

@@ -314,15 +314,16 @@ while ([W]::IsWindow($h) -and (Read1 'page.txt') -ne '14') {
                 [void][W]::PostMessage($h, 0x112, [IntPtr]0xF120, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
                 $smini = "$m/$(-not [W]::IsIconic($h))"; $tick.Restart()
             }
-            # a click on Show details: Notepad with setup.log (after the 40 s hold: setup has written its log by then)
-            if ($setupSecs -eq 55 -and $details -ne [IntPtr]::Zero) {
+            # a click on Show details: Notepad with setup.log, early (inside the 40 s hold, before setup.ps1 writes a line:
+            # the wizard starts the log itself) and once setup is running
+            if ($setupSecs -in 15, 55 -and $details -ne [IntPtr]::Zero) {
                 [void][W]::PostMessage($details, 0x201, [IntPtr]1, [IntPtr]::Zero); [void][W]::PostMessage($details, 0x202, [IntPtr]0, [IntPtr]::Zero)
                 $np = $null
                 for ($i = 0; $i -lt 30 -and -not $np; $i++) {
                     Start-Sleep -Milliseconds 200
                     $np = @(Get-CimInstance Win32_Process -Filter "Name = 'notepad.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*setup.log*' })[0]
                 }
-                $sdetails = "$([bool]$np)"
+                $sdetails = ($sdetails, "$([bool]$np)" | Where-Object { $_ }) -join '/'
                 if ($np) { Stop-Process -Id $np.ProcessId -Force -ErrorAction SilentlyContinue }
                 $tick.Restart()
             }
@@ -484,7 +485,7 @@ else {
     if ([int]$resp['setupwizoff'] -gt 0) { $fails += "the wizard was disabled $($resp['setupwizoff']) of $($resp['setupsecs']) s while setup ran" }
     if ($resp['setupmoved'] -ne 'True') { $fails += "the wizard didn't move while setup ran ($($resp['setupmoved']))" }
     if ($resp['setupminimise'] -ne 'True/True') { $fails += "minimise/restore while setup ran: $($resp['setupminimise'])" }
-    if ($resp['setupdetails'] -ne 'True') { $fails += "Show details didn't open the log while setup ran ($($resp['setupdetails']))" }
+    if ($resp['setupdetails'] -ne 'True/True') { $fails += "Show details didn't open the log while setup ran, early and later ($($resp['setupdetails']))" }
     if ([int]$resp['timeouts'] -gt 0 -or [int]$resp['hung'] -gt 0) { $fails += "the wizard stopped answering ($($resp['timeouts']) timeouts, hung $($resp['hung']) times; during: $($resp['hangs']))" }
     if ([double]$resp['maxms'] -gt 1000) { $fails += "the wizard took $($resp['maxms']) ms to answer" }
     if ($resp['boxes'] -or $resp['ourboxes']) { $fails += "message boxes came up: $($resp['boxes']) $($resp['ourboxes'])" }
