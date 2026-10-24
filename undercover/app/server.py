@@ -1029,6 +1029,7 @@ def main():
     from ..speakeasy import speak as speak_mod
     voicepreview.RENDER[0] = speak_mod.render_line   # (core and DoubleAgent add voices; only the app may reach SpeakEasy)
     voicepreview.start()   # voices from before get their preview line, one at a time, only while nothing else runs
+    speak_mod.start_warm_up()   # the speech engine ready before the first speech, once idle (1.0.1)
     worklist.start()
     vault.start()   # Vaulting: quiet backups when the GPU queue is idle (off until a vault folder is picked)
     try:   # phase 24: the full indexes kept 30 days after an export go when their time is up (daily)

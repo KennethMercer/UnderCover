@@ -337,6 +337,88 @@ def _record_speed(p: dict, sec_per_word: float):
         pass
 
 
+WARMING = {"job": None}   # the warm-up job queued or running (one at a time)
+
+
+def warm_engines() -> set:
+    """The engines the voices' speech packs read with, here (the ones a first speech would load)."""
+    from ..core.cadence import pack_ready, reading_engine
+    from ..core.voices import listed_voices
+    out = set()
+    for v in listed_voices():
+        pack = service.cadence_pack(v)
+        if pack and pack_ready(pack.get("engine", "chatterbox"), pack.get("engine_pin")):
+            out.add(reading_engine(pack.get("engine"), pack.get("engine_pin")))
+    return out
+
+
+def warm_up(job):
+    """The speech engine ready before anyone asks (1.0.1: the first speech of a session took about a minute longer
+    than it said): each engine the speech packs read with loaded in the worker, and every pack's one-off pace
+    calibration done. Gives way to any other GPU work at once (the worker's load is ended, a calibration stops
+    between its readings); the worker stops by itself when idle (cadence idle_minutes), and the next opening of
+    SpeakEasy warms it again."""
+    from ..core import jobs as J
+    from ..core.cadence import client
+    from ..core.voices import listed_voices
+
+    def busy():
+        return job.cancel or not J.GPU_QUEUE.empty()
+
+    def check():
+        if busy():
+            raise Cancelled()
+    for eng in sorted(warm_engines()):
+        job.push(stage="warming", frac=0.2, message="Getting the speech engine ready")
+        client.WORKER.call("load", engine=eng, timeout=900, cancel=busy)
+    for v in listed_voices():
+        check()
+        if service.cadence_pack(v) and service.pace_needs_calibration(v):
+            job.push(stage="warming", frac=0.6, message="Getting the speech engine ready: matching a voice's pace, once")
+            service.calibrate_pace(v, check)
+
+
+def queue_warm_up() -> bool:
+    """A warm-up GPU job, when there's anything to warm and none is queued or running. -> True when queued."""
+    from ..core import jobs as J
+    from ..core.cadence import client
+    w = WARMING["job"]
+    if (w is not None and not w.finished) or client.WORKER.running() or not warm_engines():
+        return False
+    job = J.Job("speakwarm", title="Getting the speech engine ready")
+    J.JOBS[job.id] = job
+    WARMING["job"] = job
+
+    def run(j):
+        try:
+            warm_up(j)
+            j.finish("done", message="The speech engine is ready")
+        except (Cancelled, client.WorkerError):   # (other GPU work came first, or the engine wouldn't load: the
+            j.finish("cancelled", message="Getting the speech engine ready gave way")   # first speech loads it)
+    J.GPU_QUEUE.put((job, run))
+    return True
+
+
+def start_warm_up():
+    """At the server's start: the warm-up once the server is idle (the preview backfill's rules: nothing queued or
+    running, nothing held, no Storage move, no full-screen game)."""
+    import os
+    from ..core import voicepreview
+    if os.environ.get("UNDERCOVER_NO_BACKFILL"):   # (smoke's sandbox: its checks expect the queue as they left it)
+        return
+
+    def loop():
+        for _ in range(60):   # (an hour of looking, once a minute)
+            time.sleep(60)
+            try:
+                if voicepreview.idle():
+                    queue_warm_up()
+                    return
+            except Exception:   # noqa: BLE001 - never stops the server
+                return
+    threading.Thread(target=loop, daemon=True, name="speakwarm").start()
+
+
 def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> dict:
     """The person's cadence: the engine reads each sentence (worker process, one sentence ahead), the voice's RVC
     model makes it their exact timbre, and their own gap between sentences follows."""
@@ -492,6 +574,30 @@ VOICE_S = 3.0          # the voice conversion's start (its models are usually lo
 LISTEN_BACK = 1.25     # measured: re-reads cost 1.25x as-now on a quiet GPU (listen-back handoff)
 
 
+def start_cost(p: dict) -> tuple[float, str]:
+    """(seconds, what) the first speech of a session spends before its first sentence, and nothing once the speech
+    engine is warm (warm_up: 1.0.1, the first speech took about a minute longer than it said): the engine loading, the
+    voice's one-off pace calibration, listen-back's ear loading. -> (0.0, "") when there's none."""
+    if p.get("mode") != "cadence":
+        return 0.0, ""
+    from ..core.cadence import client
+    from . import listenback
+    t, what = 0.0, []
+    if not client.WORKER.running():
+        t += COLD_ENGINE_S
+        what.append("the speech engine starts")
+    try:
+        if service.pace_needs_calibration(get_voice(p["voice"])):
+            t += CALIBRATE_S
+            what.append("it matches the voice's pace, once")
+    except Exception:   # noqa: BLE001 - only the estimate
+        pass
+    if listenback.settings().get("listen_back") and listenback._ASR.get("model") is None:
+        t += COLD_EAR_S
+        what.append("listen-back's ear loads")
+    return t, " and ".join(what)
+
+
 def eta_seconds(text: str, p: dict) -> float:
     """How long making this speech takes (Internal Affairs m10: one sentence promised 0:05 was made in 39 s: the
     audio's length had been given as the time, and listen-back and the models' start weren't counted)."""
@@ -501,16 +607,7 @@ def eta_seconds(text: str, p: dict) -> float:
         pieces = cadence_pieces(tts.sentences(text))
         pw, ps = per_word(p)
         t = sum(len(s["text"].split()) for s in pieces) * pw + len(pieces) * ps + VOICE_S
-        if not client.WORKER.running():
-            t += COLD_ENGINE_S
-        if listenback.settings().get("listen_back") and listenback._ASR.get("model") is None:
-            t += COLD_EAR_S
-        try:
-            if service.pace_needs_calibration(get_voice(p["voice"])):
-                t += CALIBRATE_S
-        except Exception:   # noqa: BLE001 - only the estimate
-            pass
-        return round(t, 1)
+        return round(t + start_cost(p)[0], 1)
     audio = tts.seconds_estimate(text, p.get("speed") or 1.0)
     return round(audio / max(float(p.get("rtf") or 1.0), 0.05) + VOICE_S, 1)
 
