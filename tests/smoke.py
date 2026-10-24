@@ -3795,8 +3795,8 @@ def u_rceta():
             found = types.SimpleNamespace(kept_seconds=lambda: 0.0, sources=[src] * 13, mode="speaking", person="Obama", name="obama", reference={})
             assert night._estimate_new(found, {"kind": "new", "target": "Obama"}) == bare, "the search's finds change the estimate"
             total = bare["total"] + (80 + 80) / 60   # (+ 2d's song step and its cover)
-            assert 130 <= total <= 150 and abs(total - 142) / 142 < 0.1, (bare, total)   # 2d: 142 min (was "about 61")
-            assert abs(total - 118) / 118 < 0.2, total   # 2b: 118 min, the other way
+            # 2d: 142 min (was "about 61"), 2b: 118 min the other way, rc-eta's own proof: 121 min (each within 15 %)
+            assert all(abs(total - real) / real < 0.15 for real in (142, 118, 121)), (bare, total)
             enough = types.SimpleNamespace(kept_seconds=lambda: 35 * 60.0, sources=[], mode="speaking", person="Obama", name="obama", reference={})
             assert night._estimate_new(enough, {"kind": "new", "target": "x"})["prepare"] == 0
             assert night.estimate({"kind": "new", "target": "Nobody Yet"})["total"] == night._estimate_new(None, {"kind": "new"})["total"]
@@ -3816,6 +3816,7 @@ def u_rceta():
     run = inspect.getsource(oneshot.run)
     assert 'plan["train_est_s"] = train_estimate_s(person)' in run and '"train_est_s"):' in inspect.getsource(oneshot)
     assert 'tr = plan.get("train_est_s") or train_estimate_s(person)' in inspect.getsource(service.resolve_voice)
+    assert 'plan["voice_until"] = time.time() + float(kw["eta"]) + AFTER_TRAINING_S' in run, "after the last epoch the old deadline comes back"
     assert 'round(service.train_estimate_s(person) + oneshot.cover_eta("", here)["high"])' in inspect.getsource(FA._auto_plan)
     # a first epoch's speed blends in (no +29 min): the run's first epoch left out once there are more
     hist = [{"epoch": 1, "secs": 120.0}]

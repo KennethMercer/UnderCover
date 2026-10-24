@@ -259,6 +259,10 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     def push(stage, frac, message, **kw):
         if job.cancel:
             raise jobs.Cancelled()
+        if stage == "voice" and kw.get("eta") is not None:
+            # a training's own time left moves the voice step's end with it: after its last epoch, "Adding the new
+            # voice" counts on from there (rc-eta proof: 93 s -> 1656 s, the deadline the training had beaten)
+            plan["voice_until"] = time.time() + float(kw["eta"]) + AFTER_TRAINING_S
         if stage == "voice" and plan.get("voice_until") and kw.get("total_left") is None and kw.get("eta") is None:
             # the voice step's own estimate (resolve_voice), then the cover: never a training's worst case for a check
             kw["total_left"] = round(max(5.0, plan["voice_until"] - time.time()) + plan.get("cover_s", 60.0), 1)
@@ -535,6 +539,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
 
 
 TYPICAL_SONG_S = 210.0   # a one-shot's song before it's found: three and a half minutes
+AFTER_TRAINING_S = 30.0  # a training's last check, adding the voice and its preview line (measured 20-25 s)
 FETCH_S = 20.0           # finding and downloading it (measured 10-30 s)
 
 

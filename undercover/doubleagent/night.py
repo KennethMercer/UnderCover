@@ -39,7 +39,7 @@ def _sec_per_step() -> float:
 # What a new voice's training turned out to be, measured from every one (rc-eta, IA's training proof: "about 61 min"
 # planned, 2 h 22 min taken; 2b the other way): the kept minutes it ended with against the target, the kept minutes
 # prepared per minute, and how far past its planned epochs it ran before the stall rule stopped it. Defaults: 2d's.
-TRAIN_SHAPE = {"kept_over_target": 1.4, "kept_per_prep_min": 3.2, "past_plan": 1.2}
+TRAIN_SHAPE = {"kept_over_target": 1.4, "kept_per_prep_min": 3.2, "past_plan": 1.1}   # (2d ran 1.2x its plan, rc-eta's proof 1.0x)
 # a character's scenes and a singer's songs yield less clean voice a minute than a person's speeches (SpongeBob: about
 # 0.3 min an upload, music and the other characters cut out): their own preparation rate until one is measured
 KIND_PREP = {"character": 0.8, "singer": 2.0}
