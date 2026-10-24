@@ -26,7 +26,8 @@ which you switch on from the top bar.
   not been tested. Without a supported card UnderCover runs on the processor, much more slowly and without voice
   training.
 - About 22.5 GB of free disk space. The installer checks that it fits before it starts.
-- An internet connection for setup, which downloads about 11.5 GB with an AMD card. That is everything: Python,
+- An internet connection for setup, which downloads about 11.4 GB with an AMD card, 12.0 GB with an NVIDIA card or 9.3 GB
+  without a supported card. That is everything: Python,
   PyTorch for your card, the tools and all the AI models. No more AI models download after setup. What you ask for later, such as songs, clips of a person or a voice from the community, comes from YouTube or Hugging Face, and an add-on, a repair, Away from home's Tailscale or a fix for the YouTube downloader download only when needed.
 
 ## Installing

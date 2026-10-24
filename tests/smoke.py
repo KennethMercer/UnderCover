@@ -3303,10 +3303,24 @@ def u_installer_space():
     assert "(CurUninstallStep = usPostUninstall) and (KeptMsg <> '') and (not UninstallSilent)" in iss
     # the shipped docs give the measured size (installer/sizes.json through sizes.isi), not an old guess
     tot = re.search(r'#define SizeTotalGB "([0-9.]+)"', (inst / "sizes.isi").read_text(encoding="utf-8")).group(1)
-    dl = re.search(r'#define SizeDownloadGB "([0-9.]+)"', (inst / "sizes.isi").read_text(encoding="utf-8")).group(1)
+    # the download per graphics card (rc-polish1: one size, AMD's, was said for every card): sizes.isi = downloads.tsv's
+    # rows, and the docs say each
+    isi_txt = (inst / "sizes.isi").read_text(encoding="utf-8")
+    dl = {k: re.search(rf'#define SizeDownload{k} "([0-9.]+)"', isi_txt).group(1) for k in ("AMD", "NVIDIA", "CPU")}
+    by: dict = {}
+    for r in (inst / "downloads.tsv").read_text(encoding="utf-8").splitlines()[1:]:
+        if r.strip():
+            by[r.split("\t")[0]] = by.get(r.split("\t")[0], 0) + int(r.split("\t")[4] or 0)
+    common = by["base"] + by["packages"] + by["models"]
+    want = {"AMD": common + by["torch-rocm"], "NVIDIA": common + max(by["torch-cuda128"], by["torch-cuda126"]), "CPU": common + by["torch-cpu"]}
+    for k, n in want.items():
+        assert dl[k] == f"{round(n / 1e9, 1):.1f}", f"sizes.isi's {k} download {dl[k]} GB isn't downloads.tsv's {n / 1e9:.2f} GB (run build.ps1)"
+    assert "SizeDownloadGB" not in iss and "function UpdateReadyMemo" in iss and "Pending(Lines[I], Bytes)" in iss[iss.index("function UpdateReadyMemo"):]
     for name, doc in (("README", (ROOT / "README.md").read_text(encoding="utf-8")), ("FRIENDS.md", (inst / "FRIENDS.md").read_text(encoding="utf-8"))):
         assert f"About {tot} GB of free disk space" in doc, f"{name}'s disk size isn't sizes.isi's {tot} GB"
-        assert f"downloads about {dl} GB" in doc, f"{name}'s download isn't sizes.isi's {dl} GB (rc-fix4b: setup downloads everything)"
+        flat = " ".join(doc.split())
+        assert (f"downloads about {dl['AMD']} GB with an AMD card, {dl['NVIDIA']} GB with an NVIDIA card or {dl['CPU']} GB without a supported card"
+                in flat), f"{name}'s download sizes aren't sizes.isi's {dl} (rc-fix4b: setup downloads everything)"
         assert "{{TIME}}" not in doc and "first time each feature" not in doc and "First assignment" not in doc, name
     nb = iss[iss.index("function NextButtonClick"):iss.index("function ShouldSkipPage")]
     assert nb.count("Result := SpaceOK(Short)") == 3 and "wpSelectDir" in nb and "DataPage.ID" in nb and "AddonPage.ID" in nb

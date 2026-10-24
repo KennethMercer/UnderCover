@@ -405,9 +405,11 @@ begin
   end;
 
   // the welcome page says the real size, plainly, before anything else
+  // (Inno shows no welcome page by default; were it shown, this is the real size. The download, which depends on the
+  // graphics card, is on the Ready page: UpdateReadyMemo)
   WizardForm.WelcomeLabel2.Caption := 'UnderCover needs about {#SizeTotalGB} GB of free space in all, far more than this installer.' + #13#10#13#10 +
-    'Setup downloads everything it needs, about {#SizeDownloadGB} GB: Python, PyTorch for your graphics card, the tools ' +
-    'and the AI models. Nothing downloads later, except add-ons you choose or a repair.';
+    'Setup downloads everything it needs first: Python, PyTorch for your graphics card, the tools and the AI models. ' +
+    'Nothing downloads later, except add-ons you choose or a repair.';
   WizardForm.DiskSpaceLabel.WordWrap := True;
   WizardForm.DiskSpaceLabel.Top := WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(20);
   WizardForm.DiskSpaceLabel.Height := ScaleY(30);
@@ -880,6 +882,60 @@ begin
   end;
 end;
 
+// a downloads.tsv line this PC needs and doesn't have yet (Bytes: its size)
+function Pending(Line: String; var Bytes: Int64): Boolean;
+var
+  Have: Int64;
+begin
+  Result := False;
+  if (Trim(Line) = '') or not WantedGroup(TabField(Line, 0)) then Exit;
+  Bytes := StrToInt64Def(TabField(Line, 4), 0);
+  Result := not (FileSize64(DownloadDest(TabField(Line, 1)), Have) and (Have = Bytes));   // there already: a re-run
+end;
+
+// the graphics card's PyTorch build, read once (space.ps1, from the folder page); none readable: the processor's
+procedure EnsureBackend;
+var
+  Need, Parts, Short: String;
+begin
+  if (Backend = '') or (Backend = 'auto') then CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Need, Parts, Short);
+  if (Backend = '') or (Backend = 'auto') then Backend := 'cpu';
+end;
+
+// what the downloads are for, in plain words
+function BackendWords: String;
+begin
+  if Pos('cuda', Backend) = 1 then Result := 'an NVIDIA graphics card'
+  else if Backend = 'rocm' then Result := 'an AMD graphics card'
+  else Result := 'the processor (no supported graphics card)';
+end;
+
+// the Ready page, just before Install: the download for THIS PC (its graphics card's PyTorch, the add-ons ticked, less
+// what's here already), from downloads.tsv, instead of one size for every card (rc-polish1: NVIDIA's is 12.0 GB)
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo,
+  MemoTasksInfo: String): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+  Bytes, Total: Int64;
+begin
+  Result := MemoDirInfo;
+  if MemoTasksInfo <> '' then Result := Result + NewLine + NewLine + MemoTasksInfo;
+  ExtractTemporaryFile('downloads.tsv');
+  if not LoadStringsFromFile(ExpandConstant('{tmp}\downloads.tsv'), Lines) then Exit;
+  EnsureBackend;
+  Total := 0;
+  for I := 1 to GetArrayLength(Lines) - 1 do
+    if Pending(Lines[I], Bytes) then Total := Total + Bytes;
+  Result := Result + NewLine + NewLine + 'Downloads first, before anything is installed:' + NewLine + Space;
+  if Total = 0 then
+    Result := Result + 'nothing: everything is downloaded already'
+  else begin
+    Result := Result + 'about ' + GBText(Total) + ' GB: Python, PyTorch for ' + BackendWords + ', the tools and the AI models';
+    if GetAddons('') <> '' then Result := Result + ', with the add-ons you ticked';
+  end;
+end;
+
 // everything this PC needs, from downloads.tsv, before anything is installed. -> True: all here
 function DownloadAll: Boolean;
 var
@@ -900,18 +956,13 @@ begin
     Say('The installer''s download list is missing. Download the installer again.', mbError, MB_OK, IDOK);
     Exit;
   end;
-  if (Backend = '') or (Backend = 'auto') then CheckSpace(DataPage.Values[0], DataPage.Values[1], DataPage.Values[2], GetAddons(''), Line, Line, Short);
-  if (Backend = '') or (Backend = 'auto') then Backend := 'cpu';   // no graphics card could be read: the processor's PyTorch
+  EnsureBackend;
   Log('Downloads for backend ' + Backend + ', add-ons "' + GetAddons('') + '"');
   DownloadTotal := 0;
   Largest := 0;
   SetArrayLength(Todo, 0);
   for I := 1 to GetArrayLength(Lines) - 1 do begin
-    Line := Lines[I];
-    if (Trim(Line) = '') or not WantedGroup(TabField(Line, 0)) then Continue;
-    Dest := DownloadDest(TabField(Line, 1));
-    Bytes := StrToInt64Def(TabField(Line, 4), 0);
-    if FileSize64(Dest, Have) and (Have = Bytes) then Continue;   // there already (a re-run, or a stopped download)
+    if not Pending(Lines[I], Bytes) then Continue;   // not this PC's, or there already (a re-run, a stopped download)
     SetArrayLength(Todo, GetArrayLength(Todo) + 1);
     Todo[GetArrayLength(Todo) - 1] := I;
     DownloadTotal := DownloadTotal + Bytes;
