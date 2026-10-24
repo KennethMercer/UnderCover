@@ -3609,7 +3609,9 @@ def u_installer_downloads():
     assert "end else if CurPageID = wpReady then\n    Result := DownloadAll;" in iss.replace("\r\n", "\n")
     assert "DownloadPage := CreateDownloadPage(" in iss and "DownloadPage.Add(Url, Name, Sha);" in iss and "DownloadPage.Download;" in iss
     assert "if DownloadPage.AbortedByUser then" in iss and "MB_RETRYCANCEL" in iss
-    assert "if FileSize64(Dest, Have) and (Have = Bytes) then Continue;" in iss, "a file already downloaded is fetched again"
+    pend = iss[iss.index("function Pending("):iss.index("procedure EnsureBackend")]
+    assert "Result := not (FileSize64(DownloadDest(TabField(Line, 1)), Have) and (Have = Bytes));" in pend, "a file already downloaded is fetched again"
+    assert "if not Pending(Lines[I], Bytes) then Continue;" in iss[iss.index("function DownloadAll"):], "a file already downloaded is fetched again"
     assert "DownloadPage.SetProgress(DownloadIndex, DownloadCount);   // (keeps the window answering)" in iss
     assert "-Backend ' + Backend + ' -Offline';" in iss and "WizardForm.CancelButton.Enabled := False;" in iss
     assert "EnableWindow" not in iss and "AwakeTimer" not in iss and "procedure CancelButtonClick" not in iss and "setup-cancel" not in iss
@@ -3711,6 +3713,13 @@ def u_rcfix7():
         assert "V.download_staged(r," in rv and "download_and_install" not in rv and "remove_voice" not in rv
         assert rv.index("downloaded.append(v.name)") < rv.index("q = test(v, ident, staged=True)"), "a candidate is checked before it's tracked"
         assert "V.discard_staged()   # what a check that stopped" in rv and 'good[0]["name"] = V.promote(good[0]["name"]).name' in rv
+        # rc-polish1: what a crash left goes at server start too (Storage counted it), once the port is this server's
+        from undercover.app import server as srv_mod
+        sm = inspect.getsource(srv_mod.main)
+        assert "voices_mod.discard_staged()" in sm and sm.index("SERVER = srv") < sm.index("voices_mod.discard_staged()") < sm.index("gpu_worker"), \
+            "the staging leftovers aren't cleared at start, or are cleared before the port is ours"
+        from undercover.core import readers as rd
+        assert "the first time" not in (rd.kokoro.__doc__ or ""), "readers.kokoro() says it downloads the first time (setup installs it)"
     # 3. one estimate: the page's words; the plan carries the training's; the job uses the one-shot's own stage estimates
     assert [jobs.eta_words(x) for x in (20, 300, 3660, 8180, 10800)] == [
         "under a minute", "about 5 min", "about 61 min", "about 2\u00bd hours", "about 3 hours"]

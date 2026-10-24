@@ -34,7 +34,8 @@ def lang(reader: str) -> str:
 
 
 def kokoro(progress=None):
-    """The loaded Kokoro model (downloads ~340 MB the first time)."""
+    """The loaded Kokoro model. Setup installs its files; they're fetched (~340 MB) only when they're missing or
+    damaged."""
     global _K
     with _LOCK:
         if _K is None:
