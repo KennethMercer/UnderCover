@@ -1067,6 +1067,8 @@ def verdict(voice_name: str, keep: str, why: str = "", by: str = "user") -> dict
         v.extra["tts"] = new
         fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
     gpu.forget_voice(v.name)
+    from ..core import voicepreview
+    voicepreview.after_add(get_voice(v.name))   # it speaks its line with the pack it now has
     return {"kept": "pending", "verdict": entry, "state": ab_state(v.name)}
 
 

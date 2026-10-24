@@ -356,6 +356,17 @@ class Handler(BaseHTTPRequestHandler):
                                    "app_folder": None if self.remote else str(ROOT)})
             if p == "/api/voices":
                 return self._json(voices_json())
+            m = re.fullmatch(r"/api/voices/([a-z0-9-]+)/preview", p)
+            if m:   # its "Go undercover as ..." line (core/voicepreview), made with the voice
+                from ..core import voicepreview
+                from ..core.voices import ModelError as _ME, get_voice as _gv
+                try:
+                    v = _gv(m.group(1))
+                except _ME:
+                    return self._error("Not found", 404)
+                if not voicepreview.fresh(v):
+                    return self._error("Its preview line isn't made yet.", 404)
+                return self._send_file(voicepreview.clip(v), cache="no-store")
             if p == "/api/search":
                 from ..core.voices import ModelError, search
                 term = (q.get("q") or [""])[0]
@@ -662,7 +673,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with job.cond:
                     job.state = "running"
-                v = download_and_install(src, name, progress)
+                from ..core import voicepreview
+                from ..core.voices import download_staged, slug, voices_dir
+                if name and (voices_dir() / slug(name)).exists():   # (before the download, as a direct install said it)
+                    raise ModelError(f"A voice called '{slug(name)}' is already installed. Pick another name or remove it first.")
+                v = voicepreview.import_voice(lambda: download_staged(src, name, progress), job)
                 from ..core.voices import display_name
                 job.finish("done", message=f"Installed {display_name(v)}", voice=v.name)
             except Cancelled:
@@ -756,8 +771,11 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     out.write(chunk)
                     left -= len(chunk)
-            try:
-                v = install(f, name, source=f"file: {fname}")
+            try:   # staged, its preview line made there, then listed (rc-preview)
+                from ..core import voicepreview
+                from ..core.voices import staged_name, staging_dir
+                v = voicepreview.import_voice(lambda: install(f, staged_name(name), source=f"file: {fname}", root=staging_dir()),
+                                              wait=20.0)   # (this request waits: past that the backfill makes it)
             except ModelError as e:
                 return self._error(str(e))
             self._json({"voice": v.name})
@@ -1007,7 +1025,10 @@ def main():
     _install_console_handler()
     _clean_old_previews()
     threading.Thread(target=gpu_worker, daemon=True, name="gpu").start()
-    from ..core import vault, worklist
+    from ..core import vault, voicepreview, worklist
+    from ..speakeasy import speak as speak_mod
+    voicepreview.RENDER[0] = speak_mod.render_line   # (core and DoubleAgent add voices; only the app may reach SpeakEasy)
+    voicepreview.start()   # voices from before get their preview line, one at a time, only while nothing else runs
     worklist.start()
     vault.start()   # Vaulting: quiet backups when the GPU queue is idle (off until a vault folder is picked)
     try:   # phase 24: the full indexes kept 30 days after an export go when their time is up (daily)

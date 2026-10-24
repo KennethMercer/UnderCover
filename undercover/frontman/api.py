@@ -350,6 +350,11 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
         out["voice_choices"] = oneshot.voice_choices(person, community, here,
                                                      others=len([k for k in cands if k not in {v.name for v in community}]),
                                                      failed=failed)
+    if voice["how"] == "check":   # the check's own time from the work it'll do, then the cover (IA pass 13: "a few minutes")
+        try:
+            out["check_s"] = round(service.check_estimate_s(person, len(cands)) + oneshot.cover_eta("", here)["high"])
+        except Exception:   # noqa: BLE001 - the page says "a few minutes", as before
+            pass
     if voice["how"] != "installed" and not demo:
         # the training's estimate, the one the job says too (rc-fix7: the plan said 61 min, the question 2½ hours)
         try:

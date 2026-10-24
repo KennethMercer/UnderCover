@@ -83,7 +83,7 @@ function seVoices() {
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
       <div class="vtext"><b>${vname(v.name)}</b>${v.trained && v.likeness != null ? `<small data-deep>likeness ${(+v.likeness).toFixed(2)}</small>` : ""}<small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">${cad}</span></small></div>
-      <div class="se-vact">${act}</div></div>`;
+      <div class="se-vact">${voiceLineButton(v.name)}${act}</div></div>`;
   };
   const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
   $("#se-voices").innerHTML = (trained.length ? `<div class="se-vgroup">Trained in DoubleAgent</div>` + trained.map(row).join("") : "")
@@ -98,8 +98,9 @@ function seVoices() {
   $$("#se-voices .voice").forEach(el => {
     const pick = () => { SE.voice = el.dataset.v; store.set("uc-se-voice", SE.voice); $$("#se-voices .voice").forEach(x => x.setAttribute("aria-selected", x === el)); sePlan(); };
     el.addEventListener("click", e => { if (!e.target.closest("button")) pick(); });
-    el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    el.addEventListener("keydown", e => { if (e.target.closest(".vline")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
   });
+  bindVoiceLines($("#se-voices"));
 }
 $("#se-q").addEventListener("input", seVoices);
 async function seNewVoice(now) {

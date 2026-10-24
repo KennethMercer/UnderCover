@@ -199,6 +199,8 @@ def keep(voice: str, which: str) -> dict:
         _drop_samples(voice)
     gpu.forget_voice(voice)
     gpu.forget_voice(p["voice"])
+    from ..core import voicepreview
+    voicepreview.after_add(get_voice(voice), force=which == "new")   # the kept one's line (its cadence came with it)
     queued = None
     if which == "new":   # its cadence: the old one's carried over; with none, a speaking voice gets one tonight
         try:
@@ -266,6 +268,8 @@ def undo(voice: str) -> dict:
         else:
             raise ModelError("There's nothing to undo for this voice.")
     gpu.forget_voice(voice)
+    from ..core import voicepreview
+    voicepreview.after_add(get_voice(voice), force=False)   # the voice back has its own line (made again only if stale)
     return {"undone": True, "voice": voice}
 
 

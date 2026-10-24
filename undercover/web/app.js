@@ -447,13 +447,14 @@ function renderVoices() {
     <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
       <span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
-      <span class="vside"><button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
+      <span class="vside">${voiceLineButton(v.name)}<button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
     const pick = () => { S.voice = el.dataset.v; S.deskVoice = true; store.set("uc-voice", S.voice); renderVoices(); summary(); refreshEstimate(); syncBuild(); };
-    el.addEventListener("click", e => { if (!e.target.closest(".remove")) pick(); });
-    el.addEventListener("keydown", e => { if (e.target.closest(".remove")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });   // Enter on Remove is Remove's own
+    el.addEventListener("click", e => { if (!e.target.closest(".remove, .vline")) pick(); });
+    el.addEventListener("keydown", e => { if (e.target.closest(".remove, .vline")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });   // Enter on Remove is Remove's own
   });
+  bindVoiceLines(box);
   $$(".remove", box).forEach(b => b.onclick = async e => {
     e.stopPropagation();
     if (!b.classList.contains("confirm")) {
@@ -574,6 +575,10 @@ function renderBackingSelect() {
   sel.innerHTML = `<option value="">Original singer</option>` + S.voices.map(v => `<option value="${esc(v.name)}">${esc(voiceDisplay(v.name))}</option>`).join("");
   sel.value = S.opts.backing_voice || "";
   const on = !!S.opts.backing_voice;
+  let hear = $("#backing-line");
+  if (!hear) { sel.insertAdjacentHTML("afterend", `<span id="backing-line" class="vline-beside"></span>`); hear = $("#backing-line"); }
+  hear.innerHTML = on ? voiceLineButton(S.opts.backing_voice) : "";
+  bindVoiceLines(hear);
   $("#backing-opts").hidden = !on;
   $("#backing-note").textContent = on
     ? "Lead and backing are split automatically. The backing voice follows one note at a time, so big stacked harmonies come out thinner."
@@ -731,6 +736,39 @@ const aCover = $("#a-cover"), aOrig = $("#a-orig");
 
 // Volume: one level for both players so Cover/Original comparisons stay fair; remembered per browser.
 const VOL = { level: store.get("uc-volume", 0.8), muted: store.get("uc-muted", false) };
+// ------------------------------------------------------------ a voice's preview line (rc-preview)
+// Every voice says "Go undercover as <its name>." (core/voicepreview.py, made with the voice): a ▶ wherever a voice is
+// picked, only when its clip is there (S.voices[].preview). One player for the page: it stops anything else playing,
+// and anything else starting stops it. The ▶ never picks the card it sits on.
+const VLINE = { a: null, btn: null };
+function voiceLineButton(name) {
+  const v = (S.voices || []).find(x => x.name === name);
+  if (!v?.preview) return "";
+  const label = voiceDisplay(name);
+  return `<button class="play vline" type="button" data-vline="${esc(name)}" data-label="${esc(label)}" aria-label="Hear ${esc(label)}" title="Hear ${esc(label)}">▶</button>`;
+}
+function bindVoiceLines(root) {
+  $$("[data-vline]", root).forEach(b => {
+    b.onclick = e => { e.stopPropagation(); e.preventDefault(); playVoiceLine(b); };
+    b.onkeydown = e => { if (e.key === "Enter" || e.key === " ") e.stopPropagation(); };   // (the card's own Enter picks it)
+  });
+}
+function playVoiceLine(b) {
+  if (VLINE.btn === b && VLINE.a && !VLINE.a.paused) return VLINE.a.pause();
+  if (VLINE.a) VLINE.a.pause();
+  $$("audio").forEach(x => { if (!x.paused) x.pause(); });
+  const a = new Audio(`/api/voices/${encodeURIComponent(b.dataset.vline)}/preview`);
+  const lvl = VOL.muted ? 0 : VOL.level;
+  a.volume = lvl * lvl;
+  VLINE.a = a; VLINE.btn = b;
+  const set = on => { b.textContent = on ? "❚❚" : "▶"; b.classList.toggle("playing", on); b.setAttribute("aria-label", `${on ? "Stop" : "Hear"} ${b.dataset.label}`); };
+  a.addEventListener("play", () => set(true));
+  a.addEventListener("pause", () => set(false));
+  a.addEventListener("ended", () => set(false));
+  a.play().catch(() => { set(false); b.title = "The browser couldn't play this voice's line."; });
+}
+document.addEventListener("play", e => { if (VLINE.a && e.target !== VLINE.a && !VLINE.a.paused) VLINE.a.pause(); }, true);   // another player started
+
 function applyVolume() {
   const v = VOL.muted ? 0 : VOL.level;
   aCover.volume = aOrig.volume = aSong.volume = v * v;  // squared: a slider position sounds closer to proportional loudness

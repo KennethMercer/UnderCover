@@ -49,6 +49,7 @@ function subjectHtml(p) {
 }
 function bindVoiceAsk() {
   $$("#os-plan [data-os-vchoice]").forEach(b => b.onclick = () => { OS.vchoice = b.dataset.osVchoice; resetGo(); if (OS.last?.plan) drawPlan(OS.last.plan); });
+  bindVoiceLines($("#os-plan"));   // (hear a voice before picking it)
 }
 function bindSubject() {
   $$("#os-plan [data-os-subject]").forEach(b => b.onclick = () => { OS.subject = b.dataset.osSubject; resetGo(); previewPlan(); });
@@ -71,7 +72,7 @@ function voiceAskHtml(p) {
   const n = (p.voice_choices || []).filter(c => c.choice.startsWith("use:")).length;
   const count = n === 1 ? "One voice from the community already matches." : `${["", "", "Two", "Three", "Four", "Five"][n] || n} voices from the community already match.`;
   return `<div id="os-voice-ask" class="os-subject-ask"${OS.vchoice ? "" : ' role="alert"'}><div class="choice-q"><b>Which ${esc(p.person)}?</b> ${count}</div>
-    <div class="choices">${p.voice_choices.map(c => `<button class="choice" type="button" data-os-vchoice="${esc(c.choice)}" aria-pressed="${c.choice === OS.vchoice}"><b>${esc(c.label)}</b><small>${esc(etaWords(c.eta_s))}${c.detail ? ` · ${esc(c.detail)}` : ""}</small></button>`).join("")}</div></div>`;
+    <div class="choices">${p.voice_choices.map(c => `<span class="choice-wrap"><button class="choice" type="button" data-os-vchoice="${esc(c.choice)}" aria-pressed="${c.choice === OS.vchoice}"><b>${esc(c.label)}</b><small>${esc(etaWords(c.eta_s))}${c.detail ? ` · ${esc(c.detail)}` : ""}</small></button>${c.voice ? voiceLineButton(c.voice) : ""}</span>`).join("")}</div></div>`;
 }
 function voiceLine(v, p) {
   const who = esc(p?.person || v?.display || v?.name || "");
@@ -111,7 +112,8 @@ function planTime(p) {
     return hi < 1 ? "under a minute" : lo >= hi ? `about ${Math.max(1, hi)} min` : `about ${lo}–${hi} min`;
   }
   const v = p.voice?.how, tr = trainWords(p);   // no number of the page's own: training's is the estimator's, a quick cover's the plan's
-  return v === "train" ? tr || "about an hour" : v === "check" ? `a few minutes to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
+  const chk = p.check_s != null ? etaWords({ low: p.check_s, high: p.check_s }) : "a few minutes";   // (the check's work, then the cover)
+  return v === "train" ? tr || "about an hour" : v === "check" ? `${chk} to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
 }
 // the plan's own training estimate (train_s: the one the job and the voice question use), else the estimator's
 const trainWords = p => { if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s }); const e = estWords("new", p.person, "singing"); if (!e && p.person && !EST.asked.has(estKey("new", p.person, "singing"))) estimateFor("new", p.person, "singing").then(() => { if (OS.last?.plan === p) drawPlan(p); }); return e; };
