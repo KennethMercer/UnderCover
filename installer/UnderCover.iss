@@ -83,11 +83,18 @@ Source: "downloads.tsv"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "downloads.tsv"; Flags: dontcopy
 ; the space check runs from the wizard too, before anything is installed (ExtractTemporaryFile)
 Source: "space.ps1"; Flags: dontcopy
+; the check of the files an earlier run kept (1.0.1), from the wizard's temp folder too
+Source: "keptcheck.ps1"; Flags: dontcopy
 Source: "sizes.json"; Flags: dontcopy
 Source: "detect_gpu.ps1"; Flags: dontcopy
 Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ignoreversion
 ; The install guide (installer/GUIDE.md): what to expect, Repair, the optional extras, uninstall
 Source: "GUIDE.md"; DestDir: "{app}"; DestName: "READ ME.md"; Flags: ignoreversion
+; The licence, the notices (the parts by others and their licences) and the project's README: an AGPL program handed
+; on as an installer carries its licence text (1.0.1)
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 #ifndef ReleaseCheck
 [Icons]
@@ -783,6 +790,27 @@ begin
   Result := #39 + S + #39;
 end;
 
+// a file name shortened in the middle ("dereverb_mel...ckpt") so Pre + it + Post fits the label's width: the download
+// page's line ran past the window with long model names, and "putting everything in its right place" was cut off (1.0.1)
+function FitName(Pre, Name, Post: String; L: TNewStaticText): String;
+var
+  B: TBitmap;
+  K: Integer;
+begin
+  Result := Name;
+  B := TBitmap.Create;
+  try
+    B.Canvas.Font.Assign(L.Font);
+    K := Length(Name);
+    while (K > 8) and (B.Canvas.TextWidth(Pre + Result + Post) > L.Width) do begin
+      K := K - 2;
+      Result := Copy(Name, 1, K div 2) + '...' + Copy(Name, Length(Name) - (K - K div 2) + 1, K - K div 2);
+    end;
+  finally
+    B.Free;
+  end;
+end;
+
 // The downloaded file (in Inno's temp folder) into its place. A small file was checked by Inno itself (its SHA-256)
 // and is renamed or copied. A big one (64 MB and up) comes without Inno's check: Inno hashes on its own thread, and a
 // gigabyte kept the window from answering for seconds. A hidden PowerShell checks its size and SHA-256 instead, and
@@ -829,7 +857,8 @@ begin
     Waited := 0;
     Said := '';
     while (Trim(String(Said)) = '') and (Waited < 18000) do begin   // (30 minutes: a slow drive, never forever)
-      DownloadPage.SetText('Checking ' + ExtractFileName(Dest) + ' and putting everything in its right place...', '');
+      DownloadPage.SetText('Checking ' + FitName('Checking ', ExtractFileName(Dest), ' and putting everything in its right place...',
+        DownloadPage.Msg1Label) + ' and putting everything in its right place...', '');
       DownloadPage.SetProgress(DownloadIndex, DownloadCount);   // (keeps the window answering)
       Sleep(100);
       Waited := Waited + 1;
@@ -955,6 +984,58 @@ begin
   end;
 end;
 
+// The files an earlier run left, there at their size, checked by their SHA-256 before they're trusted (1.0.1: a kept
+// file was skipped by its size alone, and a damaged one stayed until the Doctor's own check). One hidden PowerShell
+// for all of them, off Inno's thread as in PlaceFile, the download page answering meanwhile; a file that fails is
+// deleted, so the list below fetches it again. Lines: downloads.tsv's.
+procedure CheckKept(Lines: TArrayOfString);
+var
+  I, N, Waited: Integer;
+  Dest, ListFile, Marker, DoneFile: String;
+  Have: Int64;
+  Said, Done: AnsiString;
+  Shell: Variant;
+begin
+  ListFile := ExpandConstant('{tmp}\kept.tsv');
+  Marker := ExpandConstant('{tmp}\kept-checked.txt');
+  DoneFile := ExpandConstant('{tmp}\kept-done.txt');
+  DeleteFile(ListFile);
+  DeleteFile(Marker);
+  DeleteFile(Marker + '.part');
+  DeleteFile(DoneFile);
+  N := 0;
+  for I := 1 to GetArrayLength(Lines) - 1 do begin
+    if (Trim(Lines[I]) = '') or not WantedGroup(TabField(Lines[I], 0)) or (TabField(Lines[I], 3) = '') then Continue;
+    Dest := DownloadDest(TabField(Lines[I], 1));
+    if FileSize64(Dest, Have) and (Have = StrToInt64Def(TabField(Lines[I], 4), 0)) then begin
+      SaveStringToFile(ListFile, Dest + #9 + Lowercase(TabField(Lines[I], 3)) + #13#10, True);
+      N := N + 1;
+    end;
+  end;
+  if N = 0 then Exit;
+  Log(Format('%d files kept from an earlier run: checking their SHA-256', [N]));
+  DownloadPage.Show;
+  try
+    ExtractTemporaryFile('keptcheck.ps1');
+    Shell := CreateOleObject('WScript.Shell');
+    Shell.Run('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\keptcheck.ps1') +
+      '" -List "' + ListFile + '" -Done "' + DoneFile + '" -Marker "' + Marker + '"', 0, False);   // (0: hidden; False: don't wait)
+    Waited := 0;
+    while (not FileExists(Marker)) and (Waited < 36000) do begin   // (an hour: a slow drive, never forever)
+      Done := '';
+      if FileExists(DoneFile) then LoadStringFromFile(DoneFile, Done);
+      DownloadPage.SetText(Format('Checking the files kept from last time (%d of %d)...', [StrToIntDef(Trim(String(Done)), 0), N]), '');
+      DownloadPage.SetProgress(StrToIntDef(Trim(String(Done)), 0), N);   // (keeps the window answering)
+      Sleep(100);
+      Waited := Waited + 1;
+    end;
+    if LoadStringFromFile(Marker, Said) then Log('Kept files ' + Trim(String(Said)))
+    else Log('The kept files'' check didn''t answer: they''re downloaded again by size as before');
+  except
+    Log('The kept files couldn''t be checked: ' + GetExceptionMessage);
+  end;
+end;
+
 // everything this PC needs, from downloads.tsv, before anything is installed. -> True: all here
 function DownloadAll: Boolean;
 var
@@ -977,6 +1058,7 @@ begin
   end;
   EnsureBackend;
   Log('Downloads for backend ' + Backend + ', add-ons "' + GetAddons('') + '"');
+  CheckKept(Lines);   // (a damaged file kept from an earlier run is deleted here, so it's in the list below)
   DownloadTotal := 0;
   Largest := 0;
   SetArrayLength(Todo, 0);
@@ -1048,7 +1130,8 @@ begin
             Tries := Tries + 1;
             Log(Format('%s: %s; trying again by itself (%d of 3)', [Name, Why, Tries]));
             for W := 1 to Tries * 30 do begin   // 3, 6, 9 s, the page answering throughout
-              DownloadPage.SetText(Format('%s didn''t come through right. Trying again (%d of 3)...', [Name, Tries]), '');
+              DownloadPage.SetText(FitName('', Name, ' didn''t come through right. Trying again (3 of 3)...', DownloadPage.Msg1Label) +
+                Format(' didn''t come through right. Trying again (%d of 3)...', [Tries]), '');
               DownloadPage.SetProgress(DownloadIndex, DownloadCount);
               Sleep(100);
             end;
