@@ -30,6 +30,7 @@
   <symbol id="g-safehouse" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><circle cx="12" cy="14" r="1.5"/><path d="M12 15.5V18"/></symbol>
   <symbol id="g-up" viewBox="0 0 24 24"><path d="M7 10.5V20H4.5a1 1 0 0 1-1-1v-7.5a1 1 0 0 1 1-1z"/><path d="M7 10.5 10.6 3.6c1.4 0 2.6 1.2 2.4 2.6L12.5 9.5h5.7a2 2 0 0 1 2 2.4l-1.3 6.5A2 2 0 0 1 16.9 20H7"/></symbol>
   <symbol id="g-down" viewBox="0 0 24 24"><g transform="rotate(180 12 12)"><path d="M7 10.5V20H4.5a1 1 0 0 1-1-1v-7.5a1 1 0 0 1 1-1z"/><path d="M7 10.5 10.6 3.6c1.4 0 2.6 1.2 2.4 2.6L12.5 9.5h5.7a2 2 0 0 1 2 2.4l-1.3 6.5A2 2 0 0 1 16.9 20H7"/></g></symbol>
+  <symbol id="g-lowprofile" viewBox="0 0 24 24"><path d="M9.3 5.3c0-2 1.1-3 2.7-3s2.7 1 2.7 3"/><path d="M6.6 5.7c2.6.8 8.2.8 10.8 0"/><path d="M10.1 6.1c.2 1.6.9 2.6 1.9 2.6s1.7-1 1.9-2.6" fill="currentColor" fill-opacity=".55" stroke="none"/><path d="M6.3 21.7 7 12.2c.2-1.8 1.2-2.9 2.6-3.3l.5-2.5M17.7 21.7 17 12.2c-.2-1.8-1.2-2.9-2.6-3.3l-.5-2.5"/><path d="M6.3 21.7 7 12.2c.2-1.8 1.2-2.9 2.6-3.3l.5-2.5h3.8l.5 2.5c1.4.4 2.4 1.5 2.6 3.3l.7 9.5z" fill="currentColor" fill-opacity=".3" stroke="none"/><path d="M9.6 8.9 12 12.6l2.4-3.7"/><path d="M7.3 15.6c3.1.5 6.3.5 9.4 0"/></symbol>
   <symbol id="g-deep" viewBox="0 0 24 24"><circle cx="7.6" cy="7.5" r="4.4"/><circle cx="16.4" cy="7.5" r="4.4"/><path transform="translate(0 4.2)" d="M12 15.3C10.6 13.4 8.2 12.8 6.3 13.2 4.8 13.5 3.6 14.4 2.2 14c1 2.6 3.4 3.9 5.6 3.4 1.6-.4 3-.8 4.2.2 1.2-1 2.6-.6 4.2-.2 2.2.5 4.6-.8 5.6-3.4-1.4.4-2.6-.5-4.1-.8-1.9-.4-4.3.2-5.7 2.1z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="g-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="g-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"/></symbol>
@@ -57,11 +58,20 @@
     </nav>
     <div class="chips">
       <button class="chip chip-btn train" id="chip-train" hidden aria-label="Training progress: open DoubleAgent"></button>
+      <span class="chip lp-chip" id="lp-chip" hidden><button class="lp-btn" id="lp-toggle" type="button" role="switch" aria-checked="false" title="Low profile: half the card, in bursts"><svg class="ico" aria-hidden="true"><use href="#g-lowprofile"/></svg><span class="lp-label">Low profile</span><span class="lp-half" aria-hidden="true">½</span></button><button class="lp-more" id="lp-more" type="button" aria-expanded="false" aria-controls="lp-pop" aria-label="Low profile settings" data-deep>▾</button></span>
       <button class="chip chip-btn deep-btn" id="deep-toggle" type="button" aria-pressed="false" title="Deep Cover: show every number, score and setting"><svg class="ico" aria-hidden="true"><use href="#g-deep"/></svg><span>Deep Cover</span></button>
     </div>
   </div>
 </header>
 
+<div class="lp-pop" id="lp-pop" hidden role="dialog" aria-labelledby="lp-h">
+  <div class="lp-h"><svg class="ico" aria-hidden="true"><use href="#g-lowprofile"/></svg><b id="lp-h">Low profile</b><button class="switch" id="lp-switch" type="button" role="switch" aria-checked="false" aria-label="Low profile"></button></div>
+  <p>Keeps UnderCover to half the graphics card and works in bursts, so a game gets the card most of the time. Covers and training take longer while it's on.</p>
+  <div class="lp-sep"></div>
+  <div class="lp-row"><div class="lp-k"><b>Memory it may use</b><span id="lp-limit-out"></span></div><input type="range" id="lp-limit" min="1" max="24" step="1" aria-label="Memory limit in GB"><div class="lp-ends"><span>1 GB</span><span id="lp-limit-top"></span></div></div>
+  <div class="lp-row"><div class="lp-k"><b>Works</b><span id="lp-burst-out"></span></div><input type="range" id="lp-burst" min="25" max="75" step="1" aria-label="Share of the time it works"><div class="lp-ends"><span>less</span><span>more</span></div></div>
+  <div class="lp-row lp-auto"><span><b>On by itself for games</b><small>When a full-screen game starts</small></span><button class="switch" id="lp-auto" type="button" role="switch" aria-checked="false" aria-label="On by itself for games"></button></div>
+</div>
 <div class="workbar-wrap">
   <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
     <span class="who" id="wb-who"></span>
@@ -89,7 +99,7 @@
   <section class="wn gp-ask" id="gp-ask" hidden role="alert" aria-labelledby="gp-k">
     <div class="wn-head"><span class="wn-k" id="gp-k">Game on</span></div>
     <p class="gp-q" id="gp-q"></p>
-    <div class="row"><button class="btn" id="gp-pause" type="button">Pause while I play</button><button class="btn" id="gp-both" type="button">Keep both running</button><button class="linkbtn" id="gp-never" type="button">Don't ask for this game</button></div>
+    <div class="row"><button class="btn lp-primary" id="gp-low" type="button" hidden><svg class="ico" aria-hidden="true"><use href="#g-lowprofile"/></svg>Low profile</button><button class="btn" id="gp-pause" type="button">Pause while I play</button><button class="btn" id="gp-both" type="button">Keep both running</button><button class="linkbtn" id="gp-never" type="button">Don't ask for this game</button></div>
   </section>
   <section class="wn" id="wn" hidden aria-labelledby="wn-k">
     <div class="wn-head"><span class="wn-k" id="wn-k">What's new</span><span class="meta" id="wn-when"></span></div>
@@ -807,6 +817,7 @@
 <script src="/static/aside.js"></script>
 <script src="/static/themes.js"></script>
 <script src="/static/work.js"></script>
+<script src="/static/lowprofile.js"></script>
 <script src="/static/doubleagent.js"></script>
 <script src="/static/speakeasy.js"></script>
 <script src="/static/ear.js"></script>
