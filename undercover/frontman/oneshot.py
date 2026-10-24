@@ -309,10 +309,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     # the training when the plan trains, else the check; the one estimate the plan, the button and the countdown use
     if not demo and not trained_ok and not (voice_choice or "").startswith("use:"):
         try:
-            from ..doubleagent.service import check_estimate_s, check_failed, online_for, train_estimate_s
+            from ..doubleagent.service import check_estimate_s, online_for, train_estimate_s
             n = len(installed_for(person))
-            trains = (prefer_train or voice_choice == "train" or not (n or online_for(person, 2))   # (no voice anywhere: it trains)
-                      or (not n and voice_choice != "check" and check_failed(person)))   # (the last check couldn't be done)
+            trains = prefer_train or voice_choice == "train" or not (n or online_for(person, 2))   # (no voice anywhere: it trains)
             job.stage_est["voice"] = train_estimate_s(person) if trains else check_estimate_s(person, n + 2)
         except Exception:   # noqa: BLE001 - the stage's typical length, as before
             pass

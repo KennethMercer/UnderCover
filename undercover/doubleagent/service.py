@@ -604,9 +604,13 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         cands = [v for v in cands if v.name != weak_trained.name]
     community = [] if prefer_train else cands
     # the last check couldn't be done on these clips (rc-polish1): with no voice of theirs here, it isn't tried again
-    # unless asked; it trains, as the plan said
+    # unless asked ("check"); the plan offers the training (voice_choice "train": prefer_train above). Never a training
+    # nobody asked for (rc-fix2): without either, the job says so and stops
     failed = None if prefer_train or choice == "check" or community else check_failed(person)
-    online = [] if prefer_train or failed else online_for(person, 2)
+    if failed:
+        raise ModelError(f"The last check of {person}'s voices couldn't be done ({failed}). Add clips of {person} in "
+                         "DoubleAgent, or pick Train a new voice.")
+    online = [] if prefer_train else online_for(person, 2)
     have = {slug(v.name) for v in community} | {v.source for v in community if v.source}
     seen, uniq = set(), []
     for r in online:   # P8-4: the same candidate was downloaded twice (installed already, or listed twice)
@@ -759,9 +763,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
     plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
     tr = train_estimate_s(person)   # the plan's and the button's own estimate (rc-fix7: this line said "about 1 hour")
     plan["voice_until"] = time.time() + tr
-    push("voice", 0.2 if checked else 0.0, (f"The last check couldn't be done ({failed}), so this trains a voice for "
-                                             f"{person} ({jobs.eta_words(tr)})" if failed
-                                             else f"Training a voice for {person} ({jobs.eta_words(tr)})")
+    push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} ({jobs.eta_words(tr)})"
          + (f". {plan['subject']['label']}" if (plan.get("subject") or {}).get("label") else ""))
     name = train_new_voice(job, person, control, push, subject=plan.get("subject"))
     v = get_voice(name)

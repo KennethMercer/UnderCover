@@ -165,9 +165,9 @@ def left_out_for_a_reason(s) -> bool:
     """Unticked with the engine's (or the user's) reason in its note: a younger voice, a song, a dub, talk about them,
     left out by the gate. It stays unticked, the reason shown; a training short of voice never ticks it back in
     (rc-polish1: Obama's 2004 keynote, marked "a younger voice", was trained on). A source unticked only because there
-    was enough has no note, or the word its title matched ("interview")."""
+    was enough has no note, the word its title matched ("interview"), or "album track" (a singer's own recordings)."""
     n = (s.note or "").strip()
-    return bool(n) and not any(rx.fullmatch(n) for rx in (GOOD["speaking"], GOOD["singing"], CHAR_GOOD))
+    return bool(n) and n != "album track" and not any(rx.fullmatch(n) for rx in (GOOD["speaking"], GOOD["singing"], CHAR_GOOD))
 
 
 def show_of(name: str, found) -> str | None:

@@ -3718,7 +3718,14 @@ def u_rcfix7():
         # rc-polish1: what a crash left goes at server start too (Storage counted it), once the port is this server's
         from undercover.app import server as srv_mod
         sm = inspect.getsource(srv_mod.main)
-        assert "voices_mod.discard_staged()" in sm and sm.index("SERVER = srv") < sm.index("voices_mod.discard_staged()") < sm.index("gpu_worker"), \
+        # (only what's been staged for hours: a server on another port with the same folders may be checking one now)
+        (V.staging_dir() / "fresh").mkdir(parents=True)
+        (V.staging_dir() / "stale").mkdir(parents=True)
+        os.utime(V.staging_dir() / "stale", (time.time() - 7 * 3600, time.time() - 7 * 3600))
+        V.discard_staged(older_than=6 * 3600)
+        assert (V.staging_dir() / "fresh").is_dir() and not (V.staging_dir() / "stale").exists()
+        V.discard_staged()
+        assert "voices_mod.discard_staged(older_than=6 * 3600)" in sm and sm.index("SERVER = srv") < sm.index("voices_mod.discard_staged(") < sm.index("gpu_worker"), \
             "the staging leftovers aren't cleared at start, or are cleared before the port is ours"
         from undercover.core import readers as rd
         assert "the first time" not in (rd.kokoro.__doc__ or ""), "readers.kokoro() says it downloads the first time (setup installs it)"
@@ -3729,7 +3736,7 @@ def u_rcfix7():
     assert 'out["train_s"] = round(service.train_estimate_s(person))' in inspect.getsource(FA._auto_plan)
     assert "if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s });" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
     run = inspect.getsource(oneshot.run)
-    assert 'trains = (prefer_train or voice_choice == "train" or not (n or online_for(person, 2))' in run
+    assert 'trains = prefer_train or voice_choice == "train" or not (n or online_for(person, 2))' in run
     assert 'job.after_eta_s = plan.get("cover_s", 60.0) + 60.0' in run
     # the job's countdown during the song step: past runs say a voice step takes 5 min (quick checks); this one-shot's
     # own estimate says 2 hours of training, and that's what the countdown carries
@@ -3774,6 +3781,20 @@ def u_rcpolish1():
     finally:
         jobs._ETA_FILE = saved
     assert bare is None and own is not None and 145 <= own <= 150, (bare, own)   # (was: no time left at all)
+    # the quick download (0.02 -> 0.38 in 10 s) doesn't make a 70 s separation "almost done": the estimate leads
+    clock = [1000.0]
+    real_time = jobs.time
+    jobs.time = types.SimpleNamespace(time=lambda: clock[0])
+    try:
+        j = jobs.Job("auto")
+        j.stage_est = {"song": 80.0, "voice": 10.0, "cover": 60.0}
+        for t, p in ((0, 0.02), (5, 0.2), (10, 0.38), (40, 0.65)):
+            clock[0] = 1000.0 + t
+            j.push(stage="song", frac=p, message="x")
+        said = [e["total_left"] for e in j.events]
+    finally:
+        jobs.time = real_time
+    assert said[2] - 70 >= 60 and said[3] - 70 >= 25, said   # (the song's own part: about 70 s, then about 40 s; extrapolated, 17 s)
     assert 'job.stage_est["song"] = e["separating"] + (5.0 if here else FETCH_S)' in run and 'job.stage_est["cover"] = e["converting"] + e["mixing"]' in run
     assert run.index('job.stage_est["song"]') < run.index('push("song", 0.02 + 0.9 * n / per'), "the song's estimate comes after the song step starts"
     assert 'job.stage_est["voice"] = 10.0' in run
@@ -3810,17 +3831,21 @@ def u_rcpolish1():
         assert plain == ["use:obama", "check", "train"] and [c["choice"] for c in after] == ["use:obama", "train"], (plain, after)
         assert "couldn't be done (the clips had no other voices)" in after[-1]["detail"] and "Adding clips" in after[-1]["detail"]
     assert 'failed = None if prefer_train or choice == "check" or community else check_failed(person)' in rv
-    assert "online = [] if prefer_train or failed else online_for(person, 2)" in rv and "_remember_failed(person, None)" in rv
+    # never a training nobody asked for (rc-fix2): without the plan's "train", a held failure stops the job and says so
+    fl = rv[rv.index("failed = None if prefer_train"):]
+    assert fl.index("if failed:\n        raise ModelError(") < fl.index("online = [] if prefer_train else online_for(person, 2)") and "_remember_failed(person, None)" in rv
+    assert rv.index('if choice == "train":\n        prefer_train = True') < rv.index("failed = None if prefer_train")
+    assert 'voice_choice: last.plan.voice_ask ? OS.vchoice : last.plan.voice?.after_failed ? "train" : undefined' in page
     assert "_remember_failed(person, why, proj)" in inspect.getsource(service.no_check) and rv.count("community, plan, push, proj)") == 2
     ap = inspect.getsource(FA._auto_plan)
     assert 'online = [] if prefer_train or (failed and not inst) else service.online_for(person, 2)' in ap and '"after_failed": failed' in ap and "failed=failed)" in ap
-    assert "or (not n and voice_choice != \"check\" and check_failed(person))" in run and "if (v.after_failed)" in page
+    assert "if (v.after_failed)" in page
     # 4. left out for a reason: stays out, the reason shown; a training short of voice tops up only from the rest
     S = lambda note: types.SimpleNamespace(note=note)
     flagged = ["from 2004, decades before their newest (2020): a younger voice", srcmod.ABOUT_NOTE, service.SONG_NOTE,
                "left out by DoubleAgent: another voice", "may be in Spanish (a dub or another language)", srcmod.TALK_NOTE, "yours"]
     assert all(srcmod.left_out_for_a_reason(S(n)) for n in flagged), [n for n in flagged if not srcmod.left_out_for_a_reason(S(n))]
-    assert not any(srcmod.left_out_for_a_reason(S(n)) for n in ("", "interview", "speech", "scenes", "acapella", "voice lines"))
+    assert not any(srcmod.left_out_for_a_reason(S(n)) for n in ("", "interview", "speech", "scenes", "acapella", "voice lines", "album track"))
     tn = inspect.getsource(service.train_new_voice)
     assert "and not srcmod.left_out_for_a_reason(s)" in tn and "NOT_USABLE)\n" not in tn[tn.index("more = sorted("):tn.index("more = sorted(") + 200]
     old = types.SimpleNamespace(id="a", title="Barack Obama 2004 DNC keynote", extra={}, selected=True, user=False, note="")

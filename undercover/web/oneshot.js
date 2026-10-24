@@ -223,7 +223,7 @@ $("#os-go").onclick = async () => {
     if (planPath(last.plan) === "train") store.set("uc-person-warned", true);   // the line was on the card; said once
     const picked = last.plan.voice_ask ? pickedVoice(last.plan) : null;
     OS.pathEta = picked ? (picked.eta_s.low + picked.eta_s.high) / 2 : null; OS.pathAt = performance.now();   // the countdown starts from the whole picked path
-    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined, subject: OS.subject || undefined, voice_choice: last.plan.voice_ask ? OS.vchoice : undefined } });
+    const r = await api("/api/auto", { json: { text, prefer_train: $("#os-train").checked, choice: OS.choice || undefined, subject: OS.subject || undefined, voice_choice: last.plan.voice_ask ? OS.vchoice : last.plan.voice?.after_failed ? "train" : undefined } });   // (after a check that couldn't be done, the plan's training is what's asked for: rc-polish1)
     osFollow(r.job, text);
   } catch (e) { showError(e.message, "Can't make that cover"); }
   finally { btn.disabled = false; }

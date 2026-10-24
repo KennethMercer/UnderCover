@@ -851,7 +851,7 @@ end;
 
 // what went wrong with a download, in the user's words (rc-polish1: the box said "its SHA-256 is wrong"); the log keeps
 // the technical reason. Failed its check, came short, or Inno found its hash wrong: it arrived damaged. Our own reasons
-// (a folder it can't be put in) are plain already. Anything else is Inno's download error: the connection's
+// (a folder it can't be put in) are plain already. Inno's download errors: the connection's, or said as they are
 function PlainWhy(Why: String): String;
 var
   L: String;
@@ -861,8 +861,11 @@ begin
     Result := 'it arrived damaged'
   else if (Pos('it couldn''t be put in', L) = 1) or (Pos('checking it took too long', L) = 1) or (Pos('its check couldn''t start', L) = 1) then
     Result := Why
+  else if (Pos('http', L) > 0) or (Pos('connect', L) > 0) or (Pos('timed out', L) > 0) or (Pos('timeout', L) > 0) or
+      (Pos('server', L) > 0) or (Pos('resolve', L) > 0) or (Pos('no source', L) = 1) then
+    Result := 'the connection to its server failed'
   else
-    Result := 'the connection to its server failed';
+    Result := 'it couldn''t be saved (' + Why + ')';   // (a full drive, a file in use: not the connection's)
 end;
 
 // one file from its sources (a model's mirrors), in order. -> '' (in Inno's temp folder, checked), 'stopped', or the error
@@ -959,7 +962,7 @@ var
   Todo: array of Integer;
   I, K: Integer;
   Line, Dest, Name, Why, Short, Urls, InnoSha, CheckSha: String;
-  Bytes, Have, Largest, Free, Total: Int64;
+  Bytes, Largest, Free, Total: Int64;
   Stopped, Big: Boolean;
   Tries, W: Integer;
 #ifdef ReleaseCheck
