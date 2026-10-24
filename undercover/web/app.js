@@ -551,7 +551,10 @@ function install(btn, body) {
   btn.disabled = true; btn.textContent = "Starting…";
   api("/api/voices/install", { json: body }).then(({ job }) => {
     const stop = watchJob(job, async ev => {
-      if (ev.stage === "downloading") btn.textContent = ev.frac != null ? `${Math.round(ev.frac * 100)}%` : (ev.message || "").replace("Downloading ", "");
+      // each round named (1.0.1: it counted 0-100 % twice, the second for the index, with no word for it)
+      const part = { index: "Index ", file: "Next file " }[ev.part] || "";
+      if (ev.stage === "downloading") btn.textContent = ev.frac != null ? `${part}${Math.round(ev.frac * 100)}%` : (ev.message || "").replace("Downloading ", "");
+      else if (ev.stage === "preview") btn.textContent = "Preview line…";
       if (ev.final) {
         stop();
         if (ev.state === "done") { btn.textContent = "Installed"; $("#q").value = ""; S.online = []; await loadVoices(ev.voice); }

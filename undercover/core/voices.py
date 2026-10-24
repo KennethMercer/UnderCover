@@ -324,6 +324,8 @@ def _stream(resp: requests.Response, dest_dir: Path, fallback_name: str, progres
     if "text/html" in resp.headers.get("content-type", ""):
         raise ModelError("The link returned a web page instead of a file. It may be private, deleted, or need a login.")
     out = dest_dir / _filename_from(resp, fallback_name)
+    if progress is not None and hasattr(progress, "file"):   # (a callback that names its rounds: which file this is)
+        progress.file = out.name
     done = 0
     with open(out, "wb") as f:
         for chunk in resp.iter_content(1 << 20):
