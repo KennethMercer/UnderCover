@@ -1294,7 +1294,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         try:   # what this training turned out to be: the next new voice's estimate (rc-eta T1)
             from .night import record_shape
             gained = mins - kept_before
-            record_shape(kept_over_target=mins / TC["target_minutes"] if kept_before < TC["target_minutes"] else None,
+            from .night import person_kind
+            record_shape(person_kind(proj), kept_over_target=mins / TC["target_minutes"] if kept_before < TC["target_minutes"] else None,
                          kept_per_prep_min=gained / prep_min if gained > 1 and prep_min > 0.5 else None,
                          past_plan=(st.get("epoch") or 0) / st["planned_epochs"] if st.get("planned_epochs") and st.get("state") == "trained" else None)
         except Exception:   # noqa: BLE001 - only a measurement

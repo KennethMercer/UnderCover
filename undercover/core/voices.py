@@ -100,9 +100,13 @@ def name_from_source(src, dl: Path | None = None) -> str:
     u = urlparse(str(src or ""))
     parts = [unquote(p) for p in u.path.split("/") if p]
     repo = "/".join(parts[:2]) if "huggingface.co" in (u.netloc or "") and len(parts) >= 2 else ""
-    file = parts[-1] if parts else ""
-    if not file and dl is not None and Path(dl).is_file():
-        file = Path(dl).name
+    dl = Path(dl) if dl is not None else None
+    if dl is not None and dl.is_file():
+        file = dl.name   # (a Drive or Pixeldrain link's file comes with its own name; its URL ends in "uc" or an id)
+    elif dl is not None and dl.is_dir() and any(dl.glob("*.pth")):
+        file = max(dl.glob("*.pth"), key=lambda f: f.stat().st_size).name
+    else:
+        file = parts[-1] if parts else ""
     return _guess_name(repo, file or (repo.split("/")[-1] if repo else "") or "voice")
 
 

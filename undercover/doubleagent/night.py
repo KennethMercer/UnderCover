@@ -40,26 +40,43 @@ def _sec_per_step() -> float:
 # planned, 2 h 22 min taken; 2b the other way): the kept minutes it ended with against the target, the kept minutes
 # prepared per minute, and how far past its planned epochs it ran before the stall rule stopped it. Defaults: 2d's.
 TRAIN_SHAPE = {"kept_over_target": 1.4, "kept_per_prep_min": 3.2, "past_plan": 1.2}
+# a character's scenes and a singer's songs yield less clean voice a minute than a person's speeches (SpongeBob: about
+# 0.3 min an upload, music and the other characters cut out): their own preparation rate until one is measured
+KIND_PREP = {"character": 0.8, "singer": 2.0}
 
 
 def _shape_file():
     return path("cache_dir") / "train_shape.json"
 
 
-def train_shape() -> dict:
-    """The medians of the last trainings' shape (TRAIN_SHAPE until one is measured)."""
+def train_shape(kind: str = "speaker") -> dict:
+    """The medians of the last trainings' shape for this kind of person ("speaker", "singer", "character"; the
+    preparation rate is kept per kind, the rest for all), TRAIN_SHAPE / KIND_PREP until one is measured."""
     try:
         d = json.loads(_shape_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         d = {}
     out = {}
     for k, dflt in TRAIN_SHAPE.items():
-        xs = sorted(x for x in d.get(k, []) if isinstance(x, (int, float)) and x > 0)
-        out[k] = xs[len(xs) // 2] if xs else dflt
+        key = f"{k}:{kind}" if k == "kept_per_prep_min" else k
+        xs = sorted(x for x in d.get(key, []) if isinstance(x, (int, float)) and x > 0)
+        out[k] = xs[len(xs) // 2] if xs else (KIND_PREP.get(kind, dflt) if k == "kept_per_prep_min" else dflt)
     return out
 
 
-def record_shape(**vals):
+def person_kind(proj, person: str | None = None) -> str:
+    """ "character", "singer" or "speaker": from the project when there is one, else what the request was read as."""
+    if proj is not None:
+        from . import sources as srcmod
+        return "character" if srcmod.is_character_project(proj) else "singer" if proj.mode != "speaking" else "speaker"
+    try:
+        from .service import _subjects
+        return "character" if (_subjects().get(slug(person or "")) or {}).get("kind") == "character" else "speaker"
+    except Exception:   # noqa: BLE001 - the common case
+        return "speaker"
+
+
+def record_shape(kind: str = "speaker", **vals):
     """One training's shape (kept_over_target, kept_per_prep_min, past_plan; any of them), the last 12 kept."""
     from ..core import fsutil
     try:
@@ -68,7 +85,8 @@ def record_shape(**vals):
         d = {}
     for k, v in vals.items():
         if k in TRAIN_SHAPE and v and v > 0:
-            d[k] = (d.get(k, []) + [round(float(v), 3)])[-12:]
+            key = f"{k}:{kind}" if k == "kept_per_prep_min" else k
+            d[key] = (d.get(key, []) + [round(float(v), 3)])[-12:]
     try:
         fsutil.write_text(_shape_file(), json.dumps(d))
     except OSError:
@@ -128,7 +146,7 @@ def _estimate_new(proj, item: dict) -> dict:
     how much is kept."""
     from .frozen import budget_steps
     tc = CONFIG["training"]
-    sh = train_shape()
+    sh = train_shape(person_kind(proj, item.get("target")))
     kept_now = proj.kept_seconds() / 60 if proj is not None else 0.0
     final = max(kept_now, tc["target_minutes"] * sh["kept_over_target"])
     prep = max(0.0, final - kept_now) / sh["kept_per_prep_min"] if kept_now < tc["target_minutes"] else 0.0

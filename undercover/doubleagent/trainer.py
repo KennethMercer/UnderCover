@@ -499,8 +499,9 @@ class Trainer:
                         # the end moved out (past the plan, the stall point after a new best): the time left rises by
                         # exactly the epochs added, said as it is; the bar holds instead of going back (rc-eta T3:
                         # 0.927 -> 0.799, 382 -> 1174 s over six minutes)
-                        extended = shown["end"] is not None and end > shown["end"]
-                        shown["end"] = end
+                        extended = shown["end"] is not None and end >= shown["end"] + EXTEND_SAID
+                        if shown["end"] is None or extended:
+                            shown["end"] = end
                         shown["frac"] = max(shown["frac"], min(0.99, (epoch - 1 + (bi + 1) / len(batches)) / end))
                         report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown, end=end,
                                fraction=shown["frac"], eta=eta, extended=extended, sec_per_epoch=st.get("sec_per_epoch"))
@@ -545,8 +546,9 @@ class Trainer:
                     self._prune_saves()
                 proj.save_train()
                 end = end_epoch(epoch)
-                extended = shown["end"] is not None and end > shown["end"]   # (as within the epoch: the bar holds)
-                shown["end"] = end
+                extended = shown["end"] is not None and end >= shown["end"] + EXTEND_SAID   # (as within the epoch)
+                if shown["end"] is None or extended:
+                    shown["end"] = end
                 shown["frac"] = 1.0 if epoch >= max_epochs else max(shown["frac"], min(0.99, epoch / end))
                 spe = epoch_speed(hist, epoch0, prior_step and prior_step * steps_per_epoch) or st["sec_per_epoch"]
                 report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown, end=end,
@@ -716,6 +718,9 @@ def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None =
 
 
 SPEED_FILE = "train_speed.json"   # cache/: the last training's seconds per step, by sample rate and batch size
+
+
+EXTEND_SAID = 3   # epochs an auto run's end must move out before the added time is said at once (rc-eta T3)
 
 
 def epoch_speed(hist: list, epoch0: int, prior: float | None) -> float | None:

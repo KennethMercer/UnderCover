@@ -3765,6 +3765,7 @@ def u_rcfix7():
 @check("a training's time, said once and kept (rc-eta, IA's training proof: 'about 61 min' planned, 2 h 22 min taken; +53 min at the voice step, +29 min at epoch 2; past the plan the bar went 0.927 -> 0.799 and the time left 382 -> 1174 s): one estimator for a new voice from this PC's measured shape (kept minutes against the target, preparation rate, epochs past the plan, step speed), the same before and after the search; the job keeps the plan's number; a first epoch's speed blends in; the bar never goes back and the time left rises only by epochs added, said as such; an install with no name is named from its source")
 def u_rceta():
     import inspect
+    import tempfile
     import types
     from undercover.core import jobs, voices as V
     from undercover.doubleagent import night, service, trainer
@@ -3774,6 +3775,13 @@ def u_rceta():
     hf = "https://huggingface.co/binant/Plankton__SpongeBob___RVC_v2__1K_Epochs_69K_Steps/resolve/main/model.pth"
     assert V.name_from_source(hf, Path("C:/x/cache/dl_ab")) == "plankton-spongebob"
     assert V.name_from_source("https://example.com/files/barack%20obama.zip") == "barack-obama"
+    with tempfile.TemporaryDirectory() as td:   # a Drive link's file keeps its own name (its URL ends in "uc")
+        f = Path(td) / "Trump_RVC_v2.zip"
+        f.write_bytes(b"z")
+        assert V.name_from_source("https://drive.google.com/uc?id=1AbC", f) == "trump"
+        (Path(td) / "dl").mkdir()
+        (Path(td) / "dl" / "Morgan_Freeman_e300.pth").write_bytes(b"p")
+        assert V.name_from_source("https://pixeldrain.com/l/abc", Path(td) / "dl").startswith("morgan-freeman")
     ds = inspect.getsource(V.download_staged) + inspect.getsource(V.download_and_install)
     assert ds.count("name = name or name_from_source(src, dl)") == 2 and "dl.parent.name" not in ds
     # one estimator: the same whether the search has run yet (no project) or found 13 sources (nothing kept yet)
@@ -3783,23 +3791,27 @@ def u_rceta():
         night._sec_per_step = lambda: sps
         try:
             bare = night._estimate_new(None, {"kind": "new", "target": "Obama"})
-            found = types.SimpleNamespace(kept_seconds=lambda: 0.0, sources=[object()] * 13)
+            src = types.SimpleNamespace(extra={}, title="Obama speech", channel="", note="", selected=True, status="found", duration=600.0)
+            found = types.SimpleNamespace(kept_seconds=lambda: 0.0, sources=[src] * 13, mode="speaking", person="Obama", name="obama", reference={})
             assert night._estimate_new(found, {"kind": "new", "target": "Obama"}) == bare, "the search's finds change the estimate"
             total = bare["total"] + (80 + 80) / 60   # (+ 2d's song step and its cover)
             assert 130 <= total <= 150 and abs(total - 142) / 142 < 0.1, (bare, total)   # 2d: 142 min (was "about 61")
             assert abs(total - 118) / 118 < 0.2, total   # 2b: 118 min, the other way
-            enough = types.SimpleNamespace(kept_seconds=lambda: 35 * 60.0, sources=[])
+            enough = types.SimpleNamespace(kept_seconds=lambda: 35 * 60.0, sources=[], mode="speaking", person="Obama", name="obama", reference={})
             assert night._estimate_new(enough, {"kind": "new", "target": "x"})["prepare"] == 0
             assert night.estimate({"kind": "new", "target": "Nobody Yet"})["total"] == night._estimate_new(None, {"kind": "new"})["total"]
             # the shape is measured from every training (medians of the last 12), the defaults until then
             assert night.train_shape() == night.TRAIN_SHAPE
+            assert night.train_shape("character")["kept_per_prep_min"] == night.KIND_PREP["character"]   # (scenes yield less)
+            night.record_shape("character", kept_per_prep_min=0.5)
+            assert night.train_shape("character")["kept_per_prep_min"] == 0.5 and night.train_shape()["kept_per_prep_min"] == 3.2
             for k in (1.2, 1.6, 1.5):
                 night.record_shape(kept_over_target=k, past_plan=None)
             assert night.train_shape()["kept_over_target"] == 1.5 and night.train_shape()["past_plan"] == night.TRAIN_SHAPE["past_plan"]
         finally:
             night._sec_per_step = real
     tn = inspect.getsource(service.train_new_voice)
-    assert "record_shape(kept_over_target=" in tn and "past_plan=(st.get(\"epoch\") or 0) / st[\"planned_epochs\"]" in tn
+    assert "record_shape(person_kind(proj), kept_over_target=" in tn and "past_plan=(st.get(\"epoch\") or 0) / st[\"planned_epochs\"]" in tn
     # the plan's number is the job's: taken once at the start, the voice step trains by it (no +53 min)
     run = inspect.getsource(oneshot.run)
     assert 'plan["train_est_s"] = train_estimate_s(person)' in run and '"train_est_s"):' in inspect.getsource(oneshot)
@@ -3822,7 +3834,7 @@ def u_rceta():
     assert j.events[-1]["total_left"] == 7700.0 and "new_work" not in j.events[-1]
     # past the plan: the bar holds, the extension is said
     tsrc = inspect.getsource(trainer.Trainer.run)
-    assert tsrc.count('shown["frac"] = ') == 2 and "max(shown[\"frac\"]" in tsrc and "extended = shown[\"end\"] is not None and end > shown[\"end\"]" in tsrc
+    assert tsrc.count('shown["frac"] = ') == 2 and "max(shown[\"frac\"]" in tsrc and tsrc.count("end >= shown[\"end\"] + EXTEND_SAID") == 2
     assert tsrc.count("extended=extended") == 2 and tsrc.count("fraction=shown[\"frac\"]") == 2
     assert trainer.epoch_line({"epoch": 136, "epochs": 283, "planned": 142, "end": 171}) == \
         "Training: epoch 136 of about 171: a little longer, it's still improving (planned 142)"
