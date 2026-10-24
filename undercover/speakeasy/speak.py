@@ -275,27 +275,31 @@ class PieceClock:
     def __init__(self, words: list, per_word: float, overhead: float):
         self.words, self.per_word, self.overhead = [max(1, w) for w in words], per_word, overhead
         self.last = None   # when the last piece was made
-        self.meas_s, self.meas_w, self.n = 0.0, 0, 0
+        self.rates: list = []   # each measured piece's seconds a word
+        self.n = 0
 
     def done(self, i: int, now: float) -> float:
         """Piece i is made: -> seconds left for the pieces after it."""
         if self.last is not None:   # (piece i's own time, from the one before it)
-            self.meas_s += max(0.0, now - self.last - self.overhead)
-            self.meas_w += self.words[i]
+            self.rates.append(max(0.0, now - self.last - self.overhead) / self.words[i])
             self.n += 1
         self.last = now
         w = min(1.0, self.n / 5)
-        rate = w * (self.meas_s / self.meas_w) + (1 - w) * self.per_word if self.meas_w else self.per_word
+        rate = w * self.measured(1) + (1 - w) * self.per_word if self.rates else self.per_word
         rest = self.words[i + 1:]
         return sum(rest) * rate + len(rest) * self.overhead
 
-    def measured(self) -> float | None:
-        return self.meas_s / self.meas_w if self.n >= 3 and self.meas_w else None
+    def measured(self, least: int = 3) -> float | None:
+        """The median measured seconds a word (one slow piece, a long listen-back, doesn't make the rest slow)."""
+        if len(self.rates) < least:
+            return None
+        xs = sorted(self.rates)
+        return xs[len(xs) // 2]
 
 
 SPEED_FILE = "speak_speed.json"   # cache/: the cadence engines' measured seconds a word, by engine (and listen-back)
-PIECE_S = 0.8          # a piece's own cost besides its words: the RVC finish and levelling (measured 0.5-1 s)
-CALIBRATE_S = 45.0     # a pack's pace calibration, once per pack and engine (measured about 40 s, Agent Smoke)
+PIECE_S = 1.2          # a piece's own cost besides its words: listen-back's ear, the RVC finish, levelling (measured 1-1.5 s)
+CALIBRATE_S = 30.0     # a pack's pace calibration, once per pack and engine (measured about 30 s, Agent Smoke)
 
 
 def _speed_key(p: dict) -> str:
@@ -406,9 +410,13 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
             pieces.append(y)
             made += len(y) / sr
             left = clock.done(i, time.perf_counter())
+            # the time it says rises only slowly; but once two pieces are measured, a time left found a quarter or more
+            # short is said at once (rc-fix10: held at "5 s" for five minutes while listen-back re-read every piece)
+            shown = job._left[0] if job._left else None
+            honest = clock.n >= 2 and shown is not None and left > max(shown * 1.25, shown + 10)
             job.push(stage="speaking", frac=round((i + 1) / len(sents), 3), index=i, of=len(sents), url=file_url(f),
                      seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1), left_est=round(left, 1),
-                     message=f"Sentence {i + 1} of {len(sents)} ready")
+                     new_work=honest, message=f"Sentence {i + 1} of {len(sents)} ready")
         if clock.measured():   # this PC's speed, for the next speech's first estimate
             _record_speed(p, clock.measured())
     except BaseException:

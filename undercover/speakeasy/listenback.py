@@ -127,10 +127,14 @@ def settings() -> dict:
 
 
 def _clean(w: str) -> str:
-    """A word as compared: lower case, letters / digits / apostrophes only, and a number Whisper wrote as digits
-    ("9") read as the word it says ("nine")."""
+    """A word as compared: lower case, letters / digits / apostrophes only, a number Whisper wrote as digits ("9")
+    read as the word it says ("nine"), and British and American spellings as one (rc-fix10: Whisper writes
+    "realized" for "realised", and every piece with it was read three times over a word said right)."""
     w = re.sub(r"[^a-z0-9']", "", w.lower())
-    return NUMBERS.get(w, w)
+    w = NUMBERS.get(w, w)
+    w = re.sub(r"(?<=\w\w)is(e|ed|es|ing|ation|ations|er|ers)$", r"iz\1", w)   # realise / realize
+    w = re.sub(r"(?<=\w\w\w)our(s|ed|ing|ite|ites|able|ful)?$", r"or\1", w)   # colour / color (not four, your, hour)
+    return w
 
 
 def text_words(text: str) -> list[tuple[str, bool]]:

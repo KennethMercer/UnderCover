@@ -3871,6 +3871,14 @@ def u_rcfix10():
     assert clock.measured() and abs(clock.measured() - 0.3) < 1e-6
     ms = inspect.getsource(speak._make_cadence)
     assert "clock = PieceClock(" in ms and "left_est=round(left, 1)" in ms and "el / (i + 1)" not in ms
+    assert "honest = clock.n >= 2 and shown is not None and left > max(shown * 1.25, shown + 10)" in ms and "new_work=honest" in ms
+    slow = speak.PieceClock([40] * 10, 0.1, 1.0)
+    for i, t in enumerate((0, 15, 30, 200, 215)):   # one piece took 170 s: the median keeps the rest's speed
+        slow.done(i, float(t))
+    assert abs(slow.measured() - (14 / 40)) < 1e-6, slow.rates
+    # listen-back hears British and American spellings as one (every "realised" piece was read three times)
+    assert [listenback._clean(w) for w in ("realised", "realized", "colour", "four", "your", "hour")] == ["realized", "realized", "color", "four", "your", "hour"]
+    assert listenback.problems("I realised it", [["I", 0, .1, .9], ["realized", .1, .5, .9], ["it", .5, .6, .9]]) == []
     es = inspect.getsource(speak.eta_seconds)
     assert "cadence_pieces(tts.sentences(text))" in es and "CALIBRATE_S" in es and "per_word(p)" in es
     return f"a stuck worker gone in {took:.1f} s (and by a raising cancel); Stop checked in listen-back and the finish; run-ons in {len(pieces)} pieces"
