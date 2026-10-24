@@ -275,19 +275,19 @@ class PieceClock:
     def __init__(self, words: list, per_word: float, overhead: float):
         self.words, self.per_word, self.overhead = [max(1, w) for w in words], per_word, overhead
         self.last = None   # when the last piece was made
-        self.rates: list = []   # each measured piece's seconds a word
-        self.n = 0
+        self.rates: list = []   # each measured piece's seconds a word, all its costs in (the engine reads one ahead,
+        self.n = 0              # so a piece's own costs overlap the next one's reading: measured, not added up)
 
     def done(self, i: int, now: float) -> float:
         """Piece i is made: -> seconds left for the pieces after it."""
         if self.last is not None:   # (piece i's own time, from the one before it)
-            self.rates.append(max(0.0, now - self.last - self.overhead) / self.words[i])
+            self.rates.append(max(0.0, now - self.last) / self.words[i])
             self.n += 1
         self.last = now
         w = min(1.0, self.n / 5)
-        rate = w * self.measured(1) + (1 - w) * self.per_word if self.rates else self.per_word
         rest = self.words[i + 1:]
-        return sum(rest) * rate + len(rest) * self.overhead
+        planned = sum(rest) * self.per_word + len(rest) * self.overhead
+        return w * sum(rest) * self.measured(1) + (1 - w) * planned if self.rates else planned
 
     def measured(self, least: int = 3) -> float | None:
         """The median measured seconds a word (one slow piece, a long listen-back, doesn't make the rest slow)."""
@@ -298,8 +298,9 @@ class PieceClock:
 
 
 SPEED_FILE = "speak_speed.json"   # cache/: the cadence engines' measured seconds a word, by engine (and listen-back)
-PIECE_S = 1.2          # a piece's own cost besides its words: listen-back's ear, the RVC finish, levelling (measured 1-1.5 s)
-CALIBRATE_S = 30.0     # a pack's pace calibration, once per pack and engine (measured about 30 s, Agent Smoke)
+PIECE_S = 0.5          # a piece's own cost besides its words, before this PC has measured a speech (listen-back's ear,
+                       # the RVC finish: mostly while the engine reads the next piece; quiet GPU, 2026-10-24)
+CALIBRATE_S = 10.0     # a pack's pace calibration, once per pack and engine (the cold start and it: about 27 s, Agent Smoke)
 
 
 def _speed_key(p: dict) -> str:
@@ -307,18 +308,19 @@ def _speed_key(p: dict) -> str:
     return f"{p.get('engine')}{'+lb' if listenback.settings().get('listen_back') else ''}"
 
 
-def per_word(p: dict) -> float:
-    """This PC's seconds a word for this engine (the median of the last speeches), else the engine's own speed: about
-    3 words a second of speech, at its realtime factor, listen-back's re-reads on top."""
+def per_word(p: dict) -> tuple[float, float]:
+    """(seconds a word, seconds a piece) for this engine: this PC's measured speed (the median of the last speeches,
+    a piece's own costs in it), else the engine's own: about 3 words a second of speech at its realtime factor,
+    listen-back's re-reads on top, and PIECE_S a piece."""
     from . import listenback
     try:
         xs = sorted(json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(_speed_key(p), []))
     except (OSError, ValueError):
         xs = []
     if xs:
-        return xs[len(xs) // 2]
+        return xs[len(xs) // 2], 0.0
     base = (1 / 3.0) / max(float(p.get("rtf") or 1.0), 0.05)
-    return base * (LISTEN_BACK if listenback.settings().get("listen_back") else 1.0)
+    return base * (LISTEN_BACK if listenback.settings().get("listen_back") else 1.0), PIECE_S
 
 
 def _record_speed(p: dict, sec_per_word: float):
@@ -367,7 +369,7 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
 
     def progress(msg, done=0, total=0):
         job.push(stage="reading", frac=0.0, message=msg)
-    clock = PieceClock([len(s["text"].split()) for s in sents], per_word(p), PIECE_S)
+    clock = PieceClock([len(s["text"].split()) for s in sents], *per_word(p))
     reqs: list = []
     pieces, made, t_tts, t_rvc, t_lb = [], 0.0, 0.0, 0.0, 0.0
     pitch_hist: list = []   # each sentence's offset from the person's pitch (an engine that reads off it, Turbo)
@@ -497,7 +499,8 @@ def eta_seconds(text: str, p: dict) -> float:
     if p.get("mode") == "cadence":   # (rc-fix10) the pieces it will read, by their words, at this PC's speed
         from . import listenback
         pieces = cadence_pieces(tts.sentences(text))
-        t = sum(len(s["text"].split()) for s in pieces) * per_word(p) + len(pieces) * PIECE_S + VOICE_S
+        pw, ps = per_word(p)
+        t = sum(len(s["text"].split()) for s in pieces) * pw + len(pieces) * ps + VOICE_S
         if not client.WORKER.running():
             t += COLD_ENGINE_S
         if listenback.settings().get("listen_back") and listenback._ASR.get("model") is None:

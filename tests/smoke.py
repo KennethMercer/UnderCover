@@ -3866,16 +3866,20 @@ def u_rcfix10():
     clock = speak.PieceClock([30] * 31, 0.2, 0.8)
     first = clock.done(0, 100.0)   # (piece 0 after 90 s of start-up: not counted)
     assert abs(first - (30 * 30 * 0.2 + 30 * 0.8)) < 1e-6, first   # (the old way: 90 s x 30 pieces = 2700 s)
-    lefts = [clock.done(i, 100.0 + i * (30 * 0.3 + 0.8)) for i in range(1, 11)]   # really 0.3 s a word
-    assert lefts[0] > lefts[-1] and abs(lefts[-1] - (20 * 30 * 0.3 + 20 * 0.8)) < 1, lefts[-1]   # measured, after five
+    lefts = [clock.done(i, 100.0 + i * 9.0) for i in range(1, 11)]   # really 9 s a piece: 0.3 s a word, all costs in
+    assert lefts[0] > lefts[-1] and abs(lefts[-1] - 20 * 30 * 0.3) < 1e-6, lefts[-1]   # measured, after five
     assert clock.measured() and abs(clock.measured() - 0.3) < 1e-6
+    quick = speak.PieceClock([30] * 5, 0.2, 0.8)   # (pieces 1 s apart, the engine reading ahead: a real speed, not 0)
+    for i in range(5):
+        quick.done(i, float(i))
+    assert abs(quick.measured() - 1 / 30) < 1e-6, quick.rates
     ms = inspect.getsource(speak._make_cadence)
     assert "clock = PieceClock(" in ms and "left_est=round(left, 1)" in ms and "el / (i + 1)" not in ms
     assert "honest = clock.n >= 2 and shown is not None and left > max(shown * 1.25, shown + 10)" in ms and "new_work=honest" in ms
     slow = speak.PieceClock([40] * 10, 0.1, 1.0)
     for i, t in enumerate((0, 15, 30, 200, 215)):   # one piece took 170 s: the median keeps the rest's speed
         slow.done(i, float(t))
-    assert abs(slow.measured() - (14 / 40)) < 1e-6, slow.rates
+    assert abs(slow.measured() - (15 / 40)) < 1e-6, slow.rates
     # listen-back hears British and American spellings as one (every "realised" piece was read three times)
     assert [listenback._clean(w) for w in ("realised", "realized", "colour", "four", "your", "hour")] == ["realized", "realized", "color", "four", "your", "hour"]
     assert listenback.problems("I realised it", [["I", 0, .1, .9], ["realized", .1, .5, .9], ["it", .5, .6, .9]]) == []
