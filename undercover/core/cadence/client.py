@@ -102,6 +102,24 @@ class Worker:
             if idle:
                 self.stop("idle")
 
+    def abort(self, why: str = "stopped") -> bool:
+        """A Stop (rc-fix10, the friend's PC: SpeakEasy's Stop let the worker go on with its requests, the GPU at 100 % and
+        "about 10 min" left): with a request in it, the worker is ended at once (an engine mid-sentence can't be called
+        back) and its requests fail; the next request starts it again (the engine loads in about 20 s). Idle, it's left
+        alone. -> True when it was ended."""
+        with self.lock:
+            proc = self.proc
+            if proc is None or proc.poll() is not None or not self.pending:
+                return False
+            self.proc = None   # (a request after this starts a new one, never writes to the dying one)
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        if self.log:
+            self.log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] ended mid-request ({why})\n")
+        return True
+
     def stop(self, why: str = ""):
         """Stop the worker (frees its VRAM). Requests still waiting fail; the next request starts it again."""
         with self.lock:
@@ -136,21 +154,30 @@ class Worker:
         return fut
 
     def call(self, op: str, timeout: float | None = None, progress=None, cancel=None, **kw) -> dict:
-        """Run one request and wait for it. cancel() -> True stops waiting (the worker finishes the request anyway)."""
+        """Run one request and wait for it. cancel() -> True (or raising) stops it: the wait, and the worker's work."""
         fut = self.submit(op, progress=progress, **kw)
         return wait(fut, timeout, cancel)
 
 
 def wait(fut: Future, timeout: float | None = None, cancel=None) -> dict:
+    """The request's reply. cancel() -> True, or a cancel() that raises (a job's own check), ends the worker's work as
+    well as the wait (WORKER.abort): within about half a second, whatever the engine was in the middle of."""
     t0 = time.time()
     while True:
         try:
             return fut.result(timeout=0.5)
         except TimeoutError:
             pass
-        if cancel and cancel():
-            from ..jobs import Cancelled
-            raise Cancelled()
+        if cancel:
+            try:
+                stop = cancel()
+            except BaseException:
+                WORKER.abort("cancelled")
+                raise
+            if stop:
+                WORKER.abort("cancelled")
+                from ..jobs import Cancelled
+                raise Cancelled()
         if timeout and time.time() - t0 > timeout:
             raise WorkerError("The speech engine didn't answer in time.", "Timeout")
 

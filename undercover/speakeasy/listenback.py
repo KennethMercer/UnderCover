@@ -254,8 +254,11 @@ def insert_pause(x: np.ndarray, sr: int, at: float, seconds: float) -> np.ndarra
     return np.concatenate([x[:i], np.zeros(int(seconds * sr), np.float32), x[i:]])
 
 
-def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, log: dict) -> Path:
-    """The listen-back for one sentence: -> the take to convert (a new WAV when something was mended)."""
+def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, log: dict, cancel=None) -> Path:
+    """The listen-back for one sentence: -> the take to convert (a new WAV when something was mended). cancel() -> True:
+    Stop, between its steps and during a re-read (rc-fix10)."""
+    from ..core.jobs import Cancelled
+    stopped = lambda: cancel is not None and cancel()
     s = settings()
     t0 = time.perf_counter()
     timing = s["stretch_words"] or s["comma_lengthen"]   # Kokoro's timing reference only when a stretch may follow
@@ -268,9 +271,11 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     best = (Path(wav), seed, heard[0]["words"], problems(text, heard[0]["words"]))
     tries = 1
     while best[3] and tries < max(1, s["tries"]):   # read again with a new seed; keep the take with fewest problems
+        if stopped():
+            raise Cancelled()
         nseed = seed + 1000 * tries
         fut, w2 = render.request(text, pack, ref, seed=nseed)
-        client.wait(fut)
+        client.wait(fut, cancel=cancel)
         h = hear([str(w2)])[0]["words"]
         p = problems(text, h)
         takes.append((Path(w2), nseed))

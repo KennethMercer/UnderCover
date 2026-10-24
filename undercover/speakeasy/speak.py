@@ -302,16 +302,23 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
             try:
                 render.client.wait(fut, cancel=lambda: job.cancel)
             except WorkerError as e:
+                if job.cancel:   # (ended by its own Stop: said as a Stop)
+                    raise Cancelled()
                 raise SpeakError(str(e))
             t_tts += time.perf_counter() - t
             if lb["listen_back"]:   # hear the reading back and mend what the ear would catch (listenback.py)
                 entry = {"job": job.id, "voice": p["voice"], "sentence": i, "text": s["text"]}
                 try:
-                    wav = listenback.review(s["text"], wav, pack, ref, 1234 + i, tts.pick_reader(p["target_hz"]), entry)
+                    wav = listenback.review(s["text"], wav, pack, ref, 1234 + i, tts.pick_reader(p["target_hz"]), entry,
+                                            cancel=lambda: job.cancel)
+                except Cancelled:
+                    raise
                 except Exception as e:   # noqa: BLE001 - the reading as it came is still good to use
                     entry["error"] = f"{type(e).__name__}: {e}"
                 listenback.write_log(entry)
                 t_lb += entry.get("seconds", 0.0)
+            if job.cancel:
+                raise Cancelled()
             t = time.perf_counter()
             y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0), engine=p.get("engine"),
                                 history=pitch_hist)
@@ -329,6 +336,8 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
                      seconds=round(len(y) / sr, 2), made=round(made, 1), left=round(left, 1), total_left=round(left, 1),
                      message=f"Sentence {i + 1} of {len(sents)} ready")
     except BaseException:
+        if job.cancel:   # Stop: the sentence the worker reads ahead is ended too, not left to finish (rc-fix10)
+            render.client.WORKER.abort("speech stopped")
         for fut, wav in reqs:   # what the worker still makes is thrown away when it arrives
             fut.add_done_callback(lambda _f, wav=wav: Path(wav).unlink(missing_ok=True))
         shutil.rmtree(pdir, ignore_errors=True)

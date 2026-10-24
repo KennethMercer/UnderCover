@@ -294,7 +294,7 @@ function seStart(job, plan, estimate, resumed = false) {
 }
 $("#se-stop").onclick = async () => {
   SE.audio.pause(); SE.waiting = false; sePlayIcon();
-  if (SE.job && !SE.done) { $("#se-stop").textContent = "Stopping…"; try { await api(`/api/jobs/${SE.job}/cancel`, { json: {} }); } catch (e) {} }
+  if (SE.job && !SE.done) { $("#se-stop").textContent = "Stopping…"; SE.left = null; seTrack(); try { await api(`/api/jobs/${SE.job}/cancel`, { json: {} }); } catch (e) {} }   // (no "about 10 min to make" after a Stop: rc-fix10)
 };
 
 function seReading() {
