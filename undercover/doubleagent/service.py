@@ -530,8 +530,8 @@ def _prefetch_voice_sources(person: str, subject: dict | None = None):
 
 
 CHECK_SEARCH_S = 15.0       # finding sources of the person when the project has none yet
-CHECK_PER_SOURCE_S = 75.0   # one source fetched and prepared for the check (2026-10-24, Obama's speeches, a free GPU)
-CHECK_PER_VOICE_S = 90.0    # one voice downloaded and checked against the clips (the same run: about 1½ min each)
+CHECK_PER_SOURCE_S = 120.0  # one source fetched and prepared for the check (measured 125 s, Obama's speeches, a free GPU)
+CHECK_PER_VOICE_S = 40.0    # one voice downloaded and checked against the clips (the same run: 32 s each)
 
 
 def clip_work(proj) -> tuple[int, int]:

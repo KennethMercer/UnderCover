@@ -3935,6 +3935,14 @@ def u_rcpreview():
     assert '${c.voice ? voiceLineButton(c.voice) : ""}</span>' in page["oneshot.js"] and 'bindVoiceLines($("#os-plan"))' in page["oneshot.js"]
     assert "${voiceLineButton(v.name)}${act}" in page["speakeasy.js"] and 'bindVoiceLines($("#se-voices"))' in page["speakeasy.js"]
     assert "${voiceLineButton(c.voice)}</div>" in page["doubleagent.js"] and "bindVoiceLines(box);" in page["doubleagent.js"]
+    # Agent Smoke's clip ships made: fresh for the copy a first run seeds (the same model, index, pack and name)
+    from undercover.app import firstrun
+    d = firstrun.DEMO
+    assert json.loads((d / "preview.json").read_text(encoding="utf-8"))["line"] == "Go undercover as Agent Smoke." and (d / "preview.mp3").is_file()
+    if (d / "model.pth").is_file():   # (not in git: a fresh checkout makes it with scripts/make_demo_voice.py)
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        demo = V.Voice(**{**meta, "name": d.name, "dir": d, "pth": d / "model.pth", "index": d / "model.index"})
+        assert VP.key(demo) == json.loads((d / "preview.json").read_text(encoding="utf-8"))["key"], "Agent Smoke's shipped line is stale"
     return "made with the voice, in its folder; staged imports listed with it; the backfill when idle; five lists; the check's real work"
 
 
