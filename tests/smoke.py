@@ -4553,8 +4553,8 @@ def u_v101():
     one = (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
     assert "/^[aeiou]/i.test" not in one and one.count("aOrAn(") == 2, "the one-shot still picks a / an by the letter"
     fn = re.search(r"function aOrAn[\s\S]*?\n}\r?\n", app).group(0)
-    words = {"Obama": "an", "unique": "a", "unicorn": "a", "umbrella": "an", "unimportant": "an", "honest": "an", "hour": "an",
-             "Hulk": "a", "Eminem": "an", "European": "a", "one-man": "a", "R&B": "an", "UK": "a", "80s": "an", "1980s": "a",
+    words = {"oboe": "an", "unique": "a", "unicorn": "a", "umbrella": "an", "unimportant": "an", "honest": "an", "hour": "an",
+             "Hulk": "a", "echo": "an", "European": "a", "one-man": "a", "R&B": "an", "UK": "a", "80s": "an", "1980s": "a",
              "11": "an", "acoustic": "an", "upbeat": "an", "usual": "a", "ukulele": "a", "urban": "an", "EDM": "an", "NASA": "a",
              "U2": "a", "FBI": "an", "opera": "an", "user": "a", "under": "an", "Plankton": "a", "ABBA": "an", "Agent Smoke": "an"}
     exe = _chrome()
