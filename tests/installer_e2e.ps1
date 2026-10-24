@@ -554,6 +554,9 @@ $reg = @(Get-ChildItem 'HKCU:\Software\Python' -Recurse -ErrorAction SilentlyCon
 if ($reg.Count) { $fails += "registry entries point into the install: $(($reg | ForEach-Object { $_.Name }) -join ', ')" }
 $binAfter = BinList
 if (@(Compare-Object $binBefore $binAfter).Count) { $fails += "$binDir changed" }
+# the licence, the notices and the README in the install folder (1.0.1: an AGPL program carries its licence)
+$legal = @('LICENSE', 'NOTICE', 'README.md') | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dir $_)) }
+if ($legal) { $fails += "not in the install folder: $($legal -join ', ')" } else { Write-Host 'Licence files: LICENSE, NOTICE and README.md in the install folder' }
 
 # every model the app's features use is in place (rc-fix4b, the user: "it should be part of the install")
 $vpy = Join-Path $dir '.venv\Scripts\python.exe'
