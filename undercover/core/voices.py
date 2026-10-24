@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 import zipfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -518,14 +518,26 @@ def set_aside(d: Path, tag: str = "", note: dict | None = None) -> Path:
     return dst
 
 
+def voice_args(d: dict) -> dict:
+    """A meta.json as Voice's own fields: any other key (a field from another version, a note like the demo voice's
+    licence) is kept in extra, so a meta with more in it never stops the voice list (1.0.1: the demo voice's "licence"
+    key made Voice() fail, and with it every list of voices on a fresh install)."""
+    own = {f.name for f in fields(Voice)}
+    out = {k: v for k, v in d.items() if k in own}
+    more = {k: v for k, v in d.items() if k not in own}
+    if more:
+        out["extra"] = {**more, **(out.get("extra") or {})}
+    return out
+
+
 def display_of_meta(meta: dict) -> str:
     """A voice's display name from its meta alone (a voice set aside isn't in the lists): the one given, else the
     default (the person it was trained on, or its tidied name)."""
     if (meta.get("display") or "").strip():
         return meta["display"].strip()
     try:
-        return display_name(Voice(**{**meta, "dir": Path(meta.get("dir") or "."), "pth": Path(meta.get("pth") or "."),
-                                      "index": Path(meta["index"]) if meta.get("index") else None}))
+        return display_name(Voice(**voice_args({**meta, "dir": Path(meta.get("dir") or "."), "pth": Path(meta.get("pth") or "."),
+                                                "index": Path(meta["index"]) if meta.get("index") else None})))
     except (TypeError, ValueError, KeyError):
         return meta.get("name") or ""
 
@@ -783,7 +795,7 @@ def list_voices() -> list[Voice]:
         d["dir"] = here
         d["pth"] = here / Path(d["pth"]).name if (here / Path(d["pth"]).name).exists() else Path(d["pth"])
         d["index"] = (here / Path(d["index"]).name if (here / Path(d["index"]).name).exists() else Path(d["index"]))             if d.get("index") else None
-        out.append(Voice(**d))
+        out.append(Voice(**voice_args(d)))
     return out
 
 
