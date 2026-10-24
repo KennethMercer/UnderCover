@@ -1,9 +1,37 @@
 # Changelog
 
-What changed in UnderCover, by release. The headings summarise; the detail is in `docs/handoffs/` and the git tags
-named in brackets.
+What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
+in brackets.
 
-## 1.0.0 (not tagged yet: after the release-candidate pass and the installer test)
+## 1.0.0 (2026-10-24)
+
+**An installer that does it all up front** (rc-fix6, rc-fix8, rc-polish1)
+- Every file setup needs, about 11.4 GB for an AMD card or 12.0 GB for NVIDIA, downloads on the installer's own page,
+  each one checked against its SHA-256. A download that breaks off is tried again by itself, Stop keeps what's done,
+  and running the installer again carries on from there.
+- After the downloads, setup works offline. The window stays usable throughout, and Show details opens the log.
+- No AI model downloads the first time it's used.
+
+**Covers in one go** (rc-fix7, rc-polish1)
+- Type a song and a voice, such as "Pink Pony Club as Plankton". A voice from the community is checked against real
+  clips of the person first, and the bundled Readers stand in when the clips have no other voices to compare.
+- A voice that fails its check never joins your voices. A check that can't be done offers training or adding clips.
+
+**Hear a voice before you pick it** (rc-preview)
+- Every voice has a play button that says "Go undercover as" its name. The clip is made when the voice is.
+
+**Honest times** (rc-eta, rc-fix10)
+- Training is estimated from how fast this PC trains, and the time left follows the training. The bar never goes back.
+- Long speech is estimated from its words at this PC's speed.
+
+**Stop means stop** (rc-fix10)
+- SpeakEasy's Stop ends the work on the graphics card within a couple of seconds. Long run-on text is read in shorter
+  pieces.
+
+**Easier to read** (rc-ui1, rc-fix9)
+- The facts under a name are chips instead of a dotted line. FrontMan's song and voice searches look like searches
+  and sit in the same place.
+- Show in folder works when the path has a space in it.
 
 **Improve that improves** (phase 26, smallfix7)
 - Every voice gets a frozen test: the person's own lines and other people's clips, scored the same way every time.
