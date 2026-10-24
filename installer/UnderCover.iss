@@ -1153,6 +1153,7 @@ var
 begin
 #ifdef ReleaseCheck
   HideTestWindows;
+  if CurPageID = wpReady then Hook('ready.txt', WizardForm.ReadyMemo.Text);   // (the download said for this PC: rc-polish1)
   Hook('page.txt', IntToStr(CurPageID));
 #endif
   if CurPageID = wpFinished then ShowOutcome;

@@ -3318,6 +3318,7 @@ def u_installer_space():
     for k, n in want.items():
         assert dl[k] == f"{round(n / 1e9, 1):.1f}", f"sizes.isi's {k} download {dl[k]} GB isn't downloads.tsv's {n / 1e9:.2f} GB (run build.ps1)"
     assert "SizeDownloadGB" not in iss and "function UpdateReadyMemo" in iss and "Pending(Lines[I], Bytes)" in iss[iss.index("function UpdateReadyMemo"):]
+    assert "if CurPageID = wpReady then Hook('ready.txt', WizardForm.ReadyMemo.Text);" in iss, "the release check can't read the Ready page"
     for name, doc in (("README", (ROOT / "README.md").read_text(encoding="utf-8")), ("FRIENDS.md", (inst / "FRIENDS.md").read_text(encoding="utf-8"))):
         assert f"About {tot} GB of free disk space" in doc, f"{name}'s disk size isn't sizes.isi's {tot} GB"
         flat = " ".join(doc.split())
