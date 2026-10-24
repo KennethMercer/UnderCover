@@ -19,7 +19,7 @@ function renderAside() {
   box.innerHTML = `<p class="vt-lead">When a voice is replaced or you keep the other one, the old voice is moved here, never deleted. Delete only what you're sure you won't want back.</p>`
     + ASIDE.list.map(x => {
       const asking = ASIDE.ask === x.id;
-      return `<div class="vt-row aside-row"><span><b>${esc(x.display || x.voice)}</b>${same(x) ? `<small class="meta mono">${esc(x.voice)}</small>` : ""}<small class="meta">${esc(x.why || "set aside")} · ${esc(when(x.at))}</small>
+      return `<div class="vt-row aside-row"><span><b>${esc(x.display || x.voice)}</b>${same(x) ? `<small class="meta mono">${esc(x.voice)}</small>` : ""}${facts([upFirst(x.why || "set aside"), { t: upFirst(dayWord(x.at)), muted: true }, { t: dayTime(x.at), deep: true }])}
         ${asking && x.undo_for ? `<small class="meta aside-warn">Undo for ${esc(voiceDisplay(x.undo_for))} won't be able to bring it back.</small>` : ""}</span>
         <span class="row"><span class="meta mono">${gb(x.size || 0)}</span>
         <button class="btn" type="button" data-aside-back="${esc(x.id)}" data-pc>Bring it back</button>

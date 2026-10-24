@@ -41,13 +41,13 @@ function renderVoiceCards(cands) {
     const im = DA.imp[c.voice];
     // basic: the likeness in a word (the server's; the page never sets the cut-offs), where it came from, what it's doing
     const like = likeWord(c.likeness_word, "likeness"), num = c.likeness != null ? `likeness ${(+c.likeness).toFixed(2)}` : "";
-    const origin = c.demo ? "demo voice · not a real person"
-      : [like || num ? `${like ? `<span class="nodeep">${like}</span>` : ""}${num ? `<span data-deep>${num}</span>` : ""}` : "", c.trained ? "trained here" : "downloaded"].filter(Boolean).join(" · ");
+    const origin = facts(c.demo ? ["Demo voice", { t: "Not a real person", muted: true }]
+      : [like ? { html: `<span class="nodeep">${like}</span>${num ? `<span data-deep>${num}</span>` : ""}` } : num ? { t: num, deep: true } : "", c.trained ? "Trained here" : "Downloaded",
+         c.trained && c.singing != null ? { t: c.singing ? "Singing" : "Speech", muted: true } : "", !c.trained && c.person ? { t: c.person, muted: true } : "",
+         c.minutes ? { t: `${Math.round(c.minutes)} min`, deep: true } : ""]);
     const state = cd.queue === "running" ? "learning to speak" : cd.queue ? "learns to speak tonight" : "";
     const status = [state && `<span class="st now">${state}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
     const speaks = cd.has || c.demo ? `<svg class="ico vc-speaks" role="img" aria-label="Can speak in SpeakEasy"><title>Can speak in SpeakEasy</title><use href="#g-speakeasy"/></svg>` : "";
-    const facts = [c.trained ? (c.singing ? "singing" : c.singing === false ? "speech" : "") : c.person ? `downloaded · ${esc(c.person)}` : "",
-                   c.minutes ? `${Math.round(c.minutes)} min` : ""].filter(Boolean).join(" · ");
     const improve = c.demo ? "" : !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}" aria-expanded="${DA.own?.voice === c.voice}">${DA.own?.voice === c.voice ? "Close" : "Train my own"}</button>`
       : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy || im?.candidate ? "disabled" : ""}>${busy ? "Improving now" : c.queued ? "In tonight's queue" : im?.candidate ? "Retrained one waiting" : "Improve tonight"}</button>`;
     const impOpen = DA.impAb?.voice === c.voice;
@@ -56,12 +56,13 @@ function renderVoiceCards(cands) {
     const ownOpen = DA.own?.voice === c.voice, cadOpen = DA.cad?.voice === c.voice;
     const abOpen = DA.ab?.voice === c.voice;
     const abBtn = cd.pending ? `<button class="mini" type="button" data-cad-ab="${esc(c.voice)}" aria-expanded="${abOpen}">${abOpen ? "Close" : "Listen and choose"}</button>` : "";
-    const cadDeep = cd.has ? `<small class="meta" data-deep>cadence: ${esc(cd.engine || "")} · ${cd.data_minutes ?? "?"} min · likeness ${cd.scores?.likeness ?? "?"} · gap ${cd.scores?.cadence_gap ?? "?"}</small>` : "";
+    const cadDeep = cd.has ? facts([cd.engine && `cadence ${cd.engine}`, cd.data_minutes != null && `${cd.data_minutes} min`, cd.scores?.likeness != null && `likeness ${cd.scores.likeness}`,
+      cd.scores?.cadence_gap != null && `gap ${cd.scores.cadence_gap}`].filter(Boolean).map(t => ({ t, deep: true }))) : "";
     const cadBtn = !cd.can || cd.queue ? "" : cd.has ? `<button class="mini" type="button" data-cad="${esc(c.voice)}" title="${esc(cd.why || "")}" data-deep>Retrain its cadence</button>`
       : `<button class="mini" type="button" data-cad="${esc(c.voice)}" aria-expanded="${DA.cad?.voice === c.voice}" title="${esc(cd.why || "")}">${DA.cad?.voice === c.voice ? "Close" : "Let it speak"}</button>`;
     return `<div class="vc ${busy ? "busy" : ""}">
-      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice, false)}${speaks}</b><small>${origin}</small></div>${voiceLineButton(c.voice)}</div>
-      ${status ? `<div class="vc-status">${status}</div>` : ""}${facts ? `<small class="meta" data-deep>${facts}</small>` : ""}${cadDeep}
+      <div class="vc-top"><div class="avatar" aria-hidden="true">${vinitial(c.voice)}</div><div><b>${vname(c.voice, false)}${speaks}</b>${origin}</div>${voiceLineButton(c.voice)}</div>
+      ${status ? `<div class="vc-status">${status}</div>` : ""}${cadDeep}
       <div class="vc-acts">${DA.samples[c.voice] ? `<button class="mini" type="button" data-listen="${esc(c.voice)}" aria-pressed="${DA.playing === c.voice}">${DA.playing === c.voice ? "Stop" : "Listen"}</button>` : ""}
         <button class="mini" type="button" data-use="${esc(c.voice)}">Use in FrontMan</button>${improve}
         ${cadBtn}${abBtn}${impBtn}</div>${ownOpen ? ownHtml(c) : ""}${cadOpen ? cadHtml(c) : ""}${abOpen ? abHtml() : ""}${impOpen ? impHtml(c.voice) : ""}</div>`;

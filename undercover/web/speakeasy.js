@@ -74,15 +74,15 @@ function seVoices() {
   const list = SE.voices.filter(v => !q || `${v.name} ${v.person || ""} ${voiceDisplay(v.name)}`.toLowerCase().includes(q));
   $("#se-vcount").textContent = `${SE.voices.length} voice${SE.voices.length === 1 ? "" : "s"}`;
   const row = v => {
-    const facts = v.trained ? [v.kind, v.undertrained ? "under-trained" : ""]
-                            : ["downloaded", v.person ? `checked: ${v.person}` : "", v.kind === "singing" ? "singing" : ""];
+    const bits = v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : v.trained ? [upFirst(v.kind), v.undertrained ? { t: "Under-trained", muted: true } : ""]
+                           : ["Downloaded", v.person ? { t: `Checked: ${v.person}`, muted: true } : "", v.kind === "singing" ? { t: "Singing", muted: true } : ""];
     const c = v.cadence || {};
-    const cad = c.has ? `<span class="y">speaks</span>` : c.queue === "running" ? "learning to speak" : c.queue ? "learns to speak tonight" : "can't speak yet";
+    const cad = c.has ? `<span class="y">Speaks</span>` : c.queue === "running" ? "Learning to speak" : c.queue ? "Learns to speak tonight" : "Can't speak yet";
     const act = c.has || c.queue || !c.can ? ""
       : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">Let it speak</button>`;
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
-      <div class="vtext"><b>${vname(v.name)}</b>${v.trained && v.likeness != null ? `<small data-deep>likeness ${(+v.likeness).toFixed(2)}</small>` : ""}<small>${esc(facts.filter(Boolean).join(" · "))} · <span class="se-cad">${cad}</span></small></div>
+      <div class="vtext"><b>${vname(v.name)}</b>${facts([{ html: `<span class="se-cad">${cad}</span>` }, ...bits, v.trained && v.likeness != null ? { t: `likeness ${(+v.likeness).toFixed(2)}`, deep: true } : ""])}</div>
       <div class="se-vact">${voiceLineButton(v.name)}${act}</div></div>`;
   };
   const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
@@ -383,7 +383,7 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b><small>${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)} · ${esc(paceWord(r))}${r.mode === "cadence" ? " · their own way" : ""} · ${esc(seWhen(r.created))}</small></div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b>${facts([{ html: `${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)}` }, `${paceWord(r)} pace`, r.mode === "cadence" ? "Their own way" : "", { t: upFirst(dayWord(r.created)), muted: true }, { t: dayTime(r.created), deep: true }])}</div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
@@ -413,11 +413,6 @@ async function seToggleKeep(id, kept) {
   await seLoadRecent(); seKeepShow();
 }
 $("#se-keep").onclick = () => SE.result && seToggleKeep(SE.result.id, !!SE.result.kept);
-function seWhen(s) {
-  const d = new Date((s || "").replace(" ", "T")); if (isNaN(d)) return s || "";
-  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), days = Math.round((day(new Date()) - day(d)) / 864e5);   // calendar days
-  return days < 1 ? `today ${d.toTimeString().slice(0, 5)}` : days < 2 ? "yesterday" : d.toLocaleDateString();
-}
 function sePlayRecent(r) {
   if (!r) return;
   if (SE.recId === r.id && SE.rec.src) { if (SE.rec.paused) { seVol(SE.rec); SE.rec.play().catch(() => {}); } else SE.rec.pause(); return seRecIcons(); }

@@ -260,7 +260,7 @@ function movePanel(k, x) {
     <div class="meta">Pick a drive, or type a folder. ${esc(x.label)}'s folders (<span class="mono">${esc(subs)}</span>) go inside it.</div>
     <div class="drives">${s.drives.map(d => `<button class="drive" type="button" data-drive="${esc(d.drive)}" aria-pressed="${cur === d.drive.toUpperCase()}">
       <b>${esc(d.drive)}${x.folder.toUpperCase().startsWith(d.drive.toUpperCase()) ? ` <small>(now)</small>` : ""}</b>
-      <small>${d.removable ? "USB · " : ""}${gb(d.free)} free of ${gb(d.total)}</small><span class="dbar"><i style="width:${Math.round((1 - d.free / d.total) * 100)}%"></i></span></button>`).join("")}</div>
+      ${facts([d.removable ? "USB" : "", `${gb(d.free)} free of ${gb(d.total)}`])}<span class="dbar"><i style="width:${Math.round((1 - d.free / d.total) * 100)}%"></i></span></button>`).join("")}</div>
     <div class="mfield"><input id="mv-folder" value="${esc(R.move.folder)}" aria-label="New folder" spellcheck="false" autocomplete="off">
       <button class="btn primary" type="button" id="mv-go" ${c?.ok ? "" : "disabled"}>Move ${esc(x.label.toLowerCase())} here</button></div>
     <div class="verdict ${c ? (c.ok ? "ok" : "bad") : ""}" id="mv-verdict">${verdict}</div>
@@ -483,7 +483,7 @@ function renderPhone() {
   const fresh = was ? s.devices.find(d => !was.has(d.id)) : null;
   if (fresh) showError(`${fresh.name} is paired. It can use UnderCover while this PC is on and Phone access stays on.`, "Phone paired", null, true);
   $("#phone-devices").innerHTML = s.devices.length ? s.devices.map(d => `
-    <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b><small>paired ${esc(d.paired)} · last seen ${esc(d.seen)}</small>
+    <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b>${facts([`Paired ${d.paired}`, { t: `Last seen ${d.seen}`, muted: true }])}
       <span class="kv2" data-deep>${esc(d.ip || "")}</span></span>
       <span class="acts"><button class="btn" type="button" data-revoke="${esc(d.id)}">Revoke</button></span></div>`).join("")
     : `<p class="meta">No phones paired yet.</p>`;

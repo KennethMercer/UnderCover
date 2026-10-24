@@ -19,6 +19,28 @@ const disarm = el => { delete el.dataset.armedAt; };
 const armedFor = el => { const t = +el.dataset.armedAt; return t > 0 && Date.now() - t >= CONFIRM_MS; };   // true only for a deliberate second click
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const paceWord = x => x.pace ? x.pace[0].toUpperCase() + x.pace.slice(1) : `${(+x.speed).toFixed(1)}×`;
+// ------------------------------------------------------------ the line under a name, as chips (rc-ui1: the user's option A, docs/mockups/meta-options.html)
+// facts([...]) -> one soft pill per fact, in plain words. A fact is a string, or {t, html, muted, deep, title, cls}: muted for the least important one, cls a state (ok / warn / bad),
+// deep for Deep Cover's (the key, the exact time, the sample rate, LUFS). Empty facts drop out; nothing at all gives "".
+function facts(list) {
+  const out = list.map(f => typeof f === "string" ? { t: f } : f).filter(f => f && (f.t || f.html))
+    .map(f => `<span class="fact${f.muted ? " muted" : ""}${f.cls ? " " + f.cls : ""}"${f.deep ? " data-deep" : ""}${f.title ? ` title="${esc(f.title)}"` : ""}>${f.html ?? esc(f.t)}</span>`);
+  return out.length ? `<span class="facts">${out.join("")}</span>` : "";
+}
+const dateOf = s => { if (!s) return null; const d = new Date(typeof s === "number" ? s * 1000 : String(s).replace(" ", "T")); return isNaN(d) ? null : d; };
+// "today", "yesterday" or a date ("12 Oct", with the year when it isn't this one): no clock time, which is Deep Cover's (dayTime)
+function dayWord(s) {
+  const d = dateOf(s); if (!d) return "";
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()), n = Math.round((day(new Date()) - day(d)) / 864e5);
+  return n < 1 ? "today" : n < 2 ? "yesterday"
+    : d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(d.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }) });
+}
+const dayTime = s => { const d = dateOf(s); return d ? d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""; };
+const upFirst = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+// "No covers yet" / "1 cover" / "3 covers": never "0 covers"
+const countWord = (n, one, many = one + "s") => n ? `${n} ${n === 1 ? one : many}` : `No ${many} yet`;
+// a song's source in plain words: "Your file" or "From YouTube" (the server says "dropped file" / "YouTube")
+const sourceWord = s => /youtube/i.test(s || "") ? "From YouTube" : s ? "Your file" : "";
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
@@ -348,6 +370,7 @@ function setDrop(mode) {
   $("#drop-loaded").hidden = mode !== "loaded";
   $("#drop-uploading").hidden = mode !== "uploading";
   $("#drop").classList.toggle("loaded", mode !== "empty");
+  $("#drop-or").hidden = mode !== "empty";   // "or use your own file" only above the empty drop zone; a chosen song is just there
 }
 // separate a new song in the background while a voice is picked (the server only does it when the GPU is idle)
 function presep() {
@@ -403,8 +426,9 @@ function renderSong() {
   const s = S.song;
   $("#song-name").textContent = s.name;
   // the length is for everyone; the sample rate, channels and loudness (and the key below) are Deep Cover's
-  const base = `${s.sample ? "sample song · " : ""}${fmtTime(s.duration)}`, tech = `${(s.sample_rate / 1000).toFixed(s.sample_rate % 1000 ? 1 : 0)} kHz · ${s.channels === 1 ? "mono" : s.channels === 2 ? "stereo" : s.channels + " ch"} · ${s.lufs} LUFS`;
-  const meta = key => { $("#song-meta").innerHTML = `${esc(base)}<span data-deep> · ${esc(tech)}${key ? ` · key ${esc(key)}` : ""}</span>`; };
+  const tech = [`${(s.sample_rate / 1000).toFixed(s.sample_rate % 1000 ? 1 : 0)} kHz ${s.channels === 1 ? "mono" : s.channels === 2 ? "stereo" : s.channels + " ch"}`, `${s.lufs} LUFS`];
+  const meta = key => { $("#song-meta").innerHTML = facts([s.sample ? "Sample song" : s.youtube_id || s.source_url ? "From YouTube" : "Your file", fmtTime(s.duration),
+    ...tech.map(t => ({ t, deep: true })), key ? { t: `Key ${key}`, deep: true } : ""]); };
   meta("");
   S.songKey = null;
   api(`/api/songs/${s.id}/key`).then(k => {
@@ -446,7 +470,8 @@ function renderVoices() {
   else box.innerHTML = shownList.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
-      <span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b><small>${v.demo ? "demo voice · not a real person" : voiceTrained(v.name) ? "trained in UnderCover" : "downloaded"}${typeof earHint === "function" ? earHint(v) : ""}</small><small data-deep>${esc(voiceDesc(v))}</small></span>
+      <span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b>${facts([...(v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : [voiceTrained(v.name) ? "Trained here" : "Downloaded"]),
+        typeof earHint === "function" && earHint(v) ? { html: earHint(v), muted: true } : "", ...voiceDesc(v).split(" · ").map(t => ({ t, deep: true }))])}</span>
       <span class="vside">${voiceLineButton(v.name)}<button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
@@ -479,7 +504,10 @@ $("#q").addEventListener("input", () => {
   const q = $("#q").value.trim();
   if (q.length >= 3 && !/^https?:\/\//i.test(q)) searchTimer = setTimeout(() => searchOnline(q), 450);
 });
-$("#q").addEventListener("keydown", e => { if (e.key === "Enter") { clearTimeout(searchTimer); const q = $("#q").value.trim(); if (q.length >= 2 && !/^https?:\/\//i.test(q)) searchOnline(q); } });
+// Enter or the Search button: online right away (a link is already offered by the list as it's typed)
+function voiceSearchNow() { clearTimeout(searchTimer); const q = $("#q").value.trim(); if (!q) return $("#q").focus(); if (q.length >= 2 && !/^https?:\/\//i.test(q)) searchOnline(q); }
+$("#q").addEventListener("keydown", e => { if (e.key === "Enter") voiceSearchNow(); });
+$("#q-go").onclick = voiceSearchNow;
 
 async function searchOnline(q) {
   const seq = ++S.searchSeq;
@@ -510,7 +538,7 @@ function renderOnline(q, isLink) {
   const installedNames = new Set(S.voices.map(v => v.name));
   box.innerHTML = S.online.map(r => `
     <div class="voice"><span class="avatar">${esc(r.name[0]?.toUpperCase() || "?")}</span>
-      <span class="vtext"><b>${esc(r.name)}</b><small class="mono">${esc(r.repo)}${r.size ? " · " + fmtMB(r.size) : ""}</small>${infoChips(r)}</span>
+      <span class="vtext"><b>${esc(r.name)}</b>${facts([r.size ? fmtMB(r.size) : "", { t: r.repo, muted: true, title: r.repo }])}${infoChips(r)}</span>
       <span class="vside">${installedNames.has(r.name) ? `<span class="tag">installed</span>` : `<button class="install" data-n="${r.n}">Install</button>`}</span></div>`).join("");
   // send the exact result (not its position): other searches (e.g. the one-shot plan) replace the server's last list
   $$(".install[data-n]", box).forEach(b => b.onclick = () => {
@@ -1023,8 +1051,8 @@ function renderHistory() {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
-    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(coverTitle(h))} · ${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong><small class="mono" data-deep>${esc(bits)}</small></div>
-      <small class="hdate">${esc((h.created || "").slice(0, 16))}</small>
+    return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(coverTitle(h))}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong>${facts([
+        { html: `${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}` }, { t: upFirst(dayWord(h.created)), muted: true }, { t: dayTime(h.created), deep: true }, ...(bits ? bits.split(" · ").map(t => ({ t, deep: true })) : [])])}</div>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("");
   $$("[data-play]", box).forEach(b => b.onclick = () => {

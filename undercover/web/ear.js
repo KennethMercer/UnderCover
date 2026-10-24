@@ -139,7 +139,7 @@ const earSort = list => !EAR.on ? list : list.map((v, i) => [v, i]).sort(([a, i]
 const earHint = v => {
   const e = earVoice(v);
   if (!EAR.on || !e || !(e.up > 0) || e.up <= (e.down || 0)) return "";
-  return ` · <span class="ear-hint"><svg class="ico" aria-hidden="true"><use href="#g-up"/></svg>${e.up} of ${e.up + (e.down || 0)} liked</span>`;
+  return `<span class="ear-hint"><svg class="ico" aria-hidden="true"><use href="#g-up"/></svg>${e.up} of ${e.up + (e.down || 0)} liked</span>`;
 };
 
 // ------------------------------------------------------------ Your ear, in SafeHouse's Settings

@@ -116,7 +116,7 @@ function renderRunning(box, opts = {}) {
   box.innerHTML = !list.length ? "" : (opts.heading ? `<h3 class="qd-h">${opts.heading}</h3>` : "") + list.map(j => {
     const owner = ownerOf(j.kind), f = jobProgress(j), note = jobLine(j);
     return `<div class="qd-job running" data-owner="${owner}">
-      <div><span class="kind">${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}</span><b>${esc(jobName(j))}</b>${note ? `<small>${esc(note)}</small>` : ""}
+      <div><span class="kind">${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}</span><b>${esc(jobName(j))}</b>${note ? facts(note.split(" · ").map(upFirst)) : ""}
         <div class="bar"><i style="width:${Math.round((f || 0) * 100)}%"></i></div></div>
       <div class="qside"><button class="linkbtn" type="button" data-goto="${owner}">Open</button></div></div>`;
   }).join("");
@@ -183,7 +183,7 @@ function renderRunRoom() {
         <span class="meta mono" data-deep>job ${esc(main.id)} · started ${hhmm(main.created)}</span></div></div>` +
       (rest.length ? `<div class="rn-list">${rest.map(j => {
         const o = ownerOf(j.kind);
-        return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[o]} · ${esc(jobLine(j) || JOB_KIND[j.kind] || j.kind)}</small></span>
+        return `<div class="rn-li"><span><b>${esc(jobName(j))}</b>${facts([MOD_NAME[o], ...(jobLine(j) || JOB_KIND[j.kind] || j.kind).split(" · ").map(t => ({ t: upFirst(t), muted: true }))])}</span>
           <span class="acts"><button class="linkbtn" type="button" data-goto="${o}">Open</button></span></div>`; }).join("")}</div>` : "");
   } else if (work.held) {
     const res = (work.resume || []).map(r => typeof r === "string" ? { label: r } : r);   // {id, kind, label, held_at, queue_as}
@@ -245,7 +245,7 @@ function renderRunRoom() {
   const list = !w ? `<p class="meta">Loading…</p>` : left.length ? left.map(i => {
     const run = i.state === "running";
     const note = run ? "running now" : i.state === "paused" ? "paused · Resume continues it" : i.waits_next_night ? "waits for the next night (or start it earlier)" : queueNote(i);
-    return `<div class="rn-li"><span><b>${jobWhat(i)}</b><small>${jobSource(i)}${note ? ` · ${esc(note)}` : ""}</small></span>
+    return `<div class="rn-li"><span><b>${jobWhat(i)}</b>${facts([upFirst(jobSource(i))])}${note ? `<small>${esc(upFirst(note))}</small>` : ""}</span>
       <span class="acts"><span class="when">~${fmtMin((i.estimate || {}).total)}</span>${run ? "" : `<button class="linkbtn" type="button" data-rn-rm="${esc(i.id)}">Remove</button>`}</span></div>`;
   }).join("") : `<p class="meta">Nothing for tonight.</p>`;
   if (put($("#rn-list"), list)) $$("#rn-list [data-rn-rm]").forEach(b => b.onclick = async () => {
@@ -261,7 +261,7 @@ function renderRunRoom() {
   put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = willRetry(j) ? ["warn", "waiting to retry"] : ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");
-    return `<div class="rn-li"><span><b>${esc(jobName(j))}</b><small>${MOD_NAME[owner]} · ${esc(JOB_KIND[j.kind] || j.kind)}${how ? ` · ${esc(how)}` : ""}</small></span>
+    return `<div class="rn-li"><span><b>${esc(jobName(j))}</b>${facts([MOD_NAME[owner], { t: upFirst(JOB_KIND[j.kind] || j.kind), muted: true }, st === "done" && how ? { t: upFirst(how), muted: true } : ""])}${st !== "done" && how ? `<small>${esc(how)}</small>` : ""}</span>
       <span class="acts">${j.ended ? `<span class="when">${hhmm(j.ended)}</span>` : ""}<span class="dotw ${cls}">${esc(word)}</span>${j.retry ? `<button class="linkbtn" type="button" data-retry="${esc(j.id)}">Retry</button>` : ""}<button class="linkbtn" type="button" data-goto="${owner}">Open</button></span></div>`;
   }).join("") : `<p class="meta">Nothing has finished in the last hour.</p>`);
 }

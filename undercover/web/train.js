@@ -204,9 +204,9 @@ function renderSources() {
     else if (s.status === "failed") side = `<span class="tag bad">failed</span>` + side;
     else if (s.status !== "found") side = `<span class="tag warn">${esc(s.status)}…</span>` + side;
     if (s.user || s.status === "ready" || s.status === "failed") side += `<button class="linkbtn" data-rm="${esc(s.id)}">Remove</button>`;
-    const sub = [s.channel, s.note].filter(Boolean).map(esc).join(" · ");
+    const sub = facts([s.channel || "", s.note ? { t: upFirst(s.note), muted: true } : ""]);
     return `<label class="src"><input type="checkbox" data-id="${esc(s.id)}" ${s.selected ? "checked" : ""} ${s.status === "ready" ? "disabled" : ""}>
-      <span><b>${esc(s.title)}</b><small>${sub}</small>${s.error ? `<small class="err">${esc(s.error)}</small>` : ""}</span>
+      <span><b>${esc(s.title)}</b>${sub}${s.error ? `<small class="err">${esc(s.error)}</small>` : ""}</span>
       <span class="src-side">${side}</span></label>`;
   }).join("");
   $$("input[type=checkbox]", box).forEach(c => c.onchange = async () => {
