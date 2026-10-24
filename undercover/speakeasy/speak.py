@@ -356,8 +356,9 @@ def warm_up(job):
     """The speech engine ready before anyone asks (1.0.1: the first speech of a session took about a minute longer
     than it said): each engine the speech packs read with loaded in the worker, and every pack's one-off pace
     calibration done. Gives way to any other GPU work at once (the worker's load is ended, a calibration stops
-    between its readings); the worker stops by itself when idle (cadence idle_minutes), and the next opening of
-    SpeakEasy warms it again."""
+    between its readings), except that a speech waiting for the engine lets its load finish (it needs that engine:
+    ending the load would only start it again cold); the worker stops by itself when idle (cadence idle_minutes),
+    and the next opening of SpeakEasy warms it again."""
     from ..core import jobs as J
     from ..core.cadence import client
     from ..core.voices import listed_voices
@@ -365,12 +366,16 @@ def warm_up(job):
     def busy():
         return job.cancel or not J.GPU_QUEUE.empty()
 
+    def busy_but_speech():
+        return job.cancel or any(getattr(j, "kind", None) != "speech" for j, _ in list(J.GPU_QUEUE.queue))
+
     def check():
         if busy():
             raise Cancelled()
     for eng in sorted(warm_engines()):
+        check()
         job.push(stage="warming", frac=0.2, message="Getting the speech engine ready")
-        client.WORKER.call("load", engine=eng, timeout=900, cancel=busy)
+        client.WORKER.call("load", engine=eng, timeout=900, cancel=busy_but_speech)
     for v in listed_voices():
         check()
         if service.cadence_pack(v) and service.pace_needs_calibration(v):
@@ -380,8 +385,11 @@ def warm_up(job):
 
 def queue_warm_up() -> bool:
     """A warm-up GPU job, when there's anything to warm and none is queued or running. -> True when queued."""
+    import os
     from ..core import jobs as J
     from ..core.cadence import client
+    if os.environ.get("UNDERCOVER_NO_BACKFILL"):   # (smoke's sandbox, the page's call too: the queue as its checks left it)
+        return False
     w = WARMING["job"]
     if (w is not None and not w.finished) or client.WORKER.running() or not warm_engines():
         return False
@@ -394,7 +402,9 @@ def queue_warm_up() -> bool:
             warm_up(j)
             j.finish("done", message="The speech engine is ready")
         except (Cancelled, client.WorkerError):   # (other GPU work came first, or the engine wouldn't load: the
-            j.finish("cancelled", message="Getting the speech engine ready gave way")   # first speech loads it)
+            j.finish("done", message="Getting the speech engine ready gave way to other work")   # first speech loads it)
+        finally:   # (background work: it leaves the job feed two minutes after, as the preview backfill's jobs do)
+            threading.Timer(120, lambda: J.JOBS.pop(j.id, None)).start()
     J.GPU_QUEUE.put((job, run))
     return True
 
@@ -583,7 +593,8 @@ def start_cost(p: dict) -> tuple[float, str]:
     from ..core.cadence import client
     from . import listenback
     t, what = 0.0, []
-    if not client.WORKER.running():
+    w = WARMING["job"]
+    if not client.WORKER.running() or (w is not None and not w.finished):   # (cold, or the warm-up still loading it)
         t += COLD_ENGINE_S
         what.append("the speech engine starts")
     try:
