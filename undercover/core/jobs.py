@@ -212,14 +212,15 @@ class Job:
             if self._stage is not None:
                 self.stage_secs[self._stage[0]] = now - self._stage[1]
             self._stage = (stage, now, None)
-        if ev.get("total_left") is not None:
+        if ev.get("total_left") is not None:   # said by the job itself: what the next one is held to (rc-eta T2: the first
+            self._left = (float(ev["total_left"]), now)   # training eta, with nothing said before, went up 29 min)
             return
         if ev.get("left_est") is not None:   # a step that knows its own remaining work (rc-fix3: Do it all's preparation)
             # (new_work: work found mid-step, a model download: measured, so the time left may rise for it)
             ev["total_left"] = self._said(max(0.0, float(ev.pop("left_est"))), now, rise=bool(ev.pop("new_work", False)))
             return
-        if ev.get("eta") is not None:
-            ev["total_left"] = self._said(ev["eta"] + (self.after_eta_s or 0.0), now)
+        if ev.get("eta") is not None:   # (new_work: a training run on past its plan: its epochs added, said at once)
+            ev["total_left"] = self._said(ev["eta"] + (self.after_eta_s or 0.0), now, rise=bool(ev.pop("new_work", False)))
             return
         p = ev.get("frac", ev.get("fraction"))
         if p is None or p < 0:

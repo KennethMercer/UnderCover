@@ -129,10 +129,13 @@ def choose_holdout(proj: Project) -> list[str]:
 
 
 def epoch_line(ev: dict) -> str:
-    """ "Training: epoch 10 of about 525" for an auto run (it stops by itself near its planned end, up to the cap),
-    "Training: epoch 530, past the planned 525 (up to 1000)" once past it; "of N" for a run of a given length."""
-    e, n, p = ev.get("epoch", 0), ev.get("epochs"), ev.get("planned")
+    """ "Training: epoch 10 of about 525" for an auto run (it stops by itself near its planned end, up to the cap);
+    once its expected end moves past the plan, "Training: epoch 530 of about 560: a little longer, it's still improving
+    (planned 525)" (rc-eta T3: said, not a time left that climbs); "of N" for a run of a given length."""
+    e, n, p, end = ev.get("epoch", 0), ev.get("epochs"), ev.get("planned"), ev.get("end")
     if p and n and p < n:
+        if end and end > p:
+            return f"Training: epoch {e} of about {end}: a little longer, it's still improving (planned {p})"
         return f"Training: epoch {e} of about {p}" if e <= p else f"Training: epoch {e}, past the planned {p} (up to {n})"
     return f"Training: epoch {e} of {n}"
 
@@ -437,6 +440,7 @@ class Trainer:
         ac = dict(device_type="cuda", dtype=torch.bfloat16, enabled=self.half and dev.type == "cuda" and bf16)
         prior_step = st.get("sec_per_step") or _speed_prior(sr, bs)
         warm, steps_run = None, 0   # measured from the end of the first batch (its kernel set-up isn't the speed)
+        shown = {"frac": 0.0, "end": None}   # the bar said so far (never backwards) and the end it was said against
         epoch = epoch0
         outcome = "done"
         with timed("train.run", project=proj.name, from_epoch=epoch0, pieces=len(items), batch=bs) as rec:
@@ -487,13 +491,19 @@ class Trainer:
                     if bi % 5 == 0:
                         end = end_epoch(epoch)
                         left = end - epoch + 1 - (bi + 1) / len(batches)   # epochs still to run, to the expected end
-                        if st.get("sec_per_epoch") and epoch - epoch0 > 1:
-                            eta = st["sec_per_epoch"] * left                   # recent epochs: no warm-up skew
+                        spe = epoch_speed(hist, epoch0, prior_step and prior_step * len(batches))
+                        if spe:
+                            eta = spe * left
                         else:
                             eta = train_eta(left * len(batches), steps_run, time.time() - warm, prior_step)
-                        report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown,
-                               fraction=min(0.99, (epoch - 1 + (bi + 1) / len(batches)) / end), eta=eta,
-                               sec_per_epoch=st.get("sec_per_epoch"))
+                        # the end moved out (past the plan, the stall point after a new best): the time left rises by
+                        # exactly the epochs added, said as it is; the bar holds instead of going back (rc-eta T3:
+                        # 0.927 -> 0.799, 382 -> 1174 s over six minutes)
+                        extended = shown["end"] is not None and end > shown["end"]
+                        shown["end"] = end
+                        shown["frac"] = max(shown["frac"], min(0.99, (epoch - 1 + (bi + 1) / len(batches)) / end))
+                        report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown, end=end,
+                               fraction=shown["frac"], eta=eta, extended=extended, sec_per_epoch=st.get("sec_per_epoch"))
                 if control.wants_out() and bi < len(batches) - 1:
                     epoch -= 1   # partial epoch: don't count it
                     outcome = "paused" if control.pause else "stopped"
@@ -535,9 +545,12 @@ class Trainer:
                     self._prune_saves()
                 proj.save_train()
                 end = end_epoch(epoch)
-                report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown,
-                       fraction=1.0 if epoch >= max_epochs else min(0.99, epoch / end),
-                       eta=st["sec_per_epoch"] * max(0, end - epoch), saved=saved, history=h,
+                extended = shown["end"] is not None and end > shown["end"]   # (as within the epoch: the bar holds)
+                shown["end"] = end
+                shown["frac"] = 1.0 if epoch >= max_epochs else max(shown["frac"], min(0.99, epoch / end))
+                spe = epoch_speed(hist, epoch0, prior_step and prior_step * steps_per_epoch) or st["sec_per_epoch"]
+                report(stage="training", epoch=epoch, epochs=max_epochs, planned=planned_shown, end=end,
+                       fraction=shown["frac"], eta=spe * max(0, end - epoch), extended=extended, saved=saved, history=h,
                        sec_per_epoch=st["sec_per_epoch"])
                 # auto: stop once held-out loss hasn't improved for 100 epochs (after at least 150)
                 if length == "auto" and not st.get("steps") and epoch >= planned_epochs and st.get("best") and epoch - st["best"] >= patience:
@@ -703,6 +716,23 @@ def shrink_exported_index(vdir: Path, k: int | None = None, device: str | None =
 
 
 SPEED_FILE = "train_speed.json"   # cache/: the last training's seconds per step, by sample rate and batch size
+
+
+def epoch_speed(hist: list, epoch0: int, prior: float | None) -> float | None:
+    """Seconds an epoch takes, for the time left once this run has finished an epoch (rc-eta T2: the first one, with
+    its warm-up, said +29 min in one minute). The run's first epoch is left out when there are later ones; with a known
+    speed (this project's, else the last training's) the measured epochs blend in over five, instead of replacing it.
+    None: no finished epoch yet (train_eta goes by the steps)."""
+    mine = [h["secs"] for h in hist if h.get("epoch", 0) > epoch0 and h.get("secs")]
+    if not mine:
+        return None
+    if len(mine) > 1:
+        mine = mine[1:]   # (the first epoch of a run carries its warm-up)
+    measured = float(np.median(mine[-10:]))
+    if not prior:
+        return measured
+    w = min(1.0, len(mine) / 5)
+    return w * measured + (1 - w) * prior
 
 
 def train_eta(left_steps: float, steps_done: int, secs: float, prior_step: float | None) -> float | None:

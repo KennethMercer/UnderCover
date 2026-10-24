@@ -810,7 +810,9 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         push("voice", 1.0, f"Using your voice “{display_name(weak_trained)}”, though it's weak")
         return weak_trained
     plan["voice"] = {"name": f"{slug(person)}-uc", "display": person, "how": "train"}
-    tr = train_estimate_s(person)   # the plan's and the button's own estimate (rc-fix7: this line said "about 1 hour")
+    # the plan's and the button's own estimate, the one the job took at its start (rc-eta T2: worked out again here, from
+    # the project the prefetch had just made, it jumped 53 min)
+    tr = plan.get("train_est_s") or train_estimate_s(person)
     plan["voice_until"] = time.time() + tr
     push("voice", 0.2 if checked else 0.0, f"Training a voice for {person} ({jobs.eta_words(tr)})"
          + (f". {plan['subject']['label']}" if (plan.get("subject") or {}).get("label") else ""))
@@ -1139,6 +1141,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                         and not s.note.startswith(NOT_USABLE)]
         # rc-fix3 (IA pass 11 B2): one count over the whole job and a time left from the work itself (PrepTime)
         prep = PrepTime(getattr(job, "plan_min", None), TC["target_minutes"])
+        t_prep, kept_before = time.time(), proj.kept_seconds() / 60   # (this training's shape, for the next estimate)
 
         def said(frac, msg, batch_left=0.0):
             left = prep.left(batch_left)
@@ -1253,6 +1256,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
                  if singer else f"{mins:.1f} min of clean voice so far; adding more sources")
         proj = check_names(proj, person, push)
         mins = proj.kept_seconds() / 60
+        prep_min = (time.time() - t_prep) / 60
         if mins < 3:
             blocked, tried = srcmod.blocked_share(proj.sources)
             if tried >= 3 and blocked >= tried / 2:
@@ -1278,8 +1282,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
             if job.cancel:
                 control.stop = True
             if ev.get("stage") == "training" and ev.get("epochs"):
-                push("voice", 0.12 + 0.85 * ev.get("fraction", 0),
-                     epoch_line(ev), eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"], planned=ev.get("planned"))
+                push("voice", 0.12 + 0.85 * ev.get("fraction", 0), epoch_line(ev), eta=ev.get("eta"), epoch=ev.get("epoch"),
+                     epochs=ev["epochs"], planned=ev.get("planned"), new_work=bool(ev.get("extended")))
             elif ev.get("stage") == "preparing":
                 push("voice", 0.12, f"Training: {ev.get('note', 'getting ready')}")
         st = tr.run(control, progress=tprog)
@@ -1287,6 +1291,14 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
             raise jobs.Cancelled()
         if st.get("state") == "paused":
             raise Paused()
+        try:   # what this training turned out to be: the next new voice's estimate (rc-eta T1)
+            from .night import record_shape
+            gained = mins - kept_before
+            record_shape(kept_over_target=mins / TC["target_minutes"] if kept_before < TC["target_minutes"] else None,
+                         kept_per_prep_min=gained / prep_min if gained > 1 and prep_min > 0.5 else None,
+                         past_plan=(st.get("epoch") or 0) / st["planned_epochs"] if st.get("planned_epochs") and st.get("state") == "trained" else None)
+        except Exception:   # noqa: BLE001 - only a measurement
+            pass
         # "Checking it" (DoubleAgent's fourth stage): the saves were measured against real clips while it trained
         # (likeness, melody, words); the last one (an early stop's, between the regular saves) is measured now
         push("voice", 0.975, "Checking it against real clips")
@@ -1357,8 +1369,8 @@ def run_project(job, name: str, control, push) -> str:
             if job.cancel:
                 control.stop = True
             if ev.get("stage") == "training" and ev.get("epochs"):
-                push("voice", 0.12 + 0.85 * ev.get("fraction", 0),
-                     epoch_line(ev), eta=ev.get("eta"), epoch=ev.get("epoch"), epochs=ev["epochs"], planned=ev.get("planned"))
+                push("voice", 0.12 + 0.85 * ev.get("fraction", 0), epoch_line(ev), eta=ev.get("eta"), epoch=ev.get("epoch"),
+                     epochs=ev["epochs"], planned=ev.get("planned"), new_work=bool(ev.get("extended")))
         st = tr.run(control, progress=tprog)
         if job.cancel:
             raise jobs.Cancelled()

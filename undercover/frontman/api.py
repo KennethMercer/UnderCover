@@ -357,8 +357,8 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
             pass
     if voice["how"] != "installed" and not demo:
         # the training's estimate, the one the job says too (rc-fix7: the plan said 61 min, the question 2½ hours)
-        try:
-            out["train_s"] = round(service.train_estimate_s(person))
+        try:   # (+ the song and the cover: the whole one-shot, as the button says it; rc-eta T1)
+            out["train_s"] = round(service.train_estimate_s(person) + oneshot.cover_eta("", here)["high"])
         except Exception:   # noqa: BLE001 - the page asks the estimator itself, as before
             pass
     if (voice["how"] != "installed" or not voice["quality"]["ok"] or subject) and not demo:

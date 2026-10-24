@@ -93,6 +93,19 @@ def _guess_name(repo: str, file: str) -> str:
     return s or "voice"
 
 
+def name_from_source(src, dl: Path | None = None) -> str:
+    """A name for a voice installed with none given: from where it came (a Hugging Face repo, a link's file name), never
+    from the temp folder it was downloaded into (rc-eta: "cache", the folder a model and its index came down to)."""
+    from urllib.parse import unquote, urlparse
+    u = urlparse(str(src or ""))
+    parts = [unquote(p) for p in u.path.split("/") if p]
+    repo = "/".join(parts[:2]) if "huggingface.co" in (u.netloc or "") and len(parts) >= 2 else ""
+    file = parts[-1] if parts else ""
+    if not file and dl is not None and Path(dl).is_file():
+        file = Path(dl).name
+    return _guess_name(repo, file or (repo.split("/")[-1] if repo else "") or "voice")
+
+
 def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
@@ -690,9 +703,7 @@ def download_staged(src, name: str | None = None, progress: Progress | None = No
         src = src.url
     dl = download(src, progress)
     try:
-        if not name:
-            base = dl.name if dl.is_file() else dl.parent.name
-            name = _guess_name("", base)
+        name = name or name_from_source(src, dl)
         return install(dl, staged_name(name), source=src, root=staging_dir())
     finally:
         shutil.rmtree(dl if dl.is_dir() else dl.parent, ignore_errors=True)
@@ -753,9 +764,7 @@ def download_and_install(src: str, name: str | None = None, progress: Progress |
         raise ModelError(f"A voice called '{slug(name)}' is already installed. Pick another name or remove it first.")
     dl = download(src, progress)
     try:
-        if not name:
-            base = dl.name if dl.is_file() else dl.parent.name
-            name = _guess_name("", base)
+        name = name or name_from_source(src, dl)
         return install(dl, name, source=src, overwrite=overwrite)
     finally:
         shutil.rmtree(dl if dl.is_dir() else dl.parent, ignore_errors=True)

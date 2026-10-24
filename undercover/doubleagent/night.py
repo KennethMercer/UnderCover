@@ -18,11 +18,61 @@ SAME_PERSON = 0.35     # the current voice scoring under this against the new cl
 IMPROVE_SINGING_MIN = 30   # minutes of clean singing an "improve" aims for (more than ~30 rarely helps)
 
 
+SEC_PER_STEP = 0.35   # a training step on a current mid-range card before this PC has measured one (this RX: 0.31)
+
+
 def _sec_per_step() -> float:
+    """Seconds a training step takes on this PC: the median of the projects' measured speeds, else the last trainings'
+    (trainer's speed file), else SEC_PER_STEP."""
     from .project import list_projects
     vals = [p["train"].get("sec_per_step") for p in list_projects() if p["train"].get("sec_per_step")]
-    vals = sorted(v for v in vals if 0.05 < v < 3)
-    return vals[len(vals) // 2] if vals else 0.35
+    if not vals:
+        try:
+            from .trainer import SPEED_FILE
+            vals = list(json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).values())
+        except (OSError, ValueError, ImportError):
+            vals = []
+    vals = sorted(v for v in vals if isinstance(v, (int, float)) and 0.05 < v < 3)
+    return vals[len(vals) // 2] if vals else SEC_PER_STEP
+
+
+# What a new voice's training turned out to be, measured from every one (rc-eta, IA's training proof: "about 61 min"
+# planned, 2 h 22 min taken; 2b the other way): the kept minutes it ended with against the target, the kept minutes
+# prepared per minute, and how far past its planned epochs it ran before the stall rule stopped it. Defaults: 2d's.
+TRAIN_SHAPE = {"kept_over_target": 1.4, "kept_per_prep_min": 3.2, "past_plan": 1.2}
+
+
+def _shape_file():
+    return path("cache_dir") / "train_shape.json"
+
+
+def train_shape() -> dict:
+    """The medians of the last trainings' shape (TRAIN_SHAPE until one is measured)."""
+    try:
+        d = json.loads(_shape_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    out = {}
+    for k, dflt in TRAIN_SHAPE.items():
+        xs = sorted(x for x in d.get(k, []) if isinstance(x, (int, float)) and x > 0)
+        out[k] = xs[len(xs) // 2] if xs else dflt
+    return out
+
+
+def record_shape(**vals):
+    """One training's shape (kept_over_target, kept_per_prep_min, past_plan; any of them), the last 12 kept."""
+    from ..core import fsutil
+    try:
+        d = json.loads(_shape_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    for k, v in vals.items():
+        if k in TRAIN_SHAPE and v and v > 0:
+            d[k] = (d.get(k, []) + [round(float(v), 3)])[-12:]
+    try:
+        fsutil.write_text(_shape_file(), json.dumps(d))
+    except OSError:
+        pass
 
 
 def estimate(item: dict) -> dict:
@@ -31,6 +81,8 @@ def estimate(item: dict) -> dict:
     from . import project as P
     raw_min = 0.0
     proj = _project_for_item(item, create=False)
+    if item["kind"] == "new":
+        return _estimate_new(proj, item)
     if proj is not None:
         raw_min = sum(min(s.duration, CONFIG["training"]["max_minutes_per_source"] * 60) for s in proj.sources
                       if s.selected and s.status != "ready") / 60
@@ -65,6 +117,27 @@ def estimate(item: dict) -> dict:
         from .cadence import CADENCE_MIN
         out["cadence"] = CADENCE_MIN
     out["total"] = round(prep + train + compare + out.get("cadence", 0))
+    return out
+
+
+def _estimate_new(proj, item: dict) -> dict:
+    """A new voice, in minutes, the one estimate the plan, the job and the queue all say (rc-eta T1): it prepares clips
+    until about the target's worth is kept (what it ends with, measured: kept_over_target), at this PC's preparation
+    rate, then trains the budget those minutes give (450 steps a minute) at this PC's step speed, on past the plan as
+    far as trainings here go (past_plan). The same whether the search has run yet or not: what's found doesn't decide
+    how much is kept."""
+    from .frozen import budget_steps
+    tc = CONFIG["training"]
+    sh = train_shape()
+    kept_now = proj.kept_seconds() / 60 if proj is not None else 0.0
+    final = max(kept_now, tc["target_minutes"] * sh["kept_over_target"])
+    prep = max(0.0, final - kept_now) / sh["kept_per_prep_min"] if kept_now < tc["target_minutes"] else 0.0
+    train = budget_steps(final)[0] * sh["past_plan"] * _sec_per_step() / 60
+    out = {"prepare": round(prep), "train": round(train), "compare": 1}
+    if item.get("mode") == "speaking":   # its cadence follows (cadence.chain_cadence)
+        from .cadence import CADENCE_MIN
+        out["cadence"] = CADENCE_MIN
+    out["total"] = round(prep + train + 1 + out.get("cadence", 0))
     return out
 
 
@@ -383,7 +456,7 @@ def _improve(job, item) -> dict:
     def tprog(**ev):
         if ev.get("stage") == "training" and ev.get("epochs"):
             job.push(stage="training", frac=round(0.4 + 0.55 * ev.get("fraction", 0), 3), epoch=ev.get("epoch"),
-                     epochs=ev["epochs"], eta=ev.get("eta"),
+                     epochs=ev["epochs"], eta=ev.get("eta"), new_work=bool(ev.get("extended")),
                      planned=ev.get("planned"), message=epoch_line(ev))
     st = Trainer(proj, conv.hubert, conv.rmvpe, device=str(conv.device), half=conv.half, converter=conv).run(control, progress=tprog)
     if st.get("state") == "paused":
