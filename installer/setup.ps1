@@ -501,7 +501,7 @@ else {
 # torch 2.6 / numpy < 2, which would replace the GPU's torch), --offline from that folder only. The three pins that
 # are source archives (openai-whisper, antlr4, AMD's rocm) are built here by uv with the pinned setuptools, offline too.
 if (-not ($Fix.torch -or $Fix.packages)) { Info "PyTorch and the packages: as recorded, left alone" } else {
-Step "Installing PyTorch and the packages (a minute or two)"
+Step "Installing PyTorch and the packages"
 $offlineReq = Join-Path $InstallDir 'cache\offline-requirements.txt'
 if (-not $DryRun) {
     $lines = @(Rows @("torch-$Backend", 'packages') | Where-Object { $_.pin } | ForEach-Object { "$($_.pin) --hash=sha256:$($_.sha256)" } | Select-Object -Unique)

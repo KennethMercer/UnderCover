@@ -3480,6 +3480,12 @@ def u_installer_quiet():
         assert "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') }" in (inst / f).read_text(encoding="utf-8-sig"), f
     assert "throw ''its SHA-256 is wrong''" in iss and "Remove-Item -LiteralPath $f -Force" in iss and "Get-FileHash -Algorithm SHA256 -LiteralPath $f" in iss
     assert "Why := PlaceFile(ExpandConstant('{tmp}\\') + Name, Dest, Bytes, CheckSha);" in iss
+    # the user's box says it in plain words; the log keeps the reason (rc-polish1: "its SHA-256 is wrong" was shown)
+    ask = iss[iss.index("Log(Format('%s: %s; asking the user'"):iss.index("until (Why = '') or Stopped;")]
+    assert "': ' + PlainWhy(Why) + '.'" in ask and "+ Why +" not in ask and "+ Why)" not in ask, "the download box shows the technical reason"
+    pw = iss[iss.index("function PlainWhy"):iss.index("function FetchFile")]
+    assert "Result := 'it arrived damaged'" in pw and "(Pos('sha-256', L) > 0)" in pw and "(Pos('it came to', L) = 1)" in pw
+    assert "(a few minutes)" not in iss and "(a minute or two)" not in (inst / "setup.ps1").read_text(encoding="utf-8-sig"), "a fixed time in setup's lines"
     assert '"/BADURL=$badUrl"' in e2e and "a big file with the wrong bytes wasn't caught by its SHA-256 and fetched again" in e2e
     assert "if ($line -match '/bad\\?bytes=(\\d+)')" in e2e and "$res['hangs']" in e2e
     # the real installer passes the three folders even when they are its own: the step counts only when it runs

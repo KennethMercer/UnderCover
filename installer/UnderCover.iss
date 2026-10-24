@@ -849,6 +849,22 @@ begin
   if (Result = '') and not (FileSize64(Dest, Have) and (Have = Bytes)) then Result := 'it isn''t the right size after moving';
 end;
 
+// what went wrong with a download, in the user's words (rc-polish1: the box said "its SHA-256 is wrong"); the log keeps
+// the technical reason. Failed its check, came short, or Inno found its hash wrong: it arrived damaged. Our own reasons
+// (a folder it can't be put in) are plain already. Anything else is Inno's download error: the connection's
+function PlainWhy(Why: String): String;
+var
+  L: String;
+begin
+  L := Lowercase(Why);
+  if (Pos('sha-256', L) > 0) or (Pos('hash', L) > 0) or (Pos('it came to', L) = 1) or (Pos('the right size', L) > 0) then
+    Result := 'it arrived damaged'
+  else if (Pos('it couldn''t be put in', L) = 1) or (Pos('checking it took too long', L) = 1) or (Pos('its check couldn''t start', L) = 1) then
+    Result := Why
+  else
+    Result := 'the connection to its server failed';
+end;
+
 // one file from its sources (a model's mirrors), in order. -> '' (in Inno's temp folder, checked), 'stopped', or the error
 function FetchFile(Urls, Name, Sha: String): String;
 var
@@ -1033,12 +1049,15 @@ begin
               DownloadPage.SetProgress(DownloadIndex, DownloadCount);
               Sleep(100);
             end;
-          end else if Say('Couldn''t download ' + Name + ': ' + Why + #13#10#13#10 +
-              'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) = IDRETRY then
-            Tries := 0   // the user's Try again: three more by itself after this one
-          else begin
-            WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Why + '. What''s downloaded is kept: Install carries on from there.';
-            Stopped := True;
+          end else begin
+            Log(Format('%s: %s; asking the user', [Name, Why]));
+            if Say('Couldn''t download ' + Name + ': ' + PlainWhy(Why) + '.' + #13#10#13#10 +
+                'What''s downloaded is kept. Try again?', mbError, MB_RETRYCANCEL, IDCANCEL) = IDRETRY then
+              Tries := 0   // the user's Try again: three more by itself after this one
+            else begin
+              WizardForm.ReadyLabel.Caption := 'The download stopped: ' + Name + ': ' + PlainWhy(Why) + '. What''s downloaded is kept: Install carries on from there.';
+              Stopped := True;
+            end;
           end;
         end;
       until (Why = '') or Stopped;
@@ -1052,9 +1071,8 @@ begin
 end;
 
 // setup.ps1, hidden, from the downloaded files (-Offline: nothing goes online): the wizard's own bar and status lines
-// follow it (no console window to close by mistake). Its steps are short (unpacking and installing, a few minutes in
-// all), so Cancel is off while it runs: Inno keeps the wizard still while a program it started runs. A re-run
-// continues past what's done. -> it worked (exit code 0)
+// follow it (no console window to close by mistake). Its steps are short (unpacking and installing), so Cancel is off
+// while it runs: Inno keeps the wizard still while a program it started runs. A re-run continues past what's done. -> it worked (exit code 0)
 function RunSetup: Boolean;
 var
   Params: String;
@@ -1066,7 +1084,7 @@ begin
   Progress := 0;
   WizardForm.ProgressGauge.Max := 1000;
   WizardForm.ProgressGauge.Position := 0;
-  WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and the tools for your graphics card (a few minutes)...';
+  WizardForm.StatusLabel.Caption := 'Setting up Python, PyTorch and the tools for your graphics card...';
   WizardForm.FilenameLabel.Caption := 'Everything is downloaded: this part works offline, and it can''t be stopped halfway.';
   DetailsLink.Visible := True;
   WizardForm.CancelButton.Enabled := False;
