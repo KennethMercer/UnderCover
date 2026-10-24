@@ -7,6 +7,8 @@ in brackets.
 
 - UnderCover is licensed under the GNU Affero General Public License, version 3 or later (LICENSE, NOTICE,
   CONTRIBUTING.md). "Hold On" and Agent Smoke are public domain (CC0 1.0).
+- Running from source, a fresh library's voice list failed: the demo voice's settings file carried a note the
+  voice list didn't expect. Voices now load whatever extra notes their settings carry (hotfix-meta).
 
 ## 1.0.0 (2026-10-24)
 
