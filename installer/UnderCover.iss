@@ -451,7 +451,7 @@ begin
 #ifdef ReleaseCheck
   HideTestWindows;
   Hook('handles.txt', IntToStr(WizardForm.Handle) + ' ' + IntToStr(WizardForm.NextButton.Handle) + ' ' +
-    IntToStr(WizardForm.CancelButton.Handle) + ' ' + IntToStr(DownloadPage.AbortButton.Handle));
+    IntToStr(WizardForm.CancelButton.Handle) + ' ' + IntToStr(DownloadPage.AbortButton.Handle) + ' ' + IntToStr(DetailsLink.Handle));
 #endif
 
   // the last page's "Try again", shown only when setup didn't work
@@ -1076,14 +1076,107 @@ end;
 // setup.ps1, hidden, from the downloaded files (-Offline: nothing goes online): the wizard's own bar and status lines
 // follow it (no console window to close by mistake). Its steps are short (unpacking and installing), so Cancel is off
 // while it runs: Inno keeps the wizard still while a program it started runs. A re-run continues past what's done. -> it worked (exit code 0)
+// the wizard's own messages, handled while it waits for setup (Pascal Script has no ProcessMessages): clicks, moves,
+// minimise, Show details, repaints
+type
+  TMsg = record
+    hwnd: LongWord;
+    message: LongWord;
+    wParam: LongInt;
+    lParam: LongInt;
+    time: LongWord;
+    ptx: LongInt;
+    pty: LongInt;
+  end;
+function PeekMessage(var Msg: TMsg; hWnd: LongWord; MinMsg, MaxMsg, Remove: LongWord): BOOL; external 'PeekMessageW@user32.dll stdcall';
+function TranslateMessage(const Msg: TMsg): BOOL; external 'TranslateMessage@user32.dll stdcall';
+function DispatchMessage(const Msg: TMsg): LongInt; external 'DispatchMessageW@user32.dll stdcall';
+function OpenProcess(Access: LongWord; Inherit: BOOL; Pid: LongWord): LongWord; external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(H: LongWord; Ms: LongWord): LongWord; external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(H: LongWord): BOOL; external 'CloseHandle@kernel32.dll stdcall';
+
+procedure PumpMessages;
+var
+  Msg: TMsg;
+begin
+  while PeekMessage(Msg, 0, 0, 0, 1) do begin   // (1: PM_REMOVE)
+    TranslateMessage(Msg);
+    DispatchMessage(Msg);
+  end;
+end;
+
+// the process with this id has ended (or can't be found: it's gone)
+function ProcessEnded(Pid: LongWord): Boolean;
+var
+  H: LongWord;
+begin
+  Result := True;
+  if Pid = 0 then Exit;
+  H := OpenProcess($00100000, False, Pid);   // (SYNCHRONIZE)
+  if H = 0 then Exit;
+  Result := WaitForSingleObject(H, 0) = 0;
+  CloseHandle(H);
+end;
+
+// setup's new status lines (logs\setup-status.txt, after the first Seen) to the bars and the lines under them
+procedure FollowStatus(StatusFile: String; var Seen: Integer);
+var
+  Lines: TArrayOfString;
+  I, P: Integer;
+begin
+  if not LoadStringsFromFile(StatusFile, Lines) then Exit;
+  for I := Seen to GetArrayLength(Lines) - 1 do begin
+    P := Pos('@@ ', Lines[I]);
+    if P > 0 then SetupLine(Copy(Lines[I], P, Length(Lines[I])), False, False);
+  end;
+  if GetArrayLength(Lines) > Seen then Seen := GetArrayLength(Lines);
+end;
+
+// setup.ps1, started through WScript.Shell, hidden and not waited for (rc-fix8, the first NVIDIA install: run by
+// ExecAndLogOutput, Inno held the wizard disabled for the whole step: no click, no move, no Show details while PyTorch
+// unpacked for minutes; 43 s here, so the release check passed). Its status lines come from logs\setup-status.txt into
+// the bars, its output goes to logs\setup-output.txt (copied into this log at the end), and a small PowerShell around it
+// writes its exit code to logs\setup-exit.txt when it ends. Cancel stays off (the steps can't be stopped halfway);
+// everything else answers. No exit code and the process gone: a failure, said as one.
 function RunSetup: Boolean;
 var
-  Params: String;
+  Params, Cmd, Logs, ExitFile, PidFile, OutFile, StatusFile: String;
+  Said: AnsiString;
+  Lines: TArrayOfString;
+  Seen, I, Polls: Integer;
+  Pid: LongWord;
+  Shell: Variant;
 begin
-  // (-NonInteractive: anything that would wait for input fails at once, with its error, instead of hanging unseen)
-  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\setup.ps1') + '" -InstallDir "' +
-    ExpandConstant('{app}') + '" -LibraryDir "' + GetLibraryDir('') + '" -WorkDir "' + GetWorkDir('') + '" -ModelsDir "' +
-    GetModelsDir('') + '" -Addons "' + GetAddons('') + '" -Backend ' + Backend + ' -Offline';
+  Logs := ExpandConstant('{app}\logs');
+  ForceDirectories(Logs);
+  ExitFile := Logs + '\setup-exit.txt';
+  PidFile := Logs + '\setup-pid.txt';
+  OutFile := Logs + '\setup-output.txt';
+  StatusFile := Logs + '\setup-status.txt';
+  DeleteFile(ExitFile);
+  DeleteFile(ExitFile + '.part');
+  DeleteFile(PidFile);
+  // the log is there from the first moment, so Show details always opens something (rc-fix8: pressed before setup.ps1
+  // had written its first line, it did nothing); setup appends to it
+  SaveStringToFile(Logs + '\setup.log', GetDateTimeString('yyyy/mm/dd hh:nn:ss', '-', ':') +
+    '  Setting up: starting (the steps follow here)' + #13#10, True);
+  Seen := 0;
+  if LoadStringsFromFile(StatusFile, Lines) then Seen := GetArrayLength(Lines);   // (a Try again: only the new lines)
+  // (-NonInteractive: anything that would wait for input fails at once, with its error, instead of hanging unseen.
+  // An empty -Addons isn't passed: PowerShell drops an empty argument to a program, and setup's default is none)
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + PSQuote(ExpandConstant('{app}\installer\setup.ps1')) +
+    ' -InstallDir ' + PSQuote(ExpandConstant('{app}')) + ' -LibraryDir ' + PSQuote(GetLibraryDir('')) + ' -WorkDir ' +
+    PSQuote(GetWorkDir('')) + ' -ModelsDir ' + PSQuote(GetModelsDir('')) + ' -Backend ' + Backend + ' -Offline';
+  if GetAddons('') <> '' then Params := Params + ' -Addons ' + PSQuote(GetAddons(''));
+  Cmd := 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$env:PSModulePath = ' +
+    '[Environment]::GetEnvironmentVariable(''PSModulePath'', ''Machine''); Set-Content -LiteralPath ' + PSQuote(PidFile) + ' $PID; ' +
+#ifdef ReleaseCheck
+    // the release check's proof (rc-fix8): a setup step long enough to see the wizard answer all through it
+    'Start-Sleep -Seconds ' + IntToStr(StrToIntDef(ExpandConstant('{param:setuphold|0}'), 0)) + '; ' +
+#endif
+    // (Out-File as UTF-8: Windows PowerShell's *> writes UTF-16, which this log can't read)
+    '& powershell.exe ' + Params + ' *>&1 | Out-File -LiteralPath ' + PSQuote(OutFile) + ' -Encoding utf8; Set-Content -LiteralPath ' + PSQuote(ExitFile + '.part') +
+    ' $LASTEXITCODE; Move-Item -LiteralPath ' + PSQuote(ExitFile + '.part') + ' -Destination ' + PSQuote(ExitFile) + ' -Force"';
   Progress := 0;
   WizardForm.ProgressGauge.Max := 1000;
   WizardForm.ProgressGauge.Position := 0;
@@ -1091,10 +1184,35 @@ begin
   WizardForm.FilenameLabel.Caption := 'Everything is downloaded: this part works offline, and it can''t be stopped halfway.';
   DetailsLink.Visible := True;
   WizardForm.CancelButton.Enabled := False;
+  SetupCode := -1;
   try
-    if not ExecAndLogOutput('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, SetupCode, @SetupLine) then
-      SetupCode := -1;
+    Shell := CreateOleObject('WScript.Shell');
+    Shell.Run(Cmd, 0, False);   // (0: hidden; False: not waited for, so Inno never disables the wizard)
+    Pid := 0;
+    Polls := 0;
+    while not FileExists(ExitFile) do begin
+      PumpMessages;
+      Sleep(50);
+      Polls := Polls + 1;
+      if Polls mod 4 = 0 then FollowStatus(StatusFile, Seen);   // (5 times a second)
+      if (Pid = 0) and LoadStringFromFile(PidFile, Said) then Pid := StrToIntDef(Trim(String(Said)), 0);
+      // gone without its exit code (killed, or PowerShell couldn't start): checked every 2 s, and once more after
+      // a last look for the file it may have written just then. No process id after 5 minutes: it never started (a
+      // slow first start of PowerShell, an antivirus scan, takes seconds, not minutes)
+      if (Polls mod 40 = 0) and ((Pid <> 0) or (Polls > 6000)) and ProcessEnded(Pid) then begin
+        Sleep(500);
+        if not FileExists(ExitFile) then begin
+          Log('Setup''s PowerShell ended without its exit code');
+          Break;
+        end;
+      end;
+    end;
+    FollowStatus(StatusFile, Seen);
+    if LoadStringFromFile(ExitFile, Said) then SetupCode := StrToIntDef(Trim(String(Said)), -1);
+    if LoadStringsFromFile(OutFile, Lines) then   // (setup's own output, in this log as before rc-fix8)
+      for I := 0 to GetArrayLength(Lines) - 1 do Log('setup: ' + Lines[I]);
   except
+    Log('Setup couldn''t start: ' + GetExceptionMessage);
     SetupCode := -1;
   end;
   SetupOK := (SetupCode = 0);

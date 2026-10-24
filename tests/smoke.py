@@ -3186,7 +3186,7 @@ def u_installer_failure():
     icons = iss[iss.index("[Icons]"):iss.index("[Tasks]")]
     assert 'Filename: "{app}\\UnderCover.cmd"' not in icons, "a launch shortcut is made before setup has worked"
     code = iss[iss.index("[Code]"):]
-    assert "if CurStep = ssPostInstall then RunSetup;" in code and "ewWaitUntilTerminated, SetupCode" in code
+    assert "if CurStep = ssPostInstall then RunSetup;" in code and "SetupCode := StrToIntDef(Trim(String(Said)), -1)" in code
     assert "if SetupOK then CreateLaunchers;" in code and "'Try again'" in code and "setup-result.txt" in code
     assert "isn''t ready yet" in code and "logs\\setup.log" in code
     # the launch shortcuts go at uninstall, only those that start this install (u_installer_quiet)
@@ -3288,7 +3288,22 @@ def u_installer_space():
     assert "[Console]::Out.WriteLine($line)" in setup and "Add-Content -Path $StatusFile" in setup
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
     run = iss[iss.index("function RunSetup"):iss.index("procedure CurStepChanged")]
-    assert "ExecAndLogOutput('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, SetupCode, @SetupLine)" in run
+    # rc-fix8 (the first NVIDIA install: the wizard held still for minutes while PyTorch unpacked): setup starts through
+    # WScript.Shell, hidden, not waited for; the wizard follows setup-status.txt and pumps its own messages; the exit
+    # code comes from setup-exit.txt, and the process gone without one is a failure
+    assert "ExecAndLogOutput" not in run and "Exec(" not in run, "Inno disables the wizard while a program it started runs"
+    assert "Shell := CreateOleObject('WScript.Shell');" in run and "Shell.Run(Cmd, 0, False);" in run
+    assert "PumpMessages;" in run and "FollowStatus(StatusFile, Seen);" in run and "ProcessEnded(Pid)" in run
+    assert "' -InstallDir ' + PSQuote(ExpandConstant('{app}'))" in run and "if GetAddons('') <> '' then Params := Params + ' -Addons ' + PSQuote(GetAddons(''));" in run
+    assert "' $LASTEXITCODE; Move-Item -LiteralPath ' + PSQuote(ExitFile + '.part')" in run and "Set-Content -LiteralPath ' + PSQuote(PidFile) + ' $PID; '" in run
+    assert "if LoadStringsFromFile(StatusFile, Lines) then Seen := GetArrayLength(Lines);" in run, "a Try again replays the last run's steps"
+    hold = run[run.index("#ifdef ReleaseCheck"):run.index("#endif")]
+    assert "{param:setuphold|0}" in hold and "Start-Sleep -Seconds" in hold, "the release check can't hold setup long enough to judge"
+    assert "WizardForm.CancelButton.Enabled := False;" in run
+    assert run.index("SaveStringToFile(Logs + '" + chr(92) + "setup.log'") < run.index("Shell.Run(Cmd, 0, False);"), "Show details opens nothing until setup writes its log"
+    pump = iss[iss.index("procedure PumpMessages"):iss.index("function ProcessEnded")]
+    assert "while PeekMessage(Msg, 0, 0, 0, 1) do begin" in pump and "DispatchMessage(Msg);" in pump
+    assert "IntToStr(DownloadPage.AbortButton.Handle) + ' ' + IntToStr(DetailsLink.Handle));" in iss
     assert "-Pause" not in run, "the hidden setup would wait for Enter forever"
     assert "WizardForm.ProgressGauge.Position := Progress" in iss and "if Pos1 > Progress then Progress := Pos1" in iss
     assert "Show details" in iss and "logs\\setup.log" in iss and "DownloadPage.Show;" in iss
@@ -3470,7 +3485,11 @@ def u_installer_quiet():
     # installer tries a broken-off download again by itself, the check proves it with a server that stops early, and
     # the driver ends the check on any box or a fall back to the Ready page
     assert "trying again by itself (%d of 3)" in iss and "if Tries < 3 then begin" in iss and "Tries := 0   // the user's Try again" in iss
-    assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\", \"/BADURL=$badUrl\")" in e2e and "$size = 104857600; $send = 1048576" in e2e
+    assert "$run = RunInstaller 'full' @(\"/SHORTURL=$shortUrl\", \"/BADURL=$badUrl\", '/SETUPHOLD=40')" in e2e and "$size = 104857600; $send = 1048576" in e2e
+    # rc-fix8: the release check fails on any disabled second while setup runs, and moves, minimises and opens Show details then
+    for k in ("if ([int]$resp['setupwizoff'] -gt 0)", "if ([int]$resp['setupsecs'] -lt 60)", "if ($resp['setupmoved'] -ne 'True')",
+              "if ($resp['setupminimise'] -ne 'True/True')", "if ($resp['setupdetails'] -ne 'True/True')"):
+        assert k in e2e, k
     assert "a download that came back short wasn't tried again by itself" in e2e and "the run after Stop downloaded $n again" in e2e
     assert 'if ($logged) { Quit "a box came up:' in e2e and "the wizard went back to its Ready page during the downloads" in e2e
     assert "isn't the listed file (size or SHA-256)" in e2e

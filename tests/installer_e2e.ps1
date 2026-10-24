@@ -201,7 +201,7 @@ function Read1([string]$name) { try { $f = Join-Path $Hooks $name; if (Test-Path
 function ClassOf($w) { $c = New-Object Text.StringBuilder 64; [void][W]::GetClassName($w, $c, 64); $c.ToString() }
 $t0 = Get-Date
 while (-not (Read1 'handles.txt')) { Start-Sleep -Milliseconds 200; if (((Get-Date) - $t0).TotalMinutes -gt 5) { Quit 'the wizard never opened' } }
-$h, $next, $cancel, $abort = (Read1 'handles.txt') -split ' ' | ForEach-Object { [IntPtr][long]$_ }
+$h, $next, $cancel, $abort, $details = (Read1 'handles.txt') -split ' ' | ForEach-Object { [IntPtr][long]$_ }
 $script:wpid = [uint32]0; [void][W]::GetWindowThreadProcessId($h, [ref]$script:wpid)
 $res['toolwindow'] = [bool]([W]::GetWindowLong($h, -20) -band 0x80)   # out of the taskbar and Alt+Tab
 # a message box of the installer's process: written down, closed with No / Cancel (there should be none)
@@ -293,14 +293,47 @@ while ([W]::IsWindow($h) -and (Read1 'page.txt') -notin @('12', '14')) {
 $res['dlsecs'] = $dlSecs; $res['dlwizoff'] = $wizOff; $res['dlabortoff'] = $abortOff; $res['moved'] = $moved; $res['minimise'] = $mini
 $res['dlmin'] = [math]::Round(((Get-Date) - $dl0).TotalMinutes, 1)
 # 3. setup, offline (only in a run that got that far): how long, and how long the wizard was held still
-$setupSecs = 0; $setupOff = 0; $tick.Restart()
+# rc-fix8: the wizard answers all through it (the first NVIDIA install: it held still for minutes while PyTorch unpacked):
+# never disabled, moved, minimised and restored, and Show details opens the log (Notepad, closed again)
+$setupSecs = 0; $setupOff = 0; $tick.Restart(); $smoved = ''; $smini = ''; $sdetails = ''
 while ([W]::IsWindow($h) -and (Read1 'page.txt') -ne '14') {
     Sample; Boxes
-    if ($tick.ElapsedMilliseconds -ge 1000) { $tick.Restart(); $setupSecs++; if (-not [W]::IsWindowEnabled($h)) { $setupOff++ } }
+    if ($tick.ElapsedMilliseconds -ge 1000) {
+        $tick.Restart(); $setupSecs++
+        if ($Mode -ne 'abort' -and (Read1 'page.txt') -eq '12') {
+            if (-not [W]::IsWindowEnabled($h)) { $setupOff++ }
+            if ($setupSecs -eq 5) {
+                $a = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$a)
+                [void][W]::SetWindowPos($h, [IntPtr]::Zero, $a.L + 40, $a.T + 30, 0, 0, 0x15)
+                $b = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$b)
+                $smoved = "$(($b.L - $a.L) -eq 40 -and ($b.T - $a.T) -eq 30)"
+                [void][W]::SetWindowPos($h, [IntPtr]::Zero, $a.L, $a.T, 0, 0, 0x15)
+            }
+            if ($setupSecs -eq 10) {
+                [void][W]::PostMessage($h, 0x112, [IntPtr]0xF020, [IntPtr]::Zero); Start-Sleep -Milliseconds 500; $m = [W]::IsIconic($h)
+                [void][W]::PostMessage($h, 0x112, [IntPtr]0xF120, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
+                $smini = "$m/$(-not [W]::IsIconic($h))"; $tick.Restart()
+            }
+            # a click on Show details: Notepad with setup.log, early (inside the 40 s hold, before setup.ps1 writes a line:
+            # the wizard starts the log itself) and once setup is running
+            if ($setupSecs -in 15, 55 -and $details -ne [IntPtr]::Zero) {
+                [void][W]::PostMessage($details, 0x201, [IntPtr]1, [IntPtr]::Zero); [void][W]::PostMessage($details, 0x202, [IntPtr]0, [IntPtr]::Zero)
+                $np = $null
+                for ($i = 0; $i -lt 30 -and -not $np; $i++) {
+                    Start-Sleep -Milliseconds 200
+                    $np = @(Get-CimInstance Win32_Process -Filter "Name = 'notepad.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*setup.log*' })[0]
+                }
+                $sdetails = ($sdetails, "$([bool]$np)" | Where-Object { $_ }) -join '/'
+                if ($np) { Stop-Process -Id $np.ProcessId -Force -ErrorAction SilentlyContinue }
+                $tick.Restart()
+            }
+        }
+    }
     if ($setupSecs -gt 3600) { Quit 'setup ran for an hour' }
     Start-Sleep -Milliseconds 100
 }
-$res['setupsecs'] = $setupSecs; $res['setupwizoff'] = $setupOff
+$res['setupsecs'] = $setupSecs; $res['setupwizoff'] = $setupOff; $res['setupmoved'] = $smoved; $res['setupminimise'] = $smini
+$res['setupdetails'] = $sdetails
 # 4. the last page: Finish (an interactive run)
 $f0 = Get-Date
 while ([W]::IsWindow($h)) {
@@ -406,7 +439,7 @@ $sp = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive'
 $w0 = Get-Date; while (-not (Test-Path $portFile) -and ((Get-Date) - $w0).TotalSeconds -lt 30) { Start-Sleep -Milliseconds 200 }
 $shortUrl = "http://127.0.0.1:$((Get-Content -LiteralPath $portFile -Raw).Trim())/short"
 $badUrl = $shortUrl -replace '/short$', '/bad'
-$run = RunInstaller 'full' @("/SHORTURL=$shortUrl", "/BADURL=$badUrl")
+$run = RunInstaller 'full' @("/SHORTURL=$shortUrl", "/BADURL=$badUrl", '/SETUPHOLD=40')   # (rc-fix8: 40 s more, so the checks below have time)
 $served = Test-Path "$portFile.short"; $badServed = if (Test-Path "$portFile.bad") { (Get-Content -LiteralPath "$portFile.bad" -Raw).Trim() } else { '' }
 if (-not $sp.HasExited) { Stop-Process -Id $sp.Id -Force -ErrorAction SilentlyContinue }
 $resp = $run.resp
@@ -445,6 +478,14 @@ else {
     if ([int]$resp['dlabortoff'] -gt 0) { $fails += "the download page's Stop was disabled or hidden $($resp['dlabortoff']) s" }
     if ($resp['moved'] -ne 'True') { $fails += "the wizard didn't move on the download page ($($resp['moved']))" }
     if ($resp['minimise'] -ne 'True/True') { $fails += "minimise/restore on the download page: $($resp['minimise'])" }
+    # rc-fix8: setup's step, the whole of it: never disabled, it moves and minimises, Show details opens the log
+    Write-Host ("Setup's wizard: disabled $($resp['setupwizoff']) of $($resp['setupsecs']) s; moved $($resp['setupmoved']); " +
+                "minimise/restore $($resp['setupminimise']); Show details $($resp['setupdetails'])")
+    if ([int]$resp['setupsecs'] -lt 60) { $fails += "setup's step was up $($resp['setupsecs']) s: too short to judge" }
+    if ([int]$resp['setupwizoff'] -gt 0) { $fails += "the wizard was disabled $($resp['setupwizoff']) of $($resp['setupsecs']) s while setup ran" }
+    if ($resp['setupmoved'] -ne 'True') { $fails += "the wizard didn't move while setup ran ($($resp['setupmoved']))" }
+    if ($resp['setupminimise'] -ne 'True/True') { $fails += "minimise/restore while setup ran: $($resp['setupminimise'])" }
+    if ($resp['setupdetails'] -ne 'True/True') { $fails += "Show details didn't open the log while setup ran, early and later ($($resp['setupdetails']))" }
     if ([int]$resp['timeouts'] -gt 0 -or [int]$resp['hung'] -gt 0) { $fails += "the wizard stopped answering ($($resp['timeouts']) timeouts, hung $($resp['hung']) times; during: $($resp['hangs']))" }
     if ([double]$resp['maxms'] -gt 1000) { $fails += "the wizard took $($resp['maxms']) ms to answer" }
     if ($resp['boxes'] -or $resp['ourboxes']) { $fails += "message boxes came up: $($resp['boxes']) $($resp['ourboxes'])" }
