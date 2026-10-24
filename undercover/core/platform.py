@@ -146,11 +146,20 @@ def open_folder(path):
 
 
 def show_in_folder(file):
-    """Show a file selected in its folder (other OSes: just open the folder)."""
+    """Show a file selected in its folder (other OSes: just open the folder). A file that's gone: its folder, or the
+    nearest one that's still there."""
+    p = Path(file).resolve()
+    if not p.is_file():
+        d = p.parent
+        while not d.is_dir() and d != d.parent:
+            d = d.parent
+        return open_folder(d)
     if WINDOWS:
-        subprocess.Popen(["explorer", f"/select,{Path(file)}"])
+        # one command line, the path in its own quotes: given a list, Popen quotes the whole "/select,..." when the path
+        # has a space (C:\Users\John Smith\...), and Explorer, not understanding it, opens Documents instead
+        subprocess.Popen(f'explorer /select,"{p}"')   # noqa: S602 - our own file's path, never text from a request
     else:
-        open_folder(Path(file).parent)
+        open_folder(p.parent)
 
 
 def drives() -> list[dict]:
