@@ -7605,6 +7605,21 @@ def u_page_rules():
     assert not re.search(r"\bon C:|\bC: drive|drive C\b", ix), "the page assumes UnderCover is on C: again"
     # rc-page13 (the user's pick, after Internal Affairs proved them on a fresh library): FrontMan's three examples, in this order
     assert re.findall(r'<button type="button">([^<]+)</button>', ix[ix.index('id="os-ex"'):].split("</div>")[0]) == ["Pink Pony Club as Plankton", "Freek-a-Leek as Obama", "Hello by Adele as Peter Griffin"], "FrontMan's examples aren't the three the user picked"
+    # rc-ui1 (the user's option A, docs/mockups/meta-options.html): the line under a name is chips (facts()), in plain words, Deep's facts as data-deep chips;
+    # FrontMan's two "Set it up yourself" cards open on a search field (icon, border, Search button), the song's above the chosen song
+    assert "function facts(list)" in app and "const countWord" in app and "const sourceWord" in app and "function dayWord" in app and ".fact {" in css and ".fact.muted" in css, "the chips helper or their look is gone"
+    lib_js = (web / "library.js").read_text(encoding="utf-8")
+    rows = lib_js[lib_js.index('if (L.cat === "covers") {\n      title = x.title;'):lib_js.index("return `<div class=\"litem")]
+    assert rows.count("facts(") >= 5 and '.join(" · ")' not in rows and "<small>${esc(sub)}</small>" not in lib_js, "a Library row is a dot line again"
+    assert "cover${x.covers === 1" not in lib_js and "countWord(x.covers" in lib_js and "sourceWord(x.source)" in lib_js, "the Library says '0 covers' or 'dropped file' again"
+    for f in ("doubleagent.js", "speakeasy.js", "work.js", "aside.js", "vault.js", "rooms.js"):
+        assert "facts(" in (web / f).read_text(encoding="utf-8"), f"{f} lost its chips"
+    assert 'demo voice · not a real person' not in app + lib_js + (web / "doubleagent.js").read_text(encoding="utf-8"), "a demo voice's dot line is back"
+    song_card = ix[ix.index("<h2>1 · Song</h2>"):ix.index("<h2>2 · Voice</h2>")]
+    voice_card = ix[ix.index("<h2>2 · Voice</h2>"):ix.index('id="voices"')]
+    assert song_card.index('class="search sfield"') < song_card.index('id="drop"') and 'id="yt-go" type="button">Search</button>' in song_card, "the song card's search isn't at the top"
+    assert 'class="search sfield"' in voice_card and 'id="q-go" type="button">Search</button>' in voice_card and voice_card.count('href="#g-search"') == 1 and song_card.count('href="#g-search"') == 1, "the voice card's search isn't a search field"
+    assert '<symbol id="g-search"' in ix and ".sfield {" in css and '$("#q-go").onclick = voiceSearchNow' in app, "the search fields lost their icon, border or button"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]

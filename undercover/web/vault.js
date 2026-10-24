@@ -93,7 +93,7 @@ function vtRow(x) {
   const state = x.here === "same" ? `<span class="st ok">here ✓</span>` : x.here === "missing" ? `<span class="st warn">missing here</span>` : `<span class="st now">changed since this copy</span>`;
   const act = x.here === "missing" ? `<button class="btn" type="button" data-vt-back="${esc(key)}" data-pc>Bring it back</button>`
     : x.here === "different" && !asking ? `<button class="linkbtn" type="button" data-vt-ask="${esc(key)}" data-pc>Restore…</button>` : "";
-  return `<div class="vt-row"><span><b>${esc(x.name)}</b><small class="mono" data-deep>${x.files} file${x.files === 1 ? "" : "s"} · ${gb(x.bytes)}</small></span><span class="row">${state}${act}</span>
+  return `<div class="vt-row"><span><b>${esc(x.name)}</b>${facts([{ t: `${x.files} file${x.files === 1 ? "" : "s"}`, deep: true }, { t: gb(x.bytes), deep: true }])}</span><span class="row">${state}${act}</span>
     ${asking ? `<div class="vt-choice"><span>The one here has changed since this copy. Bring the vault's back how?</span>
       <button class="btn" type="button" data-vt-how="both">Keep both</button><button class="btn" type="button" data-vt-how="replace">Replace it</button><button class="linkbtn quiet" type="button" data-vt-how="cancel">Cancel</button>
       <p class="meta">Keep both puts the vault's copy beside yours${x.kind === "voice" ? ` (as “${esc(x.name)} from vault”)` : x.kind === "project" ? " (as its own project)" : ""}. Replace copies the current one into the vault first, so nothing is lost.</p></div>` : ""}</div>`;
@@ -149,7 +149,7 @@ function vtPicker() {
   return `<div class="move vt-pick">
     <div class="meta">Pick another drive (a USB disk is fine), or type a folder. The vault goes in a folder called “UnderCover Vault” there.</div>
     <div class="drives">${drives.map(d => `<button class="drive" type="button" data-drive="${esc(d.drive)}" aria-pressed="${cur === d.drive.toUpperCase()}">
-      <b>${esc(d.drive)}${d.app ? ` <small>(where UnderCover is installed)</small>` : ""}</b><small>${d.removable ? "USB · " : ""}${gb(d.free)} free of ${gb(d.total)}</small><span class="dbar"><i style="width:${Math.round((1 - d.free / d.total) * 100)}%"></i></span></button>`).join("")}</div>
+      <b>${esc(d.drive)}${d.app ? ` <small>(where UnderCover is installed)</small>` : ""}</b>${facts([d.removable ? "USB" : "", `${gb(d.free)} free of ${gb(d.total)}`])}<span class="dbar"><i style="width:${Math.round((1 - d.free / d.total) * 100)}%"></i></span></button>`).join("")}</div>
     <div class="mfield"><input id="vt-folder" value="${esc(VT.pick.folder)}" aria-label="Vault folder" spellcheck="false" autocomplete="off"></div>
     <div class="vt-size"><span class="meta">What to keep</span><span class="seg" id="vt-size" role="group" aria-label="What to keep">
       <button type="button" data-v="matters" aria-pressed="${VT.pick.size === "matters"}">What matters<small>voices, songs, covers, speech, settings</small></button>

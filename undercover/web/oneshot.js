@@ -72,7 +72,7 @@ function voiceAskHtml(p) {
   const n = (p.voice_choices || []).filter(c => c.choice.startsWith("use:")).length;
   const count = n === 1 ? "One voice from the community already matches." : `${["", "", "Two", "Three", "Four", "Five"][n] || n} voices from the community already match.`;
   return `<div id="os-voice-ask" class="os-subject-ask"${OS.vchoice ? "" : ' role="alert"'}><div class="choice-q"><b>Which ${esc(p.person)}?</b> ${count}</div>
-    <div class="choices">${p.voice_choices.map(c => `<span class="choice-wrap"><button class="choice" type="button" data-os-vchoice="${esc(c.choice)}" aria-pressed="${c.choice === OS.vchoice}"><b>${esc(c.label)}</b><small>${esc(etaWords(c.eta_s))}${c.detail ? ` · ${esc(c.detail)}` : ""}</small></button>${c.voice ? voiceLineButton(c.voice) : ""}</span>`).join("")}</div></div>`;
+    <div class="choices">${p.voice_choices.map(c => `<span class="choice-wrap"><button class="choice" type="button" data-os-vchoice="${esc(c.choice)}" aria-pressed="${c.choice === OS.vchoice}"><b>${esc(c.label)}</b>${facts([upFirst(etaWords(c.eta_s)), c.detail ? { t: upFirst(c.detail), muted: true } : ""])}</button>${c.voice ? voiceLineButton(c.voice) : ""}</span>`).join("")}</div></div>`;
 }
 function voiceLine(v, p) {
   const who = esc(p?.person || v?.display || v?.name || "");
@@ -124,7 +124,7 @@ const choiceName = c => c.artist || c.title || "this one";   // who it's by, as 
 function choiceLabel(c) { return `${choiceName(c)}${c.year ? " (" + c.year + ")" : ""}${c.title ? " · " + c.title : ""}`; }
 function choiceButton(c, on) {
   return `<button class="choice" type="button" data-choice="${esc(c.song_url)}" data-name="${esc(choiceName(c))}" aria-pressed="${on ? "true" : "false"}">
-    <b>${esc(choiceName(c))}</b><small>${[c.year, c.title].filter(Boolean).map(esc).join(" · ")}</small></button>`;
+    <b>${esc(choiceName(c))}</b>${facts([c.title || "", c.year ? { t: String(c.year), muted: true } : ""])}</button>`;
 }
 function renderChoices(p) {
   const box = $("#auto-choices");
@@ -440,10 +440,9 @@ async function ytSearch() {
     list.hidden = false;
     list.innerHTML = res.map((r, i) => {
       const warn = /music video|longer|live/.test(r.note);
-      const sub = r.kind === "track"
-        ? `<span class="tag ok">album track</span> ${esc(r.album || "")}${r.views ? ` · ${fmtPlays(r.views)} plays` : ""}`
-        : `${esc(r.channel)}${r.note ? ` · <span class="tag${warn ? " warn" : ""}">${esc(r.note)}</span>` : ""}`;
-      return `<div class="ytr${i === 0 ? " best" : ""}"><span><b>${esc(r.title)}</b><small>${sub}</small></span>
+      const sub = r.kind === "track" ? facts([{ t: "Album track", cls: "ok" }, r.album ? { t: r.album, muted: true } : "", r.views ? { t: `${fmtPlays(r.views)} plays`, muted: true } : ""])
+        : facts([r.channel, r.note ? { t: upFirst(r.note), cls: warn ? "warn" : "", muted: !warn } : ""]);
+      return `<div class="ytr${i === 0 ? " best" : ""}"><span><b>${esc(r.title)}</b>${sub}</span>
         <span class="mono meta">${fmtTime(r.duration)}</span><button class="btn${i === 0 ? " primary" : ""}" data-i="${i}">Use</button></div>`;
     }).join("");
     $$("button[data-i]", list).forEach(b => b.onclick = () => ytUse(res[+b.dataset.i], b));

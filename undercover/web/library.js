@@ -194,26 +194,31 @@ function renderList() {
     const id = idOf(x), check = L.cat === "covers";
     let title, sub, side;
     if (L.cat === "covers") {
-      title = x.title; sub = [voiceDisplay(x.voice) + (x.backing_voice ? ` + ${voiceDisplay(x.backing_voice)}` : ""), x.options?.octave ? `octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}` : "", when(x.created)].filter(Boolean).join(" · ");
+      title = x.title; sub = facts([voiceDisplay(x.voice) + (x.backing_voice ? ` + ${voiceDisplay(x.backing_voice)}` : ""),
+        x.options?.octave ? { t: `Octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}`, deep: true } : "", { t: upFirst(dayWord(x.created)), muted: true }, { t: dayTime(x.created), deep: true }]);
       side = keepTag(x) + `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "speech") {
-      title = x.title; sub = [voiceDisplay(x.voice), paceWord(x), when(x.created)].join(" · ");
+      title = x.title; sub = facts([voiceDisplay(x.voice), `${paceWord(x)} pace`, { t: upFirst(dayWord(x.created)), muted: true }, { t: dayTime(x.created), deep: true }]);
       side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag" data-deep>${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
-      title = x.title; sub = [x.source, x.key ? `key ${x.key}` : "", `${x.covers} cover${x.covers === 1 ? "" : "s"}`, `used ${when(x.last_used)}`].filter(Boolean).join(" · ");
+      title = x.title; sub = facts([sourceWord(x.source), countWord(x.covers, "cover"), x.last_used ? { t: `Used ${dayWord(x.last_used)}`, muted: true } : "",
+        x.key ? { t: `Key ${x.key}`, deep: true } : ""]);
       side = (x.sample ? `<span class="tag ok" title="UnderCover's sample song">sample song</span>` : "") + (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono" data-deep>${gb(x.size + x.stems_size)}</span>`;
     } else if (L.cat === "voices") {
       const [cls, word] = quality(x);
-      title = voiceDisplay(x.name); sub = [x.demo ? "demo voice · not a real person" : x.trained ? `trained in UnderCover${x.train_minutes ? ` · ${x.train_minutes} min of audio` : ""}` : (x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community"), `used in ${x.covers} cover${x.covers === 1 ? "" : "s"}`].join(" · ");
+      title = voiceDisplay(x.name); sub = facts(x.demo ? ["Demo voice", { t: "Not a real person", muted: true }]
+        : [x.trained ? "Trained here" : "Downloaded", countWord(x.covers, "cover"), x.trained && x.train_minutes ? { t: `${x.train_minutes} min of audio`, deep: true } : "",
+           !x.trained ? { t: x.source.match(/huggingface\.co\/([^/]+\/[^/]+)/)?.[1] || "community", deep: true } : ""]);
       side = (x.cadence ? `<span class="tag ok" title="Can speak in SpeakEasy">speaks</span>` : "") + (x.trained ? `<span class="tag ok">trained here</span>` : "") + `<span class="tag ${cls}" data-deep>${word}</span><span class="mono" data-deep>${gb(x.size)}</span>`;
     } else {
       title = x.person || x.name; const st = x.train || {};
-      sub = [`${x.kept_minutes} min kept`, st.state === "exported" ? `voice ${st.exported}` : st.state ? st.state : "not trained yet", `changed ${when(x.updated)}`].join(" · ");
+      sub = facts([st.state === "exported" ? "Trained" : st.state ? upFirst(st.state) : "Not trained yet", `${x.kept_minutes} min kept`, x.updated ? { t: `Changed ${dayWord(x.updated)}`, muted: true } : "",
+        st.state === "exported" ? { t: `voice ${st.exported}`, deep: true } : ""]);
       side = `<span class="mono" data-deep>${gb(x.size)}</span>`;
     }
     return `<div class="litem${check ? "" : " nocheck"}" data-id="${esc(id)}" data-kept="${x.kept ? "true" : "false"}" role="option" tabindex="0" aria-selected="${L.sel === id}">
       ${check ? `<input type="checkbox" aria-label="Select ${esc(title)}" ${L.checked.has(id) ? "checked" : ""}>` : ""}${art(title)}
-      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name, false) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b><small>${esc(sub)}</small></span><span class="lside">${side}</span></div>`
+      <span style="min-width:0"><b>${L.cat === "voices" ? vname(x.name, false) : esc(title)}${(L.cat === "covers" || L.cat === "speech") && typeof earMark === "function" ? earMark(L.cat === "covers" ? "cover" : "speech", id) : ""}</b>${sub}</span><span class="lside">${side}</span></div>`
       + (L.cat === "voices" ? waitingRow(x, all) : "");
   }).join("") : `<div class="lib-empty">${$("#lib-q").value ? `Nothing matches “${esc($("#lib-q").value)}”.`
       : hasTray() && L.kf === "kept" ? `No ${L.cat === "covers" ? "covers" : "speech"} kept yet. Send to SafeHouse keeps one for good; until then it's under Recent.` : "Nothing here."}</div>`);
@@ -310,7 +315,7 @@ function coverDetail(d, c) {
   const settings = [o.octave ? `voice octave ${o.octave > 0 ? "+" : ""}${o.octave}` : "same octave", o.key ? `key ${o.key > 0 ? "+" : ""}${o.key}` : "key unchanged",
                     c.backing_voice ? `backing by ${voiceDisplay(c.backing_voice)}` : o.backing_voice ? "lead + backing converted" : o.karaoke ? "lead only" : "",
                     o.dereverb ? "de-reverb" : "", o.polish === false ? "" : "polish", o.quality ? `${o.quality} quality` : ""].filter(Boolean).join(" · ");
-  d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3><p class="meta">sung by <b>${vname(c.voice)}</b>${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""} · ${esc(when(c.created))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3>${facts([{ html: `Sung by <b>${vname(c.voice)}</b>${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""}` }, { t: upFirst(dayWord(c.created)), muted: true }, { t: dayTime(c.created), deep: true }])}</div></div>
     ${playerHtml()}
     <div class="row"><span class="meta">Listen to</span><span class="lactions" id="lib-src"><button class="btn" data-src="url" aria-pressed="true">Cover</button>${c.original ? `<button class="btn" data-src="original">Original</button>` : ""}${c.vocal ? `<button class="btn" data-src="vocal">Vocal only</button>` : ""}</span></div>
     <dl class="kv"><dt data-deep>Settings</dt><dd data-deep>${esc(settings)}</dd>
@@ -343,7 +348,7 @@ function coverDetail(d, c) {
 }
 
 function speechDetail(d, x) {
-  d.innerHTML = `<div class="dhead">${art(x.title, true)}<div style="min-width:0"><h3>${esc(x.title)}</h3><p class="meta">spoken by <b>${vname(x.voice)}</b> · ${esc(when(x.created))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(x.title, true)}<div style="min-width:0"><h3>${esc(x.title)}</h3>${facts([{ html: `Spoken by <b>${vname(x.voice)}</b>` }, { t: upFirst(dayWord(x.created)), muted: true }, { t: dayTime(x.created), deep: true }])}</div></div>
     ${playerHtml()}
     <dl class="kv"><dt>Text</dt><dd class="lib-speech-text">${esc(x.text.length > 1200 ? x.text.slice(0, 1200) + "…" : x.text)}</dd>
       <dt data-deep>Settings</dt><dd data-deep>${esc([`${paceWord(x)} pace`, x.mode === "cadence" ? `their own cadence (${x.engine})` : `Reader ${x.reader}${x.reader_auto ? " (auto)" : ""}`, `pitch ${x.pitch > 0 ? "+" : ""}${x.pitch} st`].join(" · "))}</dd>
@@ -368,7 +373,8 @@ function speechDetail(d, x) {
 }
 
 function songDetail(d, s) {
-  d.innerHTML = `<div class="dhead">${art(s.title, true)}<div style="min-width:0"><h3>${esc(s.title)}</h3><p class="meta">${[s.duration ? fmtTime(s.duration) : "", s.sample_rate ? `${(s.sample_rate / 1000).toFixed(1)} kHz ${s.channels === 1 ? "mono" : "stereo"}` : "", s.key ? `key ${s.key}` : "", s.source].filter(Boolean).map(esc).join(" · ")}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(s.title, true)}<div style="min-width:0"><h3>${esc(s.title)}</h3>${facts([sourceWord(s.source), s.duration ? fmtTime(s.duration) : "", s.sample_rate ? { t: `${(s.sample_rate / 1000).toFixed(1)} kHz ${s.channels === 1 ? "mono" : "stereo"}`, deep: true } : "",
+      s.key ? { t: `Key ${s.key}`, deep: true } : ""])}</div></div>
     ${s.url ? playerHtml() : ""}
     <h2>Stems</h2>
     ${s.stems.length ? `<div class="stems">${s.stems.map((t, i) => `<div class="stem"><button class="tplay" data-i="${i}" aria-label="Play ${esc(t.label)}" aria-pressed="false">▶</button><span>${esc(t.label)}${t.quality !== "high" ? ` <span class="meta">(${t.quality})</span>` : ""}</span><span class="meta mono">${gb(t.size)}</span><a class="linkbtn" href="${t.url}?download">Download</a></div>`).join("")}</div>
@@ -405,7 +411,7 @@ function voiceDetail(d, v) {
   const [cls, word] = quality(v);
   const src = v.trained ? `trained in UnderCover${v.project ? ` · <button class="linkbtn" id="lib-open-proj">open project</button>` : ""}`
     : esc(v.source.replace(/^https?:\/\//, "").slice(0, 90));
-  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3><p class="meta" data-deep>folder <span class="mono">${esc(v.name)}</span> · RVC ${esc(v.version)} · ${v.sr ? v.sr / 1000 + " kHz" : "?"} · ${v.index ? "with index" : "no index"}</p><p class="meta">${v.demo ? "demo voice · made for UnderCover, not a real person" : v.trained ? "trained in UnderCover" : "downloaded"} · added ${esc(when(v.installed))}</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(voiceDisplay(v.name), true)}<div style="min-width:0"><h3>${vname(v.name)}</h3>${facts([`folder ${v.name}`, `RVC ${v.version}`, v.sr ? `${v.sr / 1000} kHz` : "", v.index ? "with index" : "no index"].filter(Boolean).map(t => ({ t, deep: true })))}${facts(v.demo ? ["Demo voice", { t: "Made for UnderCover, not a real person", muted: true }] : [v.trained ? "Trained here" : "Downloaded", v.installed ? { t: `Added ${dayWord(v.installed)}`, muted: true } : ""])}</div></div>
     ${"display" in v ? `<div class="vname-edit"><label class="meta" for="lib-vname-edit">Shown as</label><div class="row"><input id="lib-vname-edit" type="text" autocomplete="off" value="${esc(v.display || "")}" placeholder="${esc(v.name)}"><button class="btn" id="lib-vname-save" type="button">Save</button></div></div>` : ""}
     ${v.sample ? `${playerHtml()}<p class="meta">A held-out phrase rebuilt by this voice</p>` : ""}
     <dl class="kv"><dt data-deep>Likeness</dt><dd data-deep><span class="tag ${cls}">${word}</span>${v.score != null ? ` <span class="meta">${v.score.toFixed(2)} (pass 0.45)</span>` : ""}</dd>
@@ -449,7 +455,7 @@ function voiceDetail(d, v) {
 
 function trainingDetail(d, p) {
   const st = p.train || {};
-  d.innerHTML = `<div class="dhead">${art(p.person || p.name, true)}<div style="min-width:0"><h3>${esc(p.person || p.name)}</h3><p class="meta">${esc(p.mode)} · ${p.ready_sources} of ${p.sources} sources prepared · ${p.kept_minutes} min of voice kept</p></div></div>
+  d.innerHTML = `<div class="dhead">${art(p.person || p.name, true)}<div style="min-width:0"><h3>${esc(p.person || p.name)}</h3>${facts([upFirst(p.mode), `${p.ready_sources} of ${p.sources} sources ready`, { t: `${p.kept_minutes} min of voice kept`, muted: true }])}</div></div>
     <dl class="kv"><dt>Status</dt><dd>${st.state === "exported" ? `finished: voice <b>${esc(st.exported)}</b>` : st.state === "paused" ? `paused at epoch ${st.epoch}` : st.state === "trained" ? "trained, not added to voices yet" : st.state || "not trained yet"}</dd>
       <dt>On disk</dt><dd>${Object.entries(p.parts).filter(([, b]) => b).map(([k, b]) => `${esc(k)} ${gb(b)}`).join(" · ") || "—"}</dd></dl>
     <p class="meta">${st.state === "exported" ? "Deleting the project keeps the voice; you'd only need these files to train it again." : "Deleting the project removes its clips and any unfinished training."}</p>
