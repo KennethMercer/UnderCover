@@ -76,7 +76,7 @@ function voiceAskHtml(p) {
 }
 function voiceLine(v, p) {
   const who = esc(p?.person || v?.display || v?.name || "");
-  const a = /^[aeiou]/i.test(p?.person || v?.display || v?.name || "") ? "an" : "a";   // "an Obama voice"
+  const a = aOrAn(p?.person || v?.display || v?.name || "");   // "an Obama voice", "a Eurovision voice"
   if (p?.voice_ask) {
     const c = pickedVoice(p);
     return !c ? `<span class="warn">pick one below</span>` : c.voice ? `<b>${vname(c.voice)}</b>, used as it is`
@@ -165,7 +165,7 @@ async function previewPlan() {
 function drawPlan(p) {
   if (p.train_s != null && $("#os-train-eta")) $("#os-train-eta").textContent = ` · ${etaWords({ low: p.train_s, high: p.train_s })}`;   // (one number: the plan's, rc-eta)
   // three plain lines (consult 2): the song, the voice, the time. No emoji, no branch list; the branches are Deep Cover's.
-  const songLine = p.style ? `<b>${esc(p.song_query)}</b>, ${/^[aeiou]/i.test(p.style) ? "an" : "a"} ${esc(p.style)} version (a cover with singing in it)`
+  const songLine = p.style ? `<b>${esc(p.song_query)}</b>, ${aOrAn(p.style)} ${esc(p.style)} version (a cover with singing in it)`
                            : `<b>${esc(p.song_query)}</b>, the album version`;
   const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
   const warn = planPath(p) === "train" && !personWarned() ? `<p class="meta" id="os-warn">${PERSON_WARN}</p>` : "";
