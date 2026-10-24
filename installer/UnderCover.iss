@@ -1170,7 +1170,8 @@ begin
     // the release check's proof (rc-fix8): a setup step long enough to see the wizard answer all through it
     'Start-Sleep -Seconds ' + IntToStr(StrToIntDef(ExpandConstant('{param:setuphold|0}'), 0)) + '; ' +
 #endif
-    '& powershell.exe ' + Params + ' *> ' + PSQuote(OutFile) + '; Set-Content -LiteralPath ' + PSQuote(ExitFile + '.part') +
+    // (Out-File as UTF-8: Windows PowerShell's *> writes UTF-16, which this log can't read)
+    '& powershell.exe ' + Params + ' *>&1 | Out-File -LiteralPath ' + PSQuote(OutFile) + ' -Encoding utf8; Set-Content -LiteralPath ' + PSQuote(ExitFile + '.part') +
     ' $LASTEXITCODE; Move-Item -LiteralPath ' + PSQuote(ExitFile + '.part') + ' -Destination ' + PSQuote(ExitFile) + ' -Force"';
   Progress := 0;
   WizardForm.ProgressGauge.Max := 1000;
@@ -1192,8 +1193,9 @@ begin
       if Polls mod 4 = 0 then FollowStatus(StatusFile, Seen);   // (5 times a second)
       if (Pid = 0) and LoadStringFromFile(PidFile, Said) then Pid := StrToIntDef(Trim(String(Said)), 0);
       // gone without its exit code (killed, or PowerShell couldn't start): checked every 2 s, and once more after
-      // a last look for the file it may have written just then
-      if (Polls mod 40 = 0) and ((Pid <> 0) or (Polls > 600)) and ProcessEnded(Pid) then begin
+      // a last look for the file it may have written just then. No process id after 5 minutes: it never started (a
+      // slow first start of PowerShell, an antivirus scan, takes seconds, not minutes)
+      if (Polls mod 40 = 0) and ((Pid <> 0) or (Polls > 6000)) and ProcessEnded(Pid) then begin
         Sleep(500);
         if not FileExists(ExitFile) then begin
           Log('Setup''s PowerShell ended without its exit code');
