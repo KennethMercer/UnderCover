@@ -251,6 +251,8 @@ if ($UpgradeCheck) {
             [IO.File]::WriteAllText($mf, ($m | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
             Start-Sleep -Seconds 3   # (the voice list is read again after two seconds)
             Post $s '/api/library/voices/upgrade-agent/display' @{ display = 'Upgrade Agent' } | Out-Null
+            $seed.display = (@(Invoke-RestMethod "$($s.base)/api/voices" -TimeoutSec 30) | Where-Object { $_.name -eq 'upgrade-agent' }).display
+            if ($seed.display -ne 'Upgrade Agent') { throw "$($Old.tag) itself named the voice '$($seed.display)'" }
             $seed.config = Get-Content -LiteralPath (Join-Path $dir 'config.toml') -Raw
             Write-Host "  used: cover $($seed.cover) kept, speech $($seed.speech) kept, the game pause's asking off, voice 'Upgrade Agent'"
         } finally { Unserve $s }
@@ -289,7 +291,8 @@ if ($UpgradeCheck) {
         Push-Location $dir
         $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try {
-            $diff = (& $vpy -c "import sys, tomllib; from undercover.core import config as c; m = tomllib.loads(open('config.toml', encoding='utf-8').read()); d = c.differing(m, c.defaults()); print(sorted(set(f'{s}.{k}' for s in m for k in (m[s] if isinstance(m[s], dict) else [s])) - set(f'{s}.{k}' for s in d for k in (d[s] if isinstance(d[s], dict) else [s]))))" 2>&1 | Out-String).Trim()
+            # (setup writes this PC's [gpu] settings on purpose, what it detected, even where they match the defaults)
+            $diff = (& $vpy -c "import sys, tomllib; from undercover.core import config as c; m = tomllib.loads(open('config.toml', encoding='utf-8').read()); d = c.differing(m, c.defaults()); print(sorted(set(f'{s}.{k}' for s in m if s != 'gpu' for k in (m[s] if isinstance(m[s], dict) else [s])) - set(f'{s}.{k}' for s in d for k in (d[s] if isinstance(d[s], dict) else [s]))))" 2>&1 | Out-String).Trim()
         } finally { $ErrorActionPreference = $eap; Pop-Location }
         if ($diff -ne '[]') { $ufails += "config.toml holds keys equal to the defaults: $diff" } else { Write-Host '  config.toml: only what differs' }
         if (-not $ufails.Count) {
