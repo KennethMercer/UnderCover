@@ -510,10 +510,11 @@ def run_job(job: "Job", fn):
                 # under Low profile's cap: the kind needs more than the cap allowed. Remember that, free everything, and
                 # wait for the cap to lift (off, or a higher limit) before the one retry: never an error for the user
                 from . import gpu
-                lowprofile.learn_from_oom(job.kind, (gpu.alloc_gb() or (None, None))[1], lowprofile.server_limit_gb())
+                kind = lowprofile.kind_of(job)
+                lowprofile.learn_from_oom(kind, (gpu.alloc_gb() or (None, None))[1], lowprofile.server_limit_gb())
                 gpu.free()
                 gpu.release("train")
-                if not lowprofile.wait_to_fit(job, job.kind):
+                if not lowprofile.wait_to_fit(job, kind):
                     job.finish("cancelled", message="Cancelled.")
                     return
                 job.push(stage=(job.events[-1].get("stage") if job.events else "") or "converting",

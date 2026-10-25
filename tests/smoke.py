@@ -4617,7 +4617,16 @@ def u_lowprofile():
                 client.WORKER.running = lambda: False
                 assert L.server_limit_gb() == 10.0 and L.worker_share() == 0.0
                 client.WORKER.running = lambda: True
-                assert L.worker_share() >= L.WHISPER_GB and L.server_limit_gb() == round(10 - L.worker_share(), 2), (L.worker_share(), L.server_limit_gb())   # (its transcripts' Whisper counts: 3.6 GB ran out)
+                L.STATE["worker_cap"] = None
+                assert 0 < L.worker_share() <= 4 and L.server_limit_gb() == round(10 - L.worker_share(), 2), (L.worker_share(), L.server_limit_gb())
+                # the worker's share by the job that uses it: Whisper for transcripts, both for a cadence training
+                assert L.worker_need("train-transcribe") == L.WHISPER_GB and L.worker_need("cadence") >= L.WHISPER_GB + 3
+
+                class NJ:
+                    kind, lp_kind, cancel = "night", "cadence", False
+                    def push(self, **ev):
+                        pass
+                assert L.kind_of(NJ()) == "cadence" and L.before_job(NJ()) is True and L.STATE["worker_next"] >= 8.0, L.STATE
                 assert 0 < L.worker_limit_gb() <= 9
             finally:
                 client.WORKER.running = was

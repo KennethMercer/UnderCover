@@ -663,6 +663,7 @@ def _keep_awake(on: bool):
 
 def _run_item(item: dict):
     job = jobs.Job("night")
+    job.lp_kind = item["kind"]   # (Low profile sizes the card's shares by the item's own kind)
     jobs.JOBS[job.id] = job
     est = item.get("estimate") or {}
     if est.get("total"):   # its time left: the whole item's, from its own estimate (P8-3, P8-10)

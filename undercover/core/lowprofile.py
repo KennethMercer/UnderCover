@@ -204,7 +204,7 @@ def worker_share(engine: str | None = None) -> float:
     started with (0 when there's no worker)."""
     from .cadence import engine_info
     if engine is None:
-        return (STATE.get("worker_cap") or reserve_gb()) if worker_running() else 0.0
+        return (STATE.get("worker_cap") or worker_need("speech")) if worker_running() else 0.0
     info = engine_info(engine) or {}
     return float(info.get("vram_gb") or 3.6)
 
@@ -223,14 +223,26 @@ def worker_engines() -> set:
     return out
 
 
+def worker_need(kind: str) -> float:
+    """What the worker holds for a kind of job: the largest engine it may read with (the configured one, every voice's
+    pinned one) for speech; Whisper for transcripts; both at once for a cadence training (it reads, then hears each
+    reading back: 3.6 + 5 GB, the engine and Whisper loaded together ran out of 5 GB, 2026-10-24)."""
+    eng = max(worker_share(engine=e) for e in worker_engines())
+    if kind == "train-transcribe":
+        return WHISPER_GB
+    if kind in ("cadence", "newcad"):
+        return eng + WHISPER_GB
+    return eng
+
+
 def reserve_gb() -> float:
-    """The worker's share, fixed when it starts (its cap can't move later): the most any of its work takes, the largest of
-    the engines it may read with and Whisper for transcripts."""
-    return max([WHISPER_GB] + [worker_share(engine=e) for e in worker_engines()])
+    """The share kept for the worker by the job about to use it (before_job sets it), else speech's."""
+    return STATE.get("worker_next") or worker_need("speech")
 
 
 def worker_limit_gb() -> float | None:
-    """The cap a cadence worker about to start gets (its environment): the largest share it may need, or None when off."""
+    """The cap a cadence worker about to start gets (its environment; it can't move later): the share of the job that
+    starts it, or None when off."""
     if not on():
         return None
     s = settings()
@@ -240,6 +252,11 @@ def worker_limit_gb() -> float | None:
 
 
 WORKER_KINDS = ("speech", "voicepreview", "speakwarm", "train-transcribe", "cadence", "newcad")   # jobs that read with the worker
+
+
+def kind_of(job) -> str:
+    """A job's kind as Low profile sees it: an overnight item's own (new, improve, cadence, newcad), not "night"."""
+    return getattr(job, "lp_kind", None) or getattr(job, "kind", "") or ""
 
 
 def server_limit_gb(reserve_worker: bool = False) -> float | None:
@@ -273,7 +290,7 @@ def apply(reserve_worker: bool = False):
          + ("" if got is not None or lim is None else " (couldn't be applied)"))
 
 
-TRAIN_KINDS = ("train", "train-auto", "train-prepare", "night")   # (a cadence training reads with the worker: not these)
+TRAIN_KINDS = ("train", "train-auto", "train-prepare", "new", "improve", "newcad", "night")   # (newcad: a training, then its cadence)
 
 
 def before_job(job) -> bool:
@@ -284,13 +301,24 @@ def before_job(job) -> bool:
         return False
     if not on():
         return True
-    kind = getattr(job, "kind", "") or ""
+    kind = kind_of(job)
+    if kind in WORKER_KINDS:   # (the worker's share for this job; a worker started with less is ended first: its cap can't grow)
+        need = round(min(float(settings()["limit_gb"]) - 1.0, worker_need(kind)), 2)
+        STATE["worker_next"] = need
+        if worker_running() and (STATE.get("worker_cap") or 0) < need:
+            try:
+                from .cadence import client
+                client.WORKER.stop(f"Low profile: a {kind} needs a bigger share ({need} GB)")
+            except Exception:   # noqa: BLE001
+                pass
+    else:
+        STATE["worker_next"] = None
     if kind in TRAIN_KINDS:
         before_training()
         free_for("train")
     elif kind in WORKER_KINDS:
         free_for("speak")
-    apply(reserve_worker=kind in WORKER_KINDS)
+    apply(reserve_worker=kind in WORKER_KINDS and kind not in TRAIN_KINDS)
     ok, why = fits(kind)
     if ok:
         return True
@@ -307,7 +335,7 @@ def before_job(job) -> bool:
 def after_job(job):
     """A finished GPU job teaches what its kind needs (its allocated peak), under the cap or not."""
     if getattr(job, "state", None) == "done":
-        record_need(getattr(job, "kind", "") or "", getattr(job, "gpu_alloc_gb", None))
+        record_need(kind_of(job), getattr(job, "gpu_alloc_gb", None))
 
 
 def before_training():
@@ -431,9 +459,12 @@ def need_gb(kind: str) -> float | None:
 def fits(kind: str) -> tuple[bool, str]:
     """Whether a job of this kind fits the server's cap now (for a kind that reads with the worker: beside the worker's
     share). -> (True, "") or (False, the plain reason)."""
-    lim = server_limit_gb(reserve_worker=kind in WORKER_KINDS)
+    lim = server_limit_gb(reserve_worker=kind in WORKER_KINDS and kind not in TRAIN_KINDS)
     if lim is None:
         return True, ""
+    total = float(settings()["limit_gb"])
+    if kind in WORKER_KINDS and worker_need(kind) + 1.0 > total:   # (the worker's part alone is more than the whole limit)
+        return False, f"needs about {worker_need(kind) + 1.0:.0f} GB; Low profile allows {total:.0f}"
     need = need_gb(kind)
     if need is None or need <= lim:
         return True, ""
