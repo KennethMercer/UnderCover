@@ -10307,9 +10307,28 @@ def snapshot_real(dirs: dict) -> dict:
     return snap
 
 
-def _sandbox_config(root: Path, real: dict) -> tuple[Path, dict]:
-    """The sandbox's config.toml: the real settings with [paths] replaced. Asserted before anything starts: every
-    folder but the read-only model files is inside `root`."""
+@check("the sandbox never asks the game question (2026-10-25: a game the user was playing held a --full run's jobs on it until they failed): its config says [game_pause] ask = false over whatever the user's says, its [paths] all in the sandbox; the question itself is u_gamepause's")
+def u_sandbox_game():
+    import tempfile
+    import tomllib
+    with tempfile.TemporaryDirectory(prefix="uc-sbcfg-") as t:
+        root = Path(t)
+        for d in ("sb", "sb2"):   # (sandbox_server makes its root before the config)
+            (root / d).mkdir()
+        user = "[gpu]\nbackend = 'rocm'\n\n[game_pause]\nask = true\nnever_ask = ['game.exe']\n"   # asking, a game on never_ask
+        cfg, mine = _sandbox_config(root / "sb", {"models_dir": root / "models"}, user=user)
+        got = tomllib.loads(cfg.read_text(encoding="utf-8"))
+        assert got["game_pause"] == {"ask": False}, got.get("game_pause")   # replaced, not merged
+        assert got["gpu"] == {"backend": "rocm"} and {k: Path(v) for k, v in got["paths"].items()} == mine, got
+        cfg2, _ = _sandbox_config(root / "sb2", {"models_dir": root / "models"}, user="")   # no user config at all
+        assert tomllib.loads(cfg2.read_text(encoding="utf-8"))["game_pause"] == {"ask": False}
+    return "[game_pause] ask = false over the user's own, the rest kept; paths in the sandbox"
+
+
+def _sandbox_config(root: Path, real: dict, user: str | None = None) -> tuple[Path, dict]:
+    """The sandbox's config.toml: the real settings (user: that text instead, for the check) with [paths] replaced
+    and the game question off. Asserted before anything starts: every folder but the read-only model files is inside
+    `root`."""
     import re
     import tomllib
     mine = {"uploads_dir": root / "uploads", "output_dir": root / "output", "cache_dir": root / "cache",
@@ -10317,8 +10336,12 @@ def _sandbox_config(root: Path, real: dict) -> tuple[Path, dict]:
             "models_dir": real["models_dir"]}
     from undercover.core import config
     block = "[paths]\n" + "".join(f"{k} = '{v}'\n" for k, v in mine.items()) + "\n"
-    user = (ROOT / "config.toml").read_text(encoding="utf-8") if (ROOT / "config.toml").is_file() else ""   # only what differs
+    if user is None:
+        user = (ROOT / "config.toml").read_text(encoding="utf-8") if (ROOT / "config.toml").is_file() else ""   # only what differs
     text = config.replace_section(user, "paths", block)
+    # a game the user is playing never holds the sandbox's jobs on the game question (2026-10-25: a light game held a
+    # --full run's covers on "Keep both / Pause?" until they failed); u_gamepause tests the question itself
+    text = config.replace_section(text, "game_pause", "[game_pause]\nask = false\n\n")
     cfg = root / "config.toml"
     cfg.write_text(text, encoding="utf-8")
     got = {k: Path(v) for k, v in tomllib.loads(text)["paths"].items()}
@@ -10398,6 +10421,7 @@ def sandbox_server(port: int):
                 assert p == real["models_dir"], f"{k} -> {p}"
             else:
                 assert storage._inside(p, root), f"the sandbox server's {k} is {p}, outside {root}: stopping before any check runs"
+        assert api("/api/gamepause")["ask"] is False, "the sandbox would ask the game question: a game being played would hold its jobs"
         config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = {k: str(v) for k, v in mine.items()}, cfg, [root]
         yield root
     finally:
@@ -10467,7 +10491,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
