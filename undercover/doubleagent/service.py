@@ -889,6 +889,23 @@ SUNG_TO_SPEECH = 0.5   # singers speak about an octave below their singing media
                        # voice's training data) and speaks at 104 Hz (2 min of an MTV interview, measured 2026-10-10)
 
 
+def person_print(v) -> list | None:
+    """The person's WeSpeaker voice print (256 numbers) for a voice trained here: its project's confirmed reference
+    speaker, the centroid of their phrases (project.find_speakers). None for a downloaded voice or a project without
+    one. A voice pack carries it only when its exporter ticks it (it's derived data about a real person)."""
+    name = (v.extra or {}).get("project")
+    if not name or not (v.extra or {}).get("trained"):
+        return None
+    from .project import Project
+    try:
+        proj = Project.load(name)
+        emb = proj.load_embeddings()
+    except Exception:   # noqa: BLE001 - no project, no print
+        return None
+    c = emb.get(f"speaker:{(proj.reference or {}).get('cluster')}")
+    return [float(x) for x in c] if c is not None and len(c) else None
+
+
 def speaking_pitch(v) -> dict | None:
     """How this voice's person sounds when they TALK: {"hz": median, "low": p5, "how": where it comes from}, or None
     when nothing is known (a downloaded voice never checked against a person). SpeakEasy pitches its Reader to this."""

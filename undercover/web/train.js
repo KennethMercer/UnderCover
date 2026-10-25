@@ -9,7 +9,7 @@ const T = { list: [], proj: null, filter: store.get("uc-train-filter", "kept"), 
 document.addEventListener("uc:module", e => {
   const train = e.detail === "doubleagent";
   $("#drop-overlay div").textContent = train ? "Drop recordings of the person to add them as a source"
-                                             : "Drop a song to load it, or a voice model (.zip / .pth) to install it";
+                                             : "Drop a song to load it, or a voice (.ucvoice, .zip or .pth) to install it";
   if (train && !T.loaded) { T.loaded = true; loadProjects(); }
   else if (train && !T.live) {   // something started training meanwhile (another page, the queue): show that project
     const p = trainingProject();

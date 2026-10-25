@@ -922,6 +922,14 @@ body.deep .nodeep { display: none !important; }   /* basic-only words: in Deep C
 .vname-edit { display: grid; gap: 6px; }
 .vname-edit .row { display: flex; gap: 8px; }
 .vname-edit input { flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--fg); font: inherit; }
+/* a voice as one file (library.js packForm): whose voice it is, on what basis; one field a line, full width */
+.packform { display: grid; gap: 4px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.packform h4 { margin: 0 0 4px; }
+.packform label.meta { margin-top: 6px; }
+.packform input[type=text], .packform select, .packform textarea { width: 100%; box-sizing: border-box; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--fg); font: inherit; }
+.packform textarea { resize: vertical; }
+.packform .check { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
+.packform .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 
 /* Deep Cover: expert-only details (scores, data minutes, engine) are marked data-deep and shown only in Deep Cover mode */
 body:not(.deep) [data-deep] { display: none !important; }

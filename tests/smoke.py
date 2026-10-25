@@ -1272,6 +1272,7 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     # temp and work folders, caches, projects, speech parts
     "app/server.py::Handler._voice_upload::rmtree::work", "app/server.py::_clean_old_previews::rmtree::sub",
     "core/separate.py::StemSeparator.run::rmtree::self.work_dir", "core/voices.py::download::rmtree::dest",
+    "core/voicepack.py::export::rmtree::work", "core/voicepack.py::stage::rmtree::work",   # (the pack's own scratch folders)
     "core/voices.py::install::rmtree::work", "core/voices.py::download_and_install::rmtree::dl if dl.is_dir() else dl.parent",
     "core/voices.py::download_staged::rmtree::dl if dl.is_dir() else dl.parent",
     "core/ytdlp.py::stage::rmtree::d", "core/ytdlp.py::stage::rmtree::dl", "core/ytdlp.py::heal::rmtree::tmp",
@@ -4726,6 +4727,90 @@ def u_lowprofile():
         L.STATE.update(saved_state)
         gamepause.STATE.update(game=None, asking=None, answer=None, paused_for=None, gone_since=None, reason="")
     return "defaults, test default, set(), the split, needs/waits/learns, batch, speeds, the pause, the game's on/off, the phone route"
+
+
+@check("voice packs (1.1): a voice exports as one .ucvoice (safetensors weights, the compact index, a canonical manifest whose pack_id is its own SHA-256, the subject declared, the p2p fields reserved, no cadence) and imports back identical, staged, never over a voice; a pickle inside, a changed manifest, a file that isn't its SHA-256, a private person without consent, a newer format, all refused")
+def u_voicepack():
+    import hashlib
+    import re
+    import struct
+    import warnings
+    import zipfile
+    import numpy as np
+    import torch
+    from undercover.core import voicepack as P, voices as V
+    from undercover.core.engine.rvc.index import COMPACT_MAGIC, read_vectors
+    with isolated_data() as t:
+        d = _voice_dir("pack-me", {"person": "Someone Public"})
+        gen = torch.Generator().manual_seed(7)
+        weight = {"emb_phone.weight": torch.randn(192, 768, generator=gen).half(), "dec.conv_pre.weight": torch.randn(4, 3, 7, generator=gen).half()}
+        torch.save({"weight": weight, "config": [1025, 32, 192, 192, 768, 2, 6, 3, 0, "1", [3], [[1]], [10], 512, [16], 109, 256, 40000],
+                    "info": "48epoch", "sr": "40k", "f0": 1, "version": "v2"}, d / "model.pth")
+        vecs = np.random.default_rng(3).standard_normal((50, 8)).astype(np.float16)
+        (d / "model.index").write_bytes(COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        meta["index"] = str(d / "model.index")
+        (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        sub = {"kind": "public_figure", "name": "Someone Public", "consent": "unknown", "basis": "interviews on public TV", "contact": ""}
+        pack = P.export("pack-me", sub, {"id": "CC-BY-4.0"}, dest_dir=t / "out")
+        with zipfile.ZipFile(pack) as z:
+            names = z.namelist()
+            raw = z.read(P.MANIFEST)
+        m = json.loads(raw)
+        assert names[0] == P.MANIFEST and set(names) == {P.MANIFEST, P.WEIGHTS, P.INDEX}, names
+        assert raw == P.canonical(m) and m["pack_id"] == P.pack_id(m) == hashlib.sha256(P.canonical({k: v for k, v in m.items() if k not in ("pack_id", "signatures")})).hexdigest()
+        for k in ("pack_id", "publisher", "signatures", "lineage", "subject", "licence", "engine", "test", "min_app", "created", "replaces", "files"):
+            assert k in m, f"the manifest lacks {k}"
+        assert m["signatures"] == [] and m["lineage"] == {"parent": None, "root": None, "generation": 0} and m["cadence"]["included"] is False
+        assert m["subject"]["kind"] == "public_figure" and m["engine"]["family"] == "rvc" and m["test"]["print"] is None
+        assert all(re.fullmatch(r"[0-9a-f]{64}", f["sha256"]) and f["bytes"] > 0 for f in m["files"])
+        v = P.import_pack(pack, wait=0)   # (no server here: no preview line; staged, then listed)
+        assert v.name == "pack-me-2" and (V.voices_dir() / "pack-me").is_dir(), "an import landed over a voice"
+        a = torch.load(d / "model.pth", weights_only=True)
+        b = torch.load(v.pth, weights_only=True)
+        assert all(torch.equal(a["weight"][k], b["weight"][k]) for k in a["weight"]) and {k: a[k] for k in a if k != "weight"} == {k: b[k] for k in b if k != "weight"}
+        assert np.array_equal(read_vectors(d / "model.index"), read_vectors(v.index)) and v.extra["pack"]["pack_id"] == m["pack_id"]
+        assert V.display_name(V.get_voice(v.name)) == "Someone Public" and not list(V.staging_dir().glob(".unpack-*"))
+
+        def rewrite(dst, change=None, add=None, drop=None):
+            with zipfile.ZipFile(pack) as z, zipfile.ZipFile(dst, "w") as o:
+                for i in z.infolist():
+                    if i.filename != drop:
+                        o.writestr(i, change(i.filename, z.read(i.filename)) if change else z.read(i.filename))
+                for n, data in (add or {}).items():
+                    o.writestr(n, data)
+            return dst
+
+        def refused(p, word):
+            try:
+                P.read_manifest(p) if p.suffix else None
+                P.stage(p)
+            except P.PackError as e:
+                assert word in str(e), (word, str(e))
+                return
+            raise AssertionError(f"accepted a pack that should be refused ({word})")
+        refused(rewrite(t / "a.ucvoice", add={"evil.pth": b"x"}), "can carry code")
+        with warnings.catch_warnings():   # (zipfile warns about the duplicate it is asked to write)
+            warnings.simplefilter("ignore")
+            refused(rewrite(t / "f.ucvoice", add={P.INDEX: COMPACT_MAGIC}), "two files of the same name")
+        m2 = {**m, "voice": {**m["voice"], "display": "Someone Else"}}
+        refused(rewrite(t / "b.ucvoice", change=lambda n, b: P.canonical(m2) if n == P.MANIFEST else b), "changed since it was made")
+        refused(rewrite(t / "c.ucvoice", change=lambda n, b: b[:-4] + b"abcd" if n == P.INDEX else b), "SHA-256")
+        m3 = {**m, "subject": {**m["subject"], "kind": "private_person", "consent": "none", "contact": "x"}}
+        m3["pack_id"] = P.pack_id(m3)
+        refused(rewrite(t / "d.ucvoice", change=lambda n, b: P.canonical(m3) if n == P.MANIFEST else b), "agreement")
+        m4 = {**m, "format_version": P.FORMAT_VERSION + 1}
+        m4["pack_id"] = P.pack_id(m4)
+        refused(rewrite(t / "e.ucvoice", change=lambda n, b: P.canonical(m4) if n == P.MANIFEST else b), "newer UnderCover")
+        try:
+            P.export("pack-me", {"kind": "private_person", "consent": "unknown", "basis": "clips"})
+            raise AssertionError("exported a private person's voice without their agreement")
+        except P.PackError:
+            pass
+        sub_demo = P.default_subject(V.Voice(name="x", dir=t, pth=t / "x", index=None, extra={"demo": True}))
+        assert sub_demo["kind"] == "synthetic"
+        kb = round(pack.stat().st_size / 1e3)
+    return f"{kb} KB pack, identical back as pack-me-2; 6 refusals"
 
 
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
@@ -8316,6 +8401,7 @@ PHONE_SAMPLES = [
     ("DELETE", "/api/library/covers/0123456789"), ("DELETE", "/api/library/speech/0123456789"),
     ("DELETE", "/api/library/songs/0123456789abcdef"), ("POST", "/api/library/voices/v-uc/display"),
     ("POST", "/api/library/voices/v-uc/rename"), ("GET", "/api/library/voices/v-uc/export"),
+    ("GET", "/api/library/voices/v-uc/pack"), ("POST", "/api/library/voices/v-uc/pack"),
     ("DELETE", "/api/library/voices/v-uc/cadence"), ("GET", "/api/library/cleanup"), ("POST", "/api/library/cleanup"),
     ("GET", "/api/library/aside"), ("DELETE", "/api/library/aside/morgan-20261014-120000"),
     ("POST", "/api/library/aside/morgan-20261014-120000/restore"),
@@ -9452,6 +9538,44 @@ def a_train():
 
 
 @check("api: work queue, candidates, pause/resume")
+
+@check("api: a voice pack (1.1): the export form, a real voice exported over the API as one .ucvoice, imported back through the voice upload under its own free name, listed with its pack, then removed")
+def a_voicepack():
+    import zipfile
+    voices = [v["name"] for v in api("/api/voices")]
+    src = next((v for v in voices if v.endswith("-uc")), voices[0] if voices else None)
+    assert src, "no voice to pack"
+    form = api(f"/api/library/voices/{src}/pack")
+    assert form["subject"]["kind"] in form["kinds"] and "consents" in form and form["cadence_note"], form
+    body = json.dumps({"subject": {"kind": "public_figure", "name": form["subject"]["name"] or "Someone", "consent": "unknown",
+                                   "basis": "smoke's own sandbox copy, never shared"}, "licence": {}}).encode()
+    req = urllib.request.Request(BASE + f"/api/library/voices/{src}/pack", data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "Origin": BASE})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        data = r.read()
+        disp = r.headers.get("Content-Disposition") or ""
+    assert data[:2] == b"PK" and ".ucvoice" in disp, disp
+    from undercover.core import storage
+    pack = storage.ALLOWED_ROOTS[0] / "smoke-pack.ucvoice"
+    pack.write_bytes(data)
+    with zipfile.ZipFile(pack) as z:
+        m = json.loads(z.read("manifest.json"))
+    assert m["voice"]["name"] == src and m["subject"]["kind"] == "public_figure" and m["signatures"] == []
+    req = urllib.request.Request(BASE + "/api/voices/upload", data=data, method="POST",
+                                 headers={"X-Filename": "smoke-pack.ucvoice", "Origin": BASE, "Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        got = json.loads(r.read())["voice"]
+    try:
+        assert got != src and got.startswith(src), f"the import should take a free name beside {src}: {got}"
+        v = next(x for x in api("/api/voices") if x["name"] == got)
+        from undercover.core.config import path   # (pointed at the sandbox's folders by sandbox_server)
+        meta = json.loads((path("voices_dir") / got / "meta.json").read_text(encoding="utf-8"))
+        assert v and meta["extra"]["pack"]["pack_id"] == m["pack_id"], (v, meta["extra"].get("pack"))
+    finally:
+        api(f"/api/voices/{got}", method="DELETE")   # (set aside, as the user's Delete does: the sandbox goes after the run)
+        pack.unlink(missing_ok=True)
+    return f"{src} -> {round(len(data) / 1e6, 1)} MB pack -> {got}"
+
 @check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here)")
 def a_vault():
     from undercover.core import storage
@@ -10066,7 +10190,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -10088,7 +10212,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
+                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()

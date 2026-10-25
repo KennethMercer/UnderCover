@@ -3,6 +3,15 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## Unreleased (1.1)
+
+**Voice packs** (voicepack)
+- A voice can be saved as one file, a `.ucvoice` voice pack, from its page in SafeHouse's Library, and opened
+  on another PC with UnderCover (Import a voice pack, or drop it in). The pack says whose voice it is and on
+  what basis it's shared, in the exporter's own words; a private person's voice is only shared with their
+  agreement. Its weights are never a pickle, every file inside is checked before it's used, and an imported
+  voice never replaces one you have. The way a voice talks (its cadence) stays on the PC that made it.
+
 ## 1.0.3 (2026-10-25)
 
 **Updates download only what changed** (v103)

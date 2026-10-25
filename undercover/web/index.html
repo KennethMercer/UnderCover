@@ -22,7 +22,7 @@
     document.documentElement.dataset.ucTheme = th; document.getElementById("uc-theme-css").href = thCss; } } catch (e) {}</script>
 </head>
 <body data-module="frontman">
-<div class="drop-overlay" id="drop-overlay" hidden><div>Drop a song to load it, or a voice model (.zip / .pth) to install it</div></div>
+<div class="drop-overlay" id="drop-overlay" hidden><div>Drop a song to load it, or a voice (.ucvoice, .zip or .pth) to install it</div></div>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="g-frontman" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="11" rx="4"/><path d="M10 7h4M10 10h4"/><path d="M12 14v5M9 21h6"/></symbol>
   <symbol id="g-doubleagent" viewBox="0 0 24 24"><path d="M3 15a9 9 0 0 1 18 0M8 15a4 4 0 0 1 8 0v5"/><path d="M12 15v7"/></symbol>
@@ -537,6 +537,8 @@
     </div>
     <div class="lib-tools">
       <input type="search" id="lib-q" autocomplete="off" aria-label="Search the library">
+      <button class="btn" type="button" id="lib-import" title="A voice exported from UnderCover as one file">Import a voice pack…</button>
+      <input type="file" id="lib-import-file" accept=".ucvoice" hidden>
       <select id="lib-sort" aria-label="Sort" data-deep></select>
       <select id="lib-filter" aria-label="Filter" hidden data-deep></select>
     </div>

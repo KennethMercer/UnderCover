@@ -181,6 +181,35 @@ discards it (deletes inside the staging folder only). `voices/.aside/<name>-<sta
 of the way instead of deleting (a replaced voice, a candidate not kept), its `meta.json` renamed `meta.json.aside`;
 SafeHouse's Storage room lists them with why and when, and deletes one only when asked twice.
 
+### Voice pack (`.ucvoice`)
+
+A voice as one file (1.1, `core/voicepack.py`), made and opened in SafeHouse (Library, a voice's detail: Export as a
+voice pack; the Library's Import a voice pack, or a dropped `.ucvoice`). A zip of exactly these members:
+
+- `manifest.json`: canonical JSON (sorted keys, no insignificant whitespace, UTF-8), written first;
+- `weights.safetensors`: the generator's tensors, never a pickle; the `.pth`'s other entries (config, sr, f0, version,
+  info) as JSON in its metadata under `rvc`;
+- `index.ucindex` (optional): the compact fp16 index (`UCIDX16`), raw numbers.
+
+The manifest: `format` "ucvoice", `format_version` 1, `min_app` "1.1.0", `app`, `created`, `replaces` (null),
+`pack_id` (SHA-256 of the canonical manifest without `pack_id` and `signatures`), `publisher` {key, name, feed} and
+`signatures` [] (empty until 2.0 signs), `lineage` {parent, root, generation} (null, null, 0 for a first export),
+`voice` {name, display, person}, `subject` {kind: self | public_figure | private_person | fictional | synthetic, name,
+consent: self | written | none | unknown, basis (1-500 characters, the exporter's own words), contact}, `provenance`
+{origin: trained here | downloaded, source, installed, demo_of}, `licence` {id, url, text}, `engine` {family "rvc",
+version, sr, f0, f0_range}, `test` {print (the person's WeSpeaker print, 256 numbers, only when the exporter ticks it),
+publisher_scores (advisory)}, `preview` {line}, `cadence` {included: false, why}, `files` [{name, bytes, sha256}].
+A cadence pack doesn't travel (it holds real clips of the person).
+Import: every member must be listed with its size and SHA-256 and match; a member that can carry code (.pth, .pt,
+.ckpt, .pkl, .pickle, .bin, .npy, .npz, .joblib) or isn't one of the three refuses the pack, as do a changed manifest
+(its pack_id), a newer `format_version`, a subject that's missing or malformed, and a private person's voice without
+their agreement (consent none or unknown; a private person also needs a contact). The weights are read with
+safetensors and the voice's `model.pth` is written here from them, then checked as a community download's
+(`voices.inspect_pth`, weights_only); the import goes through `.staging` (`voicepreview.import_voice`) and takes its
+own name or the first free `<name>-2`, never over a voice. The imported voice's meta keeps the pack in `extra.pack`
+{pack_id, created, lineage, subject, licence, publisher, origin, source}. The voice print reaches core through
+`voicepack.PRINT` (DoubleAgent's `service.person_print`, set by the app): its project's confirmed reference speaker.
+
 ### Cadence pack
 
 A voice "has cadence" when `<voice>/tts/ref.wav` exists and `extra.tts` describes it: `engine`, `ref`, `ref_text`,
