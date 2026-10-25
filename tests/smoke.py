@@ -5399,13 +5399,69 @@ def u_cadence():
     st = DK._speech_stats(x, "one two three four")
     assert st and abs(st["dur"] - 1.0) < 0.1 and st["rate"] == st["syl"] / st["dur"] and DK._speech_stats(x[:100], "a") == {}, st
     ids = {a["id"] for a in addons.status()}
-    assert "f5" in ids, ids
-    # nothing listed that can't be had (MasterPlan, the user's fresh install: XTTS-v2 sat there as 'Not available yet')
-    assert "xtts" not in ids and all(a.wired for a in addons.ADDONS.values()), [a.id for a in addons.ADDONS.values() if not a.wired]
+    assert {"f5", "xtts"} <= ids, ids
+    # nothing listed that can't be had (MasterPlan, the user's fresh install: XTTS-v2 sat there as 'Not available yet';
+    # it's back in 1.1 as a real add-on, u_xtts)
+    assert all(a.wired for a in addons.ADDONS.values()), [a.id for a in addons.ADDONS.values() if not a.wired]
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
     with isolated_data():
         _fake_addon_roundtrip(addons)
     return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
+
+
+@check("XTTS-v2 is an opt-in add-on (1.1): a reading engine like the others (the engines table, the worker, pinned model "
+       "files), its licence (CPML), size and what it adds on the add-on page and in the installer, its packages hashed "
+       "(requirements/addon-xtts.txt matches the registry); not installed or accepted, it is never picked and the app reads as before")
+def u_xtts():
+    import importlib.util
+    import re
+    from undercover.core import addons, setup_models
+    from undercover.core.cadence import engines as E
+    e, a = E.ENGINES["xtts"], addons.ADDONS["xtts"]
+    # the engine row: an add-on's engine, read from the clip alone (no transcript), not a Chatterbox-family member
+    assert e["addon"] == "xtts" and e["licence"] == a.licence == "CPML" and e["module"] == "TTS" and e.get("wired") is not False, e
+    assert e["ref_text"] is False and "xtts" not in E.FAMILY and E.DEFAULT != "xtts", e
+    assert 0 < e["rtf"] < 1 and e["vram_gb"] == 2.1 and e["about"] and e["size_mb"] == a.size_mb, e   # measured 0.84x, 2.1 GB
+    # the worker reads with it (worker.py imports torch: read its source, not the module)
+    w = (ROOT / "undercover" / "core" / "cadence" / "worker.py").read_text(encoding="utf-8")
+    assert '"xtts": XTTS' in w and "class XTTS:" in w and "_ensure(XTTS_FILES" in w, "the worker has no XTTS engine"
+    assert "COQUI_TOS_AGREED" not in w, "the licence is accepted by the user on the add-on page, never set in code"
+    assert 'setdefault("MPLCONFIGDIR", str(path("cache_dir")' in w, "matplotlib's font cache would land in the home folder"
+    # the model files: a pinned revision, each with its SHA-256, in the Doctor's list and the download list
+    assert E.MODEL_FILES["xtts"] is E.XTTS_FILES == a.files and len(a.files) == 3, a.files
+    for local, url in a.files.items():
+        assert local.startswith("tts/xtts/") and f"/resolve/{E.XTTS_REV}/" in url and re.fullmatch(r"[0-9a-f]{64}", a.sha256[local]), local
+        assert setup_models.PINNED[local]["part"] == "xtts" and setup_models.PINNED[local]["sha256"] == a.sha256[local], local
+    # the add-on page: licence, size, what it adds; optional, nothing accepted for the user
+    assert not a.included and not a.open and a.wired and a.modules == ["speakeasy"] and "TTS" in a.imports, a
+    assert 1500 < a.size_mb < 2500 and a.adds and a.short and "non-commercial" in a.use, (a.size_mb, a.short, a.use)
+    assert "Coqui Public Model License" in a.licence_summary and "non-commercial" in a.licence_summary, a.licence_summary
+    assert a.licence_url.startswith("https://huggingface.co/coqui/XTTS-v2/") and E.XTTS_REV in a.licence_url, a.licence_url
+    # its packages: pinned, and the hashed list says the same pins (re-run installer\pin_hashes.py --addons after a change)
+    assert a.packages[0] == "coqui-tts==0.27.5" and all(re.fullmatch(r"[A-Za-z0-9_.\-]+==[^=\s]+", p) for p in a.packages), a.packages
+    inst = ROOT / "installer"
+    sys.path.insert(0, str(inst))
+    try:
+        import downloads as D
+    finally:
+        sys.path.remove(str(inst))
+    pins = D.read_pins(inst / "requirements" / "addon-xtts.txt")
+    norm = lambda n: re.sub(r"[-_.]+", "-", n).lower()
+    assert [(norm(p["name"]), p["version"]) for p in pins] == [(norm(n), v) for n, v in (p.split("==") for p in a.packages)], pins
+    assert all(p["hashes"] for p in pins), [p["name"] for p in pins if not p["hashes"]]
+    isi = (inst / "addons.isi").read_text(encoding="utf-8-sig")
+    assert "'xtts'" in isi and "XTTS-v2 " in isi and a.licence_url in isi, "addons.isi is stale: run installer\\build.ps1"
+    # not installed here: never ready, never the default, a pack made with it waits (the app is the same without it)
+    if importlib.util.find_spec("TTS") is None:
+        with isolated_data():
+            assert not addons.available("xtts") and not E.engine_ready("xtts") and not E.pack_ready("xtts")
+            old = E.CONFIG
+            E.CONFIG = {"cadence": {"engine": "xtts"}}   # chosen once, then removed: the open default reads
+            try:
+                assert E.default_engine() in E.FAMILY and E.reading_engine("chatterbox") in E.FAMILY
+            finally:
+                E.CONFIG = old
+    return f"{len(a.packages)} packages, {len(a.files)} model files ({a.size_mb / 1000:.1f} GB), {a.licence}"
 
 
 def _fake_addon_roundtrip(addons):
@@ -5472,8 +5528,8 @@ def u_addons():
                          text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-400:]
     rows = {r["id"]: r for r in json.loads(out.stdout)}
-    assert {"f5", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows) and "xtts" not in rows, sorted(rows)
-    assert rows["f5"]["installable"] and rows["kokoro"]["included"], rows["f5"]
+    assert {"f5", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker", "xtts"} <= set(rows), sorted(rows)
+    assert rows["f5"]["installable"] and rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["f5"]
     # rc-fix4b: the original Chatterbox is an optional add-on (open licence: nothing to accept; Turbo comes with setup)
     assert rows["chatterbox"]["installable"] and not rows["chatterbox"]["included"] and rows["chatterbox-turbo"]["included"]
     assert addons.ADDONS["chatterbox"].open and addons.ADDONS["chatterbox"].files
@@ -10293,7 +10349,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
