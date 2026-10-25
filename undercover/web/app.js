@@ -206,7 +206,8 @@ async function pollStatus() {
     $("#set-away-me-row").hidden = !s.away_ready || location.protocol === "https:";   // phase 20: ready on the PC
     if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
     sysStatus(s);
-    if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)
+    if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);
+    if (typeof tourStatus === "function") tourStatus(s.tour);   // the First assignment's tour: a fresh install's first visit to FrontMan (firstrun.js)   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)
     if (typeof firstReady === "function") firstReady(s);   // the first start's download in the one-shot card (oneshot.js)
     if (s.stale) restartNeeded();
     if (s.last_abrupt && store.get("uc-abrupt-seen", null) !== s.last_abrupt.at) {   // once per incident

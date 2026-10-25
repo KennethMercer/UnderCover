@@ -13,6 +13,10 @@ from here; the one-shot planner knows them ("Hold On as Agent Smoke": the librar
   copied into voices_dir when it isn't there, its build (extra.demo_build, from the shipped manifest) recorded. Its meta
   says demo: true, trained: false; nothing treats its "person" as someone to search for (core/voices.is_demo).
 Seeding only adds; it never replaces or deletes anything of the user's.
+
+- **The tour** (the First assignment, 1.1: a spotlight tour in four steps, web/firstrun.js): its state rides in the same
+  file as `tour` {step, skipped, done}. A fresh install starts it at step 0; an existing install has it done (nothing
+  shows) until Settings' Replay. Skipping ends it for good; the page asks once before it does.
 """
 import json
 import shutil
@@ -74,6 +78,36 @@ def first_run() -> dict:
             st = {"install": "fresh", "since": time.strftime("%Y-%m-%d"), "seeded": seed()}
         _save(st)
         return st
+
+
+# ---------------------------------------------------------------- the tour (the First assignment)
+def tour_status() -> dict:
+    """-> {step 0-4, skipped, done}: a fresh install that hasn't finished or skipped it gets the tour; any other copy has it done."""
+    st = load() or {}
+    t = st.get("tour")
+    if isinstance(t, dict):
+        return {"step": int(t.get("step") or 0), "skipped": bool(t.get("skipped")), "done": bool(t.get("done"))}
+    return {"step": 0, "skipped": False, "done": st.get("install") != "fresh"}
+
+
+def tour_change(step=None, skip: bool = False, done: bool = False, replay: bool = False) -> dict:
+    """Replay starts it again at step 0; skip ends it for good (skipped and done); done ends it; a step 1-4 records where it is."""
+    with _LOCK:
+        st = load() or {}
+        t = tour_status()
+        if replay:
+            t = {"step": 0, "skipped": False, "done": False}
+        elif skip:
+            t = {**t, "skipped": True, "done": True}
+        elif done:
+            t = {**t, "done": True}
+        elif step is not None:
+            if not isinstance(step, int) or not 0 <= step <= 4:
+                raise ModelError("The tour has four steps.")
+            t = {**t, "step": step}
+        st["tour"] = t
+        _save(st)
+        return t
 
 
 # ---------------------------------------------------------------- the seeds

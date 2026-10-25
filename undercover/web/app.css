@@ -133,6 +133,31 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .fact.ok { color: var(--ok); } .fact.warn { color: var(--warn); } .fact.bad { color: var(--err); }
 .fact[data-deep] { font: 500 12px/1.65 var(--mono); }
 .fact .like { font-weight: 600; }
+/* The First assignment's spotlight tour (firstrun.js): the veil dims the page and catches every click outside its holes (a clip-path
+   with holes); the rings light what's cut out (a shield ring also blocks it: the waiting state's progress); the card sits in the dark */
+.tour[hidden] { display: none; }
+.tour-veil { position: fixed; inset: 0; z-index: 90; background: rgba(6, 5, 4, .68); }
+.tour-ring { position: fixed; z-index: 91; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 75%, transparent), 0 0 34px -4px color-mix(in srgb, var(--accent) 80%, transparent); }
+.tour-ring.shield { pointer-events: auto; cursor: default; }
+.tour-card { position: fixed; z-index: 92; width: 380px; max-width: calc(100vw - 24px); padding: 16px 18px 14px; border-radius: 14px; background: var(--panel); color: var(--fg);
+  box-shadow: 0 24px 54px -18px rgba(0, 0, 0, .7), 0 0 0 1px var(--line); display: grid; gap: 10px; }
+.tour-card .tour-k { display: flex; align-items: baseline; gap: 10px; }
+.tour-card .tour-k b { flex: 1; font: 650 16.5px/1.25 var(--display); }
+.tour-card .tour-k small { font: 500 12px var(--mono); color: var(--muted); }
+.tour-card p { margin: 0; font-size: 14px; line-height: 1.55; color: color-mix(in srgb, var(--fg) 88%, var(--muted)); }
+.tour-card .tour-acts { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+.tour-card .tour-skip { margin-left: auto; color: var(--muted); }
+.tour-card .tour-try { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; border: 0; background: var(--accent); color: var(--accent-ink);
+  font: 600 14px var(--body); cursor: pointer; }
+.tour-card .tour-try .ico { width: 14px; height: 14px; fill: currentColor; stroke: none; }
+.tour-card .tour-try small { font: 500 12px var(--body); opacity: .8; }
+.tour-card .tour-now { color: var(--fg); font-weight: 500; }
+.tour-card .tour-tip { display: grid; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); }
+.tour-card .tour-tip-k { font: 600 11.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.tour-card #tour-tip-t { transition: opacity .25s; } .tour-card #tour-tip-t.out { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .tour-card #tour-tip-t { transition: none; } }
+@media (max-width: 520px) { .tour-card { width: auto; left: 12px !important; right: 12px; } }
 /* Low profile (lowprofile.js): the chip is one switch and, in Deep Cover, a "▾" for the numbers; on, the mark lights in the accent with a small ½ */
 .lp-chip { gap: 4px; }
 .lp-chip[hidden] { display: none; }

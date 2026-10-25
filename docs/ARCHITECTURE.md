@@ -462,6 +462,17 @@ into the queue drawer. Every waiting state says what it waits for (the GPU, a qu
 hung. A tab left open across an update compares `/api/status`'s `build` with the one it loaded and offers a reload
 (`#uc-updated`); `whatsnew.js` shows the newest note from `whatsnew.json` once.
 
+The First assignment (1.1) is a spotlight tour on a fresh install's first visit to FrontMan (`firstrun.js`): the page dims, the
+control in question is cut out and lit, one card sits beside it in the dark (never over it). Four steps: the one-shot line
+(with a one-press "Hold On as Agent Smoke", the sample song in the demo voice); listen and Send to SafeHouse; the SafeHouse tab,
+then the kept cover in the Library; DoubleAgent's "Who should it sound like?". Doing the thing moves it on; Next only where
+there's nothing to do. While the first cover is made the page stays dark: the app's own progress (the running strip, the
+one-shot's steps) is lit but can't be pressed, and a panel says what the job is doing in its own words with a tip every ten
+seconds; a failed cover offers Try again (the job's retry). Skip asks once and ends it for good; Settings has Replay. The
+page reads `/api/status`'s `tour` {step, skipped, done} (an existing install has it done) and posts `POST /api/firstrun`
+{step | skip | done | replay} (`app/firstrun.py`, in `tutorial.json` beside the config). `first_run` on the status is the
+models download's flag, not the tour's.
+
 Low profile (1.0.2) sits in the top bar beside the glasses: one click keeps UnderCover to half the graphics card and
 working in bursts, so a game gets the card most of the time; on, the mark lights with a small ½, and the strip reads
 "Working at a low profile". The numbers are Deep Cover's, behind a "▾" on the control (no Settings row): the memory
