@@ -866,7 +866,16 @@ def u_gamedetect():
         time.sleep(0.3)
         load = pf.gpu_3d_load()
         assert isinstance(load, dict) and all(isinstance(k, int) and v >= 0 for k, v in load.items()), load
-        live = f"; live: {len(ps)} programs, 3D counters for {len(load)}"
+        reopen = pf._GPU_REOPEN_S
+        try:   # opened again on schedule (programs started since get counted): one read without a rate, then rates
+            pf._GPU_REOPEN_S = 0.2
+            time.sleep(0.3)
+            assert pf.gpu_3d_load() is None
+            time.sleep(0.1)
+            assert isinstance(pf.gpu_3d_load(), dict)
+        finally:
+            pf._GPU_REOPEN_S = reopen
+        live = f"; live: {len(ps)} programs, 3D counters for {len(load)}, reopened on schedule"
     return f"library (6 not-games refused), 3D engine past {gp.GPU_PCT:.0f} % for {gp.GPU_FOR_S:.0f} s, the look in order{live}"
 
 
