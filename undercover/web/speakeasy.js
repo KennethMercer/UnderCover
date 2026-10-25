@@ -13,7 +13,7 @@ const SE_GROUPS = { af: "American women", bf: "British women", am: "American men
 document.addEventListener("uc:module", e => {
   SE.visible = e.detail === "speakeasy";
   $("#drop-overlay > div").textContent = SE.visible ? "Drop a .txt file to read it out"
-    : "Drop a song to load it, or a voice model (.zip / .pth) to install it";
+    : "Drop a song to load it, or a voice (.ucvoice, .zip or .pth) to install it";
   if (SE.visible) { seLoad(); api("/api/speak/warm", { json: {} }).catch(() => {}); }   // (its engine warmed while idle: 1.0.1)
   else { SE.rec.pause(); seRecIcons(); }   // the speech being made keeps playing only on this page
   if (!SE.visible && !SE.audio.paused) { SE.audio.pause(); sePlayIcon(); }
