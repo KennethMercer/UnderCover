@@ -3,7 +3,7 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## 1.0.2
+## 1.0.2 (2026-10-25)
 
 **Low profile** (lowprofile-page, v102)
 - Low profile, in the top bar beside Deep Cover, keeps UnderCover to half the graphics card and works in bursts, so a
