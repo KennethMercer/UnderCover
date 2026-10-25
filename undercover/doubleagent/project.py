@@ -13,7 +13,7 @@ import uuid
 import shutil
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 import numpy as np
@@ -61,6 +61,7 @@ class Phrase:
     sung: bool = False       # matched the person's singing voice better than their speaking voice
     noise: float = -1.0      # spectral flatness of the loud frames (hiss, artifacts); -1 = not measured yet
     floor: float = 1.0       # dB of the quiet gaps against the loud frames (hiss fills them); 1.0 = not measured yet
+    frozen: bool = False     # held out for the voice's frozen test (a singer's own sung phrases, 1.1): never trains
 
     @property
     def kept(self) -> bool:
@@ -106,7 +107,8 @@ class Project:
             raise ModelError(f"No training project called '{name}'.")
         d = json.loads(f.read_text(encoding="utf-8"))
         d["sources"] = [Source(**s) for s in d.get("sources", [])]
-        d["phrases"] = [Phrase(**p) for p in d.get("phrases", [])]
+        known = {f.name for f in fields(Phrase)}   # (a key from another version never stops the project loading)
+        d["phrases"] = [Phrase(**{k: v for k, v in p.items() if k in known}) for p in d.get("phrases", [])]
         return cls(**d)
 
     @classmethod
@@ -166,9 +168,11 @@ class Project:
     # ------------------------------------------------------------ summary
     def training_phrases(self) -> list:
         """The phrases a training uses: kept, from a ticked source (a phrase the user ticked by hand counts even in an
-        unticked one). Unticking a source after its clips were cut takes them out (smallfix7: they used to train)."""
+        unticked one). Unticking a source after its clips were cut takes them out (smallfix7: they used to train).
+        A phrase frozen into the voice's test (frozen.freeze, a singer's own sung phrases) never trains: a candidate
+        judged on it must not have learned it."""
         off = {s.id for s in self.sources if not s.selected}
-        return [p for p in self.phrases if p.kept and (p.choice is True or p.source not in off)]
+        return [p for p in self.phrases if p.kept and not p.frozen and (p.choice is True or p.source not in off)]
 
     def kept_seconds(self) -> float:
         return sum(p.dur for p in self.training_phrases())

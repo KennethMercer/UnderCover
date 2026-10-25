@@ -2391,7 +2391,7 @@ def u_frozen_bar():
     assert not offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["offer"], "a slipped donor likeness was offered"
     assert "other people" in offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["reasons"][0]
     assert not offer(_cmp(0.0, 0.08, 0.5, n=3))["offer"] and "too few" in offer(_cmp(0.0, 0.08, 0.5, n=3))["reasons"][0]
-    assert offer(_cmp(0.0, 0.08, 0.5, n=0), {"singer": True})["reasons"] == ["no spoken lines to judge a singer by yet"]
+    assert offer(_cmp(0.0, 0.08, 0.5, n=0), {"singer": True})["reasons"] == ["no spoken lines or sung phrases to judge a singer by yet"]
     assert offer(_cmp(0.0, 0.08, 0.5, nd=5))["offer"], "too few donors must skip the guard, not refuse"
     r = offer(_cmp(-0.02, 0.0, -0.39))["reasons"]
     assert r == ["the likeness slipped", "the voicing isn't clearer", "no more detail in it"], r
@@ -5052,6 +5052,62 @@ def u_frozen_files():
         assert (v3.dir / "model.pth").read_bytes() == b"approved-model" and frozen.load_test(v3)["approved"] == verdict["approved_model"]
         assert not (voices_dir() / "morgan-freeman-uc-next" / "test").exists()
     return f"{len(t['donors'])} donors, {len(t['lines'])} lines, scored by hash; level candidate not offered; keep / undo carry the test"
+
+
+@check("Improve for singers (1.1): a singer's frozen test holds their own sung phrases, frozen out of every later training; each voice is scored on them at their own key with the melody measures (pitch error, voicing kept); the bar judges on singing (provisional: no blind verdict on a singer yet) and refuses a candidate that follows the melody worse; the A/B reads the sung phrases without an octave shift; an old project with an unknown phrase key still loads")
+def u_frozen_singer():
+    import inspect
+    import json as _json
+    from undercover.core.voices import get_voice
+    from undercover.doubleagent import frozen, improved
+    from undercover.doubleagent import project as P
+    eng = _FakeEngine()
+    with isolated_data():
+        proj = _fake_project("barry-white", "Barry White")
+        for ph in proj.phrases:
+            ph.sung = True   # (a singer: every kept phrase sung)
+        proj.mode = "singing"
+        proj.save()
+        _fake_project("other-person", "Other Person", n_phrases=6, other=30, n_sources=12)
+        _fake_project("third-person", "Third Person", n_phrases=6, other=30, n_sources=12)
+        proj = P.Project.load("barry-white")
+        before = {p.id for p in proj.training_phrases()}
+        cur = _voice_dir("barry-white-uc", {"trained": True, "project": "barry-white", "f0_median": 98.0, "train_minutes": 20.0})
+        (cur / "model.pth").write_bytes(b"approved-singer")
+        v = get_voice("barry-white-uc")
+        t, s = frozen.ensure(v, proj, eng)
+        assert t["singer"] and t["lines"] == [] and frozen.SUNG_MIN <= len(t["sung"]) <= frozen.N_SUNG, (t["singer"], len(t["lines"]), len(t["sung"]))
+        assert any("provisional" in n for n in t["notes"]), t["notes"]
+        ids = {x["id"] for x in t["sung"]}
+        after = {p.id for p in P.Project.load("barry-white").training_phrases()}
+        assert ids <= before and not (ids & after) and after == before - ids, "the frozen sung phrases still train"
+        assert len(s["sung"]) == len(t["sung"]) and all(k in s["sung"][0] for k in ("id", "hnr", "contrast", "pitch_err", "voicing", "content"))
+        # a candidate the same as the approved one: judged on singing, provisional, not offered (nothing is better)
+        cand = _voice_dir("barry-white-uc-next", {"trained": True, "project": "barry-white", "f0_median": 98.0, "pending_for": "barry-white-uc"})
+        (cand / "model.pth").write_bytes(b"candidate-singer")
+        verdict = frozen.judge(v, get_voice("barry-white-uc-next"), eng)
+        assert verdict.get("on") == "singing" and verdict.get("provisional") and not verdict["offer"] and verdict["before"] is not None, verdict
+        assert "no spoken lines" not in " ".join(verdict["reasons"])
+        # the bar on fixed numbers: better on every term -> offered; the same but straying from the melody -> refused
+        good = lambda m, lo: {"mean": m, "lo": lo, "hi": m + 0.1, "n": 8}
+        cmp = {"lines": {"n": 0}, "donors": {"n": 0}, "sung": {"n": 8, "id": good(0.0, -0.005), "hnr": good(0.08, 0.02),
+                                                                 "contrast": good(0.5, 0.1), "pitch_err": good(2.0, -1.0)}}
+        ok = frozen.offer(cmp, t)
+        assert ok["offer"] and ok["on"] == "singing" and ok["provisional"] and "cleaner voicing" in ok["words"], ok
+        cmp["sung"]["pitch_err"] = good(25.0, 15.0)
+        bad = frozen.offer(cmp, t)
+        assert not bad["offer"] and not bad["terms"]["pitch"] and "melody" in " ".join(bad["reasons"]), bad
+        # the A/B: two sung phrases, kept in their key
+        ab = frozen.ab_inputs(v, n=2)
+        assert len(ab) == 2 and all(x["sung"] and x["file"].exists() for x in ab), ab
+        assert "0.0 if is_sung else render.octave_shift" in inspect.getsource(improved.make_samples)
+        # a phrase key from another version never stops the project loading
+        f = P.Project.load("barry-white").dir / "project.json"
+        d = _json.loads(f.read_text(encoding="utf-8"))
+        d["phrases"][0]["from_a_newer_version"] = 1
+        f.write_text(_json.dumps(d), encoding="utf-8")
+        assert P.Project.load("barry-white").phrases[0].id == d["phrases"][0]["id"]
+    return f"{len(t['sung'])} sung phrases frozen out of training; judged on singing (provisional); the melody guard refuses; A/B on sung phrases"
 
 
 @check("the source gate on a project (phase 26, R6): a failing source is unticked with the reason AND its cut phrases are left out of training; the user's own sources and ticked phrases are never touched; the report says kept (R3a)")
@@ -10233,7 +10289,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
