@@ -5,7 +5,7 @@
   and only when MasterPlan has cleared it (nobody at the PC: its wizard runs on this desktop, off-screen). It downloads
   about 11 GB and takes 30-60 minutes; the GPU is only touched by selftest's quick check and the first use.
 
-  powershell -ExecutionPolicy Bypass -File tests\installer_e2e.ps1 [-Root D:\] [-Keep] [-CancelCheck] [-NoFirstUse]
+  powershell -ExecutionPolicy Bypass -File tests\installer_e2e.ps1 [-Root D:\] [-Keep] [-CancelCheck] [-NoFirstUse] [-UpgradeCheck] [-NoUpgrade]
 
   -Root     the drive or folder the test install goes in (default: this repo's drive; the user hit os error 448 on D:)
   -Keep     leave the test install in place (default: deleted after the checks, pass or fail)
@@ -14,6 +14,9 @@
                 right, nothing half-made in place) and install nothing; the real run after it must carry on from there,
                 fetching none of those files again
   -NoFirstUse   skip the first cover and speech
+  -UpgradeCheck only the update in place: the released 1.0.0 installed and used (a kept cover and speech, a setting,
+                a voice of its own name), this installer over it; what survived checked (see the section below).
+                -CancelCheck runs it after its own run unless -NoUpgrade.
 
   The installer is built here as its test variant (ISCC /DReleaseCheck on installer\UnderCover.iss): the same code
   under its own name ("UnderCover release check (test)") and AppId, with no uninstaller, no shortcuts and no
@@ -48,7 +51,9 @@ param(
     [switch]$Keep,
     [switch]$CancelCheck,
     [switch]$NoFirstUse,
-    [string]$FirstUseOnly = ''   # an install made by an earlier run (-Keep): only its first-use check
+    [string]$FirstUseOnly = '',   # an install made by an earlier run (-Keep): only its first-use check
+    [switch]$UpgradeCheck,         # only the update in place: the released 1.0.0, used, then this installer over it
+    [switch]$NoUpgrade             # -CancelCheck without the update in place after it
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -141,6 +146,183 @@ if ($FirstUseOnly) {
     $why = FirstUse
     if ($why) { Write-Host "FAILED: first use: $why" -ForegroundColor Red; exit 1 }
     Write-Host "PASSED: first use downloaded nothing." -ForegroundColor Green; exit 0
+}
+
+# ---------------------------------------------------------------- the update in place (-UpgradeCheck)
+# The released 1.0.0 (its real installer, from the GitHub release, its SHA-256 checked) installed silently into the test
+# folder, used as a person would (a kept cover, a kept speech, a changed setting, a voice of their own with its own
+# name), then this checkout's installer, built as the real one, silently over it into the same folder. Checked: the new
+# version answers and its What's new is served; the cover, the speech, the voice (its name) and the setting survived;
+# config.toml still holds only what differs from the defaults; nothing was downloaded again that didn't change; a first
+# cover and speech still work and download nothing. Both are the real installers (the real AppId: the update path a
+# person takes), so for the run the PC has a registered test install and its Start menu entry; the new one's
+# uninstaller removes both at the end, and the check refuses to start when a real UnderCover is registered here.
+$Old = @{ tag = 'v1.0.0'; file = 'UnderCover-Setup-1.0.0.exe'; sha = 'd73ecc8b34f8c921406e45a50dfcd9a2a28beb7bea7b87e5348df25b8b90f3ad' }
+$UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E6B05D70-0109-4D65-8AEC-89622D0F5C91}_is1'
+function Serve {
+    $port = (7862..7869 | Where-Object { $c = New-Object Net.Sockets.TcpClient; try { $c.Connect('127.0.0.1', $_); $c.Close(); $false } catch { $true } } | Select-Object -First 1)
+    if (-not $port) { throw 'no free port in 7862-7869' }
+    $s = @{ base = "http://127.0.0.1:$port"; out = (Join-Path $dir "logs\upgrade-server-$port.log") }
+    $s.h = @{ Origin = $s.base }
+    $saved = @{}
+    foreach ($k in @('UNDERCOVER_CONFIG', 'UNDERCOVER_DATA_ROOT', 'UNDERCOVER_TEST_ROOTS', 'UNDERCOVER_SANDBOX_PORT', 'UNDERCOVER_LOW_PROFILE')) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $null)
+    }
+    [Environment]::SetEnvironmentVariable('UNDERCOVER_LOW_PROFILE', '12')   # (1.0.2 on: 12 GB of the card; 1.0.0 doesn't know it)
+    try {
+        $s.srv = Start-Process -FilePath $vpy -ArgumentList '-m', 'undercover.server', '--no-browser', '--no-tray', '--port', "$port" -WorkingDirectory $dir `
+                               -WindowStyle Hidden -RedirectStandardOutput $s.out -RedirectStandardError "$($s.out).err" -PassThru
+    } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+    $deadline = (Get-Date).AddMinutes(10); $st = $null
+    while ((Get-Date) -lt $deadline -and -not $s.srv.HasExited) {
+        Start-Sleep -Seconds 2
+        try { $st = Invoke-RestMethod "$($s.base)/api/status" -TimeoutSec 5 } catch { continue }
+        if ($st.models -eq 'ready' -or "$($st.models)".StartsWith('error')) { break }
+    }
+    if (-not $st -or $st.models -ne 'ready') { Unserve $s; throw "the installed copy didn't get ready: $($st.models)" }
+    $s.status = $st
+    return $s
+}
+function Unserve($s) {
+    try { Invoke-RestMethod "$($s.base)/api/quit" -Method Post -Headers $s.h -ContentType 'application/json' -Body '{}' -TimeoutSec 10 | Out-Null } catch { }
+    if (-not $s.srv.WaitForExit(60000)) { try { $s.srv.Kill() } catch { } }
+}
+function Post($s, [string]$p, $body) {
+    Invoke-RestMethod "$($s.base)$p" -Method Post -Headers $s.h -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5) -TimeoutSec 60
+}
+function WaitJob($s, [string]$id, [int]$minutes = 20) {
+    $deadline = (Get-Date).AddMinutes($minutes)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $all = Invoke-RestMethod "$($s.base)/api/jobs" -TimeoutSec 10
+        $snap = $all | Where-Object { $_.id -eq $id } | Select-Object -First 1
+        if ($snap -and $snap.final) { return $snap.final.state }
+    }
+    return 'still running'
+}
+function Install([string]$exe, [string]$log) {
+    $p = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$dir`"", "/LOG=`"$log`"" -PassThru
+    $null = $p.Handle
+    if (-not $p.WaitForExit(90 * 60 * 1000)) { Start-Process taskkill.exe -ArgumentList "/PID $($p.Id) /T /F" -WindowStyle Hidden -Wait; return -1 }
+    return $p.ExitCode
+}
+if ($UpgradeCheck) {
+    $runStart = Get-Date
+    $ufails = @()
+    if (Test-Path $UninstallKey) { Write-Host "An UnderCover install is registered on this PC (Apps): the upgrade check would install over it. Not run." -ForegroundColor Red; exit 2 }
+    $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $iscc) { Write-Host "Inno Setup 6 (ISCC.exe) isn't installed: it's needed to build the installer." -ForegroundColor Red; exit 2 }
+    $launch = Join-Path $env:TEMP ('uc-up-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force $launch | Out-Null
+    Write-Host "Upgrade check: $($Old.tag) installed into $dir, used, then this checkout's installer over it" -ForegroundColor White
+    try {
+        # 1. the released installer, as published, its SHA-256 checked
+        $oldExe = Join-Path $launch $Old.file
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest "https://github.com/KennethMercer/UnderCover/releases/download/$($Old.tag)/$($Old.file)" -OutFile $oldExe -UseBasicParsing
+        $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $oldExe).Hash.ToLower()
+        if ($got -ne $Old.sha) { throw "$($Old.file) isn't the release's file (SHA-256 $got)" }
+        $code = Install $oldExe (Join-Path $launch 'old-setup.log')
+        if ($code -ne 0) { throw "$($Old.tag)'s installer ended with $code" }
+        Write-Host "  $($Old.tag) installed (exit 0)"
+        # 2. used as a person would
+        $s = Serve
+        $seed = @{}
+        try {
+            $r = Post $s '/api/auto' @{ text = 'Hold On as Agent Smoke' }
+            $st = WaitJob $s $r.job
+            if ($st -ne 'done') { throw "$($Old.tag)'s first cover ended '$st'" }
+            $cov = @(Invoke-RestMethod "$($s.base)/api/library/covers" -TimeoutSec 30) | Sort-Object { $_.created } | Select-Object -Last 1
+            Post $s "/api/library/covers/$($cov.id)/keep" @{} | Out-Null
+            $seed.cover = $cov.id
+            $r = Post $s '/api/speak' @{ text = 'Kept from before the update.'; voice = 'agent-smoke'; cadence = $false }
+            $st = WaitJob $s $r.job
+            if ($st -ne 'done') { throw "$($Old.tag)'s speech ended '$st'" }
+            $sp = @(Invoke-RestMethod "$($s.base)/api/speak/recent" -TimeoutSec 30) | Select-Object -First 1
+            Post $s "/api/speak/$($sp.id)/keep" @{} | Out-Null
+            $seed.speech = $sp.id
+            Post $s '/api/gamepause/settings' @{ ask = $false } | Out-Null   # a changed setting (config.toml [game_pause] ask)
+            $vdir = Join-Path $dir 'models\voices'
+            Copy-Item -LiteralPath (Join-Path $vdir 'agent-smoke') -Destination (Join-Path $vdir 'upgrade-agent') -Recurse
+            $mf = Join-Path $vdir 'upgrade-agent\meta.json'
+            $m = Get-Content -LiteralPath $mf -Raw | ConvertFrom-Json
+            $m.name = 'upgrade-agent'; $m.dir = (Join-Path $vdir 'upgrade-agent'); $m.pth = (Join-Path $m.dir (Split-Path $m.pth -Leaf))
+            if ($m.index) { $m.index = (Join-Path $m.dir (Split-Path $m.index -Leaf)) }
+            [IO.File]::WriteAllText($mf, ($m | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
+            Start-Sleep -Seconds 3   # (the voice list is read again after two seconds)
+            Post $s '/api/library/voices/upgrade-agent/display' @{ display = 'Upgrade Agent' } | Out-Null
+            $seed.config = Get-Content -LiteralPath (Join-Path $dir 'config.toml') -Raw
+            Write-Host "  used: cover $($seed.cover) kept, speech $($seed.speech) kept, the game pause's asking off, voice 'Upgrade Agent'"
+        } finally { Unserve $s }
+        # 3. this checkout's installer, the real build, over it
+        & $iscc /Q "/O$launch" (Join-Path $repo 'installer\UnderCover.iss') | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Couldn't build the installer." }
+        $ver = (Get-Content -LiteralPath (Join-Path $repo 'undercover\VERSION') -Raw).Trim()
+        $newLog = Join-Path $launch 'new-setup.log'
+        $code = Install (Join-Path $launch "UnderCover-Setup-$ver.exe") $newLog
+        if ($code -ne 0) { $ufails += "the $ver installer over $($Old.tag) ended with $code" }
+        # 4. what survived, and what came new
+        $nlog = Get-Content -LiteralPath $newLog -Raw -ErrorAction SilentlyContinue
+        $changed = @(Compare-Object (git -C $repo show "$($Old.tag):installer/downloads.tsv" | ForEach-Object { ($_ -split "`t")[1, 3] -join '|' }) `
+                                    (Get-Content -LiteralPath (Join-Path $repo 'installer\downloads.tsv') | ForEach-Object { ($_ -split "`t")[1, 3] -join '|' }) |
+                     Where-Object { $_.SideIndicator -eq '=>' }).Count
+        $fetched = if ($nlog -match '(\d+) files to download') { [int]$Matches[1] } else { 0 }
+        Write-Host "  $ver over $($Old.tag): exit $code; $fetched files downloaded ($changed changed since $($Old.tag))"
+        if ($fetched -gt $changed) { $ufails += "the update downloaded $fetched files; only $changed changed since $($Old.tag)" }
+        $instVer = (Get-Content -LiteralPath (Join-Path $dir 'undercover\VERSION') -Raw -ErrorAction SilentlyContinue).Trim()
+        if ($instVer -ne $ver) { $ufails += "the install's VERSION says '$instVer', not $ver" }
+        $s = Serve
+        try {
+            if (-not "$($s.status.build)".StartsWith("$ver-")) { $ufails += "/api/status build is '$($s.status.build)', not $ver" }
+            $wnRepo = (Get-Content -LiteralPath (Join-Path $repo 'undercover\web\whatsnew.json') -Raw | ConvertFrom-Json).entries[0].id
+            $wn = Invoke-RestMethod "$($s.base)/static/whatsnew.json" -TimeoutSec 30
+            if ($wn.entries[0].id -ne $wnRepo) { $ufails += "What's new serves '$($wn.entries[0].id)' first, not $wnRepo" }
+            $c = @(Invoke-RestMethod "$($s.base)/api/library/covers" -TimeoutSec 30) | Where-Object { $_.id -eq $seed.cover }
+            if (-not $c -or -not $c.kept) { $ufails += "the kept cover $($seed.cover) didn't survive (kept: $($c.kept))" }
+            $sp = @(Invoke-RestMethod "$($s.base)/api/speak/recent" -TimeoutSec 30) | Where-Object { $_.id -eq $seed.speech }
+            if (-not $sp -or -not $sp.kept) { $ufails += "the kept speech $($seed.speech) didn't survive" }
+            $v = @(Invoke-RestMethod "$($s.base)/api/voices" -TimeoutSec 30) | Where-Object { $_.name -eq 'upgrade-agent' }
+            if (-not $v -or $v.display -ne 'Upgrade Agent') { $ufails += "the voice 'Upgrade Agent' didn't survive (display: '$($v.display)')" }
+            $gp = Invoke-RestMethod "$($s.base)/api/gamepause" -TimeoutSec 30
+            if ($gp.ask -ne $false) { $ufails += "the changed setting (the game pause's asking off) didn't survive" }
+        } finally { Unserve $s }
+        Push-Location $dir
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try {
+            $diff = (& $vpy -c "import sys, tomllib; from undercover.core import config as c; m = tomllib.loads(open('config.toml', encoding='utf-8').read()); d = c.differing(m, c.defaults()); print(sorted(set(f'{s}.{k}' for s in m for k in (m[s] if isinstance(m[s], dict) else [s])) - set(f'{s}.{k}' for s in d for k in (d[s] if isinstance(d[s], dict) else [s]))))" 2>&1 | Out-String).Trim()
+        } finally { $ErrorActionPreference = $eap; Pop-Location }
+        if ($diff -ne '[]') { $ufails += "config.toml holds keys equal to the defaults: $diff" } else { Write-Host '  config.toml: only what differs' }
+        if (-not $ufails.Count) {
+            $why = FirstUse
+            if ($why) { $ufails += "first use after the update: $why" } else { Write-Host "  first use after the update: nothing downloaded" }
+        }
+    } catch {
+        $ufails += "$_"
+    } finally {
+        # the new install's uninstaller takes the registration and the Start menu entry away, then the folder goes
+        $un = Join-Path $dir 'unins000.exe'
+        if (Test-Path $un) {
+            $p = Start-Process -FilePath $un -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
+            $null = $p.WaitForExit(10 * 60 * 1000)
+            Start-Sleep -Seconds 3   # (the uninstaller hands over to a copy of itself in %TEMP% and exits)
+        }
+        if (Test-Path $UninstallKey) { $ufails += "the test install is still registered (Apps): remove it there" }
+        if (-not $Keep) {
+            Get-ChildItem -LiteralPath $dir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint } |
+                ForEach-Object { try { [IO.Directory]::Delete($_.FullName, $false) } catch { } }
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $launch -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $mins = [math]::Round(((Get-Date) - $runStart).TotalMinutes, 1)
+    if ($ufails.Count) {
+        Write-Host "FAILED (upgrade, $mins min):" -ForegroundColor Red
+        $ufails | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        exit 1
+    }
+    Write-Host "PASSED: $($Old.tag) updated in place; the cover, the speech, the voice and the setting kept ($mins min)." -ForegroundColor Green
+    exit 0
 }
 
 Write-Host "Installer end-to-end check: a real install into $dir" -ForegroundColor White
@@ -632,6 +814,13 @@ if (-not $Keep) {
         ForEach-Object { try { [IO.Directory]::Delete($_.FullName, $false) } catch { } }
     Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path $dir) { Write-Host "Couldn't delete all of $dir" -ForegroundColor Yellow } else { Write-Host "Deleted $dir" }
+}
+
+# the update in place, after the release check's own run (every release check from 1.0.2 on): its own folder, run apart
+if ($CancelCheck -and -not $NoUpgrade) {
+    Write-Host ""
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -UpgradeCheck -Root $Root
+    if ($LASTEXITCODE -ne 0) { $fails += "the update in place (-UpgradeCheck) failed: see above" }
 }
 
 if ($fails.Count) {

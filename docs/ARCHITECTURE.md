@@ -575,7 +575,8 @@ port of 7862-7869 (or `UNDERCOVER_SANDBOX_PORT`) with scratch folders, its own s
 `--port N` checks a running server read-only. Smoke also checks the dependency rules, the platform helper rule, the
 `EventSource` rule, that every tab and view exists, that every route is in the phone table, and the roll-off's
 properties. `tests/fake_tailscale.py` stands in for Tailscale; `tests/installer_e2e.ps1` runs the real installer end to
-end. `scripts/check_env.py` verifies the torch build and the GPU; `scripts/make_demo_voice.py` builds Agent Smoke from
+end, and with `-UpgradeCheck` (also after every `-CancelCheck`) the update in place: the released 1.0.0 installed and
+used (a kept cover and speech, a setting, a voice of its own name), this installer over it, and what survived checked. `scripts/check_env.py` verifies the torch build and the GPU; `scripts/make_demo_voice.py` builds Agent Smoke from
 a Kokoro Reader reading a public-domain text, inside smoke's sandbox; `scripts/reader_prints.py` builds
 `assets/reader-prints.json`.
 
