@@ -34,7 +34,7 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
-from . import doctor_api, ear_api, firstrun, gamepause_api, lowprofile_api, phone_api, themes_api, vault_api
+from . import doctor_api, ear_api, firstrun, firstrun_api, gamepause_api, lowprofile_api, phone_api, themes_api, vault_api
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -351,6 +351,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
                                    "low_profile": lowprofile.status(),   # (absent = None: no card to share, the control hides)
+                                   "tour": firstrun.tour_status(),   # the First assignment's spotlight tour (web/firstrun.js)
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
                                    "away_ready": self.remote and _away_ready(),
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
@@ -423,7 +424,8 @@ class Handler(BaseHTTPRequestHandler):
                 or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)
                 or themes_api.handle(self, "POST", p)
                 or ear_api.handle(self, "POST", p) or vault_api.handle(self, "POST", p)
-                or gamepause_api.handle(self, "POST", p) or lowprofile_api.handle(self, "POST", p)):
+                or gamepause_api.handle(self, "POST", p) or lowprofile_api.handle(self, "POST", p)
+                or firstrun_api.handle(self, "POST", p)):
             return
         if p == "/api/voices/install":
             return self._start_install(self._body())

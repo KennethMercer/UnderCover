@@ -8332,7 +8332,7 @@ def u_page_rules():
     # page, and nothing calls its routes. What's new stays quiet for a copy with no covers.
     assert not (web / "tutorial.js").exists() and "tutorial.js" not in ix, "tutorial.js is back"
     pages = {f.name: f.read_text(encoding="utf-8") for f in web.iterdir() if f.suffix in (".js", ".html", ".css")}
-    left = sorted(n for n, src in pages.items() if re.search(r"/api/tutorial|\.tutorial\b|assign-|assignBrief|ASSIGNMENT_ON|wb-fold|First assignment", src))
+    left = sorted(n for n, src in pages.items() if re.search(r"/api/tutorial|\.tutorial\b|assign-|assignBrief|ASSIGNMENT_ON|wb-fold", src))   # "First assignment" is the tour's name again (firstrun.js)
     assert not left, f"the First assignment is still referenced in {left}"
     # rc-page8 (the user, on the fresh install: "Hold On as Agent Smoke ... with no tutorial it's just random words"): the field is EMPTY, no suggestion
     # line. rc-page14 (the user): its placeholder is ALWAYS "Pink Pony Club as Plankton", on a first run and after; nothing in the page changes it
@@ -8386,6 +8386,18 @@ def u_page_rules():
     assert '["gp-low", "low"]' in app and "Low profile while you play?" in app and "lowProfileOn()" in work and "Working at a low profile" in work, "the game question or the strip lost Low profile"
     arch = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert "POST /api/lowprofile" in arch and "`low_profile`" in arch, "ARCHITECTURE's UI section doesn't carry the Low profile hooks"
+    # The First assignment, again (1.1: the user's pick B, a spotlight tour, plus the waiting state): firstrun.js follows /api/status's `tour`, posts
+    # /api/firstrun; four steps; Skip asks once and ends it server-side; the waiting state lights the app's own progress (no bar of its own) and blocks it;
+    # tips rotate; Esc does nothing; Settings has Replay
+    frj = (web / "firstrun.js").read_text(encoding="utf-8")
+    assert '<script src="/static/firstrun.js">' in ix and 'id="set-tour-replay"' in ix and "tourStatus(s.tour)" in app, "the tour isn't wired into the page"
+    assert '"/api/firstrun"' in frj and "skip: true" in frj and "Skip the tour?" in frj and 'data-tour="skip-yes"' in frj and "replay: true" in frj, "the tour lost its skip-once or its replay"
+    assert '$("#workbar:not([hidden])")' in frj and "tour-ring${shield ? \" shield\"" in frj and "progress" not in frj.split("function tourCard")[1].split("function tourNow")[0].replace("tour-now", ""), "the waiting state must light the app's own progress, not draw a bar"
+    assert len(eval(frj.split("const TOUR_TIPS = ")[1].split("];")[0] + "]")) in range(6, 9) and "10000" in frj and 'e.key === "Escape") e.stopPropagation()' in frj, "the tips or the dead Esc are gone"
+    assert "clipPath = `path(evenodd" in frj and ".tour-veil {" in css and "prefers-reduced-motion: reduce) { .tour-card #tour-tip-t" in css, "the veil (clicks only reach the holes) or reduced motion is gone"
+    assert "TOUR_LONG = 180" in frj and 'data-tour="away"' in frj and "Leave it running and look around" in frj and "Your first cover is ready" in frj and "function tourNudge" in frj, "the long wait lost its look-around or its nudge"
+    from undercover.app import firstrun as _fr
+    assert {"step", "skipped", "done"} <= set(_fr.tour_status()) and "tour_change" in dir(_fr), "the server's tour state is gone"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)
     inside = re.compile(r"Internal Affairs|MasterPlan|\bIA\b|\bQA\b|\bpass \d|\bphase \d|smallfix|\brc-|\bqa\d|handoff|sandbox|voice lab", re.I)
     leaks = [l for e in json.loads((web / "whatsnew.json").read_text(encoding="utf-8"))["entries"] for l in [e["title"], *e["lines"]] if inside.search(l)]
@@ -8689,7 +8701,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
     ("GET", "/api/vault"), ("GET", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
-    ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"), ("POST", "/api/lowprofile"),
+    ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"), ("POST", "/api/lowprofile"), ("POST", "/api/firstrun"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
     ("POST", "/api/phone/revoke"), ("GET", "/api/away"), ("POST", "/api/away"), ("POST", "/api/away/forget"),
