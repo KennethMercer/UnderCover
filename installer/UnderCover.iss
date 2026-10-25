@@ -75,6 +75,7 @@ Source: "constraints.txt"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "setup.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "detect_gpu.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "python.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "installed.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "selftest.py"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "space.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "sizes.json"; DestDir: "{app}\installer"; Flags: ignoreversion
@@ -85,6 +86,9 @@ Source: "downloads.tsv"; Flags: dontcopy
 Source: "space.ps1"; Flags: dontcopy
 ; the check of the files an earlier run kept (1.0.1), from the wizard's temp folder too
 Source: "keptcheck.ps1"; Flags: dontcopy
+; what an install being updated already has (1.0.3: an update downloads only what changed), with the Python rule it reads
+Source: "installed.ps1"; Flags: dontcopy
+Source: "python.ps1"; Flags: dontcopy
 Source: "sizes.json"; Flags: dontcopy
 Source: "detect_gpu.ps1"; Flags: dontcopy
 Source: "requirements\*.txt"; DestDir: "{app}\installer\requirements"; Flags: ignoreversion
@@ -159,6 +163,7 @@ var
   DirParts, FilesNeed, FilesParts: TNewStaticText;   // the size lines: folder page (second line), files page (both)
   SpaceTimer: LongWord;  // the files page: a moment after the folders change, the size lines follow
   KeptMsg: String;       // the uninstaller's last word: the folders it kept, and why
+  Installed: String;     // the download list's destinations this install already has, one a line between line breaks (CheckInstalled)
 
 procedure RetryClick(Sender: TObject); forward;
 procedure OpenSetupLog(Sender: TObject); forward;
@@ -937,8 +942,52 @@ var
 begin
   Result := False;
   if (Trim(Line) = '') or not WantedGroup(TabField(Line, 0)) then Exit;
+  if Pos(#10 + TabField(Line, 1) + #13, Installed) > 0 then Exit;   // installed already, at its pin (an update: 1.0.3)
   Bytes := StrToInt64Def(TabField(Line, 4), 0);
   Result := not (FileSize64(DownloadDest(TabField(Line, 1)), Have) and (Have = Bytes));   // there already: a re-run
+end;
+
+// an update (1.0.3: 1.0.2 over 1.0.0 downloaded 108 of 137 files that hadn't changed): installed.ps1, the rule setup.ps1
+// uses too, lists what this install already has (a package at its pin in its own .venv, a tool where setup reuses it);
+// Pending skips those. Run hidden from the wizard's temp folder, the page answering meanwhile, as CheckKept does.
+// Nothing found (a new install, a venv setup didn't make, no answer): nothing skipped.
+procedure CheckInstalled;
+var
+  Waited, N, I: Integer;
+  Marker: String;
+  Said: AnsiString;
+  Shell: Variant;
+begin
+  Installed := #13#10;
+  if not FileExists(ExpandConstant('{app}\.venv\undercover-setup.txt')) and not DirExists(ExpandConstant('{app}\tools')) then Exit;
+  Marker := ExpandConstant('{tmp}\installed.txt');
+  DeleteFile(Marker);
+  DeleteFile(Marker + '.part');
+  DownloadPage.SetText('Looking at what this install already has...', '');
+  DownloadPage.Show;
+  try
+    ExtractTemporaryFile('installed.ps1');
+    ExtractTemporaryFile('python.ps1');
+    Shell := CreateOleObject('WScript.Shell');
+    Shell.Run('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\installed.ps1') +
+      '" -InstallDir "' + ExpandConstant('{app}') + '" -List "' + ExpandConstant('{tmp}\downloads.tsv') + '" -Out "' + Marker + '"', 0, False);
+    Waited := 0;
+    while (not FileExists(Marker)) and (Waited < 1800) do begin   // (three minutes: a cold venv's first start, never forever)
+      DownloadPage.SetProgress(Waited mod 100, 100);   // (keeps the window answering)
+      Sleep(100);
+      Waited := Waited + 1;
+    end;
+    if LoadStringFromFile(Marker, Said) then begin
+      Installed := #13#10 + String(Said);
+      if Copy(Installed, Length(Installed) - 1, 2) <> #13#10 then Installed := Installed + #13#10;
+      N := 0;
+      for I := 1 to Length(Installed) do if Installed[I] = #10 then N := N + 1;
+      Log(Format('%d files this install already has (installed at their pins): not downloaded again', [N - 1]));
+    end else Log('What this install already has couldn''t be read: everything it needs is downloaded');
+  except
+    Installed := #13#10;
+    Log('What this install already has couldn''t be checked: ' + GetExceptionMessage);
+  end;
 end;
 
 // the graphics card's PyTorch build, read once (space.ps1, from the folder page); none readable: the processor's
@@ -1058,6 +1107,7 @@ begin
   end;
   EnsureBackend;
   Log('Downloads for backend ' + Backend + ', add-ons "' + GetAddons('') + '"');
+  CheckInstalled;     // (an update: what the install has at its pins isn't downloaded again)
   CheckKept(Lines);   // (a damaged file kept from an earlier run is deleted here, so it's in the list below)
   DownloadTotal := 0;
   Largest := 0;
