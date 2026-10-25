@@ -82,7 +82,7 @@ def project_json(proj: P.Project) -> dict:
         # unless the user ticked it by hand; Step by step's Kept filter and its minutes then agree with kept_minutes
         "phrases": [{"id": p.id, "source": p.source, "start": p.start, "dur": p.dur, "score": p.score, "mix": p.mix,
                      "music_db": p.music_db, "choice": p.choice, "sung": p.sung, "kept": p.id in trains,
-                     "reason": UNTICKED if p.kept and p.id not in trains else p.reason,
+                     "reason": FROZEN if p.frozen else UNTICKED if p.kept and p.id not in trains else p.reason,
                      "url": files.file_url(proj.clip_path(p.id))} for p in proj.phrases],
         "speakers": [{**sp, "url": files.file_url(proj.clip_path(sp["clip"]))} for sp in proj.speakers],
         "reference_url": files.file_url(proj.clip_path(proj.reference["clip"])) if proj.reference.get("clip") else None,
@@ -93,6 +93,7 @@ def project_json(proj: P.Project) -> dict:
 
 
 UNTICKED = "its source is unticked"
+FROZEN = "kept out of training to test the voice by (Improve compares voices on it)"   # (1.1: a singer's frozen sung phrase)
 
 
 def _lengths() -> dict:

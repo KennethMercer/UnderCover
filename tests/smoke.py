@@ -5101,6 +5101,10 @@ def u_frozen_singer():
         ab = frozen.ab_inputs(v, n=2)
         assert len(ab) == 2 and all(x["sung"] and x["file"].exists() for x in ab), ab
         assert "0.0 if is_sung else render.octave_shift" in inspect.getsource(improved.make_samples)
+        from undercover.doubleagent import night, api as da_api
+        src = inspect.getsource(night._improve)   # the test is frozen BEFORE the candidate trains (else it learned it)
+        assert src.index("frozen.ensure(old, P.Project.load") < src.index("Trainer(proj"), "the frozen test is made after the candidate trained"
+        assert "FROZEN if p.frozen" in inspect.getsource(da_api), "a frozen phrase is listed with another reason"
         # a phrase key from another version never stops the project loading
         f = P.Project.load("barry-white").dir / "project.json"
         d = _json.loads(f.read_text(encoding="utf-8"))
