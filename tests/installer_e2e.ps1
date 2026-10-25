@@ -266,7 +266,12 @@ if ($UpgradeCheck) {
         $ver = (Get-Content -LiteralPath (Join-Path $repo 'undercover\VERSION') -Raw).Trim()
         $newLog = Join-Path $launch 'new-setup.log'
         $code = Install (Join-Path $launch "UnderCover-Setup-$ver.exe") $newLog
-        if ($code -ne 0) { $ufails += "the $ver installer over $($Old.tag) ended with $code" }
+        if ($code -ne 0) {
+            $ufails += "the $ver installer over $($Old.tag) ended with $code"
+            foreach ($f in @($newLog, (Join-Path $dir 'logs\setup.log'))) {   # (the why, before the folders go)
+                if (Test-Path -LiteralPath $f) { Write-Host "---- $f, last 30 lines ----"; Get-Content -LiteralPath $f -Tail 30 | ForEach-Object { Write-Host "    $_" } }
+            }
+        }
         # 4. what survived, and what came new
         $nlog = Get-Content -LiteralPath $newLog -Raw -ErrorAction SilentlyContinue
         $changed = @(Compare-Object (git -C $repo show "$($Old.tag):installer/downloads.tsv" | ForEach-Object { ($_ -split "`t")[1, 3] -join '|' }) `

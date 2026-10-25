@@ -164,6 +164,7 @@ var
   SpaceTimer: LongWord;  // the files page: a moment after the folders change, the size lines follow
   KeptMsg: String;       // the uninstaller's last word: the folders it kept, and why
   Installed: String;     // the download list's destinations this install already has, one a line between line breaks (CheckInstalled)
+  PageUp: Boolean;       // the download page is showing (CheckInstalled, CheckKept): hidden again when nothing is downloaded
 
 procedure RetryClick(Sender: TObject); forward;
 procedure OpenSetupLog(Sender: TObject); forward;
@@ -965,6 +966,7 @@ begin
   DeleteFile(Marker + '.part');
   DownloadPage.SetText('Looking at what this install already has...', '');
   DownloadPage.Show;
+  PageUp := True;
   try
     ExtractTemporaryFile('installed.ps1');
     ExtractTemporaryFile('python.ps1');
@@ -1064,6 +1066,7 @@ begin
   if N = 0 then Exit;
   Log(Format('%d files kept from an earlier run: checking their SHA-256', [N]));
   DownloadPage.Show;
+  PageUp := True;
   try
     ExtractTemporaryFile('keptcheck.ps1');
     Shell := CreateOleObject('WScript.Shell');
@@ -1107,6 +1110,7 @@ begin
   end;
   EnsureBackend;
   Log('Downloads for backend ' + Backend + ', add-ons "' + GetAddons('') + '"');
+  PageUp := False;
   CheckInstalled;     // (an update: what the install has at its pins isn't downloaded again)
   CheckKept(Lines);   // (a damaged file kept from an earlier run is deleted here, so it's in the list below)
   DownloadTotal := 0;
@@ -1122,6 +1126,10 @@ begin
   DownloadCount := GetArrayLength(Todo);
   Log(Format('%d files to download, %s GB', [DownloadCount, GBText(DownloadTotal)]));
   if DownloadCount = 0 then begin
+    // (a page shown for the checks above is hidden again: left up as the wizard goes on to Install, Inno's page list
+    // ran out of bounds, 'List index out of bounds (17)': an update with nothing to download, 1.0.3)
+    if PageUp then DownloadPage.Hide;
+    PageUp := False;
     Result := True;
     Exit;
   end;
