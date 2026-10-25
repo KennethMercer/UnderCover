@@ -5426,6 +5426,7 @@ def u_xtts():
     w = (ROOT / "undercover" / "core" / "cadence" / "worker.py").read_text(encoding="utf-8")
     assert '"xtts": XTTS' in w and "class XTTS:" in w and "_ensure(XTTS_FILES" in w, "the worker has no XTTS engine"
     assert "COQUI_TOS_AGREED" not in w, "the licence is accepted by the user on the add-on page, never set in code"
+    assert 'setdefault("MPLCONFIGDIR", str(path("cache_dir")' in w, "matplotlib's font cache would land in the home folder"
     # the model files: a pinned revision, each with its SHA-256, in the Doctor's list and the download list
     assert E.MODEL_FILES["xtts"] is E.XTTS_FILES == a.files and len(a.files) == 3, a.files
     for local, url in a.files.items():
