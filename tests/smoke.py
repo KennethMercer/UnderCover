@@ -4813,6 +4813,37 @@ def u_voicepack():
     return f"{kb} KB pack, identical back as pack-me-2; 6 refusals"
 
 
+@check("cadence pace (1.1): a clip's own pace from its transcript; two of the five reference clips go to the slowest clean ones near the best (6-12 s), never a fast one or a weak one; pace in the pick is a tie-break past the readings' noise, capped below the margin the approved Freeman pack wins its blind pair by")
+def u_pace():
+    from types import SimpleNamespace as NS
+    from undercover.doubleagent import cadence as C
+    assert C.pace_pen(1.0) == C.pace_pen(1.08) == C.pace_pen(0.93) == 0.0, "inside the readings' own noise: no penalty"
+    assert 0 < C.pace_pen(1.3) < C.pace_pen(1.5) <= C.CAP_PACE < 0.1 and C.pace_pen(3.0) == C.CAP_PACE
+    assert C.pace_pen(0.7) > 0 and C.pace_pen(None) == 0.0
+    m = {"score": 0.8, "pitch_off_st": 0.0, "pace_ratio": 1.5}
+    assert C.heard(m) == round(0.8 - C.pace_pen(1.5), 4)
+    text = "one two three four five six seven eight nine ten"   # (ten syllables)
+    clips = [NS(id=f"c{i}", source=f"s{i % 3}", dur=d, score=sc, noise=0.05, music_db=-40.0)
+             for i, (d, sc) in enumerate([(8, 0.90), (9, 0.89), (10, 0.88), (8.5, 0.87), (7.5, 0.86),   # fast, good
+                                           (11.5, 0.86), (6.2, 0.85), (10, 0.60)])]                     # slow, good / slow, weak
+    tr = {p.id: text for p in clips}
+    tr.update({"c5": "one two", "c6": "one two three", "c7": "one"})   # (c5, c6 slow; c7 the slowest but a weak clip)
+    saved = (C.speech_clips, C.clip_sound, C._plain)
+    try:
+        C.speech_clips = lambda proj: clips
+        C.clip_sound = lambda f: {"penalty": 0.0}
+        C._plain = lambda t: True
+        proj = NS(clip_path=lambda i: Path("x"))
+        assert C.clip_pace(clips[5], tr) == round(2 / 11.5, 3)
+        old = [p.id for p in C.ref_candidates(proj, tr, slow=0)]
+        new = [p.id for p in C.ref_candidates(proj, tr)]
+        assert old == ["c0", "c1", "c2", "c3", "c4"], old   # (6-12 s clips outside 7-11 s weren't in the old pool)
+        assert len(new) == 5 and new[:3] == ["c0", "c1", "c2"] and set(new[3:]) == {"c5", "c6"} and "c7" not in new, new
+    finally:
+        C.speech_clips, C.clip_sound, C._plain = saved
+    return f"pace_pen 1.3 -> {C.pace_pen(1.3)}, 1.5 -> {C.pace_pen(1.5)}, cap {C.CAP_PACE}; candidates {new}"
+
+
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
 def u_uninstall_kept_paths():
     import subprocess
@@ -10190,7 +10221,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
