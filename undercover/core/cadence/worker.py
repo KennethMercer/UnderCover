@@ -171,6 +171,8 @@ class XTTS:
         except ImportError:   # its tokenizer imports a Korean romaniser at the top (English never uses it)
             sys.modules.pop("ko_speech_tools", None)
             _stub("ko_speech_tools", hangul_romanize=None)
+        # matplotlib (imported by coqui's plotting helpers) keeps a font cache: in UnderCover's cache, not the home folder
+        os.environ.setdefault("MPLCONFIGDIR", str(path("cache_dir") / "matplotlib"))
         import transformers.pytorch_utils as tpu
         if not hasattr(tpu, "isin_mps_friendly"):   # gone from transformers 5; XTTS's GPT still imports it
             tpu.isin_mps_friendly = torch.isin
