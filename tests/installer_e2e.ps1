@@ -63,6 +63,12 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if ($admin) { Write-Host "Run this without admin rights: the check is a normal user's install." -ForegroundColor Red; exit 2 }
 
 if (-not $Root) { $Root = (Split-Path $repo -Qualifier) + '\' }
+# the demo voice's model files aren't kept in git (scripts/make_demo_voice.py makes them): a checkout without them
+# builds an installer with no Agent Smoke, and the first use's one-shot then has no voice to use (a 1.0.3 worktree)
+$demo = Join-Path $repo 'undercover\assets\demo-voice\agent-smoke'
+if (-not ((Test-Path (Join-Path $demo 'model.pth')) -and (Test-Path (Join-Path $demo 'model.index')))) {
+    Write-Host "The demo voice's model files aren't in this checkout ($demo): run scripts\make_demo_voice.py, or copy model.pth and model.index from a checkout that has them." -ForegroundColor Red; exit 2
+}
 $dir = Join-Path $Root ('uc-e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $runStart = Get-Date
 if ($FirstUseOnly) { $dir = (Resolve-Path -LiteralPath $FirstUseOnly).Path }
@@ -266,7 +272,12 @@ if ($UpgradeCheck) {
         $ver = (Get-Content -LiteralPath (Join-Path $repo 'undercover\VERSION') -Raw).Trim()
         $newLog = Join-Path $launch 'new-setup.log'
         $code = Install (Join-Path $launch "UnderCover-Setup-$ver.exe") $newLog
-        if ($code -ne 0) { $ufails += "the $ver installer over $($Old.tag) ended with $code" }
+        if ($code -ne 0) {
+            $ufails += "the $ver installer over $($Old.tag) ended with $code"
+            foreach ($f in @($newLog, (Join-Path $dir 'logs\setup.log'))) {   # (the why, before the folders go)
+                if (Test-Path -LiteralPath $f) { Write-Host "---- $f, last 30 lines ----"; Get-Content -LiteralPath $f -Tail 30 | ForEach-Object { Write-Host "    $_" } }
+            }
+        }
         # 4. what survived, and what came new
         $nlog = Get-Content -LiteralPath $newLog -Raw -ErrorAction SilentlyContinue
         $changed = @(Compare-Object (git -C $repo show "$($Old.tag):installer/downloads.tsv" | ForEach-Object { ($_ -split "`t")[1, 3] -join '|' }) `

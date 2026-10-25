@@ -32,7 +32,7 @@ which you switch on from the top bar.
 
 ## Installing
 
-1. Run `UnderCover-Setup-1.0.2.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
+1. Run `UnderCover-Setup-1.0.3.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
    not need administrator rights. The installer is not signed, so Windows may show a warning; choose More info and
    then Run anyway.
 2. Choose where your files are kept. The defaults are fine. Optional add-ons are off. Ticking one accepts its licence,

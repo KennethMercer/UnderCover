@@ -12,6 +12,13 @@ in brackets.
   agreement. Its weights are never a pickle, every file inside is checked before it's used, and an imported
   voice never replaces one you have. The way a voice talks (its cadence) stays on the PC that made it.
 
+## 1.0.3 (2026-10-25)
+
+**Updates download only what changed** (v103)
+- Installing a new version over an older one keeps the packages and tools it already has at the right versions,
+  and downloads only what changed. Before, every update downloaded several GB again (1.0.2 over 1.0.0: 108 of
+  137 files that hadn't changed).
+
 ## 1.0.2 (2026-10-25)
 
 **Low profile** (lowprofile-page, v102)
