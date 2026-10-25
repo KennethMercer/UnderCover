@@ -163,7 +163,10 @@ app's real folders in test mode. Writes go through `core/fsutil.py`, so a power 
 `<voices_dir>/<name>/`: `model.pth`, optional `model.index` (a compact fp16 form; `core/engine/rvc/index.py` reads
 faiss indexes without faiss), `meta.json`, and `preview.mp3` + `preview.json` (the "Go undercover as" clip; not part of
 the model). Files are found next to `meta.json`; stored absolute paths are a hint. The folder name is the id and never
-changes. Downloaded `.pth` files are loaded with `torch.load(weights_only=True)`.
+changes. Downloaded `.pth` files are loaded with `torch.load(weights_only=True)`, and a voice's `config` is held to
+RVC's own shapes before its network is built (`core.voices.check_config`, at install for a community `.pth` and a
+voice pack alike, and at load): the 18 values, the sizes capped, the upsampling equal to the sample rate's 10 ms hop
+(32, 40 or 48 kHz), and the config agreeing with its own weights; anything else is refused with the reason.
 
 `meta.extra` keys in use: `trained`, `project`, `epoch`, `train_minutes`, `likeness` (the voice check's score at export),
 `f0_median`, `f0_range` [p5, p50, p95], `from_speech`, `person` (stored at export from the project), `person_range`,

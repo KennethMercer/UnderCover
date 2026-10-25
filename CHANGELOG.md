@@ -11,6 +11,8 @@ in brackets.
   what basis it's shared, in the exporter's own words; a private person's voice is only shared with their
   agreement. Its weights are never a pickle, every file inside is checked before it's used, and an imported
   voice never replaces one you have. The way a voice talks (its cadence) stays on the PC that made it.
+- A voice model whose settings ask for a network RVC doesn't build is refused with the reason, whether it comes as a
+  voice pack or a downloaded model (cfgbounds): a crafted one could otherwise have used up the memory as it loaded.
 
 ## 1.0.3 (2026-10-25)
 
