@@ -175,6 +175,8 @@ class CoverEngine:
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
         lead_share = 0.5 if bvoice else 1.0
+        from ..core import lowprofile
+        lowprofile.free_for("convert")   # (under the cap: the separator goes before the conversion; back on first use)
         audio, sr = self.converter.convert(load_16k(cstems["vocals"]), voice.name, s,
                                            progress=lambda f: report("converting", f * lead_share, f"Converting the lead vocal to {label_of(voice.name)}"))
         work = path("cache_dir") / "converted"
@@ -456,6 +458,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
     from ..core.separate import QUALITY, SEP, file_hash
     quality = opts.quality or SEP["quality"]
     ov = QUALITY[quality]
+    from ..core import lowprofile
+    low = lowprofile.on()
     speeds = {"sep": [], "synth": [], "f0": []}
     log = path("logs_dir") / "timings.jsonl"
     if log.exists():
@@ -463,6 +467,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
             try:
                 r = json.loads(line)
             except ValueError:
+                continue
+            if bool(r.get("low_profile")) != low:   # (this mode's own measurements only)
                 continue
             if r.get("stage") == "separate.run" and r.get("overlap") == ov and r.get("model") == SEP["vocal_model"] and r.get("realtime"):
                 speeds["sep"].append(r["realtime"])
@@ -472,7 +478,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
                 speeds["synth"].append(r["realtime"])
             elif r.get("stage") == "convert.f0" and r.get("seconds_audio"):
                 speeds["f0"].append(r["seconds_audio"] / max(r["seconds"], 1e-3))
-    med = lambda xs, d: statistics.median(xs[-10:]) if xs else d
+    slow = lowprofile.factor()   # (no measurement under Low profile yet: the burst's share of the time, as a first guess)
+    med = lambda xs, d: statistics.median(xs[-10:]) if xs else d / slow
     sep_rt = med(speeds["sep"], {2: 10.6, 4: 5.1, 8: 2.7}[ov])
     stem_dir = (path("cache_dir") / "stems" / (file_hash(song) if song is not None else "none-yet")
                 / (Path(SEP["vocal_model"]).stem + ("" if quality == "high" else f"_{quality}")))

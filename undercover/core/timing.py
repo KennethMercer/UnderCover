@@ -21,6 +21,12 @@ def timed(stage: str, **fields):
         if record.get("audio_seconds"):
             record["realtime"] = round(record["audio_seconds"] / max(record["seconds"], 1e-6), 1)
         record["at"] = datetime.now().isoformat(timespec="seconds")
+        try:
+            from . import lowprofile
+            if lowprofile.on():   # (speeds under the cap and the bursts are kept apart from the full card's)
+                record["low_profile"] = True
+        except Exception:   # noqa: BLE001
+            pass
         with open(path("logs_dir") / "timings.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
         if VERBOSE:

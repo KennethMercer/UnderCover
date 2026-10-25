@@ -4572,11 +4572,142 @@ def u_v101():
         assert m and json.loads(m.group(1)) == [], m.group(1) if m else r.stdout[-300:]
         browsed = f"a / an right on {len(words)} words"
     # the release
-    assert (ROOT / "undercover" / "VERSION").read_text(encoding="utf-8").strip() == "1.0.1"
+    ver = tuple(int(x) for x in (ROOT / "undercover" / "VERSION").read_text(encoding="utf-8").strip().split("."))
+    assert ver >= (1, 0, 1), ver
     assert "\n## 1.0.1" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").replace("\r\n", "\n")
-    top = json.loads((ROOT / "undercover" / "web" / "whatsnew.json").read_text(encoding="utf-8"))["entries"][0]
+    top = next(e for e in json.loads((ROOT / "undercover" / "web" / "whatsnew.json").read_text(encoding="utf-8"))["entries"] if e["id"] == "2026-10-24-v101")
     assert top["title"] == "UnderCover 1.0.1" and 1 <= len(top["lines"]) <= 4, top
     return f"installer files, kept-file check, warm-up, report line, import rounds, release files; {browsed}"
+
+
+@check("Low profile (1.0.2): the settings and their defaults (off, half the card; a test server on at 12 GB); set() validates and persists; the limit is split (the worker's share while it's loaded); a kind that needs more than the cap waits and says so, an out-of-memory teaches it; a smaller training batch under a tight cap; speeds keyed apart; the burst's pause is bounded; the game pause's 'low' answer turns it on for that game and its closing turns it off; the route is in the phone table")
+def u_lowprofile():
+    import os
+    from undercover.core import gamepause, jobs, lowprofile as L
+    from undercover.core.voices import ModelError
+    saved_env = os.environ.get("UNDERCOVER_TEST_ROOTS")
+    saved_status = dict(jobs.STATUS)
+    saved_state = dict(L.STATE)
+    try:
+        with isolated_data():
+            jobs.STATUS["vram_gb"] = 24   # (a card, as the server's probe would say)
+            os.environ.pop("UNDERCOVER_TEST_ROOTS", None)
+            s = L.settings()
+            assert s == {"on": False, "limit_gb": 12, "burst": 0.5, "auto": False, "for_games": []}, s
+            assert L.status() == {"on": False, "limit_gb": 12, "burst": 0.5, "auto": False}
+            os.environ["UNDERCOVER_TEST_ROOTS"] = "x"
+            assert L.settings()["on"] and L.settings()["limit_gb"] == 12, "a test server runs with it on at 12 GB"
+            os.environ.pop("UNDERCOVER_TEST_ROOTS", None)
+            # set(): validated, persisted (the user's config.toml), applied
+            for bad in ({"limit_gb": 1}, {"limit_gb": 30}, {"burst": 0.1}, {"burst": "x"}):
+                try:
+                    L.change(**bad)
+                    raise AssertionError(f"accepted {bad}")
+                except ModelError:
+                    pass
+            st = L.change(on=True, limit_gb=10, burst=0.25, auto=True)
+            assert st == {"on": True, "limit_gb": 10, "burst": 0.25, "auto": True}, st
+            from undercover.core import config
+            txt = Path(config.CONFIG_FILE).read_text(encoding="utf-8")
+            assert "[low_profile]" in txt and "limit_gb = 10" in txt and "burst = 0.25" in txt, txt
+            # the split: the worker's share comes out of the server's cap while it's loaded
+            from undercover.core.cadence import client
+            was = client.WORKER.running
+            try:
+                client.WORKER.running = lambda: False
+                assert L.server_limit_gb() == 10.0 and L.worker_share() == 0.0
+                client.WORKER.running = lambda: True
+                assert 0 < L.worker_share() <= 4 and L.server_limit_gb() == round(10 - L.worker_share(), 2), (L.worker_share(), L.server_limit_gb())
+                assert 0 < L.worker_limit_gb() <= 9
+            finally:
+                client.WORKER.running = was
+            # what a kind needs: learned from allocated peaks; a kind over the cap waits, says so, and is let go on cancel
+            client.WORKER.running = lambda: False
+            try:
+                assert L.fits("cover") == (True, ""), "nothing learned yet: it runs"
+                for x in (3.5, 3.7, 3.6):
+                    L.record_need("cover", x)
+                assert L.fits("cover")[0] and 4.0 <= L.need_gb("cover") <= 4.3, L.need_gb("cover")
+                L.learn_from_oom("train", 7.9, 8.0)
+                ok, why = L.fits("train")
+                assert ok, why   # (8.7 needed, 10 allowed)
+                L.change(limit_gb=6)
+                ok, why = L.fits("train")
+                assert not ok and "needs about" in why and "allows 6" in why, (ok, why)
+                assert L.train_batch(8) == 4, L.train_batch(8)
+                L.change(limit_gb=16)
+                assert L.train_batch(8) == 8
+
+                class J:
+                    cancel = False
+                    events = []
+                    def push(self, **ev):
+                        self.events.append(ev)
+                L.change(limit_gb=6)
+                j = J()
+                ticks = []
+                def sleep(s):
+                    ticks.append(s)
+                    if len(ticks) == 3:
+                        j.cancel = True
+                assert L.wait_to_fit(j, "train", sleep=sleep) is False and len(ticks) == 3
+                assert j.events and j.events[0]["waits_for"] == "Low profile" and "needs about" in j.events[0]["message"], j.events
+                assert L.wait_to_fit(J(), "cover", sleep=sleep) is True
+            finally:
+                client.WORKER.running = was
+            # speeds apart, the burst's pause bounded, the first-guess factor
+            assert L.speed_key("chatterbox-turbo") == "chatterbox-turbo-lp" and L.factor() == 4.0   # (burst 0.25)
+            L.change(burst=0.5)
+            t0 = time.time()
+            L.gap(0.3)   # 0.3 s of work at half the time: 0.3 s of pause
+            L.gap(60.0)  # never longer than a second
+            took = time.time() - t0
+            assert 1.1 <= took <= 2.0, took
+            L.change(on=False)
+            assert L.speed_key("k") == "k" and L.factor() == 1.0
+            t0 = time.time()
+            L.gap(5.0)
+            assert time.time() - t0 < 0.05, "off: no pause"
+            # the game pause: "low" turns it on for the game and remembers it; the game's closing turns it off
+            gamepause.STATE.update(game={"exe": "game.exe", "title": "Game"}, asking={"exe": "game.exe"}, answer=None, paused_for=None)
+            r = gamepause.answer("low")
+            assert r["answer"] == "low" and L.on() and L.STATE["by_game"] == "game.exe" and "game.exe" in L.settings()["for_games"], (r, L.STATE)
+            assert L.wants_for_game("GAME.EXE")
+            gamepause.STATE["gone_since"] = 1.0
+            assert gamepause.observe(None, gamepause.GONE_S + 2.0, False) is None and not L.on(), "the game closed: off again"
+            # on by hand, then a game: its closing leaves it on
+            L.change(on=True)
+            L.game_on("other.exe")
+            assert L.STATE["by_game"] is None and not L.game_off("other.exe") and L.on()
+            L.change(on=False)
+            try:
+                gamepause.answer("low")
+                raise AssertionError("answered with no game")
+            except ModelError:
+                pass
+            # no card: nothing to share (the control hides)
+            jobs.STATUS["vram_gb"] = None
+            import sys as _s
+            torch_mod = _s.modules.pop("torch", None)
+            try:
+                assert L.status() is None and L.available() is False
+            finally:
+                if torch_mod is not None:
+                    _s.modules["torch"] = torch_mod
+        from undercover.app import phone_api
+        table = next(v for v in vars(phone_api).values() if isinstance(v, (list, tuple)) and any(isinstance(r, tuple) and len(r) >= 2 and r[1] == r"/api/gamepause" for r in v))
+        assert any(r[1] == r"/api/lowprofile" and r[0] == "POST" for r in table), "POST /api/lowprofile isn't in the phone table"
+    finally:
+        if saved_env is None:
+            os.environ.pop("UNDERCOVER_TEST_ROOTS", None)
+        else:
+            os.environ["UNDERCOVER_TEST_ROOTS"] = saved_env
+        jobs.STATUS.clear()
+        jobs.STATUS.update(saved_status)
+        L.STATE.clear()
+        L.STATE.update(saved_state)
+        gamepause.STATE.update(game=None, asking=None, answer=None, paused_for=None, gone_since=None, reason="")
+    return "defaults, test default, set(), the split, needs/waits/learns, batch, speeds, the pause, the game's on/off, the phone route"
 
 
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
@@ -9917,7 +10048,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

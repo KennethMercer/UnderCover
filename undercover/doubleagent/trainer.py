@@ -325,7 +325,8 @@ class Trainer:
         c = SR_CFG[sr]
         st["sr"] = sr
         length = st.get("length", "auto")
-        bs = int(st.get("batch_size") or TCFG["batch_size"])
+        from ..core import lowprofile
+        bs = lowprofile.train_batch(int(st.get("batch_size") or TCFG["batch_size"]))   # (smaller under a tight cap)
 
         report(stage="preparing", fraction=0.0, note="downloading base models")
         base = setup_models.base_model_files(sr)
@@ -443,6 +444,7 @@ class Trainer:
         shown = {"frac": 0.0, "end": None}   # the bar said so far (never backwards) and the end it was said against
         epoch = epoch0
         outcome = "done"
+        pacer = lowprofile.Pacer()   # (Low profile: a pause after each step, in proportion to its work)
         with timed("train.run", project=proj.name, from_epoch=epoch0, pieces=len(items), batch=bs) as rec:
             while epoch < max_epochs:
                 epoch += 1
@@ -482,6 +484,7 @@ class Trainer:
                     opt_g.zero_grad(set_to_none=True)
                     loss.backward()
                     opt_g.step()
+                    pacer.tick()
                     for k, v in (("mel", loss_mel), ("kl", loss_kl), ("fm", loss_fm), ("gen", loss_gen), ("disc", loss_disc)):
                         sums[k] += float(v.detach())
                     if warm is None:
@@ -754,9 +757,14 @@ def train_eta(left_steps: float, steps_done: int, secs: float, prior_step: float
     return (w * measured + (1 - w) * prior_step) * left_steps
 
 
+def _speed_key(sr, bs) -> str:
+    from ..core import lowprofile
+    return lowprofile.speed_key(f"{sr}-{bs}")   # (speeds under Low profile kept apart: "-lp")
+
+
 def _speed_prior(sr, bs) -> float | None:
     try:
-        return json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(f"{sr}-{bs}")
+        return json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(_speed_key(sr, bs))
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -767,7 +775,7 @@ def _speed_record(sr, bs, sec_per_step: float):
         d = json.loads(f.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         d = {}
-    d[f"{sr}-{bs}"] = sec_per_step
+    d[_speed_key(sr, bs)] = sec_per_step
     fsutil.write_text(f, json.dumps(d))
 
 

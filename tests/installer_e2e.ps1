@@ -79,9 +79,10 @@ function FirstUse {
     $before = CacheList
     $out = Join-Path $dir 'logs\firstuse-server.log'
     $saved = @{}
-    foreach ($k in @('UNDERCOVER_CONFIG', 'UNDERCOVER_DATA_ROOT', 'UNDERCOVER_TEST_ROOTS', 'UNDERCOVER_SANDBOX_PORT')) {
+    foreach ($k in @('UNDERCOVER_CONFIG', 'UNDERCOVER_DATA_ROOT', 'UNDERCOVER_TEST_ROOTS', 'UNDERCOVER_SANDBOX_PORT', 'UNDERCOVER_LOW_PROFILE')) {
         $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $null)
     }
+    [Environment]::SetEnvironmentVariable('UNDERCOVER_LOW_PROFILE', '12')   # (a test server keeps to 12 GB of the card, as every sandbox does)
     try {
         $srv = Start-Process -FilePath $vpy -ArgumentList '-m', 'undercover.server', '--no-browser', '--no-tray', '--port', "$port" -WorkingDirectory $dir `
                              -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError "$out.err" -PassThru

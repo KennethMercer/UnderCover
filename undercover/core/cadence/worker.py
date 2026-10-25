@@ -247,6 +247,8 @@ def op_ping(rid, req):
     info = {"pid": os.getpid(), "device": DEVICE, "torch": torch.__version__}
     if DEVICE == "cuda":
         info["vram_gb"] = round(torch.cuda.memory_allocated() / 2**30, 2)
+        from .. import gpu as G
+        info["peak_gb"] = G.peak_gb()
     return info
 
 
@@ -262,6 +264,10 @@ def main():
     sys.stdout = sys.stderr
     _standins()
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    from .. import gpu as G
+    cap = G.apply_cap()   # Low profile: the server's cap reaches this process through its environment
+    if cap:
+        print(f"graphics memory capped at {cap} GB", flush=True)
     for raw in sys.stdin.buffer:
         try:
             req = json.loads(raw)
@@ -272,6 +278,8 @@ def main():
         rid = req.get("id")
         try:
             reply(id=rid, ok=True, **OPS[req["op"]](rid, req))
+            if cap and req["op"] == "load":   # (what the engine takes under its share; the working peak is on ping)
+                print(f"peak_gb={G.peak_gb()} alloc={G.alloc_gb()} after {req['op']}", flush=True)
         except Exception as e:   # noqa: BLE001 - reported to the app, the worker carries on
             traceback.print_exc()
             msg = str(e) or e.__class__.__name__

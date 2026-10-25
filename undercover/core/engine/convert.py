@@ -235,6 +235,8 @@ class Converter:
 
         pieces, start = [], 0
         bounds = [t // WINDOW * WINDOW for t in opt_ts]
+        from .. import lowprofile
+        pacer = lowprofile.Pacer()   # (Low profile: a pause after each chunk, in proportion to its work)
         with timed("convert.synth", voice=lv.name, chunks=len(bounds) + 1, audio_seconds=round(len(audio) / SR16, 1)):
             for t in bounds + [None]:
                 end = None if t is None else t + 2 * t_pad + WINDOW
@@ -243,6 +245,7 @@ class Converter:
                 pc = pitch[:, fs:fe] if pitch is not None else None
                 pfc = pitchf[:, fs:fe] if pitchf is not None else None
                 piece = self._vc_chunk(lv, chunk, pc, pfc, s)[t_pad_tgt:-t_pad_tgt]
+                pacer.tick()
                 if t is not None:
                     # the chunk runs one frame (10 ms) past the next boundary; without this trim every seam pushed
                     # the rest of the vocal 10 ms later (measured ~20 ms drift by 2 min after exact chunk lengths)

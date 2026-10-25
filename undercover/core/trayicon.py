@@ -84,12 +84,16 @@ def tooltip(status: dict | None, jobs: list | None = None, doctor_bad: bool = Fa
     return "UnderCover · ready"
 
 
-def game_question(game: dict | None) -> str | None:
-    """The game pause's question as one line (None when nothing is being asked)."""
+def game_question(game: dict | None, low_profile: bool = False) -> str | None:
+    """The game pause's question as one line (None when nothing is being asked). With Low profile there, it's offered
+    first (the mockup's copy, the maintainers' notes, lowprofile)."""
     a = (game or {}).get("asking")
     if not a:
         return None
-    return f"{a.get('title') or a.get('exe')} is full-screen: pause UnderCover while you play?"
+    who = a.get('title') or a.get('exe')
+    if low_profile:
+        return f"Game on: {who}. UnderCover is working. Low profile while you play? It keeps to half the graphics card and works in bursts."
+    return f"{who} is full-screen: pause UnderCover while you play?"
 
 
 def menu_model(status: dict | None, jobs: list | None = None, phone_on: bool | None = None,
@@ -101,11 +105,14 @@ def menu_model(status: dict | None, jobs: list | None = None, phone_on: bool | N
                 {"id": "-"},
                 {"id": "close", "text": "Close this icon"}]
     items = []
-    q = game_question(game)
+    lp = status.get("low_profile")   # (None on a PC with no card to share: no switch, the old question)
+    q = game_question(game, bool(lp))
     if q:
         exe = game["asking"].get("exe") or "this game"
-        items += [{"id": "game-q", "text": q[:120], "enabled": False},
-                  {"id": "game-pause", "text": "Pause while I play"},
+        items += [{"id": "game-q", "text": q[:120], "enabled": False}]
+        if lp:
+            items.append({"id": "game-low", "text": "Low profile while I play"})
+        items += [{"id": "game-pause", "text": "Pause while I play"},
                   {"id": "game-both", "text": "Keep both running"},
                   {"id": "game-never", "text": f"Don't ask for {exe[:60]}"},
                   {"id": "-"}]
@@ -123,6 +130,8 @@ def menu_model(status: dict | None, jobs: list | None = None, phone_on: bool | N
         items.append({"id": "resume", "text": "Resume voice work"})
     elif any(j.get("kind") in ("train", "train-prepare", "train-auto", "train-transcribe", "night") for j in run):
         items.append({"id": "pause", "text": "Pause voice work"})
+    if lp:
+        items.append({"id": "lowprofile", "text": "Low profile", "checked": bool(lp.get("on"))})
     if phone_on is not None:
         items.append({"id": "phone", "text": "Phone access", "checked": bool(phone_on)})
     items += [{"id": "-"}, {"id": "restart", "text": "Restart"}, {"id": "quit", "text": "Quit UnderCover"}]
@@ -241,7 +250,7 @@ def run(port: int):
         a = (st["game"] or {}).get("asking")
         if a and a.get("since") != st["asked_at"]:   # a new question: one balloon (Windows holds it back in an
             st["asked_at"] = a.get("since")          # exclusive full-screen game; the menu and the phone still ask)
-            say(f"{game_question(st['game'])} Choose in this icon's menu, or on your phone.")
+            say(f"{game_question(st['game'], bool((st['status'] or {}).get('low_profile')))} Choose in this icon's menu, or on your phone.")
         if time.time() - st["phone_at"] > 60:   # the tick changes only when someone flips it (the action re-reads it)
             ph = srv.get("/api/phone")
             st["phone"] = ph.get("enabled") if isinstance(ph, dict) else None
@@ -265,8 +274,13 @@ def run(port: int):
                 ok, msg = srv.post(f"/api/work/{item_id}")
                 if not ok:
                     say(msg)
-            elif item_id in ("game-pause", "game-both", "game-never"):
+            elif item_id in ("game-pause", "game-both", "game-never", "game-low"):
                 ok, msg = srv.post("/api/gamepause", {"answer": item_id.split("-", 1)[1]})
+                if not ok:
+                    say(msg)
+            elif item_id == "lowprofile":
+                lp = (st["status"] or {}).get("low_profile") or {}
+                ok, msg = srv.post("/api/lowprofile", {"on": not lp.get("on")})
                 if not ok:
                     say(msg)
             elif item_id == "phone":

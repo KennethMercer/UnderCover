@@ -34,7 +34,7 @@ from ..doubleagent import night  # noqa: F401 - registers the overnight queue's 
 from ..doubleagent import cadence  # noqa: F401 - registers the cadence items (phase 4) and the engines' add-ons
 from ..speakeasy import api as speakeasy_api
 from ..speakeasy import speak  # noqa: F401 - registers SpeakEasy's user-facing errors
-from . import doctor_api, ear_api, firstrun, gamepause_api, phone_api, themes_api, vault_api
+from . import doctor_api, ear_api, firstrun, gamepause_api, lowprofile_api, phone_api, themes_api, vault_api
 
 UCFG = CONFIG["ui"]
 PKG = Path(__file__).resolve().parents[1]   # the undercover package
@@ -344,12 +344,13 @@ class Handler(BaseHTTPRequestHandler):
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
                         "start": w["start"], "start_at": w["settings"].get("start_at"),
                         "waits_until": w.get("waits_until"), "waits_for": w.get("waits_for")}   # B3: the strip says the wait
-                from ..core import addons, gamepause
+                from ..core import addons, gamepause, lowprofile
                 ga = gamepause.STATE.get("asking")   # the game pause's open question: every page and a paired phone show it
                 work["game_ask"] = {**ga, "reason": gamepause.STATE.get("reason") or ""} if ga else None
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
                                    "auto_job": auto, "cover_job": cover, "training": training, "work": work,
                                    "ytdlp_updated": ytdlp_swapped(), "build": BUILD,
+                                   "low_profile": lowprofile.status(),   # (absent = None: no card to share, the control hides)
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
                                    "away_ready": self.remote and _away_ready(),
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
@@ -422,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
                 or doctor_api.handle(self, "POST", p) or phone_api.handle(self, "POST", p)
                 or themes_api.handle(self, "POST", p)
                 or ear_api.handle(self, "POST", p) or vault_api.handle(self, "POST", p)
-                or gamepause_api.handle(self, "POST", p)):
+                or gamepause_api.handle(self, "POST", p) or lowprofile_api.handle(self, "POST", p)):
             return
         if p == "/api/voices/install":
             return self._start_install(self._body())

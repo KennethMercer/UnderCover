@@ -3,6 +3,17 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## 1.0.2
+
+**Low profile** (lowprofile-page, v102)
+- Low profile, in the top bar beside Deep Cover, keeps UnderCover to half the graphics card and works in bursts, so a
+  game gets the card most of the time. The limit is one number for the whole of UnderCover; a job that needs more than
+  it allows waits and says so instead of failing.
+- When a full-screen game starts, the question offers it first, and remembers the answer for that game. Deep Cover
+  holds the exact limit, how much of the time it works, and turning it on by itself for games.
+- Times shown while it's on come from speeds measured under it; the strip says "Working at a low profile".
+- Every test server runs with it on at 12 GB, so a test run leaves half the card.
+
 ## 1.0.1 (2026-10-24)
 
 **Licence** (licence, v101)
