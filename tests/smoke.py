@@ -4617,7 +4617,7 @@ def u_lowprofile():
                 client.WORKER.running = lambda: False
                 assert L.server_limit_gb() == 10.0 and L.worker_share() == 0.0
                 client.WORKER.running = lambda: True
-                assert 0 < L.worker_share() <= 4 and L.server_limit_gb() == round(10 - L.worker_share(), 2), (L.worker_share(), L.server_limit_gb())
+                assert L.worker_share() >= L.WHISPER_GB and L.server_limit_gb() == round(10 - L.worker_share(), 2), (L.worker_share(), L.server_limit_gb())   # (its transcripts' Whisper counts: 3.6 GB ran out)
                 assert 0 < L.worker_limit_gb() <= 9
             finally:
                 client.WORKER.running = was

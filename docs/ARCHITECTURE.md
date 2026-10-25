@@ -540,7 +540,8 @@ The installer and the app survive version mismatches and fix common problems the
 - Low profile (`core/lowprofile.py`, 1.0.2): UnderCover keeps to part of the graphics card and works in bursts, so a
   game gets the card most of the time. One number from the user, `limit_gb`, is the whole of UnderCover on the card:
   the server process is capped with PyTorch's per-process memory fraction (a hard limit on ROCm and CUDA: its allocator
-  refuses more, as a full card would), the cadence worker gets its engine's share (`engines.py` vram_gb) through its
+  refuses more, as a full card would), the cadence worker gets a share fixed when it starts, the most any of its work
+  takes (the largest engine it may read with, `engines.py` vram_gb, or Whisper's 5 GB for transcripts), through its
   environment (`UNDERCOVER_GPU_LIMIT_GB`) and that share comes out of the server's cap while the worker is loaded; a
   training stops the worker first and gets the whole limit. Under the cap, what the next step doesn't need is freed
   (`gpu.release`: the separator before a conversion or a speech; the separator, the converter and listen-back's ear
@@ -551,8 +552,8 @@ The installer and the app survive version mismatches and fix common problems the
   step is made of two micro-batches whose gradients add up (gradient accumulation; the generator's random slice and
   noise replayed for its own pass): the plan's batch, samples and steps stay, so a voice trained under Low profile is
   the same voice, only slower. While a training runs under it, covers wait for its end instead of running between its
-  steps; a job that doesn't fit goes to the back of the queue, so the ones behind it that fit run. The worker's share
-  is the largest engine it may load (the configured one, or a voice's pinned one). `burst` (0.25–0.75) is the share of the time it works: each step loop (training steps, conversion
+  steps; a job that doesn't fit goes to the back of the queue, so the ones behind it that fit run. An out-of-memory inside the
+  worker is the worker's, not the job's: it never teaches the server-side need. `burst` (0.25–0.75) is the share of the time it works: each step loop (training steps, conversion
   and separation chunks, sentences) calls `Pacer.tick()`, which waits for the GPU and pauses in proportion to the step
   (20 ms to 1 s). Speeds measured under it are kept apart (`-lp` keys in speak_speed.json, train_speed.json and
   eta.json; `low_profile: true` on timings.jsonl records), and an estimate with none yet takes 1/burst as its first

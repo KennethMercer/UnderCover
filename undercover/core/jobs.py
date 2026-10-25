@@ -506,7 +506,7 @@ def run_job(job: "Job", fn):
             # Out of GPU memory: free what UnderCover holds (cached voices, allocator cache) and try once more.
             # Separations are cached, so the retry picks up where it was; mostly hits smaller cards or a game open.
             from . import lowprofile
-            if attempt == 1 and _is_oom(e) and lowprofile.on():
+            if attempt == 1 and _is_oom(e) and lowprofile.on() and type(e).__name__ != "WorkerError":
                 # under Low profile's cap: the kind needs more than the cap allowed. Remember that, free everything, and
                 # wait for the cap to lift (off, or a higher limit) before the one retry: never an error for the user
                 from . import gpu

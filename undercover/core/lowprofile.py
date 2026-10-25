@@ -188,17 +188,24 @@ def game_off(exe: str | None = None) -> bool:
 
 # ---------------------------------------------------------------- the cap, split between the two processes
 
-def worker_share(engine: str | None = None) -> float:
-    """The cadence worker's share of the limit: its engine's graphics memory (the engines table), while it's loaded."""
-    from .cadence import engine_info
+WHISPER_GB = 5.0   # the worker's transcripts: Whisper large-v3-turbo loads at full precision (3.6 GB ran out, 2026-10-24)
+
+
+def worker_running() -> bool:
     try:
         from .cadence import client
-        if engine is None and not client.WORKER.running():
-            return 0.0
+        return client.WORKER.running()
     except Exception:   # noqa: BLE001 - no worker here
-        if engine is None:
-            return 0.0
-    info = engine_info(engine or (CONFIG.get("cadence") or {}).get("engine") or "chatterbox-turbo") or {}
+        return False
+
+
+def worker_share(engine: str | None = None) -> float:
+    """An engine's share (the engines table's graphics memory); with none given, the share the running worker was
+    started with (0 when there's no worker)."""
+    from .cadence import engine_info
+    if engine is None:
+        return (STATE.get("worker_cap") or reserve_gb()) if worker_running() else 0.0
+    info = engine_info(engine) or {}
     return float(info.get("vram_gb") or 3.6)
 
 
@@ -217,8 +224,9 @@ def worker_engines() -> set:
 
 
 def reserve_gb() -> float:
-    """The share to keep for the worker before its request is known: the largest of the engines it may load."""
-    return max(worker_share(engine=e) for e in worker_engines())
+    """The worker's share, fixed when it starts (its cap can't move later): the most any of its work takes, the largest of
+    the engines it may read with and Whisper for transcripts."""
+    return max([WHISPER_GB] + [worker_share(engine=e) for e in worker_engines()])
 
 
 def worker_limit_gb() -> float | None:
@@ -226,7 +234,9 @@ def worker_limit_gb() -> float | None:
     if not on():
         return None
     s = settings()
-    return round(min(float(s["limit_gb"]) - 1.0, reserve_gb()), 2)
+    cap = round(min(float(s["limit_gb"]) - 1.0, reserve_gb()), 2)
+    STATE["worker_cap"] = cap
+    return cap
 
 
 WORKER_KINDS = ("speech", "voicepreview", "speakwarm", "train-transcribe", "cadence", "newcad")   # jobs that read with the worker
@@ -240,7 +250,7 @@ def server_limit_gb(reserve_worker: bool = False) -> float | None:
         return None
     s = settings()
     lim = float(s["limit_gb"])
-    share = max(reserve_gb(), worker_share()) if reserve_worker else (reserve_gb() if worker_share() else 0.0)
+    share = max(reserve_gb(), worker_share()) if reserve_worker else worker_share()
     return round(max(1.0, lim - share), 2)
 
 
