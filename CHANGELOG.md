@@ -5,6 +5,12 @@ in brackets.
 
 ## Unreleased (1.1)
 
+**Games are seen behind other windows** (gamedetect)
+- The game pause, and Low profile's "on by itself for games", now see a game that isn't in front: a game from a
+  Steam, Epic, GOG, Xbox, Riot, EA or Ubisoft library while it runs (its menus, or alt-tabbed out), and any program
+  keeping the graphics card's 3D engine busy. Before, only a game filling the screen counted, so a game you had
+  switched away from could be slowed by UnderCover's work.
+
 **XTTS-v2 add-on** (xtts)
 - Coqui's XTTS-v2 is back as an optional engine for SpeakEasy's speech in a person's cadence: added in SafeHouse,
   Add-ons (or ticked in the installer), 1.9 GB, under its non-commercial licence, which you read and accept there.

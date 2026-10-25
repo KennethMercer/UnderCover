@@ -78,8 +78,9 @@ def tailscaled_os_args() -> list:
 def fullscreen_app() -> dict | None:
     """The program filling the screen right now, or None: {"exe", "path", "title", "how", "pid"}. Read only.
     how: "exclusive" (a game holding the screen: Windows' QUNS_RUNNING_D3D_FULL_SCREEN), "busy" (Windows' own
-    "something is full-screen", QUNS_BUSY), or "borderless" (the foreground window covers its whole monitor with no
-    title bar: many modern games). The desktop and the taskbar are never it."""
+    "something is full-screen", QUNS_BUSY), or "borderless" (the foreground window covers its whole monitor and isn't
+    a maximized one: many modern games, windowed full-screen with or without a title bar style). The desktop and the
+    taskbar are never it. A game that isn't in front (menus, alt-tab) is for processes() and gpu_3d_load() to see."""
     if not WINDOWS:
         raise _not("Seeing a full-screen game")
     import ctypes
@@ -96,9 +97,7 @@ def fullscreen_app() -> dict | None:
     user32.GetClassNameW(hwnd, cls, 256)
     if cls.value in ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
         return None
-    if how is None:   # borderless: no title bar, and the window covers its whole monitor
-        if user32.GetWindowLongW(hwnd, -16) & 0x00C00000 == 0x00C00000:   # GWL_STYLE has WS_CAPTION: a normal window
-            return None
+    if how is None:   # borderless: the window covers its whole monitor (a title bar style or not: windowed full-screen)
         if user32.IsZoomed(hwnd):   # maximized, not full-screen: a browser or an editor with its own title bar
             return None
 
@@ -116,17 +115,99 @@ def fullscreen_app() -> dict | None:
         how = "borderless"
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    exe = ""
-    h = kernel32.OpenProcess(0x1000, False, pid.value)   # PROCESS_QUERY_LIMITED_INFORMATION: no rights to change it
-    if h:
-        n, buf = wintypes.DWORD(1024), ctypes.create_unicode_buffer(1024)
-        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
-            exe = buf.value
-        kernel32.CloseHandle(h)
+    exe = process_path(pid.value)
     title = ctypes.create_unicode_buffer(512)
     user32.GetWindowTextW(hwnd, title, 512)
-    from pathlib import Path
     return {"exe": Path(exe).name if exe else "", "path": exe, "title": title.value, "how": how, "pid": pid.value}
+
+
+def process_path(pid: int) -> str:
+    """A process's program file ("" when it can't be read: gone, or another user's). Read only."""
+    if not WINDOWS:
+        raise _not("Reading a program's path")
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.windll.kernel32
+    h = kernel32.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION: no rights to change it
+    if not h:
+        return ""
+    try:
+        n, buf = wintypes.DWORD(1024), ctypes.create_unicode_buffer(1024)
+        return buf.value if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)) else ""
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def processes() -> dict:
+    """{pid: program file} of the processes this user can read. Read only."""
+    if not WINDOWS:
+        raise _not("Listing programs")
+    import ctypes
+    from ctypes import wintypes
+    psapi = ctypes.windll.psapi
+    n = 4096
+    while True:
+        arr, got = (wintypes.DWORD * n)(), wintypes.DWORD()
+        if not psapi.EnumProcesses(arr, ctypes.sizeof(arr), ctypes.byref(got)):
+            return {}
+        if got.value < ctypes.sizeof(arr):
+            break
+        n *= 2
+    out = {}
+    for pid in arr[:got.value // ctypes.sizeof(wintypes.DWORD)]:
+        if pid:
+            p = process_path(pid)
+            if p:
+                out[int(pid)] = p
+    return out
+
+
+_GPU_Q: dict = {}   # the 3D engine counters' query, kept open: their values are rates between two reads
+
+
+def gpu_3d_load() -> dict | None:
+    """{pid: % of the graphics card's 3D engine} since the last call (Windows' "GPU Engine" counters, the ones Task
+    Manager shows), or None on the first call (a rate needs two reads). Read only."""
+    if not WINDOWS:
+        raise _not("Reading the graphics card's load")
+    import ctypes
+    from ctypes import wintypes
+    pdh = ctypes.windll.pdh
+    if "q" not in _GPU_Q:
+        q, c = wintypes.HANDLE(), wintypes.HANDLE()
+        if pdh.PdhOpenQueryW(None, None, ctypes.byref(q)) != 0:
+            return None
+        if pdh.PdhAddEnglishCounterW(q, "\\GPU Engine(*engtype_3D)\\Utilization Percentage", None, ctypes.byref(c)) != 0:
+            pdh.PdhCloseQuery(q)
+            return None
+        pdh.PdhCollectQueryData(q)
+        _GPU_Q.update(q=q, c=c)
+        return None
+    if pdh.PdhCollectQueryData(_GPU_Q["q"]) != 0:
+        return None
+
+    class VALUE(ctypes.Structure):
+        _fields_ = [("CStatus", wintypes.DWORD), ("doubleValue", ctypes.c_double)]
+
+    class ITEM(ctypes.Structure):
+        _fields_ = [("szName", wintypes.LPWSTR), ("FmtValue", VALUE)]
+    size, count = wintypes.DWORD(0), wintypes.DWORD(0)
+    PDH_FMT_DOUBLE, PDH_MORE_DATA = 0x200, 0x800007D2
+    r = pdh.PdhGetFormattedCounterArrayW(_GPU_Q["c"], PDH_FMT_DOUBLE, ctypes.byref(size), ctypes.byref(count), None)
+    if r & 0xFFFFFFFF != PDH_MORE_DATA or not size.value:
+        return {}
+    buf = ctypes.create_string_buffer(size.value)
+    if pdh.PdhGetFormattedCounterArrayW(_GPU_Q["c"], PDH_FMT_DOUBLE, ctypes.byref(size), ctypes.byref(count), buf) != 0:
+        return {}
+    items = ctypes.cast(buf, ctypes.POINTER(ITEM))
+    out: dict = {}
+    for i in range(count.value):
+        it = items[i]
+        name = it.szName or ""
+        if it.FmtValue.CStatus in (0, 1) and name.startswith("pid_"):   # PDH_CSTATUS_VALID_DATA / NEW_DATA
+            pid = int(name.split("_")[1])
+            out[pid] = round(out.get(pid, 0.0) + max(0.0, it.FmtValue.doubleValue), 1)
+    return out
 
 
 # ---------------------------------------------------------------- files and folders
