@@ -3585,6 +3585,9 @@ def u_installer_downloads():
         for local in a.files:
             assert [r for r in rows if r["group"] == f"addon-{a.id}" and r["dest"] == f"models/{local}"], (a.id, local)
         assert not a.packages or (inst / "requirements" / f"addon-{a.id}.txt").exists(), a.id
+        # the size the add-on page and the installer say is what it downloads (F5 said 1.5 GB for 1.41)
+        got = sum(int(r["bytes"]) for r in rows if r["group"] == f"addon-{a.id}") / 1e6
+        assert abs(got - a.size_mb) <= 0.02 * got, (a.id, a.size_mb, round(got))
     # the tools: the versions setup.ps1 names
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
     base = {r["dest"][len("cache/"):] for r in rows if r["group"] == "base"}
