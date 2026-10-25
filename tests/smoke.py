@@ -3627,11 +3627,13 @@ def u_installer_downloads():
                       f"if ($InstallDir -ne '{d}') {{ Write-Output 'FAIL=installed.ps1 changed the InstallDir of setup'; exit 1 }}\n"
                       f"$Have = {have}; $PythonVer = '3.12.10'\n"
                       "Write-Output \"inplace=$(@(Rows @('packages') | Where-Object { InPlace $_ } | ForEach-Object { $_.pin }) -join ',')\"\n"
+                      # (a pin that moved is needed again: c==2 against an installed c==1)
+                      "Write-Output \"moved=$(Test-Installed ([pscustomobject]@{ pin = 'c==2'; dest = 'cache/c-2.whl' }) $Have $InstallDir $PythonVer)\"\n"
                       "Get-Files @('packages', 'models') 'the packages'\n")
             f = d / "t.ps1"
             f.write_text(script, encoding="utf-8")
             r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(f)], capture_output=True, text=True, timeout=120)
-            assert "inplace=a==1" in r.stdout, (r.stdout, r.stderr)
+            assert "inplace=a==1" in r.stdout and "moved=False" in r.stdout, (r.stdout, r.stderr)
             assert want in r.stdout, (have, r.stdout, r.stderr)
     finally:
         shutil.rmtree(d, ignore_errors=True)
