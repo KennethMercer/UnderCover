@@ -190,6 +190,9 @@ function Unserve($s) {
 function Post($s, [string]$p, $body) {
     Invoke-RestMethod "$($s.base)$p" -Method Post -Headers $s.h -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5) -TimeoutSec 60
 }
+# (one element per item: Windows PowerShell 5.1 pipes a JSON array from Invoke-RestMethod as a single object, so a
+# Where-Object let the whole list through and .display joined every voice's name)
+function List($s, [string]$p) { $all = Invoke-RestMethod "$($s.base)$p" -TimeoutSec 30; return $all }
 function WaitJob($s, [string]$id, [int]$minutes = 20) {
     $deadline = (Get-Date).AddMinutes($minutes)
     while ((Get-Date) -lt $deadline) {
@@ -232,13 +235,13 @@ if ($UpgradeCheck) {
             $r = Post $s '/api/auto' @{ text = 'Hold On as Agent Smoke' }
             $st = WaitJob $s $r.job
             if ($st -ne 'done') { throw "$($Old.tag)'s first cover ended '$st'" }
-            $cov = @(Invoke-RestMethod "$($s.base)/api/library/covers" -TimeoutSec 30) | Sort-Object { $_.created } | Select-Object -Last 1
+            $cov = @(List $s '/api/library/covers') | Sort-Object { $_.created } | Select-Object -Last 1
             Post $s "/api/library/covers/$($cov.id)/keep" @{} | Out-Null
             $seed.cover = $cov.id
             $r = Post $s '/api/speak' @{ text = 'Kept from before the update.'; voice = 'agent-smoke'; cadence = $false }
             $st = WaitJob $s $r.job
             if ($st -ne 'done') { throw "$($Old.tag)'s speech ended '$st'" }
-            $sp = @(Invoke-RestMethod "$($s.base)/api/speak/recent" -TimeoutSec 30) | Select-Object -First 1
+            $sp = @(List $s '/api/speak/recent') | Select-Object -First 1
             Post $s "/api/speak/$($sp.id)/keep" @{} | Out-Null
             $seed.speech = $sp.id
             Post $s '/api/gamepause/settings' @{ ask = $false } | Out-Null   # a changed setting (config.toml [game_pause] ask)
@@ -248,10 +251,11 @@ if ($UpgradeCheck) {
             $m = Get-Content -LiteralPath $mf -Raw | ConvertFrom-Json
             $m.name = 'upgrade-agent'; $m.dir = (Join-Path $vdir 'upgrade-agent'); $m.pth = (Join-Path $m.dir (Split-Path $m.pth -Leaf))
             if ($m.index) { $m.index = (Join-Path $m.dir (Split-Path $m.index -Leaf)) }
+            foreach ($k in @('demo', 'person', 'demo_build')) { $m.extra.PSObject.Properties.Remove($k) }   # (a copy of the demo voice isn't the demo)
             [IO.File]::WriteAllText($mf, ($m | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
             Start-Sleep -Seconds 3   # (the voice list is read again after two seconds)
             Post $s '/api/library/voices/upgrade-agent/display' @{ display = 'Upgrade Agent' } | Out-Null
-            $seed.display = (@(Invoke-RestMethod "$($s.base)/api/voices" -TimeoutSec 30) | Where-Object { $_.name -eq 'upgrade-agent' }).display
+            $seed.display = (@(List $s '/api/voices') | Where-Object { $_.name -eq 'upgrade-agent' }).display
             if ($seed.display -ne 'Upgrade Agent') { throw "$($Old.tag) itself named the voice '$($seed.display)'" }
             $seed.config = Get-Content -LiteralPath (Join-Path $dir 'config.toml') -Raw
             Write-Host "  used: cover $($seed.cover) kept, speech $($seed.speech) kept, the game pause's asking off, voice 'Upgrade Agent'"
@@ -279,11 +283,11 @@ if ($UpgradeCheck) {
             $wnRepo = (Get-Content -LiteralPath (Join-Path $repo 'undercover\web\whatsnew.json') -Raw | ConvertFrom-Json).entries[0].id
             $wn = Invoke-RestMethod "$($s.base)/static/whatsnew.json" -TimeoutSec 30
             if ($wn.entries[0].id -ne $wnRepo) { $ufails += "What's new serves '$($wn.entries[0].id)' first, not $wnRepo" }
-            $c = @(Invoke-RestMethod "$($s.base)/api/library/covers" -TimeoutSec 30) | Where-Object { $_.id -eq $seed.cover }
+            $c = @(List $s '/api/library/covers') | Where-Object { $_.id -eq $seed.cover }
             if (-not $c -or -not $c.kept) { $ufails += "the kept cover $($seed.cover) didn't survive (kept: $($c.kept))" }
-            $sp = @(Invoke-RestMethod "$($s.base)/api/speak/recent" -TimeoutSec 30) | Where-Object { $_.id -eq $seed.speech }
+            $sp = @(List $s '/api/speak/recent') | Where-Object { $_.id -eq $seed.speech }
             if (-not $sp -or -not $sp.kept) { $ufails += "the kept speech $($seed.speech) didn't survive" }
-            $v = @(Invoke-RestMethod "$($s.base)/api/voices" -TimeoutSec 30) | Where-Object { $_.name -eq 'upgrade-agent' }
+            $v = @(List $s '/api/voices') | Where-Object { $_.name -eq 'upgrade-agent' }
             if (-not $v -or $v.display -ne 'Upgrade Agent') { $ufails += "the voice 'Upgrade Agent' didn't survive (display: '$($v.display)')" }
             $gp = Invoke-RestMethod "$($s.base)/api/gamepause" -TimeoutSec 30
             if ($gp.ask -ne $false) { $ufails += "the changed setting (the game pause's asking off) didn't survive" }
