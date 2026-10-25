@@ -302,6 +302,7 @@ def before_job(job) -> bool:
     if not on():
         return True
     kind = kind_of(job)
+    need = 0.0
     if kind in WORKER_KINDS:   # (the worker's share for this job; a worker started with less is ended first: its cap can't grow)
         need = round(min(float(settings()["limit_gb"]) - 1.0, worker_need(kind)), 2)
         STATE["worker_next"] = need
@@ -320,6 +321,16 @@ def before_job(job) -> bool:
         free_for("speak")
     apply(reserve_worker=kind in WORKER_KINDS and kind not in TRAIN_KINDS)
     ok, why = fits(kind)
+    if not ok and worker_running() and (STATE.get("worker_cap") or 0) > need:
+        # a worker loaded with a bigger share than this job's (a cadence training's, before a speech): its share comes
+        # back; the next request starts it with the right one
+        try:
+            from .cadence import client
+            client.WORKER.stop(f"Low profile: its share goes to a {kind}")
+        except Exception:   # noqa: BLE001
+            pass
+        apply(reserve_worker=kind in WORKER_KINDS and kind not in TRAIN_KINDS)
+        ok, why = fits(kind)
     if ok:
         return True
     if why != getattr(job, "_lp_said", None):   # (said once per reason; the job goes to the back of the queue, looked at again)
