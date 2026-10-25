@@ -4743,8 +4743,9 @@ def u_voicepack():
     with isolated_data() as t:
         d = _voice_dir("pack-me", {"person": "Someone Public"})
         gen = torch.Generator().manual_seed(7)
-        weight = {"emb_phone.weight": torch.randn(192, 768, generator=gen).half(), "dec.conv_pre.weight": torch.randn(4, 3, 7, generator=gen).half()}
-        torch.save({"weight": weight, "config": [1025, 32, 192, 192, 768, 2, 6, 3, 0, "1", [3], [[1]], [10], 512, [16], 109, 256, 40000],
+        from undercover.doubleagent.trainer import model_config   # (a real 40 kHz config: crafted ones are refused, u_cfgbounds)
+        weight = {"enc_p.emb_phone.weight": torch.randn(192, 768, generator=gen).half(), "dec.conv_pre.weight": torch.randn(512, 192, 7, generator=gen).half()}
+        torch.save({"weight": weight, "config": model_config(40000),
                     "info": "48epoch", "sr": "40k", "f0": 1, "version": "v2"}, d / "model.pth")
         vecs = np.random.default_rng(3).standard_normal((50, 8)).astype(np.float16)
         (d / "model.index").write_bytes(COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
@@ -4811,6 +4812,48 @@ def u_voicepack():
         assert sub_demo["kind"] == "synthetic"
         kb = round(pack.stat().st_size / 1e3)
     return f"{kb} KB pack, identical back as pack-me-2; 6 refusals"
+
+
+@check("a voice's config is held to RVC's own shapes before its network is built (1.1): the trainer's own 32/40/48 kHz configs pass; a crafted one (a huge channel count, a hop that isn't the sample rate's, too many layers, a wrong length, weights that disagree with it) is refused with the reason, at install (community .pth and voice pack alike) and at load")
+def u_cfgbounds():
+    import inspect
+    import torch
+    from undercover.core import voices as V
+    from undercover.core.engine import convert
+    from undercover.doubleagent.trainer import SR_CFG, model_config
+    std = model_config(40000)
+    weight = {"enc_p.emb_phone.weight": torch.zeros(192, 768), "emb_g.weight": torch.zeros(109, 256),
+              "dec.conv_pre.weight": torch.zeros(512, 192, 7)}
+    for sr in SR_CFG:
+        V.check_config({"config": model_config(sr), "weight": weight}, f"{sr // 1000} kHz")   # (a voice trained here)
+    V.check_config({"config": [*std[:-1], "40k"], "weight": weight})   # (some community models say "40k")
+
+    def refused(cfg, word, w=weight):
+        try:
+            V.check_config({"config": cfg, "weight": w}, "the test voice")
+        except V.ModelError as e:
+            assert word in str(e), (word, str(e))
+            return str(e)
+        raise AssertionError(f"accepted a crafted config ({word})")
+    said = [refused(std[:13] + [2_000_000] + std[14:], "upsample initial channel"),
+            refused(std[:12] + [[10, 10, 2, 3]] + std[13:], "hop"),
+            refused(std[:6] + [400] + std[7:], "n layers"),
+            refused(std[:-1], "values where RVC has 18"),
+            refused(std[:17] + [44100], "sr"),
+            refused(std[:4] + [1 << 20] + std[5:], "filter channels"),
+            refused(std, "differ from its own weights", {**weight, "dec.conv_pre.weight": torch.zeros(256, 192, 7)})]
+    with isolated_data() as t:   # at install: a community .pth with a crafted config never gets past inspect_pth
+        p = t / "crafted.pth"
+        torch.save({"weight": weight, "config": std[:13] + [2_000_000] + std[14:], "version": "v2", "f0": 1}, p)
+        try:
+            V.inspect_pth(p)
+            raise AssertionError("inspect_pth accepted a crafted config")
+        except V.ModelError as e:
+            assert "isn't used" in str(e), str(e)
+    assert "check_config(ck" in inspect.getsource(convert.LoadedVoice.__init__).split("cls(*cfg")[0], "a voice's network is built before its config is checked"
+    from undercover.core import voicepack
+    assert "inspect_pth(" in inspect.getsource(voicepack.stage), "a voice pack's weights skip the config check"
+    return f"3 trainer configs pass; {len(said)} crafted ones refused, e.g. {said[0][:90]}"
 
 
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
@@ -10190,7 +10233,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

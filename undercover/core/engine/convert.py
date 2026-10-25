@@ -46,6 +46,8 @@ class LoadedVoice:
         from .rvc.synth import (SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono, SynthesizerTrnMs768NSFsid,
                                 SynthesizerTrnMs768NSFsid_nono)
         ck = torch.load(voice.pth, map_location="cpu", weights_only=True)
+        from ..voices import check_config, display_name
+        check_config(ck, display_name(voice))   # (before the network is built from it: RVC's own shapes only)
         self.version = ck.get("version", "v1")
         self.f0 = int(ck.get("f0", 1))
         cfg = list(ck["config"])
