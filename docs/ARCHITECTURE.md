@@ -468,7 +468,9 @@ control in question is cut out and lit, one card sits beside it in the dark (nev
 then the kept cover in the Library; DoubleAgent's "Who should it sound like?". Doing the thing moves it on; Next only where
 there's nothing to do. While the first cover is made the page stays dark: the app's own progress (the running strip, the
 one-shot's steps) is lit but can't be pressed, and a panel says what the job is doing in its own words with a tip every ten
-seconds; a failed cover offers Try again (the job's retry). Skip asks once and ends it for good; Settings has Replay. The
+seconds; a failed cover offers Try again (the job's retry). When the job's time left is over three minutes (`TOUR_LONG`), the
+panel offers "Leave it running and look around": the veil lifts and the job goes on. When it ends, a small "Your first cover
+is ready" card in the corner (or "didn't finish") brings the tour back at step 2 on one press, not a jump. Skip asks once and ends it for good; Settings has Replay. The
 page reads `/api/status`'s `tour` {step, skipped, done} (an existing install has it done) and posts `POST /api/firstrun`
 {step | skip | done | replay} (`app/firstrun.py`, in `tutorial.json` beside the config). `first_run` on the status is the
 models download's flag, not the tour's.
