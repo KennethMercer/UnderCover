@@ -54,6 +54,8 @@ Vocal separation models (Mel-Band Roformer), from the UVR community, through aud
 Optional add-ons (never installed unless the user accepts their licence):
   F5-TTS: SWivid, code MIT, weights Creative Commons Attribution-NonCommercial 4.0.
   Vocos mel-24khz: charactr, MIT.
+  XTTS-v2: Coqui, code (coqui-tts, maintained by Idiap) MPL-2.0, weights Coqui Public Model License 1.0.0
+    (non-commercial). https://huggingface.co/coqui/XTTS-v2
 
 
 SOFTWARE UNDERCOVER INSTALLS (from their publishers; not included here)

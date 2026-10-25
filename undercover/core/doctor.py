@@ -278,7 +278,8 @@ def c_models(ctx) -> list:
 
 def _part_name(part: str) -> str:
     return {"rvc": "Voice engine", "separation": "Vocal separation", "speaker": "Speaker check", "kokoro": "Kokoro",
-            "chatterbox": "Cadence engine (Chatterbox)", "chatterbox-turbo": "Cadence engine", "whisper": "Speech recogniser", "f5": "F5-TTS"}.get(part, part)
+            "chatterbox": "Cadence engine (Chatterbox)", "chatterbox-turbo": "Cadence engine", "whisper": "Speech recogniser", "f5": "F5-TTS",
+            "xtts": "XTTS-v2"}.get(part, part)
 
 
 def c_disk(ctx) -> list:

@@ -163,7 +163,10 @@ app's real folders in test mode. Writes go through `core/fsutil.py`, so a power 
 `<voices_dir>/<name>/`: `model.pth`, optional `model.index` (a compact fp16 form; `core/engine/rvc/index.py` reads
 faiss indexes without faiss), `meta.json`, and `preview.mp3` + `preview.json` (the "Go undercover as" clip; not part of
 the model). Files are found next to `meta.json`; stored absolute paths are a hint. The folder name is the id and never
-changes. Downloaded `.pth` files are loaded with `torch.load(weights_only=True)`.
+changes. Downloaded `.pth` files are loaded with `torch.load(weights_only=True)`, and a voice's `config` is held to
+RVC's own shapes before its network is built (`core.voices.check_config`, at install for a community `.pth` and a
+voice pack alike, and at load): the 18 values, the sizes capped, the upsampling equal to the sample rate's 10 ms hop
+(32, 40 or 48 kHz), and the config agreeing with its own weights; anything else is refused with the reason.
 
 `meta.extra` keys in use: `trained`, `project`, `epoch`, `train_minutes`, `likeness` (the voice check's score at export),
 `f0_median`, `f0_range` [p5, p50, p95], `from_speech`, `person` (stored at export from the project), `person_range`,
@@ -318,6 +321,16 @@ Slowing the reference clip to slow the reading was heard as slurred; that code i
 Chatterbox's files keeps reading with it until Turbo's arrive. Every Chatterbox output carries Resemble's inaudible
 watermark. Non-commercial engines (F5-TTS, XTTS-v2) are add-ons.
 
+XTTS-v2 (1.1) is the `xtts` row of `ENGINES` and the `xtts` add-on: coqui-tts 0.27.5 and its own needs, installed
+`--no-deps` from `installer/requirements/addon-xtts.txt` (`pin_hashes.py --addons` writes it from PyPI's hashes), and three
+pinned model files (`model.pth`, `config.json`, `vocab.json`, 1.9 GB) in `models/tts/xtts/`. Like Chatterbox it reads from
+the clip alone; it is not in the Chatterbox family, so a pack made with it reads with it, and a Chatterbox pack keeps
+reading with Chatterbox. The worker (`XTTS` in `cadence/worker.py`) loads the files directly (no Coqui download or
+terms prompt: the licence is accepted on the add-on page) with the model's own settings, and puts in three stand-ins for
+English reading on torch 2.9 (a Korean romaniser its tokenizer imports, a transformers helper gone in 5.x, coqui's
+torchcodec check; audio goes through soundfile). Its licence text is the copy in the model's repo at the pinned revision
+(Coqui's own site is gone).
+
 ### The Readers: Kokoro
 
 Kokoro (82M, Apache-2.0 code and weights, `kokoro-onnx` on the CPU) is the quick path for a voice without a cadence
@@ -413,6 +426,16 @@ harmonicity is up by at least 0.05 and spectral contrast by at least 0.35, each 
 likeness as a guard. That bar reproduced every blind verdict on record; a false offer costs more than a missed
 improvement, so these numbers are tightened, never loosened. Otherwise Improve reports "tried, no improvement: yours is
 kept" and the candidate parks in Set aside.
+
+A singer has no speech of their own to read back, so their frozen test (1.1) holds up to 12 of their own sung
+phrases instead (3-9 s, three per song at most), cut from their songs and separated from the music. From the moment
+the test is made they're held out of every training (`Phrase.frozen`): a candidate judged on them never learned
+them (the approved voice was trained before, so it has: a lean against offering, the safe side). Each voice converts
+them at their own key and is scored on the same measures plus two of singing's own against the source melody: the
+median cents it strays from it (`pitch_err`) and the share of voiced frames that stay voiced (`voicing`). The bar on
+them is the speech bar's terms with a pitch guard (no more than 10 cents further off the melody). It is provisional,
+and a verdict judged on singing says so: no blind verdict on a singer's Improve exists yet to fit it to. The
+Improve A/B plays two of the frozen sung phrases, each in its own key.
 
 Before anything trains, a source gate (`frozen.GATE`) admits a source only if its kept phrases sit near the approved
 voice (mean cosine to the reference at least 0.62, median phrase score at least 0.50), in its register (median pitch

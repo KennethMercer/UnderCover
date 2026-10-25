@@ -158,7 +158,58 @@ class F5:
         return np.asarray(wav, np.float32)
 
 
-ENGINE_CLASSES = {"chatterbox-turbo": ChatterboxTurbo, "chatterbox": Chatterbox, "f5": F5}
+class XTTS:
+    """Coqui's XTTS-v2 (an add-on, 1.1), read the way it was measured (the maintainers' notes, cadence): the model's own
+    settings from its config.json, English, the person's conditioning computed once per reference clip."""
+    sr = 24000
+
+    def __init__(self, rid):
+        from .engines import XTTS_FILES
+        _ensure(XTTS_FILES, "XTTS-v2", rid)
+        try:
+            __import__("ko_speech_tools")
+        except ImportError:   # its tokenizer imports a Korean romaniser at the top (English never uses it)
+            sys.modules.pop("ko_speech_tools", None)
+            _stub("ko_speech_tools", hangul_romanize=None)
+        # matplotlib (imported by coqui's plotting helpers) keeps a font cache: in UnderCover's cache, not the home folder
+        os.environ.setdefault("MPLCONFIGDIR", str(path("cache_dir") / "matplotlib"))
+        import transformers.pytorch_utils as tpu
+        if not hasattr(tpu, "isin_mps_friendly"):   # gone from transformers 5; XTTS's GPT still imports it
+            tpu.isin_mps_friendly = torch.isin
+        import transformers.utils.import_utils as iu
+        has_codec = iu.is_torchcodec_available
+        iu.is_torchcodec_available = lambda: True   # coqui refuses torch 2.9 without torchcodec; audio goes through soundfile here
+        try:
+            from TTS.tts.configs.xtts_config import XttsConfig
+            from TTS.tts.models.xtts import Xtts
+        finally:
+            iu.is_torchcodec_available = has_codec
+        d = path("models_dir") / "tts" / "xtts"
+        self.cfg = XttsConfig()
+        self.cfg.load_json(str(d / "config.json"))
+        self.m = Xtts.init_from_config(self.cfg)
+        self.m.load_checkpoint(self.cfg, checkpoint_dir=str(d), use_deepspeed=False, eval=True)
+        self.m.to(DEVICE)
+        self.sr = int(self.cfg.audio.output_sample_rate)
+        self.ref = None
+
+    def __call__(self, text, ref, ref_text, seed, opts):
+        c = self.cfg
+        st = os.stat(ref)   # a new pack puts a new clip at the same path (tts/ref.wav): its date and size tell
+        key = (ref, st.st_mtime_ns, st.st_size)
+        if self.ref != key:
+            self.lat = self.m.get_conditioning_latents(audio_path=[str(ref)], max_ref_length=c.max_ref_len,
+                                                        gpt_cond_len=c.gpt_cond_len, gpt_cond_chunk_len=c.gpt_cond_chunk_len,
+                                                        sound_norm_refs=c.sound_norm_refs)
+            self.ref = key
+        torch.manual_seed(seed)
+        out = self.m.inference(text, "en", *self.lat, temperature=float(opts.get("temperature", c.temperature)),
+                               length_penalty=c.length_penalty, repetition_penalty=c.repetition_penalty, top_k=c.top_k,
+                               top_p=c.top_p)
+        return np.asarray(out["wav"], np.float32)
+
+
+ENGINE_CLASSES = {"chatterbox-turbo": ChatterboxTurbo, "chatterbox": Chatterbox, "f5": F5, "xtts": XTTS}
 LOADED: dict = {}
 WHISPER: dict = {}
 from .engines import WHISPER_PROMPT as PROMPT   # shared with SpeakEasy's listen-back (the same hearing)

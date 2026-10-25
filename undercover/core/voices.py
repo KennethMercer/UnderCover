@@ -434,6 +434,99 @@ class Voice:
         return d
 
 
+# What a voice's config may ask for when its network is built (1.1): RVC v1 and v2's own shapes with room for small
+# variants, never more. A config is 18 numbers and lists that size the network before a single weight is read, so a
+# crafted one could ask for a network of any size (a memory blow-up, not code); every voice in the maintainers' library
+# (18 RVC v2, 32 and 40 kHz) has exactly the standard values.
+CFG_FIELDS = ("spec_channels", "segment_size", "inter_channels", "hidden_channels", "filter_channels", "n_heads",
+              "n_layers", "kernel_size", "p_dropout", "resblock", "resblock_kernel_sizes", "resblock_dilation_sizes",
+              "upsample_rates", "upsample_initial_channel", "upsample_kernel_sizes", "spk_embed_dim", "gin_channels", "sr")
+CFG_RATES = (32000, 40000, 48000)
+
+
+def _cfg_sr(v) -> int | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    m = re.fullmatch(r"(\d+)k", str(v).strip().lower())
+    return int(m.group(1)) * 1000 if m else None
+
+
+def check_config(ck: dict, what: str = "the voice") -> None:
+    """Refuse a voice whose config asks for a network outside RVC's known shapes, with the reason in plain words
+    (ModelError). ck: the loaded .pth dict ({"weight", "config", ...}). Its weights are held to the config too, where
+    they say the same thing (the phone embedding's width, the speaker table)."""
+    cfg = ck.get("config")
+    if not isinstance(cfg, (list, tuple)) or len(cfg) != len(CFG_FIELDS):
+        raise ModelError(f"{what}'s settings aren't an RVC voice's ({len(cfg) if isinstance(cfg, (list, tuple)) else 'no'} "
+                         f"values where RVC has {len(CFG_FIELDS)}), so it isn't used.")
+    c = dict(zip(CFG_FIELDS, cfg))
+
+    def bad(field, why):
+        raise ModelError(f"{what} asks for a network RVC doesn't build ({field.replace('_', ' ')} {why}), so it isn't used.")
+
+    def num(field, lo, hi):
+        v = c[field]
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            bad(field, f"is {v!r}; RVC's is between {lo} and {hi}")
+        return v
+
+    def ints(field, n_lo, n_hi, lo, hi):
+        v = c[field]
+        if not isinstance(v, (list, tuple)) or not n_lo <= len(v) <= n_hi or \
+                any(isinstance(x, bool) or not isinstance(x, int) or not lo <= x <= hi for x in v):
+            bad(field, f"is {v!r}")
+        return list(v)
+    if c["spec_channels"] not in (513, 1025):
+        bad("spec_channels", f"is {c['spec_channels']!r}; RVC's is 513 or 1025")
+    num("segment_size", 1, 128)
+    inter, hidden = num("inter_channels", 16, 256), num("hidden_channels", 16, 256)
+    num("filter_channels", 16, 1024)
+    heads = num("n_heads", 1, 8)
+    if hidden % heads:
+        bad("n_heads", f"({heads}) don't divide the hidden channels ({hidden})")
+    num("n_layers", 1, 12)
+    num("kernel_size", 1, 9)
+    if isinstance(c["p_dropout"], bool) or not isinstance(c["p_dropout"], (int, float)) or not 0 <= c["p_dropout"] < 1:
+        bad("p_dropout", f"is {c['p_dropout']!r}")
+    if str(c["resblock"]) not in ("1", "2"):
+        bad("resblock", f"is {c['resblock']!r}; RVC's is 1 or 2")
+    ks = ints("resblock_kernel_sizes", 1, 4, 1, 15)
+    dil = c["resblock_dilation_sizes"]
+    if not isinstance(dil, (list, tuple)) or len(dil) != len(ks) or \
+            any(not isinstance(d, (list, tuple)) or not 1 <= len(d) <= 4 or
+                any(isinstance(x, bool) or not isinstance(x, int) or not 1 <= x <= 9 for x in d) for d in dil):
+        bad("resblock_dilation_sizes", f"is {dil!r}")
+    rates = ints("upsample_rates", 1, 5, 1, 16)
+    up = num("upsample_initial_channel", 16, 1024)
+    kern = ints("upsample_kernel_sizes", len(rates), len(rates), 1, 48)
+    if any(not r <= k <= 3 * r for r, k in zip(rates, kern)):
+        bad("upsample_kernel_sizes", f"({kern}) don't fit the upsample rates ({rates})")
+    num("spk_embed_dim", 1, 1024)
+    gin = num("gin_channels", 1, 512)
+    sr = _cfg_sr(c["sr"])
+    if sr not in CFG_RATES:
+        bad("sr", f"is {c['sr']!r}; RVC's is 32, 40 or 48 kHz")
+    prod = 1
+    for r in rates:
+        prod *= r
+    if prod != sr // 100:   # (10 ms frames: the upsampling has to come to the sample rate's hop)
+        bad("upsample_rates", f"({rates}) come to a hop of {prod}, where {sr // 1000} kHz needs {sr // 100}")
+    w = ck.get("weight") or {}
+    emb = w.get("enc_p.emb_phone.weight")
+    if emb is not None and tuple(emb.shape)[:1] != (hidden,):
+        bad("hidden_channels", f"({hidden}) differ from its own weights ({tuple(emb.shape)})")
+    if emb is not None and tuple(emb.shape)[1:] not in ((256,), (768,)):
+        bad("phone embedding", f"is {tuple(emb.shape)}; RVC's reads 256 (v1) or 768 (v2) features")
+    g = w.get("emb_g.weight")
+    if g is not None and (len(g.shape) != 2 or g.shape[1] != gin or not 1 <= g.shape[0] <= 1024):
+        bad("speaker table", f"is {tuple(g.shape)} for {gin} gin channels")
+    pre = w.get("dec.conv_pre.weight")
+    if pre is not None and tuple(pre.shape)[:2] != (up, inter):
+        bad("upsample_initial_channel", f"({up}) differ from its own weights ({tuple(pre.shape)})")
+
+
 def inspect_pth(p: Path) -> dict:
     """Validate an RVC inference .pth safely and return its metadata."""
     import torch
@@ -443,6 +536,7 @@ def inspect_pth(p: Path) -> dict:
         raise ModelError(f"'{p.name}' isn't a loadable voice model (or contains unsafe code), so it was rejected. ({e.__class__.__name__})")
     if not isinstance(ck, dict) or "weight" not in ck or "config" not in ck:
         raise ModelError(f"'{p.name}' isn't an RVC inference model. It may be a training checkpoint (G_/D_ file).")
+    check_config(ck, f"'{p.name}'")   # (what it asks the network to be: a community download and a voice pack alike)
     cfg = ck["config"]
     version = ck.get("version") or ("v2" if any(t.shape[-1] == 768 for k, t in ck["weight"].items() if k.endswith("emb_phone.weight")) else "v1")
     sr = ck.get("sr")

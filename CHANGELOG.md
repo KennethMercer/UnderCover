@@ -5,12 +5,25 @@ in brackets.
 
 ## Unreleased (1.1)
 
+**XTTS-v2 add-on** (xtts)
+- Coqui's XTTS-v2 is back as an optional engine for SpeakEasy's speech in a person's cadence: added in SafeHouse,
+  Add-ons (or ticked in the installer), 1.9 GB, under its non-commercial licence, which you read and accept there.
+  It needs less graphics memory than the default and pauses more inside a sentence, but reads about three times
+  slower. Without it nothing changes.
+
+**Improve for singers** (singers)
+- Improve can now judge a singing voice: on short phrases of the singer's own songs, kept out of the training, it
+  offers a retrained voice only when it sounds clearly better there and follows the melody as well. The bar is new
+  for singers and will be tuned by the first blind listening.
+
 **Voice packs** (voicepack)
 - A voice can be saved as one file, a `.ucvoice` voice pack, from its page in SafeHouse's Library, and opened
   on another PC with UnderCover (Import a voice pack, or drop it in). The pack says whose voice it is and on
   what basis it's shared, in the exporter's own words; a private person's voice is only shared with their
   agreement. Its weights are never a pickle, every file inside is checked before it's used, and an imported
   voice never replaces one you have. The way a voice talks (its cadence) stays on the PC that made it.
+- A voice model whose settings ask for a network RVC doesn't build is refused with the reason, whether it comes as a
+  voice pack or a downloaded model (cfgbounds): a crafted one could otherwise have used up the memory as it loaded.
 
 ## 1.0.3 (2026-10-25)
 

@@ -2391,7 +2391,7 @@ def u_frozen_bar():
     assert not offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["offer"], "a slipped donor likeness was offered"
     assert "other people" in offer(_cmp(0.0, 0.08, 0.5, id_d=-0.05))["reasons"][0]
     assert not offer(_cmp(0.0, 0.08, 0.5, n=3))["offer"] and "too few" in offer(_cmp(0.0, 0.08, 0.5, n=3))["reasons"][0]
-    assert offer(_cmp(0.0, 0.08, 0.5, n=0), {"singer": True})["reasons"] == ["no spoken lines to judge a singer by yet"]
+    assert offer(_cmp(0.0, 0.08, 0.5, n=0), {"singer": True})["reasons"] == ["no spoken lines or sung phrases to judge a singer by yet"]
     assert offer(_cmp(0.0, 0.08, 0.5, nd=5))["offer"], "too few donors must skip the guard, not refuse"
     r = offer(_cmp(-0.02, 0.0, -0.39))["reasons"]
     assert r == ["the likeness slipped", "the voicing isn't clearer", "no more detail in it"], r
@@ -3585,6 +3585,9 @@ def u_installer_downloads():
         for local in a.files:
             assert [r for r in rows if r["group"] == f"addon-{a.id}" and r["dest"] == f"models/{local}"], (a.id, local)
         assert not a.packages or (inst / "requirements" / f"addon-{a.id}.txt").exists(), a.id
+        # the size the add-on page and the installer say is what it downloads (F5 said 1.5 GB for 1.41)
+        got = sum(int(r["bytes"]) for r in rows if r["group"] == f"addon-{a.id}") / 1e6
+        assert abs(got - a.size_mb) <= 0.02 * got, (a.id, a.size_mb, round(got))
     # the tools: the versions setup.ps1 names
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
     base = {r["dest"][len("cache/"):] for r in rows if r["group"] == "base"}
@@ -4743,8 +4746,9 @@ def u_voicepack():
     with isolated_data() as t:
         d = _voice_dir("pack-me", {"person": "Someone Public"})
         gen = torch.Generator().manual_seed(7)
-        weight = {"emb_phone.weight": torch.randn(192, 768, generator=gen).half(), "dec.conv_pre.weight": torch.randn(4, 3, 7, generator=gen).half()}
-        torch.save({"weight": weight, "config": [1025, 32, 192, 192, 768, 2, 6, 3, 0, "1", [3], [[1]], [10], 512, [16], 109, 256, 40000],
+        from undercover.doubleagent.trainer import model_config   # (a real 40 kHz config: crafted ones are refused, u_cfgbounds)
+        weight = {"enc_p.emb_phone.weight": torch.randn(192, 768, generator=gen).half(), "dec.conv_pre.weight": torch.randn(512, 192, 7, generator=gen).half()}
+        torch.save({"weight": weight, "config": model_config(40000),
                     "info": "48epoch", "sr": "40k", "f0": 1, "version": "v2"}, d / "model.pth")
         vecs = np.random.default_rng(3).standard_normal((50, 8)).astype(np.float16)
         (d / "model.index").write_bytes(COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
@@ -4842,6 +4846,48 @@ def u_pace():
     finally:
         C.speech_clips, C.clip_sound, C._plain = saved
     return f"pace_pen 1.3 -> {C.pace_pen(1.3)}, 1.5 -> {C.pace_pen(1.5)}, cap {C.CAP_PACE}; candidates {new}"
+
+
+@check("a voice's config is held to RVC's own shapes before its network is built (1.1): the trainer's own 32/40/48 kHz configs pass; a crafted one (a huge channel count, a hop that isn't the sample rate's, too many layers, a wrong length, weights that disagree with it) is refused with the reason, at install (community .pth and voice pack alike) and at load")
+def u_cfgbounds():
+    import inspect
+    import torch
+    from undercover.core import voices as V
+    from undercover.core.engine import convert
+    from undercover.doubleagent.trainer import SR_CFG, model_config
+    std = model_config(40000)
+    weight = {"enc_p.emb_phone.weight": torch.zeros(192, 768), "emb_g.weight": torch.zeros(109, 256),
+              "dec.conv_pre.weight": torch.zeros(512, 192, 7)}
+    for sr in SR_CFG:
+        V.check_config({"config": model_config(sr), "weight": weight}, f"{sr // 1000} kHz")   # (a voice trained here)
+    V.check_config({"config": [*std[:-1], "40k"], "weight": weight})   # (some community models say "40k")
+
+    def refused(cfg, word, w=weight):
+        try:
+            V.check_config({"config": cfg, "weight": w}, "the test voice")
+        except V.ModelError as e:
+            assert word in str(e), (word, str(e))
+            return str(e)
+        raise AssertionError(f"accepted a crafted config ({word})")
+    said = [refused(std[:13] + [2_000_000] + std[14:], "upsample initial channel"),
+            refused(std[:12] + [[10, 10, 2, 3]] + std[13:], "hop"),
+            refused(std[:6] + [400] + std[7:], "n layers"),
+            refused(std[:-1], "values where RVC has 18"),
+            refused(std[:17] + [44100], "sr"),
+            refused(std[:4] + [1 << 20] + std[5:], "filter channels"),
+            refused(std, "differ from its own weights", {**weight, "dec.conv_pre.weight": torch.zeros(256, 192, 7)})]
+    with isolated_data() as t:   # at install: a community .pth with a crafted config never gets past inspect_pth
+        p = t / "crafted.pth"
+        torch.save({"weight": weight, "config": std[:13] + [2_000_000] + std[14:], "version": "v2", "f0": 1}, p)
+        try:
+            V.inspect_pth(p)
+            raise AssertionError("inspect_pth accepted a crafted config")
+        except V.ModelError as e:
+            assert "isn't used" in str(e), str(e)
+    assert "check_config(ck" in inspect.getsource(convert.LoadedVoice.__init__).split("cls(*cfg")[0], "a voice's network is built before its config is checked"
+    from undercover.core import voicepack
+    assert "inspect_pth(" in inspect.getsource(voicepack.stage), "a voice pack's weights skip the config check"
+    return f"3 trainer configs pass; {len(said)} crafted ones refused, e.g. {said[0][:90]}"
 
 
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
@@ -5040,6 +5086,66 @@ def u_frozen_files():
         assert (v3.dir / "model.pth").read_bytes() == b"approved-model" and frozen.load_test(v3)["approved"] == verdict["approved_model"]
         assert not (voices_dir() / "morgan-freeman-uc-next" / "test").exists()
     return f"{len(t['donors'])} donors, {len(t['lines'])} lines, scored by hash; level candidate not offered; keep / undo carry the test"
+
+
+@check("Improve for singers (1.1): a singer's frozen test holds their own sung phrases, frozen out of every later training; each voice is scored on them at their own key with the melody measures (pitch error, voicing kept); the bar judges on singing (provisional: no blind verdict on a singer yet) and refuses a candidate that follows the melody worse; the A/B reads the sung phrases without an octave shift; an old project with an unknown phrase key still loads")
+def u_frozen_singer():
+    import inspect
+    import json as _json
+    from undercover.core.voices import get_voice
+    from undercover.doubleagent import frozen, improved
+    from undercover.doubleagent import project as P
+    eng = _FakeEngine()
+    with isolated_data():
+        proj = _fake_project("barry-white", "Barry White")
+        for ph in proj.phrases:
+            ph.sung = True   # (a singer: every kept phrase sung)
+        proj.mode = "singing"
+        proj.save()
+        _fake_project("other-person", "Other Person", n_phrases=6, other=30, n_sources=12)
+        _fake_project("third-person", "Third Person", n_phrases=6, other=30, n_sources=12)
+        proj = P.Project.load("barry-white")
+        before = {p.id for p in proj.training_phrases()}
+        cur = _voice_dir("barry-white-uc", {"trained": True, "project": "barry-white", "f0_median": 98.0, "train_minutes": 20.0})
+        (cur / "model.pth").write_bytes(b"approved-singer")
+        v = get_voice("barry-white-uc")
+        t, s = frozen.ensure(v, proj, eng)
+        assert t["singer"] and t["lines"] == [] and frozen.SUNG_MIN <= len(t["sung"]) <= frozen.N_SUNG, (t["singer"], len(t["lines"]), len(t["sung"]))
+        assert any("provisional" in n for n in t["notes"]), t["notes"]
+        ids = {x["id"] for x in t["sung"]}
+        after = {p.id for p in P.Project.load("barry-white").training_phrases()}
+        assert ids <= before and not (ids & after) and after == before - ids, "the frozen sung phrases still train"
+        assert len(s["sung"]) == len(t["sung"]) and all(k in s["sung"][0] for k in ("id", "hnr", "contrast", "pitch_err", "voicing", "content"))
+        # a candidate the same as the approved one: judged on singing, provisional, not offered (nothing is better)
+        cand = _voice_dir("barry-white-uc-next", {"trained": True, "project": "barry-white", "f0_median": 98.0, "pending_for": "barry-white-uc"})
+        (cand / "model.pth").write_bytes(b"candidate-singer")
+        verdict = frozen.judge(v, get_voice("barry-white-uc-next"), eng)
+        assert verdict.get("on") == "singing" and verdict.get("provisional") and not verdict["offer"] and verdict["before"] is not None, verdict
+        assert "no spoken lines" not in " ".join(verdict["reasons"])
+        # the bar on fixed numbers: better on every term -> offered; the same but straying from the melody -> refused
+        good = lambda m, lo: {"mean": m, "lo": lo, "hi": m + 0.1, "n": 8}
+        cmp = {"lines": {"n": 0}, "donors": {"n": 0}, "sung": {"n": 8, "id": good(0.0, -0.005), "hnr": good(0.08, 0.02),
+                                                                 "contrast": good(0.5, 0.1), "pitch_err": good(2.0, -1.0)}}
+        ok = frozen.offer(cmp, t)
+        assert ok["offer"] and ok["on"] == "singing" and ok["provisional"] and "cleaner voicing" in ok["words"], ok
+        cmp["sung"]["pitch_err"] = good(25.0, 15.0)
+        bad = frozen.offer(cmp, t)
+        assert not bad["offer"] and not bad["terms"]["pitch"] and "melody" in " ".join(bad["reasons"]), bad
+        # the A/B: two sung phrases, kept in their key
+        ab = frozen.ab_inputs(v, n=2)
+        assert len(ab) == 2 and all(x["sung"] and x["file"].exists() for x in ab), ab
+        assert "0.0 if is_sung else render.octave_shift" in inspect.getsource(improved.make_samples)
+        from undercover.doubleagent import night, api as da_api
+        src = inspect.getsource(night._improve)   # the test is frozen BEFORE the candidate trains (else it learned it)
+        assert src.index("frozen.ensure(old, P.Project.load") < src.index("Trainer(proj"), "the frozen test is made after the candidate trained"
+        assert "FROZEN if p.frozen" in inspect.getsource(da_api), "a frozen phrase is listed with another reason"
+        # a phrase key from another version never stops the project loading
+        f = P.Project.load("barry-white").dir / "project.json"
+        d = _json.loads(f.read_text(encoding="utf-8"))
+        d["phrases"][0]["from_a_newer_version"] = 1
+        f.write_text(_json.dumps(d), encoding="utf-8")
+        assert P.Project.load("barry-white").phrases[0].id == d["phrases"][0]["id"]
+    return f"{len(t['sung'])} sung phrases frozen out of training; judged on singing (provisional); the melody guard refuses; A/B on sung phrases"
 
 
 @check("the source gate on a project (phase 26, R6): a failing source is unticked with the reason AND its cut phrases are left out of training; the user's own sources and ticked phrases are never touched; the report says kept (R3a)")
@@ -5327,13 +5433,69 @@ def u_cadence():
     st = DK._speech_stats(x, "one two three four")
     assert st and abs(st["dur"] - 1.0) < 0.1 and st["rate"] == st["syl"] / st["dur"] and DK._speech_stats(x[:100], "a") == {}, st
     ids = {a["id"] for a in addons.status()}
-    assert "f5" in ids, ids
-    # nothing listed that can't be had (MasterPlan, the user's fresh install: XTTS-v2 sat there as 'Not available yet')
-    assert "xtts" not in ids and all(a.wired for a in addons.ADDONS.values()), [a.id for a in addons.ADDONS.values() if not a.wired]
+    assert {"f5", "xtts"} <= ids, ids
+    # nothing listed that can't be had (MasterPlan, the user's fresh install: XTTS-v2 sat there as 'Not available yet';
+    # it's back in 1.1 as a real add-on, u_xtts)
+    assert all(a.wired for a in addons.ADDONS.values()), [a.id for a in addons.ADDONS.values() if not a.wired]
     # the accept / install / remove path, with a tiny fake add-on (no packages, no files), in its own data folders
     with isolated_data():
         _fake_addon_roundtrip(addons)
     return f"engine {default_engine()}, add-ons: {', '.join(sorted(ids))}"
+
+
+@check("XTTS-v2 is an opt-in add-on (1.1): a reading engine like the others (the engines table, the worker, pinned model "
+       "files), its licence (CPML), size and what it adds on the add-on page and in the installer, its packages hashed "
+       "(requirements/addon-xtts.txt matches the registry); not installed or accepted, it is never picked and the app reads as before")
+def u_xtts():
+    import importlib.util
+    import re
+    from undercover.core import addons, setup_models
+    from undercover.core.cadence import engines as E
+    e, a = E.ENGINES["xtts"], addons.ADDONS["xtts"]
+    # the engine row: an add-on's engine, read from the clip alone (no transcript), not a Chatterbox-family member
+    assert e["addon"] == "xtts" and e["licence"] == a.licence == "CPML" and e["module"] == "TTS" and e.get("wired") is not False, e
+    assert e["ref_text"] is False and "xtts" not in E.FAMILY and E.DEFAULT != "xtts", e
+    assert 0 < e["rtf"] < 1 and e["vram_gb"] == 2.1 and e["about"] and e["size_mb"] == a.size_mb, e   # measured 0.84x, 2.1 GB
+    # the worker reads with it (worker.py imports torch: read its source, not the module)
+    w = (ROOT / "undercover" / "core" / "cadence" / "worker.py").read_text(encoding="utf-8")
+    assert '"xtts": XTTS' in w and "class XTTS:" in w and "_ensure(XTTS_FILES" in w, "the worker has no XTTS engine"
+    assert "COQUI_TOS_AGREED" not in w, "the licence is accepted by the user on the add-on page, never set in code"
+    assert 'setdefault("MPLCONFIGDIR", str(path("cache_dir")' in w, "matplotlib's font cache would land in the home folder"
+    # the model files: a pinned revision, each with its SHA-256, in the Doctor's list and the download list
+    assert E.MODEL_FILES["xtts"] is E.XTTS_FILES == a.files and len(a.files) == 3, a.files
+    for local, url in a.files.items():
+        assert local.startswith("tts/xtts/") and f"/resolve/{E.XTTS_REV}/" in url and re.fullmatch(r"[0-9a-f]{64}", a.sha256[local]), local
+        assert setup_models.PINNED[local]["part"] == "xtts" and setup_models.PINNED[local]["sha256"] == a.sha256[local], local
+    # the add-on page: licence, size, what it adds; optional, nothing accepted for the user
+    assert not a.included and not a.open and a.wired and a.modules == ["speakeasy"] and "TTS" in a.imports, a
+    assert 1500 < a.size_mb < 2500 and a.adds and a.short and "non-commercial" in a.use, (a.size_mb, a.short, a.use)
+    assert "Coqui Public Model License" in a.licence_summary and "non-commercial" in a.licence_summary, a.licence_summary
+    assert a.licence_url.startswith("https://huggingface.co/coqui/XTTS-v2/") and E.XTTS_REV in a.licence_url, a.licence_url
+    # its packages: pinned, and the hashed list says the same pins (re-run installer\pin_hashes.py --addons after a change)
+    assert a.packages[0] == "coqui-tts==0.27.5" and all(re.fullmatch(r"[A-Za-z0-9_.\-]+==[^=\s]+", p) for p in a.packages), a.packages
+    inst = ROOT / "installer"
+    sys.path.insert(0, str(inst))
+    try:
+        import downloads as D
+    finally:
+        sys.path.remove(str(inst))
+    pins = D.read_pins(inst / "requirements" / "addon-xtts.txt")
+    norm = lambda n: re.sub(r"[-_.]+", "-", n).lower()
+    assert [(norm(p["name"]), p["version"]) for p in pins] == [(norm(n), v) for n, v in (p.split("==") for p in a.packages)], pins
+    assert all(p["hashes"] for p in pins), [p["name"] for p in pins if not p["hashes"]]
+    isi = (inst / "addons.isi").read_text(encoding="utf-8-sig")
+    assert "'xtts'" in isi and "XTTS-v2 " in isi and a.licence_url in isi, "addons.isi is stale: run installer\\build.ps1"
+    # not installed here: never ready, never the default, a pack made with it waits (the app is the same without it)
+    if importlib.util.find_spec("TTS") is None:
+        with isolated_data():
+            assert not addons.available("xtts") and not E.engine_ready("xtts") and not E.pack_ready("xtts")
+            old = E.CONFIG
+            E.CONFIG = {"cadence": {"engine": "xtts"}}   # chosen once, then removed: the open default reads
+            try:
+                assert E.default_engine() in E.FAMILY and E.reading_engine("chatterbox") in E.FAMILY
+            finally:
+                E.CONFIG = old
+    return f"{len(a.packages)} packages, {len(a.files)} model files ({a.size_mb / 1000:.1f} GB), {a.licence}"
 
 
 def _fake_addon_roundtrip(addons):
@@ -5400,8 +5562,8 @@ def u_addons():
                          text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-400:]
     rows = {r["id"]: r for r in json.loads(out.stdout)}
-    assert {"f5", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker"} <= set(rows) and "xtts" not in rows, sorted(rows)
-    assert rows["f5"]["installable"] and rows["kokoro"]["included"], rows["f5"]
+    assert {"f5", "chatterbox", "whisper", "kokoro", "rvc", "separation", "speaker", "xtts"} <= set(rows), sorted(rows)
+    assert rows["f5"]["installable"] and rows["xtts"]["installable"] and rows["kokoro"]["included"], rows["f5"]
     # rc-fix4b: the original Chatterbox is an optional add-on (open licence: nothing to accept; Turbo comes with setup)
     assert rows["chatterbox"]["installable"] and not rows["chatterbox"]["included"] and rows["chatterbox-turbo"]["included"]
     assert addons.ADDONS["chatterbox"].open and addons.ADDONS["chatterbox"].files
@@ -5901,7 +6063,11 @@ def u_pace_pitch():
     assert abs(fast["pitch_off_st"] - 3.53) < 0.01, fast
     m = {"score": 0.67, **fast}
     assert K.nudge_for(m) == -3.5 and K.nudge_for({"pitch_off_st": 0.4}) == 0.0
-    assert K.heard(m) == round(0.67 - min(K.CAP_PITCH, K.W_PITCH * (3.53 - K.PITCH_DEAD)), 4) and K.heard(m, K.nudge_for(m)) == 0.67
+    # (1.1 pace: the score as heard also loses the capped pace term; these readings are x1.14, just past the noise)
+    pace = K.pace_pen(fast["pace_ratio"])
+    assert 0 < pace < K.CAP_PACE, (fast["pace_ratio"], pace)
+    assert K.heard(m) == round(0.67 - min(K.CAP_PITCH, K.W_PITCH * (3.53 - K.PITCH_DEAD)) - pace, 4), K.heard(m)
+    assert K.heard(m, K.nudge_for(m)) == round(0.67 - pace, 4), K.heard(m, K.nudge_for(m))
     debate = K.pace_pitch(4.5, 145.0, prof)   # 3.7 st under the median, but where their debate voice is
     assert debate["pitch_st"] < -3 and debate["pitch_off_st"] == 0.0 and K.nudge_for(debate) == 0.0, debate
     assert K.heard({"score": 0.6, **debate}) == 0.6
@@ -10221,7 +10387,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

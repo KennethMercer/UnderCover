@@ -61,7 +61,7 @@ class Addon:
     modules: list = field(default_factory=list)    # the suite modules that use it ("speakeasy", ...)
     paths: list = field(default_factory=list)      # folders/files under models/ it occupies (default: its files)
     open_note: str = ""        # included parts: anything to know about the licence ("credit the authors")
-    short: str = ""            # the installer's one-line what ("lighter on graphics memory, slightly flatter speech")
+    short: str = ""            # the installer's one-line what ("less graphics memory, slightly flatter speech")
     use: str = ""              # the installer's one-line who may use what it makes ("personal, non-commercial use only")
     hashes: dict = field(default_factory=dict)     # package name -> SHA-256 of its wheel: the pin "Update" installs
 

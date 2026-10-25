@@ -126,6 +126,7 @@ def make_samples(job, voice: str) -> dict:
     conv = gpu.MODELS.converter
     lines = frozen.ab_inputs(get_voice(voice), n=2)
     xs = [render.trim(render.load16(ln["file"])) for ln in lines] or [render.trim(render.load16(LINE))]
+    sung = [bool(ln.get("sung")) for ln in lines] or [False]   # (a singer's own sung phrase stays in its key: no octave shift)
     out = _samples(voice)
     out["current"].parent.mkdir(parents=True, exist_ok=True)
     for key, name in (("current", voice), ("new", st["candidate"])):
@@ -134,8 +135,8 @@ def make_samples(job, voice: str) -> dict:
         v = get_voice(name)
         lv = LoadedVoice(v, conv.device, conv.half)
         pieces, sr = [], 16000
-        for x in xs:
-            shift = render.octave_shift(x, conv.rmvpe, (v.extra or {}).get("f0_median"))
+        for x, is_sung in zip(xs, sung):
+            shift = 0.0 if is_sung else render.octave_shift(x, conv.rmvpe, (v.extra or {}).get("f0_median"))
             y, sr = conv.convert(np.concatenate([np.zeros(int(16000 * render.LEAD_S), np.float32), x]), lv, Settings(pitch=shift))
             pieces += [render.level(np.nan_to_num(y[int(sr * render.LEAD_S):])), np.zeros(int(sr * 0.6), np.float32)]
         del lv
