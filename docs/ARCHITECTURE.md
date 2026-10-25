@@ -321,6 +321,16 @@ Slowing the reference clip to slow the reading was heard as slurred; that code i
 Chatterbox's files keeps reading with it until Turbo's arrive. Every Chatterbox output carries Resemble's inaudible
 watermark. Non-commercial engines (F5-TTS, XTTS-v2) are add-ons.
 
+XTTS-v2 (1.1) is the `xtts` row of `ENGINES` and the `xtts` add-on: coqui-tts 0.27.5 and its own needs, installed
+`--no-deps` from `installer/requirements/addon-xtts.txt` (`pin_hashes.py --addons` writes it from PyPI's hashes), and three
+pinned model files (`model.pth`, `config.json`, `vocab.json`, 1.9 GB) in `models/tts/xtts/`. Like Chatterbox it reads from
+the clip alone; it is not in the Chatterbox family, so a pack made with it reads with it, and a Chatterbox pack keeps
+reading with Chatterbox. The worker (`XTTS` in `cadence/worker.py`) loads the files directly (no Coqui download or
+terms prompt: the licence is accepted on the add-on page) with the model's own settings, and puts in three stand-ins for
+English reading on torch 2.9 (a Korean romaniser its tokenizer imports, a transformers helper gone in 5.x, coqui's
+torchcodec check; audio goes through soundfile). Its licence text is the copy in the model's repo at the pinned revision
+(Coqui's own site is gone).
+
 ### The Readers: Kokoro
 
 Kokoro (82M, Apache-2.0 code and weights, `kokoro-onnx` on the CPU) is the quick path for a voice without a cadence

@@ -5,6 +5,12 @@ in brackets.
 
 ## Unreleased (1.1)
 
+**XTTS-v2 add-on** (xtts)
+- Coqui's XTTS-v2 is back as an optional engine for SpeakEasy's speech in a person's cadence: added in SafeHouse,
+  Add-ons (or ticked in the installer), 1.9 GB, under its non-commercial licence, which you read and accept there.
+  It needs less graphics memory than the default and pauses more inside a sentence, but reads about three times
+  slower. Without it nothing changes.
+
 **Improve for singers** (singers)
 - Improve can now judge a singing voice: on short phrases of the singer's own songs, kept out of the training, it
   offers a retrained voice only when it sounds clearly better there and follows the melody as well. The bar is new

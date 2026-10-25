@@ -6,7 +6,7 @@ build and the user's machine use the same default; engines whose weights aren't 
 (core/addons.py) that the user installs and accepts themselves.
 
 Measured 2026-10-11 on the RX 7900 XTX (the maintainers' notes, cadence): Chatterbox 0.5-0.6x realtime at cfg 0.3 (3.6 GB),
-F5-TTS 2.9-3.5x (0.9 GB).
+F5-TTS 2.9-3.5x (0.9 GB), XTTS-v2 0.84x (2.1 GB).
 """
 from .. import addons, setup_models
 from ..config import CONFIG, path
@@ -29,7 +29,11 @@ TURBO_REV = "749d1c1a46eb10492095d68fbcf55691ccf137cd"
 TURBO_FILES = {f"tts/chatterbox-turbo/{f}": f"{HF}/ResembleAI/chatterbox-turbo/resolve/{TURBO_REV}/{f}"
                for f in ("ve.safetensors", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors", "conds.pt", "added_tokens.json",
                          "merges.txt", "special_tokens_map.json", "tokenizer_config.json", "vocab.json")}
-MODEL_FILES = {"chatterbox": CHATTERBOX_FILES, "chatterbox-turbo": TURBO_FILES, "f5": F5_FILES}
+# XTTS-v2 (Coqui, an add-on since 1.1): the three files inference reads, pinned (the repo's dvae.pth and mel_stats.pth are
+# for training, speakers_xtts.pth for Coqui's own studio voices) -> models/tts/xtts/
+XTTS_REV = "6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
+XTTS_FILES = {f"tts/xtts/{f}": f"{HF}/coqui/XTTS-v2/resolve/{XTTS_REV}/{f}" for f in ("model.pth", "config.json", "vocab.json")}
+MODEL_FILES = {"chatterbox": CHATTERBOX_FILES, "chatterbox-turbo": TURBO_FILES, "f5": F5_FILES, "xtts": XTTS_FILES}
 # SHA-256 of each file above (Hugging Face's LFS records; small files hashed here), checked after every download
 MODEL_SHA256 = {
     "tts/chatterbox/ve.safetensors": "f0921cab452fa278bc25cd23ffd59d36f816d7dc5181dd1bef9751a7fb61f63c",
@@ -49,6 +53,9 @@ MODEL_SHA256 = {
     "tts/f5/model_1250000.safetensors": "670900fd14e6c458b95da6e9ed317cdb20dbaf7a1c02ac06a05475a9d32b6a38",
     "tts/f5/vocos/config.yaml": "da9033922f969a47f0c160010226919e59f27761fd5066f3828d46de6650b0fc",
     "tts/f5/vocos/pytorch_model.bin": "97ec976ad1fd67a33ab2682d29c0ac7df85234fae875aefcc5fb215681a91b2a",
+    "tts/xtts/model.pth": "c7ea20001c6a0a841c77e252d8409f6a74fb423e79b3206a0771ba5989776187",
+    "tts/xtts/config.json": "ef262b1454dd2a77e1461b0b2cd53e19b8a7624cc131b837d36df67356bc75e8",
+    "tts/xtts/vocab.json": "928260878a59da8a72a2a5b7687fea29d5106137669d90945430fe17e415304a",
     "whisper/large-v3-turbo.pt": "aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a",
 }
 
@@ -56,6 +63,7 @@ setup_models.register_pinned(CHATTERBOX_FILES, MODEL_SHA256, "chatterbox")   # t
 setup_models.register_pinned(TURBO_FILES, MODEL_SHA256, "chatterbox-turbo")
 setup_models.register_pinned({"whisper/large-v3-turbo.pt": WHISPER_URL}, MODEL_SHA256, "whisper")
 setup_models.register_pinned(F5_FILES, MODEL_SHA256, "f5")
+setup_models.register_pinned(XTTS_FILES, MODEL_SHA256, "xtts")
 
 # The engines that read a person's cadence from a reference clip alone, so a pack made with one is as good for the other
 # (phase 23: packs stay valid when the engine they were made with isn't installed). Best first.
@@ -81,6 +89,12 @@ ENGINES = {
     "f5": {"name": "F5-TTS", "licence": "CC-BY-NC-4.0", "addon": "f5", "ref_text": True, "rtf": 3.0, "vram_gb": 0.9,
            "size_mb": 1400, "module": "f5_tts",
            "about": "Fast (3-4x realtime); flattens some intonation. Non-commercial weights: an add-on you accept."},
+    # measured 2026-10-11 (the maintainers' notes, cadence): 0.84x realtime alone, 0.79-0.80 with RVC; likeness alone 0.56 /
+    # 0.39, with RVC 0.74 / 0.82 (as good as the others); it reads both test voices fast, with longer pauses inside a sentence
+    "xtts": {"name": "XTTS-v2", "licence": "CPML", "addon": "xtts", "ref_text": False, "rtf": 0.8, "vram_gb": 2.1,
+             "size_mb": 1900, "module": "TTS",
+             "about": "Coqui's model: less graphics memory than Chatterbox, longer pauses inside a sentence, about a third "
+                      "of Turbo's speed. Non-commercial weights (CPML): an add-on you accept."},
 }
 
 
@@ -170,6 +184,22 @@ addons.register(addons.Addon(
               "frozendict==2.4.7", "torch-einops-utils==0.1.36", "torchdiffeq==0.2.5", "ema-pytorch==0.8.3",
               "hydra-core==1.3.7", "unidecode==1.4.0", "transformers-stream-generator==0.0.5", "loguru==0.7.3",
               "win32-setctime==1.2.0"]))
+addons.register(addons.Addon(
+    id="xtts", name="XTTS-v2", adds="Another engine for SpeakEasy's speech in a person's own cadence. It needs less graphics "
+                                    "memory and pauses more inside a sentence, but reads about three times slower than the default.",
+    short="longer pauses inside a sentence, slower to read", use="personal, non-commercial use only",
+    # coqui.ai/cpml went with Coqui (2024): the licence is the copy in the model's own repo, at the pinned revision
+    licence="CPML", licence_url=f"{HF}/coqui/XTTS-v2/blob/{XTTS_REV}/LICENSE.txt",
+    licence_summary=("The code is MPL-2.0, but the model weights are under the Coqui Public Model License 1.0.0: you may use "
+                     "the model and what it makes for non-commercial purposes only (personal use, study, hobby projects). "
+                     "Anyone you give what it makes to must get the licence's terms or its link with it."),
+    size_mb=1900, files=XTTS_FILES, sha256=MODEL_SHA256, imports=["TTS", "coqpit", "trainer"], modules=["speakeasy"],
+    # coqui-tts's own needs that the app doesn't have (resolved from PyPI against the app's pins); left out: the
+    # trainer's loggers (tensorboard and what it pulls in, psutil) and num2words's command line (docopt), never imported to speak
+    packages=["coqui-tts==0.27.5", "coqpit-config==0.2.5", "coqui-tts-trainer==0.3.3", "anyascii==0.3.3", "inflect==7.5.0",
+              "typeguard==4.6.0", "ko-speech-tools==0.1.0", "num2words==0.5.14", "pysbd==0.3.4",
+              "monotonic-alignment-search==0.2.1", "matplotlib==3.11.2", "contourpy==1.4.0", "cycler==0.12.1",
+              "fonttools==4.66.1", "kiwisolver==1.5.1", "pyparsing==3.3.3", "python-dateutil==2.9.0.post0"]))
 
 # the open parts the cadence engine is built from (listed in the Add-ons room; never installed or removed there)
 # the original Chatterbox: an optional add-on since rc-fix4b (setup installs Turbo, the default; this one is 3.2 GB more
