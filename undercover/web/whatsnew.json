@@ -2,6 +2,14 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-25-v103",
+      "date": "2026-10-25",
+      "title": "UnderCover 1.0.3",
+      "lines": [
+        "An update now downloads only what changed. What's already installed at the right version stays as it is, so updating takes minutes, not gigabytes."
+      ]
+    },
+    {
       "id": "2026-10-24-v102",
       "date": "2026-10-24",
       "title": "UnderCover 1.0.2",

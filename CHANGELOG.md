@@ -3,6 +3,13 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## 1.0.3
+
+**Updates download only what changed** (v103)
+- Installing a new version over an older one keeps the packages and tools it already has at the right versions,
+  and downloads only what changed. Before, every update downloaded several GB again (1.0.2 over 1.0.0: 108 of
+  137 files that hadn't changed).
+
 ## 1.0.2 (2026-10-25)
 
 **Low profile** (lowprofile-page, v102)

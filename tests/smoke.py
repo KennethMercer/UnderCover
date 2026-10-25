@@ -3616,16 +3616,25 @@ def u_installer_downloads():
         (d / "downloads.tsv").write_text("\t".join(D.COLUMNS) + "\n" + "".join(
             f"packages\tcache/{n}.whl\thttps://example.invalid/{n}\t{'0' * 64}\t10\t{n}==1\n" for n in ("a", "b", "c")) +
             f"models\tmodels/m.bin\thttps://example.invalid/m\t{'0' * 64}\t5\t\n", encoding="ascii")
-        script = (f"$ErrorActionPreference = 'Stop'; $Cache = '{d / 'cache' / 'downloads'}'; $Offline = $true\n"
-                  "function Fail($m) { Write-Output \"FAIL=$m\"; exit 1 }\nfunction Info($m) { Write-Output \"INFO=$m\" }\n"
-                  "function Status($a, $b) { }\n" + fn.replace("$PSScriptRoot", f"'{d}'") +
-                  "\nWrite-Output \"inplace=$(@(Rows @('packages') | Where-Object { InPlace $_ } | ForEach-Object { $_.pin }) -join ',')\"\n"
-                  "Get-Files @('packages', 'models') 'the packages'\n")
-        f = d / "t.ps1"
-        f.write_text(script, encoding="utf-8")
-        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(f)], capture_output=True, text=True, timeout=120)
-        assert "inplace=a==1" in r.stdout, (r.stdout, r.stderr)
-        assert "FAIL=2 of the files setup needs weren't downloaded (b.whl, ...). Run the installer again" in r.stdout, (r.stdout, r.stderr)
+        # (1.0.3: a pin already installed in the venv isn't needed in the cache: installed.ps1's rule, here c==1 installed)
+        for have, want in (("@{}", "FAIL=2 of the files setup needs weren't downloaded (b.whl, ...). Run the installer again"),
+                           ("@{ 'c==1' = $true }", "FAIL=1 of the files setup needs weren't downloaded (b.whl). Run the installer again")):
+            script = (f"$ErrorActionPreference = 'Stop'; $Cache = '{d / 'cache' / 'downloads'}'; $Offline = $true\n"
+                      "function Fail($m) { Write-Output \"FAIL=$m\"; exit 1 }\nfunction Info($m) { Write-Output \"INFO=$m\" }\n"
+                      "function Status($a, $b) { }\n" + fn.replace("$PSScriptRoot", f"'{d}'") +
+                      # (set before the dot-source, as setup.ps1 does: the helper's param block must leave it alone)
+                      f"\n$InstallDir = '{d}'; . '{ROOT / 'installer' / 'installed.ps1'}'\n"
+                      f"if ($InstallDir -ne '{d}') {{ Write-Output 'FAIL=installed.ps1 changed the InstallDir of setup'; exit 1 }}\n"
+                      f"$Have = {have}; $PythonVer = '3.12.10'\n"
+                      "Write-Output \"inplace=$(@(Rows @('packages') | Where-Object { InPlace $_ } | ForEach-Object { $_.pin }) -join ',')\"\n"
+                      # (a pin that moved is needed again: c==2 against an installed c==1)
+                      "Write-Output \"moved=$(Test-Installed ([pscustomobject]@{ pin = 'c==2'; dest = 'cache/c-2.whl' }) $Have $InstallDir $PythonVer)\"\n"
+                      "Get-Files @('packages', 'models') 'the packages'\n")
+            f = d / "t.ps1"
+            f.write_text(script, encoding="utf-8")
+            r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(f)], capture_output=True, text=True, timeout=120)
+            assert "inplace=a==1" in r.stdout and "moved=False" in r.stdout, (r.stdout, r.stderr)
+            assert want in r.stdout, (have, r.stdout, r.stderr)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     # the wizard: the download page on Install, before anything is installed; setup -Offline with this card's backend;

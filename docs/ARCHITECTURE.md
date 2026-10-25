@@ -1,6 +1,6 @@
 # UnderCover architecture
 
-This document describes how UnderCover is built, as of 1.0.2: the names, the modules, the code layout, the data on
+This document describes how UnderCover is built, as of 1.0.3: the names, the modules, the code layout, the data on
 disk, the engines and why they were chosen, the page, and how the app looks after itself. It is the contract a change
 is measured against. What the project is for and how decisions are made is in [MASTERPLAN.md](MASTERPLAN.md); how to
 install is in [README.md](../README.md) and [installer/GUIDE.md](../installer/GUIDE.md); how to contribute is in
@@ -588,7 +588,12 @@ The installer (`installer/UnderCover.iss`, Inno Setup) installs per user with no
 URLs, SHA-256, bytes, pin), then runs ISCC. The wizard's download page fetches every file and checks each hash; after it
 nothing goes online. Files kept from an earlier run (Stop, or a run that broke off) are checked by SHA-256 again before
 they count (`keptcheck.ps1`, run hidden so the page stays live); a damaged one is deleted and downloaded again. LICENSE,
-NOTICE and README.md go into the install folder. `setup.ps1` installs a private Python (`python.ps1`, via uv), the packages for the detected backend
+NOTICE and README.md go into the install folder.
+An update downloads only what changed (1.0.3): `installer/installed.ps1` lists what the install being updated already
+has (a package at its exact pin in its own setup-made `.venv`, read from the venv itself; uv, Python, ffmpeg and Deno
+where setup reuses them), the download page skips those, and setup installs only the pins that differ (still
+`--require-hashes`, offline). A venv setup didn't make, one on the wrong Python, or one that won't start counts as
+having nothing; a repair reinstalls the packages as before. `setup.ps1` installs a private Python (`python.ps1`, via uv), the packages for the detected backend
 (`detect_gpu.ps1`: rocm, cuda128, cuda126 or cpu; `requirements/*.txt`, hashed by `pin_hashes.py` and constrained by
 `constraints.txt`), ffmpeg and Deno, puts the models in place (`python -m undercover.models install --offline`), writes
 the GPU settings, runs `selftest.py`, writes the manifest and makes a launcher. `space.ps1` and `sizes.json` give the

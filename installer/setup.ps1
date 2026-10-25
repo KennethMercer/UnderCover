@@ -138,7 +138,12 @@ function Status([string]$detail = '', [double]$frac = -1) {
     [Console]::Out.WriteLine($line); [Console]::Out.Flush()
     if (-not $DryRun) {
         New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
-        Add-Content -Path $StatusFile -Value ("{0:u}  {1}" -f (Get-Date), $line)
+        # a progress note never stops setup: the wizard reads this file while setup writes it, and a write that found it
+        # busy once ended a 1.0.0 setup at its last step (the update-in-place check's log); a few tries, then it's skipped
+        for ($try = 0; $try -lt 5; $try++) {
+            try { Add-Content -Path $StatusFile -Value ("{0:u}  {1}" -f (Get-Date), $line) -ErrorAction Stop; break }
+            catch { Start-Sleep -Milliseconds 50 }
+        }
     }
 }
 # what a Cancel leaves for the next run, read from the disk: "Python 3.12.10, PyTorch and the downloads so far"
@@ -308,7 +313,7 @@ function CacheFile([string]$name) {   # a base tool's file in the cache, by its 
 # the files these groups need in cache\downloads: -Offline, each must be there (the installer fetched them); else the
 # missing ones are fetched now, resumable, each checked against its SHA-256
 function Get-Files([string[]]$groups, [string]$what) {
-    $rows = @(Rows $groups | Where-Object { $_.dest -like 'cache/*' })
+    $rows = @(Rows $groups | Where-Object { $_.dest -like 'cache/*' -and -not (Test-Installed $_ $Have $InstallDir $PythonVer) })
     $todo = @($rows | Where-Object { -not (InPlace $_) })
     if (-not $todo.Count) { Info "$what`: all $($rows.Count) files are here"; return }
     if ($Offline) {
@@ -436,6 +441,13 @@ if ($Addons) { $script:StepsTotal += 1 }
 if (-not $Offline) { $script:StepsTotal += 1 }
 
 # 2. The files: the tools and the packages for this graphics card, in cache\downloads -----------------------------
+# What this install already has is neither needed in cache\downloads nor installed again (1.0.3: an update over 1.0.0
+# downloaded 108 of 137 files that hadn't changed): installer\installed.ps1, the rule the installer's download page uses
+# too. A repair reinstalls the packages as before (a package can be there at its pin and still be broken); -Force makes
+# the venv again, so it has nothing.
+. (Join-Path $PSScriptRoot 'installed.ps1')
+$Have = if ($Repair -or $Force -or $DryRun) { @{} } else { Get-InstalledPins $InstallDir $PythonVer }
+if ($Have.Count) { Info "$($Have.Count) packages already installed in .venv: the pinned ones among them are kept" }
 $addonIds = @($Addons -split '[,; ]+' | Where-Object { $_ })
 # (a repair fetches PyTorch and the packages only when they need fixing: a working setup tidied them away)
 $groups = @('base') + $(if ($Fix.torch -or $Fix.packages) { @("torch-$Backend", 'packages') } else { @() }) + @($addonIds | ForEach-Object { "addon-$_" })
@@ -503,17 +515,22 @@ else {
 if (-not ($Fix.torch -or $Fix.packages)) { Info "PyTorch and the packages: as recorded, left alone" } else {
 Step "Installing PyTorch and the packages"
 $offlineReq = Join-Path $InstallDir 'cache\offline-requirements.txt'
+$lines = @()
 if (-not $DryRun) {
-    $lines = @(Rows @("torch-$Backend", 'packages') | Where-Object { $_.pin } | ForEach-Object { "$($_.pin) --hash=sha256:$($_.sha256)" } | Select-Object -Unique)
+    $pinned = @(Rows @("torch-$Backend", 'packages') | Where-Object { $_.pin })
+    $lines = @($pinned | Where-Object { -not (Test-Installed $_ $Have $InstallDir $PythonVer) } |
+               ForEach-Object { "$($_.pin) --hash=sha256:$($_.sha256)" } | Select-Object -Unique)
     New-Item -ItemType Directory -Force (Split-Path $offlineReq) | Out-Null
     Set-Content -LiteralPath $offlineReq -Value $lines -Encoding ascii
-    Info "$($lines.Count) packages, from $Cache"
+    Info "$($lines.Count) packages, from $Cache$(if ($lines.Count -lt $pinned.Count) { "; $($pinned.Count - $lines.Count) already installed at their pins, kept" })"
 }
 # (the bar follows uv's cache as uv unpacks the files into it, against what that measured: PyTorch for this card, the
 # rest; a card whose PyTorch hasn't been measured gets the largest measured, so the bar is a little slow, never stuck)
 $torchGb = $StepGb.torch.$Backend
 if (-not $torchGb) { $torchGb = ($StepGb.torch.PSObject.Properties | ForEach-Object { $_.Value } | Measure-Object -Maximum).Maximum }
-RunWatched $Uv @('pip', 'install', '--python', $Py, '--offline', '--no-index', '--find-links', $Cache, '--no-deps', '--require-hashes', '-r', $offlineReq) $env:UV_CACHE_DIR ([double]$torchGb + [double]$StepGb.common + [double]$StepGb.cadence) 'Unpacking PyTorch and the packages'
+if ($DryRun -or $lines.Count) {
+    RunWatched $Uv @('pip', 'install', '--python', $Py, '--offline', '--no-index', '--find-links', $Cache, '--no-deps', '--require-hashes', '-r', $offlineReq) $env:UV_CACHE_DIR ([double]$torchGb + [double]$StepGb.common + [double]$StepGb.cadence) 'Unpacking PyTorch and the packages'
+} else { Info "every pinned package is installed at its pin: nothing to unpack" }
 if (-not $DryRun) {
     $ver = & $Py -c "import importlib.metadata as m; print(m.version('torch'))"
     if ($LASTEXITCODE -ne 0) { Fail "PyTorch didn't install correctly" }
