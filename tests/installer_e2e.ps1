@@ -299,7 +299,7 @@ if ($UpgradeCheck) {
             $diff = (& $vpy -c "import sys, tomllib; from undercover.core import config as c; m = tomllib.loads(open('config.toml', encoding='utf-8').read()); d = c.differing(m, c.defaults()); print(sorted(set(f'{s}.{k}' for s in m if s != 'gpu' for k in (m[s] if isinstance(m[s], dict) else [s])) - set(f'{s}.{k}' for s in d for k in (d[s] if isinstance(d[s], dict) else [s]))))" 2>&1 | Out-String).Trim()
         } finally { $ErrorActionPreference = $eap; Pop-Location }
         if ($diff -ne '[]') { $ufails += "config.toml holds keys equal to the defaults: $diff" } else { Write-Host '  config.toml: only what differs' }
-        if (-not $ufails.Count) {
+        if ($code -eq 0 -and $instVer -eq $ver -and (Test-Path $vpy)) {   # (the update installed: its first use, whatever else failed)
             $why = FirstUse
             if ($why) { $ufails += "first use after the update: $why" } else { Write-Host "  first use after the update: nothing downloaded" }
         }
