@@ -3622,7 +3622,10 @@ def u_installer_downloads():
             script = (f"$ErrorActionPreference = 'Stop'; $Cache = '{d / 'cache' / 'downloads'}'; $Offline = $true\n"
                       "function Fail($m) { Write-Output \"FAIL=$m\"; exit 1 }\nfunction Info($m) { Write-Output \"INFO=$m\" }\n"
                       "function Status($a, $b) { }\n" + fn.replace("$PSScriptRoot", f"'{d}'") +
-                      f"\n. '{ROOT / 'installer' / 'installed.ps1'}'\n$Have = {have}; $InstallDir = '{d}'; $PythonVer = '3.12.10'\n"
+                      # (set before the dot-source, as setup.ps1 does: the helper's param block must leave it alone)
+                      f"\n$InstallDir = '{d}'; . '{ROOT / 'installer' / 'installed.ps1'}'\n"
+                      f"if ($InstallDir -ne '{d}') {{ Write-Output 'FAIL=installed.ps1 changed the InstallDir of setup'; exit 1 }}\n"
+                      f"$Have = {have}; $PythonVer = '3.12.10'\n"
                       "Write-Output \"inplace=$(@(Rows @('packages') | Where-Object { InPlace $_ } | ForEach-Object { $_.pin }) -join ',')\"\n"
                       "Get-Files @('packages', 'models') 'the packages'\n")
             f = d / "t.ps1"

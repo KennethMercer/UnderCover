@@ -970,7 +970,7 @@ begin
     ExtractTemporaryFile('python.ps1');
     Shell := CreateOleObject('WScript.Shell');
     Shell.Run('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\installed.ps1') +
-      '" -InstallDir "' + ExpandConstant('{app}') + '" -List "' + ExpandConstant('{tmp}\downloads.tsv') + '" -Out "' + Marker + '"', 0, False);
+      '" -HaveDir "' + ExpandConstant('{app}') + '" -HaveList "' + ExpandConstant('{tmp}\downloads.tsv') + '" -HaveOut "' + Marker + '"', 0, False);
     Waited := 0;
     while (not FileExists(Marker)) and (Waited < 1800) do begin   // (three minutes: a cold venv's first start, never forever)
       DownloadPage.SetProgress(Waited mod 100, 100);   // (keeps the window answering)

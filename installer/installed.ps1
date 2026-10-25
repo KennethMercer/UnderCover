@@ -1,13 +1,15 @@
 # What this install already has of the download list (1.0.3): an update downloads only what changed. One rule, used in
-# two places: the installer runs this file hidden before its download page (-InstallDir -List -Out: the destinations
+# two places: the installer runs this file hidden before its download page (-HaveDir -HaveList -HaveOut: the destinations
 # it needn't fetch, one a line), and setup.ps1 dot-sources it to install only the pins that differ.
 #   a package row (a pin, name==version): that exact version is installed in this install's own .venv (one setup made,
 #     on the full-version Python), read from the venv itself, not from the record;
 #   a tool row (uv, Python, ffmpeg, Deno): the tool is where setup would reuse it (setup leaves a present one alone);
 #   anything else (a model): not decided here (the download page counts a model file in its place already).
 # No venv setup made, one on the wrong Python, or one that won't start: nothing counts as installed.
-#   powershell -File installed.ps1 -InstallDir <app> -List <downloads.tsv> -Out <file>
-param([string]$InstallDir = '', [string]$List = '', [string]$Out = '')
+#   powershell -File installed.ps1 -HaveDir <app> -HaveList <downloads.tsv> -HaveOut <file>
+# (its own parameter names: setup.ps1 dot-sources this file, and a dot-sourced param block sets its names in the
+# caller's scope: -InstallDir here once emptied setup's own, and the update failed and was rolled back)
+param([string]$HaveDir = '', [string]$HaveList = '', [string]$HaveOut = '')
 
 . (Join-Path $PSScriptRoot 'python.ps1')
 
@@ -51,11 +53,11 @@ function Test-Installed($row, $have, [string]$Dir, [string]$PythonVer) {
     return $false
 }
 
-if ($InstallDir -and $List -and $Out) {
-    $rows = @(Import-Csv -LiteralPath $List -Delimiter "`t")
+if ($HaveDir -and $HaveList -and $HaveOut) {
+    $rows = @(Import-Csv -LiteralPath $HaveList -Delimiter "`t")
     $pv = Get-PythonVersion $rows
-    $have = Get-InstalledPins $InstallDir $pv
-    $skip = @($rows | Where-Object { $_.dest -like 'cache/*' -and (Test-Installed $_ $have $InstallDir $pv) } | ForEach-Object { $_.dest })
-    Set-Content -LiteralPath "$Out.part" -Value $skip -Encoding ascii
-    Move-Item -LiteralPath "$Out.part" -Destination $Out -Force
+    $have = Get-InstalledPins $HaveDir $pv
+    $skip = @($rows | Where-Object { $_.dest -like 'cache/*' -and (Test-Installed $_ $have $HaveDir $pv) } | ForEach-Object { $_.dest })
+    Set-Content -LiteralPath "$HaveOut.part" -Value $skip -Encoding ascii
+    Move-Item -LiteralPath "$HaveOut.part" -Destination $HaveOut -Force
 }
