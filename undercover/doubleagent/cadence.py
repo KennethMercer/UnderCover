@@ -89,6 +89,19 @@ PITCH_DEAD = 0.5     # semitones past the person's range of registers: no nudge,
 PITCH_MIN_N = 8      # a source sets an edge of that range once this many of its sentences were measured
 W_PITCH = 0.05       # score units per semitone heard off the person's pitch, past the dead zone
 CAP_PITCH = 0.15
+# 1.1: the pace of a fast-reading voice (Freeman's packs read 1.5-1.8x his measured pace). Turbo and Chatterbox copy the
+# pace of their reference clip, and stretching the clip was heard as slurred (the maintainers' notes, phase23-outcome),
+# so the lever is the choice of clip: each candidate's own pace is measured from its transcript, and SLOW_SLOTS of the
+# CANDIDATES go to the person's slowest clean clips (within SLOW_MARGIN of the best clip's quality). In the pick, pace is
+# a tie-break, not a penalty: past the readings' own noise (PACE_NOISE, +-10% between seeds) a pack loses W_PACE per unit
+# of log-ratio, at most CAP_PACE, less than the 0.1 the approved Freeman pack wins its blind pair by (phase 12), so it
+# can't overturn the ear's verdict; and a new pick still waits for the ear (tts/pending/).
+SLOW_SLOTS = 2
+SLOW_MARGIN = 0.08
+SLOW_DUR = (6.0, 12.0)   # seconds: the slow slots' clips (the others keep phase 3's 7-11 s)
+PACE_NOISE = 0.10
+W_PACE = 0.15
+CAP_PACE = 0.05
 
 
 # ---------------------------------------------------------------- text helpers (same rules as phase 3)
@@ -313,6 +326,19 @@ def pitch_off(f0_hz: float, person: dict) -> float:
     return round(12 * math.log2(f0_hz / hi) if f0_hz > hi else 12 * math.log2(f0_hz / lo) if f0_hz < lo else 0.0, 2)
 
 
+def pace_pen(ratio: float | None) -> float:
+    """Score units lost for readings whose pace is `ratio` x the person's, past the readings' own noise (a tie-break)."""
+    if not ratio or ratio <= 0:
+        return 0.0
+    return round(min(CAP_PACE, W_PACE * max(0.0, abs(math.log(ratio)) - math.log(1 + PACE_NOISE))), 4)
+
+
+def clip_pace(p, tr: dict) -> float | None:
+    """A clip's own pace, syllables per second over the whole clip (its pauses included, as the person's pace is)."""
+    text = tr.get(p.id) or ""
+    return round(syllables(text) / p.dur, 3) if text and p.dur else None
+
+
 def pitch_pen(st: float | None) -> float:
     """Score units lost for readings heard `st` semitones past the person's range of registers."""
     return round(min(CAP_PITCH, W_PITCH * max(0.0, abs(st or 0.0) - PITCH_DEAD)), 4)
@@ -327,9 +353,10 @@ def nudge_for(m: dict) -> float:
 
 def heard(m: dict, nudge: float = 0.0) -> float:
     """A pack's score as it would be heard: m measured its readings (with whatever nudge they already had), `nudge`
-    more semitones on top; readings heard past the person's range of registers lose pitch_pen."""
+    more semitones on top; readings heard past the person's range of registers lose pitch_pen, and readings well off
+    their pace lose pace_pen (1.1: a tie-break, capped below the ear's margins)."""
     st = m.get("pitch_off_st")
-    return round(m["score"] - pitch_pen(None if st is None else st + nudge), 4)
+    return round(m["score"] - pitch_pen(None if st is None else st + nudge) - pace_pen(m.get("pace_ratio")), 4)
 
 
 def as_heard(m: dict, nudge: float):
@@ -444,10 +471,12 @@ def clip_sound(f: Path) -> dict:
     return {**m, "penalty": clipsound.penalty(m)}
 
 
-def ref_candidates(proj, tr: dict, n: int = CANDIDATES, sound: bool = True) -> list:
+def ref_candidates(proj, tr: dict, n: int = CANDIDATES, sound: bool = True, slow: int = SLOW_SLOTS) -> list:
     """Kept speech clips of 7-11 s, clean, clearly the person, plain transcript; best first, from different
     sources where possible (phase 3's pick_ref rule). sound: a clip that sounds muffled / noisy / roomy ranks lower
-    (phase 9; False = the rule before it, for comparisons)."""
+    (phase 9; False = the rule before it, for comparisons). slow (1.1): that many of the n go to the slowest of the
+    clips within SLOW_MARGIN of the best one's quality (the engines copy their clip's pace), from different sources
+    where possible; 0 = the rule before it."""
     pen = {}
 
     def quality(p):
@@ -463,14 +492,25 @@ def ref_candidates(proj, tr: dict, n: int = CANDIDATES, sound: bool = True) -> l
     cands = sorted([p for p in speech_clips(proj) if 7.0 <= p.dur <= 11.0 and _plain(tr.get(p.id, ""))], key=quality, reverse=True)
     if not cands:   # nothing ideal: the longest plain-ish clips of 5-12 s
         cands = sorted([p for p in speech_clips(proj) if 5.0 <= p.dur <= 12.0 and tr.get(p.id)], key=quality, reverse=True)
+    slow = max(0, min(slow, n - 1)) if cands else 0
+    picked_slow = []
+    if slow:
+        q0 = quality(cands[0])
+        # (a wider window of lengths for these: a slow speaker's 7-11 s clips are few, Freeman 7 of his 23 at 6-12 s)
+        pool = [p for p in speech_clips(proj) if SLOW_DUR[0] <= p.dur <= SLOW_DUR[1] and _plain(tr.get(p.id, ""))]
+        near = sorted((p for p in pool if quality(p) >= q0 - SLOW_MARGIN and clip_pace(p, tr)), key=lambda p: clip_pace(p, tr))
+        if near:   # the slowest of them, whatever their source; only clips slower than their median (a slot never takes a fast one)
+            mid = clip_pace(near[len(near) // 2], tr)
+            picked_slow = [p for p in near if clip_pace(p, tr) < mid][:slow]
     out, seen = [], set()
     for p in cands:
-        if p.source not in seen:
+        if len(out) >= n - len(picked_slow):
+            break
+        if p not in picked_slow and p.source not in seen:
             out.append(p)
             seen.add(p.source)
-        if len(out) >= n:
-            return out
-    return (out + [p for p in cands if p not in out])[:n]
+    out += [p for p in cands if p not in out and p not in picked_slow][:n - len(picked_slow) - len(out)]
+    return out + picked_slow
 
 
 class Tester:
@@ -659,8 +699,8 @@ def train(job, voice_name: str, push, control=None) -> dict:
             finally:
                 _cleanup(wavs)
             tried.append({"clip": p.id, "source": p.source, "dur": round(p.dur, 2), "text": tr.get(p.id, ""),
-                          "tempo1": m, **best})
-        win = max(tried, key=lambda t: t["score"])
+                          "clip_pace": clip_pace(p, tr), "pace_pen": pace_pen(m.get("pace_ratio")), "tempo1": m, **best})
+        win = max(tried, key=lambda t: t["score"] - t["pace_pen"])   # (1.1: pace a tie-break, capped)
         # 4. the voice's current cadence, on the same test: keep the new one only if it's better
         old = pack_of(v)
         before = None
@@ -701,8 +741,8 @@ def train(job, voice_name: str, push, control=None) -> dict:
                 "data_minutes": mins,
                 "pitch_nudge": win["pitch_nudge"],
                 "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score", "score_voice", "sound",
-                                                    "heard", "pace", "pace_target", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
-                                                    "pitch_raw_st", "pitch_off_st")},
+                                                    "heard", "pace", "pace_target", "pace_ratio", "pace_heard", "pace_pen",
+                                                    "clip_pace", "f0_hz", "pitch_st", "pitch_raw_st", "pitch_off_st")},
                 "person": {k: person.get(k) for k in ("rate", "pauses", "pause_ms", "range_st", "sentences", "sentence_gap_s")},
                 "before": before and {k: before.get(k) for k in ("likeness", "wer", "cadence_gap", "score", "score_voice", "sound",
                                                                  "heard", "pace", "pace_ratio", "pace_heard", "f0_hz", "pitch_st",
