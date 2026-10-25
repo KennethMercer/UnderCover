@@ -19,7 +19,7 @@ miopen_find_mode = "FAST"
 # Low profile (1.0.2): UnderCover keeps to part of the graphics card and works in bursts, so a game gets the card most
 # of the time. The page's switch and its Deep Cover panel write these. limit_gb is the whole of UnderCover on the card
 # (the server and the speech engine's worker together; whole GB; the default is half the card). burst is the share of
-# the time it works (0.25-0.75). auto: a full-screen game turns it on without asking; for_games: the games that do
+# the time it works (0.25-0.75). auto: a game turns it on without asking; for_games: the games that do
 # (answered "Low profile" once). Test servers run with it on at 12 GB unless UNDERCOVER_LOW_PROFILE says otherwise.
 on = false
 burst = 0.5

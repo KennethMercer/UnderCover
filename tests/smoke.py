@@ -766,7 +766,7 @@ def u_gamepause():
             gp.answer("both")
             th.join(5)
             assert out.get("r") == "start"
-            assert any("Waiting: Cyberpunk 2077 is full-screen" in (e.get("message") or "") for e in job.events), \
+            assert any("Waiting: Cyberpunk 2077 is running" in (e.get("message") or "") for e in job.events), \
                 "the waiting job didn't say why"
             # ... and Pause makes it wait until the game is gone (the watcher resumes), then it starts
             reset()
@@ -797,6 +797,86 @@ def u_gamepause():
             gp.STATE.clear()
             gp.STATE.update(saved[3])
     return "no work: no question; no answer: no pause; Pause / both / never; resumes only its own hold; a starting job waits"
+
+
+@check("a game is seen when it isn't in front (1.1: a borderless game the user had alt-tabbed out of read as no game, and GPU work made it unplayable): a program from a game library is a game while it runs (its helpers, the launchers and always-on tools aren't); a program holding the 3D engine past GPU_PCT for GPU_FOR_S is one (a burst isn't; UnderCover's own Python and Windows' own never are); the look takes the screen first, then those")
+def u_gamedetect():
+    import sys as _sys
+    from undercover.core import gamepause as gp, platform as pf
+    steam = r"C:\Program Files (x86)\Steam\steamapps\common\Wardogs\Wardogs\Binaries\Win64\WardogsClient-Win64-Shipping.exe"
+    # a game library: the game, its folder as the title; a second library on another drive; helpers, launchers, tools not
+    g = gp.library_game({40: r"C:\Program Files (x86)\Steam\steamapps\common\Wardogs\Wardogs\Plugins\Sentry\crashpad_handler.exe", 41: steam})
+    assert g and g["exe"] == "WardogsClient-Win64-Shipping.exe" and g["title"] == "Wardogs" and g["how"] == "running" and g["pid"] == 41, g
+    assert gp.library_game({7: "E:/SteamLibrary/steamapps/common/Hades/x64/Hades.exe"})["title"] == "Hades"
+    assert gp.library_game({8: r"C:\Program Files\Epic Games\Fortnite\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping.exe"})["title"] == "Fortnite"
+    for not_a_game in (r"C:\Program Files (x86)\Steam\steamapps\common\Wardogs\Wardogs\Plugins\Sentry\crashpad_handler.exe",
+                       r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+                       r"C:\Riot Games\Riot Client\RiotClientServices.exe",
+                       r"D:\SteamLibrary\steamapps\common\wallpaper_engine\wallpaper64.exe",
+                       r"C:\Program Files (x86)\Steam\steam.exe", r"C:\Program Files\Mozilla Firefox\firefox.exe"):
+        assert gp.library_game({9: not_a_game}) is None, not_a_game
+    # the 3D engine: past GPU_PCT for GPU_FOR_S is a game; a burst, a light program, UnderCover's own Python, dwm aren't
+    saved_heavy = dict(gp._HEAVY)
+    try:
+        gp._HEAVY.clear()
+        game = r"C:\Games\Indie\Indie.exe"   # (not from a launcher's library: only its GPU use tells)
+        procs = {50: game, 51: r"C:\Users\u\AppData\Local\Discord\app-1.0\Discord.exe", 52: str(Path(_sys.executable)),
+                 53: r"C:\Windows\System32\dwm.exe"}
+        load = {50: 82.0, 51: 0.6, 52: 95.0, 53: 40.0}
+        assert gp.gpu_game(None, procs, 0.0) is None   # (the counters' first read: no rate yet)
+        assert gp.gpu_game(load, procs, 0.0) is None and gp.gpu_game(load, procs, gp.GPU_FOR_S - 1) is None   # a burst so far
+        g = gp.gpu_game(load, procs, gp.GPU_FOR_S + 1)
+        assert g and g["exe"] == "Indie.exe" and g["how"] == "gpu" and g["pid"] == 50, g
+        assert gp.gpu_game({**load, 50: 5.0}, procs, gp.GPU_FOR_S + 2) is None   # it eased off: the clock starts again
+        assert gp.gpu_game(load, procs, gp.GPU_FOR_S + 3) is None and 50 in gp._HEAVY
+        assert gp.gpu_game({52: 99.0, 53: 99.0}, procs, 1e6) is None, "UnderCover's own work or Windows' read as a game"
+        # the look: the screen first; a game behind another window next (the 1.1 miss); UnderCover's own page is no game
+        saved = (pf.fullscreen_app, pf.processes, pf.gpu_3d_load)
+        try:
+            pf.processes, pf.gpu_3d_load = (lambda: {41: steam}), (lambda: {})
+            pf.fullscreen_app = lambda: None
+            assert gp._look()["how"] == "running" and gp.game_up(), "a game behind another window wasn't seen"
+            pf.fullscreen_app = lambda: {"exe": "chrome.exe", "title": "UnderCover — Google Chrome", "how": "busy"}
+            assert gp._look()["exe"] == "WardogsClient-Win64-Shipping.exe" and gp.game_up()
+            pf.fullscreen_app = lambda: {"exe": "eldenring.exe", "title": "ELDEN RING", "how": "exclusive"}
+            assert gp._look()["exe"] == "eldenring.exe"
+            pf.processes = lambda: {12: r"C:\Program Files\Mozilla Firefox\firefox.exe"}
+            pf.fullscreen_app = lambda: None
+            assert gp._look() is None and not gp.game_up()
+
+            def gone():
+                raise OSError("a program went away mid-read")
+            pf.processes = gone
+            assert gp._look() is None and not gp.game_up()
+        finally:
+            pf.fullscreen_app, pf.processes, pf.gpu_3d_load = saved
+    finally:
+        gp._HEAVY.clear()
+        gp._HEAVY.update(saved_heavy)
+    # the words say "running" (a game behind another window isn't full-screen)
+    from undercover.core import trayicon as tray
+    assert tray.game_question({"asking": {"title": "Wardogs"}}).startswith("Wardogs is running")
+    assert "is running while" in (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    # on Windows, the real readers answer (read only): this process among the programs, the 3D counters a rate
+    live = ""
+    if pf.WINDOWS:
+        ps = pf.processes()
+        assert os.getpid() in ps and Path(ps[os.getpid()]).name.lower().startswith("python"), len(ps)
+        pf.gpu_3d_load()
+        time.sleep(0.3)
+        load = pf.gpu_3d_load()
+        assert isinstance(load, dict) and all(isinstance(k, int) and v >= 0 for k, v in load.items()), load
+        reopen = pf._GPU_REOPEN_S
+        try:   # opened again on schedule (programs started since get counted): one read without a rate, then rates
+            pf._GPU_REOPEN_S = 0.2
+            time.sleep(0.3)
+            assert pf.gpu_3d_load() is None
+            time.sleep(0.1)
+            assert isinstance(pf.gpu_3d_load(), dict)
+        finally:
+            pf._GPU_REOPEN_S = reopen
+        live = f"; live: {len(ps)} programs, 3D counters for {len(load)}, reopened on schedule"
+    return f"library (6 not-games refused), 3D engine past {gp.GPU_PCT:.0f} % for {gp.GPU_FOR_S:.0f} s, the look in order{live}"
 
 
 @check("cadence reading: very short sentences are read with a neighbour (never across a paragraph), the voice conversion gets a lead-in; Agent Smoke ships a shrunk index")
@@ -8501,7 +8581,7 @@ def u_tray():
     asking = {"asking": {"exe": "eldenring.exe", "title": "ELDEN RING", "since": 1.0}}
     g = [i["id"] for i in tray.menu_model(idle, [], game=asking) if i["id"] != "-"]
     assert g[:5] == ["game-q", "game-pause", "game-both", "game-never", "open"], g
-    assert tray.game_question(asking).startswith("ELDEN RING is full-screen") and tray.game_question({"asking": None}) is None
+    assert tray.game_question(asking).startswith("ELDEN RING is running") and tray.game_question({"asking": None}) is None
     assert next(i for i in m if i["id"] == "startup")["checked"] is True
     cover = {"id": "c1", "kind": "cover", "state": "running", "title": "Cover: Hello as Agent Smoke", "total_left": 130}
     train = {"id": "t1", "kind": "train", "state": "running", "title": "Training Morgan Freeman", "epoch": 120,
@@ -10352,7 +10432,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

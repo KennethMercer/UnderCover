@@ -182,7 +182,7 @@ function gameAsk(a) {
   box.hidden = !a;
   if (!a) return;
   const low = typeof LP !== "undefined" && LP.known;   // with Low profile there (lowprofile.js), it's the first answer
-  $("#gp-q").textContent = `${a.title || a.exe} is full-screen while ${a.reason || "UnderCover is working on the graphics card"}. ` +
+  $("#gp-q").textContent = `${a.title || a.exe} is running while ${a.reason || "UnderCover is working on the graphics card"}. ` +
     (low ? "Low profile while you play? UnderCover keeps to half the graphics card and works in bursts." : "Pause UnderCover while you play?");
   $("#gp-low").hidden = !low;
   $("#gp-never").textContent = `Don't ask for ${a.exe}`;

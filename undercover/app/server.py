@@ -1053,7 +1053,7 @@ def main():
     except Exception as e:   # noqa: BLE001 - never block startup
         print(f"The kept full indexes couldn't be checked: {e}", flush=True)
     from ..core import gamepause
-    gamepause.start()   # the game pause: asks before UnderCover's GPU work competes with a full-screen game
+    gamepause.start()   # the game pause: asks before UnderCover's GPU work competes with a game
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
     try:   # Phone access (phase 11): the second listener, if it's switched on
         phone_api.setup(lambda a, p: PhoneServer((a, p), Handler), port, lambda a, p: AwayServer((a, p), Handler))

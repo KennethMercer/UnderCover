@@ -523,9 +523,15 @@ away token (`away.html`). Never plain port forwarding. Windows-only for now (`pl
 The server starts it; one per user; it leaves with the server after a Quit. The icon shows idle, working (the module's
 bar), problem or stopped. Menu: Open, the running jobs with time left, Pause / Resume, Phone access, Restart, Quit,
 Start with Windows (off by default; a Startup-folder shortcut made only on the person's click). It also asks the game
-pause's question (`core/gamepause.py`): when a full-screen game starts while UnderCover has GPU work, "Pause UnderCover
+pause's question (`core/gamepause.py`): when a game starts while UnderCover has GPU work, "Pause UnderCover
 while you play?" (Pause / Keep both running / Don't ask for this game), asked and never assumed. Not `core/tray.py`,
-which is the recent tray of covers and speech.
+which is the recent tray of covers and speech. A game is any one of (1.1, `gamepause._look`; the readers are in
+`core/platform`): the program in front fills its monitor (exclusive, Windows' "busy", or a window covering the whole
+monitor that isn't maximized); a program from a game library is running (`GAME_DIRS`: Steam's `steamapps\common`,
+Epic, GOG, Xbox, Riot, EA, Ubisoft; its helpers, the launchers and always-on tools such as Wallpaper Engine are not),
+which also sees a game in its menus or behind another window; or a program holds the 3D engine past `GPU_PCT` (30 %)
+for `GPU_FOR_S` (15 s), from Windows' GPU Engine counters (UnderCover's own Python and Windows' own processes never
+count).
 
 ### The ear
 
@@ -612,7 +618,7 @@ The installer and the app survive version mismatches and fix common problems the
   (20 ms to 1 s). Speeds measured under it are kept apart (`-lp` keys in speak_speed.json, train_speed.json and
   eta.json; `low_profile: true` on timings.jsonl records), and an estimate with none yet takes 1/burst as its first
   guess. The game pause's answer `low` turns it on for that game (remembered in `[low_profile] for_games`; `auto`
-  turns it on for any full-screen game without asking) and the game's closing turns it off again, only then. Settings:
+  turns it on for any game without asking) and the game's closing turns it off again, only then. Settings:
   `[low_profile] on, limit_gb, burst, auto, for_games`; `POST /api/lowprofile` and `/api/status.low_profile`
   (absent on a PC with no card to share, which hides the control). Test servers (`UNDERCOVER_TEST_ROOTS`) run with it on
   at 12 GB unless `UNDERCOVER_LOW_PROFILE` says otherwise ("0" off, or a limit), so a test run leaves half the card.
