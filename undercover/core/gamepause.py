@@ -38,6 +38,7 @@ HELPERS = ("crash", "anticheat", "battleye", "beservice", "launcher", "updater",
 SYSTEM = {"dwm.exe", "explorer.exe", "csrss.exe", "searchhost.exe", "shellexperiencehost.exe", "startmenuexperiencehost.exe",
           "textinputhost.exe", "applicationframehost.exe", "svchost.exe", "system", "idle"}
 _HEAVY: dict = {}   # pid -> when it went past GPU_PCT
+_SEEN_LOCK = threading.Lock()
 STATE = {"game": None, "asking": None, "answer": None, "paused_for": None, "gone_since": None, "reason": "",
          "orphan_since": None}
 _LOCK = threading.Lock()
@@ -244,7 +245,8 @@ def gpu_game(load: dict | None, procs: dict, now: float) -> dict | None:
 def _running_game(now: float) -> dict | None:
     """A game that isn't (or isn't yet) in front: from a game library, or holding the 3D engine."""
     procs = platform.processes()
-    return library_game(procs) or gpu_game(platform.gpu_3d_load(), procs, now)
+    with _SEEN_LOCK:   # (the watcher, a job about to start and the preview backfill may look at once: _HEAVY is shared)
+        return library_game(procs) or gpu_game(platform.gpu_3d_load(), procs, now)
 
 
 def _look():

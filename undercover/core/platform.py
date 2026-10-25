@@ -163,16 +163,28 @@ def processes() -> dict:
 
 
 _GPU_Q: dict = {}   # the 3D engine counters' query, kept open: their values are rates between two reads
+_GPU_REOPEN_S = 30.0   # opened again this often, so programs started since are in its list of instances
 
 
 def gpu_3d_load() -> dict | None:
     """{pid: % of the graphics card's 3D engine} since the last call (Windows' "GPU Engine" counters, the ones Task
-    Manager shows), or None on the first call (a rate needs two reads). Read only."""
+    Manager shows), or None on the first call and every _GPU_REOPEN_S (a rate needs two reads). Read only; safe from
+    several threads (one read at a time)."""
     if not WINDOWS:
         raise _not("Reading the graphics card's load")
+    import threading
+    lock = _GPU_Q.setdefault("lock", threading.Lock())
+    with lock:
+        return _gpu_3d_read()
+
+
+def _gpu_3d_read() -> dict | None:
     import ctypes
     from ctypes import wintypes
     pdh = ctypes.windll.pdh
+    if "q" in _GPU_Q and time.monotonic() - _GPU_Q["t"] > _GPU_REOPEN_S:
+        pdh.PdhCloseQuery(_GPU_Q.pop("q"))
+        _GPU_Q.pop("c", None)
     if "q" not in _GPU_Q:
         q, c = wintypes.HANDLE(), wintypes.HANDLE()
         if pdh.PdhOpenQueryW(None, None, ctypes.byref(q)) != 0:
@@ -181,7 +193,7 @@ def gpu_3d_load() -> dict | None:
             pdh.PdhCloseQuery(q)
             return None
         pdh.PdhCollectQueryData(q)
-        _GPU_Q.update(q=q, c=c)
+        _GPU_Q.update(q=q, c=c, t=time.monotonic())
         return None
     if pdh.PdhCollectQueryData(_GPU_Q["q"]) != 0:
         return None
