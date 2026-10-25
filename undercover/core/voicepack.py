@@ -107,10 +107,6 @@ def default_subject(v) -> dict:
     return {"kind": "public_figure", "name": voice_person(v) or "", "consent": "unknown", "basis": "", "contact": ""}
 
 
-def _version_tuple(s: str) -> tuple:
-    return tuple(int(x) for x in re.findall(r"\d+", str(s))[:3]) or (0,)
-
-
 # ---------------------------------------------------------------- export
 
 def _rvc_meta(ck: dict) -> dict:
@@ -134,7 +130,7 @@ def export(name: str, subject: dict, licence: dict | None = None, include_print:
     from safetensors.torch import save_file
     from . import about, voicepreview
     from .engine.rvc.index import compact_in_place, is_compact
-    from .voices import display_name, get_voice, voice_person
+    from .voices import display_name, get_voice, person_guessed, voice_person
     v = get_voice(name)
     sub = check_subject(subject)
     ck = torch.load(v.pth, map_location="cpu", weights_only=True)
@@ -168,7 +164,8 @@ def export(name: str, subject: dict, licence: dict | None = None, include_print:
             "app": about.VERSION, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "replaces": None,
             "publisher": {"key": "", "name": "", "feed": ""}, "signatures": [],
             "lineage": {"parent": None, "root": None, "generation": 0},
-            "voice": {"name": v.name, "display": display_name(v), "person": voice_person(v) or ""},
+            "voice": {"name": v.name, "display": display_name(v),   # (a checked or trained person only, never the app's guess)
+                      "person": "" if person_guessed(v) else (voice_person(v) or "")},
             "subject": sub,
             "provenance": {"origin": "trained here" if ex.get("trained") else "downloaded", "source": v.source or "",
                            "installed": v.installed or "", "demo_of": "agent-smoke" if ex.get("demo") else ""},
@@ -206,6 +203,8 @@ def read_manifest(pack: Path) -> dict:
         _err(f"That isn't a voice pack (it isn't a zip file: {type(e).__name__}).")
     with z:
         names = [i.filename for i in z.infolist()]
+        if len(set(names)) != len(names):   # (two members of one name: which one a reader takes is up to the reader)
+            _err("The pack holds two files of the same name, so it isn't opened.")
         bad = [n for n in names if n.lower().endswith(PICKLES)]
         if bad:
             _err(f"The pack holds {bad[0]}, a kind of file that can carry code, so it isn't opened. A voice pack carries "

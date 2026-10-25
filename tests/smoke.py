@@ -4725,6 +4725,7 @@ def u_voicepack():
     import hashlib
     import re
     import struct
+    import warnings
     import zipfile
     import numpy as np
     import torch
@@ -4780,6 +4781,9 @@ def u_voicepack():
                 return
             raise AssertionError(f"accepted a pack that should be refused ({word})")
         refused(rewrite(t / "a.ucvoice", add={"evil.pth": b"x"}), "can carry code")
+        with warnings.catch_warnings():   # (zipfile warns about the duplicate it is asked to write)
+            warnings.simplefilter("ignore")
+            refused(rewrite(t / "f.ucvoice", add={P.INDEX: COMPACT_MAGIC}), "two files of the same name")
         m2 = {**m, "voice": {**m["voice"], "display": "Someone Else"}}
         refused(rewrite(t / "b.ucvoice", change=lambda n, b: P.canonical(m2) if n == P.MANIFEST else b), "changed since it was made")
         refused(rewrite(t / "c.ucvoice", change=lambda n, b: b[:-4] + b"abcd" if n == P.INDEX else b), "SHA-256")
@@ -4797,7 +4801,7 @@ def u_voicepack():
         sub_demo = P.default_subject(V.Voice(name="x", dir=t, pth=t / "x", index=None, extra={"demo": True}))
         assert sub_demo["kind"] == "synthetic"
         kb = round(pack.stat().st_size / 1e3)
-    return f"{kb} KB pack, identical back as pack-me-2; 5 refusals"
+    return f"{kb} KB pack, identical back as pack-me-2; 6 refusals"
 
 
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
@@ -9525,6 +9529,44 @@ def a_train():
 
 
 @check("api: work queue, candidates, pause/resume")
+
+@check("api: a voice pack (1.1): the export form, a real voice exported over the API as one .ucvoice, imported back through the voice upload under its own free name, listed with its pack, then removed")
+def a_voicepack():
+    import zipfile
+    voices = [v["name"] for v in api("/api/voices")]
+    src = next((v for v in voices if v.endswith("-uc")), voices[0] if voices else None)
+    assert src, "no voice to pack"
+    form = api(f"/api/library/voices/{src}/pack")
+    assert form["subject"]["kind"] in form["kinds"] and "consents" in form and form["cadence_note"], form
+    body = json.dumps({"subject": {"kind": "public_figure", "name": form["subject"]["name"] or "Someone", "consent": "unknown",
+                                   "basis": "smoke's own sandbox copy, never shared"}, "licence": {}}).encode()
+    req = urllib.request.Request(BASE + f"/api/library/voices/{src}/pack", data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "Origin": BASE})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        data = r.read()
+        disp = r.headers.get("Content-Disposition") or ""
+    assert data[:2] == b"PK" and ".ucvoice" in disp, disp
+    from undercover.core import storage
+    pack = storage.ALLOWED_ROOTS[0] / "smoke-pack.ucvoice"
+    pack.write_bytes(data)
+    with zipfile.ZipFile(pack) as z:
+        m = json.loads(z.read("manifest.json"))
+    assert m["voice"]["name"] == src and m["subject"]["kind"] == "public_figure" and m["signatures"] == []
+    req = urllib.request.Request(BASE + "/api/voices/upload", data=data, method="POST",
+                                 headers={"X-Filename": "smoke-pack.ucvoice", "Origin": BASE, "Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        got = json.loads(r.read())["voice"]
+    try:
+        assert got != src and got.startswith(src), f"the import should take a free name beside {src}: {got}"
+        v = next(x for x in api("/api/voices") if x["name"] == got)
+        from undercover.core.config import path   # (pointed at the sandbox's folders by sandbox_server)
+        meta = json.loads((path("voices_dir") / got / "meta.json").read_text(encoding="utf-8"))
+        assert v and meta["extra"]["pack"]["pack_id"] == m["pack_id"], (v, meta["extra"].get("pack"))
+    finally:
+        api(f"/api/voices/{got}", method="DELETE")   # (set aside, as the user's Delete does: the sandbox goes after the run)
+        pack.unlink(missing_ok=True)
+    return f"{src} -> {round(len(data) / 1e6, 1)} MB pack -> {got}"
+
 @check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here)")
 def a_vault():
     from undercover.core import storage
@@ -10161,7 +10203,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
+                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
