@@ -158,7 +158,7 @@ def remember_game(exe: str, want: bool = True):
 
 
 def wants_for_game(exe: str) -> bool:
-    """A full-screen game that turns Low profile on without asking: on the list, or `auto`."""
+    """A game that turns Low profile on without asking: on the list, or `auto`."""
     s = settings()
     return s["auto"] or exe.lower() in (g.lower() for g in s["for_games"])
 

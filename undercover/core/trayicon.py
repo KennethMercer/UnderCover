@@ -93,7 +93,7 @@ def game_question(game: dict | None, low_profile: bool = False) -> str | None:
     who = a.get('title') or a.get('exe')
     if low_profile:
         return f"Game on: {who}. UnderCover is working. Low profile while you play? It keeps to half the graphics card and works in bursts."
-    return f"{who} is full-screen: pause UnderCover while you play?"
+    return f"{who} is running: pause UnderCover while you play?"
 
 
 def menu_model(status: dict | None, jobs: list | None = None, phone_on: bool | None = None,
