@@ -87,12 +87,12 @@ ENGINES = {
                    "about": "Resemble AI's open model (MIT code and weights); closest to each person's cadence in our tests. "
                             "Every output carries Resemble's inaudible watermark."},
     "f5": {"name": "F5-TTS", "licence": "CC-BY-NC-4.0", "addon": "f5", "ref_text": True, "rtf": 3.0, "vram_gb": 0.9,
-           "size_mb": 1400, "module": "f5_tts",
+           "size_mb": 1410, "module": "f5_tts",
            "about": "Fast (3-4x realtime); flattens some intonation. Non-commercial weights: an add-on you accept."},
     # measured 2026-10-11 (the maintainers' notes, cadence): 0.84x realtime alone, 0.79-0.80 with RVC; likeness alone 0.56 /
     # 0.39, with RVC 0.74 / 0.82 (as good as the others); it reads both test voices fast, with longer pauses inside a sentence
     "xtts": {"name": "XTTS-v2", "licence": "CPML", "addon": "xtts", "ref_text": False, "rtf": 0.8, "vram_gb": 2.1,
-             "size_mb": 1900, "module": "TTS",
+             "size_mb": 1880, "module": "TTS",
              "about": "Coqui's model: less graphics memory than Chatterbox, longer pauses inside a sentence, about a third "
                       "of Turbo's speed. Non-commercial weights (CPML): an add-on you accept."},
 }
@@ -175,11 +175,11 @@ addons.register(addons.Addon(
     # (no "about 4x faster" any more: that was against Chatterbox; the default, Turbo, makes speech about as fast)
     id="f5", name="F5-TTS", adds="Another engine for SpeakEasy's speech in a person's own cadence. It needs less graphics memory, "
                                  "and its intonation is slightly flatter.",
-    short="lighter on graphics memory, slightly flatter speech", use="personal, non-commercial use only",
+    short="less graphics memory, slightly flatter speech", use="personal, non-commercial use only",
     licence="CC-BY-NC-4.0", licence_url="https://huggingface.co/SWivid/F5-TTS",
     licence_summary=("The code is MIT, but the model weights are Creative Commons Attribution-NonCommercial 4.0: "
                      "you may use what it makes for personal, non-commercial purposes only."),
-    size_mb=1450, files=F5_FILES, sha256=MODEL_SHA256, imports=["f5_tts", "vocos", "x_transformers"], modules=["speakeasy"],
+    size_mb=1410, files=F5_FILES, sha256=MODEL_SHA256, imports=["f5_tts", "vocos", "x_transformers"], modules=["speakeasy"],
     packages=["f5-tts==1.1.22", "vocos==0.1.0", "encodec==0.1.1", "x-transformers==2.31.7", "einx==0.4.3",
               "frozendict==2.4.7", "torch-einops-utils==0.1.36", "torchdiffeq==0.2.5", "ema-pytorch==0.8.3",
               "hydra-core==1.3.7", "unidecode==1.4.0", "transformers-stream-generator==0.0.5", "loguru==0.7.3",
@@ -193,7 +193,7 @@ addons.register(addons.Addon(
     licence_summary=("The code is MPL-2.0, but the model weights are under the Coqui Public Model License 1.0.0: you may use "
                      "the model and what it makes for non-commercial purposes only (personal use, study, hobby projects). "
                      "Anyone you give what it makes to must get the licence's terms or its link with it."),
-    size_mb=1900, files=XTTS_FILES, sha256=MODEL_SHA256, imports=["TTS", "coqpit", "trainer"], modules=["speakeasy"],
+    size_mb=1880, files=XTTS_FILES, sha256=MODEL_SHA256, imports=["TTS", "coqpit", "trainer"], modules=["speakeasy"],
     # coqui-tts's own needs that the app doesn't have (resolved from PyPI against the app's pins); left out: the
     # trainer's loggers (tensorboard and what it pulls in, psutil) and num2words's command line (docopt), never imported to speak
     packages=["coqui-tts==0.27.5", "coqpit-config==0.2.5", "coqui-tts-trainer==0.3.3", "anyascii==0.3.3", "inflect==7.5.0",
