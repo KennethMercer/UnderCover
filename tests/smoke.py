@@ -8395,6 +8395,7 @@ def u_page_rules():
     assert '$("#workbar:not([hidden])")' in frj and "tour-ring${shield ? \" shield\"" in frj and "progress" not in frj.split("function tourCard")[1].split("function tourNow")[0].replace("tour-now", ""), "the waiting state must light the app's own progress, not draw a bar"
     assert len(eval(frj.split("const TOUR_TIPS = ")[1].split("];")[0] + "]")) in range(6, 9) and "10000" in frj and 'e.key === "Escape") e.stopPropagation()' in frj, "the tips or the dead Esc are gone"
     assert "clipPath = `path(evenodd" in frj and ".tour-veil {" in css and "prefers-reduced-motion: reduce) { .tour-card #tour-tip-t" in css, "the veil (clicks only reach the holes) or reduced motion is gone"
+    assert "TOUR_LONG = 180" in frj and 'data-tour="away"' in frj and "Leave it running and look around" in frj and "Your first cover is ready" in frj and "function tourNudge" in frj, "the long wait lost its look-around or its nudge"
     from undercover.app import firstrun as _fr
     assert {"step", "skipped", "done"} <= set(_fr.tour_status()) and "tour_change" in dir(_fr), "the server's tour state is gone"
     # rc-page9 (IA pass 12, A3): What's new reaches friends; no internal names (the chats, phases, QA passes, branch names)

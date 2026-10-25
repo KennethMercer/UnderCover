@@ -8,10 +8,15 @@
 //   but can't be pressed, and a panel in the dark says what it's doing in the job's own words, with a tip every ten seconds.
 //   2. The result: listen, then Send to SafeHouse.   3. The SafeHouse tab, then the kept cover in the Library.
 //   4. DoubleAgent's "Who should it sound like?", then one closing line.
+// A first cover with more than three minutes left (a voice to train first) offers "Leave it running and look around": the veil lifts, the
+// job goes on, and when it's done a small "Your first cover is ready" nudge in the corner brings them to the result with step 2 lit (a nudge,
+// not a jump: someone looking around may be in the middle of something; the user, 2026-10-25).
 // Server: /api/status's `tour` {step, skipped, done}; POST /api/firstrun {step | skip | done | replay} (app/firstrun.py).
 // Uses app.js ($, $$, api, esc, S, HIST, showResult), shell.js (showTab), jobs.js (runningJobs), work.js (jobName, jobLine, glyph).
 
-const TOUR = { known: null, step: 0, sub: 0, on: false, wait: false, job: null, failed: null, confirm: false, tip: 0, tipAt: 0, timer: 0, began: false };
+const TOUR = { known: null, step: 0, sub: 0, on: false, wait: false, job: null, failed: null, confirm: false, tip: 0, tipAt: 0, timer: 0, began: false,
+               left: null, long: false, away: false, ready: null };
+const TOUR_LONG = 180;   // seconds left above which the waiting panel offers to let them look around
 const TOUR_TIPS = [
   "The glasses in the top bar are Deep Cover: every number and setting. You never need them to make a cover.",
   "Train tonight puts a voice in the night's queue: it trains while the PC is free, and it's ready in the morning.",
@@ -30,7 +35,8 @@ function tourDom() {
   if ($("#tour")) return;
   document.body.insertAdjacentHTML("beforeend", `<div class="tour" id="tour" hidden>
     <div class="tour-veil" id="tour-veil"></div><div id="tour-rings"></div>
-    <div class="tour-card" id="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-h"></div></div>`);
+    <div class="tour-card" id="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-h"></div></div>
+    <div class="tour-nudge" id="tour-nudge" hidden role="status" aria-live="polite"></div>`);
 }
 const tourRect = el => { const r = el.getBoundingClientRect(); return r.width && r.height ? { x: r.left - 8, y: r.top - 8, w: r.width + 16, h: r.height + 16 } : null; };
 function tourHoles(targets, shield) {
@@ -78,7 +84,8 @@ function tourCard() {
       <div class="tour-acts"><button class="btn primary" type="button" data-tour="retry">Try again</button>${tourSkip}</div>`;
   } else if (TOUR.wait) {
     c.innerHTML = `<div class="tour-k"><b id="tour-h">Making your first cover</b>${k}</div><p class="tour-now" id="tour-now"></p>
-      <p class="tour-tip" id="tour-tip"><span class="tour-tip-k">While you wait</span><span id="tour-tip-t"></span></p><div class="tour-acts">${tourSkip}</div>`;
+      <p class="tour-tip" id="tour-tip"><span class="tour-tip-k">While you wait</span><span id="tour-tip-t"></span></p>
+      <div class="tour-acts">${TOUR.long ? `<button class="btn" type="button" data-tour="away">Leave it running and look around</button>` : ""}${tourSkip}</div>`;
     tourNow(); tourTip(true);
   } else if (n === 1) {
     c.innerHTML = `<div class="tour-k"><b id="tour-h">Your first assignment: a cover</b>${k}</div>
@@ -108,6 +115,7 @@ function tourNow() {
   const el = $("#tour-now"); if (!el) return;
   const j = (typeof runningJobs === "function" ? runningJobs() : []).find(x => x.id === TOUR.job) || (typeof runningJobs === "function" ? runningJobs()[0] : null);
   const line = j ? (typeof jobLine === "function" ? jobLine(j, false) : "") || j.message || "" : "";
+  TOUR.left = j ? j.total_left ?? j.eta ?? null : null;
   const said = line ? line.replace(/^./, c => c.toUpperCase()).replace(/[.\s]+$/, "") + "." : "Getting started.";   // one full stop, whatever the job's words end with
   el.textContent = `${said} The bar and the time left are lit on the page.`;
 }
@@ -124,7 +132,11 @@ function tourTip(first) {
 function tourTick() {
   if (!TOUR.on) return;
   if (TOUR.step === 1 && !TOUR.wait && !TOUR.failed && (S.osBusy || S.job)) { TOUR.wait = true; TOUR.job = (typeof OS !== "undefined" && OS.job) || S.job; tourCard(); }
-  if (TOUR.wait) { tourNow(); if (Date.now() - TOUR.tipAt > 10000) tourTip(false); }
+  if (TOUR.wait) {
+    tourNow(); if (Date.now() - TOUR.tipAt > 10000) tourTip(false);
+    const long = TOUR.left != null && TOUR.left > TOUR_LONG;
+    if (long !== TOUR.long && !TOUR.away) { TOUR.long = long; tourCard(); }   // the offer comes (or goes) with the job's own time left
+  }
   // a cover that ends between two looks at the job feed never fires uc:jobdone (it was never seen running): once the page isn't busy, its end is read
   if (TOUR.wait && !S.osBusy && !S.job) {
     const j = (typeof JF !== "undefined" ? JF.list : []).find(x => x.id === TOUR.job && (x.final || ["done", "error", "cancelled"].includes(x.state)));
@@ -132,12 +144,14 @@ function tourTick() {
   }
   if (TOUR.step === 2 && $("#keep")?.dataset.kept === "true") return tourGo(3);
   if (TOUR.step === 3 && !TOUR.sub && document.body.dataset.module === "safehouse") { TOUR.sub = 1; tourShowKept(); tourCard(); }
+  if (TOUR.away) return;   // looking around: no veil until the nudge brings them back
   tourPlace(tourHoles(tourTargets(), TOUR.wait));
 }
 document.addEventListener("uc:jobdone", e => tourJobEnded(e.detail));
 function tourJobEnded(j) {   // once: the event, or the tick's look at the feed
   if (!TOUR.on || !TOUR.wait || !["auto", "cover"].includes(j.kind)) return;
   const st = j.final?.state || j.state;
+  if (TOUR.away) { TOUR.wait = false; TOUR.ready = { ok: st === "done", id: j.id, message: j.final?.message || j.message || "" }; return tourNudge(); }
   if (st === "done") { TOUR.wait = false; TOUR.job = null; setTimeout(() => tourGo(2), 600); }   // the result panel is drawn by then
   else { TOUR.wait = false; TOUR.failed = { id: j.id, message: typeof plainMsg === "function" ? plainMsg(j.final?.message || j.message || "") : (j.final?.message || j.message || "") }; tourCard(); }
 }
@@ -147,6 +161,21 @@ async function tourShowKept() {   // SafeHouse > Library > Covers > Kept, so the
   (await soon('#lib-cats .cat[data-cat="covers"]'))?.click();
   (await soon('#lib-kfilter [data-v="kept"]'))?.click();
   (await soon('#lib-list .litem[data-kept="true"]'))?.scrollIntoView({ block: "center" });
+}
+// looking around: the veil lifts and the job goes on; the tour waits for its end (the event, or the tick's look at the feed)
+function tourAway() { TOUR.away = true; $("#tour").hidden = true; document.body.classList.remove("touring"); }
+// the end, while they look around: a small card in the corner, not a jump; one press brings back the tour at the result (or the failure)
+function tourNudge() {
+  const n = $("#tour-nudge"), ok = TOUR.ready?.ok;
+  n.innerHTML = `<b>${ok ? "Your first cover is ready" : "Your first cover didn't finish"}</b>
+    <div class="tour-acts"><button class="btn primary" type="button" data-tour="back">${ok ? "Hear it" : "See why"}</button><button class="linkbtn quiet tour-skip" type="button" data-tour="nudge-skip">Skip the tour</button></div>`;
+  n.hidden = false;
+}
+function tourBack(confirm = false) {
+  const r = TOUR.ready; TOUR.away = false; TOUR.ready = null; TOUR.long = false; $("#tour-nudge").hidden = true;
+  $("#tour").hidden = false; document.body.classList.add("touring");
+  if (r && !r.ok) { showTab("frontman"); TOUR.failed = { id: r.id, message: typeof plainMsg === "function" ? plainMsg(r.message) : r.message }; TOUR.confirm = confirm; tourCard(); tourTick(); return; }
+  showTab("frontman"); tourGo(2); if (confirm) { TOUR.confirm = true; tourCard(); }
 }
 function tourGo(n) {
   TOUR.step = n; TOUR.sub = 0; TOUR.failed = null; TOUR.confirm = false; TOUR.scrolled = false;
@@ -170,7 +199,7 @@ function tourEnd(how) {
 
 // ------------------------------------------------------------ the card's buttons; Esc and the dark do nothing
 document.addEventListener("click", e => {
-  const b = e.target.closest("[data-tour]"); if (!b || !TOUR.on) return;
+  const b = e.target.closest("[data-tour]"); if (!b || !TOUR.on) return;   // (the nudge sits outside the overlay: its buttons count too)
   const a = b.dataset.tour;
   if (a === "skip") { TOUR.confirm = true; tourCard(); }
   else if (a === "skip-no") { TOUR.confirm = false; tourCard(); }
@@ -180,6 +209,9 @@ document.addEventListener("click", e => {
     api(`/api/jobs/${id}/retry`, { method: "POST" }).then(r => { TOUR.job = r?.job || TOUR.job; if (typeof refreshJobs === "function") refreshJobs(true); })
       .catch(() => { TOUR.wait = false; $("#os-go").click(); }); }   // no retry for it: the same request again
   else if (a === "next") tourGo(TOUR.step + 1);
+  else if (a === "away") tourAway();
+  else if (a === "back") tourBack();
+  else if (a === "nudge-skip") tourBack(true);   // back to where it was, with the one question
   else if (a === "end") tourEnd("done");
 });
 document.addEventListener("keydown", e => { if (TOUR.on && e.key === "Escape") e.stopPropagation(); }, true);
