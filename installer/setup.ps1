@@ -138,7 +138,12 @@ function Status([string]$detail = '', [double]$frac = -1) {
     [Console]::Out.WriteLine($line); [Console]::Out.Flush()
     if (-not $DryRun) {
         New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
-        Add-Content -Path $StatusFile -Value ("{0:u}  {1}" -f (Get-Date), $line)
+        # a progress note never stops setup: the wizard reads this file while setup writes it, and a write that found it
+        # busy once ended a 1.0.0 setup at its last step (the update-in-place check's log); a few tries, then it's skipped
+        for ($try = 0; $try -lt 5; $try++) {
+            try { Add-Content -Path $StatusFile -Value ("{0:u}  {1}" -f (Get-Date), $line) -ErrorAction Stop; break }
+            catch { Start-Sleep -Milliseconds 50 }
+        }
     }
 }
 # what a Cancel leaves for the next run, read from the disk: "Python 3.12.10, PyTorch and the downloads so far"
