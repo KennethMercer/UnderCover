@@ -422,7 +422,14 @@ def gpu_worker():
                 gate(job)
             CURRENT[0] = job
             from . import gpu as G, lowprofile
-            if not lowprofile.before_job(job):   # (Low profile: freed, the whole limit for a training, waited to fit)
+            go = lowprofile.before_job(job)   # (Low profile: freed, the whole limit for a training, a fit check)
+            if go is None:   # doesn't fit the cap (said): to the back of the queue, the jobs behind it run; looked at again
+                CURRENT[0] = None
+                GPU_QUEUE.put((job, fn))
+                if GPU_QUEUE.qsize() <= 1:
+                    time.sleep(2)   # (nothing else to run: no spinning)
+                continue
+            if go is False:
                 job.finish("cancelled", message="Cancelled.")
                 CURRENT[0] = None
                 continue
@@ -440,6 +447,23 @@ def gpu_worker():
                 job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).")
             except Exception:
                 pass
+
+
+def serve_between(before=None):
+    """A training's Control.service: covers queued meanwhile run between its steps (its models stay loaded). Not under
+    Low profile: the training holds the cap, and a cover beside it would run out of it; they wait for its end.
+    before(): called before each job runs (a training says "paused for a cover")."""
+    from . import lowprofile
+    if lowprofile.on():
+        return
+    while not GPU_QUEUE.empty():
+        try:
+            other, fn = GPU_QUEUE.get_nowait()
+        except Exception:   # noqa: BLE001
+            return
+        if before is not None:
+            before()
+        run_job(other, fn)
 
 
 def run_job(job: "Job", fn):

@@ -4634,9 +4634,9 @@ def u_lowprofile():
                 L.change(limit_gb=6)
                 ok, why = L.fits("train")
                 assert not ok and "needs about" in why and "allows 6" in why, (ok, why)
-                assert L.train_batch(8) == 4, L.train_batch(8)
+                assert L.train_accum(8) == 2, L.train_accum(8)   # (the plan's batch in two halves: the same step)
                 L.change(limit_gb=16)
-                assert L.train_batch(8) == 8
+                assert L.train_accum(8) == 1
 
                 class J:
                     cancel = False

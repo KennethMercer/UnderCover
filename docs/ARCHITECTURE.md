@@ -547,8 +547,12 @@ The installer and the app survive version mismatches and fix common problems the
   before a training). Every GPU job records its peak (`gpu_peak_gb`, `gpu_alloc_gb`, `gpu_start_gb` on its snapshot);
   `cache/gpu_need.json` keeps each kind's allocated peaks, and a kind that needs more than the cap allows waits and says
   so ("needs about 9 GB; Low profile allows 6", `waits_for: "Low profile"`) instead of running out of memory; an
-  out-of-memory under the cap teaches the need and the job is retried once the cap lifts. A training's batch is halved
-  under a tight cap. `burst` (0.25–0.75) is the share of the time it works: each step loop (training steps, conversion
+  out-of-memory under the cap teaches the need and the job is retried once the cap lifts. Under a tight cap a training
+  step is made of two micro-batches whose gradients add up (gradient accumulation; the generator's random slice and
+  noise replayed for its own pass): the plan's batch, samples and steps stay, so a voice trained under Low profile is
+  the same voice, only slower. While a training runs under it, covers wait for its end instead of running between its
+  steps; a job that doesn't fit goes to the back of the queue, so the ones behind it that fit run. The worker's share
+  is the largest engine it may load (the configured one, or a voice's pinned one). `burst` (0.25–0.75) is the share of the time it works: each step loop (training steps, conversion
   and separation chunks, sentences) calls `Pacer.tick()`, which waits for the GPU and pauses in proportion to the step
   (20 ms to 1 s). Speeds measured under it are kept apart (`-lp` keys in speak_speed.json, train_speed.json and
   eta.json; `low_profile: true` on timings.jsonl records), and an estimate with none yet takes 1/burst as its first

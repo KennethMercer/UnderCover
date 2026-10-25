@@ -783,12 +783,7 @@ def control_for(job):
     control = jobs.Control()
 
     def service():
-        while not jobs.GPU_QUEUE.empty():
-            try:
-                other, fn = jobs.GPU_QUEUE.get_nowait()
-            except Exception:   # noqa: BLE001
-                return
-            jobs.run_job(other, fn)
+        jobs.serve_between()
     control.service = service
     job.control = control
     return control

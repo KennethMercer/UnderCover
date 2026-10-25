@@ -143,7 +143,11 @@ def change(**patch) -> dict:
     if "on" in patch and not patch["on"]:
         with _LOCK:
             STATE["by_game"] = None   # switched off by hand: no game's closing has anything to undo
-    apply()
+    from . import jobs
+    if jobs.CURRENT[0] is None or not on():   # (a lower cap under a running job would end it: it waits for the next start)
+        apply()
+    else:
+        _log("on while a job runs: the cap applies when the next job starts")
     return status()
 
 
@@ -198,12 +202,31 @@ def worker_share(engine: str | None = None) -> float:
     return float(info.get("vram_gb") or 3.6)
 
 
+def worker_engines() -> set:
+    """The engines a worker started now may load: the configured one, and every engine a voice's pack is pinned to."""
+    out = {(CONFIG.get("cadence") or {}).get("engine") or "chatterbox-turbo"}
+    try:
+        from .voices import listed_voices
+        for v in listed_voices():
+            pin = (((v.extra or {}).get("tts") or {}).get("engine_pin"))
+            if pin:
+                out.add(pin)
+    except Exception:   # noqa: BLE001 - the configured one at least
+        pass
+    return out
+
+
+def reserve_gb() -> float:
+    """The share to keep for the worker before its request is known: the largest of the engines it may load."""
+    return max(worker_share(engine=e) for e in worker_engines())
+
+
 def worker_limit_gb() -> float | None:
-    """The cap a cadence worker about to start gets (its environment): its engine's share, or None when off."""
+    """The cap a cadence worker about to start gets (its environment): the largest share it may need, or None when off."""
     if not on():
         return None
     s = settings()
-    return round(min(float(s["limit_gb"]) - 1.0, worker_share(engine=(CONFIG.get("cadence") or {}).get("engine"))), 2)
+    return round(min(float(s["limit_gb"]) - 1.0, reserve_gb()), 2)
 
 
 WORKER_KINDS = ("speech", "voicepreview", "speakwarm", "train-transcribe", "cadence", "newcad")   # jobs that read with the worker
@@ -217,7 +240,7 @@ def server_limit_gb(reserve_worker: bool = False) -> float | None:
         return None
     s = settings()
     lim = float(s["limit_gb"])
-    share = worker_share(engine=(CONFIG.get("cadence") or {}).get("engine")) if reserve_worker else worker_share()
+    share = max(reserve_gb(), worker_share()) if reserve_worker else (reserve_gb() if worker_share() else 0.0)
     return round(max(1.0, lim - share), 2)
 
 
@@ -244,8 +267,11 @@ TRAIN_KINDS = ("train", "train-auto", "train-prepare", "night")   # (a cadence t
 
 
 def before_job(job) -> bool:
-    """The GPU worker, before a queued job runs: what the job doesn't need is freed, a training gets the whole limit, and a
-    job that can't fit waits for the cap to lift. -> False when the job was cancelled while it waited."""
+    """The GPU worker, before a queued job runs: what the job doesn't need is freed, a training gets the whole limit.
+    -> True to run; None when the job doesn't fit the cap (said once; the caller puts it back at the end of the queue,
+    so the jobs behind it that do fit aren't held), False when it was cancelled."""
+    if getattr(job, "cancel", False):
+        return False
     if not on():
         return True
     kind = getattr(job, "kind", "") or ""
@@ -255,7 +281,17 @@ def before_job(job) -> bool:
     elif kind in WORKER_KINDS:
         free_for("speak")
     apply(reserve_worker=kind in WORKER_KINDS)
-    return wait_to_fit(job, kind)
+    ok, why = fits(kind)
+    if ok:
+        return True
+    if why != getattr(job, "_lp_said", None):   # (said once per reason; the job goes to the back of the queue, looked at again)
+        job._lp_said = why
+        try:
+            job.push(stage="waiting", message=f"Waiting for Low profile: this {kind} {why}. Turn it off, or raise its limit, "
+                                              "and it starts.", waits_for="Low profile")
+        except Exception:   # noqa: BLE001 - only a message
+            pass
+    return None
 
 
 def after_job(job):
@@ -288,8 +324,16 @@ def free_for(step: str):
 
 # ---------------------------------------------------------------- bursts
 
+_BURST = {"at": 0.0, "b": 1.0}
+
+
 def burst() -> float:
-    return settings()["burst"] if on() else 1.0
+    """The share of the time to work (1.0 when off), read from the settings once a second (a step loop asks on every step)."""
+    now = time.monotonic()
+    if now - _BURST["at"] > 1.0:
+        _BURST["b"] = settings()["burst"] if on() else 1.0
+        _BURST["at"] = now
+    return _BURST["b"]
 
 
 def gap(work_s: float):
@@ -319,16 +363,16 @@ class Pacer:
         self.t = time.perf_counter()
 
 
-def train_batch(bs: int) -> int:
-    """The training batch under the cap: halved (never under 2) when the cap is below what a training needs here, or
-    below 10 GB before any training has been measured (batch 8 reached 11.8 GB on the maintainers' card)."""
+def train_accum(bs: int) -> int:
+    """How many micro-batches a training step is made of under the cap: 2 (the plan's batch in two halves, the gradients
+    added up, one optimizer step: the same samples a step and the same steps as the plan, so the voice is the same
+    voice) when the cap is below what a training needs here, or below 10 GB before any training has been measured
+    (batch 8 reached 11.8 GB on the maintainers' card); else 1. Never a micro-batch under 2."""
     lim = server_limit_gb()
-    if lim is None:
-        return bs
+    if lim is None or bs < 4:
+        return 1
     need = need_gb("train")
-    if (need is not None and need > lim) or (need is None and lim < 10):
-        return max(2, bs // 2)
-    return bs
+    return 2 if (need is not None and need > lim) or (need is None and lim < 10) else 1
 
 
 def factor() -> float:
