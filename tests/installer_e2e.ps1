@@ -63,6 +63,12 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if ($admin) { Write-Host "Run this without admin rights: the check is a normal user's install." -ForegroundColor Red; exit 2 }
 
 if (-not $Root) { $Root = (Split-Path $repo -Qualifier) + '\' }
+# the demo voice's model files aren't kept in git (scripts/make_demo_voice.py makes them): a checkout without them
+# builds an installer with no Agent Smoke, and the first use's one-shot then has no voice to use (a 1.0.3 worktree)
+$demo = Join-Path $repo 'undercover\assets\demo-voice\agent-smoke'
+if (-not ((Test-Path (Join-Path $demo 'model.pth')) -and (Test-Path (Join-Path $demo 'model.index')))) {
+    Write-Host "The demo voice's model files aren't in this checkout ($demo): run scripts\make_demo_voice.py, or copy model.pth and model.index from a checkout that has them." -ForegroundColor Red; exit 2
+}
 $dir = Join-Path $Root ('uc-e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $runStart = Get-Date
 if ($FirstUseOnly) { $dir = (Resolve-Path -LiteralPath $FirstUseOnly).Path }
