@@ -417,6 +417,16 @@ likeness as a guard. That bar reproduced every blind verdict on record; a false 
 improvement, so these numbers are tightened, never loosened. Otherwise Improve reports "tried, no improvement: yours is
 kept" and the candidate parks in Set aside.
 
+A singer has no speech of their own to read back, so their frozen test (1.1) holds up to 12 of their own sung
+phrases instead (3-9 s, three per song at most), cut from their songs and separated from the music. From the moment
+the test is made they're held out of every training (`Phrase.frozen`): a candidate judged on them never learned
+them (the approved voice was trained before, so it has: a lean against offering, the safe side). Each voice converts
+them at their own key and is scored on the same measures plus two of singing's own against the source melody: the
+median cents it strays from it (`pitch_err`) and the share of voiced frames that stay voiced (`voicing`). The bar on
+them is the speech bar's terms with a pitch guard (no more than 10 cents further off the melody). It is provisional,
+and a verdict judged on singing says so: no blind verdict on a singer's Improve exists yet to fit it to. The
+Improve A/B plays two of the frozen sung phrases, each in its own key.
+
 Before anything trains, a source gate (`frozen.GATE`) admits a source only if its kept phrases sit near the approved
 voice (mean cosine to the reference at least 0.62, median phrase score at least 0.50), in its register (median pitch
 within 5 semitones of the voice's own) and the pipeline kept more than a tenth of it; left-out sources are reported

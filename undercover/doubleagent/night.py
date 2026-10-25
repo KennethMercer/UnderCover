@@ -504,6 +504,11 @@ def _improve(job, item) -> dict:
         (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
     # 2. train (R4 / R5: the recipe and the budget were set above, or kept from the paused run)
     conv = gpu.MODELS.converter
+    # (1.1) the frozen test is made before the candidate trains, not after: a singer's test freezes their own sung
+    # phrases out of training, and made at the comparing step the first candidate would have learned what it's judged on
+    if frozen.load_test(old) is None:
+        push("night", 0.39, "Setting aside the test this voice is judged on")
+        frozen.ensure(old, P.Project.load(proj.name), frozen.GpuEngine(conv, SpeakerEmbedder()))
     proj = P.Project.load(proj.name)
     plan = proj.train.get("improve") or {}
     push("night", 0.4, (f"Refining {label_of(old.name)} on {proj.kept_seconds() / 60:.1f} min of {proj.person}"

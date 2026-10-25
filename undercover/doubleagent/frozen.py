@@ -63,6 +63,16 @@ MALE_HZ = 165.0          # a donor's median pitch under this = male (the lab's s
 N_LINES = 12             # the person's own lines (the lab read 9-14); the bar needs LINES_MIN
 LINES_MIN = 4
 TEST_VERSION = 1
+# 1.1: a singer's test (they have no speech of their own to read back). Their own separated sung phrases, frozen out of
+# training from the moment the test is made (Phrase.frozen), converted through each voice at their own key and scored on
+# the same measures plus two of singing's own against the source melody: pitch_err (the median cents the converted
+# melody strays from it, voiced in both) and voicing (the share of its voiced frames that stay voiced). The bar on them
+# is the speech bar's terms with a pitch guard, PROVISIONAL: no blind verdict on a singer's Improve exists yet to fit
+# it to (the maintainers' notes, singers). The approved voice was trained before its phrases were frozen, so it has seen
+# them and candidates haven't: a lean against offering, the safe side.
+N_SUNG = 12
+SUNG_MIN = 4
+PITCH_ERR_BAND = 10.0    # cents: a candidate's melody may not stray further than this more than the approved one's
 
 
 # ---------------------------------------------------------------- R5: the budget, R4: the recipe (pure)
@@ -120,15 +130,17 @@ def paired(diffs, seed: int = 0) -> dict | None:
     return {"mean": round(float(d.mean()), 4), "lo": round(float(lo), 4), "hi": round(float(hi), 4), "n": int(len(d))}
 
 
-MEASURES = ("id", "cent", "hnr", "contrast", "noise", "ltas", "content")
-UP = {"id": True, "cent": True, "hnr": True, "contrast": True, "noise": False, "ltas": False, "content": True}
+MEASURES = ("id", "cent", "hnr", "contrast", "noise", "ltas", "content", "pitch_err", "voicing")
+UP = {"id": True, "cent": True, "hnr": True, "contrast": True, "noise": False, "ltas": False, "content": True,
+      "pitch_err": False, "voicing": True}
+CLASSES = ("lines", "donors", "sung")
 
 
 def compare(approved: dict, candidate: dict) -> dict:
     """The candidate against the approved voice on the same frozen test: per class (lines / donors), per measure, the
     paired difference with its interval. Inputs are matched by file; an input one of them lacks is left out."""
     out = {}
-    for cls in ("lines", "donors"):
+    for cls in CLASSES:
         a = {r["file"]: r for r in approved.get(cls) or [] if "id" in r}
         b = {r["file"]: r for r in candidate.get(cls) or [] if "id" in r}
         files = sorted(set(a) & set(b))
@@ -146,8 +158,10 @@ def offer(cmp: dict, test: dict | None = None) -> dict:
     -> {offer: bool, reasons: [why not], words: what changed (R3a), terms: {name: pass}}."""
     lines, donors = cmp.get("lines") or {}, cmp.get("donors") or {}
     terms, why, words = {}, [], []
+    if lines.get("n", 0) < LINES_MIN and (cmp.get("sung") or {}).get("n", 0) >= SUNG_MIN:
+        return offer_sung(cmp)
     if lines.get("n", 0) < LINES_MIN:
-        why = ("no spoken lines to judge a singer by yet" if (test or {}).get("singer")
+        why = ("no spoken lines or sung phrases to judge a singer by yet" if (test or {}).get("singer")
                else "too few of their own lines to judge on" + (f" ({(test or {}).get('lines_why')})" if (test or {}).get("lines_why") else ""))
         return {"offer": False, "reasons": [why], "words": [], "terms": {}}
     idl = lines.get("id")
@@ -177,6 +191,85 @@ def offer(cmp: dict, test: dict | None = None) -> dict:
             why.append("on other people's voices the likeness slipped")
     ok = all(terms.values())
     return {"offer": ok, "reasons": [] if ok else why, "words": words if ok else [], "terms": terms}
+
+
+def offer_sung(cmp: dict) -> dict:
+    """The bar for a singer (1.1), on their own frozen sung phrases: likeness not worse than the band; harmonicity and
+    spectral contrast up by the speech bar's margins, outside their intervals; the melody followed no worse
+    (PITCH_ERR_BAND); the donor guard. PROVISIONAL: not yet fitted to any blind verdict on a singer (the verdict says
+    so). -> offer()'s shape, with on: "singing" and provisional: True."""
+    sung, donors = cmp.get("sung") or {}, cmp.get("donors") or {}
+    terms, why, words = {}, [], []
+    idl = sung.get("id")
+    terms["likeness"] = bool(idl and idl["mean"] > -LIKENESS_BAND)
+    if not terms["likeness"]:
+        why.append("the likeness slipped on their own singing")
+    elif idl and idl["lo"] > LIKENESS_BAND:
+        words.append("a closer likeness")
+    else:
+        words.append("the likeness is unchanged")
+    h = sung.get("hnr")
+    terms["harmonicity"] = bool(h and h["mean"] >= HNR_MIN and h["lo"] > 0)
+    if terms["harmonicity"]:
+        words.insert(0, "cleaner voicing")
+    else:
+        why.append("the voicing isn't clearer")
+    c = sung.get("contrast")
+    terms["contrast"] = bool(c and c["mean"] >= CONTRAST_MIN and c["lo"] > 0)
+    if terms["contrast"]:
+        words.insert(len(words) - 1, "more detail")
+    else:
+        why.append("no more detail in it")
+    pe = sung.get("pitch_err")
+    terms["pitch"] = bool(pe is None or pe["mean"] <= PITCH_ERR_BAND)
+    if not terms["pitch"]:
+        why.append("it follows the melody less closely")
+    idd = donors.get("id")
+    if donors.get("n", 0) >= POOL_MIN and idd is not None:
+        terms["donor_guard"] = bool(idd["mean"] > -LIKENESS_BAND)
+        if not terms["donor_guard"]:
+            why.append("on other people's voices the likeness slipped")
+    ok = all(terms.values())
+    return {"offer": ok, "reasons": [] if ok else why, "words": words if ok else [], "terms": terms, "on": "singing",
+            "provisional": True}
+
+
+def sung_candidates(proj, n: int = N_SUNG * 2) -> list:
+    """The person's best kept sung phrases to freeze into their test: 3-9 s, score >= 0.6, not a training holdout, at
+    most three per source (song), in a fixed order (sha1 of the id)."""
+    hold = set(proj.train.get("holdout") or [])
+    good = [q for q in proj.training_phrases() if q.sung and q.score >= 0.6 and 3 <= q.dur <= 9 and q.id not in hold]
+    good.sort(key=lambda q: hashlib.sha1(q.id.encode()).hexdigest())
+    seen, out = {}, []
+    for q in good:
+        if seen.get(q.source, 0) >= 3:
+            continue
+        seen[q.source] = seen.get(q.source, 0) + 1
+        out.append(q)
+        if len(out) >= n:
+            break
+    return out
+
+
+def hold_out(proj_name: str, ids: list):
+    """Freeze phrases into the test: they never train again (Phrase.frozen), written onto the latest saved project."""
+    from .project import Project, lock
+    with lock(proj_name):
+        cur = Project.load(proj_name)
+        for p in cur.phrases:
+            if p.id in ids:
+                p.frozen = True
+        cur.save()
+
+
+def _melody(f0_in: np.ndarray, f0_out: np.ndarray) -> dict:
+    """How closely a conversion follows its input's melody: the median cents it strays, voiced in both, and the share
+    of the input's voiced frames that stay voiced."""
+    m = min(len(f0_in), len(f0_out))
+    a, b = np.asarray(f0_in[:m], float), np.asarray(f0_out[:m], float)
+    both, voiced = (a > 0) & (b > 0), int((a > 0).sum())
+    err = float(np.median(np.abs(1200 * np.log2(b[both] / a[both])))) if both.sum() > 10 else None
+    return {"pitch_err": None if err is None else round(err, 2), "voicing": round(float(both.sum() / voiced), 4) if voiced else None}
 
 
 def words_of(verdict: dict) -> str:
@@ -569,14 +662,39 @@ def freeze(voice, proj, engine, push=None) -> dict:
         f = f"{i:02d}.wav"
         sf.write(str(d / "lines" / f), np.asarray(y, dtype=np.float32), int(sr), subtype="PCM_16")
         lines.append({"id": q["id"], "text": q["text"], "file": f, "sr": int(sr)})
-    singer = not any(not q.sung for q in proj.training_phrases())   # a singer: no speech of theirs to read back (a known gap)
+    singer = not any(not q.sung for q in proj.training_phrases())   # a singer: no speech of theirs to read back
+    # 1.1: their own singing, frozen out of training from now on (a candidate judged on it must not have learned it)
+    sung = []
+    cands_s = sung_candidates(proj)
+    if len(cands_s) >= SUNG_MIN:
+        push(0.8, f"Freezing the test: {proj.person or label_of(voice.name)}'s own singing")
+        (d / "sung").mkdir(exist_ok=True)
+        for q in cands_s:
+            if len(sung) >= N_SUNG:
+                break
+            c = proj.clip_path(q.id)
+            if not c.exists():
+                continue
+            x = _load16(c)
+            f = engine.pitch(x)
+            f = f[f > 0]
+            if len(f) < 20:   # (too little voiced to measure a melody on)
+                continue
+            name = f"{len(sung):02d}.wav"
+            sf.write(str(d / "sung" / name), x, 16000, subtype="PCM_16")
+            sung.append({"id": q.id, "file": name, "source": q.source, "dur": round(len(x) / 16000, 2), "f0": round(float(np.median(f)), 1)})
+        if sung:
+            hold_out(proj.name, [s["id"] for s in sung])
     t = {"version": TEST_VERSION, "made": time.strftime("%Y-%m-%d %H:%M"), "voice": voice.name, "project": proj.name,
-         "sex": sex, "tgt_hz": round(tgt_hz, 1), "donors": donors, "lines": lines, "read_with": how, "approved": None,
+         "sex": sex, "tgt_hz": round(tgt_hz, 1), "donors": donors, "lines": lines, "sung": sung, "read_with": how, "approved": None,
          "singer": singer, "lines_why": (None if len(lines) >= LINES_MIN else "no spoken clips of theirs" if singer
                                          else "no cadence engine to read them" if how and how.startswith("failed") else
                                          "too few transcribed clips" if not cands_l else None),
          "notes": ([] if len(donors) >= POOL_MIN else [f"only {len(donors)} other voices: the donor guard is skipped"])
-                  + ([] if len(lines) >= LINES_MIN else [f"only {len(lines)} of their own lines: Improve can't judge on them"])}
+                  + ([] if len(lines) >= LINES_MIN or len(sung) >= SUNG_MIN else
+                     [f"only {len(lines)} of their own lines and {len(sung)} sung phrases: Improve can't judge on them"])
+                  + ([f"judged on {len(sung)} of their own sung phrases (a provisional bar: no blind verdict on a singer yet)"]
+                     if len(lines) < LINES_MIN and len(sung) >= SUNG_MIN else [])}
     _write_json(d / "test.json", t)
     return t
 
@@ -603,8 +721,8 @@ def score_voice(test_voice, voice, engine, push=None) -> dict:
     tgt_hz = float(t["tgt_hz"])
     own_hz = float((voice.extra or {}).get("f0_median") or tgt_hz)
     lv = engine.load_voice(voice)
-    rows, lines = [], []
-    total = len(t["donors"]) + len(t["lines"])
+    rows, lines, sung = [], [], []
+    total = len(t["donors"]) + len(t["lines"]) + len(t.get("sung") or [])
     try:
         for k, dn in enumerate(t["donors"]):
             push(k / max(1, total), f"Scoring {label_of(voice.name)} on other voices ({k + 1}/{len(t['donors'])})")
@@ -643,12 +761,32 @@ def score_voice(test_voice, voice, engine, push=None) -> dict:
             lines.append({"file": ln["file"], "id": float(e @ ref), "cent": float(np.mean(real_emb @ e)), "shift": shift,
                           "noise": float(noisiness(o16, 16000)), "ltas": float(np.sqrt(np.mean((real_ltas - ltas(o16)) ** 2))),
                           **features(o16, f0_out)})
+        for k, sp in enumerate(t.get("sung") or []):   # (1.1: their own singing, at its own key: no shift)
+            done = len(t["donors"]) + len(t["lines"]) + k
+            push(done / max(1, total), f"Scoring {label_of(voice.name)} on their own singing ({k + 1}/{len(t['sung'])})")
+            x = _load16(d / "sung" / sp["file"])
+            f0_in = engine.pitch(x)
+            y, sr = engine.convert(np.concatenate([np.zeros(4800, np.float32), x]), lv, 0.0)
+            if y is None:
+                continue
+            o16 = resample16(np.asarray(y)[int(sr * 0.3):], sr)
+            if not np.isfinite(o16).all() or np.abs(o16).max() < 1e-3:
+                sung.append({"file": sp["file"], "dead": True})
+                continue
+            e = engine.embed(o16)
+            f0_out = engine.pitch(o16)
+            a, b = engine.content(x), engine.content(o16)
+            m = min(len(a), len(b))
+            content = float(np.mean(np.sum(a[:m] * b[:m], 1) / (np.linalg.norm(a[:m], axis=1) * np.linalg.norm(b[:m], axis=1) + 1e-9))) if m else None
+            sung.append({"file": sp["file"], "id": float(e @ ref), "cent": float(np.mean(real_emb @ e)), "content": content,
+                         "noise": float(noisiness(o16, 16000)), "ltas": float(np.sqrt(np.mean((real_ltas - ltas(o16)) ** 2))),
+                         **features(o16, f0_out), **_melody(f0_in, f0_out)})
     finally:
         del lv
-    s = {"model": h, "voice": voice.name, "made": time.strftime("%Y-%m-%d %H:%M"), "donors": rows, "lines": lines,
+    s = {"model": h, "voice": voice.name, "made": time.strftime("%Y-%m-%d %H:%M"), "donors": rows, "lines": lines, "sung": sung,
          "summary": {cls: {k: round(float(np.mean([r[k] for r in rs if r.get(k) is not None])), 4)
                            for k in MEASURES if any(r.get(k) is not None for r in rs)}
-                     for cls, rs in (("donors", rows), ("lines", lines)) if rs}}
+                     for cls, rs in (("donors", rows), ("lines", lines), ("sung", sung)) if rs}}
     _write_json(out, s)
     return s
 
@@ -667,7 +805,7 @@ def compare_seconds(test: dict | None) -> dict:
     approved voice was scored on it), then scoring the candidate. A test not made yet is priced at the usual size
     (N_LINES lines, POOL_PER_SEX donors)."""
     if test:
-        n_l, n_d = len(test.get("lines") or []), len(test.get("donors") or [])
+        n_l, n_d = len(test.get("lines") or []) + len(test.get("sung") or []), len(test.get("donors") or [])
         ens = 0.0 if test.get("approved") else SCORE_S * (n_l + n_d)
     else:
         n_l, n_d = N_LINES, POOL_PER_SEX
@@ -705,11 +843,12 @@ def judge(test_voice, candidate, engine, push=None) -> dict:
     cand = score_voice(test_voice, candidate, engine, push)
     cmp = compare(appr, cand)
     v = offer(cmp, load_test(test_voice))
-    before = (appr.get("summary") or {}).get("lines", {}).get("id")
-    after = (cand.get("summary") or {}).get("lines", {}).get("id")
-    if before is None:   # no own lines: the donor likeness, so the card still has a number
-        before = (appr.get("summary") or {}).get("donors", {}).get("id")
-        after = (cand.get("summary") or {}).get("donors", {}).get("id")
+    before, after = None, None
+    for cls in ("lines", "sung", "donors"):   # the card's numbers: their own lines, else their singing, else other voices
+        before = (appr.get("summary") or {}).get(cls, {}).get("id")
+        after = (cand.get("summary") or {}).get(cls, {}).get("id")
+        if before is not None:
+            break
     return {**v, "compare": cmp, "before": before, "after": after, "candidate_model": cand["model"], "approved_model": appr["model"]}
 
 
@@ -719,7 +858,11 @@ def ab_inputs(voice, n: int = 2) -> list[dict]:
     if not t:
         return []
     d = test_dir(voice) / "lines"
-    return [{"file": d / ln["file"], "text": ln["text"], "sr": ln["sr"]} for ln in t["lines"][:n] if (d / ln["file"]).exists()]
+    out = [{"file": d / ln["file"], "text": ln["text"], "sr": ln["sr"]} for ln in t["lines"][:n] if (d / ln["file"]).exists()]
+    if not out:   # a singer: two of their own frozen sung phrases (1.1)
+        s = test_dir(voice) / "sung"
+        out = [{"file": s / sp["file"], "text": "", "sr": 16000, "sung": True} for sp in (t.get("sung") or [])[:n] if (s / sp["file"]).exists()]
+    return out
 
 
 def move_test(src_dir: Path, dst_dir: Path):

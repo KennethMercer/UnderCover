@@ -5,6 +5,11 @@ in brackets.
 
 ## Unreleased (1.1)
 
+**Improve for singers** (singers)
+- Improve can now judge a singing voice: on short phrases of the singer's own songs, kept out of the training, it
+  offers a retrained voice only when it sounds clearly better there and follows the melody as well. The bar is new
+  for singers and will be tuned by the first blind listening.
+
 **Voice packs** (voicepack)
 - A voice can be saved as one file, a `.ucvoice` voice pack, from its page in SafeHouse's Library, and opened
   on another PC with UnderCover (Import a voice pack, or drop it in). The pack says whose voice it is and on
