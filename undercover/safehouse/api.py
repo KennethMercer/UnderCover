@@ -44,6 +44,7 @@ POST   /api/storage/move                    {group, folder} -> {job}  (kind "mov
 import io
 import json
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -181,6 +182,28 @@ def _route(h, method, p):
         from ..core import voicepreview
         voicepreview.after_add(v)   # its line says the new name
         return h._json({"ok": True, "name": v.name, "display": display_name(v), "custom": bool(v.display)})
+    m = re.fullmatch(r"voices/([a-z0-9-]+)/pack", rest)
+    if m:   # a voice as one .ucvoice file (core/voicepack.py, 1.1)
+        from ..core import voicepack
+        from ..core.voices import get_voice
+        v = get_voice(m.group(1))
+        if method == "GET":   # the export form: what it starts from
+            can = False
+            if voicepack.PRINT[0] is not None:
+                try:
+                    can = voicepack.PRINT[0](v) is not None
+                except Exception:   # noqa: BLE001
+                    can = False
+            return h._json({"subject": voicepack.default_subject(v), "kinds": list(voicepack.SUBJECT_KINDS),
+                            "consents": list(voicepack.CONSENTS), "basis_max": voicepack.BASIS_MAX, "can_print": can,
+                            "cadence": bool((v.extra or {}).get("tts")), "cadence_note": voicepack.CADENCE_NOTE})
+        if method == "POST":
+            b = h._body()
+            f = voicepack.export(v.name, b.get("subject") or {}, b.get("licence") or {}, bool(b.get("include_print")))
+            try:
+                return _file_response(h, f, f.name, "application/zip")
+            finally:
+                f.unlink(missing_ok=True)
     m = re.fullmatch(r"voices/([a-z0-9-]+)/(rename|export)", rest)
     if m:
         from ..core.voices import get_voice, voices_dir
@@ -281,6 +304,18 @@ def _storage_route(h, method, p):
         job = storage.start_move(body.get("group"), body.get("folder"), confirmed=body.get("confirm") is True)
         return h._json({"job": job.id})
     raise LookupError("Not found")
+
+
+def _file_response(h, f: Path, name: str, kind: str):
+    """One file on disk as a download, streamed (a voice pack is 60-200 MB)."""
+    size = f.stat().st_size
+    h.send_response(200)
+    h.send_header("Content-Type", kind)
+    h.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
+    h.send_header("Content-Length", str(size))
+    h.end_headers()
+    with open(f, "rb") as src:
+        shutil.copyfileobj(src, h.wfile, 1 << 20)
 
 
 def _zip_response(h, name: str, files: list[tuple[Path, str]]):

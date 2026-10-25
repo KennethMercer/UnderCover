@@ -425,7 +425,9 @@ function voiceDetail(d, v) {
       <dt data-deep>Size</dt><dd data-deep>${gb(v.size)}${v.cadence ? " (with its cadence)" : ""}</dd></dl>
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button><button class="btn" id="lib-rename" data-deep data-pc>Rename folder…</button>
-      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep data-pc>Export .zip</a><button class="btn danger" id="lib-del">Remove…</button></div>`;
+      <button class="btn" id="lib-pack" type="button" data-pc>Export as a voice pack…</button>
+      <a class="btn" href="/api/library/voices/${encodeURIComponent(v.name)}/export" data-deep data-pc>Export .zip</a><button class="btn danger" id="lib-del">Remove…</button></div>
+    <div id="lib-pack-box"></div>`;
   if (v.sample) wirePlayer(v.sample);
   const op = $("#lib-open-proj");
   if (op) op.onclick = async () => { store.set("uc-train-proj", v.project); showTab("doubleagent"); try { await openProject(v.project); } catch (e) {} };
@@ -443,6 +445,7 @@ function voiceDetail(d, v) {
     nameIn.onkeydown = e => { if (e.key === "Enter") save(); };
   }
   renameFlow(v.name, async name => { const r = await api(`/api/library/voices/${encodeURIComponent(v.name)}/rename`, { json: { name } }); L.sel = r.name; });
+  $("#lib-pack").onclick = () => packForm(v);
   confirmClick($("#lib-del"), "Click again to remove", async () => { removedVoice(v.name, await api(`/api/voices/${encodeURIComponent(v.name)}`, { method: "DELETE" })); afterChange(); loadVoices(); });
   if ($("#lib-full-idx")) $("#lib-full-idx").onclick = async e => {   // the shrunk voice's full index, kept 30 days
     e.target.disabled = true;
@@ -452,6 +455,54 @@ function voiceDetail(d, v) {
   if ($("#lib-del-cad")) confirmClick($("#lib-del-cad"), "Click again: the voice stays", async () => {
     await api(`/api/library/voices/${encodeURIComponent(v.name)}/cadence`, { method: "DELETE" }); afterChange(); });
 }
+
+// a voice as one file (core/voicepack.py, 1.1): whose voice it is and on what basis, in plain words, then the download
+const PACK_KINDS = { self: "My own voice", public_figure: "A public figure's", private_person: "A private person's",
+  fictional: "A fictional character's", synthetic: "Made up (not a real person)" };
+const PACK_CONSENTS = { self: "It's mine", written: "Yes, I have it in writing", none: "No", unknown: "I don't know" };
+async function packForm(v) {
+  const box = $("#lib-pack-box");
+  let f;
+  try { f = await api(`/api/library/voices/${encodeURIComponent(v.name)}/pack`); }
+  catch (e) { showError(e.message, "Couldn't start the export"); return; }
+  const s = f.subject, opt = (o, cur) => Object.entries(o).map(([k, t]) => `<option value="${k}"${k === cur ? " selected" : ""}>${esc(t)}</option>`).join("");
+  box.innerHTML = `<div class="packform"><h4>Export ${vname(v.name)} as a voice pack</h4>
+    <label class="meta" for="pk-kind">Whose voice is it?</label><select id="pk-kind">${opt(PACK_KINDS, s.kind)}</select>
+    <label class="meta" for="pk-name">Their name</label><input id="pk-name" type="text" autocomplete="off" value="${esc(s.name || "")}">
+    <label class="meta" for="pk-consent">Did they agree to it being shared?</label><select id="pk-consent">${opt(PACK_CONSENTS, s.consent)}</select>
+    <label class="meta" for="pk-basis">Where the clips came from, and why it's fine to share</label>
+    <textarea id="pk-basis" rows="3" maxlength="${f.basis_max}">${esc(s.basis || "")}</textarea>
+    <label class="meta" for="pk-contact">How they can reach you to have it taken down <span data-pk-optional>(optional)</span></label>
+    <input id="pk-contact" type="text" autocomplete="off" value="${esc(s.contact || "")}">
+    <label class="meta" for="pk-licence" data-deep>Licence (an SPDX id, optional)</label><input id="pk-licence" type="text" autocomplete="off" data-deep>
+    ${f.can_print ? `<label class="check"><input type="checkbox" id="pk-print"> Include their voice print (lets others measure a better version; it's data about a real person)</label>` : ""}
+    ${f.cadence ? `<p class="meta">The way they talk stays on your PC. The voice can travel.</p>` : ""}
+    <div class="row"><button class="btn primary" id="pk-go" type="button">Save the voice pack</button><button class="linkbtn" id="pk-x" type="button">Cancel</button></div></div>`;
+  const opt2 = () => { box.querySelector("[data-pk-optional]").hidden = $("#pk-kind").value === "private_person"; };
+  $("#pk-kind").onchange = opt2; opt2();
+  $("#pk-x").onclick = () => { box.innerHTML = ""; };
+  $("#pk-go").onclick = async () => {
+    const go = $("#pk-go"); go.disabled = true; go.textContent = "Packing…";
+    const body = { subject: { kind: $("#pk-kind").value, name: $("#pk-name").value.trim(), consent: $("#pk-consent").value,
+      basis: $("#pk-basis").value.trim(), contact: $("#pk-contact").value.trim() },
+      licence: { id: $("#pk-licence").value.trim() }, include_print: !!$("#pk-print")?.checked };
+    try {
+      const r = await fetch(`/api/library/voices/${encodeURIComponent(v.name)}/pack`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "The voice pack couldn't be made.");
+      const name = decodeURIComponent((r.headers.get("Content-Disposition") || "").split("''")[1] || `${v.name}.ucvoice`);
+      const url = URL.createObjectURL(await r.blob()), a = document.createElement("a");
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      box.innerHTML = `<p class="meta">Saved ${esc(name)}. Anyone with UnderCover can import it in SafeHouse's Library.</p>`;
+    } catch (e) { go.disabled = false; go.textContent = "Save the voice pack"; showError(e.message, "Couldn't make the voice pack"); }
+  };
+}
+$("#lib-import").onclick = () => $("#lib-import-file").click();
+$("#lib-import-file").onchange = async e => {   // the same path as a dropped voice file: checked, staged, its preview line, listed
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  await installFile(f); afterChange();
+};
 
 function trainingDetail(d, p) {
   const st = p.train || {};

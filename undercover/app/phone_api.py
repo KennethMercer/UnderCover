@@ -84,6 +84,8 @@ ROUTES = [
     ("POST", rf"/api/library/voices/{_ID}/display", "phone", "a voice's display name"),
     ("POST", rf"/api/library/voices/{_ID}/rename", "pc", "Rename folder (Deep Cover)"),
     ("GET", rf"/api/library/voices/{_ID}/export", "pc", "Export .zip (Deep Cover)"),
+    ("GET", rf"/api/library/voices/{_ID}/pack", "pc", "a voice pack's export form"),
+    ("POST", rf"/api/library/voices/{_ID}/pack", "pc", "Export as a voice pack (.ucvoice)"),
     ("DELETE", rf"/api/library/voices/{_ID}/cadence", "pc", "Delete cadence (Deep Cover)"),
     ("GET|POST", r"/api/library/cleanup", "pc", "Storage: Clean up"),
     ("GET", r"/api/library/aside", "pc", "Storage: voices set aside"),

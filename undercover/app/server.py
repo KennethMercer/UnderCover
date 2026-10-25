@@ -759,13 +759,13 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=stop, daemon=True).start()
 
     def _voice_upload(self):
-        """Install a voice from a dropped .zip/.pth/.index file (body = raw file bytes)."""
+        """Install a voice from a dropped .ucvoice/.zip/.pth file (body = raw file bytes)."""
         import tempfile
         from ..core.voices import ModelError, _guess_name, install
         n = int(self.headers.get("Content-Length") or 0)
         fname = Path(unquote(self.headers.get("X-Filename") or "voice.zip")).name
-        if Path(fname).suffix.lower() not in (".zip", ".pth"):
-            return self._error("Drop a voice model as a .zip or .pth file.")
+        if Path(fname).suffix.lower() not in (".ucvoice", ".zip", ".pth"):
+            return self._error("Drop a voice as a .ucvoice voice pack, or a model as a .zip or .pth file.")
         if not n or n > CONFIG["voices"]["max_download_gb"] * 1e9:
             return self._error("That file is empty or too large to be a voice model.")
         name = unquote(self.headers.get("X-Name") or "") or _guess_name("", fname)
@@ -781,10 +781,13 @@ class Handler(BaseHTTPRequestHandler):
                     out.write(chunk)
                     left -= len(chunk)
             try:   # staged, its preview line made there, then listed (rc-preview)
-                from ..core import voicepreview
+                from ..core import voicepack, voicepreview
                 from ..core.voices import staged_name, staging_dir
-                v = voicepreview.import_voice(lambda: install(f, staged_name(name), source=f"file: {fname}", root=staging_dir()),
-                                              wait=20.0)   # (this request waits: past that the backfill makes it)
+                if f.suffix.lower() == voicepack.SUFFIX:   # (a voice pack: its manifest, sizes and SHA-256 first, 1.1)
+                    v = voicepack.import_pack(f, wait=20.0)
+                else:
+                    v = voicepreview.import_voice(lambda: install(f, staged_name(name), source=f"file: {fname}", root=staging_dir()),
+                                                  wait=20.0)   # (this request waits: past that the backfill makes it)
             except ModelError as e:
                 return self._error(str(e))
             self._json({"voice": v.name})
@@ -1037,6 +1040,9 @@ def main():
     from ..core import vault, voicepreview, worklist
     from ..speakeasy import speak as speak_mod
     voicepreview.RENDER[0] = speak_mod.render_line   # (core and DoubleAgent add voices; only the app may reach SpeakEasy)
+    from ..core import voicepack
+    from ..doubleagent import service as da_service
+    voicepack.PRINT[0] = da_service.person_print   # (a pack's voice print, when the exporter ticks it: DoubleAgent's)
     voicepreview.start()   # voices from before get their preview line, one at a time, only while nothing else runs
     speak_mod.start_warm_up()   # the speech engine ready before the first speech, once idle (1.0.1)
     worklist.start()

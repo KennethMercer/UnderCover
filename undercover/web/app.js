@@ -362,11 +362,11 @@ addEventListener("drop", e => {
   if (!$("#view-train").hidden && window.trainDrop) return window.trainDrop([...(e.dataTransfer?.files || [])]);
   if (!$("#view-speakeasy").hidden && window.speakDrop) return window.speakDrop([...(e.dataTransfer?.files || [])]);
   const f = e.dataTransfer?.files?.[0]; if (!f) return;
-  if (/\.(zip|pth)$/i.test(f.name)) installFile(f); else upload(f);
+  if (/\.(ucvoice|zip|pth)$/i.test(f.name)) installFile(f); else upload(f);
 });
 
 async function installFile(file) {
-  const name = file.name.replace(/\.(zip|pth)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "voice";
+  const name = file.name.replace(/\.(ucvoice|zip|pth)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "voice";
   $("#online-h").hidden = $("#online").hidden = false;
   $("#online-h").textContent = "Installing from file";
   $("#online").innerHTML = `<p class="meta">Installing ${esc(file.name)}…</p>`;
