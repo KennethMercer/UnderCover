@@ -108,7 +108,8 @@ def _median(xs):
 
 def typical(kind: str, stage: str | None = None) -> float | None:
     """How long a kind (or one of its stages) usually takes, in seconds: the median of its last runs."""
-    rec = _eta_load().get(kind) or {}
+    from . import lowprofile
+    rec = _eta_load().get(lowprofile.speed_key(kind)) or {}
     return _median(rec.get("stages", {}).get(stage, [])) if stage else _median(rec.get("total", []))
 
 
@@ -119,8 +120,9 @@ def _eta_learn(job: "Job"):
     import json
     from . import fsutil
     with _ETA_LOCK:
+        from . import lowprofile
         st = _eta_load()
-        rec = st.setdefault(job.kind, {"total": [], "stages": {}})
+        rec = st.setdefault(lowprofile.speed_key(job.kind), {"total": [], "stages": {}})
         rec["total"] = (rec["total"] + [round(job.ended - job.started, 1)])[-12:]
         for name, secs in job.stage_secs.items():
             rec["stages"][name] = (rec["stages"].get(name, []) + [round(secs, 1)])[-12:]
@@ -301,7 +303,9 @@ class Job:
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
                 "retry": self.state == "error" and self.retry_req is not None,
                 "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs),
-                "target": getattr(self, "target", None)}   # what a job works on, as data ({kind, name, display}): no title parsing
+                "target": getattr(self, "target", None),   # what a job works on, as data ({kind, name, display}): no title parsing
+                "gpu_peak_gb": getattr(self, "gpu_peak_gb", None), "gpu_alloc_gb": getattr(self, "gpu_alloc_gb", None),
+                "gpu_start_gb": getattr(self, "gpu_start_gb", None)}
         # the newest value of each progress field within the current stage (some events carry only a note)
         said_at = None
         for ev in reversed(evs[-40:]):
@@ -351,6 +355,8 @@ def gpu_worker():
         if torch.cuda.is_available():
             STATUS["gpu"] = torch.cuda.get_device_name(0)
             STATUS["vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 2**30)
+            from . import lowprofile
+            lowprofile.apply()   # Low profile's cap, when it's on (STATUS gpu_limit_gb says the server's share)
         # Which torch build this install expects ([gpu].backend; the installer writes it). Never fall back to the
         # CPU silently when a GPU build was expected (a cover would take ages, training hours): say what's wrong instead.
         want = CONFIG["gpu"].get("backend", "rocm")
@@ -415,15 +421,49 @@ def gpu_worker():
             for gate in START_GATES:
                 gate(job)
             CURRENT[0] = job
+            from . import gpu as G, lowprofile
+            go = lowprofile.before_job(job)   # (Low profile: freed, the whole limit for a training, a fit check)
+            if go is None:   # doesn't fit the cap (said): to the back of the queue, the jobs behind it run; looked at again
+                CURRENT[0] = None
+                GPU_QUEUE.put((job, fn))
+                if GPU_QUEUE.qsize() <= 1:
+                    time.sleep(2)   # (nothing else to run: no spinning)
+                continue
+            if go is False:
+                job.finish("cancelled", message="Cancelled.")
+                CURRENT[0] = None
+                continue
+            G.reset_peak()
+            job.gpu_start_gb = (G.alloc_gb() or (None,))[0]   # what was already held when it started (models from before)
             try:
                 run_job(job, fn)
             finally:
                 CURRENT[0] = None
+                job.gpu_peak_gb = G.peak_gb()   # the most graphics memory this job held (Low profile's measure)
+                job.gpu_alloc_gb = (G.alloc_gb() or (None, None))[1]   # of it, the most in tensors (the rest is cache)
+                lowprofile.after_job(job)
         except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
             try:
                 job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).")
             except Exception:
                 pass
+
+
+def serve_between(before=None):
+    """A training's Control.service: covers queued meanwhile run between its steps (its models stay loaded). Not under
+    Low profile: the training holds the cap, and a cover beside it would run out of it; they wait for its end.
+    before(): called before each job runs (a training says "paused for a cover")."""
+    from . import lowprofile
+    if lowprofile.on():
+        return
+    while not GPU_QUEUE.empty():
+        try:
+            other, fn = GPU_QUEUE.get_nowait()
+        except Exception:   # noqa: BLE001
+            return
+        if before is not None:
+            before()
+        run_job(other, fn)
 
 
 def run_job(job: "Job", fn):
@@ -465,6 +505,21 @@ def run_job(job: "Job", fn):
                 return
             # Out of GPU memory: free what UnderCover holds (cached voices, allocator cache) and try once more.
             # Separations are cached, so the retry picks up where it was; mostly hits smaller cards or a game open.
+            from . import lowprofile
+            if attempt == 1 and _is_oom(e) and lowprofile.on() and type(e).__name__ != "WorkerError":
+                # under Low profile's cap: the kind needs more than the cap allowed. Remember that, free everything, and
+                # wait for the cap to lift (off, or a higher limit) before the one retry: never an error for the user
+                from . import gpu
+                kind = lowprofile.kind_of(job)
+                lowprofile.learn_from_oom(kind, (gpu.alloc_gb() or (None, None))[1], lowprofile.server_limit_gb())
+                gpu.free()
+                gpu.release("train")
+                if not lowprofile.wait_to_fit(job, kind):
+                    job.finish("cancelled", message="Cancelled.")
+                    return
+                job.push(stage=(job.events[-1].get("stage") if job.events else "") or "converting",
+                         message="Low profile's share of the card ran out; trying again")
+                continue
             if attempt == 1 and _is_oom(e) and job.kind in ("cover", "preview", "auto"):
                 from . import gpu
                 gpu.free()

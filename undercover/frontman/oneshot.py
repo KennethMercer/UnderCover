@@ -443,12 +443,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     job.control = control   # Pause (top of the page) reaches a one-shot's training through this
 
     def service():
-        while not jobs.GPU_QUEUE.empty():
-            try:
-                other, fn = jobs.GPU_QUEUE.get_nowait()
-            except Exception:
-                return
-            jobs.run_job(other, fn)
+        jobs.serve_between()
     control.service = service
     try:
         v = resolve_voice(job, person, prefer_train, control, push, plan, choice=voice_choice)

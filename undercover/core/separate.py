@@ -185,13 +185,16 @@ def _quiet_tqdm(iterable, *args, **kwargs):
     is waited for before the next is queued: otherwise the loop queues every chunk in a second or two, the GPU works
     through the queue afterwards, and neither Stop (queued kernels can't be called back) nor the progress is true
     (a Stop measured 11.6 s late on a 4-minute file, 2026-10-14)."""
+    from . import lowprofile
     n = len(iterable) if hasattr(iterable, "__len__") else 0
     sync = _sync()
+    pacer = lowprofile.Pacer()   # (Low profile: a pause after each chunk, in proportion to its work)
     for i, item in enumerate(iterable, 1):
         if _stop is not None and _stop():
             raise Stopped()
         yield item
         sync()
+        pacer.tick()
         if _progress and n:
             _progress(i / n)
 

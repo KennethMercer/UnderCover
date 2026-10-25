@@ -230,6 +230,17 @@ def _batches(items: list, bs: int) -> list[list[int]]:
     return [b for b in out if len(b) >= max(2, bs // 2)] or out
 
 
+def _rng_state(dev) -> tuple:
+    """The random state a generator pass draws its slice and noise from (the CPU's and the card's)."""
+    return torch.get_rng_state(), (torch.cuda.get_rng_state(dev) if dev.type == "cuda" else None)
+
+
+def _set_rng_state(dev, st: tuple):
+    torch.set_rng_state(st[0])
+    if st[1] is not None:
+        torch.cuda.set_rng_state(st[1], dev)
+
+
 def _collate(items: list, ids: list[int], device):
     b = [items[i] for i in ids]
     T = max(x["n"] for x in b)
@@ -325,7 +336,9 @@ class Trainer:
         c = SR_CFG[sr]
         st["sr"] = sr
         length = st.get("length", "auto")
+        from ..core import lowprofile
         bs = int(st.get("batch_size") or TCFG["batch_size"])
+        accum = lowprofile.train_accum(bs)   # (Low profile under a tight cap: each step in micro-batches, the same step)
 
         report(stage="preparing", fraction=0.0, note="downloading base models")
         base = setup_models.base_model_files(sr)
@@ -443,7 +456,8 @@ class Trainer:
         shown = {"frac": 0.0, "end": None}   # the bar said so far (never backwards) and the end it was said against
         epoch = epoch0
         outcome = "done"
-        with timed("train.run", project=proj.name, from_epoch=epoch0, pieces=len(items), batch=bs) as rec:
+        pacer = lowprofile.Pacer()   # (Low profile: a pause after each step, in proportion to its work)
+        with timed("train.run", project=proj.name, from_epoch=epoch0, pieces=len(items), batch=bs, accum=accum) as rec:
             while epoch < max_epochs:
                 epoch += 1
                 t0 = time.time()
@@ -453,37 +467,62 @@ class Trainer:
                     control.service()
                     if control.wants_out():
                         break
-                    phone, plen, pitch, pitchf, spec, slen, wave, sid = _collate(items, ids, dev)
-                    with torch.autocast(**ac):
-                        y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(
-                            phone, plen, pitch, pitchf, spec, slen, sid)
-                    with torch.autocast(device_type="cuda", enabled=False):
-                        mel = spec_to_mel_torch(spec, c["n_fft"], c["mels"], sr)
-                        y_mel = commons.slice_segments(mel, ids_slice, seg)
-                        y_hat_mel = mel_spectrogram_torch(y_hat.float().squeeze(1), c["n_fft"], c["mels"], sr,
-                                                          c["hop"], c["n_fft"])
-                        wave_s = commons.slice_segments(wave, ids_slice * c["hop"], c["segment"])
-                    with torch.autocast(**ac):
-                        y_d_r, y_d_g, _, _ = net_d(wave_s, y_hat.detach())
-                    loss_disc = discriminator_loss(y_d_r, y_d_g)
+                    # one optimizer step over the batch: whole, or (Low profile under a tight cap) in micro-batches whose
+                    # gradients add up; the generator's random slice and noise are replayed, so its own pass below reads
+                    # exactly what the discriminator's did (the maintainers' notes, v102-lowprofile)
+                    parts = [ids] if accum == 1 else [ids[k::accum] for k in range(accum)]
                     opt_d.zero_grad(set_to_none=True)
-                    loss_disc.backward()
+                    fwd, rngs = [], []
+
+                    def g_forward(part):
+                        phone, plen, pitch, pitchf, spec, slen, wave, sid = _collate(items, part, dev)
+                        with torch.autocast(**ac):
+                            y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(
+                                phone, plen, pitch, pitchf, spec, slen, sid)
+                        with torch.autocast(device_type="cuda", enabled=False):
+                            mel = spec_to_mel_torch(spec, c["n_fft"], c["mels"], sr)
+                            y_mel = commons.slice_segments(mel, ids_slice, seg)
+                            y_hat_mel = mel_spectrogram_torch(y_hat.float().squeeze(1), c["n_fft"], c["mels"], sr,
+                                                              c["hop"], c["n_fft"])
+                            wave_s = commons.slice_segments(wave, ids_slice * c["hop"], c["segment"])
+                        return y_hat, y_mel, y_hat_mel, wave_s, z_p, logs_q, m_p, logs_p, z_mask
+                    for part in parts:
+                        rngs.append(_rng_state(dev))
+                        if accum == 1:
+                            f = g_forward(part)
+                        else:
+                            with torch.no_grad():   # (the discriminator only needs the outputs; the graph comes below)
+                                f = g_forward(part)
+                        fwd.append(f)
+                        with torch.autocast(**ac):
+                            y_d_r, y_d_g, _, _ = net_d(f[3], f[0].detach())
+                        loss_disc = discriminator_loss(y_d_r, y_d_g) / accum
+                        loss_disc.backward()
+                        sums["disc"] += float(loss_disc.detach())
                     opt_d.step()
-                    with torch.autocast(**ac):
-                        y_d_r, y_d_g, fmap_r, fmap_g = net_d(wave_s, y_hat)
-                    loss_mel = F.l1_loss(y_mel, y_hat_mel.float()) * 45
-                    loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask)
-                    loss_fm = feature_loss(fmap_r, fmap_g)
-                    loss_gen = generator_loss(y_d_g)
-                    loss = loss_gen + loss_fm + loss_mel + loss_kl
-                    if not torch.isfinite(loss):
-                        raise ModelError("Training became unstable (the loss went to infinity). "
-                                         "Try again; if it repeats, remove noisy samples.")
                     opt_g.zero_grad(set_to_none=True)
-                    loss.backward()
+                    for part, f, rs in zip(parts, fwd, rngs):
+                        if accum > 1:
+                            _set_rng_state(dev, rs)
+                            f = g_forward(part)
+                        y_hat, y_mel, y_hat_mel, wave_s, z_p, logs_q, m_p, logs_p, z_mask = f
+                        with torch.autocast(**ac):
+                            y_d_r, y_d_g, fmap_r, fmap_g = net_d(wave_s, y_hat)
+                        loss_mel = F.l1_loss(y_mel, y_hat_mel.float()) * 45
+                        loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask)
+                        loss_fm = feature_loss(fmap_r, fmap_g)
+                        loss_gen = generator_loss(y_d_g)
+                        loss = loss_gen + loss_fm + loss_mel + loss_kl
+                        if not torch.isfinite(loss):
+                            raise ModelError("Training became unstable (the loss went to infinity). "
+                                             "Try again; if it repeats, remove noisy samples.")
+                        (loss / accum).backward()
+                        for k, v in (("mel", loss_mel), ("kl", loss_kl), ("fm", loss_fm), ("gen", loss_gen)):
+                            sums[k] += float(v.detach()) / accum
+                        del f, y_hat, y_d_r, y_d_g, fmap_r, fmap_g, loss
+                    del fwd
                     opt_g.step()
-                    for k, v in (("mel", loss_mel), ("kl", loss_kl), ("fm", loss_fm), ("gen", loss_gen), ("disc", loss_disc)):
-                        sums[k] += float(v.detach())
+                    pacer.tick()
                     if warm is None:
                         warm = time.time()
                     else:
@@ -754,9 +793,14 @@ def train_eta(left_steps: float, steps_done: int, secs: float, prior_step: float
     return (w * measured + (1 - w) * prior_step) * left_steps
 
 
+def _speed_key(sr, bs) -> str:
+    from ..core import lowprofile
+    return lowprofile.speed_key(f"{sr}-{bs}")   # (speeds under Low profile kept apart: "-lp")
+
+
 def _speed_prior(sr, bs) -> float | None:
     try:
-        return json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(f"{sr}-{bs}")
+        return json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).get(_speed_key(sr, bs))
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -767,7 +811,7 @@ def _speed_record(sr, bs, sec_per_step: float):
         d = json.loads(f.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         d = {}
-    d[f"{sr}-{bs}"] = sec_per_step
+    d[_speed_key(sr, bs)] = sec_per_step
     fsutil.write_text(f, json.dumps(d))
 
 

@@ -663,6 +663,7 @@ def _keep_awake(on: bool):
 
 def _run_item(item: dict):
     job = jobs.Job("night")
+    job.lp_kind = item["kind"]   # (Low profile sizes the card's shares by the item's own kind)
     jobs.JOBS[job.id] = job
     est = item.get("estimate") or {}
     if est.get("total"):   # its time left: the whole item's, from its own estimate (P8-3, P8-10)
@@ -783,12 +784,7 @@ def control_for(job):
     control = jobs.Control()
 
     def service():
-        while not jobs.GPU_QUEUE.empty():
-            try:
-                other, fn = jobs.GPU_QUEUE.get_nowait()
-            except Exception:   # noqa: BLE001
-                return
-            jobs.run_job(other, fn)
+        jobs.serve_between()
     control.service = service
     job.control = control
     return control

@@ -367,13 +367,7 @@ def start_train(name: str, b: dict):
 
     def service():
         """Covers queued while training run right away, between training steps (models stay in VRAM)."""
-        while not jobs.GPU_QUEUE.empty():
-            try:
-                other_job, fn = jobs.GPU_QUEUE.get_nowait()
-            except Exception:
-                return
-            job.push(stage="training", note="paused for a cover")
-            jobs.run_job(other_job, fn)
+        jobs.serve_between(lambda: job.push(stage="training", note="paused for a cover"))
     control.service = service
 
     def run(job):
@@ -435,12 +429,7 @@ def start_auto(name: str, b: dict):
     ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
 
     def between():   # not `service`: that name is the module this function calls below ("Do it all" failed with an AttributeError)
-        while not jobs.GPU_QUEUE.empty():
-            try:
-                other, fn = jobs.GPU_QUEUE.get_nowait()
-            except Exception:
-                return
-            jobs.run_job(other, fn)
+        jobs.serve_between()
     control.service = between
 
     def run(job):

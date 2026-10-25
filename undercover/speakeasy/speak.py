@@ -304,8 +304,9 @@ CALIBRATE_S = 10.0     # a pack's pace calibration, once per pack and engine (th
 
 
 def _speed_key(p: dict) -> str:
+    from ..core import lowprofile
     from . import listenback
-    return f"{p.get('engine')}{'+lb' if listenback.settings().get('listen_back') else ''}"
+    return lowprofile.speed_key(f"{p.get('engine')}{'+lb' if listenback.settings().get('listen_back') else ''}")
 
 
 def per_word(p: dict) -> tuple[float, float]:
@@ -465,6 +466,8 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
     reqs: list = []
     pieces, made, t_tts, t_rvc, t_lb = [], 0.0, 0.0, 0.0, 0.0
     pitch_hist: list = []   # each sentence's offset from the person's pitch (an engine that reads off it, Turbo)
+    from ..core import lowprofile
+    pacer = lowprofile.Pacer()   # (Low profile: a pause after each sentence, in proportion to its work)
     try:
         for i, s in enumerate(sents):
             while len(reqs) < min(len(sents), i + ahead):
@@ -497,6 +500,7 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
                                 history=pitch_hist)
             y = _level(y)
             t_rvc += time.perf_counter() - t
+            pacer.tick()
             pause = 0.0 if s["pause"] == 0 else (p["para_gap_s"] if s["pause"] >= 0.5 else p["gap_s"])
             y = np.concatenate([y, np.zeros(int(sr * pause), np.float32)])
             f = pdir / f"s{i:04d}.wav"

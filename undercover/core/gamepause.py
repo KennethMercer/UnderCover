@@ -14,7 +14,7 @@ question from GET /api/gamepause and answer with POST /api/gamepause."""
 import threading
 import time
 
-from . import jobs, platform, worklist
+from . import jobs, lowprofile, platform, worklist
 from .config import CONFIG
 
 POLL_S = 5
@@ -44,33 +44,42 @@ def observe(app: dict | None, now: float, busy: bool, reason: str = "") -> str |
     the work held for a game that has now gone should start again (the caller resumes), else None. reason: what the
     question says UnderCover is doing ("… full-screen while <reason>")."""
     s = settings()
+    low_for, gone = None, None   # (Low profile's on / off happen after the block: they write the settings)
     with _LOCK:
         if app and not _ours(app) and app.get("exe"):
             STATE["gone_since"] = None
             same = STATE["game"] and STATE["game"].get("exe") == app["exe"]
             if not same:   # a different game (or the first): earlier answers were for that one
                 STATE.update(game=app, answer=None, asking=None, reason="")
+            if busy and STATE["answer"] is None and STATE["asking"] is None and lowprofile.wants_for_game(app["exe"]):
+                STATE["answer"] = "low"   # Low profile for this game, as answered before (or auto): no question
+                low_for = app["exe"]
             if (s["ask"] and busy and app["exe"] not in s["never_ask"] and STATE["answer"] is None
                     and STATE["asking"] is None):
                 STATE["asking"] = {"exe": app["exe"], "title": app.get("title") or app["exe"], "since": now}
                 STATE["reason"] = reason or "UnderCover is working on the graphics card"
-            return None
-        if STATE["game"] is None:
-            return None
-        STATE["gone_since"] = STATE["gone_since"] or now
-        if now - STATE["gone_since"] < GONE_S:
-            return None
-        exe = STATE["game"]["exe"]
-        resume = STATE["paused_for"] == exe
-        STATE.update(game=None, asking=None, answer=None, paused_for=None, gone_since=None, reason="")
-        return "resume" if resume else None
+        elif STATE["game"] is not None:
+            STATE["gone_since"] = STATE["gone_since"] or now
+            if now - STATE["gone_since"] >= GONE_S:
+                exe = STATE["game"]["exe"]
+                gone = (exe, STATE["paused_for"] == exe)
+                STATE.update(game=None, asking=None, answer=None, paused_for=None, gone_since=None, reason="")
+    if low_for:
+        lowprofile.game_on(low_for)
+    if gone is None:
+        return None
+    lowprofile.game_off(gone[0])   # (only when it was this game that turned it on)
+    return "resume" if gone[1] else None
 
 
 def answer(choice: str) -> dict:
-    """The user's answer to the question on the screen: "pause", "both" or "never"."""
+    """The user's answer to the question on the screen: "low" (Low profile while the game runs, remembered for that
+    game), "pause", "both" or "never"."""
     from .voices import ModelError
-    if choice not in ("pause", "both", "never"):
-        raise ModelError("Pause, keep both running, or don't ask for this game?")
+    if choice not in ("low", "pause", "both", "never"):
+        raise ModelError("Low profile, pause, keep both running, or don't ask for this game?")
+    if choice == "low" and not lowprofile.available():
+        raise ModelError("There's no graphics card to share on this PC.")
     with _LOCK:
         game = STATE["game"]
         if game is None:
@@ -85,6 +94,9 @@ def answer(choice: str) -> dict:
             STATE["paused_for"] = exe
     elif choice == "never":
         set_never(exe, True)
+    elif choice == "low":
+        lowprofile.game_on(exe)
+        lowprofile.remember_game(exe)
     return status()
 
 
@@ -136,7 +148,7 @@ def before_start(job, sleep=time.sleep, look=None, clock=time.time) -> str:
                                                   "on any UnderCover page or on your phone.")
             except Exception:   # noqa: BLE001 - only a message
                 pass
-        if choice in ("both", "never"):
+        if choice in ("both", "never", "low"):   # (low: the work goes on, under Low profile)
             return "start"
         if choice == "pause":
             while worklist.hold() == {"held": True, "held_by": "game"} and not getattr(job, "cancel", False):

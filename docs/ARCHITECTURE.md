@@ -1,6 +1,6 @@
 # UnderCover architecture
 
-This document describes how UnderCover is built, as of 1.0.1: the names, the modules, the code layout, the data on
+This document describes how UnderCover is built, as of 1.0.2: the names, the modules, the code layout, the data on
 disk, the engines and why they were chosen, the page, and how the app looks after itself. It is the contract a change
 is measured against. What the project is for and how decisions are made is in [MASTERPLAN.md](MASTERPLAN.md); how to
 install is in [README.md](../README.md) and [installer/GUIDE.md](../installer/GUIDE.md); how to contribute is in
@@ -537,6 +537,33 @@ The installer and the app survive version mismatches and fix common problems the
 - A diagnostics file (`core/diagnostics.py`, `GET /api/doctor/bundle.zip`): the logs, the manifest, `config.toml`, a
   fresh report. Text only, no audio; the person's folders shortened to `<UnderCover>`, `<library>`, `<working files>`,
   `<model files>`, `<voices>` and `%USERPROFILE%`.
+- Low profile (`core/lowprofile.py`, 1.0.2): UnderCover keeps to part of the graphics card and works in bursts, so a
+  game gets the card most of the time. One number from the user, `limit_gb`, is the whole of UnderCover on the card:
+  the server process is capped with PyTorch's per-process memory fraction (a hard limit on ROCm and CUDA: its allocator
+  refuses more, as a full card would), the cadence worker gets the share of the job that starts it (speech: the largest
+  engine it may read with, `engines.py` vram_gb, a voice's pinned one included; transcripts: Whisper's 5 GB; a cadence
+  training: both), through its environment (`UNDERCOVER_GPU_LIMIT_GB`); its cap can't move, so a worker with less than
+  the next job needs is ended first, and one holding more than a job that doesn't fit needs gives its share back and that share comes out of the server's cap while the worker is loaded; a
+  training stops the worker first and gets the whole limit. Under the cap, what the next step doesn't need is freed
+  (`gpu.release`: the separator before a conversion or a speech; the separator, the converter and listen-back's ear
+  before a training). Every GPU job records its peak (`gpu_peak_gb`, `gpu_alloc_gb`, `gpu_start_gb` on its snapshot);
+  `cache/gpu_need.json` keeps each kind's allocated peaks, and a kind that needs more than the cap allows waits and says
+  so ("needs about 9 GB; Low profile allows 6", `waits_for: "Low profile"`) instead of running out of memory; an
+  out-of-memory under the cap teaches the need and the job is retried once the cap lifts. Under a tight cap a training
+  step is made of two micro-batches whose gradients add up (gradient accumulation; the generator's random slice and
+  noise replayed for its own pass): the plan's batch, samples and steps stay, so a voice trained under Low profile is
+  the same voice, only slower. While a training runs under it, covers wait for its end instead of running between its
+  steps; a job that doesn't fit goes to the back of the queue, so the ones behind it that fit run. An out-of-memory inside the
+  worker is the worker's, not the job's: it never teaches the server-side need. An overnight item is sized by its own
+  kind (new, improve, cadence, newcad), not as the queue's job. `burst` (0.25–0.75) is the share of the time it works: each step loop (training steps, conversion
+  and separation chunks, sentences) calls `Pacer.tick()`, which waits for the GPU and pauses in proportion to the step
+  (20 ms to 1 s). Speeds measured under it are kept apart (`-lp` keys in speak_speed.json, train_speed.json and
+  eta.json; `low_profile: true` on timings.jsonl records), and an estimate with none yet takes 1/burst as its first
+  guess. The game pause's answer `low` turns it on for that game (remembered in `[low_profile] for_games`; `auto`
+  turns it on for any full-screen game without asking) and the game's closing turns it off again, only then. Settings:
+  `[low_profile] on, limit_gb, burst, auto, for_games`; `POST /api/lowprofile` and `/api/status.low_profile`
+  (absent on a PC with no card to share, which hides the control). Test servers (`UNDERCOVER_TEST_ROOTS`) run with it on
+  at 12 GB unless `UNDERCOVER_LOW_PROFILE` says otherwise ("0" off, or a limit), so a test run leaves half the card.
 - Vaulting (`core/vault.py`): a quiet, incremental backup of what cannot be downloaded again (voices trained here, kept
   covers and speech, settings, the ear) to a folder on another drive, as plain files named by the SHA-256 of their
   original bytes, with a snapshot per run and a Restore that asks before replacing. Off until a folder is picked.
@@ -551,7 +578,8 @@ port of 7862-7869 (or `UNDERCOVER_SANDBOX_PORT`) with scratch folders, its own s
 `--port N` checks a running server read-only. Smoke also checks the dependency rules, the platform helper rule, the
 `EventSource` rule, that every tab and view exists, that every route is in the phone table, and the roll-off's
 properties. `tests/fake_tailscale.py` stands in for Tailscale; `tests/installer_e2e.ps1` runs the real installer end to
-end. `scripts/check_env.py` verifies the torch build and the GPU; `scripts/make_demo_voice.py` builds Agent Smoke from
+end, and with `-UpgradeCheck` (also after every `-CancelCheck`) the update in place: the released 1.0.0 installed and
+used (a kept cover and speech, a setting, a voice of its own name), this installer over it, and what survived checked. `scripts/check_env.py` verifies the torch build and the GPU; `scripts/make_demo_voice.py` builds Agent Smoke from
 a Kokoro Reader reading a public-domain text, inside smoke's sandbox; `scripts/reader_prints.py` builds
 `assets/reader-prints.json`.
 

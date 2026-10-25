@@ -24,16 +24,22 @@ SEC_PER_STEP = 0.35   # a training step on a current mid-range card before this 
 def _sec_per_step() -> float:
     """Seconds a training step takes on this PC: the median of the projects' measured speeds, else the last trainings'
     (trainer's speed file), else SEC_PER_STEP."""
+    from ..core import lowprofile
     from .project import list_projects
-    vals = [p["train"].get("sec_per_step") for p in list_projects() if p["train"].get("sec_per_step")]
-    if not vals:
+    vals = [] if lowprofile.on() else [p["train"].get("sec_per_step") for p in list_projects() if p["train"].get("sec_per_step")]
+    if not vals:   # (under Low profile: only speeds measured under it, in the speed file's "-lp" keys)
         try:
+            from ..core import lowprofile
             from .trainer import SPEED_FILE
-            vals = list(json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8")).values())
+            d = json.loads((path("cache_dir") / SPEED_FILE).read_text(encoding="utf-8"))
+            vals = [v for k, v in d.items() if k.endswith("-lp") == lowprofile.on()]   # (this mode's own speeds)
         except (OSError, ValueError, ImportError):
             vals = []
     vals = sorted(v for v in vals if isinstance(v, (int, float)) and 0.05 < v < 3)
-    return vals[len(vals) // 2] if vals else SEC_PER_STEP
+    if vals:
+        return vals[len(vals) // 2]
+    from ..core import lowprofile
+    return SEC_PER_STEP * lowprofile.factor()   # (nothing measured under Low profile yet: the burst's share, as a first guess)
 
 
 # What a new voice's training turned out to be, measured from every one (rc-eta, IA's training proof: "about 61 min"

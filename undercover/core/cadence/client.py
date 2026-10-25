@@ -47,12 +47,18 @@ class Worker:
         env = dict(os.environ, PYTHONUNBUFFERED="1", TQDM_DISABLE="1", HF_HUB_DISABLE_SYMLINKS_WARNING="1",
                    HF_HOME=str(path("models_dir") / "hf"), HF_HUB_DISABLE_TELEMETRY="1",
                    TRANSFORMERS_VERBOSITY="error", PYTHONIOENCODING="utf-8")
+        from .. import gpu, lowprofile
+        env.pop(gpu.LIMIT_ENV, None)   # (never the server's own cap: the worker's share, when Low profile is on)
+        share = lowprofile.worker_limit_gb()
+        if share:
+            env[gpu.LIMIT_ENV] = str(share)
         self.log = open(path("logs_dir") / "cadence-worker.log", "a", encoding="utf-8", buffering=1)
         self.log.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting the cadence worker\n")
         self.proc = subprocess.Popen([sys.executable, "-m", "undercover.core.cadence.worker"], cwd=ROOT, env=env,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         threading.Thread(target=self._reader, args=(self.proc,), daemon=True, name="cadence-reader").start()
+        lowprofile.apply()   # (the worker's share comes out of the server's cap while it's loaded)
         if self._watch is None:
             self._watch = threading.Thread(target=self._idle_loop, daemon=True, name="cadence-idle")
             self._watch.start()
@@ -135,6 +141,11 @@ class Worker:
             proc.kill()
         if self.log:
             self.log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] stopped ({why or 'asked'})\n")
+        try:
+            from .. import lowprofile
+            lowprofile.apply()   # (its share goes back to the server)
+        except Exception:   # noqa: BLE001
+            pass
 
     # ---------------------------------------------------------------- requests
     def submit(self, op: str, progress=None, **kw) -> Future:
