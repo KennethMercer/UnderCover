@@ -3,6 +3,12 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## 1.1.1 (not released yet)
+
+**Hardening** (netguard)
+- Links UnderCover fetches for you are checked again at the moment each connection is made, including every address
+  the YouTube downloader follows by itself.
+
 ## 1.1.0 (2026-10-26)
 
 **Hardening** (harden1)

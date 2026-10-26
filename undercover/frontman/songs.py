@@ -147,6 +147,8 @@ def from_link(url: str) -> SongResult:
     with _ydl(skip_download=True, noplaylist=True) as ydl:
         try:
             e = ydl.extract_info(url.strip(), download=False)
+        except safeurl.LinkRefused:
+            raise
         except Exception as ex:
             raise ModelError(f"Couldn't read that link ({_short(ex)}).")
     if e.get("entries"):
