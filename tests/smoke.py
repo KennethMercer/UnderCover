@@ -901,11 +901,11 @@ def u_cadence_starts():
     from undercover.core.engine.rvc import index as rvcindex
     with isolated_data() as box:
         f = box / "model.index"
-        v = np.random.default_rng(0).normal(size=(3000, 16)).astype(np.float16)
+        v = np.random.default_rng(0).normal(size=(3000, 256)).astype(np.float16)
         f.write_bytes(rvcindex.COMPACT_MAGIC + struct.pack("<qq", *v.shape) + v.tobytes())
         assert mdv.shrink_index(box, k=200) == (3000, 200)
         back = rvcindex.read_vectors(f)
-        assert back.shape == (200, 16) and np.isfinite(back).all()
+        assert back.shape == (200, 256) and np.isfinite(back).all()
         assert mdv.shrink_index(box, k=500) == (200, 200), "a small index was changed"
     man = json.loads((ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke" / "manifest.json").read_text(encoding="utf-8"))
     assert {"model.pth", "model.index"} <= set(man["files"]) and man["files"]["model.index"]["size"] < 32e6, man["files"]
@@ -1024,6 +1024,7 @@ def u_listenback_extra():
 @check("hardening (1.1): a web page's Origin must be this server's own scheme, host and port; JSON bodies are capped per route (413, the body never read); a voice zip unpacks under a running size cap, few members, no links; links fetched for someone reach only the internet (after DNS, on every redirect); a phone can't cancel or retry PC-only work; the away listener names nothing; the Phone access copy says the home connection isn't encrypted")
 def u_harden1():
     import inspect
+    import numpy as np
     import io
     import tempfile
     import zipfile
@@ -1239,6 +1240,38 @@ def u_harden1():
     for f, s in (("speakeasy.js", "${esc(est.first_why)}"), ("speakeasy.js", "${esc(est.waiting)}"),
                  ("vault.js", 'esc(last.reason || "")'), ("doubleagent.js", "${esc(state)}"), ("train.js", "${esc(s.status)}")):
         assert s in (web / f).read_text(encoding="utf-8"), (f, s)
+    # a malformed voice index is a plain refusal (IndexFormatError), never another error; sizes checked up front
+    import struct
+    from undercover.core.engine.rvc import index as IX
+    with tempfile.TemporaryDirectory(prefix="uc-h1i-") as t:
+        t = Path(t)
+        good = t / "good.index"
+        good.write_bytes(IX.COMPACT_MAGIC + struct.pack("<qq", 2, 256) + np.zeros(512, np.float16).tobytes())
+        assert IX.read_vectors(good).shape == (2, 256)
+        bad = {"no vectors": IX.COMPACT_MAGIC + struct.pack("<qq", 0, 256),
+               "minus": IX.COMPACT_MAGIC + struct.pack("<qq", -4, 256) + b"\0" * 64,
+               "odd size": IX.COMPACT_MAGIC + struct.pack("<qq", 2, 100) + b"\0" * 400,
+               "cut header": IX.COMPACT_MAGIC + b"\x01\x02",
+               "huge": IX.COMPACT_MAGIC + struct.pack("<qq", 1 << 60, 768),
+               "faiss cut": b"IwFl" + b"\x01" * 9,
+               "faiss odd": b"IwFl" + struct.pack("<iqqqBi", 100, 5, 0, 0, 1, 1),
+               "faiss junk": b"IwFl" + struct.pack("<iqqqBi", 256, 2, 0, 0, 1, 1) + b"\xff" * 40}
+        for what, data in bad.items():
+            f = t / f"{what.replace(' ', '_')}.index"
+            f.write_bytes(data)
+            try:
+                IX.read_vectors(f)
+                raise AssertionError(f"a malformed index was read ({what})")
+            except IX.IndexFormatError:
+                pass
+            if not data.startswith(IX.COMPACT_MAGIC):   # (a compact file is left as it is; reading it refuses it)
+                try:
+                    IX.compact_in_place(f)
+                    raise AssertionError(f"a malformed index was compacted ({what})")
+                except IX.IndexFormatError:
+                    pass
+    from undercover.core import themes as TH
+    assert TH.BLOCKED.search("src(fonts/x.woff2)") and TH.BLOCKED.search("SRC (x)") is None and TH.BLOCKED.search("SRC(x)")
     # nothing is installed or downloaded unchecked: no add-on by version alone, no model file without its checksum
     from undercover.core import addons as AD, setup_models as SM
     inst = inspect.getsource(AD.install)
@@ -5199,7 +5232,7 @@ def u_voicepack():
         weight = {"enc_p.emb_phone.weight": torch.randn(192, 768, generator=gen).half(), "dec.conv_pre.weight": torch.randn(512, 192, 7, generator=gen).half()}
         torch.save({"weight": weight, "config": model_config(40000),
                     "info": "48epoch", "sr": "40k", "f0": 1, "version": "v2"}, d / "model.pth")
-        vecs = np.random.default_rng(3).standard_normal((50, 8)).astype(np.float16)
+        vecs = np.random.default_rng(3).standard_normal((50, 256)).astype(np.float16)
         (d / "model.index").write_bytes(COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
         meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         meta["index"] = str(d / "model.index")
@@ -9638,7 +9671,7 @@ def u_smaller():
         pth = os.urandom(4000)
         (vd / "model.pth").write_bytes(pth)
         (d / "train" / "e5.pth").write_bytes(pth)
-        vecs = rng.standard_normal((300, 8)).astype(np.float16)
+        vecs = rng.standard_normal((300, 256)).astype(np.float16)
         with open(vd / "model.index", "wb") as f:
             f.write(ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
         ov = smaller.overview()
@@ -9740,7 +9773,7 @@ def u_shrink_export():
         vd = voices_dir() / "export-voice"
         vd.mkdir(parents=True)
         (vd / "model.pth").write_bytes(b"p")
-        vecs = np.random.default_rng(2).standard_normal((300, 8)).astype(np.float16)
+        vecs = np.random.default_rng(2).standard_normal((300, 256)).astype(np.float16)
         full = ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes()
         (vd / "model.index").write_bytes(full)
         assert trainer.shrink_exported_index(vd, k=0) is None and (vd / "model.index").read_bytes() == full   # off
