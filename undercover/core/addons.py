@@ -183,8 +183,8 @@ def _pip(*args, what="the add-on's Python packages") -> None:
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:
-        with open(path("logs_dir") / "errors.log", "a", encoding="utf-8") as f:
-            f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] add-on {' '.join(cmd)}\n{r.stdout}\n{r.stderr}")
+        from .jobs import log_error
+        log_error(f"add-on {' '.join(cmd)}\n{r.stdout}\n{r.stderr}")
         raise ModelError(f"Installing {what} failed (details in logs/errors.log). "
                          "Check your internet connection and try again.")
 

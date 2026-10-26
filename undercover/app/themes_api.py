@@ -54,7 +54,7 @@ def _route(h, method, p):
             return h._json(themes.save(h._body()))
         raise LookupError("Not found")
     if p == "/api/themes/import" and method == "POST":
-        n = int(h.headers.get("Content-Length") or 0)
+        n = h._length()
         if not n or n > themes.MAX_BYTES:
             h.close_connection = True   # the body isn't read
             raise ThemeError("That file is empty or over 4 MB: a theme is a few KB, fonts a few hundred.")

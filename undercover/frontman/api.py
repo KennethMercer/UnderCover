@@ -85,7 +85,7 @@ def handle(h, method: str, p: str) -> bool:
 
 
 def _upload(h):
-    n = int(h.headers.get("Content-Length") or 0)
+    n = h._length()
     name = unquote(h.headers.get("X-Filename") or "song")
     ext = Path(name).suffix.lower()
     if ext not in AUDIO_EXT:
@@ -292,8 +292,12 @@ def _song_from_youtube(h, body: dict):
     try:
         if body.get("url") and not body.get("id"):
             r = songs.from_link(body["url"])
-        else:
-            r = songs.SongResult(**{k: body[k] for k in ("id", "url", "title", "raw_title", "channel", "duration")})
+        else:   # a search result: a YouTube video id, its address made here (1.1 hardening: never the body's url)
+            vid = str(body.get("id") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+                raise ValueError("That isn't a YouTube video. Search again.")
+            r = songs.SongResult(id=vid, url=f"https://www.youtube.com/watch?v={vid}",
+                                 **{k: body[k] for k in ("title", "raw_title", "channel", "duration")})
         h._json(songs.download(r, register_song))
     except (ModelError, ValueError, KeyError, TypeError) as e:
         h._error(str(e) if not isinstance(e, (KeyError, TypeError)) else "That song result is incomplete. Search again.")

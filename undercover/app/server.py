@@ -89,13 +89,18 @@ BUSY_503 = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection
 
 def _cross_site(method: str, path: str, headers) -> bool:
     """A request another web site's page made (1.1 hardening: Sec-Fetch-Site, which every browser that runs the page
-    sends), on any listener and method, refused. Only following a link to one of the pages is let through: it can
-    read nothing. Another port on this PC counts as the same site, so the Origin check is what refuses that."""
-    if (headers.get("Sec-Fetch-Site") or "").lower() != "cross-site":
+    sends), on any listener and method, refused. Following a link to one of the pages is let through: it can read
+    nothing. A page on another port of this PC is the "same site" to a browser: its other requests meet the Origin
+    check, and its GETs to /api/ and /files/ are refused here (only this page's own, same-origin, or a typed address)."""
+    site = (headers.get("Sec-Fetch-Site") or "").lower()
+    if site in ("", "same-origin", "none"):
         return False
     p = urlparse(path).path
+    data = p.startswith(("/api/", "/files/"))
+    if site == "same-site":
+        return method == "GET" and data
     return not (method == "GET" and (headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
-                and not p.startswith(("/api/", "/files/", "/static/")))
+                and not data and not p.startswith("/static/"))
 
 
 def _pc_only(job) -> bool:
@@ -103,8 +108,14 @@ def _pc_only(job) -> bool:
     return job.kind in PC_ONLY_KINDS or bool(getattr(job, "pc_only", False))
 
 
-class BodyTooLarge(Exception):
+class ClientError(Exception):
+    """A request the server can't take as sent: answered with its status, no traceback logged, the connection closed."""
+    status = 400
+
+
+class BodyTooLarge(ClientError):
     """A JSON body over its route's cap: answered 413, the body never read."""
+    status = 413
 
 
 # ---------------------------------------------------------------- heartbeat (what was happening if the PC dies)
@@ -212,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
     def _body(self) -> dict:
         if getattr(self, "_read", None) is not None:   # read once per request (Retry replays what was sent)
             return self._read
-        n = int(self.headers.get("Content-Length") or 0)
+        n = self._length()
         cap = JSON_MAX_FOR.get(urlparse(self.path).path, JSON_MAX)
         if n < 0 or n > cap:
             self.close_connection = True   # (the body isn't read)
@@ -225,6 +236,16 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._read = {}
         return self._read
+
+    def _length(self) -> int:
+        """The request's Content-Length: digits only (1.1 hardening), else a ClientError, the body never read."""
+        v = (self.headers.get("Content-Length") or "").strip()
+        if not v:
+            return 0
+        if not re.fullmatch(r"[0-9]{1,15}", v):
+            self.close_connection = True
+            raise ClientError("That request's length isn't a number.")
+        return int(v)
 
     def _guard_host(self) -> bool:
         """Refuse requests whose Host isn't this server (a DNS-rebinding page could otherwise READ local files)."""
@@ -469,8 +490,9 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 return self._retry(m.group(1))
             return self._route_post(p)
-        except BodyTooLarge as e:
-            self._error(str(e), 413)
+        except ClientError as e:
+            self.close_connection = True
+            self._error(str(e), e.status)
         except LookupError as e:
             self._error(str(e), 404)
         except Exception as e:
@@ -565,8 +587,9 @@ class Handler(BaseHTTPRequestHandler):
             if r.get("with"):
                 gpu.forget_voice(r["with"])
             self._json({"ok": True, **r})
-        except BodyTooLarge as e:
-            self._error(str(e), 413)
+        except ClientError as e:
+            self.close_connection = True
+            self._error(str(e), e.status)
         except ModelError as e:
             self._error(str(e))
         except LookupError as e:
@@ -834,7 +857,7 @@ class Handler(BaseHTTPRequestHandler):
         """Install a voice from a dropped .ucvoice/.zip/.pth file (body = raw file bytes)."""
         import tempfile
         from ..core.voices import ModelError, _guess_name, install
-        n = int(self.headers.get("Content-Length") or 0)
+        n = self._length()
         fname = Path(unquote(self.headers.get("X-Filename") or "voice.zip")).name
         if Path(fname).suffix.lower() not in (".ucvoice", ".zip", ".pth"):
             return self._error("Drop a voice as a .ucvoice voice pack, or a model as a .zip or .pth file.")

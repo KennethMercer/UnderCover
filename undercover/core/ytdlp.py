@@ -338,11 +338,10 @@ def latest_pair() -> dict:
 # projects publish on GitHub, over HTTPS: yt-dlp-ejs's wheel by the release asset's digest (GitHub's own SHA-256 of
 # the file); yt-dlp, which puts no wheel on GitHub, by its source tarball (checked against the release's
 # SHA2-256SUMS) holding byte for byte every file the wheel's package holds. The one file pip builds differently,
-# yt_dlp/version.py, must be plain assignments, equal but for two strings (VARIANT, UPDATE_HINT). Anything missing,
-# unreachable or different: no update, said in the System room.
+# yt_dlp/version.py, is never taken from the wheel: the staged pair gets the tarball's own (checked) copy. Anything
+# missing, unreachable or different: no update, said in the System room.
 GITHUB_YT = "https://github.com/yt-dlp/yt-dlp/releases/download"
 GITHUB_EJS = "https://api.github.com/repos/yt-dlp/ejs/releases/tags"
-VERSION_PY_FREE = ("VARIANT", "UPDATE_HINT")   # what pip's build of version.py may set differently
 UPSTREAM_MAX = 64 << 20
 
 
@@ -389,9 +388,9 @@ def _version_py(text: str) -> dict:
     return out
 
 
-def _same_package(wheel: Path, tarball: bytes, version: str):
+def _same_package(wheel: Path, tarball: bytes, version: str) -> bytes:
     """The wheel's yt_dlp package is the source tarball's, file by file (see above); nothing else in the wheel but its
-    own dist-info."""
+    own dist-info. -> the tarball's yt_dlp/version.py, which the staged pair holds instead of the wheel's."""
     import tarfile
     src = {}
     with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as t:
@@ -407,23 +406,22 @@ def _same_package(wheel: Path, tarball: bytes, version: str):
                 continue
             if not n.startswith("yt_dlp/"):
                 raise NotVouched(f"the wheel holds {n!r}, outside yt-dlp's own package")
-            data = z.read(i)
-            if n == "yt_dlp/version.py":
-                if n not in src:
-                    raise NotVouched("the source has no yt_dlp/version.py")
-                a, b = _version_py(data.decode("utf-8")), _version_py(src[n].decode("utf-8"))
-                if {k: v for k, v in a.items() if k not in VERSION_PY_FREE} != {k: v for k, v in b.items()
-                                                                             if k not in VERSION_PY_FREE}:
-                    raise NotVouched("yt_dlp/version.py differs from the source's")
-                if not all(isinstance(a.get(k), (str, type(None))) for k in VERSION_PY_FREE):
-                    raise NotVouched("yt_dlp/version.py differs from the source's")
+            if n == "yt_dlp/version.py":   # (never used: the tarball's copy replaces it when the pair is staged)
                 continue
-            if src.get(n) != data:
+            if src.get(n) != z.read(i):
                 raise NotVouched(f"{n} differs from GitHub's source" if n in src else f"{n} isn't in GitHub's source")
+    if "yt_dlp/version.py" not in src:
+        raise NotVouched("GitHub's source has no yt_dlp/version.py")
+    try:
+        _version_py(src["yt_dlp/version.py"].decode("ascii"))
+    except UnicodeDecodeError:
+        raise NotVouched("GitHub's yt_dlp/version.py isn't plain text")   # (a plain file of values, as upstream makes it)
+    return src["yt_dlp/version.py"]
 
 
-def upstream_check(pair: dict, files: dict, get=None):
-    """Raise NotVouched unless GitHub vouches for both wheels PyPI served (files: {package: downloaded wheel path})."""
+def upstream_check(pair: dict, files: dict, get=None) -> dict:
+    """Raise NotVouched unless GitHub vouches for both wheels PyPI served (files: {package: downloaded wheel path}).
+    -> {path inside the pair: bytes} the staged pair must hold instead of the wheel's (yt_dlp/version.py)."""
     get = get or _https_get
     ejs = pair["wheels"][EJS]
     try:
@@ -444,7 +442,7 @@ def upstream_check(pair: dict, files: dict, get=None):
     tarball = get(f"{GITHUB_YT}/{tag}/yt-dlp.tar.gz")
     if hashlib.sha256(tarball).hexdigest() != sums["yt-dlp.tar.gz"]:
         raise NotVouched(f"yt-dlp {pair['yt']}'s source tarball doesn't match its SHA2-256SUMS")
-    _same_package(Path(files[PKG]), tarball, pair["yt"])
+    return {"yt_dlp/version.py": _same_package(Path(files[PKG]), tarball, pair["yt"])}
 
 
 UPSTREAM = upstream_check   # (tests put a stand-in here: they never reach GitHub)
@@ -523,9 +521,12 @@ def stage(pair: dict, into: Path | None = None) -> Path:
     dl.mkdir()
     try:
         got = {name: download(pair["wheels"][name], dl) for name in (PKG, EJS)}
-        UPSTREAM(pair, got)   # (1.1) GitHub vouches for both, or nothing is unpacked
+        own = UPSTREAM(pair, got) or {}   # (1.1) GitHub vouches for both, or nothing is unpacked
         for name in (PKG, EJS):
             unpack(got[name], d)
+        for rel, data in own.items():   # the tarball's checked copy, never the wheel's (before the files are hashed)
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_bytes(data)
     except BaseException:   # a refused hash, GitHub not vouching, or a broken wheel: nothing of it stays
         if into is None:
             _drop(d)

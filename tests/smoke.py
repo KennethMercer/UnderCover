@@ -1051,14 +1051,53 @@ def u_harden1():
     def body(n, path="/api/speak", data=b""):
         h = SimpleNamespace(headers={"Content-Length": str(n)}, path=path, _read=None, close_connection=False,
                             rfile=io.BytesIO(data) if data else NoRead())
+        h._length = lambda: S.Handler._length(h)
         try:
             return S.Handler._body(h), h
-        except S.BodyTooLarge as e:
+        except S.ClientError as e:
             return e, h
     r, h = body(S.JSON_MAX + 1)
     assert isinstance(r, S.BodyTooLarge) and h.close_connection and "413" not in str(r), r
     r, h = body(-5)
-    assert isinstance(r, S.BodyTooLarge), r
+    assert isinstance(r, S.ClientError), r
+    for odd in ("12abc", "1e6", "0x10", " 5 5", "+5", "\u0661\u0662", "9" * 20):   # digits only, else 400 and close
+        h = SimpleNamespace(headers={"Content-Length": odd}, path="/api/phone/away", _read=None, close_connection=False, rfile=NoRead())
+        try:
+            S.Handler._length(h)
+            raise AssertionError(f"Content-Length {odd!r} was taken")
+        except S.ClientError as e:
+            assert e.status == 400 and h.close_connection, odd
+    assert S.Handler._length(SimpleNamespace(headers={"Content-Length": "42"})) == 42
+    for mod in ("app/themes_api.py", "doubleagent/api.py", "frontman/api.py", "app/server.py"):
+        assert 'int(h.headers.get("Content-Length")' not in (ROOT / "undercover" / mod).read_text(encoding="utf-8"), mod
+        assert 'int(self.headers.get("Content-Length")' not in (ROOT / "undercover" / mod).read_text(encoding="utf-8"), mod
+    post = inspect.getsource(S.Handler.do_POST)
+    assert post.index("except ClientError") < post.index("except Exception"), "a client error would be logged with a traceback"
+    # errors.log stays small: past ERRORS_MAX it's kept as errors.log.1 and starts again
+    with isolated_data():
+        from undercover.core.config import path as lpath
+        lpath("logs_dir").mkdir(parents=True, exist_ok=True)
+        big = lpath("logs_dir") / "errors.log"
+        big.write_bytes(b"x" * (jobs.ERRORS_MAX + 1))
+        jobs.log_error("one more")
+        assert big.stat().st_size < 1000 and (lpath("logs_dir") / "errors.log.1").stat().st_size > jobs.ERRORS_MAX
+    assert "log_error(" in inspect.getsource(jobs.friendly) and "open(path(\"logs_dir\") / \"errors.log\"" not in inspect.getsource(jobs.friendly)
+    # a song from a search result: a YouTube video id only, its address made here
+    from undercover.frontman import api as FA, songs as SG
+    got, said = [], []
+    real_dl = SG.download
+    try:
+        SG.download = lambda r, reg: (got.append(r), {"ok": True})[1]
+        fh = SimpleNamespace(_json=lambda o: said.append(("ok", o)), _error=lambda m, s=400: said.append(("error", m)))
+        base = {"title": "t", "raw_title": "t", "channel": "c", "duration": 1.0}
+        for bad in ({"id": "../../etc", "url": "http://127.0.0.1:7860/api/status"}, {"id": "abc", "url": "https://www.youtube.com/watch?v=abc"},
+                    {"id": "dQw4w9WgXcQx", "url": "x"}, {"id": "dQw4w9WgX%Q", "url": "x"}):
+            FA._song_from_youtube(fh, {**base, **bad})
+        assert got == [] and all(k == "error" for k, _ in said), (got, said)
+        FA._song_from_youtube(fh, {**base, "id": "dQw4w9WgXcQ", "url": "http://192.168.1.1/x"})
+        assert got and got[0].url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ" and got[0].id == "dQw4w9WgXcQ", got
+    finally:
+        SG.download = real_dl
     r, _ = body(2 << 20, "/api/themes", b'{"name": "t"}')
     assert r == {"name": "t"}, r   # (a theme saved from the editor may be bigger)
     r, _ = body(8 << 20, "/api/vault/restore", b'{"keys": []}')
@@ -1213,6 +1252,10 @@ def u_harden1():
     assert cs("GET", "/api/vault", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
     assert cs("DELETE", "/", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
     assert not cs("GET", "/", sec_fetch_site="cross-site", sec_fetch_mode="navigate")   # a link to the page: it reads nothing
+    # another port of this PC is the "same site": its GETs to /api/ and /files/ are refused (the Origin check takes the rest)
+    assert cs("GET", "/api/youtube/search", sec_fetch_site="same-site") and cs("GET", "/files/output/x.mp3", sec_fetch_site="same-site")
+    assert not cs("GET", "/", sec_fetch_site="same-site", sec_fetch_mode="navigate") and not cs("GET", "/static/app.js", sec_fetch_site="same-site")
+    assert not cs("GET", "/api/status", sec_fetch_site="same-origin") and not cs("GET", "/api/status")   # this page; the tray
     for site in ("same-origin", "same-site", "none", ""):   # (same-site: another port here; the Origin check refuses that)
         assert not cs("POST", "/api/voices/install", sec_fetch_site=site, sec_fetch_mode="cors"), site
     gate = inspect.getsource(S.Handler._gate)
@@ -8484,7 +8527,8 @@ def u_ytdlp_upstream():
         good_wheel = {**pkg, "yt_dlp/version.py": vpy.replace("VARIANT = None", "VARIANT = 'pip'"),
                       f"yt_dlp-{ver}.dist-info/METADATA": "Name: yt-dlp\n", f"yt_dlp-{ver}.data/data/x.txt": "skipped"}
         ejs_file = t / f"yt_dlp_ejs-{ejs}-py3-none-any.whl"
-        ejs_file.write_bytes(b"ejs wheel")
+        with zipfile.ZipFile(ejs_file, "w") as z:   # (a real wheel: the staging test unpacks it)
+            z.writestr("yt_dlp_ejs/__init__.py", "")
         ejs_sha = hashlib.sha256(ejs_file.read_bytes()).hexdigest()
 
         def world(yt_files=None, tar_files=None, ejs_digest=None, sums_has=True, tar_sha=None):
@@ -8506,8 +8550,7 @@ def u_ytdlp_upstream():
             "a changed file": world(yt_files={**good_wheel, "yt_dlp/extractor/x.py": "X = 2\n"}),
             "a file not in the source": world(yt_files={**good_wheel, "yt_dlp/extra.py": "import os\n"}),
             "outside the package": world(yt_files={**good_wheel, "sitecustomize.py": "import os\n"}),
-            "code in version.py": world(yt_files={**good_wheel, "yt_dlp/version.py": vpy + "import os\n"}),
-            "another version.py value": world(yt_files={**good_wheel, "yt_dlp/version.py": vpy.replace("stable", "nightly")}),
+            "no version.py in the source": world(tar_files={k: v for k, v in pkg.items() if k != "yt_dlp/version.py"}),
         }
         for what, (pair, files, get) in refused.items():
             try:
@@ -8515,6 +8558,24 @@ def u_ytdlp_upstream():
                 raise AssertionError(f"GitHub vouched when it shouldn't: {what}")
             except Y.NotVouched:
                 pass
+        # the staged pair never holds the wheel's version.py: the tarball's own bytes, even when the wheel's carries an
+        # encoding declaration or a BOM that would read differently when Python imports it
+        odd = "\ufeff# -*- coding: utf-7 -*-\n__version__ = '2099.01.02'\nVARIANT = '+AF8AXw-import+AF8AXw-'\n"
+        pair, files, get = world(yt_files={**good_wheel, "yt_dlp/version.py": odd})
+        own = Y.upstream_check(pair, files, get)
+        assert own == {"yt_dlp/version.py": vpy.encode()}, own
+        stage_pair = {"yt": ver, "ejs": ejs, "wheels": {
+            Y.PKG: {"url": files[Y.PKG].as_uri(), "sha": hashlib.sha256(files[Y.PKG].read_bytes()).hexdigest(), "file": files[Y.PKG].name},
+            Y.EJS: {"url": files[Y.EJS].as_uri(), "sha": hashlib.sha256(files[Y.EJS].read_bytes()).hexdigest(), "file": files[Y.EJS].name}}}
+        real_up = Y.UPSTREAM
+        try:
+            Y.UPSTREAM = lambda pr, fs: Y.upstream_check(pr, fs, get)
+            d = Y.stage(stage_pair, into=t / "staged")
+        finally:
+            Y.UPSTREAM = real_up
+        assert (d / "yt_dlp" / "version.py").read_bytes() == vpy.encode(), (d / "yt_dlp" / "version.py").read_bytes()
+        assert json.loads((d / "pair.json").read_text(encoding="utf-8"))["files"]["yt_dlp/version.py"] == hashlib.sha256(vpy.encode()).hexdigest()
+        assert Y.changed(d) == "", Y.changed(d)
         pair, files, _ = world()
 
         def offline(url):
@@ -8535,7 +8596,7 @@ def u_ytdlp_upstream():
     assert "UPSTREAM(pair, got)" in inspect.getsource(Y.stage)
     lib = (ROOT / "undercover" / "web" / "library.js").read_text(encoding="utf-8")
     assert 's.ytdlp_offer ? "Update now"' in lib
-    return "ejs digest, tarball sums, the package file by file, version.py as data; 8 refusals; under 48 h offered, not taken"
+    return "ejs digest, tarball sums, the package file by file, the tarball's own version.py staged; 7 refusals; under 48 h offered, not taken"
 
 
 @check("yt-dlp self-heal: fake PyPI + fake resolvers: swap, bad hash, failed test, rollback, offline, detection, dry run")
