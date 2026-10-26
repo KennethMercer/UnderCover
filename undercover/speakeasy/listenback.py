@@ -356,7 +356,8 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
             edits.append((b, b, 0.12, f"pause {w}"))
     for a, b, f, why in sorted(edits, key=lambda e: e[0], reverse=True):
         x = insert_pause(x, sr, a, f) if why.startswith("pause") else stretch_span(x, sr, a, b, f)
-    log.update(tries=tries, seed=best[1], first_problems=problems(text, heard[0]["words"]), problems=best[3],
+    left = [p for p in best[3] if not (cut and p.startswith("stray ending"))]   # (what the cut mended isn't left)
+    log.update(tries=tries, seed=best[1], first_problems=problems(text, heard[0]["words"]), problems=left,
                edits=[(why, round(f, 2)) for *_, f, why in edits] + ([("stray ending cut", cut)] if cut else []),
                seconds=round(time.perf_counter() - t0, 2))
     kref.unlink(missing_ok=True)

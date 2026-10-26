@@ -1003,7 +1003,7 @@ def u_listenback_extra():
             lb.render.request = lambda *a, **k: (reads.append(k.get("seed")), (None, take(f"r{len(reads)}.wav", W(*said))))[1]
             log = {}
             out = lb.review(text, first, {}, t / "ref.wav", 1234, "bm_george", log)
-            assert reads == [] and log["tries"] == 1, (reads, log)
+            assert reads == [] and log["tries"] == 1 and log["problems"] == [] and log["first_problems"], (reads, log)
             assert ("stray ending cut", 2) in log["edits"] and out != first and abs(sf.info(str(out)).duration - 2.38) < 0.01, log
             garbled = take("b.wav", W("Press", "the", "button.", "I'll", "uh", "um", "er", "ah", "oh", "take", "it", "from", "there."))
             reads.clear()
