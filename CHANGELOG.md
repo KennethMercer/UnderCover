@@ -5,6 +5,14 @@ in brackets.
 
 ## Unreleased (1.1)
 
+**Hardening** (harden1)
+- Stricter checks on requests to UnderCover's server, on the PC and from phones: who may call it, how much a request
+  may send, how long a connection may wait, and how many may be open at once.
+- Phone pairings now expire after 30 days without use; a phone you use keeps working.
+- Links UnderCover fetches for you only reach the internet, and voice files are unpacked with size limits.
+- Updated parts are checked before they're used, and nothing is installed without its checksum.
+- The Phone access setting says that the home connection isn't encrypted.
+
 **Speech that runs on past its text** (lbextra)
 - When the speech engine carries on past the end of a sentence (repeating its last words, or a garbled tail), the
   extra is now cut off at the sentence's last word. A take with many extra words no longer counts the same as one

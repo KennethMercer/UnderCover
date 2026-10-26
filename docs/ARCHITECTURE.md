@@ -533,6 +533,18 @@ every route and its policy (open / phone / pc). Away from home (`core/tailnet.py
 (pinned MSI, hashes checked, no driver, no service) whose Funnel points only at a third, dedicated listener with its own
 away token (`away.html`). Never plain port forwarding. Windows-only for now (`platform.supports("away")`).
 
+Request rules on every listener (1.1): an Origin, when a request has one, is this server's own scheme, host and port;
+a request another site's page makes (`Sec-Fetch-Site: cross-site`) is refused, except following a link to a page;
+JSON bodies are capped per route (`JSON_MAX`, 1 MB; 413, never read) while uploads keep their own limits; every read of
+a request times out after 30 s; every response says `X-Content-Type-Options: nosniff` and `Referrer-Policy:
+no-referrer`. The phone and away listeners take `MAX_LIVE` (32) connections at once (503 past it). The away listener's
+`Server` header and its refusals before a token name nothing. A device token lasts 30 days from its last use
+(`phone.TOKEN_IDLE_S`; each use renews it and its cookie). Wrong pairing codes are counted per address (5) and in all
+(20). A phone may not cancel or retry work only the PC starts. Links the app fetches for someone (a voice install, a
+training source, a song from a link) reach only the internet: `core/safeurl.py` refuses a host that is or resolves to
+this PC, the home network or a link-local address, and checks every redirect. A voice zip unpacks under a running size
+cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerShell is started by its full path.
+
 ### System tray
 
 `core/trayicon.py` (`pythonw -m undercover.tray`, pystray) is its own light process over the HTTP API, with no torch.
@@ -584,8 +596,10 @@ The installer and the app survive version mismatches and fix common problems the
   and yt-dlp ships the fix within days, so a pinned pair breaks between releases. Only yt-dlp and the yt-dlp-ejs its own
   `pin` extra names may follow PyPI. Detect: the same breakage on several videos within a window, more failures than
   successes. Fetch: the newest yt-dlp and the solver its release pins, both checked against PyPI's published SHA-256.
-  Stage and test: into `<cache>/ytdlp/<yt-dlp>+ejs<solver>/`, then resolve known public videos; swap in only if at least
-  as good, and only when nothing is using yt-dlp. Roll back: `state.json` keeps the last known good pair. Say so:
+  Stage and test: into `<cache>/ytdlp/<yt-dlp>+ejs<solver>/` (every file's SHA-256 kept in its `pair.json`, checked at
+  every start: a pair whose files differ, or that has no hashes, falls back to the last known good, then the venv's,
+  with a log line), then resolve known public videos; swap in only if at least as good, and only when nothing is using
+  yt-dlp. Roll back: `state.json` keeps the last known good pair. Say so:
   `logs/doctor.log` and the System room, with a Deep Cover switch to turn it off. The venv's pinned pair
   (`installer/requirements/common.txt`) is the last resort and is never upgraded.
 - A recorded manifest (`manifest.json` in the app folder, git-ignored; `core/manifest.py`): Python, venv, backend and torch
