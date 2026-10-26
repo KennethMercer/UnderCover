@@ -491,16 +491,18 @@ when the control is there. The tray menu carries the same switch (`core/trayicon
 
 FrontMan: the one-shot line as the page ("Pink Pony Club as Plankton"), a plan card in three plain lines before anything
 starts, "Set it up yourself" (song and voice side by side, each with its search first), the result, the recent tray
-(the latest 15). A weak existing voice may
+(the newest 5, Show more for all 15). A weak existing voice may
 make the cover, labelled honestly, with training offered now or tonight.
 
 DoubleAgent: voice cards (likeness as a word: great / good / fair / poor; speak or sing; the preview button; Listen and
-choose for a waiting cadence or Improve), the overnight queue with its morning report in words ("better", "about the
+choose for a waiting cadence or Improve; on a downloaded voice, Train my own with Now or Tonight on the card, Speaking or
+singing taken from the voice's name when it says and asked when it doesn't), filter chips above the cards (likeness, can
+speak, trained here or downloaded; they combine, All clears them, the browser remembers them), the overnight queue with its morning report in words ("better", "about the
 same", "not better: yours is kept"), the four-step new-voice wizard.
 
 SpeakEasy: a text box with a time estimate, a voice picker grouped "Trained in DoubleAgent" / "Downloaded" with each
 voice's cadence status, Pace (Slower, Natural or Faster, made at generation, never time-stretched), "Now speaking"
-sentence by sentence while the rest are made, WAV / MP3 when finished, Recent.
+sentence by sentence while the rest are made, WAV / MP3 when finished, Recent (the newest 5, Show more for all 15).
 
 SafeHouse: a strip of rooms (`#safehouse/<room>`): Library (Kept / Recent views), Running (now, tonight, recent, last
 night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the

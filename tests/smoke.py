@@ -8324,7 +8324,7 @@ def u_page_syntax():
     try:
         with tempfile.TemporaryDirectory() as prof:
             r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--enable-logging=stderr", "--v=0",
-                                "--virtual-time-budget=6000", "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"], capture_output=True, text=True, timeout=90)
+                                "--virtual-time-budget=6000", "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)   # the DOM and the log are UTF-8, not the console code page
     finally:
         srv.shutdown()
     bad = [ln.split("CONSOLE", 1)[1][:200] for ln in r.stderr.splitlines() if ":CONSOLE" in ln and ("SyntaxError" in ln or "ReferenceError" in ln)]
@@ -8370,6 +8370,15 @@ def u_page_rules():
     assert "voice_choice:" in osj and "data-os-vchoice" in osj and "Pick a voice first." in osj, "the one-shot lost its voice question"
     assert "function workMoved" in work and "workMoved(" in (web / "train.js").read_text(encoding="utf-8"), "work/add's `moved` is no longer said"
     assert "daFilters" in da and "data-own-go" in da and 'id="da-filters"' in ix, "Your voices lost its filter chips, or Train my own its Now / Tonight"
+    # pagepolish2 (the user, 2026-10-26): Recent shows five with Show more to the tray's 15; Train my own on every downloaded voice, its kind
+    # asked when the voice doesn't say; the filters have All and are remembered per browser
+    se = (web / "speakeasy.js").read_text(encoding="utf-8")
+    assert "RECENT_SHOW = 5, RECENT_TRAY = 15" in app and "S.histAll ? RECENT_TRAY : RECENT_SHOW" in app and "SE.recAll ? RECENT_TRAY : RECENT_SHOW" in se and 'recentMore("se-recent-more"' in se, "a module's Recent lost its five and Show more"
+    assert "!c.trained ? `<button class=\"mini\" type=\"button\" data-own=" in da and 'c.singing === false ? "speaking" : ""' in da and "Speaking or singing?" in da, "Train my own lost a downloaded voice, or stopped asking speaking or singing"
+    assert "data-fall" in da and 'store.set("uc-da-filters"' in da and 'store.get("uc-da-filters"' in da, "Your voices' filters lost All or the memory"
+    from undercover.doubleagent import night as _nt
+    _v = type("V", (), {"name": "someone-singing-v2", "extra": {}, "display": None})()
+    assert _nt._sung_hint(_v) is True and _nt._sung_hint(type("V", (), {"name": "model-v2-final", "extra": {}, "display": None})()) is None, "a downloaded voice's name no longer says whether it sings"
     assert "reportOutcome" in work and "reportName(x)" in work and "While you were out" in ix and "REPORT_WORDS" in work, "the overnight report lost its words"
     # smallfix5 hooks: the one estimator, the tonight start note, the pause note, the paused card, the remove note
     assert all(k in work for k in ("function estimateFor", "const startsNote", "const pausingNote", "function removedNote")) and "/api/work/estimate" in work, "work.js lost a smallfix5 hook"
