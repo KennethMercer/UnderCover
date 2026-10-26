@@ -325,6 +325,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 
 .hist-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .hist { display: grid; }
+.recent-more { justify-self: start; margin-top: 8px; }
 .hrow { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
 .hrow:first-child { border-top: 0; }
 .hrow.playing strong { color: var(--accent); }
@@ -705,6 +706,7 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .own-who input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; color: inherit; font: 500 15px var(--body); min-width: 0; }
 /* "Your voices" filters: a row of chips per kind of fact; pressing the pressed one clears it */
 .vfilters { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 12px; }
+.own-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .vf-group { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .vf-group small { margin-right: 2px; }
 .fchip { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 11px; font-size: 13px; cursor: pointer; }

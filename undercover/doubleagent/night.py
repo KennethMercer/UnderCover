@@ -5,6 +5,7 @@ retrains it (doubleagent/frozen.py), and offers the result beside the current vo
 the person's own lines; the ear decides (doubleagent/improved.py). Also the pickers for the queue: candidates (voices that can be improved) and lookup (names for a new voice).
 """
 import json
+import re
 
 import numpy as np
 
@@ -290,6 +291,18 @@ def _person_from_voice(v) -> str:
     return trained_person(v) or v.name.removesuffix("-uc").replace("-", " ")
 
 
+_SUNG = re.compile(r"(?i)(?<![a-z])(sing|singing|sung|vocals?|songs?)(?![a-z])")
+_SPOKEN = re.compile(r"(?i)(?<![a-z])(speaking|speech|spoken|talking|talk|tts|narrat\w*|voiceover)(?![a-z])")
+
+
+def _sung_hint(v) -> bool | None:
+    """A downloaded voice's own name (or the file it came as), read for singing or speaking: True, False, or None when it says
+    neither (or both). "Train my own" takes it as the kind of clips to find; the page asks when it's None."""
+    words = " ".join(str(x) for x in (v.name, (v.extra or {}).get("original_name"), getattr(v, "display", None)) if x).replace("_", " ").replace("-", " ")
+    sung, spoken = bool(_SUNG.search(words)), bool(_SPOKEN.search(words))
+    return True if sung and not spoken else False if spoken and not sung else None
+
+
 def candidates() -> list:
     """Voices for the "Improve my voices" picker: what each was trained on, its last measured likeness, what an
     improve would do and roughly how long it takes."""
@@ -305,6 +318,8 @@ def candidates() -> list:
         ex = v.extra or {}
         c = {"voice": v.name, **voice_info(v), "minutes": ex.get("train_minutes"),
              "singing": None if ex.get("from_speech") is None else not ex.get("from_speech"), "likeness": None}
+        if c["singing"] is None and not ex.get("trained"):
+            c["singing"] = _sung_hint(v)
         if c["demo"]:   # Agent Smoke: never offered for improving (its "person" is nobody to search for)
             out.append({**c, "can": False, "note": "a demo voice made for UnderCover, not a real person, so there's nobody to find clips of", "cadence": service.cadence_status(v)})
             continue
