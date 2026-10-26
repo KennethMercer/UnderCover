@@ -78,6 +78,9 @@ Your voices, songs, covers and speech are kept in ordinary folders that you choo
 to SafeHouse roll off after the next fifteen; Send to SafeHouse keeps one for good. UnderCover never deletes a voice
 on its own: a replaced or removed voice is kept in SafeHouse's Storage until you delete it yourself.
 
+Speech read with the Chatterbox engines (SpeakEasy's default) carries Resemble AI's inaudible watermark, so a detector
+may flag it as synthetic.
+
 Only use voices you have the right to use, and say that a recording is synthetic when you share it.
 
 ## Troubleshooting

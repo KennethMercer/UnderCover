@@ -29,7 +29,7 @@ from .config import CONFIG, path
 
 VCFG = CONFIG["voices"]
 HF = "https://huggingface.co"
-UA = {"User-Agent": "UnderCover/0.1 (local voice-cover tool)"}
+UA = {"User-Agent": "Mozilla/5.0"}   # (1.1: a neutral one; the sites learn nothing about the app)
 # .pth files that are NOT inference voice models
 NOT_VOICE = re.compile(r"(^|/)(G|D)_\d+\.pth$|hubert|rmvpe|contentvec|f0G|f0D|rng_state|optimizer|scheduler"
                        r"|training_args|pytorch_model|adapter_model|example|dataset", re.I)

@@ -1240,6 +1240,34 @@ def u_harden1():
     for f, s in (("speakeasy.js", "${esc(est.first_why)}"), ("speakeasy.js", "${esc(est.waiting)}"),
                  ("vault.js", 'esc(last.reason || "")'), ("doubleagent.js", "${esc(state)}"), ("train.js", "${esc(s.status)}")):
         assert s in (web / f).read_text(encoding="utf-8"), (f, s)
+    # the diagnostics file: says what it still holds; the home-network address masked; names left out on request
+    from undercover.core import diagnostics as DG
+    assert DG.mask_lan("at 192.168.1.20, 10.0.0.5, 172.20.3.4; not 8.8.8.8, 172.32.1.1, 10.1") == \
+        "at 192.168.x.y, 10.0.x.y, 172.20.x.y; not 8.8.8.8, 172.32.1.1, 10.1"
+    assert DG.hide_names("Chappell Roan - Pink Pony Club (Agent Test).mp3 via quick-fox.tail1234.ts.net",
+                         ["Agent Test", "Chappell Roan"]) == "<name> - Pink Pony Club (<name>).mp3 via <node>.ts.net"
+    with isolated_data():
+        from undercover.core.config import path as cpath
+        (cpath("output_dir")).mkdir(parents=True, exist_ok=True)
+        (cpath("output_dir") / "history.jsonl").write_text(json.dumps(
+            {"output": str(cpath("output_dir") / "Some Song (Agent Test).mp3"), "voice": "agent-test"}) + "\n", encoding="utf-8")
+        cpath("logs_dir").mkdir(parents=True, exist_ok=True)
+        (cpath("logs_dir") / "server.log").write_text("made Some Song (Agent Test).mp3 with agent-test; phone at 192.168.1.20\n",
+                                                      encoding="utf-8")
+        for with_names in (True, False):
+            c = DG.contents(None, with_names=with_names)
+            assert c["names"] is with_names and any("masked" in k for k in c["kept"]), c["kept"]
+            with zipfile.ZipFile(io.BytesIO(DG.build(None, with_names=with_names))) as z:
+                log = z.read("logs/server.log").decode("utf-8")
+            assert "192.168.1.20" not in log and "192.168.x.y" in log, log
+            assert ("Some Song" in log) is with_names and ("<name>" in log) is (not with_names), log
+    from undercover.app import doctor_api as DA
+    assert DA._with_names(SimpleNamespace(path="/api/doctor/bundle?names=0")) is False
+    assert DA._with_names(SimpleNamespace(path="/api/doctor/bundle")) is True
+    assert 'id="sys-bundle-nonames"' in (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    assert "bundle.zip${q}" in (ROOT / "undercover" / "web" / "rooms.js").read_text(encoding="utf-8")
+    assert V.UA["User-Agent"] == "Mozilla/5.0"
+    assert "Resemble AI's inaudible watermark" in (ROOT / "README.md").read_text(encoding="utf-8")
     # a malformed voice index is a plain refusal (IndexFormatError), never another error; sizes checked up front
     import struct
     from undercover.core.engine.rvc import index as IX
