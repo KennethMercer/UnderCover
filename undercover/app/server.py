@@ -75,7 +75,8 @@ RESTART = threading.Event()
 # JSON request bodies (1.1 hardening): read whole, so capped. The upload routes read their bodies in chunks under their
 # own limits and never come here.
 JSON_MAX = 1 << 20                        # 1 MB: the longest speech (50,000 characters) is a few hundred KB
-JSON_MAX_FOR = {"/api/themes": 8 << 20}   # a theme saved from the editor (its files are capped at 4 MB)
+JSON_MAX_FOR = {"/api/themes": 8 << 20,          # a theme saved from the editor (its files are capped at 4 MB)
+                "/api/vault/restore": 32 << 20}   # the list of what to restore from a big library
 # job kinds only the PC starts (a Storage move, an add-on, Make smaller, the yt-dlp update): never cancelled or retried
 # from a phone, whatever route started them
 PC_ONLY_KINDS = ("move", "addon", "smaller", "ytdlp")

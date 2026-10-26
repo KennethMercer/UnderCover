@@ -1061,6 +1061,8 @@ def u_harden1():
     assert isinstance(r, S.BodyTooLarge), r
     r, _ = body(2 << 20, "/api/themes", b'{"name": "t"}')
     assert r == {"name": "t"}, r   # (a theme saved from the editor may be bigger)
+    r, _ = body(8 << 20, "/api/vault/restore", b'{"keys": []}')
+    assert r == {"keys": []}, r     # (and the list of what to restore from a big library)
     payload = json.dumps({"text": "x" * 200_000}).encode()   # a long speech, well under the cap
     r, _ = body(len(payload), "/api/speak", payload)
     assert r["text"] == "x" * 200_000
@@ -1227,9 +1229,7 @@ def u_harden1():
     real_end = BaseHTTPRequestHandler.end_headers
     try:
         BaseHTTPRequestHandler.end_headers = lambda self: sent.append("end")
-        S.Handler.end_headers(SimpleNamespace(send_header=lambda k, v: sent.append((k, v)), __class__=S.Handler))
-    except TypeError:   # (super() needs a real instance: build one without a socket)
-        h = S.Handler.__new__(S.Handler)
+        h = S.Handler.__new__(S.Handler)   # (no socket: only the headers matter)
         h.send_header = lambda k, v: sent.append((k, v))
         S.Handler.end_headers(h)
     finally:
