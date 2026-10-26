@@ -2965,8 +2965,9 @@ def u_ci_workflow():
     assert uses and all(re.fullmatch(r"actions/(checkout|setup-python|cache/restore|cache/save)@[0-9a-f]{40}", u) for u in uses), uses
     # the shared wheel cache is written only by a push to main; everything else only reads it
     saves = [s for s in steps if s.get("uses", "").startswith("actions/cache/save@")]
-    assert all("github.ref == 'refs/heads/main'" in str(s.get("if")) and "github.event_name == 'push'" in str(s.get("if"))
-               for s in saves) and not any(s.get("uses", "").startswith("actions/cache@") for s in steps), saves
+    save_if = "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wheels.outputs.cache-hit != 'true'"
+    assert saves and all(s.get("if") == save_if for s in saves), saves   # (the whole condition: nothing ORed in)
+    assert not any(s.get("uses", "").startswith("actions/cache@") for s in steps), "the combined cache action writes on every run"
     assert "badge.svg" not in (ROOT / "README.md").read_text(encoding="utf-8"), "the README loads a badge from github.com"
     assert next(s for s in steps if s.get("uses", "").startswith("actions/checkout"))["with"]["persist-credentials"] is False
     runs = "\n".join(s.get("run", "") for s in steps)
