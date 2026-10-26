@@ -372,8 +372,11 @@ backing into the conversion.
 Transcripts and the listen-back guard use openai-whisper large-v3-turbo on the GPU (MIT): 13-17x realtime, 4.6 GB,
 0.4% word error on known text, with a short punctuated starting prompt so the text keeps its punctuation. faster-whisper
 was ruled out: no ROCm build on Windows, and its OpenMP runtime cannot share a process with torch. After the engine
-reads a sentence, listen-back (`speakeasy/listenback.py`) hears it back: a word missing or read with low confidence gets
-the sentence read again with a new seed, and the best take is kept. Its word stretch and comma lengthening are off by
+reads a sentence, listen-back (`speakeasy/listenback.py`) hears it back: a word missing, read with low confidence or
+added inside the line gets the sentence read again with a new seed, and the least bad take is kept (`cost`, word by
+word: ten extra words weigh ten, not one). Words past the text's last word are a stray ending (1.1: an engine repeated
+its last phrase on every seed, so no re-read could mend it): `trim_ending` cuts the take TRAIL_S after that word,
+never into the next word heard, with a short fade, and no re-read is spent on it. Its word stretch and comma lengthening are off by
 default: blind, the re-reads fixed the word and the other two did not. Whisper is language-model biased (it hears
 "evening" in "eving"), so it catches gross slips; the ear is the judge.
 

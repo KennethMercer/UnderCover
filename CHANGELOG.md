@@ -5,6 +5,11 @@ in brackets.
 
 ## Unreleased (1.1)
 
+**Speech that runs on past its text** (lbextra)
+- When the speech engine carries on past the end of a sentence (repeating its last words, or a garbled tail), the
+  extra is now cut off at the sentence's last word. A take with many extra words no longer counts the same as one
+  missing a single word, so the better take is kept.
+
 **Games are seen behind other windows** (gamedetect)
 - The game pause, and Low profile's "on by itself for games", now see a game that isn't in front: a game from a
   Steam, Epic, GOG, Xbox, Riot, EA or Ubisoft library while it runs (its menus, or alt-tabbed out), and any program

@@ -1,7 +1,9 @@
 """Listen back (2026-10-13): after the cadence engine (Chatterbox) reads a sentence, before the voice conversion, hear
 what it said and mend what the ear would catch. Measured on Agent Smoke, and the user heard it:
-  - a word missing, misheard or said with low confidence (Chatterbox is stochastic): the sentence is read again with a
-    new seed, up to `tries`, and the best take is kept;
+  - a word missing, misheard or said with low confidence (Chatterbox is stochastic), or extra words inside the line:
+    the sentence is read again with a new seed, up to `tries`, and the least bad take is kept (`cost`: word by word);
+  - a stray ending, words past the text's last word (1.1: an engine repeating its last phrase on every seed): cut off
+    after that word, with no re-read;
   - a squeezed word ("evening" said "eving": 9% of its line where Kokoro gives it 12.5%, on every seed, setting and
     reference style): stretched on its own toward Kokoro's share, pitch kept, capped at MAX_STRETCH;
   - a comma not heard ("Smoke, Agent Smoke"): Chatterbox leaves a pause there (0.22 s on average, more than Kokoro's
@@ -43,6 +45,7 @@ DRAWL_LINE = 4         # ...in a short line only: in flowing speech Whisper's wo
                        # stressed one (on the golden set's 18 speech readings, every line flagged a word at 0.30 s)
 PAUSE_MARKS = ",.;:!?…—–-"
 FADE_S = 0.015
+TRAIL_S = 0.25         # a stray ending is cut this long after the text's last word (its decay kept)
 
 
 LOW_VRAM_GB = 12        # under this, the worker's own Whisper is freed before the listen-back loads one here
@@ -184,10 +187,52 @@ def problems(text: str, words: list) -> list[str]:
         if (len(want) <= DRAWL_LINE and k is not None and i < len(want) - 1 and not pause[i] and len(words[k]) > 2
                 and syllables(w) == 1 and words[k][2] - words[k][1] > DRAWL_S):
             out.append(f"drawn-out {w!r} ({words[k][2] - words[k][1]:.2f} s)")
-    extra = len(words) - sum(k is not None for k in idx)
+    tail = _tail(want, idx, words)
+    extra = len(words) - sum(k is not None for k in idx) - len(tail)
     if extra > 0:
         out.append(f"{extra} extra word(s)")
+    if tail:   # past the last word of the text: a stray continuation (review cuts it off)
+        out.append(f"stray ending {' '.join(w[0].strip() for w in tail)!r}")
     return out
+
+
+def _tail(want: list, idx: list, words: list) -> list:
+    """The heard words after the text's last word, when that last word was heard: a stray continuation (1.1: an engine
+    repeating "I'll take it from there" on every seed, so no re-read could mend it)."""
+    if not want or not idx or idx[-1] is None:
+        return []
+    return words[idx[-1] + 1:]
+
+
+def cost(probs: list[str]) -> int:
+    """How bad a take is, to compare takes by: a word per word (10 extra words count 10, not 1 like one missing word),
+    a stray ending nothing (review cuts it off)."""
+    n = 0
+    for p in probs:
+        m = re.match(r"(\d+) extra word", p)
+        n += 0 if p.startswith("stray ending") else int(m.group(1)) if m else 1
+    return n
+
+
+def trim_ending(x: np.ndarray, sr: int, text: str, words: list) -> tuple[np.ndarray, int]:
+    """A stray continuation cut off: the take ends TRAIL_S after the text's last word (never into the next word heard),
+    with a short fade. -> (audio, how many heard words were cut; 0 when there was nothing to cut)."""
+    want = [w for w, _ in text_words(text)]
+    idx = _align(want, words)
+    tail = _tail(want, idx, words)
+    if not tail or len(words[idx[-1]]) < 3:
+        return x, 0
+    end = float(words[idx[-1]][2])
+    nxt = float(tail[0][1]) if len(tail[0]) > 1 else end
+    cut = min(end + TRAIL_S, max(end, nxt - 0.02))
+    i = int(round(cut * sr))
+    if i >= len(x):   # (words Whisper heard past the audio's end: nothing there to cut)
+        return x, 0
+    y = np.array(x[:i], dtype=np.float32)
+    f = min(int(FADE_S * sr), len(y))
+    if f:
+        y[len(y) - f:] *= np.linspace(1.0, 0.0, f, dtype=np.float32)
+    return y, len(tail)
 
 
 def _voiced(x: np.ndarray, sr: int, a: float, b: float) -> tuple[float, float]:
@@ -274,7 +319,8 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     kwords = heard[1]["words"] if timing else []
     best = (Path(wav), seed, heard[0]["words"], problems(text, heard[0]["words"]))
     tries = 1
-    while best[3] and tries < max(1, s["tries"]):   # read again with a new seed; keep the take with fewest problems
+    # read again with a new seed; keep the least bad take (cost: word by word; a stray ending is cut, so no re-read)
+    while cost(best[3]) and tries < max(1, s["tries"]):
         if stopped():
             raise Cancelled()
         nseed = seed + 1000 * tries
@@ -283,13 +329,14 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
         h = hear([str(w2)])[0]["words"]
         p = problems(text, h)
         takes.append((Path(w2), nseed))
-        if len(p) < len(best[3]):
+        if cost(p) < cost(best[3]):
             best = (Path(w2), nseed, h, p)
         tries += 1
     take, words = best[0], best[2]
     x, sr = sf.read(str(take), dtype="float32")
     if x.ndim > 1:
         x = x.mean(1)
+    x, cut = trim_ending(x, sr, text, words)   # a stray continuation past the text's last word: off
     tw = text_words(text)
     mine, ko = {}, {}
     if timing:
@@ -309,14 +356,15 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
             edits.append((b, b, 0.12, f"pause {w}"))
     for a, b, f, why in sorted(edits, key=lambda e: e[0], reverse=True):
         x = insert_pause(x, sr, a, f) if why.startswith("pause") else stretch_span(x, sr, a, b, f)
-    log.update(tries=tries, seed=best[1], first_problems=problems(text, heard[0]["words"]), problems=best[3],
-               edits=[(why, round(f, 2)) for *_, f, why in edits],
+    left = [p for p in best[3] if not (cut and p.startswith("stray ending"))]   # (what the cut mended isn't left)
+    log.update(tries=tries, seed=best[1], first_problems=problems(text, heard[0]["words"]), problems=left,
+               edits=[(why, round(f, 2)) for *_, f, why in edits] + ([("stray ending cut", cut)] if cut else []),
                seconds=round(time.perf_counter() - t0, 2))
     kref.unlink(missing_ok=True)
     for t, _ in takes:
         if t != take:
             t.unlink(missing_ok=True)
-    if not edits and take == Path(wav):
+    if not edits and not cut and take == Path(wav):
         return Path(wav)
     out = Path(wav).with_name(Path(wav).stem + "_lb.wav")
     sf.write(out, x, sr, subtype="FLOAT")

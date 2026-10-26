@@ -947,6 +947,80 @@ def u_listenback():
     return "problems found; one word stretched, the rest untouched; clauses split; re-reads on, stretches off"
 
 
+@check("listen-back, extra and repeated words (1.1: an engine repeated \"I'll take it from there\" on every seed, and a take with a 10-word garbled tail tied with one missing a word): takes are weighed word by word; words past the text's last word are a stray ending, cut off at that word (a short fade, never into the next word) with no re-read; a repeat inside the line counts per word and is read again")
+def u_listenback_extra():
+    import tempfile
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.config import CONFIG
+    from undercover.speakeasy import listenback as lb
+    W = lambda *ws, step=0.3: [[w, i * step, i * step + 0.25, 0.95] for i, w in enumerate(ws)]
+    text = "Press the button. I'll take it from there."
+    said = ["Press", "the", "button.", "I'll", "take", "it", "from", "there."]
+    # a stray ending: the text is all there, then it carries on
+    p = lb.problems(text, W(*said, "I'll", "take", "it", "from", "there."))
+    assert p == ["stray ending \"I'll take it from there.\""] and lb.cost(p) == 0, p
+    assert lb.problems(text, W(*said)) == [] and lb.cost([]) == 0
+    # a repeat inside the line counts word by word (and is read again); a garbled tail never beats one missing word
+    p = lb.problems("Pick a song, pick a voice.", W("Pick", "a", "song,", "pick", "a", "song,", "pick", "a", "voice."))
+    assert p == ["3 extra word(s)"] and lb.cost(p) == 3, p
+    assert lb.cost(["10 extra word(s)"]) > lb.cost(["missing 'evening'"]) == 1
+    assert lb.cost(["missing 'a'", "unsure 'b' (0.30)", "2 extra word(s)", "stray ending 'x y'"]) == 4
+    # the last word missing: what comes after may be it, misheard, so it isn't a stray ending
+    p = lb.problems(text, W(*said[:-1], "hair.", "Your", "gents"))
+    assert "missing 'there'" in p and not any(q.startswith("stray ending") for q in p), p
+    # the cut: TRAIL_S after the last word, never into the next word heard, with a fade; nothing to cut, nothing cut
+    sr = 24000
+    x = (0.3 * np.sin(2 * np.pi * 150 * np.arange(3 * sr) / sr)).astype(np.float32)
+    words = W(*said, "I'll", "take")   # "there." ends at 2.35 s, the stray "I'll" starts at 2.4 s
+    y, n = lb.trim_ending(x, sr, text, words)
+    assert n == 2 and abs(len(y) / sr - 2.38) < 0.002 and abs(y[-1]) < 1e-3 and np.allclose(y[:sr], x[:sr]), (n, len(y) / sr)
+    far = [list(w) for w in words]
+    far[-2][1], far[-2][2], far[-1][1], far[-1][2] = 2.8, 2.9, 2.9, 2.95
+    y, n = lb.trim_ending(x, sr, text, far)
+    assert n == 2 and abs(len(y) / sr - (2.35 + lb.TRAIL_S)) < 0.002, len(y) / sr
+    assert lb.trim_ending(x, sr, text, W(*said))[1] == 0 and len(lb.trim_ending(x, sr, text, W(*said))[0]) == len(x)
+    ghost = W(*said, step=0.38) + [["more", 3.2, 3.4, 0.9]]   # heard past the audio's end (3 s): nothing there to cut
+    assert lb.trim_ending(x, sr, text, ghost)[1] == 0
+    # review, with a fake engine and ear: a stray ending is cut with no re-read; a garbled take loses to a take missing
+    # one word
+    saved = (lb.hear, lb.render.request, lb.client.wait, CONFIG.get("speakeasy"))
+    with tempfile.TemporaryDirectory(prefix="uc-lbx-") as t:
+        t = Path(t)
+        heard_by = {}
+
+        def take(name, ws):
+            f = t / name
+            sf.write(str(f), x, sr, subtype="FLOAT")
+            heard_by[str(f)] = ws
+            return f
+        reads = []
+        try:
+            CONFIG["speakeasy"] = {}
+            lb.hear = lambda files: [{"words": heard_by[str(f)]} for f in files]
+            lb.client.wait = lambda fut, cancel=None: None
+            first = take("a.wav", words)
+            lb.render.request = lambda *a, **k: (reads.append(k.get("seed")), (None, take(f"r{len(reads)}.wav", W(*said))))[1]
+            log = {}
+            out = lb.review(text, first, {}, t / "ref.wav", 1234, "bm_george", log)
+            assert reads == [] and log["tries"] == 1 and log["problems"] == [] and log["first_problems"], (reads, log)
+            assert ("stray ending cut", 2) in log["edits"] and out != first and abs(sf.info(str(out)).duration - 2.38) < 0.01, log
+            garbled = take("b.wav", W("Press", "the", "button.", "I'll", "uh", "um", "er", "ah", "oh", "take", "it", "from", "there."))
+            reads.clear()
+            lb.render.request = lambda *a, **k: (reads.append(k.get("seed")),
+                                                 (None, take(f"m{len(reads)}.wav", W("Press", "the", "button.", "I'll", "take", "it", "there."))))[1]
+            log = {}
+            lb.review(text, garbled, {}, t / "ref.wav", 1234, "bm_george", log)
+            assert log["problems"] == ["missing 'from'"] and log["seed"] == 2234 and len(reads) == 2, log
+        finally:
+            lb.hear, lb.render.request, lb.client.wait = saved[:3]
+            if saved[3] is None:
+                CONFIG.pop("speakeasy", None)
+            else:
+                CONFIG["speakeasy"] = saved[3]
+    return "a stray ending cut with no re-read; repeats inside a line counted per word; a garbled take never kept over one missing a word"
+
+
 def _fake_ts_set(state_file, **kw):
     """Change the fake Tailscale's state (signed in, Funnel approved...) through the fake itself: its processes change
     the same file at the same time, under its lock."""
@@ -10503,7 +10577,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
