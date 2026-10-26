@@ -42,7 +42,7 @@ def safe_format(fmt: str | None) -> str:
     """The format selector with every choice limited to PROTOCOLS. One stream only: a merged choice ("+") would
     download several at once, and those run in yt-dlp's own threads."""
     fmt = fmt or "bestaudio/best"
-    if any(c in fmt for c in "+,()"):
+    if any(c in re.sub(r"\[[^\]]*\]", "", fmt) for c in "+,()"):   # (inside a [filter] they're just text)
         raise ValueError(f"one stream per download: {fmt!r}")
     return "/".join(part + PROTOCOL_FILTER for part in fmt.split("/"))
 
@@ -71,10 +71,10 @@ def _watched(yt_dlp):
                 with safeurl.guarded():
                     info = super().extract_info(url, download, *a, **kw)
             except Exception as e:
-                _note(url, False, str(e))
                 no = safeurl.refused_in(e)
-                if no:
+                if no:   # (not a YouTube breakage: the self-heal doesn't hear of it)
                     raise no from e
+                _note(url, False, str(e))
                 raise
             if kw.get("process", True):   # formats resolved: the part that breaks when YouTube changes
                 _note(url, True)
@@ -93,7 +93,12 @@ def _watched(yt_dlp):
             try:
                 with safeurl.guarded():
                     if safeurl.proxied():   # behind a proxy the address isn't ours to see: the name is checked
-                        safeurl.check(url)
+                        try:
+                            safeurl.check(url)
+                        except safeurl.LinkRefused:
+                            raise
+                        except ModelError:   # (a name only the proxy resolves, or not a web link: theirs to say)
+                            pass
                     return super().urlopen(req)
             except Exception as e:
                 no = safeurl.refused_in(e)

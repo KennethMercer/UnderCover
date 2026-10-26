@@ -1625,6 +1625,18 @@ def u_netguard():
                 raise AssertionError(merged)
             except ValueError:
                 pass
+        assert youtube.safe_format("bestaudio[ext~='(m4a|webm)']").count(youtube.PROTOCOL_FILTER) == 1
+        # a refusal isn't a YouTube breakage: the self-heal never hears of it
+        noted, real_note = [], youtube._note
+        youtube._note = lambda *a: noted.append(a)
+        try:
+            answers["www.youtube.com"] = ["127.0.0.2"]
+            with youtube.open_ydl("x") as y:
+                assert refused(lambda: y.extract_info("https://www.youtube.com/watch?v=aaaaaaaaaaa", download=False)) == safeurl.SAY
+        finally:
+            youtube._note = real_note
+            answers.pop("www.youtube.com")
+        assert noted == [], noted
         assert popen == [], popen
         src = {f.relative_to(ROOT).as_posix(): f.read_text(encoding="utf-8") for f in (ROOT / "undercover").rglob("*.py")}
         for rel, text in src.items():
@@ -1649,7 +1661,10 @@ def u_netguard():
             refused(lambda: socket.create_connection(("127.0.0.2", net.server_port), timeout=5))
         with youtube.open_ydl("x") as y:
             assert refused(lambda: y.urlopen("http://192.168.1.1/x")) == safeurl.SAY
-        assert hits["home"] == [], hits
+            assert hits["home"] == [], hits
+            answers["pub.test"] = ["127.0.0.1"]   # a link on the internet goes through the proxy
+            assert len(y.urlopen("http://pub.test/x").read()) == 4000
+        assert hits["home"] == ["http://pub.test/x"], hits
     finally:
         yt_dlp.utils.Popen.__init__ = real_popen
         safeurl._private, socket.getaddrinfo = real_private, real_resolve
