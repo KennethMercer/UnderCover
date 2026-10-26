@@ -1,7 +1,5 @@
 # UnderCover
 
-[![tests](https://github.com/KennethMercer/UnderCover/actions/workflows/tests.yml/badge.svg)](https://github.com/KennethMercer/UnderCover/actions/workflows/tests.yml)
-
 UnderCover makes songs and speech in voices you choose, entirely on your own PC. There is no account, and nothing you
 make leaves the machine.
 

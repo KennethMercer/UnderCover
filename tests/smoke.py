@@ -2952,9 +2952,22 @@ def u_ci_workflow():
     assert set(on) == {"push", "pull_request"} and "pull_request_target" not in text and "workflow_run" not in text, on
     assert wf["permissions"] == {"contents": "read"}, wf["permissions"]
     assert not re.search(r"\$\{\{\s*(secrets|github\.event)", text), "the workflow reads secrets or event text"
+    # every job: read-only at most, on a GitHub-hosted runner pinned by its image (never self-hosted: a fork's code
+    # would run on a machine of ours), and nothing allowed to fail quietly
+    for name, job in wf["jobs"].items():
+        assert job.get("permissions") in (None, {"contents": "read"}, {}), (name, job.get("permissions"))
+        runs_on = job.get("runs-on")
+        assert isinstance(runs_on, str) and re.fullmatch(r"(windows|ubuntu|macos)-\d[\w.]*", runs_on), (name, runs_on)
+        assert "continue-on-error" not in job and not any("continue-on-error" in s for s in job["steps"]), name
+    assert "self-hosted" not in text and "continue-on-error" not in text
     steps = [s for job in wf["jobs"].values() for s in job["steps"]]
     uses = [s["uses"] for s in steps if "uses" in s]
-    assert uses and all(re.fullmatch(r"actions/(checkout|setup-python|cache)@[0-9a-f]{40}", u) for u in uses), uses
+    assert uses and all(re.fullmatch(r"actions/(checkout|setup-python|cache/restore|cache/save)@[0-9a-f]{40}", u) for u in uses), uses
+    # the shared wheel cache is written only by a push to main; everything else only reads it
+    saves = [s for s in steps if s.get("uses", "").startswith("actions/cache/save@")]
+    assert all("github.ref == 'refs/heads/main'" in str(s.get("if")) and "github.event_name == 'push'" in str(s.get("if"))
+               for s in saves) and not any(s.get("uses", "").startswith("actions/cache@") for s in steps), saves
+    assert "badge.svg" not in (ROOT / "README.md").read_text(encoding="utf-8"), "the README loads a badge from github.com"
     assert next(s for s in steps if s.get("uses", "").startswith("actions/checkout"))["with"]["persist-credentials"] is False
     runs = "\n".join(s.get("run", "") for s in steps)
     installs = [ln.strip() for ln in runs.splitlines() if "pip install" in ln]
