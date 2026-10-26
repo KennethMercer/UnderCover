@@ -16,6 +16,14 @@ class IndexFormatError(Exception):
     pass
 
 
+DIMS = (256, 768)   # the feature sizes RVC v1 / v2 indexes hold (1.1 hardening: anything else is refused up front)
+
+
+def _shape(n: int, d: int):
+    if n <= 0 or d not in DIMS:
+        raise IndexFormatError(f"not a voice index ({n} vectors of {d} numbers)")
+
+
 class _Reader:
     def __init__(self, data: bytes):
         self.b, self.p = data, 0
@@ -51,6 +59,7 @@ def read_ivf_flat(path: Path) -> np.ndarray:
     if r.fourcc() != b"IwFl":
         raise IndexFormatError("not an IVF-Flat index (only RVC-style IVF Flat indexes are supported)")
     d, ntotal = r.header()
+    _shape(ntotal, d)
     nlist, _nprobe = r.u64(), r.u64()
     # coarse quantizer (IndexFlat): header + centroid vector, which we skip
     if r.fourcc() not in (b"IxF2", b"IxFI", b"IxFl"):
@@ -132,16 +141,21 @@ def is_compact(path: Path) -> bool:
 
 
 def read_vectors(path: Path) -> np.ndarray:
-    """All stored vectors (n, d) float32 from a compact or a faiss IVF-Flat index."""
+    """All stored vectors (n, d) float32 from a compact or a faiss IVF-Flat index. A malformed file is an
+    IndexFormatError, never another exception (1.1 hardening: a plain refusal for an upload, not a server error)."""
     path = Path(path)
-    if is_compact(path):
-        raw = path.read_bytes()
-        n, d = struct.unpack_from("<qq", raw, len(COMPACT_MAGIC))
-        off = len(COMPACT_MAGIC) + 16
-        if len(raw) != off + n * d * 2:
-            raise IndexFormatError("compact index is truncated")
-        return np.frombuffer(raw, np.float16, n * d, off).reshape(n, d).astype(np.float32)
-    return read_ivf_flat(path)
+    try:
+        if is_compact(path):
+            raw = path.read_bytes()
+            n, d = struct.unpack_from("<qq", raw, len(COMPACT_MAGIC))
+            _shape(n, d)
+            off = len(COMPACT_MAGIC) + 16
+            if len(raw) != off + n * d * 2:
+                raise IndexFormatError("compact index is truncated")
+            return np.frombuffer(raw, np.float16, n * d, off).reshape(n, d).astype(np.float32)
+        return read_ivf_flat(path)
+    except (struct.error, ValueError, OverflowError, MemoryError) as e:
+        raise IndexFormatError(f"damaged index ({type(e).__name__})") from e
 
 
 def compact_in_place(path: Path) -> tuple[int, int]:
@@ -151,7 +165,7 @@ def compact_in_place(path: Path) -> tuple[int, int]:
     old = path.stat().st_size
     if is_compact(path):
         return old, old
-    vecs = read_ivf_flat(path).astype(np.float16)
+    vecs = read_vectors(path).astype(np.float16)   # (a malformed file: IndexFormatError)
     if not np.isfinite(vecs).all():
         raise IndexFormatError("index has values out of fp16 range")
     tmp = path.with_name(f"{path.name}.compact.tmp")

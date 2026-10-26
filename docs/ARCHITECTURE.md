@@ -1,6 +1,6 @@
 # UnderCover architecture
 
-This document describes how UnderCover is built, as of 1.0.3: the names, the modules, the code layout, the data on
+This document describes how UnderCover is built, as of 1.1.0: the names, the modules, the code layout, the data on
 disk, the engines and why they were chosen, the page, and how the app looks after itself. It is the contract a change
 is measured against. What the project is for and how decisions are made is in [MASTERPLAN.md](MASTERPLAN.md); how to
 install is in [README.md](../README.md) and [installer/GUIDE.md](../installer/GUIDE.md); how to contribute is in
@@ -491,16 +491,18 @@ when the control is there. The tray menu carries the same switch (`core/trayicon
 
 FrontMan: the one-shot line as the page ("Pink Pony Club as Plankton"), a plan card in three plain lines before anything
 starts, "Set it up yourself" (song and voice side by side, each with its search first), the result, the recent tray
-(the latest 15). A weak existing voice may
+(the newest 5, Show more for all 15). A weak existing voice may
 make the cover, labelled honestly, with training offered now or tonight.
 
 DoubleAgent: voice cards (likeness as a word: great / good / fair / poor; speak or sing; the preview button; Listen and
-choose for a waiting cadence or Improve), the overnight queue with its morning report in words ("better", "about the
+choose for a waiting cadence or Improve; on a downloaded voice, Train my own with Now or Tonight on the card, Speaking or
+singing taken from the voice's name when it says and asked when it doesn't), filter chips above the cards (likeness, can
+speak, trained here or downloaded; they combine, All clears them, the browser remembers them), the overnight queue with its morning report in words ("better", "about the
 same", "not better: yours is kept"), the four-step new-voice wizard.
 
 SpeakEasy: a text box with a time estimate, a voice picker grouped "Trained in DoubleAgent" / "Downloaded" with each
 voice's cadence status, Pace (Slower, Natural or Faster, made at generation, never time-stretched), "Now speaking"
-sentence by sentence while the rest are made, WAV / MP3 when finished, Recent.
+sentence by sentence while the rest are made, WAV / MP3 when finished, Recent (the newest 5, Show more for all 15).
 
 SafeHouse: a strip of rooms (`#safehouse/<room>`): Library (Kept / Recent views), Running (now, tonight, recent, last
 night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the
@@ -532,6 +534,18 @@ but GET, an HttpOnly SameSite=Strict cookie stored on the PC as its SHA-256; els
 every route and its policy (open / phone / pc). Away from home (`core/tailnet.py`) runs a hidden userspace Tailscale
 (pinned MSI, hashes checked, no driver, no service) whose Funnel points only at a third, dedicated listener with its own
 away token (`away.html`). Never plain port forwarding. Windows-only for now (`platform.supports("away")`).
+
+Request rules on every listener (1.1): an Origin, when a request has one, is this server's own scheme, host and port;
+a request another site's page makes (`Sec-Fetch-Site: cross-site`) is refused, except following a link to a page;
+JSON bodies are capped per route (`JSON_MAX`, 1 MB; 413, never read) while uploads keep their own limits; every read of
+a request times out after 30 s; every response says `X-Content-Type-Options: nosniff` and `Referrer-Policy:
+no-referrer`. The phone and away listeners take `MAX_LIVE` (32) connections at once (503 past it). The away listener's
+`Server` header and its refusals before a token name nothing. A device token lasts 30 days from its last use
+(`phone.TOKEN_IDLE_S`; each use renews it and its cookie). Wrong pairing codes are counted per address (5) and in all
+(20). A phone may not cancel or retry work only the PC starts. Links the app fetches for someone (a voice install, a
+training source, a song from a link) reach only the internet: `core/safeurl.py` refuses a host that is or resolves to
+this PC, the home network or a link-local address, and checks every redirect. A voice zip unpacks under a running size
+cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerShell is started by its full path.
 
 ### System tray
 
@@ -583,9 +597,15 @@ The installer and the app survive version mismatches and fix common problems the
 - Self-healing yt-dlp, the one exception to "never latest" (`core/ytdlp.py`). YouTube changes something every few weeks
   and yt-dlp ships the fix within days, so a pinned pair breaks between releases. Only yt-dlp and the yt-dlp-ejs its own
   `pin` extra names may follow PyPI. Detect: the same breakage on several videos within a window, more failures than
-  successes. Fetch: the newest yt-dlp and the solver its release pins, both checked against PyPI's published SHA-256.
-  Stage and test: into `<cache>/ytdlp/<yt-dlp>+ejs<solver>/`, then resolve known public videos; swap in only if at least
-  as good, and only when nothing is using yt-dlp. Roll back: `state.json` keeps the last known good pair. Say so:
+  successes. Fetch: the newest yt-dlp and the solver its release pins, both checked against PyPI's published SHA-256,
+  and both vouched for by GitHub too (1.1): the solver's wheel by its release asset's digest, yt-dlp's wheel package
+  file by file against its release's source tarball (itself checked against the release's SHA2-256SUMS; `version.py`
+  may differ only in two plain strings). No vouching, no update. A release younger than 48 h is never taken by itself:
+  the System room offers it ("Update now").
+  Stage and test: into `<cache>/ytdlp/<yt-dlp>+ejs<solver>/` (every file's SHA-256 kept in its `pair.json`, checked at
+  every start: a pair whose files differ, or that has no hashes, falls back to the last known good, then the venv's,
+  with a log line), then resolve known public videos; swap in only if at least as good, and only when nothing is using
+  yt-dlp. Roll back: `state.json` keeps the last known good pair. Say so:
   `logs/doctor.log` and the System room, with a Deep Cover switch to turn it off. The venv's pinned pair
   (`installer/requirements/common.txt`) is the last resort and is never upgraded.
 - A recorded manifest (`manifest.json` in the app folder, git-ignored; `core/manifest.py`): Python, venv, backend and torch

@@ -32,9 +32,11 @@ which you switch on from the top bar.
 
 ## Installing
 
-1. Run `UnderCover-Setup-1.0.3.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
+1. Run `UnderCover-Setup-1.1.0.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
    not need administrator rights. The installer is not signed, so Windows may show a warning; choose More info and
    then Run anyway.
+   To check the download first, run `Get-FileHash` on it in PowerShell and compare the SHA-256 with the one on the
+   release page.
 2. Choose where your files are kept. The defaults are fine. Optional add-ons are off. Ticking one accepts its licence,
    which you can read from the same page.
 3. Setup then runs inside the installer, with one bar for the whole install and one for the current step. Every
@@ -77,6 +79,9 @@ access from outside your home are off until you turn them on, and each phone has
 Your voices, songs, covers and speech are kept in ordinary folders that you choose. Covers and speech you don't send
 to SafeHouse roll off after the next fifteen; Send to SafeHouse keeps one for good. UnderCover never deletes a voice
 on its own: a replaced or removed voice is kept in SafeHouse's Storage until you delete it yourself.
+
+Speech read with the Chatterbox engines (SpeakEasy's default) carries Resemble AI's inaudible watermark, so a detector
+may flag it as synthetic.
 
 Only use voices you have the right to use, and say that a recording is synthetic when you share it.
 

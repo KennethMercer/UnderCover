@@ -1,7 +1,7 @@
 """Vaulting's routes (the backups are core/vault.py; SafeHouse shows them):
 
     GET  /api/vault                      on/off, where, size choice, the last run, stored vs raw bytes, a run under way
-    GET  /api/vault/check?folder=        would this folder do? {ok, why, warn, free, need} (nothing is switched)
+    POST /api/vault/check {folder, size}  would this folder do? (a POST: it may make the folder to test it) {ok, why, warn, free, need} (nothing is switched)
     POST /api/vault/settings             {folder, size}: switch on (a checked folder), change the size, or off (folder "")
     POST /api/vault/run                  vault now, in the background
     GET  /api/vault/contents?snapshot=   what a snapshot holds, by kind and item ({item: id, title, files, bytes, keys, here: same|missing|different}; a song's or a speech's files are one item, titled from its record)
@@ -23,8 +23,9 @@ def handle(h, method: str, p: str) -> bool:
     try:
         if method == "GET" and path == "/api/vault":
             h._json(vault.status())
-        elif method == "GET" and path == "/api/vault/check":
-            h._json(vault.check_folder(one("folder"), one("size") or None))
+        elif method == "POST" and path == "/api/vault/check":
+            b = h._body()
+            h._json(vault.check_folder(str(b.get("folder") or ""), b.get("size") or None))
         elif method == "POST" and path == "/api/vault/settings":
             b = h._body()
             h._json(vault.set_folder(str(b.get("folder") or ""), b.get("size") or None))

@@ -11,7 +11,7 @@
 import os
 import threading
 import time
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ..core import diagnostics, doctor, jobs, platform
 from ..core.config import path
@@ -27,6 +27,11 @@ def fast(max_age: float = 5.0) -> dict:
         _CACHE["rep"] = doctor.run(False, STATUS)
         _CACHE["at"] = time.time()
     return _CACHE["rep"]
+
+
+def _with_names(h) -> bool:
+    """The diagnostics file with names in it, unless the page asked to leave them out (?names=0)."""
+    return (parse_qs(urlparse(h.path).query).get("names") or ["1"])[0] != "0"
 
 
 def handle(h, method: str, p: str) -> bool:
@@ -51,9 +56,9 @@ def handle(h, method: str, p: str) -> bool:
             _CACHE["rep"] = None   # the next GET shows the result
             h._json(r)
         elif method == "GET" and p == "/api/doctor/bundle":
-            h._json(diagnostics.contents(fast(0)))
+            h._json(diagnostics.contents(fast(0), with_names=_with_names(h)))
         elif method == "GET" and p == "/api/doctor/bundle.zip":
-            data = diagnostics.build(fast(0))
+            data = diagnostics.build(fast(0), with_names=_with_names(h))
             name = f"UnderCover-diagnostics-{time.strftime('%Y%m%d-%H%M')}.zip"
             h.send_response(200)
             h.send_header("Content-Type", "application/zip")

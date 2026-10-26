@@ -432,15 +432,20 @@ $("#sys-doctor-full").onclick = async () => {
 $("#sys-logs").onclick = async () => {
   try { await api("/api/doctor/open-logs", { method: "POST" }); } catch (err) { showError(err.message, "Couldn't open the logs"); }
 };
-$("#sys-bundle").onclick = async () => {
+async function showBundle() {   // (1.1: what the file still holds, and "Leave names out")
+  const q = $("#sys-bundle-nonames").checked ? "?names=0" : "";
   let c;
-  try { c = await api("/api/doctor/bundle"); } catch (err) { return showError(err.message, "Couldn't list it"); }
+  try { c = await api(`/api/doctor/bundle${q}`); } catch (err) { return showError(err.message, "Couldn't list it"); }
   $("#sys-bundle-list").innerHTML = c.files.map(f => `<li><b>${esc(f.about)}</b> <span class="meta" data-deep>${esc(f.name)} · ${(f.size / 1e3).toFixed(0)} KB</span></li>`).join("");
   $("#sys-bundle-size").textContent = `about ${(c.size / 1e6).toFixed(1)} MB before it's zipped`;
   $("#sys-bundle-note").innerHTML = `${esc(c.never)}<span data-deep> ${c.shortened.map(s => `${esc(s.folder)} → ${esc(s.reads)}`).join(" · ")}</span>`;
+  $("#sys-bundle-kept").textContent = c.kept?.length ? `It still holds ${c.kept.join("; ")}.` : "";
+  $("#sys-bundle-save").setAttribute("href", `/api/doctor/bundle.zip${q}`);
   $("#sys-bundle-save").setAttribute("download", c.name);
   $("#sys-bundle-box").hidden = false;
-};
+}
+$("#sys-bundle").onclick = showBundle;
+$("#sys-bundle-nonames").onchange = showBundle;
 $("#sys-bundle-cancel").onclick = () => { $("#sys-bundle-box").hidden = true; };
 $("#sys-bundle-save").addEventListener("click", () => setTimeout(() => { $("#sys-bundle-box").hidden = true; }, 500));
 setTimeout(loadDoctor, 4000);   // once after the page opens, so a problem shows on the tab before the room is opened

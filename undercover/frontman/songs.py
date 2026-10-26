@@ -142,6 +142,8 @@ def search(query: str, limit: int = 8, style: str | None = None, words: list[str
 def from_link(url: str) -> SongResult:
     if not re.match(r"https?://", url.strip()):
         raise ModelError("That doesn't look like a link. Paste a full address starting with https://")
+    from ..core import safeurl
+    safeurl.preflight(url.strip())   # (1.1 hardening: only the internet; yt-dlp starts from a checked address)
     with _ydl(skip_download=True, noplaylist=True) as ydl:
         try:
             e = ydl.extract_info(url.strip(), download=False)

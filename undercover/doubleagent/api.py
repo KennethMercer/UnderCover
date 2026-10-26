@@ -229,7 +229,7 @@ def _sources(h, proj, b):
 
 
 def _upload(h, proj, b):
-    n = int(h.headers.get("Content-Length") or 0)
+    n = h._length()
     fname = Path(unquote(h.headers.get("X-Filename") or "recording.wav")).name
     if Path(fname).suffix.lower() not in files.AUDIO_EXT:
         raise ModelError(f"'{fname}' doesn't look like an audio file. Use mp3, wav, flac, m4a or ogg.")

@@ -183,8 +183,8 @@ def _pip(*args, what="the add-on's Python packages") -> None:
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:
-        with open(path("logs_dir") / "errors.log", "a", encoding="utf-8") as f:
-            f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] add-on {' '.join(cmd)}\n{r.stdout}\n{r.stderr}")
+        from .jobs import log_error
+        log_error(f"add-on {' '.join(cmd)}\n{r.stdout}\n{r.stderr}")
         raise ModelError(f"Installing {what} failed (details in logs/errors.log). "
                          "Check your internet connection and try again.")
 
@@ -306,8 +306,9 @@ def install(addon_id: str, accept: bool, progress=None, cancel=None, source: Pat
                  "-r", str(hashed), what=f"{a.name}'s Python packages")
         elif hashed.exists():
             _pip("install", "--no-deps", "--require-hashes", "-r", str(hashed))
-        else:
-            _pip("install", "--no-deps", "-c", str(CONSTRAINTS), *a.packages)
+        else:   # (1.1 hardening: never an install by version alone)
+            raise ModelError(f"{a.name} has no pinned list with checksums (installer/requirements/addon-{a.id}.txt), "
+                             "so it isn't installed.")
     if a.files:
         from . import setup_models
 

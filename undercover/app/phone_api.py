@@ -110,7 +110,8 @@ ROUTES = [
     ("POST", r"/api/gamepause/settings", "pc", "the game pause's settings"),
     ("POST", r"/api/lowprofile", "phone", "Low profile from the sofa: half the card, in bursts"),
     ("POST", r"/api/firstrun", "phone", "the First assignment's tour: its step, skip, done, replay"),
-    ("GET", r"/api/vault/check|/api/vault/contents", "pc", "the vault's folder check and what it holds"),
+    ("POST", r"/api/vault/check", "pc", "the vault's folder check"),
+    ("GET", r"/api/vault/contents", "pc", "what the vault holds"),
     ("POST", r"/api/vault/settings|/api/vault/run|/api/vault/restore", "pc", "the vault: its folder, a run, a restore"),
     # Themes (phase 14): a phone may read and use them; making, importing and deleting are done on the PC
     ("GET", r"/api/themes", "phone", "the theme list"),
@@ -337,7 +338,7 @@ def _route(h, method, p):
         if not getattr(h, "away", False):
             raise PhoneError("Open the away link on the phone itself.", 400)
         token, dev = phone.redeem_away(str(h._body().get("code") or ""))
-        h.set_cookie = f"{phone.AWAY_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000"
+        h.set_cookie = away_cookie(token)
         return h._json({"ok": True, "device": dev})
     if h.remote:   # the gate refuses these for phones already; never let a phone change Phone access
         raise PhoneError("Phone access is managed on the PC.", 403)
@@ -371,11 +372,22 @@ def _route(h, method, p):
     raise LookupError("Not found")
 
 
+def home_cookie(token: str) -> str:
+    """The phone's home-network token as a cookie: it lasts TOKEN_IDLE_S, and every answer to a paired phone sends it
+    again, so its life runs from the last use (1.1)."""
+    return f"{phone.COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={phone.TOKEN_IDLE_S}"
+
+
+def away_cookie(token: str) -> str:
+    """The same for the away-from-home address (HTTPS there, so Secure)."""
+    return f"{phone.AWAY_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={phone.TOKEN_IDLE_S}"
+
+
 def _claim(h):
     b = h._body()
     if not h.remote:
         raise PhoneError("Pair from the phone: open the address shown on the PC there.", 400)
     token, dev = phone.claim(b.get("code"), b.get("name") or phone.name_from_agent(h.headers.get("User-Agent")),
                              h.client_address[0])
-    h.set_cookie = f"{phone.COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000"
+    h.set_cookie = home_cookie(token)
     h._json({"ok": True, "device": dev})

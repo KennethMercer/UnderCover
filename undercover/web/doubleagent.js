@@ -12,11 +12,17 @@
 // fixed per pair; keeping one says which it was.
 
 const DA = { samples: {}, all: false, audio: new Audio(), playing: null, cands: [],
-             f: { like: "", speak: "", src: "" },   // "Your voices" filters: one chip pressed per group, or none
+             f: daSavedF(), fx: {},   // "Your voices" filters: one chip pressed per group, or none (remembered per browser); fx: what filters now (daFilters)
              cad: null,   // "Let it speak" open on a card: { voice } (Now or Tonight, with the time)
-             own: null,   // "Train my own" open on a card: { voice, mode } (Speaking / Singing; taken from the voice where it says)
+             own: null,   // "Train my own" open on a card: { voice, mode } (Speaking / Singing taken from the voice where it says; "" = asked)
              ab: null };   // the open A/B: { voice, st (GET .../cadence), why, err, busy }
 
+function daSavedF() {
+  const f = { like: "", speak: "", src: "" }, s = store.get("uc-da-filters", {});
+  for (const g of Object.keys(f)) if (typeof s?.[g] === "string") f[g] = s[g];
+  return f;
+}
+function daSetF(f) { DA.f = f; store.set("uc-da-filters", f); DA.all = false; renderVoiceCards(DA.cands); }
 async function loadSamples() {
   try { DA.samples = Object.fromEntries((await api("/api/library/voices")).filter(v => v.sample).map(v => [v.name, v.sample])); }
   catch (e) { DA.samples = {}; }
@@ -33,7 +39,7 @@ function renderVoiceCards(cands) {
   daFilters();
   // voices trained here first (they can be improved), then the downloaded ones
   const list = DA.cands.filter(daMatch).sort((a, b) => (b.can - a.can) || (b.trained - a.trained) || a.voice.localeCompare(b.voice));
-  if (!list.length) { box.innerHTML = `<p class="meta">No voice matches these filters. <button class="linkbtn" type="button" id="da-fclear">Show every voice</button></p>`; $("#da-more").hidden = true; $("#da-fclear").onclick = () => { DA.f = { like: "", speak: "", src: "" }; renderVoiceCards(DA.cands); }; renderDaOutcome(); return; }
+  if (!list.length) { box.innerHTML = `<p class="meta">No voice matches these filters. <button class="linkbtn" type="button" id="da-fclear">Show every voice</button></p>`; $("#da-more").hidden = true; $("#da-fclear").onclick = () => daSetF({ like: "", speak: "", src: "" }); renderDaOutcome(); return; }
   const shown = DA.all ? list : list.slice(0, 6);
   const kept = $("#cad-ab", box);   // the open A/B survives a redraw (a reading playing, the why text)
   box.innerHTML = shown.map(c => {
@@ -46,9 +52,10 @@ function renderVoiceCards(cands) {
          c.trained && c.singing != null ? { t: c.singing ? "Singing" : "Speech", muted: true } : "", !c.trained && c.person ? { t: c.person, muted: true } : "",
          c.minutes ? { t: `${Math.round(c.minutes)} min`, deep: true } : ""]);
     const state = cd.queue === "running" ? "learning to speak" : cd.queue ? "learns to speak tonight" : "";
-    const status = [state && `<span class="st now">${state}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
+    const status = [state && `<span class="st now">${esc(state)}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
     const speaks = cd.has || c.demo ? `<svg class="ico vc-speaks" role="img" aria-label="Can speak in SpeakEasy"><title>Can speak in SpeakEasy</title><use href="#g-speakeasy"/></svg>` : "";
-    const improve = c.demo ? "" : !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}" aria-expanded="${DA.own?.voice === c.voice}">${DA.own?.voice === c.voice ? "Close" : "Train my own"}</button>`
+    // a downloaded voice: "Train my own" (UnderCover's own voice of the person, to compare) opens Now / Tonight on the card; one trained here improves
+    const improve = c.demo ? "" : !c.trained ? `<button class="mini" type="button" data-own="${esc(c.voice)}" aria-expanded="${DA.own?.voice === c.voice}" ${c.queued || busy ? "disabled" : ""}>${busy ? "Training now" : c.queued ? "In tonight's queue" : DA.own?.voice === c.voice ? "Close" : "Train my own"}</button>`
       : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy || im?.candidate ? "disabled" : ""}>${busy ? "Improving now" : c.queued ? "In tonight's queue" : im?.candidate ? "Retrained one waiting" : "Improve tonight"}</button>`;
     const impOpen = DA.impAb?.voice === c.voice;
     const impBtn = im?.candidate ? `<button class="mini" type="button" data-imp-ab="${esc(c.voice)}" aria-expanded="${impOpen}">${impOpen ? "Close" : "Hear the retrained one"}</button>`
@@ -109,23 +116,24 @@ function renderVoiceCards(cands) {
   }
   $$("[data-own]", box).forEach(b => b.onclick = () => {   // the choice opens on the card itself: Now or Tonight
     const c = DA.cands.find(x => x.voice === b.dataset.own);
-    DA.own = DA.own?.voice === c.voice ? null : { voice: c.voice, mode: c.singing === true ? "singing" : c.singing === false ? "speaking" : DA_MODE.v };
+    DA.own = DA.own?.voice === c.voice ? null : { voice: c.voice, mode: c.singing === true ? "singing" : c.singing === false ? "speaking" : "" };   // not known: asked
     renderVoiceCards(DA.cands);
   });
   $$("[data-own-mode]", box).forEach(b => b.onclick = () => { DA.own.mode = b.dataset.ownMode; renderVoiceCards(DA.cands); });
   $$("[data-own-go]", box).forEach(b => b.onclick = () => {
     const c = DA.cands.find(x => x.voice === DA.own?.voice); if (!c) return;
     const person = ownPerson(c);
+    if (!DA.own.mode) return;   // Speaking or singing comes first (the buttons wait for it)
     if (!person) return $("[data-own-name]", box)?.focus();   // never search YouTube for a file name ("Model V2 Final"): ask whose voice it is
     daBegin(person, DA.own.mode, b.dataset.ownGo === "tonight", b);
   });
   const nameIn = $("[data-own-name]", box);
   if (nameIn) nameIn.oninput = () => {   // typing the name: the buttons wake up now; the time follows once the typing stops (a redraw would take the caret)
     DA.own.name = nameIn.value;
-    $$("[data-own-go]", box).forEach(b => { b.disabled = !nameIn.value.trim(); });
+    $$("[data-own-go]", box).forEach(b => { b.disabled = !nameIn.value.trim() || !DA.own.mode; });
     clearTimeout(DA.ownTimer);
     DA.ownTimer = setTimeout(() => {
-      const p = nameIn.value.trim(); if (!p || !DA.own) return;
+      const p = nameIn.value.trim(); if (!p || !DA.own?.mode) return;
       estimateFor("new", p, DA.own.mode).then(() => {
         if (!DA.own || DA.own.name !== nameIn.value) return;
         const at = nameIn.selectionStart; renderVoiceCards(DA.cands);
@@ -137,13 +145,14 @@ function renderVoiceCards(cands) {
 }
 
 // "Your voices" filters (basic, a row of chips): likeness word, can it speak in SpeakEasy, trained here or downloaded. A group only shows when
-// the voices differ in it; pressing the pressed chip clears it. (Male / female waits for the voice print.)
+// the voices differ in it; chips in different groups combine; pressing the pressed chip clears it, "All" clears them all; the choice is
+// remembered per browser (uc-da-filters). (Male / female waits for the voice print: sex isn't stored.)
 const daKey = {
   like: c => c.likeness_word || "",
   speak: c => c.demo || c.cadence?.has ? "yes" : "no",   // the demo voice speaks
   src: c => c.demo ? "" : c.trained ? "trained" : "downloaded",
 };
-const daMatch = c => Object.keys(DA.f).every(g => !DA.f[g] || daKey[g](c) === DA.f[g]);
+const daMatch = c => Object.keys(DA.fx).every(g => !DA.fx[g] || daKey[g](c) === DA.fx[g]);
 function daFilters() {
   const box = $("#da-filters");
   const groups = [
@@ -151,12 +160,15 @@ function daFilters() {
     ["speak", "Speaks", [["yes", "Can speak"], ["no", "Can't speak yet"]]],
     ["src", "From", [["trained", "Trained here"], ["downloaded", "Downloaded"]]],
   ].map(([g, label, opts]) => [g, label, opts.filter(([v]) => DA.cands.some(c => daKey[g](c) === v))]).filter(([, , opts]) => opts.length > 1);
-  Object.keys(DA.f).forEach(g => { if (DA.f[g] && !groups.some(([k, , opts]) => k === g && opts.some(([v]) => v === DA.f[g]))) DA.f[g] = ""; });   // a pressed chip that's gone lapses
   box.hidden = DA.cands.length < 4 || !groups.length;
+  // what filters: only chips on show (no row, no filtering; a chip whose voices are gone lapses). DA.f stays the remembered choice for when they're back
+  DA.fx = Object.fromEntries(Object.keys(DA.f).map(g => [g, !box.hidden && groups.some(([k, , opts]) => k === g && opts.some(([v]) => v === DA.f[g])) ? DA.f[g] : ""]));
   if (box.hidden) return;
-  box.innerHTML = groups.map(([g, label, opts]) => `<span class="vf-group" role="group" aria-label="${label}"><small class="meta">${label}</small>${
-    opts.map(([v, text]) => `<button class="fchip" type="button" data-fg="${g}" data-fv="${v}" aria-pressed="${DA.f[g] === v}">${text}</button>`).join("")}</span>`).join("");
-  $$("[data-fg]", box).forEach(b => b.onclick = () => { DA.f[b.dataset.fg] = DA.f[b.dataset.fg] === b.dataset.fv ? "" : b.dataset.fv; DA.all = false; renderVoiceCards(DA.cands); });
+  const none = Object.values(DA.fx).every(v => !v);
+  box.innerHTML = `<button class="fchip" type="button" data-fall aria-pressed="${none}">All</button>` + groups.map(([g, label, opts]) => `<span class="vf-group" role="group" aria-label="${label}"><small class="meta">${label}</small>${
+    opts.map(([v, text]) => `<button class="fchip" type="button" data-fg="${g}" data-fv="${v}" aria-pressed="${DA.fx[g] === v}">${text}</button>`).join("")}</span>`).join("");
+  $$("[data-fg]", box).forEach(b => b.onclick = () => daSetF({ ...DA.fx, [b.dataset.fg]: DA.fx[b.dataset.fg] === b.dataset.fv ? "" : b.dataset.fv }));
+  $("[data-fall]", box).onclick = () => daSetF({ like: "", speak: "", src: "" });
 }
 const abUrl = (voice, rest = "") => `/api/train/voices/${encodeURIComponent(voice)}/cadence${rest}`;
 // which reading is A: fixed per pair (from the new pack's id), so a redraw or a second look keeps the letters
@@ -365,14 +377,14 @@ function cadHtml(c) {
 // that's often "Model V2 Final", and UnderCover would search YouTube for it (RC pass 10, B).
 const ownPerson = c => (c.person || (DA.own?.voice === c.voice ? DA.own.name || "" : "")).trim();
 function ownHtml(c) {
-  const person = ownPerson(c), m = DA.own.mode, eta = person ? estWords("new", person, m) : "";
-  if (person && !eta && !EST.asked.has(estKey("new", person, m))) estimateFor("new", person, m).then(() => { if (DA.own) renderVoiceCards(DA.cands); });
+  const person = ownPerson(c), m = DA.own.mode, eta = person && m ? estWords("new", person, m) : "";
+  if (person && m && !eta && !EST.asked.has(estKey("new", person, m))) estimateFor("new", person, m).then(() => { if (DA.own) renderVoiceCards(DA.cands); });
   const ask = !c.person;
   return `<div class="vc-own">${ask ? `<label class="own-who"><span>Whose voice is this?</span><input type="text" data-own-name autocomplete="off" value="${esc(DA.own.name || "")}" placeholder="their name, e.g. Barack Obama" aria-label="Whose voice is this"></label>
     <p class="meta">UnderCover finds clips of them and trains your own voice of them, to compare with this one.</p>`
     : `<p class="meta">Train your own <b>${esc(person)}</b> voice to compare with this one: UnderCover finds clips of them and trains it${c.singing == null ? "" : ` (${c.singing ? "singing" : "speaking"}, like this one)`}.</p>`}
-    <div class="seg" role="group" aria-label="Kind of audio"><button type="button" data-own-mode="speaking" aria-pressed="${m === "speaking"}">Speaking</button><button type="button" data-own-mode="singing" aria-pressed="${m === "singing"}">Singing</button></div>
-    <div class="row"><button class="btn primary" type="button" data-own-go="now"${person ? "" : " disabled"}>Train now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-own-go="tonight"${person ? "" : " disabled"}>Tonight</button></div></div>`;
+    <div class="own-mode">${c.singing == null ? `<span class="meta">Speaking or singing?</span>` : ""}<div class="seg" role="group" aria-label="Speaking or singing"><button type="button" data-own-mode="speaking" aria-pressed="${m === "speaking"}">Speaking</button><button type="button" data-own-mode="singing" aria-pressed="${m === "singing"}">Singing</button></div></div>
+    <div class="row"><button class="btn primary" type="button" data-own-go="now"${person && m ? "" : " disabled"}>Train now${eta ? ` · ${eta}` : ""}</button><button class="btn" type="button" data-own-go="tonight"${person && m ? "" : " disabled"}>Tonight</button></div></div>`;
 }
 async function daStart(tonight) {
   const person = $("#da-person").value.trim();

@@ -60,7 +60,7 @@ function renderVault() {
     : `<p>No copy yet. The first one starts when UnderCover is idle, or now.</p>`;
   box.innerHTML = `${line}${s.error ? `<p class="vt-warn">The last copy stopped: ${esc(s.error)}</p>` : ""}
     ${s.restore?.running ? `<p class="meta">Restoring: the current files are copied into the vault first, then the old ones come back…</p>` : ""}
-    <p class="meta mono" data-deep>${esc(s.folder)} · ${s.size === "everything" ? "everything I'd miss" : "what matters"}${s.raw ? ` · ${gb(s.raw)} kept in ${gb(s.stored)} (${Math.round(s.stored / s.raw * 100)}%)` : ""}${last ? ` · last run ${last.seconds} s, ${last.reason || ""}` : ""}</p>
+    <p class="meta mono" data-deep>${esc(s.folder)} · ${s.size === "everything" ? "everything I'd miss" : "what matters"}${s.raw ? ` · ${gb(s.raw)} kept in ${gb(s.stored)} (${Math.round(s.stored / s.raw * 100)}%)` : ""}${last ? ` · last run ${last.seconds} s, ${esc(last.reason || "")}` : ""}</p>
     <div class="row"><button class="btn" type="button" id="vt-now" data-pc ${s.running || !s.connected ? "disabled" : ""}>${s.running ? "Copying…" : "Vault now"}</button>
       <button class="linkbtn" type="button" id="vt-change" data-pc>Change…</button><button class="linkbtn quiet" type="button" id="vt-off" data-pc>Switch off</button></div>
     ${VT.c ? vtContents() : ""}`;
@@ -164,7 +164,7 @@ function vtRunCheck() {
   clearTimeout(vtCheckTimer);
   vtCheckTimer = setTimeout(async () => {
     const p = VT.pick; if (!p) return;
-    try { VT.check = await api(`/api/vault/check?folder=${encodeURIComponent(p.folder)}&size=${p.size}`); }
+    try { VT.check = await api("/api/vault/check", { json: { folder: p.folder, size: p.size } }); }
     catch (e) { VT.check = { ok: false, why: e.message }; }
     if (VT.pick !== p || !$("#vt-verdict")) return;
     $("#vt-verdict").className = `verdict ${VT.check.ok ? "ok" : "bad"}`; $("#vt-verdict").innerHTML = vtVerdict(VT.check);

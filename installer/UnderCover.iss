@@ -105,7 +105,7 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; The "UnderCover" shortcuts (Start menu, desktop) are made by the code below only once setup has worked
 ; (CreateLaunchers): a failed setup never leaves a shortcut that looks like a working install.
 ; Repair: the Doctor checks the install against its record and setup fixes only what's wrong (files and settings kept)
-Name: "{group}\Repair {#AppName}"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup.ps1"" -InstallDir ""{app}"" -Repair -Pause"; WorkingDir: "{app}"
+Name: "{group}\Repair {#AppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup.ps1"" -InstallDir ""{app}"" -Repair -Pause"; WorkingDir: "{app}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Tasks]
@@ -140,6 +140,12 @@ Type: files; Name: "{app}\UnderCover.cmd"
 ; desktop can belong to another copy of UnderCover)
 
 [Code]
+// Windows PowerShell by its full path (1.1 hardening), never whichever powershell.exe comes first on the PATH
+function PSExe(): String;
+begin
+  Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+end;
+
 // The optional add-ons (generated from undercover/core/addons.py by build.ps1): ADDON_COUNT, AddonId(i),
 // AddonCaption(i), AddonUrl(i).
 #include "addons.isi"
@@ -199,7 +205,7 @@ begin
   if Lib <> '' then Params := Params + ' -LibraryDir "' + DirArg(Lib) + '"';
   if Work <> '' then Params := Params + ' -WorkDir "' + DirArg(Work) + '"';
   if Models <> '' then Params := Params + ' -ModelsDir "' + DirArg(Models) + '"';
-  Exec('powershell.exe', Params, ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec(PSExe(), Params, ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, Code);
   if not LoadStringsFromFile(OutFile, Lines) then Exit;
   for I := 0 to GetArrayLength(Lines) - 1 do begin
     if Pos('backend|', Lines[I]) = 1 then begin
@@ -847,7 +853,7 @@ begin
     try
       Shell := CreateOleObject('WScript.Shell');
       // (its own module path first: an installer started from PowerShell 7 hands it PowerShell 7's)
-      Shell.Run('powershell.exe -NoProfile -NonInteractive -Command "$env:PSModulePath = [Environment]::GetEnvironmentVariable(' +
+      Shell.Run('"' + PSExe() + '" -NoProfile -NonInteractive -Command "$env:PSModulePath = [Environment]::GetEnvironmentVariable(' +
         '''PSModulePath'', ''Machine''); $m = ' + PSQuote(Marker) + '; $f = ' + PSQuote(Src) +
         '; try { $n = (Get-Item -LiteralPath $f).Length; if ($n -ne ' + IntToStr(Bytes) + ') { throw (''it came to '' + $n + '' of ' +
         IntToStr(Bytes) + ' bytes'') }; if ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower() -ne ''' + Sha +
@@ -971,7 +977,7 @@ begin
     ExtractTemporaryFile('installed.ps1');
     ExtractTemporaryFile('python.ps1');
     Shell := CreateOleObject('WScript.Shell');
-    Shell.Run('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\installed.ps1') +
+    Shell.Run('"' + PSExe() + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\installed.ps1') +
       '" -HaveDir "' + ExpandConstant('{app}') + '" -HaveList "' + ExpandConstant('{tmp}\downloads.tsv') + '" -HaveOut "' + Marker + '"', 0, False);
     Waited := 0;
     while (not FileExists(Marker)) and (Waited < 1800) do begin   // (three minutes: a cold venv's first start, never forever)
@@ -1070,7 +1076,7 @@ begin
   try
     ExtractTemporaryFile('keptcheck.ps1');
     Shell := CreateOleObject('WScript.Shell');
-    Shell.Run('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\keptcheck.ps1') +
+    Shell.Run('"' + PSExe() + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\keptcheck.ps1') +
       '" -List "' + ListFile + '" -Done "' + DoneFile + '" -Marker "' + Marker + '"', 0, False);   // (0: hidden; False: don't wait)
     Waited := 0;
     while (not FileExists(Marker)) and (Waited < 36000) do begin   // (an hour: a slow drive, never forever)
@@ -1309,14 +1315,14 @@ begin
     ' -InstallDir ' + PSQuote(ExpandConstant('{app}')) + ' -LibraryDir ' + PSQuote(GetLibraryDir('')) + ' -WorkDir ' +
     PSQuote(GetWorkDir('')) + ' -ModelsDir ' + PSQuote(GetModelsDir('')) + ' -Backend ' + Backend + ' -Offline';
   if GetAddons('') <> '' then Params := Params + ' -Addons ' + PSQuote(GetAddons(''));
-  Cmd := 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$env:PSModulePath = ' +
+  Cmd := '"' + PSExe() + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$env:PSModulePath = ' +
     '[Environment]::GetEnvironmentVariable(''PSModulePath'', ''Machine''); Set-Content -LiteralPath ' + PSQuote(PidFile) + ' $PID; ' +
 #ifdef ReleaseCheck
     // the release check's proof (rc-fix8): a setup step long enough to see the wizard answer all through it
     'Start-Sleep -Seconds ' + IntToStr(StrToIntDef(ExpandConstant('{param:setuphold|0}'), 0)) + '; ' +
 #endif
     // (Out-File as UTF-8: Windows PowerShell's *> writes UTF-16, which this log can't read)
-    '& powershell.exe ' + Params + ' *>&1 | Out-File -LiteralPath ' + PSQuote(OutFile) + ' -Encoding utf8; Set-Content -LiteralPath ' + PSQuote(ExitFile + '.part') +
+    '& ' + PSQuote(PSExe()) + ' ' + Params + ' *>&1 | Out-File -LiteralPath ' + PSQuote(OutFile) + ' -Encoding utf8; Set-Content -LiteralPath ' + PSQuote(ExitFile + '.part') +
     ' $LASTEXITCODE; Move-Item -LiteralPath ' + PSQuote(ExitFile + '.part') + ' -Destination ' + PSQuote(ExitFile) + ' -Force"';
   Progress := 0;
   WizardForm.ProgressGauge.Max := 1000;

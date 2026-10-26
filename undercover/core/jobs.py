@@ -3,6 +3,7 @@
 Every module's GPU work is a Job run by `gpu_worker`, so the models stay loaded and jobs queue. Long voice work
 (training) runs queued jobs between its steps (`Control.service`), so covers don't wait for it.
 """
+import os
 import queue
 import shutil
 import threading
@@ -53,6 +54,22 @@ def register_user_error(cls):
     return cls
 
 
+ERRORS_MAX = 5 << 20   # errors.log past this is kept as errors.log.1 (one old copy) and starts again (1.1 hardening)
+
+
+def log_error(text: str):
+    """A line in logs/errors.log, which never grows past ERRORS_MAX."""
+    f = path("logs_dir") / "errors.log"
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if f.exists() and f.stat().st_size > ERRORS_MAX:
+            os.replace(f, f.with_name("errors.log.1"))
+        with open(f, "a", encoding="utf-8") as out:
+            out.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}")
+    except OSError:
+        pass
+
+
 def friendly(e: BaseException, stage: str = "") -> str:
     """Turn an exception into a message that says what to do. Full traceback goes to logs/errors.log."""
     from .voices import ModelError
@@ -71,8 +88,7 @@ def friendly(e: BaseException, stage: str = "") -> str:
         return f"A file is missing: {Path(getattr(e, 'filename', '') or text).name}. If you deleted something from the output folder, run the cover again."
     if isinstance(e, PermissionError):
         return "Windows blocked writing a file. Close any app that has the output file open (e.g. a media player) and try again."
-    with open(path("logs_dir") / "errors.log", "a", encoding="utf-8") as f:
-        f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {stage}\n{traceback.format_exc()}")
+    log_error(f"{stage}\n{traceback.format_exc()}")
     where = f" while {stage}" if stage else ""
     return f"Something went wrong{where} ({name}). Details were saved to logs/errors.log."
 
