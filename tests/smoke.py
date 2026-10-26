@@ -2962,7 +2962,14 @@ def u_ci_workflow():
     for f in ("torch-cpu.txt", "common.txt", "cadence.txt"):
         assert f in runs, f
     assert "-c installer\\constraints.txt" in runs and runs.rstrip().endswith("tests\\smoke.py --unit-only"), runs[-200:]
-    return f"{len(uses)} actions pinned by SHA, read-only, {len(installs)} hashed installs, unit checks"
+    # PyTorch for the CPU: exact versions with their hashes, from PyTorch's CPU index and no other
+    torch_ln = next(ln for ln in installs if "torch-cpu.txt" in ln)
+    assert "--index-url https://download.pytorch.org/whl/cpu" in torch_ln and "extra-index-url" not in text, torch_ln
+    pins = re.sub(r"\\\r?\n", " ", (ROOT / "installer" / "requirements" / "torch-cpu.txt").read_text(encoding="utf-8"))
+    lines = [ln for ln in pins.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert len(lines) == 3 and all(re.match(r"torch(audio|vision)?==[\d.]+\+cpu ", ln) and re.search(r"--hash=sha256:[0-9a-f]{64}", ln)
+                                   for ln in lines), lines
+    return f"{len(uses)} actions pinned by SHA, read-only, {len(installs)} hashed installs (PyTorch's CPU index only), unit checks"
 
 
 @check("the product repo's root (layout + layout2, user 2026-10-17: 'shouldn't root be basically the readme, changelog, and project folder', 'do it'): README, CHANGELOG, .gitignore, docs/MASTERPLAN.md and the undercover / installer / scripts / tests folders; every reference to a moved file follows; the user's config.toml is ignored")
