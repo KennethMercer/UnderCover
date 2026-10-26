@@ -46,7 +46,7 @@ TOKENS = frozenset(
 FONT_PROPS = frozenset({"font-family", "src", "font-weight", "font-style", "font-display", "font-stretch", "unicode-range"})
 VALUE = re.compile(r"""[A-Za-z0-9#%.,()\-+/*\s"']+""")    # no backslash, no braces, no !, no ;, no @, no <, no :
 FONT_SRC = re.compile(r"""url\(\s*(["']?)fonts/([A-Za-z0-9][A-Za-z0-9._-]{0,80}\.woff2)\1\s*\)(\s+format\(\s*["']woff2["']\s*\))?""")
-BLOCKED = re.compile(r"url\(|expression|javascript|@import|behavior|-moz-binding|image-set|\\", re.I)
+BLOCKED = re.compile(r"url\(|src\(|expression|javascript|@import|behavior|-moz-binding|image-set|\\", re.I)
 
 
 class ThemeError(ModelError):

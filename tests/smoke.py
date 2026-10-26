@@ -901,11 +901,11 @@ def u_cadence_starts():
     from undercover.core.engine.rvc import index as rvcindex
     with isolated_data() as box:
         f = box / "model.index"
-        v = np.random.default_rng(0).normal(size=(3000, 16)).astype(np.float16)
+        v = np.random.default_rng(0).normal(size=(3000, 256)).astype(np.float16)
         f.write_bytes(rvcindex.COMPACT_MAGIC + struct.pack("<qq", *v.shape) + v.tobytes())
         assert mdv.shrink_index(box, k=200) == (3000, 200)
         back = rvcindex.read_vectors(f)
-        assert back.shape == (200, 16) and np.isfinite(back).all()
+        assert back.shape == (200, 256) and np.isfinite(back).all()
         assert mdv.shrink_index(box, k=500) == (200, 200), "a small index was changed"
     man = json.loads((ROOT / "undercover" / "assets" / "demo-voice" / "agent-smoke" / "manifest.json").read_text(encoding="utf-8"))
     assert {"model.pth", "model.index"} <= set(man["files"]) and man["files"]["model.index"]["size"] < 32e6, man["files"]
@@ -1019,6 +1019,405 @@ def u_listenback_extra():
             else:
                 CONFIG["speakeasy"] = saved[3]
     return "a stray ending cut with no re-read; repeats inside a line counted per word; a garbled take never kept over one missing a word"
+
+
+@check("hardening (1.1): a web page's Origin must be this server's own scheme, host and port; JSON bodies are capped per route (413, the body never read); a voice zip unpacks under a running size cap, few members, no links; links fetched for someone reach only the internet (after DNS, on every redirect); a phone can't cancel or retry PC-only work; the away listener names nothing; the Phone access copy says the home connection isn't encrypted")
+def u_harden1():
+    import inspect
+    import numpy as np
+    import io
+    import tempfile
+    import zipfile
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import jobs, safeurl, voices as V
+
+    # an Origin: this server's own (any of its three loopback names), or none (the tray, the command line)
+    def origin_ok(origin, port=7860):
+        said = []
+        h = SimpleNamespace(headers={} if origin is None else {"Origin": origin},
+                            server=SimpleNamespace(server_address=("127.0.0.1", port)), _error=lambda m, s: said.append(s))
+        return S.Handler._guard_origin(h) and not said
+    for good in (None, "http://127.0.0.1:7860", "http://localhost:7860", "http://[::1]:7860", "HTTP://LOCALHOST:7860/"):
+        assert origin_ok(good), good
+    for bad in ("http://127.0.0.1:3000", "https://127.0.0.1:7860", "http://localhost:7861", "http://evil.example",
+                "null", "", "http://127.0.0.1"):
+        assert not origin_ok(bad), bad
+    # JSON bodies: capped per route, refused before a byte is read
+    class NoRead:
+        def read(self, n=-1):
+            raise AssertionError("an over-cap body was read")
+
+    def body(n, path="/api/speak", data=b""):
+        h = SimpleNamespace(headers={"Content-Length": str(n)}, path=path, _read=None, close_connection=False,
+                            rfile=io.BytesIO(data) if data else NoRead())
+        h._length = lambda: S.Handler._length(h)
+        try:
+            return S.Handler._body(h), h
+        except S.ClientError as e:
+            return e, h
+    r, h = body(S.JSON_MAX + 1)
+    assert isinstance(r, S.BodyTooLarge) and h.close_connection and "413" not in str(r), r
+    r, h = body(-5)
+    assert isinstance(r, S.ClientError), r
+    for odd in ("12abc", "1e6", "0x10", " 5 5", "+5", "\u0661\u0662", "9" * 20):   # digits only, else 400 and close
+        h = SimpleNamespace(headers={"Content-Length": odd}, path="/api/phone/away", _read=None, close_connection=False, rfile=NoRead())
+        try:
+            S.Handler._length(h)
+            raise AssertionError(f"Content-Length {odd!r} was taken")
+        except S.ClientError as e:
+            assert e.status == 400 and h.close_connection, odd
+    assert S.Handler._length(SimpleNamespace(headers={"Content-Length": "42"})) == 42
+    for mod in ("app/themes_api.py", "doubleagent/api.py", "frontman/api.py", "app/server.py"):
+        assert 'int(h.headers.get("Content-Length")' not in (ROOT / "undercover" / mod).read_text(encoding="utf-8"), mod
+        assert 'int(self.headers.get("Content-Length")' not in (ROOT / "undercover" / mod).read_text(encoding="utf-8"), mod
+    post = inspect.getsource(S.Handler.do_POST)
+    assert post.index("except ClientError") < post.index("except Exception"), "a client error would be logged with a traceback"
+    # errors.log stays small: past ERRORS_MAX it's kept as errors.log.1 and starts again
+    with isolated_data():
+        from undercover.core.config import path as lpath
+        lpath("logs_dir").mkdir(parents=True, exist_ok=True)
+        big = lpath("logs_dir") / "errors.log"
+        big.write_bytes(b"x" * (jobs.ERRORS_MAX + 1))
+        jobs.log_error("one more")
+        assert big.stat().st_size < 1000 and (lpath("logs_dir") / "errors.log.1").stat().st_size > jobs.ERRORS_MAX
+    assert "log_error(" in inspect.getsource(jobs.friendly) and "open(path(\"logs_dir\") / \"errors.log\"" not in inspect.getsource(jobs.friendly)
+    # a song from a search result: a YouTube video id only, its address made here
+    from undercover.frontman import api as FA, songs as SG
+    got, said = [], []
+    real_dl = SG.download
+    try:
+        SG.download = lambda r, reg: (got.append(r), {"ok": True})[1]
+        fh = SimpleNamespace(_json=lambda o: said.append(("ok", o)), _error=lambda m, s=400: said.append(("error", m)))
+        base = {"title": "t", "raw_title": "t", "channel": "c", "duration": 1.0}
+        for bad in ({"id": "../../etc", "url": "http://127.0.0.1:7860/api/status"}, {"id": "abc", "url": "https://www.youtube.com/watch?v=abc"},
+                    {"id": "dQw4w9WgXcQx", "url": "x"}, {"id": "dQw4w9WgX%Q", "url": "x"}):
+            FA._song_from_youtube(fh, {**base, **bad})
+        assert got == [] and all(k == "error" for k, _ in said), (got, said)
+        FA._song_from_youtube(fh, {**base, "id": "dQw4w9WgXcQ", "url": "http://192.168.1.1/x"})
+        assert got and got[0].url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ" and got[0].id == "dQw4w9WgXcQ", got
+    finally:
+        SG.download = real_dl
+    r, _ = body(2 << 20, "/api/themes", b'{"name": "t"}')
+    assert r == {"name": "t"}, r   # (a theme saved from the editor may be bigger)
+    r, _ = body(8 << 20, "/api/vault/restore", b'{"keys": []}')
+    assert r == {"keys": []}, r     # (and the list of what to restore from a big library)
+    payload = json.dumps({"text": "x" * 200_000}).encode()   # a long speech, well under the cap
+    r, _ = body(len(payload), "/api/speak", payload)
+    assert r["text"] == "x" * 200_000
+    # a voice zip: a running cap on what it unpacks to, a member limit, links skipped, names flattened
+    saved_cap = V.VCFG["max_download_gb"]
+    with tempfile.TemporaryDirectory(prefix="uc-h1-") as t:
+        t = Path(t)
+        bomb = t / "bomb.zip"
+        with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("model.pth", b"\0" * (8 << 20))   # 8 MB of zeros: a few KB zipped
+        assert bomb.stat().st_size < 64 << 10
+        try:
+            V.VCFG["max_download_gb"] = 0.004   # 4 MB
+            out = t / "out"
+            out.mkdir()
+            with zipfile.ZipFile(bomb) as z:
+                try:
+                    V._safe_extract(z, out)
+                    raise AssertionError("a zip unpacking past the cap was extracted")
+                except V.ModelError as e:
+                    assert "limit" in str(e), e
+            assert not list(out.iterdir()), list(out.iterdir())   # the part-written file is gone
+            V.VCFG["max_download_gb"] = 1
+            many = t / "many.zip"
+            with zipfile.ZipFile(many, "w") as z:
+                for i in range(V.ZIP_MAX_MEMBERS + 1):
+                    z.writestr(f"m{i}.pth", b"x")
+            with zipfile.ZipFile(many) as z:
+                try:
+                    V._safe_extract(z, out)
+                    raise AssertionError("a zip of too many model files was extracted")
+                except V.ModelError:
+                    pass
+            odd = t / "odd.zip"
+            with zipfile.ZipFile(odd, "w") as z:
+                link = zipfile.ZipInfo("link.pth")
+                link.external_attr = (0o120777 << 16)   # a symbolic link entry
+                z.writestr(link, "../../somewhere")
+                z.writestr("../../up/voice.pth", b"weights")
+                z.writestr("readme.txt", b"not a model")
+            with zipfile.ZipFile(odd) as z:
+                V._safe_extract(z, out)
+            assert sorted(p.name for p in out.iterdir()) == ["voice.pth"], list(out.iterdir())   # flattened; no link
+        finally:
+            V.VCFG["max_download_gb"] = saved_cap
+    # links fetched for someone: the internet only, after DNS, on every redirect
+    fake = lambda *ips: (lambda host, port, type=0: [(2, 1, 6, "", (ip, port)) for ip in ips])
+    for url in ("http://127.0.0.1:7860/api/status", "http://192.168.1.1/", "http://10.0.0.5/x.zip", "http://[::1]/",
+                "http://169.254.169.254/latest", "http://100.100.1.1/", "http://[::ffff:127.0.0.1]/", "http://0.0.0.0/"):
+        try:
+            safeurl.check(url)
+            raise AssertionError(f"{url} was allowed")
+        except V.ModelError as e:
+            assert str(e) == safeurl.SAY, (url, e)
+    for resolved in (("192.168.1.20",), ("93.184.216.34", "10.1.1.1"), ("fe80::1",)):
+        try:
+            safeurl.check("https://files.example/voice.zip", resolve=fake(*resolved))
+            raise AssertionError(f"a name resolving to {resolved} was allowed")
+        except V.ModelError:
+            pass
+    safeurl.check("https://files.example/voice.zip", resolve=fake("93.184.216.34"))   # the internet: fine
+    for bad in ("ftp://files.example/x.zip", "file:///C:/x.zip", "https://"):
+        try:
+            safeurl.check(bad)
+            raise AssertionError(bad)
+        except V.ModelError:
+            pass
+    import requests
+    calls = []
+
+    class Resp:
+        def __init__(self, status, location=None, url=""):
+            self.status_code, self.headers, self.url = status, ({"location": location} if location else {}), url
+
+        def close(self):
+            pass
+    saved_get, saved_check = requests.get, safeurl.check
+    try:
+        safeurl.check = lambda url: saved_check(url, resolve=fake("93.184.216.34") if "example" in url else socket_resolve)
+        socket_resolve = __import__("socket").getaddrinfo
+        requests.get = lambda url, **kw: (calls.append(url), Resp(302, "http://127.0.0.1:7860/api/status"))[1]
+        try:
+            safeurl.get("https://files.example/voice.zip", timeout=5)
+            raise AssertionError("a redirect into this PC was followed")
+        except V.ModelError as e:
+            assert str(e) == safeurl.SAY and calls == ["https://files.example/voice.zip"], (e, calls)
+        calls.clear()
+        hops = iter([Resp(301, "/v2/voice.zip"), Resp(200, url="https://files.example/v2/voice.zip")])
+        requests.get = lambda url, **kw: (calls.append(url), next(hops))[1]
+        assert safeurl.get("https://files.example/voice.zip").status_code == 200
+        assert calls == ["https://files.example/voice.zip", "https://files.example/v2/voice.zip"], calls
+    finally:
+        requests.get, safeurl.check = saved_get, saved_check
+    from undercover.doubleagent import sources
+    from undercover.frontman import songs
+    for mod in (sources, songs):   # refused before yt-dlp ever sees it
+        real = mod._ydl
+        mod._ydl = lambda **kw: (_ for _ in ()).throw(AssertionError("yt-dlp got a link into this PC"))
+        try:
+            try:
+                mod.from_link("http://127.0.0.1:7860/api/status")
+                raise AssertionError("from_link took a link into this PC")
+            except V.ModelError as e:
+                assert str(e) == safeurl.SAY, e
+        finally:
+            mod._ydl = real
+    assert "safeurl.get(" in inspect.getsource(V._get)
+    # PC-only work: a phone can neither cancel it nor retry it; work a phone may start, it may stop
+    made = []
+    try:
+        for kind, pc in (("move", False), ("doctor", True), ("cover", False)):
+            j = jobs.Job(kind, title=kind)
+            j.pc_only = pc
+            jobs.JOBS[j.id] = j
+            made.append(j)
+        for j, refused in zip(made, (True, True, False)):
+            r = S._Replay(f"/api/jobs/{j.id}/cancel", {})
+            r.remote = True
+            r._route_post(r.path)
+            assert (r.status == 403) == refused and j.cancel == (not refused), (j.kind, r.status, r.out)
+            r = S._Replay(f"/api/jobs/{j.id}/cancel", {})   # from the PC: anything
+            r._route_post(r.path)
+            assert r.status == 200 and j.cancel
+        made[1].state, made[1].retry_req = "error", ("/api/doctor/full", {})
+        r = S._Replay(f"/api/jobs/{made[1].id}/retry", {})
+        r.remote = True
+        r._retry(made[1].id)
+        assert r.status == 403 and r.out["error"] == S.PC_ONLY_JOB, r.out
+    finally:
+        for j in made:
+            jobs.JOBS.pop(j.id, None)
+    rp = inspect.getsource(S.Handler._remember_request)
+    assert 'j.pc_only = phone_api.policy("POST", p)[0] == "pc"' in rp, "jobs don't remember a PC-only start"
+    assert S.phone_api.policy("POST", "/api/doctor/fix/models")[0] == "pc" and S.phone_api.policy("POST", "/api/doctor/full")[0] != "pc"
+    # the away listener: a neutral Server header, refusals that name nothing
+    away = SimpleNamespace(server=SimpleNamespace(away=True))
+    assert S.Handler.version_string(away) == "web"
+    ga = inspect.getsource(S.Handler._gate_away)
+    assert all(w not in (S.AWAY_401 + S.AWAY_403).decode().lower() for w in ("undercover", "away", "phone", "pair", "pc"))
+    assert "AWAY_401" in ga and "AWAY_403" in ga and "Away from home is off" not in ga and "self._deny(403)" not in ga, ga
+    page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    assert "the connection isn't encrypted" in page
+    # another site's page: refused on every method and listener; following a link to a page is let through
+    cs = lambda m, p, **h: S._cross_site(m, p, {k.replace("_", "-").title(): v for k, v in h.items()})
+    assert cs("POST", "/api/voices/install", sec_fetch_site="cross-site", sec_fetch_mode="cors")
+    assert cs("GET", "/api/status", sec_fetch_site="cross-site", sec_fetch_mode="cors")
+    assert cs("GET", "/files/output/x.mp3", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
+    assert cs("GET", "/api/vault", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
+    assert cs("DELETE", "/", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
+    assert not cs("GET", "/", sec_fetch_site="cross-site", sec_fetch_mode="navigate")   # a link to the page: it reads nothing
+    # another port of this PC is the "same site": its GETs to /api/ and /files/ are refused (the Origin check takes the rest)
+    assert cs("GET", "/api/youtube/search", sec_fetch_site="same-site") and cs("GET", "/files/output/x.mp3", sec_fetch_site="same-site")
+    assert not cs("GET", "/", sec_fetch_site="same-site", sec_fetch_mode="navigate") and not cs("GET", "/static/app.js", sec_fetch_site="same-site")
+    assert not cs("GET", "/api/status", sec_fetch_site="same-origin") and not cs("GET", "/api/status")   # this page; the tray
+    for site in ("same-origin", "same-site", "none", ""):   # (same-site: another port here; the Origin check refuses that)
+        assert not cs("POST", "/api/voices/install", sec_fetch_site=site, sec_fetch_mode="cors"), site
+    gate = inspect.getsource(S.Handler._gate)
+    assert gate.index("_cross_site(") < gate.index("if not self.remote:"), "the cross-site check isn't first, on every listener"
+    # the folder check is a POST now (it may make the folder): a GET answers nothing
+    from undercover.app import vault_api
+    assert S.phone_api.policy("POST", "/api/vault/check")[0] == "pc"
+    g = SimpleNamespace(path="/api/vault/check?folder=C%3A%5Cx")
+    assert vault_api.handle(g, "GET", "/api/vault/check") is False
+    assert 'api("/api/vault/check", { json:' in (ROOT / "undercover" / "web" / "vault.js").read_text(encoding="utf-8")
+    # every response says its type is its own and sends no referrer
+    from http.server import BaseHTTPRequestHandler
+    sent = []
+    real_end = BaseHTTPRequestHandler.end_headers
+    try:
+        BaseHTTPRequestHandler.end_headers = lambda self: sent.append("end")
+        h = S.Handler.__new__(S.Handler)   # (no socket: only the headers matter)
+        h.send_header = lambda k, v: sent.append((k, v))
+        S.Handler.end_headers(h)
+    finally:
+        BaseHTTPRequestHandler.end_headers = real_end
+    assert ("X-Content-Type-Options", "nosniff") in sent and ("Referrer-Policy", "no-referrer") in sent and sent[-1] == "end", sent
+    # the page: server-made strings through esc() too
+    web = ROOT / "undercover" / "web"
+    for f, s in (("speakeasy.js", "${esc(est.first_why)}"), ("speakeasy.js", "${esc(est.waiting)}"),
+                 ("vault.js", 'esc(last.reason || "")'), ("doubleagent.js", "${esc(state)}"), ("train.js", "${esc(s.status)}")):
+        assert s in (web / f).read_text(encoding="utf-8"), (f, s)
+    # the diagnostics file: says what it still holds; the home-network address masked; names left out on request
+    from undercover.core import diagnostics as DG
+    assert DG.mask_lan("at 192.168.1.20, 10.0.0.5, 172.20.3.4; not 8.8.8.8, 172.32.1.1, 10.1") == \
+        "at 192.168.x.y, 10.0.x.y, 172.20.x.y; not 8.8.8.8, 172.32.1.1, 10.1"
+    assert DG.hide_names("Chappell Roan - Pink Pony Club (Agent Test).mp3 via quick-fox.tail1234.ts.net",
+                         ["Agent Test", "Chappell Roan"]) == "<name> - Pink Pony Club (<name>).mp3 via <node>.ts.net"
+    with isolated_data():
+        from undercover.core.config import path as cpath
+        (cpath("output_dir")).mkdir(parents=True, exist_ok=True)
+        (cpath("output_dir") / "history.jsonl").write_text(json.dumps(
+            {"output": str(cpath("output_dir") / "Some Song (Agent Test).mp3"), "voice": "agent-test"}) + "\n", encoding="utf-8")
+        cpath("logs_dir").mkdir(parents=True, exist_ok=True)
+        (cpath("logs_dir") / "server.log").write_text("made Some Song (Agent Test).mp3 with agent-test; phone at 192.168.1.20\n",
+                                                      encoding="utf-8")
+        for with_names in (True, False):
+            c = DG.contents(None, with_names=with_names)
+            assert c["names"] is with_names and any("masked" in k for k in c["kept"]), c["kept"]
+            with zipfile.ZipFile(io.BytesIO(DG.build(None, with_names=with_names))) as z:
+                log = z.read("logs/server.log").decode("utf-8")
+            assert "192.168.1.20" not in log and "192.168.x.y" in log, log
+            assert ("Some Song" in log) is with_names and ("<name>" in log) is (not with_names), log
+    from undercover.app import doctor_api as DA
+    assert DA._with_names(SimpleNamespace(path="/api/doctor/bundle?names=0")) is False
+    assert DA._with_names(SimpleNamespace(path="/api/doctor/bundle")) is True
+    assert 'id="sys-bundle-nonames"' in (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    assert "bundle.zip${q}" in (ROOT / "undercover" / "web" / "rooms.js").read_text(encoding="utf-8")
+    assert V.UA["User-Agent"] == "Mozilla/5.0"
+    assert "Resemble AI's inaudible watermark" in (ROOT / "README.md").read_text(encoding="utf-8")
+    # a malformed voice index is a plain refusal (IndexFormatError), never another error; sizes checked up front
+    import struct
+    from undercover.core.engine.rvc import index as IX
+    with tempfile.TemporaryDirectory(prefix="uc-h1i-") as t:
+        t = Path(t)
+        good = t / "good.index"
+        good.write_bytes(IX.COMPACT_MAGIC + struct.pack("<qq", 2, 256) + np.zeros(512, np.float16).tobytes())
+        assert IX.read_vectors(good).shape == (2, 256)
+        bad = {"no vectors": IX.COMPACT_MAGIC + struct.pack("<qq", 0, 256),
+               "minus": IX.COMPACT_MAGIC + struct.pack("<qq", -4, 256) + b"\0" * 64,
+               "odd size": IX.COMPACT_MAGIC + struct.pack("<qq", 2, 100) + b"\0" * 400,
+               "cut header": IX.COMPACT_MAGIC + b"\x01\x02",
+               "huge": IX.COMPACT_MAGIC + struct.pack("<qq", 1 << 60, 768),
+               "faiss cut": b"IwFl" + b"\x01" * 9,
+               "faiss odd": b"IwFl" + struct.pack("<iqqqBi", 100, 5, 0, 0, 1, 1),
+               "faiss junk": b"IwFl" + struct.pack("<iqqqBi", 256, 2, 0, 0, 1, 1) + b"\xff" * 40}
+        for what, data in bad.items():
+            f = t / f"{what.replace(' ', '_')}.index"
+            f.write_bytes(data)
+            try:
+                IX.read_vectors(f)
+                raise AssertionError(f"a malformed index was read ({what})")
+            except IX.IndexFormatError:
+                pass
+            if not data.startswith(IX.COMPACT_MAGIC):   # (a compact file is left as it is; reading it refuses it)
+                try:
+                    IX.compact_in_place(f)
+                    raise AssertionError(f"a malformed index was compacted ({what})")
+                except IX.IndexFormatError:
+                    pass
+    from undercover.core import themes as TH
+    assert TH.BLOCKED.search("src(fonts/x.woff2)") and TH.BLOCKED.search("SRC (x)") is None and TH.BLOCKED.search("SRC(x)")
+    # nothing is installed or downloaded unchecked: no add-on by version alone, no model file without its checksum
+    from undercover.core import addons as AD, setup_models as SM
+    inst = inspect.getsource(AD.install)
+    assert '"-c", str(CONSTRAINTS), *a.packages' not in inst and "no pinned list with checksums" in inst, "an unhashed add-on install"
+    with tempfile.TemporaryDirectory(prefix="uc-h1f-") as t:
+        src = Path(t) / "x.bin"
+        src.write_bytes(b"x")
+        try:
+            SM.fetch(src.as_uri(), Path(t) / "out.bin", None, "x.bin")
+            raise AssertionError("a file with no checksum was downloaded")
+        except V.ModelError as e:
+            assert "no known checksum" in str(e) and not (Path(t) / "out.bin").exists(), e
+    # Windows PowerShell by its full path wherever it's started: the installer, the launchers, the app
+    import re
+    iss = (ROOT / "installer" / "UnderCover.iss").read_text(encoding="utf-8")
+    code = [ln for ln in iss.splitlines() if not ln.lstrip().startswith((";", "//"))]
+    bare = [ln for ln in code if re.search(r"(?<![\\])powershell\.exe", ln, re.I) and "WindowsPowerShell" not in ln]
+    assert not bare and "Exec(PSExe()," in iss and iss.count("'\"' + PSExe() + '\"") == 4 and "PSQuote(PSExe())" in iss, bare
+    for f in (ROOT / "scripts" / "UnderCover.bat", ROOT / "installer" / "setup.ps1"):
+        assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile" in f.read_text(encoding="utf-8"), f
+    from undercover.core import platform as PF
+    ps_src = inspect.getsource(PF)
+    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 4
+    assert PF._powershell().lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
+    # every listener drops a stalled client; the phone and away listeners take so many connections at once, then 503
+    # and close (live, on 127.0.0.1, with a handler that holds its connections)
+    import socket
+    import threading
+    from http.server import BaseHTTPRequestHandler as BH
+    assert S.Handler.timeout == 30 and issubclass(S.AwayServer, S.PhoneServer)
+    hold = threading.Event()
+
+    class Slow(BH):
+        def do_GET(self):
+            hold.wait(10)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    class Two(S.PhoneServer):
+        MAX_LIVE = 2
+    srv = Two(("127.0.0.1", 0), Slow)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    socks = []
+    try:
+        port = srv.server_address[1]
+        for _ in range(2):
+            c = socket.create_connection(("127.0.0.1", port), timeout=5)
+            c.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            socks.append(c)
+        time.sleep(0.3)
+        c = socket.create_connection(("127.0.0.1", port), timeout=5)
+        socks.append(c)
+        busy = c.recv(200)
+        assert busy.startswith(b"HTTP/1.1 503"), busy
+        hold.set()
+        assert all(s.recv(200).split(b"\r\n")[0].endswith(b" 200 OK") for s in socks[:2])
+        for s in socks:
+            s.close()
+        time.sleep(0.3)
+        c = socket.create_connection(("127.0.0.1", port), timeout=5)   # the places came back
+        c.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert c.recv(200).split(b"\r\n")[0].endswith(b" 200 OK")
+        c.close()
+    finally:
+        hold.set()
+        srv.shutdown()
+        srv.server_close()
+    return ("origin exact; cross-site refused; bodies capped (413, unread); zips capped / few / no links; links internet-only, "
+            "redirects too; PC-only work stays the PC's; away names nothing; nosniff + no-referrer; esc() on server strings; "
+            "30 s timeout; 503 past a listener's connection cap")
 
 
 def _fake_ts_set(state_file, **kw):
@@ -4904,7 +5303,7 @@ def u_voicepack():
         weight = {"enc_p.emb_phone.weight": torch.randn(192, 768, generator=gen).half(), "dec.conv_pre.weight": torch.randn(512, 192, 7, generator=gen).half()}
         torch.save({"weight": weight, "config": model_config(40000),
                     "info": "48epoch", "sr": "40k", "f0": 1, "version": "v2"}, d / "model.pth")
-        vecs = np.random.default_rng(3).standard_normal((50, 8)).astype(np.float16)
+        vecs = np.random.default_rng(3).standard_normal((50, 256)).astype(np.float16)
         (d / "model.index").write_bytes(COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
         meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         meta["index"] = str(d / "model.index")
@@ -5415,7 +5814,7 @@ def u_stop_download():
                 return got["n"] > 3
             t0 = time.time()
             try:
-                setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", None, "big.bin", cancel=stop_soon)
+                setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", "0" * 64, "big.bin", cancel=stop_soon)   # (stopped before the checksum)
                 raise AssertionError("the download ran to the end")
             except setup_models.DownloadStopped:
                 pass
@@ -7705,10 +8104,23 @@ def u_phone_pairing():
             p2 = phone.new_pairing()   # expiry
             phone.PAIRING["until"] = time.time() - 1
             assert "run out" in refused(p2["code"])
-            p3 = phone.new_pairing()   # five wrong codes cancel it
+            # five wrong codes from one address: that address is out of tries, even with the right code; the code lives
+            # on for the phone that's really pairing (1.1: a stranger's guesses can't cancel it)
+            p3 = phone.new_pairing()
             for _ in range(phone.MAX_TRIES):
                 refused(wrong, addr="10.0.0.8")
-            assert phone.pairing() is None and "run out" in refused(p3["code"], addr="10.0.0.7")
+            assert phone.pairing() is not None and "from this phone" in refused(p3["code"], addr="10.0.0.8")
+            t3, d3 = phone.claim(p3["code"], "Tablet", "10.0.0.7")
+            assert d3["name"] == "Tablet" and phone.pairing() is None
+            phone.revoke(d3["id"])
+            phone._TRIES[:] = []
+            p3b = phone.new_pairing()   # MAX_WRONG in all, from any addresses, cancels it
+            for i in range(phone.MAX_WRONG):
+                if i % phone.RATE[1] == 0:
+                    phone._TRIES[:] = []
+                refused(wrong, addr=f"10.0.1.{i // (phone.MAX_TRIES - 1)}")
+            assert phone.pairing() is None and "run out" in refused(p3b["code"], addr="10.0.0.5")
+            phone._TRIES[:] = []
             phone._TRIES[:] = []   # the rate limit: 10 tries per address in 10 minutes, then 429 even with the right code
             p4 = phone.new_pairing()
             for _ in range(phone.RATE[1]):
@@ -7721,6 +8133,18 @@ def u_phone_pairing():
             phone._TRIES[:] = []
             phone._FILE[0] = None   # read back from the file
             assert phone.device_for(token)["name"] == "Pixel 8"
+            # a token's life (1.1): 30 days from its last use, renewed by every use; a record from before starts at its
+            # first use; the cookie lives as long and is sent again with each answer
+            rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
+            rec["used"] = time.time() - phone.TOKEN_IDLE_S + 60
+            assert phone.device_for(token) and time.time() - rec["used"] < 5, "a use didn't renew the token"
+            rec["used"] = time.time() - phone.TOKEN_IDLE_S - 1
+            assert phone.device_for(token) is None, "a token unused for 30 days still worked"
+            rec.pop("used")
+            assert phone.device_for(token) and "used" in rec
+            from undercover.app import phone_api as PA
+            assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t") and "Secure" in PA.away_cookie("t")
+            assert phone.TOKEN_IDLE_S == 30 * 86400
             phone.revoke(dev["id"])
             assert phone.device_for(token) is None and phone.devices() == []
             token2, dev2 = phone.claim(phone.new_pairing()["code"], "<b>Tab</b>\n", "10.0.0.5")
@@ -8064,6 +8488,117 @@ def _fake_wheel(folder: Path, pkg: str, mod: str, ver: str, requires=(), extra_f
     return {"url": f.as_uri(), "sha": hashlib.sha256(f.read_bytes()).hexdigest(), "file": f.name, "size": f.stat().st_size}
 
 
+@check("yt-dlp's update is vouched for by GitHub too (1.1): yt-dlp-ejs's wheel by the release asset's digest; yt-dlp's wheel package file by file against its SHA2-256SUMS-checked source tarball (version.py: plain values, two strings free); anything missing or different, no update; a release under 48 h is never taken by itself, offered instead")
+def u_ytdlp_upstream():
+    import hashlib
+    import inspect
+    import io
+    import tarfile
+    import tempfile
+    import zipfile
+    from undercover.core import ytdlp as Y
+    assert Y.gh_tag("2026.8.19") == "2026.08.19" and Y.gh_tag("2026.10.1.2") == "2026.10.01.2"
+    with tempfile.TemporaryDirectory(prefix="uc-yup-") as t:
+        t = Path(t)
+        ver, ejs = "2099.1.2", "9.9.0"
+
+        made = [0]
+
+        def wheel(name, files):   # (each world its own folder: a later one never overwrites an earlier one)
+            made[0] += 1
+            (t / f"w{made[0]}").mkdir()
+            f = t / f"w{made[0]}" / name
+            with zipfile.ZipFile(f, "w") as z:
+                for n, data in files.items():
+                    z.writestr(n, data)
+            return f
+        vpy = "# Autogenerated\n__version__ = '2099.01.02'\nVARIANT = None\nUPDATE_HINT = None\nCHANNEL = 'stable'\n"
+        pkg = {"yt_dlp/__init__.py": "print('yt')\n", "yt_dlp/extractor/x.py": "X = 1\n", "yt_dlp/version.py": vpy}
+
+        def tarball(files):
+            b = io.BytesIO()
+            with tarfile.open(fileobj=b, mode="w:gz") as tz:
+                for n, data in files.items():
+                    raw = data.encode()
+                    ti = tarfile.TarInfo(f"yt-dlp/{n}")
+                    ti.size = len(raw)
+                    tz.addfile(ti, io.BytesIO(raw))
+            return b.getvalue()
+        good_wheel = {**pkg, "yt_dlp/version.py": vpy.replace("VARIANT = None", "VARIANT = 'pip'"),
+                      f"yt_dlp-{ver}.dist-info/METADATA": "Name: yt-dlp\n", f"yt_dlp-{ver}.data/data/x.txt": "skipped"}
+        ejs_file = t / f"yt_dlp_ejs-{ejs}-py3-none-any.whl"
+        with zipfile.ZipFile(ejs_file, "w") as z:   # (a real wheel: the staging test unpacks it)
+            z.writestr("yt_dlp_ejs/__init__.py", "")
+        ejs_sha = hashlib.sha256(ejs_file.read_bytes()).hexdigest()
+
+        def world(yt_files=None, tar_files=None, ejs_digest=None, sums_has=True, tar_sha=None):
+            yw = wheel(f"yt_dlp-{ver}-py3-none-any.whl", yt_files or good_wheel)
+            tz = tarball(tar_files or pkg)
+            sums = (f"{tar_sha or hashlib.sha256(tz).hexdigest()}  yt-dlp.tar.gz\n" if sums_has else "") + "00ff  yt-dlp.exe\n"
+            rel = {"assets": [{"name": ejs_file.name, "digest": f"sha256:{ejs_digest or ejs_sha}"}]}
+            pages = {f"{Y.GITHUB_EJS}/{ejs}": json.dumps(rel).encode(),
+                     f"{Y.GITHUB_YT}/{Y.gh_tag(ver)}/SHA2-256SUMS": sums.encode(),
+                     f"{Y.GITHUB_YT}/{Y.gh_tag(ver)}/yt-dlp.tar.gz": tz}
+            pair = {"yt": ver, "ejs": ejs, "wheels": {Y.EJS: {"file": ejs_file.name, "sha": ejs_sha}}}
+            return pair, {Y.PKG: yw, Y.EJS: ejs_file}, (lambda url: pages[url])
+        pair, files, get = world()
+        Y.upstream_check(pair, files, get)   # all agree: fine (version.py differs only in VARIANT)
+        refused = {
+            "ejs digest": world(ejs_digest="0" * 64),
+            "no tarball in the sums": world(sums_has=False),
+            "tarball not its sums": world(tar_sha="1" * 64),
+            "a changed file": world(yt_files={**good_wheel, "yt_dlp/extractor/x.py": "X = 2\n"}),
+            "a file not in the source": world(yt_files={**good_wheel, "yt_dlp/extra.py": "import os\n"}),
+            "outside the package": world(yt_files={**good_wheel, "sitecustomize.py": "import os\n"}),
+            "no version.py in the source": world(tar_files={k: v for k, v in pkg.items() if k != "yt_dlp/version.py"}),
+        }
+        for what, (pair, files, get) in refused.items():
+            try:
+                Y.upstream_check(pair, files, get)
+                raise AssertionError(f"GitHub vouched when it shouldn't: {what}")
+            except Y.NotVouched:
+                pass
+        # the staged pair never holds the wheel's version.py: the tarball's own bytes, even when the wheel's carries an
+        # encoding declaration or a BOM that would read differently when Python imports it
+        odd = "\ufeff# -*- coding: utf-7 -*-\n__version__ = '2099.01.02'\nVARIANT = '+AF8AXw-import+AF8AXw-'\n"
+        pair, files, get = world(yt_files={**good_wheel, "yt_dlp/version.py": odd})
+        own = Y.upstream_check(pair, files, get)
+        assert own == {"yt_dlp/version.py": vpy.encode()}, own
+        stage_pair = {"yt": ver, "ejs": ejs, "wheels": {
+            Y.PKG: {"url": files[Y.PKG].as_uri(), "sha": hashlib.sha256(files[Y.PKG].read_bytes()).hexdigest(), "file": files[Y.PKG].name},
+            Y.EJS: {"url": files[Y.EJS].as_uri(), "sha": hashlib.sha256(files[Y.EJS].read_bytes()).hexdigest(), "file": files[Y.EJS].name}}}
+        real_up = Y.UPSTREAM
+        try:
+            Y.UPSTREAM = lambda pr, fs: Y.upstream_check(pr, fs, get)
+            d = Y.stage(stage_pair, into=t / "staged")
+        finally:
+            Y.UPSTREAM = real_up
+        assert (d / "yt_dlp" / "version.py").read_bytes() == vpy.encode(), (d / "yt_dlp" / "version.py").read_bytes()
+        assert json.loads((d / "pair.json").read_text(encoding="utf-8"))["files"]["yt_dlp/version.py"] == hashlib.sha256(vpy.encode()).hexdigest()
+        assert Y.changed(d) == "", Y.changed(d)
+        pair, files, _ = world()
+
+        def offline(url):
+            raise Y.NotVouched("GitHub couldn't be reached (OSError)")
+        try:
+            Y.upstream_check(pair, files, offline)
+            raise AssertionError("no answer from GitHub was taken as yes")
+        except Y.NotVouched:
+            pass
+    # (2) the age rule: under 48 h (or no time given), never by itself
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    assert Y._age_s({"uploaded": (now - timedelta(hours=3)).isoformat()}) < Y.YOUNG_S
+    assert Y._age_s({"uploaded": (now - timedelta(hours=49)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}) > Y.YOUNG_S
+    assert Y._age_s({}) is None
+    src = inspect.getsource(Y.heal)
+    assert 'reason == "breakage"' in src and "a is None or a < YOUNG_S" in src and 'st["offer"]' in src
+    assert "UPSTREAM(pair, got)" in inspect.getsource(Y.stage)
+    lib = (ROOT / "undercover" / "web" / "library.js").read_text(encoding="utf-8")
+    assert 's.ytdlp_offer ? "Update now"' in lib
+    return "ejs digest, tarball sums, the package file by file, the tarball's own version.py staged; 7 refusals; under 48 h offered, not taken"
+
+
 @check("yt-dlp self-heal: fake PyPI + fake resolvers: swap, bad hash, failed test, rollback, offline, detection, dry run")
 def u_ytdlp_heal():
     import sys as _sys
@@ -8097,19 +8632,38 @@ def u_ytdlp_heal():
             req = ['yt-dlp-ejs==9.9.0; extra == "pin"'] if name == "yt-dlp" else []
             return {"info": {"name": name, "version": ver, "requires_dist": req},
                     "urls": [{"packagetype": "bdist_wheel", "filename": w["file"], "url": w["url"],
-                              "digests": {"sha256": w["sha"]}, "yanked": False}]}
+                              "digests": {"sha256": w["sha"]}, "yanked": False,
+                              "upload_time_iso_8601": state.get("uploaded", "2020-01-01T00:00:00.000000Z")}]}
         scores = {}
 
         def fake_resolve(d):
             key = Path(d).name if d else "venv"
             return {"ok": scores.get(key, scores.get("*", 0)), "of": 3, "errors": [], "version": key}
-        ytdlp.fetch_json, ytdlp.RESOLVE = fake_json, fake_resolve
+        ytdlp.fetch_json, ytdlp.RESOLVE, ytdlp.UPSTREAM = fake_json, fake_resolve, lambda pair, files: None   # (never GitHub)
         new_name = f"{newer}+ejs9.9.0"
         try:
             assert ytdlp.home().parent == Path(config_path("cache_dir")) and storage_inside(ytdlp.home(), t)
-            # 1. a newer pair that resolves as many: used, the venv's pair is the way back
+            # 0. (1.1) a release under 48 h: a breakage heal doesn't take it, it's offered; GitHub not vouching: kept
             scores.update({"venv": 3, "*": 3})
+            from datetime import datetime, timezone
+            state["uploaded"] = datetime.now(timezone.utc).isoformat()
+            r = ytdlp.heal(reason="breakage")
+            assert not r["changed"] and "48 h" in r["note"] and ytdlp.status()["offer"]["yt"] == newer, r
+            assert "48 h" in ytdlp.load()["last_result"], ytdlp.load()["last_result"]
+            state.pop("uploaded")
+
+            def not_vouched(pair, files):
+                raise ytdlp.NotVouched("GitHub's yt-dlp-ejs 9.9.0 release doesn't vouch for PyPI's file")
+            ytdlp.UPSTREAM = not_vouched
             r = ytdlp.heal(reason="test")
+            assert not r["changed"] and "wasn't taken" in r["note"] and not any(p.name.startswith(newer) for p in ytdlp.home().iterdir()), r
+            ytdlp.UPSTREAM = lambda pair, files: None
+            # 1. a newer pair that resolves as many: used, the venv's pair is the way back (a heal by hand takes a young
+            # one too: Update now)
+            state["uploaded"] = datetime.now(timezone.utc).isoformat()
+            r = ytdlp.heal(reason="test")
+            state.pop("uploaded")
+            assert ytdlp.status()["offer"] is None
             assert r["changed"] and r["chose"] == "new" and r["after"]["yt"] == newer, r
             st = ytdlp.load()
             assert st["active"] == new_name and st["last_good"] is None, st
@@ -8161,6 +8715,32 @@ def u_ytdlp_heal():
             st["active"], st["last_good"] = "gone+ejs1", None
             ytdlp.save(st)
             assert ytdlp.activate()["source"] == "venv"
+            # 7b. (1.1) a pair whose files differ from when it was staged isn't used: changed, added, or no hashes kept;
+            # Python's own __pycache__ doesn't count
+            said, real_log = [], ytdlp.log
+            ytdlp.log = said.append
+            st["active"], st["last_good"] = new_name, None
+            ytdlp.save(st)
+            d = ytdlp.side(new_name)
+            assert ytdlp.changed(d) == "" and ytdlp.activate()["yt"] == newer
+            init = d / "yt_dlp" / "__init__.py"
+            orig = init.read_bytes()
+            init.write_bytes(orig + b"\n# changed\n")
+            assert "differ" in ytdlp.changed(d) and ytdlp.activate()["source"] == "venv", "a changed pair was used"
+            init.write_bytes(orig)
+            (d / "yt_dlp" / "extra.py").write_text("x = 1\n", encoding="utf-8")
+            assert "differ" in ytdlp.changed(d) and ytdlp.activate()["source"] == "venv", "a pair with an added file was used"
+            (d / "yt_dlp" / "extra.py").unlink()
+            (d / "yt_dlp" / "__pycache__").mkdir(exist_ok=True)
+            (d / "yt_dlp" / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\0")
+            assert ytdlp.changed(d) == ""
+            pj = json.loads((d / "pair.json").read_text(encoding="utf-8"))
+            (d / "pair.json").write_text(json.dumps({k: v for k, v in pj.items() if k != "files"}), encoding="utf-8")
+            assert "before its files were hashed" in ytdlp.changed(d) and ytdlp.activate()["source"] == "venv"
+            (d / "pair.json").write_text(json.dumps(pj), encoding="utf-8")
+            assert ytdlp.activate()["yt"] == newer
+            ytdlp.log = real_log
+            assert any("isn't used" in s for s in said), ("the fallback wasn't logged", said)
             # 8. a wheel that climbs out is refused
             evil = _fake_wheel(pypi, "yt-dlp", "yt_dlp", "2099.3.4", extra_files={"../../evil.py": "x"})
             try:
@@ -8253,7 +8833,7 @@ def u_ytdlp_heal():
             finally:
                 ytdlp.status = real_status
         finally:
-            ytdlp.fetch_json, ytdlp.RESOLVE = saved[0], saved[1]
+            ytdlp.fetch_json, ytdlp.RESOLVE, ytdlp.UPSTREAM = saved[0], saved[1], ytdlp.upstream_check
             ytdlp._use(None)
             _sys.path[:] = saved[3]
             ytdlp.ACTIVE.clear()
@@ -8783,7 +9363,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/storage/check"), ("POST", "/api/storage/move"),
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
-    ("GET", "/api/vault"), ("GET", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
+    ("GET", "/api/vault"), ("POST", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
     ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"), ("POST", "/api/lowprofile"), ("POST", "/api/firstrun"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
@@ -9301,7 +9881,7 @@ def u_smaller():
         pth = os.urandom(4000)
         (vd / "model.pth").write_bytes(pth)
         (d / "train" / "e5.pth").write_bytes(pth)
-        vecs = rng.standard_normal((300, 8)).astype(np.float16)
+        vecs = rng.standard_normal((300, 256)).astype(np.float16)
         with open(vd / "model.index", "wb") as f:
             f.write(ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes())
         ov = smaller.overview()
@@ -9403,7 +9983,7 @@ def u_shrink_export():
         vd = voices_dir() / "export-voice"
         vd.mkdir(parents=True)
         (vd / "model.pth").write_bytes(b"p")
-        vecs = np.random.default_rng(2).standard_normal((300, 8)).astype(np.float16)
+        vecs = np.random.default_rng(2).standard_normal((300, 256)).astype(np.float16)
         full = ri.COMPACT_MAGIC + struct.pack("<qq", *vecs.shape) + vecs.tobytes()
         (vd / "model.index").write_bytes(full)
         assert trainer.shrink_exported_index(vd, k=0) is None and (vd / "model.index").read_bytes() == full   # off
@@ -9952,7 +10532,7 @@ def a_voicepack():
 def a_vault():
     from undercover.core import storage
     vf = storage.ALLOWED_ROOTS[0] / "vault-drive"
-    bad = api("/api/vault/check?folder=" + urllib.parse.quote(str(ROOT / "output")))
+    bad = api("/api/vault/check", {"folder": str(ROOT / "output")})
     assert bad["ok"] is False, bad
     st = api("/api/vault/settings", {"folder": str(vf), "size": "matters"})
     assert st["on"] and st["connected"], st
@@ -10586,7 +11166,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

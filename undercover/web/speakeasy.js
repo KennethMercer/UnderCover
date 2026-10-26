@@ -214,8 +214,8 @@ function seSummary() {
   const est = SE.est && SE.est.key === seEstKey() ? SE.est : null;   // the server's, while it still matches what's on the page
   const secs = est ? est.audio_seconds : w / 3.0 / sePaceFactor();
   const cad = est ? est.mode === "cadence" : SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
-  const first = est && est.first_s >= 5 ? `, ${fmtTime(est.first_s)} of it because ${est.first_why} (the first speech only)` : "";   // (1.0.1)
-  const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${first}${est.waiting ? ` (${est.waiting} ahead in the queue)` : ""}`
+  const first = est && est.first_s >= 5 ? `, ${fmtTime(est.first_s)} of it because ${esc(est.first_why)} (the first speech only)` : "";   // (1.0.1)
+  const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${first}${est.waiting ? ` (${esc(est.waiting)} ahead in the queue)` : ""}`
     : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
   const when = `${cad ? "the way they really do" : "read by the Reader"}${ready} · ready to play after the ${cad ? "first few sentences" : "first sentence"}`;
   $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`

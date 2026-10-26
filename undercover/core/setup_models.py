@@ -151,6 +151,8 @@ def fetch(url: str, dest, want: str | None, local: str = "", progress=None, trie
     from pathlib import Path
     dest = Path(dest)
     local = local or dest.name
+    if not want:   # (1.1 hardening: a file nothing can check is never downloaded)
+        raise ModelError(f"{local} has no known checksum, so it isn't downloaded.")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
     if url.startswith("file://"):
@@ -183,7 +185,7 @@ def fetch(url: str, dest, want: str | None, local: str = "", progress=None, trie
                 if attempt == tries:
                     raise
                 time.sleep(2 * attempt)   # the .part stays: the next try carries on from it
-    if want and sha256_of(tmp) != want:
+    if sha256_of(tmp) != want:
         tmp.unlink(missing_ok=True)
         raise ModelError(f"The download of {local} came out different from the expected file (checksum mismatch), so it "
                          "wasn't used. Try again; if it keeps happening, the source may have changed.")

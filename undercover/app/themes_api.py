@@ -40,7 +40,6 @@ def _send(h, data: bytes, ctype: str, name: str | None = None):
     h.send_header("Content-Type", ctype)
     h.send_header("Content-Length", str(len(data)))
     h.send_header("Cache-Control", "no-cache")
-    h.send_header("X-Content-Type-Options", "nosniff")
     if name:
         h.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
     h.end_headers()
@@ -55,7 +54,7 @@ def _route(h, method, p):
             return h._json(themes.save(h._body()))
         raise LookupError("Not found")
     if p == "/api/themes/import" and method == "POST":
-        n = int(h.headers.get("Content-Length") or 0)
+        n = h._length()
         if not n or n > themes.MAX_BYTES:
             h.close_connection = True   # the body isn't read
             raise ThemeError("That file is empty or over 4 MB: a theme is a few KB, fonts a few hundred.")

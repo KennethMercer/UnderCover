@@ -5,11 +5,13 @@ every request that doesn't come from this PC must carry a paired device's token 
 
 - **Pairing:** the PC asks for a code (`new_pairing()`): six characters, valid for 5 minutes and once, shown on the PC as
   a QR code of `http://<address>:<port>/pair#<code>` and as text to type. The phone sends it back with a name
-  (`claim()`); at most 5 wrong codes, then the pairing is dropped; at most 10 tries per address and 30 in all every 10
+  (`claim()`); at most 5 wrong codes from one address (it may try no more for that code: a stranger's guesses don't
+  cancel the user's code), 20 in all, then the pairing is dropped; at most 10 tries per address and 30 in all every 10
   minutes.
 - **Tokens:** 32 random bytes per device, given to the phone once (an HttpOnly cookie) and stored here only as their
   SHA-256 (`device_for()` compares hashes in constant time). Revoke removes the record, so the token stops working at
-  its next request.
+  its next request. A token unused for TOKEN_IDLE_S (30 days) stops working by itself (a lost phone); each use renews
+  it, so a phone that's used never notices.
 - **Where:** `phone.json` next to the config file (`{"enabled", "devices": [{id, name, hash, paired, seen, ip}]}`;
   git-ignored), so a sandbox server with its own config has its own. In test mode (storage.ALLOWED_ROOTS) it is only
   written inside the test's folders.
@@ -29,7 +31,9 @@ from pathlib import Path
 from . import config, fsutil
 
 PAIR_SECONDS = 300
-MAX_TRIES = 5             # wrong codes before the pairing is dropped
+MAX_TRIES = 5             # wrong codes from one address: it may try no more for that code
+MAX_WRONG = 20            # wrong codes in all, from every address, before the pairing is dropped
+TOKEN_IDLE_S = 30 * 86400  # a token unused this long stops working; each use renews it (and the cookie's life)
 RATE = (600, 10, 30)      # window (s), tries per address, tries in all
 MAX_DEVICES = 10
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I: easy to type from the screen
@@ -130,7 +134,7 @@ def redeem_away(code: str) -> tuple[str, dict]:
         if d is None:
             raise PhoneError("That phone isn't paired any more.", 403)
         token = secrets.token_urlsafe(32)
-        d["away_hash"] = hash_token(token)
+        d["away_hash"], d["away_used"] = hash_token(token), time.time()
         _save()
         return token, public(d)
 
@@ -168,7 +172,7 @@ def new_pairing() -> dict:
         if not _load()["enabled"]:
             raise PhoneError("Switch Phone access on first.")
         PAIRING = {"code": "".join(secrets.choice(ALPHABET) for _ in range(6)), "until": time.time() + PAIR_SECONDS,
-                   "tries": 0}
+                   "tries": 0, "by": {}}
         return dict(PAIRING)
 
 
@@ -211,11 +215,17 @@ def claim(code: str, name: str, addr: str) -> tuple[str, dict]:
         if not PAIRING or PAIRING["until"] <= time.time():
             PAIRING = None
             raise PhoneError("That code has run out. Make a new one on the PC.", 403)
+        by = PAIRING.setdefault("by", {})
+        if by.get(addr, 0) >= MAX_TRIES:   # this address is out of tries for this code (the code lives on for others)
+            raise PhoneError("Too many wrong codes from this phone. Make a new code on the PC.", 403)
         if not hmac.compare_digest(code.encode(), PAIRING["code"].encode()):
+            by[addr] = by.get(addr, 0) + 1
             PAIRING["tries"] += 1
-            if PAIRING["tries"] >= MAX_TRIES:
+            if PAIRING["tries"] >= MAX_WRONG:
                 PAIRING = None
                 raise PhoneError("Too many wrong codes: that one is cancelled. Make a new one on the PC.", 403)
+            if by[addr] >= MAX_TRIES:
+                raise PhoneError("Too many wrong codes from this phone. Make a new code on the PC.", 403)
             raise PhoneError("That isn't the code on the PC. Check it and try again.", 403)
         PAIRING = None   # once
         if len(st["devices"]) >= MAX_DEVICES:
@@ -223,7 +233,7 @@ def claim(code: str, name: str, addr: str) -> tuple[str, dict]:
         token = secrets.token_urlsafe(32)
         now = time.strftime("%Y-%m-%d %H:%M")
         dev = {"id": secrets.token_hex(5), "name": clean_name(name), "hash": hash_token(token), "paired": now,
-               "seen": now, "ip": addr}
+               "seen": now, "ip": addr, "used": time.time()}
         st["devices"].append(dev)
         _save()
         return token, public(dev)
@@ -261,6 +271,10 @@ def device_for(token: str | None, addr: str = "", away: bool = False) -> dict | 
         if found is None:
             return None
         now = time.time()
+        used = "away_used" if away else "used"
+        if found.get(used) is not None and now - float(found[used]) > TOKEN_IDLE_S:
+            return None   # unused for 30 days: stopped by itself (Revoke isn't needed for a lost phone)
+        found[used] = now   # (a record from before 1.1 starts its clock at its first use)
         if now - _SEEN_AT.get(h, 0) > SEEN_EVERY:
             _SEEN_AT[h] = now
             found["seen"], found["ip"] = time.strftime("%Y-%m-%d %H:%M"), addr or found.get("ip")

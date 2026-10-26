@@ -685,7 +685,7 @@ set "UC_ARGS=%*"
 if /i "%~1"=="--console" (set "UC_MODE=console" & set "UC_ARGS=")
 if /i "%~1"=="--background" (set "UC_MODE=background" & set "UC_ARGS=")
 rem Started by Explorer (Start menu, double-click, a shortcut)? Walk up: powershell <- for's cmd <- this cmd <- parent
-if not defined UC_MODE for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$i=$PID; foreach($n in 1..3){$i=(Get-CimInstance Win32_Process -Filter ('ProcessId='+$i)).ParentProcessId}; (Get-Process -Id $i -EA 0).ProcessName"`) do set "UC_PARENT=%%P"
+if not defined UC_MODE for /f "usebackq delims=" %%P in (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "$i=$PID; foreach($n in 1..3){$i=(Get-CimInstance Win32_Process -Filter ('ProcessId='+$i)).ParentProcessId}; (Get-Process -Id $i -EA 0).ProcessName"`) do set "UC_PARENT=%%P"
 if not defined UC_MODE if /i "%UC_PARENT%"=="explorer" set "UC_MODE=background"
 if not defined UC_MODE set "UC_MODE=console"
 if "%UC_MODE%"=="background" (

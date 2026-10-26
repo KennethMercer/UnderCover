@@ -157,12 +157,41 @@ def vkey(v: str | None) -> tuple:
 ACTIVE: dict = {"dir": None}
 
 
+def file_hashes(d: Path) -> dict:
+    """{path inside the pair: SHA-256} of every file a pair folder holds but its pair.json (1.1 hardening)."""
+    out = {}
+    for f in sorted(p for p in d.rglob("*") if p.is_file()):
+        rel = f.relative_to(d).as_posix()
+        if rel != "pair.json" and "__pycache__" not in rel.split("/"):
+            out[rel] = hashlib.sha256(f.read_bytes()).hexdigest()
+    return out
+
+
+def changed(d: Path) -> str:
+    """Why a pair folder can't be trusted ("" when it can): its files must be exactly the ones hashed when it was
+    staged (1.1 hardening: a file changed, missing or added since is refused, and so is a pair staged before the hashes
+    were kept)."""
+    want = (_pair_of(d) or {}).get("files")
+    if not want:
+        return "it was staged before its files were hashed"
+    have = file_hashes(d)
+    if have != want:
+        diff = sorted(set(have) ^ set(want)) + sorted(k for k in set(have) & set(want) if have[k] != want[k])
+        return f"{len(diff)} file(s) differ from when it was staged (e.g. {diff[0]})"
+    return ""
+
+
 def activate() -> dict:
-    """Put the active side pair first on sys.path (before anything imports yt_dlp). A missing or broken folder falls back
-    to the last known good, then to the venv's pair, and says so in the log."""
+    """Put the active side pair first on sys.path (before anything imports yt_dlp). A missing or broken folder, or one
+    whose files changed since it was staged, falls back to the last known good, then to the venv's pair, and says so in
+    the log."""
     st = load()
     for name in (st["active"], st["last_good"]):
         d = side(name)
+        why = changed(d) if d is not None else ""
+        if why:
+            log(f"pair {name} isn't used: {why}")
+            d = None
         if d is not None:
             if name != st["active"]:
                 log(f"the active pair {st['active']} is missing or damaged: using the last known good {name}")
@@ -279,7 +308,8 @@ def fetch_json(name: str, version: str | None = None) -> dict:
 def _wheel(meta: dict) -> dict:
     for f in meta.get("urls") or []:
         if f.get("packagetype") == "bdist_wheel" and f["filename"].endswith("-py3-none-any.whl") and not f.get("yanked"):
-            return {"url": f["url"], "sha": f["digests"]["sha256"], "file": f["filename"], "size": f.get("size") or 0}
+            return {"url": f["url"], "sha": f["digests"]["sha256"], "file": f["filename"], "size": f.get("size") or 0,
+                    "uploaded": f.get("upload_time_iso_8601") or f.get("upload_time")}
     raise HealError(f"PyPI lists no plain wheel for {meta.get('info', {}).get('name')} {meta.get('info', {}).get('version')}.")
 
 
@@ -301,6 +331,137 @@ def latest_pair() -> dict:
     if not ejs:
         raise HealError(f"yt-dlp {ver} doesn't name a yt-dlp-ejs version; not taking it.")
     return {"yt": ver, "ejs": ejs, "wheels": {PKG: _wheel(yt), EJS: _wheel(fetch_json(EJS, ejs))}}
+
+
+# ---------------------------------------------------------------- GitHub vouches too (1.1 hardening)
+# PyPI's published SHA-256 alone would let a hijacked PyPI release through. So a new pair must also match what the
+# projects publish on GitHub, over HTTPS: yt-dlp-ejs's wheel by the release asset's digest (GitHub's own SHA-256 of
+# the file); yt-dlp, which puts no wheel on GitHub, by its source tarball (checked against the release's
+# SHA2-256SUMS) holding byte for byte every file the wheel's package holds. The one file pip builds differently,
+# yt_dlp/version.py, is never taken from the wheel: the staged pair gets the tarball's own (checked) copy. Anything
+# missing, unreachable or different: no update, said in the System room.
+GITHUB_YT = "https://github.com/yt-dlp/yt-dlp/releases/download"
+GITHUB_EJS = "https://api.github.com/repos/yt-dlp/ejs/releases/tags"
+UPSTREAM_MAX = 64 << 20
+
+
+class NotVouched(HealError):
+    """GitHub doesn't vouch for the files PyPI served (or couldn't be asked)."""
+
+
+def _https_get(url: str) -> bytes:
+    if not url.startswith("https://"):
+        raise NotVouched(f"not an HTTPS address: {url}")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read(UPSTREAM_MAX + 1)
+    except OSError as e:
+        raise NotVouched(f"GitHub couldn't be reached ({type(e).__name__})")
+    if len(data) > UPSTREAM_MAX:
+        raise NotVouched(f"{url} is larger than expected")
+    return data
+
+
+def gh_tag(version: str) -> str:
+    """PyPI's yt-dlp version -> its GitHub tag ("2026.8.19" -> "2026.08.19")."""
+    p = version.split(".")
+    if len(p) < 3 or not all(x.isdigit() for x in p):
+        raise NotVouched(f"yt-dlp {version} isn't a release version")
+    return ".".join([p[0], f"{int(p[1]):02d}", f"{int(p[2]):02d}"] + p[3:])
+
+
+def _version_py(text: str) -> dict:
+    """yt_dlp/version.py as data: {name: value}, refused unless it is only `NAME = <string, number or None>`."""
+    import ast
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        raise NotVouched("yt_dlp/version.py doesn't parse")
+    out = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, (str, int, type(None)))):
+            out[node.targets[0].id] = node.value.value
+        elif not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)):   # (a docstring is fine)
+            raise NotVouched("yt_dlp/version.py holds more than plain values")
+    return out
+
+
+def _same_package(wheel: Path, tarball: bytes, version: str) -> bytes:
+    """The wheel's yt_dlp package is the source tarball's, file by file (see above); nothing else in the wheel but its
+    own dist-info. -> the tarball's yt_dlp/version.py, which the staged pair holds instead of the wheel's."""
+    import tarfile
+    src = {}
+    with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as t:
+        for m in t.getmembers():
+            parts = m.name.split("/")
+            if m.isfile() and "yt_dlp" in parts:
+                src["/".join(parts[parts.index("yt_dlp"):])] = t.extractfile(m).read()
+    info = f"yt_dlp-{version}.dist-info/"
+    with zipfile.ZipFile(wheel) as z:
+        for i in z.infolist():
+            n = i.filename
+            if n.endswith("/") or n.startswith((info, f"yt_dlp-{version}.data/")):   # (.data is never unpacked)
+                continue
+            if not n.startswith("yt_dlp/"):
+                raise NotVouched(f"the wheel holds {n!r}, outside yt-dlp's own package")
+            if n == "yt_dlp/version.py":   # (never used: the tarball's copy replaces it when the pair is staged)
+                continue
+            if src.get(n) != z.read(i):
+                raise NotVouched(f"{n} differs from GitHub's source" if n in src else f"{n} isn't in GitHub's source")
+    if "yt_dlp/version.py" not in src:
+        raise NotVouched("GitHub's source has no yt_dlp/version.py")
+    try:
+        _version_py(src["yt_dlp/version.py"].decode("ascii"))
+    except UnicodeDecodeError:
+        raise NotVouched("GitHub's yt_dlp/version.py isn't plain text")   # (a plain file of values, as upstream makes it)
+    return src["yt_dlp/version.py"]
+
+
+def upstream_check(pair: dict, files: dict, get=None) -> dict:
+    """Raise NotVouched unless GitHub vouches for both wheels PyPI served (files: {package: downloaded wheel path}).
+    -> {path inside the pair: bytes} the staged pair must hold instead of the wheel's (yt_dlp/version.py)."""
+    get = get or _https_get
+    ejs = pair["wheels"][EJS]
+    try:
+        rel = json.loads(get(f"{GITHUB_EJS}/{pair['ejs']}"))
+    except ValueError:
+        raise NotVouched(f"GitHub's yt-dlp-ejs {pair['ejs']} release couldn't be read")
+    asset = next((a for a in rel.get("assets") or [] if a.get("name") == ejs["file"]), None)
+    if asset is None or (asset.get("digest") or "").lower() != f"sha256:{ejs['sha']}".lower():
+        raise NotVouched(f"GitHub's yt-dlp-ejs {pair['ejs']} release doesn't vouch for PyPI's file")
+    tag = gh_tag(pair["yt"])
+    sums = {}
+    for line in get(f"{GITHUB_YT}/{tag}/SHA2-256SUMS").decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            sums[parts[1].lstrip("*")] = parts[0].lower()
+    if "yt-dlp.tar.gz" not in sums:
+        raise NotVouched(f"yt-dlp {pair['yt']}'s GitHub release lists no source tarball")
+    tarball = get(f"{GITHUB_YT}/{tag}/yt-dlp.tar.gz")
+    if hashlib.sha256(tarball).hexdigest() != sums["yt-dlp.tar.gz"]:
+        raise NotVouched(f"yt-dlp {pair['yt']}'s source tarball doesn't match its SHA2-256SUMS")
+    return {"yt_dlp/version.py": _same_package(Path(files[PKG]), tarball, pair["yt"])}
+
+
+UPSTREAM = upstream_check   # (tests put a stand-in here: they never reach GitHub)
+YOUNG_S = 48 * 3600         # a release younger than this is never taken by itself; Update now takes it
+
+
+def _age_s(w: dict) -> float | None:
+    """How long ago PyPI got this wheel (None when PyPI didn't say)."""
+    from datetime import datetime, timezone
+    t = w.get("uploaded")
+    if not t:
+        return None
+    try:
+        when = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - when).total_seconds()
 
 
 def pinned_pair() -> dict:
@@ -359,9 +520,14 @@ def stage(pair: dict, into: Path | None = None) -> Path:
     dl = d / ".wheels"
     dl.mkdir()
     try:
+        got = {name: download(pair["wheels"][name], dl) for name in (PKG, EJS)}
+        own = UPSTREAM(pair, got) or {}   # (1.1) GitHub vouches for both, or nothing is unpacked
         for name in (PKG, EJS):
-            unpack(download(pair["wheels"][name], dl), d)
-    except BaseException:   # a refused hash or a broken wheel: nothing of it stays
+            unpack(got[name], d)
+        for rel, data in own.items():   # the tarball's checked copy, never the wheel's (before the files are hashed)
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_bytes(data)
+    except BaseException:   # a refused hash, GitHub not vouching, or a broken wheel: nothing of it stays
         if into is None:
             _drop(d)
         else:
@@ -369,7 +535,8 @@ def stage(pair: dict, into: Path | None = None) -> Path:
         raise
     shutil.rmtree(dl, ignore_errors=True)
     (d / "pair.json").write_text(json.dumps({"yt": pair["yt"], "ejs": pair["ejs"], "made": time.strftime("%Y-%m-%d %H:%M"),
-                                             "sha": {k: w["sha"] for k, w in pair["wheels"].items()}}), encoding="utf-8")
+                                             "sha": {k: w["sha"] for k, w in pair["wheels"].items()},
+                                             "files": file_hashes(d)}), encoding="utf-8")   # checked at every activation
     return d
 
 
@@ -461,10 +628,25 @@ def heal(job=None, reason: str = "", dry_run: bool = False, offline: bool = Fals
             if new and vkey(new["yt"]) <= vkey(cur["yt"]) and (cur.get("ejs") or "") == new["ejs"]:
                 say(f"PyPI's newest is {new['yt']} + solver {new['ejs']}: nothing newer", 0.5)
                 new = None
+            st.pop("offer", None)
+            if new and reason == "breakage":   # (1.1) by itself, never a release younger than 48 h: it's offered instead
+                ages = [_age_s(w) for w in new["wheels"].values()]
+                young = [a for a in ages if a is None or a < YOUNG_S]
+                if young:
+                    hours = max(0, int(min((a for a in ages if a is not None), default=0) // 3600))
+                    note_ = (f"yt-dlp {new['yt']} is new ({hours} h old): UnderCover waits {YOUNG_S // 3600} h before "
+                             "taking a release by itself. Update now in SafeHouse, System takes it now.")
+                    say(note_)
+                    st["offer"] = {"yt": new["yt"], "ejs": new["ejs"], "hours": hours}
+                    new = None
             if new:
                 say(f"PyPI has yt-dlp {new['yt']} + solver {new['ejs']}: downloading and checking", 0.45)
                 try:
                     new_dir = stage(new, Path(tmp) if dry_run else None)
+                except NotVouched as e:
+                    note_ = f"yt-dlp {new['yt']} wasn't taken: {e}. Kept what works."
+                    say(note_)
+                    new_dir = None
                 except (OSError, HealError) as e:
                     note_ = f"yt-dlp {new['yt']} couldn't be fetched safely ({e}): kept what works."
                     say(note_)
@@ -497,7 +679,7 @@ def heal(job=None, reason: str = "", dry_run: bool = False, offline: bool = Fals
                 if not dry_run:
                     st["held_until"] = time.time() + HOLD if breakage() else 0
                     st["last_check"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    st["last_result"] = verdict
+                    st["last_result"] = f"{verdict}. {note_}" if note_ else verdict   # (the System room says why)
                     save(st)
                 return out
             # use it
@@ -579,7 +761,7 @@ def status() -> dict:
     st, cur = load(), current()
     return {"yt": cur["yt"], "ejs": cur.get("ejs"), "source": cur["source"], "auto": st["auto"],
             "last_good": st["last_good"], "last_check": st.get("last_check"), "last_result": st.get("last_result"),
-            "swapped": st.get("swapped"), "broken": FLAG["broken"],
+            "swapped": st.get("swapped"), "broken": FLAG["broken"], "offer": st.get("offer"),
             "job": _HEAL["job"].id if _HEAL["job"] is not None and not _HEAL["job"].finished else None,
             "pinned": venv_pair()}
 

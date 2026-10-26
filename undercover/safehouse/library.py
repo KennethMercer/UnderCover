@@ -96,6 +96,7 @@ def ytdlp_info() -> dict:
     s = ytdlp.status()
     return {"ytdlp": s["yt"], "ytdlp_ejs": s["ejs"], "ytdlp_source": s["source"], "ytdlp_pinned": s["pinned"]["yt"],
             "ytdlp_auto": s["auto"], "ytdlp_last": s.get("last_result"), "ytdlp_checked": s.get("last_check"),
+            "ytdlp_offer": s.get("offer"),
             "ytdlp_updated": s.get("swapped") or addons.updated("ytdlp"), "ytdlp_job": s["job"], "ytdlp_broken": bool(s["broken"])}
 
 
