@@ -2,8 +2,8 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
-      "id": "2026-10-27-v110",
-      "date": "2026-10-27",
+      "id": "2026-10-26-v110",
+      "date": "2026-10-26",
       "title": "UnderCover 1.1",
       "lines": [
         "A new install starts with a short tour: your first cover in about a minute, keeping it, and where it lives.",

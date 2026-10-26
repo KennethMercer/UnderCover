@@ -3,7 +3,7 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## 1.1.0 (2026-10-27)
+## 1.1.0 (2026-10-26)
 
 **Hardening** (harden1)
 - Stricter checks on requests to UnderCover's server, on the PC and from phones: who may call it, how much a request
