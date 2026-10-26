@@ -1021,6 +1021,190 @@ def u_listenback_extra():
     return "a stray ending cut with no re-read; repeats inside a line counted per word; a garbled take never kept over one missing a word"
 
 
+@check("hardening (1.1): a web page's Origin must be this server's own scheme, host and port; JSON bodies are capped per route (413, the body never read); a voice zip unpacks under a running size cap, few members, no links; links fetched for someone reach only the internet (after DNS, on every redirect); a phone can't cancel or retry PC-only work; the away listener names nothing; the Phone access copy says the home connection isn't encrypted")
+def u_harden1():
+    import inspect
+    import io
+    import tempfile
+    import zipfile
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import jobs, safeurl, voices as V
+
+    # an Origin: this server's own (any of its three loopback names), or none (the tray, the command line)
+    def origin_ok(origin, port=7860):
+        said = []
+        h = SimpleNamespace(headers={} if origin is None else {"Origin": origin},
+                            server=SimpleNamespace(server_address=("127.0.0.1", port)), _error=lambda m, s: said.append(s))
+        return S.Handler._guard_origin(h) and not said
+    for good in (None, "http://127.0.0.1:7860", "http://localhost:7860", "http://[::1]:7860", "HTTP://LOCALHOST:7860/"):
+        assert origin_ok(good), good
+    for bad in ("http://127.0.0.1:3000", "https://127.0.0.1:7860", "http://localhost:7861", "http://evil.example",
+                "null", "", "http://127.0.0.1"):
+        assert not origin_ok(bad), bad
+    # JSON bodies: capped per route, refused before a byte is read
+    class NoRead:
+        def read(self, n=-1):
+            raise AssertionError("an over-cap body was read")
+
+    def body(n, path="/api/speak", data=b""):
+        h = SimpleNamespace(headers={"Content-Length": str(n)}, path=path, _read=None, close_connection=False,
+                            rfile=io.BytesIO(data) if data else NoRead())
+        try:
+            return S.Handler._body(h), h
+        except S.BodyTooLarge as e:
+            return e, h
+    r, h = body(S.JSON_MAX + 1)
+    assert isinstance(r, S.BodyTooLarge) and h.close_connection and "413" not in str(r), r
+    r, h = body(-5)
+    assert isinstance(r, S.BodyTooLarge), r
+    r, _ = body(2 << 20, "/api/themes", b'{"name": "t"}')
+    assert r == {"name": "t"}, r   # (a theme saved from the editor may be bigger)
+    payload = json.dumps({"text": "x" * 200_000}).encode()   # a long speech, well under the cap
+    r, _ = body(len(payload), "/api/speak", payload)
+    assert r["text"] == "x" * 200_000
+    # a voice zip: a running cap on what it unpacks to, a member limit, links skipped, names flattened
+    saved_cap = V.VCFG["max_download_gb"]
+    with tempfile.TemporaryDirectory(prefix="uc-h1-") as t:
+        t = Path(t)
+        bomb = t / "bomb.zip"
+        with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("model.pth", b"\0" * (8 << 20))   # 8 MB of zeros: a few KB zipped
+        assert bomb.stat().st_size < 64 << 10
+        try:
+            V.VCFG["max_download_gb"] = 0.004   # 4 MB
+            out = t / "out"
+            out.mkdir()
+            with zipfile.ZipFile(bomb) as z:
+                try:
+                    V._safe_extract(z, out)
+                    raise AssertionError("a zip unpacking past the cap was extracted")
+                except V.ModelError as e:
+                    assert "limit" in str(e), e
+            assert not list(out.iterdir()), list(out.iterdir())   # the part-written file is gone
+            V.VCFG["max_download_gb"] = 1
+            many = t / "many.zip"
+            with zipfile.ZipFile(many, "w") as z:
+                for i in range(V.ZIP_MAX_MEMBERS + 1):
+                    z.writestr(f"m{i}.pth", b"x")
+            with zipfile.ZipFile(many) as z:
+                try:
+                    V._safe_extract(z, out)
+                    raise AssertionError("a zip of too many model files was extracted")
+                except V.ModelError:
+                    pass
+            odd = t / "odd.zip"
+            with zipfile.ZipFile(odd, "w") as z:
+                link = zipfile.ZipInfo("link.pth")
+                link.external_attr = (0o120777 << 16)   # a symbolic link entry
+                z.writestr(link, "../../somewhere")
+                z.writestr("../../up/voice.pth", b"weights")
+                z.writestr("readme.txt", b"not a model")
+            with zipfile.ZipFile(odd) as z:
+                V._safe_extract(z, out)
+            assert sorted(p.name for p in out.iterdir()) == ["voice.pth"], list(out.iterdir())   # flattened; no link
+        finally:
+            V.VCFG["max_download_gb"] = saved_cap
+    # links fetched for someone: the internet only, after DNS, on every redirect
+    fake = lambda *ips: (lambda host, port, type=0: [(2, 1, 6, "", (ip, port)) for ip in ips])
+    for url in ("http://127.0.0.1:7860/api/status", "http://192.168.1.1/", "http://10.0.0.5/x.zip", "http://[::1]/",
+                "http://169.254.169.254/latest", "http://100.100.1.1/", "http://[::ffff:127.0.0.1]/", "http://0.0.0.0/"):
+        try:
+            safeurl.check(url)
+            raise AssertionError(f"{url} was allowed")
+        except V.ModelError as e:
+            assert str(e) == safeurl.SAY, (url, e)
+    for resolved in (("192.168.1.20",), ("93.184.216.34", "10.1.1.1"), ("fe80::1",)):
+        try:
+            safeurl.check("https://files.example/voice.zip", resolve=fake(*resolved))
+            raise AssertionError(f"a name resolving to {resolved} was allowed")
+        except V.ModelError:
+            pass
+    safeurl.check("https://files.example/voice.zip", resolve=fake("93.184.216.34"))   # the internet: fine
+    for bad in ("ftp://files.example/x.zip", "file:///C:/x.zip", "https://"):
+        try:
+            safeurl.check(bad)
+            raise AssertionError(bad)
+        except V.ModelError:
+            pass
+    import requests
+    calls = []
+
+    class Resp:
+        def __init__(self, status, location=None, url=""):
+            self.status_code, self.headers, self.url = status, ({"location": location} if location else {}), url
+
+        def close(self):
+            pass
+    saved_get, saved_check = requests.get, safeurl.check
+    try:
+        safeurl.check = lambda url: saved_check(url, resolve=fake("93.184.216.34") if "example" in url else socket_resolve)
+        socket_resolve = __import__("socket").getaddrinfo
+        requests.get = lambda url, **kw: (calls.append(url), Resp(302, "http://127.0.0.1:7860/api/status"))[1]
+        try:
+            safeurl.get("https://files.example/voice.zip", timeout=5)
+            raise AssertionError("a redirect into this PC was followed")
+        except V.ModelError as e:
+            assert str(e) == safeurl.SAY and calls == ["https://files.example/voice.zip"], (e, calls)
+        calls.clear()
+        hops = iter([Resp(301, "/v2/voice.zip"), Resp(200, url="https://files.example/v2/voice.zip")])
+        requests.get = lambda url, **kw: (calls.append(url), next(hops))[1]
+        assert safeurl.get("https://files.example/voice.zip").status_code == 200
+        assert calls == ["https://files.example/voice.zip", "https://files.example/v2/voice.zip"], calls
+    finally:
+        requests.get, safeurl.check = saved_get, saved_check
+    from undercover.doubleagent import sources
+    from undercover.frontman import songs
+    for mod in (sources, songs):   # refused before yt-dlp ever sees it
+        real = mod._ydl
+        mod._ydl = lambda **kw: (_ for _ in ()).throw(AssertionError("yt-dlp got a link into this PC"))
+        try:
+            try:
+                mod.from_link("http://127.0.0.1:7860/api/status")
+                raise AssertionError("from_link took a link into this PC")
+            except V.ModelError as e:
+                assert str(e) == safeurl.SAY, e
+        finally:
+            mod._ydl = real
+    assert "safeurl.get(" in inspect.getsource(V._get)
+    # PC-only work: a phone can neither cancel it nor retry it; work a phone may start, it may stop
+    made = []
+    try:
+        for kind, pc in (("move", False), ("doctor", True), ("cover", False)):
+            j = jobs.Job(kind, title=kind)
+            j.pc_only = pc
+            jobs.JOBS[j.id] = j
+            made.append(j)
+        for j, refused in zip(made, (True, True, False)):
+            r = S._Replay(f"/api/jobs/{j.id}/cancel", {})
+            r.remote = True
+            r._route_post(r.path)
+            assert (r.status == 403) == refused and j.cancel == (not refused), (j.kind, r.status, r.out)
+            r = S._Replay(f"/api/jobs/{j.id}/cancel", {})   # from the PC: anything
+            r._route_post(r.path)
+            assert r.status == 200 and j.cancel
+        made[1].state, made[1].retry_req = "error", ("/api/doctor/full", {})
+        r = S._Replay(f"/api/jobs/{made[1].id}/retry", {})
+        r.remote = True
+        r._retry(made[1].id)
+        assert r.status == 403 and r.out["error"] == S.PC_ONLY_JOB, r.out
+    finally:
+        for j in made:
+            jobs.JOBS.pop(j.id, None)
+    rp = inspect.getsource(S.Handler._remember_request)
+    assert 'j.pc_only = phone_api.policy("POST", p)[0] == "pc"' in rp, "jobs don't remember a PC-only start"
+    assert S.phone_api.policy("POST", "/api/doctor/fix/models")[0] == "pc" and S.phone_api.policy("POST", "/api/doctor/full")[0] != "pc"
+    # the away listener: a neutral Server header, refusals that name nothing
+    away = SimpleNamespace(server=SimpleNamespace(away=True))
+    assert S.Handler.version_string(away) == "web"
+    ga = inspect.getsource(S.Handler._gate_away)
+    assert all(w not in (S.AWAY_401 + S.AWAY_403).decode().lower() for w in ("undercover", "away", "phone", "pair", "pc"))
+    assert "AWAY_401" in ga and "AWAY_403" in ga and "Away from home is off" not in ga and "self._deny(403)" not in ga, ga
+    page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    assert "the connection isn't encrypted" in page
+    return "origin exact; bodies capped (413, unread); zips capped / few / no links; links internet-only, redirects too; PC-only work stays the PC's; away names nothing"
+
+
 def _fake_ts_set(state_file, **kw):
     """Change the fake Tailscale's state (signed in, Funnel approved...) through the fake itself: its processes change
     the same file at the same time, under its lock."""
@@ -10577,7 +10761,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

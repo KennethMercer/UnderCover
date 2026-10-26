@@ -337,8 +337,9 @@ def _stream(resp: requests.Response, dest_dir: Path, fallback_name: str, progres
 
 
 def _get(url: str, **kw) -> requests.Response:
+    from . import safeurl   # (1.1 hardening: only the internet, every redirect checked)
     try:
-        r = requests.get(url, headers=UA, stream=True, timeout=60, allow_redirects=True, **kw)
+        r = safeurl.get(url, headers=UA, stream=True, timeout=60, **kw)
     except requests.RequestException as e:
         raise ModelError(f"Download failed ({e.__class__.__name__}). Check your connection and try again.")
     if r.status_code == 404:
@@ -545,19 +546,41 @@ def inspect_pth(p: Path) -> dict:
     return {"version": version, "sr": sr or (cfg[-1] if isinstance(cfg[-1], int) else None), "f0": bool(ck.get("f0", 1))}
 
 
+ZIP_MAX_MEMBERS = 32   # a voice zip holds a model and an index or two: more is refused
+
+
 def _safe_extract(zf: zipfile.ZipFile, dest: Path):
-    """Extract only .pth/.index members, refusing path traversal."""
-    for m in zf.infolist():
-        name = m.filename.replace("\\", "/")
-        if m.is_dir() or not name.lower().endswith((".pth", ".index")):
+    """Extract only .pth/.index members, refusing path traversal and links (1.1 hardening: and streamed under a running
+    cap of max_download_gb on what they unpack to, whatever the zip says their sizes are; a part-written file is
+    removed when the cap is passed)."""
+    cap = VCFG["max_download_gb"] * 1e9
+    members = [m for m in zf.infolist()
+               if not m.is_dir() and m.filename.replace("\\", "/").lower().endswith((".pth", ".index"))]
+    if len(members) > ZIP_MAX_MEMBERS:
+        raise ModelError(f"That zip holds {len(members)} model files; a voice is one model and its index. "
+                         "Unzip it yourself and install the one you want.")
+    done = 0
+    for m in members:
+        if (m.external_attr >> 16) & 0o170000 == 0o120000:   # a link stored in the zip: never made, never followed
             continue
+        name = m.filename.replace("\\", "/")
         target = (dest / Path(name).name).resolve()  # flatten: ignore folders inside the zip
         if dest.resolve() not in target.parents:
             continue
         if target.exists():  # same file name in two folders: keep both
             target = target.with_name(f"{target.stem}_{m.CRC:x}{target.suffix}")
         with zf.open(m) as src, open(target, "wb") as out:
-            shutil.copyfileobj(src, out)
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                done += len(chunk)
+                if done > cap:
+                    out.close()
+                    target.unlink(missing_ok=True)
+                    raise ModelError(f"That zip unpacks to more than the {VCFG['max_download_gb']} GB limit, far more "
+                                     "than a voice. It isn't installed.")
+                out.write(chunk)
 
 
 def _collect(paths: list[Path], work: Path) -> tuple[list[Path], list[Path]]:

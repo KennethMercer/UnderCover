@@ -72,6 +72,27 @@ BUILD = build_stamp()
 SERVER = None          # the running ThreadingHTTPServer
 RESTART = threading.Event()
 
+# JSON request bodies (1.1 hardening): read whole, so capped. The upload routes read their bodies in chunks under their
+# own limits and never come here.
+JSON_MAX = 1 << 20                        # 1 MB: the longest speech (50,000 characters) is a few hundred KB
+JSON_MAX_FOR = {"/api/themes": 8 << 20}   # a theme saved from the editor (its files are capped at 4 MB)
+# job kinds only the PC starts (a Storage move, an add-on, Make smaller, the yt-dlp update): never cancelled or retried
+# from a phone, whatever route started them
+PC_ONLY_KINDS = ("move", "addon", "smaller", "ytdlp")
+
+
+AWAY_401, AWAY_403 = b"Unauthorized", b"Forbidden"   # the away listener's refusals before a token: no names, no state
+PC_ONLY_JOB = "That work was started on the PC and can only be stopped or retried there."
+
+
+def _pc_only(job) -> bool:
+    """A job a phone may not cancel or retry: started by a PC-only route, or of a kind only the PC starts."""
+    return job.kind in PC_ONLY_KINDS or bool(getattr(job, "pc_only", False))
+
+
+class BodyTooLarge(Exception):
+    """A JSON body over its route's cap: answered 413, the body never read."""
+
 
 # ---------------------------------------------------------------- heartbeat (what was happening if the PC dies)
 
@@ -178,6 +199,10 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, "_read", None) is not None:   # read once per request (Retry replays what was sent)
             return self._read
         n = int(self.headers.get("Content-Length") or 0)
+        cap = JSON_MAX_FOR.get(urlparse(self.path).path, JSON_MAX)
+        if n < 0 or n > cap:
+            self.close_connection = True   # (the body isn't read)
+            raise BodyTooLarge(f"That request is too large ({max(n, 0) // 1024} KB; this one takes up to {cap // 1024} KB).")
         if not n:
             self._read = {}
             return {}
@@ -197,12 +222,21 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _guard_origin(self) -> bool:
-        """Block cross-site requests from other web pages (only this page may call the API)."""
+        """Block cross-site requests from other web pages (only this page may call the API): an Origin, when there is
+        one, must be this server's own, scheme, host and port (1.1 hardening: as the home-network gate compares it).
+        A request with no Origin (the tray, the command line) isn't a web page's."""
         origin = self.headers.get("Origin")
-        if origin and urlparse(origin).hostname not in ("127.0.0.1", "localhost"):
+        if origin is None:
+            return True
+        port = self.server.server_address[1]
+        if origin.rstrip("/").lower() not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}", f"http://[::1]:{port}"):
             self._error("Forbidden", 403)
             return False
         return True
+
+    def version_string(self) -> str:
+        """The Server header: the away-from-home listener (what the internet reaches) names nothing."""
+        return "web" if getattr(self.server, "away", False) else super().version_string()
 
     # Phone access (phase 11)
     remote = False   # the request came from the network (a paired phone), not from this PC
@@ -249,18 +283,19 @@ class Handler(BaseHTTPRequestHandler):
         (pairing stays on the home Wi-Fi), the redeem route and the page around it open, everything else an away token
         (cookie uc_away, a token of its own) and the phone policy (PC-only routes refused)."""
         from ..core import tailnet
+        # (1.1 hardening: what the internet can reach without a token says nothing about the app or its settings)
         if not phone.enabled() or not phone.away_on() or not tailnet.STATE["host"]:
-            return self._deny(401, b"Away from home is off on the PC.")
+            return self._deny(401, AWAY_401)
         host = (self.headers.get("Host") or "").lower()
         if host != tailnet.STATE["host"].lower():
-            return self._deny(403)
+            return self._deny(403, AWAY_403)
         if method != "GET":
             o = urlparse(self.headers.get("Origin") or "")
             if o.scheme != "https" or o.netloc.lower() != host:
-                return self._deny(403)
+                return self._deny(403, AWAY_403)
         p = urlparse(self.path).path
         if p in ("/pair", "/api/phone/claim"):
-            return self._deny(403, b"Pairing only happens on the home Wi-Fi.")
+            return self._deny(403, AWAY_403)
         if (method, p) in (("GET", "/away"), ("POST", "/api/phone/away")):
             return True
         pol, what = phone_api.policy(method, p)
@@ -268,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
         self.device = phone.device_for(self._cookie(phone.AWAY_COOKIE), "", away=True)   # Funnel's loopback: no address to keep
         if self.device is None:
-            return self._deny(401, b"This phone isn't set up for away from home. On the home Wi-Fi: Use this phone away from home.")
+            return self._deny(401, AWAY_401)
         if pol == "pc":
             return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
                               "application/json")
@@ -298,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _other_method(self):
         if getattr(self.server, "phone", False) or not _loopback(self.client_address[0]):
-            return self._deny(401)
+            return self._deny(401, AWAY_401 if getattr(self.server, "away", False) else None)
         self.send_error(HTTPStatus.NOT_IMPLEMENTED, f"Unsupported method ({self.command!r})")
 
     do_HEAD = do_PUT = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _other_method
@@ -408,6 +443,8 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 return self._retry(m.group(1))
             return self._route_post(p)
+        except BodyTooLarge as e:
+            self._error(str(e), 413)
         except LookupError as e:
             self._error(str(e), 404)
         except Exception as e:
@@ -440,6 +477,8 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/jobs/(\w+)/cancel", p)
         if m:
             job = JOBS.get(m.group(1))
+            if job and self.remote and _pc_only(job):
+                return self._error(PC_ONLY_JOB, 403)
             if job:
                 job.cancel = True
             return self._json({"ok": True})
@@ -454,6 +493,7 @@ class Handler(BaseHTTPRequestHandler):
             if j is not None and j.origin is self and j.kind in self.RETRY_KINDS and isinstance(self._read, dict):
                 j.retry_req = (p, dict(self._read))
             if j is not None and j.origin is self:
+                j.pc_only = phone_api.policy("POST", p)[0] == "pc"   # started by a PC-only route: the PC's to stop
                 j.origin = None   # only needed until now: don't keep the request (and its connection) alive
 
     def _retry(self, job_id: str):
@@ -463,6 +503,8 @@ class Handler(BaseHTTPRequestHandler):
         if job.state != "error":
             return self._error("Only work that failed can be retried.")
         p, body = job.retry_req
+        if self.remote and (_pc_only(job) or phone_api.policy("POST", p)[0] == "pc"):   # (the replay runs as the PC)
+            return self._error(PC_ONLY_JOB, 403)
         r = _Replay(p, body)
         before = set(JOBS)
         jobs.ORIGIN.h = r
@@ -476,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
         if r.status >= 400 or not new:
             return self._error((r.out or {}).get("error") or "It couldn't be started again.", r.status if r.status >= 400 else 409)
         for j in new:
-            j.retry_req, j.origin = (p, body), None
+            j.retry_req, j.origin, j.pc_only = (p, body), None, _pc_only(job)
         self._json({"ok": True, "job": new[0].id, "was": job_id})
 
     def do_DELETE(self):
@@ -497,6 +539,8 @@ class Handler(BaseHTTPRequestHandler):
             if r.get("with"):
                 gpu.forget_voice(r["with"])
             self._json({"ok": True, **r})
+        except BodyTooLarge as e:
+            self._error(str(e), 413)
         except ModelError as e:
             self._error(str(e))
         except LookupError as e:
