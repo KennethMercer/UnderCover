@@ -8370,7 +8370,7 @@ def u_page_rules():
     assert "voice_choice:" in osj and "data-os-vchoice" in osj and "Pick a voice first." in osj, "the one-shot lost its voice question"
     assert "function workMoved" in work and "workMoved(" in (web / "train.js").read_text(encoding="utf-8"), "work/add's `moved` is no longer said"
     assert "daFilters" in da and "data-own-go" in da and 'id="da-filters"' in ix, "Your voices lost its filter chips, or Train my own its Now / Tonight"
-    # pagepolish2 (the user, 2026-10-15): Recent shows five with Show more to the tray's 15; Train my own on every downloaded voice, its kind
+    # pagepolish2 (the user, 2026-10-26): Recent shows five with Show more to the tray's 15; Train my own on every downloaded voice, its kind
     # asked when the voice doesn't say; the filters have All and are remembered per browser
     se = (web / "speakeasy.js").read_text(encoding="utf-8")
     assert "RECENT_SHOW = 5, RECENT_TRAY = 15" in app and "S.histAll ? RECENT_TRAY : RECENT_SHOW" in app and "SE.recAll ? RECENT_TRAY : RECENT_SHOW" in se and 'recentMore("se-recent-more"' in se, "a module's Recent lost its five and Show more"

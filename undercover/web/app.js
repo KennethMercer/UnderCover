@@ -1057,7 +1057,7 @@ function renderPreviews(list, kind, made, variants) {
 
 // ------------------------------------------------------------ history
 let HIST = [];
-// Recent in a module (FrontMan's covers, SpeakEasy's speech; the user, 2026-10-15): the newest five, "Show more" opens the rest of the
+// Recent in a module (FrontMan's covers, SpeakEasy's speech; the user, 2026-10-26): the newest five, "Show more" opens the rest of the
 // tray's 15, "Show fewer" folds it back. Everything older is in SafeHouse.
 const RECENT_SHOW = 5, RECENT_TRAY = 15;
 const recentMore = (id, open, total) => total > RECENT_SHOW
