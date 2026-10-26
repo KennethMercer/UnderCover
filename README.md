@@ -35,6 +35,8 @@ which you switch on from the top bar.
 1. Run `UnderCover-Setup-1.1.0.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
    not need administrator rights. The installer is not signed, so Windows may show a warning; choose More info and
    then Run anyway.
+   To check the download first, run `Get-FileHash` on it in PowerShell and compare the SHA-256 with the one on the
+   release page.
 2. Choose where your files are kept. The defaults are fine. Optional add-ons are off. Ticking one accepts its licence,
    which you can read from the same page.
 3. Setup then runs inside the installer, with one bar for the whole install and one for the current step. Every
