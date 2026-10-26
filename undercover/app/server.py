@@ -83,6 +83,7 @@ PC_ONLY_KINDS = ("move", "addon", "smaller", "ytdlp")
 
 AWAY_401, AWAY_403 = b"Unauthorized", b"Forbidden"   # the away listener's refusals before a token: no names, no state
 PC_ONLY_JOB = "That work was started on the PC and can only be stopped or retried there."
+BUSY_503 = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"   # past a listener's cap
 
 
 def _cross_site(method: str, path: str, headers) -> bool:
@@ -187,6 +188,7 @@ def voices_json() -> list[dict]:
 class Handler(BaseHTTPRequestHandler):
     server_version = "UnderCover"
     protocol_version = "HTTP/1.1"
+    timeout = 30   # (1.1 hardening) every read of a request, on every listener: a client that stalls is dropped
 
     def log_message(self, fmt, *args):  # keep the console quiet; errors are reported in the UI
         pass
@@ -288,9 +290,11 @@ class Handler(BaseHTTPRequestHandler):
         pol, what = phone_api.policy(method, urlparse(self.path).path)
         if pol == "open":
             return True
-        self.device = phone.device_for(self._cookie(phone.COOKIE), self.client_address[0])
+        tok = self._cookie(phone.COOKIE)
+        self.device = phone.device_for(tok, self.client_address[0])
         if self.device is None:
             return self._deny(401)
+        self.set_cookie = phone_api.home_cookie(tok)   # (its life runs from this use)
         if pol == "pc":
             return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
                               "application/json")
@@ -320,9 +324,11 @@ class Handler(BaseHTTPRequestHandler):
         pol, what = phone_api.policy(method, p)
         if pol == "open":
             return True
-        self.device = phone.device_for(self._cookie(phone.AWAY_COOKIE), "", away=True)   # Funnel's loopback: no address to keep
+        tok = self._cookie(phone.AWAY_COOKIE)
+        self.device = phone.device_for(tok, "", away=True)   # Funnel's loopback: no address to keep
         if self.device is None:
             return self._deny(401, AWAY_401)
+        self.set_cookie = phone_api.away_cookie(tok)   # (its life runs from this use)
         if pol == "pc":
             return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
                               "application/json")
@@ -919,6 +925,32 @@ class PhoneServer(ExclusiveServer):
     """The second listener, on the home-network address, only while Phone access is on (app/phone_api.py)."""
     phone = True   # every request it answers comes from the network
     daemon_threads = True
+    MAX_LIVE = 32  # (1.1 hardening) connections open at once: past it, 503 and closed, nothing read
+
+    def __init__(self, *a, **kw):
+        self._live = threading.BoundedSemaphore(self.MAX_LIVE)
+        super().__init__(*a, **kw)
+
+    def process_request(self, request, client_address):
+        if not self._live.acquire(blocking=False):
+            try:
+                request.settimeout(2)
+                request.sendall(BUSY_503)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._live.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._live.release()
 
     def server_bind(self):
         """As ExclusiveServer, without HTTPServer's reverse DNS lookup of the address (getfqdn: ~5 s for an address

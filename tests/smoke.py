@@ -1239,8 +1239,57 @@ def u_harden1():
     for f, s in (("speakeasy.js", "${esc(est.first_why)}"), ("speakeasy.js", "${esc(est.waiting)}"),
                  ("vault.js", 'esc(last.reason || "")'), ("doubleagent.js", "${esc(state)}"), ("train.js", "${esc(s.status)}")):
         assert s in (web / f).read_text(encoding="utf-8"), (f, s)
+    # every listener drops a stalled client; the phone and away listeners take so many connections at once, then 503
+    # and close (live, on 127.0.0.1, with a handler that holds its connections)
+    import socket
+    import threading
+    from http.server import BaseHTTPRequestHandler as BH
+    assert S.Handler.timeout == 30 and issubclass(S.AwayServer, S.PhoneServer)
+    hold = threading.Event()
+
+    class Slow(BH):
+        def do_GET(self):
+            hold.wait(10)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    class Two(S.PhoneServer):
+        MAX_LIVE = 2
+    srv = Two(("127.0.0.1", 0), Slow)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    socks = []
+    try:
+        port = srv.server_address[1]
+        for _ in range(2):
+            c = socket.create_connection(("127.0.0.1", port), timeout=5)
+            c.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            socks.append(c)
+        time.sleep(0.3)
+        c = socket.create_connection(("127.0.0.1", port), timeout=5)
+        socks.append(c)
+        busy = c.recv(200)
+        assert busy.startswith(b"HTTP/1.1 503"), busy
+        hold.set()
+        assert all(s.recv(200).split(b"\r\n")[0].endswith(b" 200 OK") for s in socks[:2])
+        for s in socks:
+            s.close()
+        time.sleep(0.3)
+        c = socket.create_connection(("127.0.0.1", port), timeout=5)   # the places came back
+        c.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert c.recv(200).split(b"\r\n")[0].endswith(b" 200 OK")
+        c.close()
+    finally:
+        hold.set()
+        srv.shutdown()
+        srv.server_close()
     return ("origin exact; cross-site refused; bodies capped (413, unread); zips capped / few / no links; links internet-only, "
-            "redirects too; PC-only work stays the PC's; away names nothing; nosniff + no-referrer; esc() on server strings")
+            "redirects too; PC-only work stays the PC's; away names nothing; nosniff + no-referrer; esc() on server strings; "
+            "30 s timeout; 503 past a listener's connection cap")
 
 
 def _fake_ts_set(state_file, **kw):
@@ -7927,10 +7976,23 @@ def u_phone_pairing():
             p2 = phone.new_pairing()   # expiry
             phone.PAIRING["until"] = time.time() - 1
             assert "run out" in refused(p2["code"])
-            p3 = phone.new_pairing()   # five wrong codes cancel it
+            # five wrong codes from one address: that address is out of tries, even with the right code; the code lives
+            # on for the phone that's really pairing (1.1: a stranger's guesses can't cancel it)
+            p3 = phone.new_pairing()
             for _ in range(phone.MAX_TRIES):
                 refused(wrong, addr="10.0.0.8")
-            assert phone.pairing() is None and "run out" in refused(p3["code"], addr="10.0.0.7")
+            assert phone.pairing() is not None and "from this phone" in refused(p3["code"], addr="10.0.0.8")
+            t3, d3 = phone.claim(p3["code"], "Tablet", "10.0.0.7")
+            assert d3["name"] == "Tablet" and phone.pairing() is None
+            phone.revoke(d3["id"])
+            phone._TRIES[:] = []
+            p3b = phone.new_pairing()   # MAX_WRONG in all, from any addresses, cancels it
+            for i in range(phone.MAX_WRONG):
+                if i % phone.RATE[1] == 0:
+                    phone._TRIES[:] = []
+                refused(wrong, addr=f"10.0.1.{i // (phone.MAX_TRIES - 1)}")
+            assert phone.pairing() is None and "run out" in refused(p3b["code"], addr="10.0.0.5")
+            phone._TRIES[:] = []
             phone._TRIES[:] = []   # the rate limit: 10 tries per address in 10 minutes, then 429 even with the right code
             p4 = phone.new_pairing()
             for _ in range(phone.RATE[1]):
@@ -7943,6 +8005,18 @@ def u_phone_pairing():
             phone._TRIES[:] = []
             phone._FILE[0] = None   # read back from the file
             assert phone.device_for(token)["name"] == "Pixel 8"
+            # a token's life (1.1): 30 days from its last use, renewed by every use; a record from before starts at its
+            # first use; the cookie lives as long and is sent again with each answer
+            rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
+            rec["used"] = time.time() - phone.TOKEN_IDLE_S + 60
+            assert phone.device_for(token) and time.time() - rec["used"] < 5, "a use didn't renew the token"
+            rec["used"] = time.time() - phone.TOKEN_IDLE_S - 1
+            assert phone.device_for(token) is None, "a token unused for 30 days still worked"
+            rec.pop("used")
+            assert phone.device_for(token) and "used" in rec
+            from undercover.app import phone_api as PA
+            assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t") and "Secure" in PA.away_cookie("t")
+            assert phone.TOKEN_IDLE_S == 30 * 86400
             phone.revoke(dev["id"])
             assert phone.device_for(token) is None and phone.devices() == []
             token2, dev2 = phone.claim(phone.new_pairing()["code"], "<b>Tab</b>\n", "10.0.0.5")
