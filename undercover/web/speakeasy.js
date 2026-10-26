@@ -382,11 +382,12 @@ async function seLoadRecent() {
 function seRecent() {
   const box = $("#se-recent");
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
-  box.innerHTML = SE.recent.slice(0, 15).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
+  box.innerHTML = SE.recent.slice(0, SE.recAll ? RECENT_TRAY : RECENT_SHOW).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
       <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b>${facts([{ html: `${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)}` }, `${paceWord(r)} pace`, r.mode === "cadence" ? "Their own way" : "", { t: upFirst(dayWord(r.created)), muted: true }, { t: dayTime(r.created), deep: true }])}</div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
-      <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("");
+      <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-rdel="${r.id}">Remove</button></span></div>`).join("") + recentMore("se-recent-more", !!SE.recAll, SE.recent.length);
+  $("#se-recent-more")?.addEventListener("click", () => { SE.recAll = !SE.recAll; seRecent(); });
   $$("[data-rplay]", box).forEach(b => b.onclick = () => sePlayRecent(SE.recent.find(r => r.id === b.dataset.rplay)));
   $$("[data-rkeep]", box).forEach(b => b.onclick = () => seToggleKeep(b.dataset.rkeep, b.getAttribute("aria-pressed") === "true"));
   $$("[data-rdel]", box).forEach(b => b.onclick = async () => {

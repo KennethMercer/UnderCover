@@ -1057,6 +1057,11 @@ function renderPreviews(list, kind, made, variants) {
 
 // ------------------------------------------------------------ history
 let HIST = [];
+// Recent in a module (FrontMan's covers, SpeakEasy's speech; the user, 2026-10-15): the newest five, "Show more" opens the rest of the
+// tray's 15, "Show fewer" folds it back. Everything older is in SafeHouse.
+const RECENT_SHOW = 5, RECENT_TRAY = 15;
+const recentMore = (id, open, total) => total > RECENT_SHOW
+  ? `<button class="linkbtn recent-more" type="button" id="${id}" aria-expanded="${open}">${open ? "Show fewer" : "Show more"}</button>` : "";
 async function loadHistory() {
   let ok = true;
   try { HIST = await api("/api/history"); } catch (e) { HIST = []; ok = false; }
@@ -1069,14 +1074,15 @@ function renderHistory() {
   const box = $("#hist");
   if (!HIST.length) { box.innerHTML = `<p class="meta">Your covers will appear here.</p>`; return; }
   const nowPlaying = !active().paused ? playingHist : null;
-  box.innerHTML = HIST.slice(0, 50).map(h => {
+  box.innerHTML = HIST.slice(0, S.histAll ? RECENT_TRAY : RECENT_SHOW).map(h => {
     const o = h.options || {};
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
     return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(coverTitle(h))}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong>${facts([
         { html: `${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}` }, { t: upFirst(dayWord(h.created)), muted: true }, { t: dayTime(h.created), deep: true }, ...(bits ? bits.split(" · ").map(t => ({ t, deep: true })) : [])])}</div>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
-  }).join("");
+  }).join("") + recentMore("hist-more", !!S.histAll, HIST.length);
+  $("#hist-more")?.addEventListener("click", () => { S.histAll = !S.histAll; renderHistory(); });
   $$("[data-play]", box).forEach(b => b.onclick = () => {
     const h = HIST.find(x => x.id === b.dataset.play);
     if (S.result?.id === h.id) return togglePlay();
