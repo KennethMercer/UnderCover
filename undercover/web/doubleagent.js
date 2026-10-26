@@ -46,7 +46,7 @@ function renderVoiceCards(cands) {
          c.trained && c.singing != null ? { t: c.singing ? "Singing" : "Speech", muted: true } : "", !c.trained && c.person ? { t: c.person, muted: true } : "",
          c.minutes ? { t: `${Math.round(c.minutes)} min`, deep: true } : ""]);
     const state = cd.queue === "running" ? "learning to speak" : cd.queue ? "learns to speak tonight" : "";
-    const status = [state && `<span class="st now">${state}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
+    const status = [state && `<span class="st now">${esc(state)}</span>`, cd.pending && `<span class="st now">new voice to hear</span>`, im?.candidate && `<span class="st now">retrained voice to hear</span>`].filter(Boolean).join("");
     const speaks = cd.has || c.demo ? `<svg class="ico vc-speaks" role="img" aria-label="Can speak in SpeakEasy"><title>Can speak in SpeakEasy</title><use href="#g-speakeasy"/></svg>` : "";
     const improve = c.demo ? "" : !c.can ? `<button class="mini" type="button" data-own="${esc(c.voice)}" aria-expanded="${DA.own?.voice === c.voice}">${DA.own?.voice === c.voice ? "Close" : "Train my own"}</button>`
       : `<button class="mini" type="button" data-improve="${esc(c.voice)}" ${c.queued || busy || im?.candidate ? "disabled" : ""}>${busy ? "Improving now" : c.queued ? "In tonight's queue" : im?.candidate ? "Retrained one waiting" : "Improve tonight"}</button>`;

@@ -110,7 +110,8 @@ ROUTES = [
     ("POST", r"/api/gamepause/settings", "pc", "the game pause's settings"),
     ("POST", r"/api/lowprofile", "phone", "Low profile from the sofa: half the card, in bursts"),
     ("POST", r"/api/firstrun", "phone", "the First assignment's tour: its step, skip, done, replay"),
-    ("GET", r"/api/vault/check|/api/vault/contents", "pc", "the vault's folder check and what it holds"),
+    ("POST", r"/api/vault/check", "pc", "the vault's folder check"),
+    ("GET", r"/api/vault/contents", "pc", "what the vault holds"),
     ("POST", r"/api/vault/settings|/api/vault/run|/api/vault/restore", "pc", "the vault: its folder, a run, a restore"),
     # Themes (phase 14): a phone may read and use them; making, importing and deleting are done on the PC
     ("GET", r"/api/themes", "phone", "the theme list"),

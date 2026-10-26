@@ -1202,7 +1202,45 @@ def u_harden1():
     assert "AWAY_401" in ga and "AWAY_403" in ga and "Away from home is off" not in ga and "self._deny(403)" not in ga, ga
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert "the connection isn't encrypted" in page
-    return "origin exact; bodies capped (413, unread); zips capped / few / no links; links internet-only, redirects too; PC-only work stays the PC's; away names nothing"
+    # another site's page: refused on every method and listener; following a link to a page is let through
+    cs = lambda m, p, **h: S._cross_site(m, p, {k.replace("_", "-").title(): v for k, v in h.items()})
+    assert cs("POST", "/api/voices/install", sec_fetch_site="cross-site", sec_fetch_mode="cors")
+    assert cs("GET", "/api/status", sec_fetch_site="cross-site", sec_fetch_mode="cors")
+    assert cs("GET", "/files/output/x.mp3", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
+    assert cs("GET", "/api/vault", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
+    assert cs("DELETE", "/", sec_fetch_site="cross-site", sec_fetch_mode="navigate")
+    assert not cs("GET", "/", sec_fetch_site="cross-site", sec_fetch_mode="navigate")   # a link to the page: it reads nothing
+    for site in ("same-origin", "same-site", "none", ""):   # (same-site: another port here; the Origin check refuses that)
+        assert not cs("POST", "/api/voices/install", sec_fetch_site=site, sec_fetch_mode="cors"), site
+    gate = inspect.getsource(S.Handler._gate)
+    assert gate.index("_cross_site(") < gate.index("if not self.remote:"), "the cross-site check isn't first, on every listener"
+    # the folder check is a POST now (it may make the folder): a GET answers nothing
+    from undercover.app import vault_api
+    assert S.phone_api.policy("POST", "/api/vault/check")[0] == "pc"
+    g = SimpleNamespace(path="/api/vault/check?folder=C%3A%5Cx")
+    assert vault_api.handle(g, "GET", "/api/vault/check") is False
+    assert 'api("/api/vault/check", { json:' in (ROOT / "undercover" / "web" / "vault.js").read_text(encoding="utf-8")
+    # every response says its type is its own and sends no referrer
+    from http.server import BaseHTTPRequestHandler
+    sent = []
+    real_end = BaseHTTPRequestHandler.end_headers
+    try:
+        BaseHTTPRequestHandler.end_headers = lambda self: sent.append("end")
+        S.Handler.end_headers(SimpleNamespace(send_header=lambda k, v: sent.append((k, v)), __class__=S.Handler))
+    except TypeError:   # (super() needs a real instance: build one without a socket)
+        h = S.Handler.__new__(S.Handler)
+        h.send_header = lambda k, v: sent.append((k, v))
+        S.Handler.end_headers(h)
+    finally:
+        BaseHTTPRequestHandler.end_headers = real_end
+    assert ("X-Content-Type-Options", "nosniff") in sent and ("Referrer-Policy", "no-referrer") in sent and sent[-1] == "end", sent
+    # the page: server-made strings through esc() too
+    web = ROOT / "undercover" / "web"
+    for f, s in (("speakeasy.js", "${esc(est.first_why)}"), ("speakeasy.js", "${esc(est.waiting)}"),
+                 ("vault.js", 'esc(last.reason || "")'), ("doubleagent.js", "${esc(state)}"), ("train.js", "${esc(s.status)}")):
+        assert s in (web / f).read_text(encoding="utf-8"), (f, s)
+    return ("origin exact; cross-site refused; bodies capped (413, unread); zips capped / few / no links; links internet-only, "
+            "redirects too; PC-only work stays the PC's; away names nothing; nosniff + no-referrer; esc() on server strings")
 
 
 def _fake_ts_set(state_file, **kw):
@@ -8958,7 +8996,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/storage/check"), ("POST", "/api/storage/move"),
     ("GET", "/api/doctor"), ("POST", "/api/doctor/full"), ("POST", "/api/doctor/fix/stale"), ("GET", "/api/doctor/bundle"),
     ("GET", "/api/doctor/bundle.zip"), ("POST", "/api/doctor/open-logs"),
-    ("GET", "/api/vault"), ("GET", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
+    ("GET", "/api/vault"), ("POST", "/api/vault/check"), ("GET", "/api/vault/contents"), ("POST", "/api/vault/settings"),
     ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"), ("POST", "/api/lowprofile"), ("POST", "/api/firstrun"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
@@ -10127,7 +10165,7 @@ def a_voicepack():
 def a_vault():
     from undercover.core import storage
     vf = storage.ALLOWED_ROOTS[0] / "vault-drive"
-    bad = api("/api/vault/check?folder=" + urllib.parse.quote(str(ROOT / "output")))
+    bad = api("/api/vault/check", {"folder": str(ROOT / "output")})
     assert bad["ok"] is False, bad
     st = api("/api/vault/settings", {"folder": str(vf), "size": "matters"})
     assert st["on"] and st["connected"], st

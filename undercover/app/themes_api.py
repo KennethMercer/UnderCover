@@ -40,7 +40,6 @@ def _send(h, data: bytes, ctype: str, name: str | None = None):
     h.send_header("Content-Type", ctype)
     h.send_header("Content-Length", str(len(data)))
     h.send_header("Cache-Control", "no-cache")
-    h.send_header("X-Content-Type-Options", "nosniff")
     if name:
         h.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
     h.end_headers()

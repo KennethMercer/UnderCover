@@ -85,6 +85,17 @@ AWAY_401, AWAY_403 = b"Unauthorized", b"Forbidden"   # the away listener's refus
 PC_ONLY_JOB = "That work was started on the PC and can only be stopped or retried there."
 
 
+def _cross_site(method: str, path: str, headers) -> bool:
+    """A request another web site's page made (1.1 hardening: Sec-Fetch-Site, which every browser that runs the page
+    sends), on any listener and method, refused. Only following a link to one of the pages is let through: it can
+    read nothing. Another port on this PC counts as the same site, so the Origin check is what refuses that."""
+    if (headers.get("Sec-Fetch-Site") or "").lower() != "cross-site":
+        return False
+    p = urlparse(path).path
+    return not (method == "GET" and (headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
+                and not p.startswith(("/api/", "/files/", "/static/")))
+
+
 def _pc_only(job) -> bool:
     """A job a phone may not cancel or retry: started by a PC-only route, or of a kind only the PC starts."""
     return job.kind in PC_ONLY_KINDS or bool(getattr(job, "pc_only", False))
@@ -234,6 +245,12 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def end_headers(self):
+        """Every response (1.1 hardening): its type is the one it says, and no page sends this address on."""
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        super().end_headers()
+
     def version_string(self) -> str:
         """The Server header: the away-from-home listener (what the internet reaches) names nothing."""
         return "web" if getattr(self.server, "away", False) else super().version_string()
@@ -250,6 +267,8 @@ class Handler(BaseHTTPRequestHandler):
         self._read, self.set_cookie, self.device = None, None, None
         self.remote = getattr(self.server, "phone", False) or not _loopback(self.client_address[0])
         self.away = getattr(self.server, "away", False)
+        if _cross_site(method, self.path, self.headers):
+            return self._deny(403, AWAY_403 if self.away else None)
         if not self.remote:
             return self._guard_host() and (method == "GET" or self._guard_origin())
         if self.away:
