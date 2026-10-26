@@ -595,7 +595,11 @@ The installer and the app survive version mismatches and fix common problems the
 - Self-healing yt-dlp, the one exception to "never latest" (`core/ytdlp.py`). YouTube changes something every few weeks
   and yt-dlp ships the fix within days, so a pinned pair breaks between releases. Only yt-dlp and the yt-dlp-ejs its own
   `pin` extra names may follow PyPI. Detect: the same breakage on several videos within a window, more failures than
-  successes. Fetch: the newest yt-dlp and the solver its release pins, both checked against PyPI's published SHA-256.
+  successes. Fetch: the newest yt-dlp and the solver its release pins, both checked against PyPI's published SHA-256,
+  and both vouched for by GitHub too (1.1): the solver's wheel by its release asset's digest, yt-dlp's wheel package
+  file by file against its release's source tarball (itself checked against the release's SHA2-256SUMS; `version.py`
+  may differ only in two plain strings). No vouching, no update. A release younger than 48 h is never taken by itself:
+  the System room offers it ("Update now").
   Stage and test: into `<cache>/ytdlp/<yt-dlp>+ejs<solver>/` (every file's SHA-256 kept in its `pair.json`, checked at
   every start: a pair whose files differ, or that has no hashes, falls back to the last known good, then the venv's,
   with a log line), then resolve known public videos; swap in only if at least as good, and only when nothing is using

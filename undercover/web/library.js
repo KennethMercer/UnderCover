@@ -49,8 +49,10 @@ async function loadSummary() {
   $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} + solver ${s.ytdlp_ejs || "missing"} · ${s.ytdlp_source === "side" ? `a checked update (pinned ${s.ytdlp_pinned})` : "the pinned pair"}` +
     (s.ytdlp_checked ? ` · last check ${s.ytdlp_checked.replace("T", " ").slice(0, 16)}: ${s.ytdlp_last}` : "") : "yt-dlp isn't installed";   // Deep Cover
   $("#lib-ytdlp-st").textContent = !s.ytdlp ? "Not installed." : s.ytdlp_job ? "Looking for a working version…"
+    : s.ytdlp_offer ? `yt-dlp ${s.ytdlp_offer.yt} is out: UnderCover takes a new release by itself only once it's 48 hours old. Update now takes it today.`
     : s.ytdlp_broken ? "YouTube is refusing videos: a newer version usually fixes it." : !s.ytdlp_ejs ? "Its puzzle solver is missing: most videos will be refused."
     : `Working (${s.ytdlp}).`;
+  if (!s.ytdlp_job) $("#lib-ytdlp-go").textContent = s.ytdlp_offer ? "Update now" : "Check for a fix";   // (1.1: a release under 48 h is the user's click)
   $("#lib-ytdlp-auto").checked = !!s.ytdlp_auto;
   if (s.ytdlp_job && !L.ytdlpWatch) ytdlpWatch(s.ytdlp_job);
   renderKf();   // the tabs' totals and the chips' numbers
