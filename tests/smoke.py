@@ -1239,6 +1239,30 @@ def u_harden1():
     for f, s in (("speakeasy.js", "${esc(est.first_why)}"), ("speakeasy.js", "${esc(est.waiting)}"),
                  ("vault.js", 'esc(last.reason || "")'), ("doubleagent.js", "${esc(state)}"), ("train.js", "${esc(s.status)}")):
         assert s in (web / f).read_text(encoding="utf-8"), (f, s)
+    # nothing is installed or downloaded unchecked: no add-on by version alone, no model file without its checksum
+    from undercover.core import addons as AD, setup_models as SM
+    inst = inspect.getsource(AD.install)
+    assert '"-c", str(CONSTRAINTS), *a.packages' not in inst and "no pinned list with checksums" in inst, "an unhashed add-on install"
+    with tempfile.TemporaryDirectory(prefix="uc-h1f-") as t:
+        src = Path(t) / "x.bin"
+        src.write_bytes(b"x")
+        try:
+            SM.fetch(src.as_uri(), Path(t) / "out.bin", None, "x.bin")
+            raise AssertionError("a file with no checksum was downloaded")
+        except V.ModelError as e:
+            assert "no known checksum" in str(e) and not (Path(t) / "out.bin").exists(), e
+    # Windows PowerShell by its full path wherever it's started: the installer, the launchers, the app
+    import re
+    iss = (ROOT / "installer" / "UnderCover.iss").read_text(encoding="utf-8")
+    code = [ln for ln in iss.splitlines() if not ln.lstrip().startswith((";", "//"))]
+    bare = [ln for ln in code if re.search(r"(?<![\\])powershell\.exe", ln, re.I) and "WindowsPowerShell" not in ln]
+    assert not bare and "Exec(PSExe()," in iss and iss.count("'\"' + PSExe() + '\"") == 4 and "PSQuote(PSExe())" in iss, bare
+    for f in (ROOT / "scripts" / "UnderCover.bat", ROOT / "installer" / "setup.ps1"):
+        assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile" in f.read_text(encoding="utf-8"), f
+    from undercover.core import platform as PF
+    ps_src = inspect.getsource(PF)
+    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 4
+    assert PF._powershell().lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
     # every listener drops a stalled client; the phone and away listeners take so many connections at once, then 503
     # and close (live, on 127.0.0.1, with a handler that holds its connections)
     import socket
@@ -5686,7 +5710,7 @@ def u_stop_download():
                 return got["n"] > 3
             t0 = time.time()
             try:
-                setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", None, "big.bin", cancel=stop_soon)
+                setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", "0" * 64, "big.bin", cancel=stop_soon)   # (stopped before the checksum)
                 raise AssertionError("the download ran to the end")
             except setup_models.DownloadStopped:
                 pass
@@ -8457,6 +8481,32 @@ def u_ytdlp_heal():
             st["active"], st["last_good"] = "gone+ejs1", None
             ytdlp.save(st)
             assert ytdlp.activate()["source"] == "venv"
+            # 7b. (1.1) a pair whose files differ from when it was staged isn't used: changed, added, or no hashes kept;
+            # Python's own __pycache__ doesn't count
+            said, real_log = [], ytdlp.log
+            ytdlp.log = said.append
+            st["active"], st["last_good"] = new_name, None
+            ytdlp.save(st)
+            d = ytdlp.side(new_name)
+            assert ytdlp.changed(d) == "" and ytdlp.activate()["yt"] == newer
+            init = d / "yt_dlp" / "__init__.py"
+            orig = init.read_bytes()
+            init.write_bytes(orig + b"\n# changed\n")
+            assert "differ" in ytdlp.changed(d) and ytdlp.activate()["source"] == "venv", "a changed pair was used"
+            init.write_bytes(orig)
+            (d / "yt_dlp" / "extra.py").write_text("x = 1\n", encoding="utf-8")
+            assert "differ" in ytdlp.changed(d) and ytdlp.activate()["source"] == "venv", "a pair with an added file was used"
+            (d / "yt_dlp" / "extra.py").unlink()
+            (d / "yt_dlp" / "__pycache__").mkdir(exist_ok=True)
+            (d / "yt_dlp" / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\0")
+            assert ytdlp.changed(d) == ""
+            pj = json.loads((d / "pair.json").read_text(encoding="utf-8"))
+            (d / "pair.json").write_text(json.dumps({k: v for k, v in pj.items() if k != "files"}), encoding="utf-8")
+            assert "before its files were hashed" in ytdlp.changed(d) and ytdlp.activate()["source"] == "venv"
+            (d / "pair.json").write_text(json.dumps(pj), encoding="utf-8")
+            assert ytdlp.activate()["yt"] == newer
+            ytdlp.log = real_log
+            assert any("isn't used" in s for s in said), ("the fallback wasn't logged", said)
             # 8. a wheel that climbs out is refused
             evil = _fake_wheel(pypi, "yt-dlp", "yt_dlp", "2099.3.4", extra_files={"../../evil.py": "x"})
             try:

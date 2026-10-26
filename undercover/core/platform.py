@@ -19,6 +19,11 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DETACHED = NO_WINDOW | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
+def _powershell() -> str:
+    """Windows PowerShell by its full path (1.1 hardening), never whichever powershell.exe comes first on the PATH."""
+    return str(Path(os.environ.get("SystemRoot") or r"C:\Windows") / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+
+
 class NotOnThisOS(Exception):
     """This needs Windows (for now); the message says what, plainly."""
 
@@ -482,7 +487,7 @@ def startup_entry(on: bool, target, folder=None, icon=None) -> bool:
           + (f"$s.IconLocation = '{q(icon)}'; " if icon else "")
           + "$s.Description = 'UnderCover'; $s.Save()")
     folder.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+    r = subprocess.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
                        timeout=30, creationflags=NO_WINDOW)
     if r.returncode or not link.exists():
         raise OSError(f"The startup shortcut couldn't be made: {(r.stderr or r.stdout).strip()[:200]}")
@@ -506,7 +511,7 @@ def repoint_shortcuts(old, new, folders=None) -> list[str]:
           "Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse:$w.r -ErrorAction SilentlyContinue | ForEach-Object { "
           "$l = $sh.CreateShortcut($_.FullName); if ($l.TargetPath -ieq $old) { $l.TargetPath = $new; $l.Save(); "
           "Write-Output $_.FullName } } }")
-    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+    r = subprocess.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
                        timeout=60, creationflags=NO_WINDOW)
     if r.returncode:
         raise OSError(f"The shortcuts couldn't be moved: {(r.stderr or r.stdout).strip()[:200]}")
@@ -551,7 +556,7 @@ def network_and_firewall(addr: str) -> tuple[str, str, str]:
           "if ($i) { Get-NetConnectionProfile -InterfaceIndex $i | Select-Object Name,InterfaceAlias,NetworkCategory | "
           "ConvertTo-Json -Compress }")
     with concurrent.futures.ThreadPoolExecutor(3) as ex:
-        f_net = ex.submit(run_text, ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps])
+        f_net = ex.submit(run_text, [_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps])
         f_state = ex.submit(run_text, ["netsh", "advfirewall", "show", "allprofiles", "state"])
         f_rules = ex.submit(run_text, ["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"])
         return f_net.result().strip(), f_state.result(), f_rules.result()
@@ -562,7 +567,7 @@ def video_controllers() -> list[dict]:
     if not WINDOWS:
         raise _not("Reading the graphics driver")
     import json
-    out = run_text(["powershell", "-NoProfile", "-Command",
+    out = run_text([_powershell(), "-NoProfile", "-Command",
                     "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate | ConvertTo-Json -Compress"])
     rows = json.loads(out or "null")
     return rows if isinstance(rows, list) else [rows] if rows else []

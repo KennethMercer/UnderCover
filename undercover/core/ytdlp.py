@@ -157,12 +157,41 @@ def vkey(v: str | None) -> tuple:
 ACTIVE: dict = {"dir": None}
 
 
+def file_hashes(d: Path) -> dict:
+    """{path inside the pair: SHA-256} of every file a pair folder holds but its pair.json (1.1 hardening)."""
+    out = {}
+    for f in sorted(p for p in d.rglob("*") if p.is_file()):
+        rel = f.relative_to(d).as_posix()
+        if rel != "pair.json" and "__pycache__" not in rel.split("/"):
+            out[rel] = hashlib.sha256(f.read_bytes()).hexdigest()
+    return out
+
+
+def changed(d: Path) -> str:
+    """Why a pair folder can't be trusted ("" when it can): its files must be exactly the ones hashed when it was
+    staged (1.1 hardening: a file changed, missing or added since is refused, and so is a pair staged before the hashes
+    were kept)."""
+    want = (_pair_of(d) or {}).get("files")
+    if not want:
+        return "it was staged before its files were hashed"
+    have = file_hashes(d)
+    if have != want:
+        diff = sorted(set(have) ^ set(want)) + sorted(k for k in set(have) & set(want) if have[k] != want[k])
+        return f"{len(diff)} file(s) differ from when it was staged (e.g. {diff[0]})"
+    return ""
+
+
 def activate() -> dict:
-    """Put the active side pair first on sys.path (before anything imports yt_dlp). A missing or broken folder falls back
-    to the last known good, then to the venv's pair, and says so in the log."""
+    """Put the active side pair first on sys.path (before anything imports yt_dlp). A missing or broken folder, or one
+    whose files changed since it was staged, falls back to the last known good, then to the venv's pair, and says so in
+    the log."""
     st = load()
     for name in (st["active"], st["last_good"]):
         d = side(name)
+        why = changed(d) if d is not None else ""
+        if why:
+            log(f"pair {name} isn't used: {why}")
+            d = None
         if d is not None:
             if name != st["active"]:
                 log(f"the active pair {st['active']} is missing or damaged: using the last known good {name}")
@@ -369,7 +398,8 @@ def stage(pair: dict, into: Path | None = None) -> Path:
         raise
     shutil.rmtree(dl, ignore_errors=True)
     (d / "pair.json").write_text(json.dumps({"yt": pair["yt"], "ejs": pair["ejs"], "made": time.strftime("%Y-%m-%d %H:%M"),
-                                             "sha": {k: w["sha"] for k, w in pair["wheels"].items()}}), encoding="utf-8")
+                                             "sha": {k: w["sha"] for k, w in pair["wheels"].items()},
+                                             "files": file_hashes(d)}), encoding="utf-8")   # checked at every activation
     return d
 
 

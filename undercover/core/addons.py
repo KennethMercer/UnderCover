@@ -306,8 +306,9 @@ def install(addon_id: str, accept: bool, progress=None, cancel=None, source: Pat
                  "-r", str(hashed), what=f"{a.name}'s Python packages")
         elif hashed.exists():
             _pip("install", "--no-deps", "--require-hashes", "-r", str(hashed))
-        else:
-            _pip("install", "--no-deps", "-c", str(CONSTRAINTS), *a.packages)
+        else:   # (1.1 hardening: never an install by version alone)
+            raise ModelError(f"{a.name} has no pinned list with checksums (installer/requirements/addon-{a.id}.txt), "
+                             "so it isn't installed.")
     if a.files:
         from . import setup_models
 
