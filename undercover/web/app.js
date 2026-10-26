@@ -1082,7 +1082,7 @@ function renderHistory() {
         { html: `${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}` }, { t: upFirst(dayWord(h.created)), muted: true }, { t: dayTime(h.created), deep: true }, ...(bits ? bits.split(" · ").map(t => ({ t, deep: true })) : [])])}</div>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("") + recentMore("hist-more", !!S.histAll, HIST.length);
-  $("#hist-more")?.addEventListener("click", () => { S.histAll = !S.histAll; renderHistory(); });
+  $("#hist-more")?.addEventListener("click", () => { S.histAll = !S.histAll; renderHistory(); $("#hist-more")?.focus({ preventScroll: true }); });   // the redraw keeps the keyboard on the button
   $$("[data-play]", box).forEach(b => b.onclick = () => {
     const h = HIST.find(x => x.id === b.dataset.play);
     if (S.result?.id === h.id) return togglePlay();

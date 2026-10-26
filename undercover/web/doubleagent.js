@@ -12,7 +12,7 @@
 // fixed per pair; keeping one says which it was.
 
 const DA = { samples: {}, all: false, audio: new Audio(), playing: null, cands: [],
-             f: daSavedF(),   // "Your voices" filters: one chip pressed per group, or none (remembered per browser)
+             f: daSavedF(), fx: {},   // "Your voices" filters: one chip pressed per group, or none (remembered per browser); fx: what filters now (daFilters)
              cad: null,   // "Let it speak" open on a card: { voice } (Now or Tonight, with the time)
              own: null,   // "Train my own" open on a card: { voice, mode } (Speaking / Singing taken from the voice where it says; "" = asked)
              ab: null };   // the open A/B: { voice, st (GET .../cadence), why, err, busy }
@@ -152,7 +152,7 @@ const daKey = {
   speak: c => c.demo || c.cadence?.has ? "yes" : "no",   // the demo voice speaks
   src: c => c.demo ? "" : c.trained ? "trained" : "downloaded",
 };
-const daMatch = c => Object.keys(DA.f).every(g => !DA.f[g] || daKey[g](c) === DA.f[g]);
+const daMatch = c => Object.keys(DA.fx).every(g => !DA.fx[g] || daKey[g](c) === DA.fx[g]);
 function daFilters() {
   const box = $("#da-filters");
   const groups = [
@@ -160,13 +160,14 @@ function daFilters() {
     ["speak", "Speaks", [["yes", "Can speak"], ["no", "Can't speak yet"]]],
     ["src", "From", [["trained", "Trained here"], ["downloaded", "Downloaded"]]],
   ].map(([g, label, opts]) => [g, label, opts.filter(([v]) => DA.cands.some(c => daKey[g](c) === v))]).filter(([, , opts]) => opts.length > 1);
-  Object.keys(DA.f).forEach(g => { if (DA.f[g] && !groups.some(([k, , opts]) => k === g && opts.some(([v]) => v === DA.f[g]))) DA.f[g] = ""; });   // a pressed chip that's gone lapses
   box.hidden = DA.cands.length < 4 || !groups.length;
-  if (box.hidden) { DA.f = { like: "", speak: "", src: "" }; return; }   // no chips, no filtering (the remembered choice waits for them)
-  const none = Object.values(DA.f).every(v => !v);
+  // what filters: only chips on show (no row, no filtering; a chip whose voices are gone lapses). DA.f stays the remembered choice for when they're back
+  DA.fx = Object.fromEntries(Object.keys(DA.f).map(g => [g, !box.hidden && groups.some(([k, , opts]) => k === g && opts.some(([v]) => v === DA.f[g])) ? DA.f[g] : ""]));
+  if (box.hidden) return;
+  const none = Object.values(DA.fx).every(v => !v);
   box.innerHTML = `<button class="fchip" type="button" data-fall aria-pressed="${none}">All</button>` + groups.map(([g, label, opts]) => `<span class="vf-group" role="group" aria-label="${label}"><small class="meta">${label}</small>${
-    opts.map(([v, text]) => `<button class="fchip" type="button" data-fg="${g}" data-fv="${v}" aria-pressed="${DA.f[g] === v}">${text}</button>`).join("")}</span>`).join("");
-  $$("[data-fg]", box).forEach(b => b.onclick = () => daSetF({ ...DA.f, [b.dataset.fg]: DA.f[b.dataset.fg] === b.dataset.fv ? "" : b.dataset.fv }));
+    opts.map(([v, text]) => `<button class="fchip" type="button" data-fg="${g}" data-fv="${v}" aria-pressed="${DA.fx[g] === v}">${text}</button>`).join("")}</span>`).join("");
+  $$("[data-fg]", box).forEach(b => b.onclick = () => daSetF({ ...DA.fx, [b.dataset.fg]: DA.fx[b.dataset.fg] === b.dataset.fv ? "" : b.dataset.fv }));
   $("[data-fall]", box).onclick = () => daSetF({ like: "", speak: "", src: "" });
 }
 const abUrl = (voice, rest = "") => `/api/train/voices/${encodeURIComponent(voice)}/cadence${rest}`;
