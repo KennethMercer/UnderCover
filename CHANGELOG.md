@@ -3,7 +3,7 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## Unreleased (1.1)
+## 1.1.0 (2026-10-27)
 
 **Hardening** (harden1)
 - Stricter checks on requests to UnderCover's server, on the PC and from phones: who may call it, how much a request
@@ -12,6 +12,25 @@ in brackets.
 - Links UnderCover fetches for you only reach the internet, and voice files are unpacked with size limits.
 - Updated parts are checked before they're used, and nothing is installed without its checksum.
 - The Phone access setting says that the home connection isn't encrypted.
+- The first start after updating may use the YouTube downloader that came with this release once, while a newer one
+  it fetched earlier is checked again.
+
+**The First assignment, as a tour** (firstrun-tour)
+- A fresh install opens on a four-step tour: your first cover (one press, about a minute), listening and keeping it,
+  finding it in SafeHouse, and the start of a new voice. While the cover is made, the page stays dimmed with the app's
+  own progress lit and a changing tip. Skip asks once; Settings replays it.
+
+**Recent, Train my own, filters** (pagepolish2)
+- FrontMan's and SpeakEasy's Recent show the five newest, with Show more for the rest of the fifteen.
+- Every downloaded voice offers Train my own, with Now or Tonight on its card; it asks speaking or singing when the
+  voice doesn't say.
+- Your voices' filters have All, and remember what you picked.
+
+**A person's own pace** (pace)
+- Speech in a person's cadence picks slower, clearer clips of them as its reference, so it no longer rushes.
+
+**The installer's add-ons** (addonpage)
+- The add-on page has one row per add-on, each a single line with its download size.
 
 **Speech that runs on past its text** (lbextra)
 - When the speech engine carries on past the end of a sentence (repeating its last words, or a garbled tail), the
