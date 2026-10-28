@@ -1,0 +1,66 @@
+# UnderCover's unit checks on every push and pull request: Windows, Python 3.12, the CPU build of PyTorch, and every
+# package from the installer's own pinned lists with their SHA-256 (--require-hashes, --no-deps), exactly as setup
+# installs them. No GPU, no models, nothing private. Each action is pinned by its full commit SHA (the tag in the
+# comment, checked with git ls-remote).
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97   # v7.0.0
+        with:
+          python-version: "3.12.10"
+
+      - name: Wheel cache, read (keyed by the pinned lists)
+        id: wheels
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9   # v6.1.0
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-${{ hashFiles('installer/requirements/torch-cpu.txt', 'installer/requirements/common.txt', 'installer/requirements/cadence.txt', 'installer/constraints.txt') }}
+
+      - name: Install the pinned packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m venv .venv
+          $py = '.venv\Scripts\python.exe'
+          $req = 'installer\requirements'
+          # setuptools first (the pinned one): two pins are pure-Python source archives built without network access
+          Select-String -Path "$req\common.txt" -Pattern '^setuptools==' -Context 0,1 | ForEach-Object {
+            $_.Line.TrimEnd('\', ' '), $_.Context.PostContext[0].Trim() -join ' ' } | Set-Content setuptools.txt
+          & $py -m pip install --no-deps --require-hashes -r setuptools.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # PyTorch for the CPU, from PyTorch's own index (constraints.txt pins the AMD build, so not here)
+          & $py -m pip install --no-deps --require-hashes --index-url https://download.pytorch.org/whl/cpu -r "$req\torch-cpu.txt"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # everything else, as setup installs it
+          & $py -m pip install --no-deps --require-hashes --no-build-isolation -c installer\constraints.txt -r "$req\common.txt" -r "$req\cadence.txt"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Wheel cache, write (pushes to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wheels.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9   # v6.1.0
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ steps.wheels.outputs.cache-primary-key }}
+
+      - name: Unit checks
+        shell: pwsh
+        run: .venv\Scripts\python.exe tests\smoke.py --unit-only

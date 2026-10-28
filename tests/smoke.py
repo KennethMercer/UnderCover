@@ -3339,6 +3339,52 @@ def u_config_layers():
     return "overlay; fresh = defaults; migrate keeps values (path, quoted list, bool), the full file, once; writes go to the user file"
 
 
+@check("the tests on GitHub (1.1): one workflow, .github/workflows/tests.yml, read-only, every action pinned by its full commit SHA, no pull_request_target and no secrets; it installs only from the installer's pinned, hashed lists (--require-hashes, --no-deps) and runs the unit checks")
+def u_ci_workflow():
+    import re
+    import yaml
+    wf_dir = ROOT / ".github" / "workflows"
+    assert sorted(p.name for p in wf_dir.iterdir()) == ["tests.yml"], sorted(p.name for p in wf_dir.iterdir())
+    text = (wf_dir / "tests.yml").read_text(encoding="utf-8")
+    wf = yaml.safe_load(text)
+    on = wf.get("on", wf.get(True))   # (YAML reads a bare `on:` key as True)
+    assert set(on) == {"push", "pull_request"} and "pull_request_target" not in text and "workflow_run" not in text, on
+    assert wf["permissions"] == {"contents": "read"}, wf["permissions"]
+    assert not re.search(r"\$\{\{\s*(secrets|github\.event)", text), "the workflow reads secrets or event text"
+    # every job: read-only at most, on a GitHub-hosted runner pinned by its image (never self-hosted: a fork's code
+    # would run on a machine of ours), and nothing allowed to fail quietly
+    for name, job in wf["jobs"].items():
+        assert job.get("permissions") in (None, {"contents": "read"}, {}), (name, job.get("permissions"))
+        runs_on = job.get("runs-on")
+        assert isinstance(runs_on, str) and re.fullmatch(r"(windows|ubuntu|macos)-\d[\w.]*", runs_on), (name, runs_on)
+        assert "continue-on-error" not in job and not any("continue-on-error" in s for s in job["steps"]), name
+    assert "self-hosted" not in text and "continue-on-error" not in text
+    steps = [s for job in wf["jobs"].values() for s in job["steps"]]
+    uses = [s["uses"] for s in steps if "uses" in s]
+    assert uses and all(re.fullmatch(r"actions/(checkout|setup-python|cache/restore|cache/save)@[0-9a-f]{40}", u) for u in uses), uses
+    # the shared wheel cache is written only by a push to main; everything else only reads it
+    saves = [s for s in steps if s.get("uses", "").startswith("actions/cache/save@")]
+    save_if = "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wheels.outputs.cache-hit != 'true'"
+    assert saves and all(s.get("if") == save_if for s in saves), saves   # (the whole condition: nothing ORed in)
+    assert not any(s.get("uses", "").startswith("actions/cache@") for s in steps), "the combined cache action writes on every run"
+    assert "badge.svg" not in (ROOT / "README.md").read_text(encoding="utf-8"), "the README loads a badge from github.com"
+    assert next(s for s in steps if s.get("uses", "").startswith("actions/checkout"))["with"]["persist-credentials"] is False
+    runs = "\n".join(s.get("run", "") for s in steps)
+    installs = [ln.strip() for ln in runs.splitlines() if "pip install" in ln]
+    assert installs and all("--require-hashes" in ln and "--no-deps" in ln for ln in installs), installs
+    for f in ("torch-cpu.txt", "common.txt", "cadence.txt"):
+        assert f in runs, f
+    assert "-c installer\\constraints.txt" in runs and runs.rstrip().endswith("tests\\smoke.py --unit-only"), runs[-200:]
+    # PyTorch for the CPU: exact versions with their hashes, from PyTorch's CPU index and no other
+    torch_ln = next(ln for ln in installs if "torch-cpu.txt" in ln)
+    assert "--index-url https://download.pytorch.org/whl/cpu" in torch_ln and "extra-index-url" not in text, torch_ln
+    pins = re.sub(r"\\\r?\n", " ", (ROOT / "installer" / "requirements" / "torch-cpu.txt").read_text(encoding="utf-8"))
+    lines = [ln for ln in pins.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert len(lines) == 3 and all(re.match(r"torch(audio|vision)?==[\d.]+\+cpu ", ln) and re.search(r"--hash=sha256:[0-9a-f]{64}", ln)
+                                   for ln in lines), lines
+    return f"{len(uses)} actions pinned by SHA, read-only, {len(installs)} hashed installs (PyTorch's CPU index only), unit checks"
+
+
 @check("the product repo's root (layout + layout2, user 2026-10-17: 'shouldn't root be basically the readme, changelog, and project folder', 'do it'): README, CHANGELOG, .gitignore, docs/MASTERPLAN.md and the undercover / installer / scripts / tests folders; every reference to a moved file follows; the user's config.toml is ignored")
 def u_layout():
     import re
@@ -11166,7 +11212,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
