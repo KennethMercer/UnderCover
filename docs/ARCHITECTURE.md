@@ -544,7 +544,12 @@ no-referrer`. The phone and away listeners take `MAX_LIVE` (32) connections at o
 (`phone.TOKEN_IDLE_S`; each use renews it and its cookie). Wrong pairing codes are counted per address (5) and in all
 (20). A phone may not cancel or retry work only the PC starts. Links the app fetches for someone (a voice install, a
 training source, a song from a link) reach only the internet: `core/safeurl.py` refuses a host that is or resolves to
-this PC, the home network or a link-local address, and checks every redirect. A voice zip unpacks under a running size
+this PC, the home network or a link-local address, and checks every redirect. Since 1.1.1 the check is also made at
+connect time: inside `safeurl.guarded()` (per thread) every socket connect and send-to is checked by the address it
+really uses, a name resolved there and the connection pinned to a checked address. Every yt-dlp call runs inside it
+(`core/youtube.py`'s `YoutubeDL`, its `urlopen` too), only yt-dlp's own HTTP, HLS and DASH downloaders run (no program
+gets a link), one stream at a time, one fragment thread. A configured proxy is reached at its own address, and links
+behind it are checked by name. A voice zip unpacks under a running size
 cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerShell is started by its full path.
 
 ### System tray

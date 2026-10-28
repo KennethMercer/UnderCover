@@ -517,6 +517,8 @@ def from_link(url: str) -> list[Source]:
     with _ydl(extract_flat="in_playlist", skip_download=True) as ydl:
         try:
             info = ydl.extract_info(url.strip(), download=False)
+        except safeurl.LinkRefused:
+            raise
         except Exception as e:
             raise ModelError(f"Couldn't read that link ({_short(e)}).")
     entries = info.get("entries") or [info]

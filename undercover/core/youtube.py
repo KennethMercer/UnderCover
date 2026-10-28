@@ -27,9 +27,30 @@ def _note(url: str, ok: bool, err: str = ""):
         pass
 
 
+# Links only reach the internet (1.1.1 hardening, core/safeurl): every call into yt-dlp runs inside safeurl's guard,
+# and its urlopen enters the guard again (a request from a thread yt-dlp started). Only formats yt-dlp fetches itself
+# are taken, and only its own three downloaders run: a program (ffmpeg, rtmpdump, a player) would fetch outside the guard.
+PROTOCOLS = ("http", "https", "m3u8_native", "http_dash_segments")
+DOWNLOADERS = ("HttpFD", "HlsFD", "DashSegmentsFD")
+PROTOCOL_FILTER = "[protocol~='^(" + "|".join(PROTOCOLS) + ")$']"
+FORCED = {"external_downloader": {"default": "native"}, "concurrent_fragment_downloads": 1}
+CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, or a kind of stream it doesn't download). "
+              "Try another link.")
+
+
+def safe_format(fmt: str | None) -> str:
+    """The format selector with every choice limited to PROTOCOLS. One stream only: a merged choice ("+") would
+    download several at once, and those run in yt-dlp's own threads."""
+    fmt = fmt or "bestaudio/best"
+    if any(c in re.sub(r"\[[^\]]*\]", "", fmt) for c in "+,()"):   # (inside a [filter] they're just text)
+        raise ValueError(f"one stream per download: {fmt!r}")
+    return "/".join(part + PROTOCOL_FILTER for part in fmt.split("/"))
+
+
 def _watched(yt_dlp):
     if WATCHED.get("base") is yt_dlp.YoutubeDL:
         return WATCHED["cls"]
+    from . import safeurl
 
     class Watched(yt_dlp.YoutubeDL):
         def __enter__(self):
@@ -47,27 +68,78 @@ def _watched(yt_dlp):
 
         def extract_info(self, url, download=True, *a, **kw):
             try:
-                info = super().extract_info(url, download, *a, **kw)
+                with safeurl.guarded():
+                    info = super().extract_info(url, download, *a, **kw)
             except Exception as e:
+                no = safeurl.refused_in(e)
+                if no:   # (not a YouTube breakage: the self-heal doesn't hear of it)
+                    raise no from e
                 _note(url, False, str(e))
                 raise
             if kw.get("process", True):   # formats resolved: the part that breaks when YouTube changes
                 _note(url, True)
             return info
 
+        def download(self, *a, **kw):
+            with safeurl.guarded():
+                return super().download(*a, **kw)
+
+        def process_ie_result(self, *a, **kw):
+            with safeurl.guarded():
+                return super().process_ie_result(*a, **kw)
+
+        def urlopen(self, req):
+            url = req if isinstance(req, str) else getattr(req, "url", None) or req.get_full_url()
+            try:
+                with safeurl.guarded():
+                    if safeurl.proxied():   # behind a proxy the address isn't ours to see: the name is checked
+                        try:
+                            safeurl.check(url)
+                        except safeurl.LinkRefused:
+                            raise
+                        except ModelError:   # (a name only the proxy resolves, or not a web link: theirs to say)
+                            pass
+                    return super().urlopen(req)
+            except Exception as e:
+                no = safeurl.refused_in(e)
+                if no:   # (raised as itself: yt-dlp's retry loops only catch its own network errors)
+                    raise no from e
+                raise
+
+        def dl(self, name, info, *a, **kw):
+            from yt_dlp.downloader import get_suitable_downloader
+            from yt_dlp.utils import determine_protocol
+            fd = get_suitable_downloader(info, self.params, to_stdout=(name == "-"))
+            if fd.__name__ not in DOWNLOADERS or determine_protocol(info) not in PROTOCOLS:
+                raise safeurl.LinkRefused(CANT_FETCH)
+            return super().dl(name, info, *a, **kw)
+
+    # a downloader that hands over to a program by itself (HLS features it can't do, some sites) is refused too
+    from yt_dlp.downloader import external
+    ext = external.ExternalFD
+    if not getattr(ext.real_download, "_uc_guard", False):
+        def real_download(self, filename, info_dict, _orig=ext.real_download):
+            if isinstance(self.ydl, WATCHED.get("cls") or ()):
+                raise safeurl.LinkRefused(CANT_FETCH)
+            return _orig(self, filename, info_dict)
+        real_download._uc_guard = True
+        ext.real_download = real_download
+
     WATCHED.update(base=yt_dlp.YoutubeDL, cls=Watched)
     return Watched
 
 
 def open_ydl(missing: str, **opts):
-    """A quiet yt_dlp.YoutubeDL that reports how YouTube videos go (see the module's notes). `missing`: what to tell the
-    user when yt-dlp isn't installed."""
+    """A quiet yt_dlp.YoutubeDL that reports how YouTube videos go and only reaches the internet (see the notes
+    above). `missing`: what to tell the user when yt-dlp isn't installed."""
     try:
         import yt_dlp
     except ImportError:
         raise ModelError(missing)
     base = {"quiet": True, "no_warnings": True, "noprogress": True, "logger": _QuietLogger()}
-    return _watched(yt_dlp)({**base, **opts})
+    opts = {**base, **opts, **FORCED}
+    opts["format"] = safe_format(opts.get("format"))
+    return _watched(yt_dlp)(opts)
 
 
 SONGS_MISSING = "yt-dlp isn't installed in UnderCover's environment, so songs can't be fetched from YouTube."
@@ -109,6 +181,10 @@ BLOCKED_MSG = ("YouTube is temporarily blocking downloads from this PC (it asks 
 
 
 def check_blocked(e: BaseException):
+    """The causes said as themselves: a refused link, YouTube's bot check."""
+    from .safeurl import LinkRefused
+    if isinstance(e, LinkRefused):
+        raise e
     t = str(e)
     if "not a bot" in t or "Sign in to confirm" in t:
         raise YouTubeBlocked(BLOCKED_MSG)

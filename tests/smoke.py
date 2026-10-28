@@ -1428,6 +1428,258 @@ def _fake_ts_set(state_file, **kw):
                    env={**os.environ, "FAKE_TS_STATE": str(state_file)}, timeout=30)
 
 
+@check("hardening (1.1.1): inside the link guard every socket is checked by the address it really uses, when it connects or sends (a name answering differently the second time gets nowhere); yt-dlp's redirects, the addresses inside a page and HLS fragments never reach this PC or the home network; only yt-dlp's own three downloaders run, no program, one stream, one thread; a proxy is reached and links behind it checked by name; Deno gets no network permission")
+def u_netguard():
+    import http.server
+    import os
+    import socket
+    import ssl
+    import tempfile
+    import threading
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor
+    import yt_dlp
+    from yt_dlp.downloader import get_suitable_downloader
+    from yt_dlp.downloader.external import FFmpegFD
+    from yt_dlp.extractor.youtube.jsc._builtin import deno
+    from undercover.core import safeurl, youtube
+    from undercover.core.youtube import SongResult
+    from undercover.frontman import songs
+
+    # the address forms that carry a home address inside, the real rule (no test stand-in yet)
+    for ip in ("::ffff:192.168.1.1", "::ffff:127.0.0.2", "64:ff9b::c0a8:101", "64:ff9b::7f00:1", "64:ff9b:1::a00:1",
+               "2002:c0a8:101::1", "2001:0:4136:e378:8000:63bf:3f57:fefe", "::1", "fe80::1%12", "100.64.0.1", "::"):
+        assert safeurl._private(ip), ip
+    for ip in ("8.8.8.8", "2606:4700::1111"):   # (Python calls all of 64:ff9b::/96 reserved: NAT64 fails closed)
+        assert not safeurl._private(ip), ip
+    # install() twice: one wrapper, on every call that picks an address
+    before = {n: getattr(socket.socket, n) for n in ("connect", "connect_ex", "sendto")}
+    safeurl.install()
+    assert all(getattr(socket.socket, n) is f and f._uc_guard for n, f in before.items())
+
+    hits = {"home": []}
+
+    def serve(ip, routes):
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                code, headers, body = routes(self.path)
+                self.send_response(code)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        srv = http.server.ThreadingHTTPServer((ip, 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
+
+    def home_route(p):
+        hits["home"].append(p)
+        return 200, {"Content-Type": "audio/mpeg"}, b"\xff\xfb" * 2000
+    home = serve("127.0.0.2", home_route)   # stands in for the home network
+    H2 = f"http://127.0.0.2:{home.server_port}"
+
+    def net_route(p):
+        if p == "/redir":
+            return 302, {"Location": H2 + "/a.mp3"}, b""
+        if p in ("/page.html", "/ok.html"):
+            src = H2 + "/a.mp4" if p == "/page.html" else "/a.mp4"
+            return 200, {"Content-Type": "text/html"}, f'<html><head><title>t</title></head><body><video src="{src}"></video></body></html>'.encode()
+        if p == "/list.m3u8":
+            segs = "".join(f"#EXTINF:2.0,\n{H2}/s{i}.ts\n" for i in range(4))
+            return 200, {"Content-Type": "application/vnd.apple.mpegurl"}, \
+                f"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n{segs}#EXT-X-ENDLIST\n".encode()
+        if p == "/a.mp4":
+            return 200, {"Content-Type": "video/mp4"}, b"\0" * 4000
+        return 404, {}, b""
+    net = serve("127.0.0.1", net_route)     # stands in for the internet
+    H1 = f"http://127.0.0.1:{net.server_port}"
+
+    real_private, real_resolve, real_check = safeurl._private, socket.getaddrinfo, safeurl.check.__defaults__
+    answers = {}
+
+    def resolve(host, *a, **kw):   # names for the test: each answers from its own list, one answer per lookup
+        if host in answers:
+            ip = answers[host].pop(0) if len(answers[host]) > 1 else answers[host][0]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, a[0] if a else kw.get("port")))]
+        return real_resolve(host, *a, **kw)
+    env = {k: os.environ.get(k) for k in ("NO_PROXY", "no_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")}
+    for k in env:
+        os.environ.pop(k, None)
+    os.environ["NO_PROXY"] = "*"            # this PC's own proxy settings stay out of it
+    safeurl._PROXIES["at"] = -1e9
+    safeurl._private = lambda ip: ip.split("%")[0] != "127.0.0.1" and real_private(ip)
+    socket.getaddrinfo = resolve
+    safeurl.check.__defaults__ = (resolve,)
+    tmp = Path(tempfile.mkdtemp(prefix="uc-netguard-"))
+    popen = []
+    real_popen = yt_dlp.utils.Popen.__init__
+
+    def no_popen(self, args, *a, **kw):   # (yt-dlp asks ffmpeg its version: fine; a program given a link isn't)
+        if any("://" in str(x) for x in (args if isinstance(args, (list, tuple)) else [args])):
+            popen.append(args)
+            raise AssertionError("a program was started for a download")
+        return real_popen(self, args, *a, **kw)
+    yt_dlp.utils.Popen.__init__ = no_popen
+    try:
+        def refused(fn):
+            try:
+                fn()
+            except safeurl.LinkRefused as e:
+                return str(e)
+            except safeurl.Refused as e:
+                return str(e)
+            raise AssertionError("not refused")
+
+        # (a) DNS rebinding: the name checked says the internet, the second lookup says home: refused at connect
+        answers["rebind.test"] = ["127.0.0.1", "127.0.0.2"]
+        assert refused(lambda: safeurl.get(f"http://rebind.test:{home.server_port}/a.mp3", timeout=5)) == safeurl.SAY
+        # a name connected inside the guard is resolved there, checked and pinned
+        answers["pin.test"] = ["127.0.0.1"]
+        with safeurl.guarded():
+            s = socket.create_connection(("pin.test", net.server_port), timeout=5)
+            assert s.getpeername()[0] == "127.0.0.1"
+            s.close()
+            answers["home.test"] = ["127.0.0.2"]
+            refused(lambda: socket.create_connection(("home.test", home.server_port), timeout=5))
+        # every call that picks an address, inside the guard; the same calls outside it still work
+        for fam, addr in ((socket.AF_INET, ("127.0.0.2", home.server_port)),
+                          (socket.AF_INET6, ("::ffff:127.0.0.2", home.server_port, 0, 0)),
+                          (socket.AF_INET6, ("::1", home.server_port, 0, 0))):
+            if fam == socket.AF_INET6 and not socket.has_ipv6:
+                continue
+            with socket.socket(fam, socket.SOCK_STREAM) as s, safeurl.guarded():
+                refused(lambda: s.connect(addr))
+                refused(lambda: s.connect_ex(addr))
+            with socket.socket(fam, socket.SOCK_DGRAM) as s:
+                with safeurl.guarded():
+                    refused(lambda: s.sendto(b"x", addr))
+                    refused(lambda: s.sendto(b"x", 0, addr))
+                    if hasattr(s, "sendmsg"):
+                        refused(lambda: s.sendmsg([b"x"], [], 0, addr))
+                if fam == socket.AF_INET:
+                    s.sendto(b"x", addr)    # outside: fine
+        with safeurl.guarded():
+            refused(lambda: socket.create_connection(("127.0.0.2", home.server_port), timeout=5))
+            ctx = ssl.create_default_context()
+            with ctx.wrap_socket(socket.socket(), server_hostname="x.test") as s:
+                refused(lambda: s.connect(("127.0.0.2", home.server_port)))
+            if hasattr(socket, "AF_UNIX"):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    refused(lambda: s.connect(str(tmp / "sock")))
+            fake = type("S", (), {"family": 12345, "type": socket.SOCK_STREAM})()
+            refused(lambda: safeurl._vet(fake, ("8.8.8.8", 80)))
+            started = []
+            t = threading.Thread(target=lambda: started.append(safeurl.on()))
+            t.start()
+            t.join()
+            assert started == [False], "a thread started in a guarded block starts unguarded (as the notes say)"
+        assert hits["home"] == [], hits
+        with socket.create_connection(("127.0.0.2", home.server_port), timeout=5) as s:   # outside the guard
+            assert s.getpeername()[0] == "127.0.0.2"
+        hits["home"].clear()
+
+        # yt-dlp: its redirect, the address inside a page, HLS fragments: refused, the home server never asked
+        for name, path in (("redirect", "/redir"), ("page", "/page.html"), ("hls", "/list.m3u8")):
+            with youtube.open_ydl("x", outtmpl=str(tmp / f"{name}.%(ext)s")) as y:
+                assert refused(lambda: y.download([H1 + path])) == safeurl.SAY, name
+            assert hits["home"] == [], (name, hits)
+        # a page on the internet with its video there too still downloads
+        with youtube.open_ydl("x", outtmpl=str(tmp / "ok.%(ext)s")) as y:
+            y.download([H1 + "/ok.html"])
+        assert any(p.name.startswith("ok.") and p.stat().st_size == 4000 for p in tmp.iterdir()), list(tmp.iterdir())
+        # yt-dlp's requests from a thread it started come back into the guard
+        with youtube.open_ydl("x") as y, ThreadPoolExecutor(1) as pool:
+            assert refused(lambda: pool.submit(y.urlopen, H2 + "/x").result()) == safeurl.SAY
+        assert hits["home"] == [], hits
+        # the message the user gets from a song download
+        with isolated_data():
+            r = SongResult(id="t", url=H1 + "/redir", title="t", raw_title="t", channel="", duration=60)
+            assert refused(lambda: songs.download(r, register=lambda *a: {})) == safeurl.SAY
+        assert hits["home"] == [], hits
+
+        # one stream, one thread, yt-dlp's own downloaders only
+        with youtube.open_ydl("x", concurrent_fragment_downloads=4, external_downloader="ffmpeg",
+                              format="bestaudio[abr<=160]/bestaudio/best") as y:
+            assert y.params["concurrent_fragment_downloads"] == 1
+            assert y.params["format"].count(youtube.PROTOCOL_FILTER) == 3
+            assert set(y._request_director.handlers) <= {"Requests", "Urllib"}, set(y._request_director.handlers)
+            fmt = lambda proto, **kw: {"url": H1 + "/a.mp4", "protocol": proto, "ext": "mp4", "format_id": "f",
+                                       "http_headers": {}, **kw}
+            for proto in ("http", "https", "m3u8_native", "m3u8", "http_dash_segments"):
+                assert get_suitable_downloader(fmt(proto), y.params).__name__ in youtube.DOWNLOADERS, proto
+            for proto, kw in (("rtmp", {}), ("rtmp_ffmpeg", {}), ("rtsp", {}), ("mms", {}), ("f4m", {}),
+                              ("ism", {}), ("websocket_frag", {}), ("m3u8_native", {"is_live": True}),
+                              ("http", {"section_start": 5}), ("niconico_dmc", {}), ("mhtml", {}),
+                              ("youtube_live_chat", {}), ("bunnycdn", {})):
+                assert refused(lambda: y.dl(str(tmp / "x.mp4"), fmt(proto, **kw))) == youtube.CANT_FETCH, proto
+            assert refused(lambda: FFmpegFD(y, y.params).download(str(tmp / "y.mp4"), fmt("m3u8"))) == youtube.CANT_FETCH
+        for merged in ("bestvideo+bestaudio", "best,worst", "(bestaudio)"):
+            try:
+                youtube.safe_format(merged)
+                raise AssertionError(merged)
+            except ValueError:
+                pass
+        assert youtube.safe_format("bestaudio[ext~='(m4a|webm)']").count(youtube.PROTOCOL_FILTER) == 1
+        # a refusal isn't a YouTube breakage: the self-heal never hears of it
+        noted, real_note = [], youtube._note
+        youtube._note = lambda *a: noted.append(a)
+        try:
+            answers["www.youtube.com"] = ["127.0.0.2"]
+            with youtube.open_ydl("x") as y:
+                assert refused(lambda: y.extract_info("https://www.youtube.com/watch?v=aaaaaaaaaaa", download=False)) == safeurl.SAY
+        finally:
+            youtube._note = real_note
+            answers.pop("www.youtube.com")
+        assert noted == [], noted
+        assert popen == [], popen
+        src = {f.relative_to(ROOT).as_posix(): f.read_text(encoding="utf-8") for f in (ROOT / "undercover").rglob("*.py")}
+        for rel, text in src.items():
+            if rel not in ("undercover/core/youtube.py", "undercover/core/ytdlp.py"):
+                assert "YoutubeDL(" not in text, rel   # every YoutubeDL comes from open_ydl
+            for opt in ("external_downloader", "concurrent_fragment_downloads", "download_ranges", "nocheckcertificate",
+                        "remote_components", "hls_prefer_native", '"proxy"'):
+                assert opt not in text or rel == "undercover/core/youtube.py", (rel, opt)
+        # Deno: yt-dlp gives it no permission to reach the network
+        argv = list(deno.DenoJCP._DENO_BASE_OPTIONS)
+        dsrc = Path(deno.__file__).read_text(encoding="utf-8")
+        assert not any(a.startswith("--allow") or a == "-A" for a in argv), argv
+        assert "--allow" not in dsrc and "'-A'" not in dsrc and '"-A"' not in dsrc
+
+        # a proxy: its own address reached, everything else at home refused, links behind it checked by name
+        os.environ.pop("NO_PROXY", None)
+        os.environ["HTTP_PROXY"] = H2
+        safeurl._PROXIES["at"] = -1e9
+        with safeurl.guarded():
+            assert safeurl.proxied()
+            socket.create_connection(("127.0.0.2", home.server_port), timeout=5).close()
+            refused(lambda: socket.create_connection(("127.0.0.2", net.server_port), timeout=5))
+        with youtube.open_ydl("x") as y:
+            assert refused(lambda: y.urlopen("http://192.168.1.1/x")) == safeurl.SAY
+            assert hits["home"] == [], hits
+            answers["pub.test"] = ["127.0.0.1"]   # a link on the internet goes through the proxy
+            assert len(y.urlopen("http://pub.test/x").read()) == 4000
+        assert hits["home"] == ["http://pub.test/x"], hits
+    finally:
+        yt_dlp.utils.Popen.__init__ = real_popen
+        safeurl._private, socket.getaddrinfo = real_private, real_resolve
+        safeurl.check.__defaults__ = real_check
+        for k, v in env.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        safeurl._PROXIES["at"] = -1e9
+        home.shutdown()
+        net.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+    return "the race, every socket call, yt-dlp's hops, the downloaders, one stream, the proxy, Deno"
+
+
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
@@ -11235,7 +11487,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
