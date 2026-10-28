@@ -3711,7 +3711,7 @@ def u_installer_python():
     assert "StartsWith($root, [StringComparison]::OrdinalIgnoreCase)" in helper, "the registry cleanup must be limited to this install"
     if os.name == "nt":
         with tempfile.TemporaryDirectory(prefix="uc-py-") as td:
-            d = Path(td)
+            d = Path(td).resolve()      # the long name: a runner's TEMP can be 8.3 (RUNNER~1), PowerShell answers in full
             (d / "cpython-3.12-windows-x86_64-none").mkdir()           # the minor link (here a plain folder)
             (d / "cpython-3.12-windows-x86_64-none" / "python.exe").write_bytes(b"x")
 
@@ -4921,7 +4921,7 @@ def u_desk_plan():
     def boom(*a, **k):
         raise AssertionError("the plan looked something up for the desk")
     saved = (firstrun.SAMPLE, firstrun.DEMO, service.online_for, service.subject_of, ambiguity.choices_for)
-    with isolated_data() as t:
+    with isolated_data() as t, _audio_reads():
         try:
             sample = t / "assets" / "sample"
             sample.mkdir(parents=True)
@@ -7977,7 +7977,8 @@ def u_doctor_packages():
     from undercover.core import addons, doctor, manifest
     with isolated_data():
         pins = manifest.pins()
-        have = manifest.installed()
+        # a venv exactly as setup pinned it, whatever this one holds (a CPU build has no rocm packages)
+        have = {**manifest.installed(), **{n: r["version"] for n, r in pins.items() if r.get("version")}}
         name = "soundfile" if "soundfile" in pins else next(n for n in pins if n not in manifest.NEVER_FROM_APP and n in have)
         # the record (written by setup) says the pinned version; the venv now reports another one
         manifest.save({"v": 1, "kind": "installed", "models": {}, "packages": {n: have[n] for n in pins if n in have}})
@@ -7986,7 +7987,7 @@ def u_doctor_packages():
         addons._pip = lambda *a, what="": calls.append((a, Path(a[a.index("-r") + 1]).read_text(encoding="utf-8")))
         try:
             manifest.save({**manifest.load(), "packages": {**manifest.load()["packages"], name: pins[name]["version"]}})
-            manifest.installed = lambda: {**real(), name: "0.0.1"}
+            manifest.installed = lambda: {**have, name: "0.0.1"}
             row = next(r for r in doctor.run(False)["results"] if r["id"] == "packages")
             assert row["state"] == "warn" and name in row["detail"] and row["fix"]["id"] == "packages", row
             lines, refused = doctor.package_fix_lines()
@@ -7999,7 +8000,7 @@ def u_doctor_packages():
             assert "--dry-run" in args and "--no-deps" in args and "--require-hashes" in args and "--hash=sha256:" in req, args
             assert req.strip() == pins[name]["line"], req
             # torch is never reinstalled by the app: it's offered as setup.ps1 -Repair
-            manifest.installed = lambda: {**real(), "torch": "9.9.9+rocm"}
+            manifest.installed = lambda: {**have, "torch": "9.9.9+rocm"}
             assert "torch" in doctor.package_fix_lines()[1]
             row = next(r for r in doctor.run(False)["results"] if r["id"] == "torch")
             assert row["state"] in ("warn", "bad") and row["fix"]["how"] == "offer", row
@@ -8914,6 +8915,28 @@ def _fake_demo_voice(d: Path):
                                      encoding="utf-8")
 
 
+@contextlib.contextmanager
+def _audio_reads():
+    """register_song reads a song through ffprobe and ffmpeg. Where they aren't on PATH (GitHub's runner), soundfile
+    stands in for the length and the loudness is a fixed figure, so the seeding checks run anywhere; with ffmpeg, as is."""
+    import shutil
+    from undercover.frontman import remix, songs
+    if shutil.which("ffprobe") and shutil.which("ffmpeg"):
+        yield
+        return
+    import soundfile as sf
+
+    def probe(p):
+        i = sf.info(str(p))
+        return {"duration": float(i.duration), "sample_rate": int(i.samplerate), "channels": int(i.channels)}
+    saved = songs._ffprobe, songs._peaks, remix.lufs
+    songs._ffprobe, songs._peaks, remix.lufs = probe, lambda p, bins=1200: [], lambda p: -20.0
+    try:
+        yield
+    finally:
+        songs._ffprobe, songs._peaks, remix.lufs = saved
+
+
 def _chrome():
     import shutil
     return shutil.which("chrome") or shutil.which("google-chrome") or next(
@@ -9142,7 +9165,7 @@ def u_firstrun():
     from undercover.core.voices import ModelError
     from undercover.doubleagent import cadence, night, service
     saved = (firstrun.SAMPLE, firstrun.DEMO)
-    with isolated_data() as t:
+    with isolated_data() as t, _audio_reads():
         try:
             # no audio in the shipped folder: no sample song, nothing breaks
             empty = t / "assets" / "sample-none"
