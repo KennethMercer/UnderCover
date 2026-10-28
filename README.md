@@ -32,7 +32,7 @@ which you switch on from the top bar.
 
 ## Installing
 
-1. Run `UnderCover-Setup-1.1.0.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
+1. Run `UnderCover-Setup-1.1.1.exe`. It installs for your Windows user only, in `%LOCALAPPDATA%\UnderCover`, and does
    not need administrator rights. The installer is not signed, so Windows may show a warning; choose More info and
    then Run anyway.
    To check the download first, run `Get-FileHash` on it in PowerShell and compare the SHA-256 with the one on the
