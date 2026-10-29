@@ -110,7 +110,10 @@ def _watched(yt_dlp):
             from yt_dlp.downloader import get_suitable_downloader
             from yt_dlp.utils import determine_protocol
             fd = get_suitable_downloader(info, self.params, to_stdout=(name == "-"))
-            if fd.__name__ not in DOWNLOADERS or determine_protocol(info) not in PROTOCOLS:
+            # a part of a stream is refused too, whichever downloader would take it: yt-dlp gives it to ffmpeg when
+            # ffmpeg is there and reads the whole file itself when it isn't, so the answer is the same on every PC
+            if (fd.__name__ not in DOWNLOADERS or determine_protocol(info) not in PROTOCOLS
+                    or info.get("section_start") or info.get("section_end")):
                 raise safeurl.LinkRefused(CANT_FETCH)
             return super().dl(name, info, *a, **kw)
 

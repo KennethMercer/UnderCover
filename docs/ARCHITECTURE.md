@@ -556,7 +556,8 @@ this PC, the home network or a link-local address, and checks every redirect. Si
 connect time: inside `safeurl.guarded()` (per thread) every socket connect and send-to is checked by the address it
 really uses, a name resolved there and the connection pinned to a checked address. Every yt-dlp call runs inside it
 (`core/youtube.py`'s `YoutubeDL`, its `urlopen` too), only yt-dlp's own HTTP, HLS and DASH downloaders run (no program
-gets a link), one stream at a time, one fragment thread. A configured proxy is reached at its own address, and links
+gets a link), one stream at a time, one fragment thread, and never a part of a stream (`section_start` / `section_end`,
+e.g. a YouTube clip link), whatever downloader yt-dlp would pick, so the answer doesn't depend on ffmpeg being there. A configured proxy is reached at its own address, and links
 behind it are checked by name. A voice zip unpacks under a running size
 cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerShell is started by its full path.
 
