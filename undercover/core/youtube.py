@@ -178,22 +178,41 @@ def _seconds(t: str) -> float | None:
     return sum(x * 60 ** k for k, x in enumerate(reversed(parts)))
 
 
+FIRST_KEY = "extractaudio+ffmpeg_o1"   # the key yt-dlp looks at first for the conversion's output arguments
+
+
+def _resolved(pa: dict) -> list:
+    """The output arguments yt-dlp would give the audio conversion from these postprocessor_args: its own resolver
+    where it has it, else the same order (extractaudio+ffmpeg_o1, _o, extractaudio+ffmpeg, extractaudio with ffmpeg,
+    default)."""
+    try:
+        from yt_dlp.utils import _configuration_args
+        return list(_configuration_args("ExtractAudio", pa, "ffmpeg", ["_o1", "_o", ""]))
+    except (ImportError, TypeError):
+        for k in (FIRST_KEY, "extractaudio+ffmpeg_o", "extractaudio+ffmpeg"):
+            if pa.get(k):
+                return list(pa[k])
+        both = list(pa.get("extractaudio") or []) + list(pa.get("ffmpeg") or [])
+        return both or list(pa.get("default") or [])
+
+
 def bounded_args(pa) -> dict:
     """yt-dlp's postprocessor_args with the audio conversion bounded by time: at most files.MAX_AUDIO_S of output
     (a small download can decode to hours), a caller's own tighter -t kept. An output option, so ffmpeg stops writing
-    there. A song that comes in the target format skips this conversion; songs.download bounds its own pass for that."""
+    there. It bounds the list yt-dlp would really use, whichever key it came from, and writes it under the key yt-dlp
+    reads first, so no other key can loosen it. A song that comes in the target format skips this conversion;
+    songs.download bounds its own pass for that."""
     from .files import MAX_AUDIO_S
     pa = dict(pa) if isinstance(pa, dict) else {"default": list(pa)} if pa else {}
-    args = list(pa.get("extractaudio") or pa.get("default") or [])   # (yt-dlp takes the specific key over "default")
-    i = len(args) - 1 - args[::-1].index("-t") if "-t" in args else None
+    args = _resolved(pa)
+    i = len(args) - 1 - args[::-1].index("-t") if "-t" in args else None   # (ffmpeg takes the last -t)
     if i is not None and i + 1 < len(args):
         s = _seconds(args[i + 1])
-        if s is not None and 0 < s <= MAX_AUDIO_S:
-            return {**pa, "extractaudio": args}
-        args[i + 1] = str(MAX_AUDIO_S)   # past the bound, or not a time: the bound
+        if not (s is not None and 0 < s <= MAX_AUDIO_S):
+            args[i + 1] = str(MAX_AUDIO_S)   # past the bound, or not a time: the bound
     else:
         args += ["-t", str(MAX_AUDIO_S)]
-    return {**pa, "extractaudio": args}
+    return {**pa, FIRST_KEY: args}
 
 
 def _capped(d: dict):
