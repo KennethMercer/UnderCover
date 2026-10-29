@@ -17,11 +17,14 @@ import subprocess
 import uuid
 from pathlib import Path
 
+import soundfile as sf
+
 from ..core.config import path
 from ..core.fsutil import retry
 from ..core.voices import ModelError
 from ..core.youtube import SongResult, _music_tracks, _short, _ydl
 
+MAX_SONG_S = 20 * 60   # a single song: a longer link is refused before the download, and after the decode
 STOP = {"the", "in", "of", "by", "an", "and", "to", "on", "for", "my", "me", "you", "it", "is", "at", "with", "from"}
 BAD = [(re.compile(p, re.I), w) for p, w in [
     (r"\blive\b|\bconcert\b|\btour\b|\bperforms?\b|\bperformance\b", 2.0),
@@ -179,13 +182,16 @@ def download(r: SongResult, register, progress=None) -> dict:
     sid = known_song(r.id)
     if sid:
         return json.loads((path("uploads_dir") / f"{sid}.json").read_text(encoding="utf-8"))
-    if r.duration and r.duration > 20 * 60:
+    if r.duration and r.duration > MAX_SONG_S:
         raise ModelError(f"'{r.title}' is {round(r.duration / 60)} minutes long. Pick a single song (under 20 minutes).")
     work = path("cache_dir") / f"yt_{uuid.uuid4().hex[:8]}"
     work.mkdir(parents=True)
     try:
+        # the decode is bounded by time too (a link with no length can be small to download and huge as audio): a
+        # second past the song rule, so audio that reaches it is known to run longer
         opts = {"format": "bestaudio/best", "outtmpl": str(work / "song.%(ext)s"), "noplaylist": True,
-                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}]}
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}],
+                "postprocessor_args": {"extractaudio": ["-t", str(MAX_SONG_S + 1)]}}
         if progress:
             def hook(d):
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
@@ -205,6 +211,8 @@ def download(r: SongResult, register, progress=None) -> dict:
         f = next(iter(work.glob("song.flac")), None)
         if not f:
             raise ModelError(f"Downloaded '{r.title}' but couldn't convert it to audio.")
+        if sf.info(str(f)).duration > MAX_SONG_S:   # it ran to the bound: longer than a song, whatever it said
+            raise ModelError(f"'{r.title}' runs longer than 20 minutes. Pick a single song (under 20 minutes).")
         name = re.sub(r'[<>:"/\\|?*]+', "_", r.title).strip() + ".flac"
         meta = register(f, name, None, {"title": r.title, "source_url": r.url, "youtube_id": r.id})
         k = _known()

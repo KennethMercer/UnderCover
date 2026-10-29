@@ -41,8 +41,10 @@ CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, a clip o
 # a few MB and a long interview's audio a few hundred; 2 GB, as a voice download's default (a fixed cap here: no
 # setting, since nothing a link is used for comes near it)
 MAX_BYTES = 2 * 10 ** 9
-TOO_BIG = ("That link kept sending more than 2 GB, far more than a song or an interview needs, so UnderCover stopped it "
-           "(most likely a radio station or another stream with no end). Try a link to a single video.")
+TOO_BIG = ("That link is more than 2 GB, far more than a song or an interview needs, so UnderCover stopped it. "
+           "Try a shorter video, or one with its sound alone.")
+ENDLESS = ("That link kept sending past 2 GB with no size given, so UnderCover stopped it (most likely a radio station "
+           "or another stream with no end). Try a link to a single video.")   # (a guess only when no size was declared)
 
 
 def safe_format(fmt: str | None) -> str:
@@ -167,7 +169,7 @@ def _capped(d: dict):
     """The progress hook on every download: stop it once more than MAX_BYTES is declared or has arrived."""
     from . import safeurl
     if d.get("status") == "downloading" and max(d.get("downloaded_bytes") or 0, d.get("total_bytes") or 0) > MAX_BYTES:
-        raise safeurl.LinkRefused(TOO_BIG)
+        raise safeurl.LinkRefused(TOO_BIG if d.get("total_bytes") or d.get("total_bytes_estimate") else ENDLESS)
 
 
 SONGS_MISSING = "yt-dlp isn't installed in UnderCover's environment, so songs can't be fetched from YouTube."

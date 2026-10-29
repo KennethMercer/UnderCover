@@ -1609,14 +1609,16 @@ def u_netguard():
         # made small for the test; the caller's own progress hook still runs)
         real_cap, youtube.MAX_BYTES = youtube.MAX_BYTES, 200_000
         try:
-            for name in ("endless", "big"):
-                seen = []
+            for name, say in (("endless", youtube.ENDLESS), ("big", youtube.TOO_BIG)):   # (a guess at the cause only
+                seen = []                                                                   # when no size was given)
                 with youtube.open_ydl("x", outtmpl=str(tmp / f"{name}.%(ext)s"), progress_hooks=[seen.append]) as y:
                     assert y.params["max_filesize"] == 200_000 and y.params["progress_hooks"][0] is youtube._capped
-                    assert refused(lambda: y.download([H1 + f"/{name}.mp3"])) == youtube.TOO_BIG, name
+                    assert refused(lambda: y.download([H1 + f"/{name}.mp3"])) == say, name
                 got = sum(p.stat().st_size for p in tmp.iterdir() if p.name.startswith(name))
                 assert got <= 200_000 + 4 * 2 ** 20, (name, got)   # (past the cap by one read at most: yt-dlp's reads grow to 4 MiB)
                 assert name == "big" or seen, name   # (the endless one was under way when it was stopped)
+            assert refused(lambda: youtube._capped(   # (an estimated size counts as given: a long video, no guess)
+                {"status": "downloading", "downloaded_bytes": 300_000, "total_bytes_estimate": 250_000})) == youtube.TOO_BIG
             with youtube.open_ydl("x", outtmpl=str(tmp / "ok2.%(ext)s")) as y:   # a cap trip doesn't stay behind
                 y.download([H1 + "/ok.html"])
         finally:
@@ -1716,6 +1718,68 @@ def u_netguard():
         net.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
     return "the race, every socket call, yt-dlp's hops, the downloaders, one stream, the proxy, Deno"
+
+
+@check("a link's audio is bounded by time as well as size: a song's decode stops a second past 20 minutes and audio that reaches it is refused plainly; a training source's stops at what a source keeps, length known or not; a site with no sound-only format gives a small video first")
+def u_decode_bound():
+    import numpy as np
+    import soundfile as sf
+    from undercover.core import youtube
+    from undercover.core.config import path
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import sources as S
+    from undercover.frontman import songs
+    seen = []
+
+    def fake(seconds, name):   # stands in for yt-dlp + ffmpeg: the decode's output, as long as the bound allows
+        class Y:
+            def __init__(self, **opts):
+                self.opts = opts
+                seen.append(opts)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def download(self, urls):
+                a = self.opts["postprocessor_args"]["extractaudio"]
+                n = min(seconds, float(a[a.index("-t") + 1])) if "-t" in a else seconds
+                out = Path(self.opts["outtmpl"].replace("%(ext)s", name))
+                sf.write(str(out), np.zeros(int(n * 1000), np.float32), 1000)
+                return 0
+        return Y
+    real = (songs._ydl, S._ydl)
+    with isolated_data():
+        try:
+            # a song with no length given that runs for hours: the decode stops at the bound and it's refused
+            songs._ydl = fake(5 * 3600, "flac")
+            r = youtube.SongResult(id="t1", url="https://example.com/a.mp3", title="Long one", raw_title="t", channel="", duration=0)
+            try:
+                songs.download(r, register=lambda *a: {"id": "x"})
+                raise AssertionError("a 5-hour song was taken")
+            except ModelError as e:
+                assert "runs longer than 20 minutes" in str(e), e
+            assert seen[-1]["postprocessor_args"]["extractaudio"] == ["-t", str(songs.MAX_SONG_S + 1)], seen[-1]
+            got = []
+            songs._ydl = fake(180, "flac")   # an ordinary song goes through
+            songs.download(youtube.SongResult(id="t2", url="https://example.com/b.mp3", title="Short", raw_title="t",
+                                              channel="", duration=0), register=lambda f, *a: got.append(sf.info(str(f)).duration) or {"id": "y"})
+            assert got and abs(got[0] - 180) < 0.01, got
+            # a training source: bounded to what a source keeps, with no length known and with one too short to cut
+            keep = int(S.TCFG["max_minutes_per_source"] * 60)
+            for dur in (0, 120):
+                S._ydl = fake(5 * 3600, "wav")
+                d = S.download(S.Source(id=f"s{dur}", url="https://example.com/c.mp3", title="c", duration=dur), path("cache_dir") / "src")
+                assert abs(sf.info(str(d)).duration - min(keep, 5 * 3600)) < 0.01 and seen[-1]["postprocessor_args"]["extractaudio"][:2] == ["-t", str(keep)], (dur, seen[-1])
+            assert seen[-1]["format"].startswith("bestaudio[abr<=160]/bestaudio/best[height<=480]/best"), seen[-1]["format"]
+            S._ydl = fake(5 * 3600, "wav")   # a long one with its length known is cut to its stretches, as before
+            S.download(S.Source(id="s3", url="https://example.com/d.mp3", title="d", duration=3 * 3600), path("cache_dir") / "src")
+            assert seen[-1]["postprocessor_args"]["extractaudio"][0] in ("-ss", "-filter_complex"), seen[-1]
+        finally:
+            songs._ydl, S._ydl = real
+    return "a 5-hour song stopped at 20 min and refused; a source at its keep, length known or not; 480p before best"
 
 
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
@@ -11630,7 +11694,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_platform, u_tray):
         fn()

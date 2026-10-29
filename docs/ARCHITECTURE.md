@@ -561,7 +561,8 @@ e.g. a YouTube clip link) and never a stream that is live, about to be, or just 
 (`is_live`, `live_status`; a past stream kept as a video is an ordinary file), whatever downloader yt-dlp would pick,
 so the answer doesn't depend on ffmpeg being there. No download grows past `youtube.MAX_BYTES` (2 GB): yt-dlp's
 `max_filesize` for a size declared up front, and a progress hook on every download for what actually arrives, both
-said plainly. A configured proxy is reached at its own address, and links behind it are checked by name. A voice zip unpacks under a running size
+said plainly. The audio made from it is bounded by time too (ffmpeg `-t`): a song a second past its 20 minutes (and
+refused when it gets there), a training source at what a source keeps. A configured proxy is reached at its own address, and links behind it are checked by name. A voice zip unpacks under a running size
 cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerShell is started by its full path.
 
 ### System tray
