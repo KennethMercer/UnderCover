@@ -2,6 +2,15 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-29-v113",
+      "date": "2026-10-29",
+      "title": "UnderCover 1.1.3",
+      "lines": [
+        "Downloads from links stay within a sensible size and length, the same on every PC.",
+        "Dropping a song again that couldn't be read no longer removes the copy already in your uploads."
+      ]
+    },
+    {
       "id": "2026-10-29-v112",
       "date": "2026-10-29",
       "title": "UnderCover 1.1.2",

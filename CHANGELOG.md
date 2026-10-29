@@ -3,11 +3,14 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## Not released yet
+## 1.1.3 (2026-10-29)
 
 **Hardening** (sections, bytecap, decodecap)
 - Links are handled the same way on every PC, whether or not ffmpeg is installed.
 - A download from a link stays within a sensible size and length.
+
+**Fixes** (decodecap)
+- Dropping a song again that UnderCover couldn't read no longer removes the copy already in your uploads.
 
 ## 1.1.2 (2026-10-29)
 
