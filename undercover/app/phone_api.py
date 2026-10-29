@@ -180,6 +180,8 @@ def setup(make_server, port: int, make_away=None):
 def warm():
     """Read the network type and the firewall now (~1 s, cached), so the Doctor's fast check finds them ready."""
     from ..core import doctor
+    if _L["addr"]:
+        phone.home_net(_L["addr"])   # (its prefix read ahead, so a phone's first request doesn't wait for it)
     if _L["addr"] and phone.usable(_L["addr"]):
         phone.windows_check(_L["addr"], _L["port"], doctor.phone_programs())   # reads again only when older than WIN_KEEP
 

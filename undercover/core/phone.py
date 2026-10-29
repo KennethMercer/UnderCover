@@ -169,6 +169,33 @@ def lan_address() -> str | None:
     return a if usable(a) else None
 
 
+_NETS: dict = {}   # the PC's address -> its home network (the prefix query takes ~0.5 s, so it's kept)
+HOME_PREFIX = 24     # when the OS doesn't say: a home router's usual size, and the narrower guess is the safer one
+
+
+def home_net(own: str | None = None):
+    """The PC's own home network (its address and the interface's prefix): a home token is good only from inside it."""
+    own = own or lan_address()
+    if not own:
+        return None
+    if own not in _NETS:
+        from . import platform
+        try:
+            n = platform.prefix_length(own)
+        except Exception:   # noqa: BLE001 - not on this OS, or the query failed: the usual home size
+            n = None
+        _NETS[own] = ipaddress.ip_network(f"{own}/{n or HOME_PREFIX}", strict=False)
+    return _NETS[own]
+
+
+def on_home_net(addr: str, own: str | None = None) -> bool:
+    try:
+        net = home_net(own)
+        return net is not None and ipaddress.ip_address(addr) in net
+    except ValueError:
+        return False
+
+
 def usable(addr: str) -> bool:
     try:
         ip = ipaddress.ip_address(addr)
@@ -270,8 +297,9 @@ def devices() -> list[dict]:
 
 def device_for(token: str | None, addr: str = "", away: bool = False) -> dict | None:
     """The paired device this token belongs to (None: no token, unknown, revoked, or phone access is off). away: the
-    token is checked against the device's away token (the away-from-home address), never its home one."""
-    if not token:
+    token is checked against the device's away token (the away-from-home address), never its home one. addr: where a
+    home token comes from; it's good only from the PC's own home network (a copy taken elsewhere does nothing here)."""
+    if not token or (addr and not away and not on_home_net(addr)):
         return None
     h = hash_token(token)
     with _LOCK:

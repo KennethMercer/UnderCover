@@ -44,7 +44,7 @@ main{max-width:380px;width:100%}.mark{font-size:13px;letter-spacing:.18em;text-t
 <body><main><div class="mark">UnderCover</div><h1 id="sw-down">Your PC isn't answering</h1>
 <p>Nothing came back from it through the away link. Is the PC on, with away from home switched on?</p>
 <p><a href="/">Try again</a></p>${home ? `
-<p id="sw-home">On the home Wi-Fi? <a href="${home}/">Open the home address</a> (${home.slice(7)}).</p>` : ""}
+<p id="sw-home">Only if this phone is on your own home Wi-Fi now: <a href="${home}/">open the home address</a> (${home.slice(7)}). Anywhere else, leave it.</p>` : ""}
 </main></body></html>`;
   return new Response(html, { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" } });

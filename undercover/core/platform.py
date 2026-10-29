@@ -562,6 +562,27 @@ def network_and_firewall(addr: str) -> tuple[str, str, str]:
         return f_net.result().strip(), f_state.result(), f_rules.result()
 
 
+def prefix_length(addr: str) -> int | None:
+    """The network prefix of the interface holding `addr` (24 for a 255.255.255.0 home network), or None when the OS
+    doesn't say. Read only (~0.5 s on Windows: PowerShell; Linux: `ip`)."""
+    import ipaddress
+    import re
+    ipaddress.ip_address(addr)   # only a real address goes into the command line
+    try:
+        if WINDOWS:
+            out = run_text([_powershell(), "-NoProfile", "-NonInteractive", "-Command",
+                            f"(Get-NetIPAddress -IPAddress '{addr}' -ErrorAction SilentlyContinue | Select-Object -First 1).PrefixLength"])
+            m = re.search(r"\d+", out or "")
+        else:
+            out = run_text(["ip", "-o", "-f", "inet", "addr", "show"])
+            m = re.search(rf"inet {re.escape(addr)}/(\d+)", out or "")
+            m = m and re.search(r"\d+", m.group(1))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    n = int(m.group(0)) if m else None
+    return n if n is not None and 8 <= n <= 32 else None
+
+
 def video_controllers() -> list[dict]:
     """The graphics adapters Windows reports: [{Name, DriverVersion, DriverDate}] (~1 s, PowerShell)."""
     if not WINDOWS:

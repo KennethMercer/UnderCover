@@ -1365,7 +1365,7 @@ def u_harden1():
         assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile" in f.read_text(encoding="utf-8"), f
     from undercover.core import platform as PF
     ps_src = inspect.getsource(PF)
-    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 4
+    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 5
     assert PF._powershell().lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
     # every listener drops a stalled client; the phone and away listeners take so many connections at once, then 503
     # and close (live, on 127.0.0.1, with a handler that holds its connections)
@@ -8756,6 +8756,32 @@ def u_phone_pairing():
             text = phone.state_file().read_text(encoding="utf-8")
             assert token not in text and phone.hash_token(token) in text, "the token isn't stored as its hash"
             assert phone.device_for(token)["id"] == dev["id"] and phone.device_for(token + "x") is None
+            # a home token is good only from the PC's own home network (its interface's prefix; /24 when the OS can't say)
+            saved_nets = dict(phone._NETS)
+            from undercover.core import platform as P
+            real_prefix = P.prefix_length
+            try:
+                phone._NETS.clear()
+                P.prefix_length = lambda a: 22
+                assert phone.home_net("192.168.4.20").with_prefixlen == "192.168.4.0/22"
+                phone._NETS.clear()
+                P.prefix_length = lambda a: None
+                assert phone.home_net("192.168.1.20").with_prefixlen == "192.168.1.0/24"
+                os.environ["UNDERCOVER_PHONE_ADDR"], was = "192.168.1.20", os.environ.get("UNDERCOVER_PHONE_ADDR")
+                try:
+                    assert phone.device_for(token, "192.168.1.77")["id"] == dev["id"], "refused on the home network"
+                    for elsewhere in ("192.168.2.77", "10.0.0.9", "8.8.8.8", "not-an-address"):
+                        assert phone.device_for(token, elsewhere) is None, f"a home token worked from {elsewhere}"
+                finally:
+                    if was is None:
+                        os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
+                    else:
+                        os.environ["UNDERCOVER_PHONE_ADDR"] = was
+            finally:
+                P.prefix_length = real_prefix
+                phone._NETS.clear()
+                phone._NETS.update(saved_nets)
+            assert "Only if this phone is on your own home Wi-Fi" in (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
             p2 = phone.new_pairing()   # expiry
             phone.PAIRING["until"] = time.time() - 1
             assert "run out" in refused(p2["code"])
