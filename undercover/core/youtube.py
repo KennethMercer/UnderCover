@@ -34,8 +34,8 @@ PROTOCOLS = ("http", "https", "m3u8_native", "http_dash_segments")
 DOWNLOADERS = ("HttpFD", "HlsFD", "DashSegmentsFD")
 PROTOCOL_FILTER = "[protocol~='^(" + "|".join(PROTOCOLS) + ")$']"
 FORCED = {"external_downloader": {"default": "native"}, "concurrent_fragment_downloads": 1}
-CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, or a kind of stream it doesn't download). "
-              "Try another link.")
+CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, a clip of a longer video, or a kind of stream it "
+              "doesn't download). Try another link, or the whole video's.")
 
 
 def safe_format(fmt: str | None) -> str:
@@ -109,11 +109,12 @@ def _watched(yt_dlp):
         def dl(self, name, info, *a, **kw):
             from yt_dlp.downloader import get_suitable_downloader
             from yt_dlp.utils import determine_protocol
+            # a part of a stream is refused whichever downloader would take it: yt-dlp gives it to ffmpeg when ffmpeg
+            # is there and reads the whole file itself when it isn't, so the answer is the same on every PC
+            if info.get("section_start") or info.get("section_end"):
+                raise safeurl.LinkRefused(CANT_FETCH)
             fd = get_suitable_downloader(info, self.params, to_stdout=(name == "-"))
-            # a part of a stream is refused too, whichever downloader would take it: yt-dlp gives it to ffmpeg when
-            # ffmpeg is there and reads the whole file itself when it isn't, so the answer is the same on every PC
-            if (fd.__name__ not in DOWNLOADERS or determine_protocol(info) not in PROTOCOLS
-                    or info.get("section_start") or info.get("section_end")):
+            if fd.__name__ not in DOWNLOADERS or determine_protocol(info) not in PROTOCOLS:
                 raise safeurl.LinkRefused(CANT_FETCH)
             return super().dl(name, info, *a, **kw)
 
