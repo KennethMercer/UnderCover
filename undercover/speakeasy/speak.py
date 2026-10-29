@@ -451,9 +451,12 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
         service.calibrate_pace(v, _stop)
         v = get_voice(p["voice"])
     if "speak_hz" not in service.cadence_pack(v):   # a pack made before its clip's pitch was measured: once, kept
-        service.remember_speak_hz(v, gpu.MODELS.converter.rmvpe)
-        v = get_voice(p["voice"])
-        p = {**p, "target_hz": service.speech_target(v, service.cadence_pack(v))}
+        try:
+            service.remember_speak_hz(v, gpu.MODELS.converter.rmvpe)
+            v = get_voice(p["voice"])
+            p = {**p, "target_hz": service.speech_target(v, service.cadence_pack(v))}
+        except Exception:   # noqa: BLE001 - it reads at the voice's own pitch as before, and tries again next time
+            v = get_voice(p["voice"])
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
     ref = render.paced_ref(service.cadence_ref(v), pack.get("pace_ref_rate") if engine_info(p["engine"]).get("pace_by_ref") else None)
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents],
