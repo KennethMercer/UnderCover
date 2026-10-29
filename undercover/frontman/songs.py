@@ -211,7 +211,7 @@ def download(r: SongResult, register, progress=None) -> dict:
         f = next(iter(work.glob("song.flac")), None)
         if not f:
             raise ModelError(f"Downloaded '{r.title}' but couldn't convert it to audio.")
-        if sf.info(str(f)).duration > MAX_SONG_S:   # it ran to the bound: longer than a song, whatever it said
+        if sf.info(str(f)).duration > MAX_SONG_S + 0.5:   # it ran to the bound: longer than a song, whatever it said
             raise ModelError(f"'{r.title}' runs longer than 20 minutes. Pick a single song (under 20 minutes).")
         name = re.sub(r'[<>:"/\\|?*]+', "_", r.title).strip() + ".flac"
         meta = register(f, name, None, {"title": r.title, "source_url": r.url, "youtube_id": r.id})
