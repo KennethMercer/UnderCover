@@ -17,6 +17,7 @@ import numpy as np
 
 from ..core import jobs
 from ..core.config import CONFIG, path
+from ..core.files import MAX_AUDIO_S
 from ..core.timing import timed
 
 RCFG = CONFIG["remix"]
@@ -63,7 +64,7 @@ def lufs(p: Path) -> float:
     key = (str(Path(p).resolve()), st.st_size, st.st_mtime_ns)
     if key in _LUFS:
         return _LUFS[key]
-    err = _run(["-nostats", "-i", str(p), "-af", "ebur128=framelog=quiet", "-f", "null", "-"])
+    err = _run(["-nostats", "-i", str(p), "-t", str(MAX_AUDIO_S), "-af", "ebur128=framelog=quiet", "-f", "null", "-"])
     m = re.findall(r"I:\s+(-?[\d.]+|-inf) LUFS", err)
     v = -70.0 if not m or m[-1] == "-inf" else max(float(m[-1]), -70.0)
     _LUFS[key] = v

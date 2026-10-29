@@ -17,11 +17,15 @@ import subprocess
 import uuid
 from pathlib import Path
 
+import soundfile as sf
+
 from ..core.config import path
+from ..core.files import MAX_AUDIO_S
 from ..core.fsutil import retry
 from ..core.voices import ModelError
 from ..core.youtube import SongResult, _music_tracks, _short, _ydl
 
+MAX_SONG_S = 20 * 60   # a single song: a longer link is refused before the download, and after the decode
 STOP = {"the", "in", "of", "by", "an", "and", "to", "on", "for", "my", "me", "you", "it", "is", "at", "with", "from"}
 BAD = [(re.compile(p, re.I), w) for p, w in [
     (r"\blive\b|\bconcert\b|\btour\b|\bperforms?\b|\bperformance\b", 2.0),
@@ -179,13 +183,16 @@ def download(r: SongResult, register, progress=None) -> dict:
     sid = known_song(r.id)
     if sid:
         return json.loads((path("uploads_dir") / f"{sid}.json").read_text(encoding="utf-8"))
-    if r.duration and r.duration > 20 * 60:
+    if r.duration and r.duration > MAX_SONG_S:
         raise ModelError(f"'{r.title}' is {round(r.duration / 60)} minutes long. Pick a single song (under 20 minutes).")
     work = path("cache_dir") / f"yt_{uuid.uuid4().hex[:8]}"
     work.mkdir(parents=True)
     try:
+        # the decode is bounded by time too (a link with no length can be small to download and huge as audio): a
+        # second past the song rule, so audio that reaches it is known to run longer
         opts = {"format": "bestaudio/best", "outtmpl": str(work / "song.%(ext)s"), "noplaylist": True,
-                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}]}
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}],
+                "postprocessor_args": {"extractaudio": ["-t", str(MAX_SONG_S + 1)]}}
         if progress:
             def hook(d):
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
@@ -202,9 +209,15 @@ def download(r: SongResult, register, progress=None) -> dict:
                 check_blocked(e)
                 raise ModelError(f"Couldn't download '{r.title}' ({_short(e)}). UnderCover updates its YouTube "
                                  "downloader by itself when YouTube changes; try again in a while.")
-        f = next(iter(work.glob("song.flac")), None)
-        if not f:
+        got = next(iter(work.glob("song.flac")), None)
+        if not got:
             raise ModelError(f"Downloaded '{r.title}' but couldn't convert it to audio.")
+        # decoded once more by ffmpeg itself, to the bound: a file that came as FLAC skips yt-dlp's conversion (and its
+        # -t), and its own header may say less than it holds; the length is judged from what ffmpeg wrote
+        f = work / "bounded.flac"
+        _bounded(got, f, MAX_SONG_S + 1)
+        if sf.info(str(f)).duration > MAX_SONG_S + 0.5:   # it ran to the bound: longer than a song, whatever it said
+            raise ModelError(f"'{r.title}' runs longer than 20 minutes. Pick a single song (under 20 minutes).")
         name = re.sub(r'[<>:"/\\|?*]+', "_", r.title).strip() + ".flac"
         meta = register(f, name, None, {"title": r.title, "source_url": r.url, "youtube_id": r.id})
         k = _known()
@@ -213,6 +226,14 @@ def download(r: SongResult, register, progress=None) -> dict:
         return meta
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _bounded(src: Path, dst: Path, seconds: float) -> None:
+    """src decoded by ffmpeg into a FLAC of at most `seconds` (its header then says what's really in it)."""
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-t", str(seconds), "-vn", "-c:a", "flac", str(dst)],
+                       capture_output=True, text=True)
+    if r.returncode or not dst.exists():
+        raise ModelError("Downloaded the song but couldn't read it as audio.")
 
 
 # ---------------------------------------------------------------- songs in uploads/
@@ -231,17 +252,19 @@ def _ffprobe(p: Path) -> dict:
             "channels": int(st.get("channels", 0))}
 
 
-def _peaks(p: Path, bins: int = 1200) -> list[float]:
-    """Waveform overview: peak level per bin, decoded via ffmpeg (any format)."""
+def _peaks(p: Path, bins: int = 1200) -> tuple[list[float], float]:
+    """Waveform overview (peak level per bin) and how long the audio really is (the seconds ffmpeg decoded, a second
+    past MAX_AUDIO_S at most; a file's own header can say less than it holds), decoded via ffmpeg (any format)."""
     import numpy as np
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-t", str(MAX_AUDIO_S + 1), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
                          capture_output=True).stdout
     a = np.abs(np.frombuffer(raw, dtype=np.float32))
     if not len(a):
-        return []
+        return [], 0.0
+    seconds = len(a) / 4000
     a = a[: len(a) // bins * bins].reshape(bins, -1).max(axis=1) if len(a) >= bins else a
     top = float(a.max()) or 1.0
-    return [round(float(x) / top, 3) for x in a]
+    return [round(float(x) / top, 3) for x in a], seconds
 
 
 def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: dict | None = None) -> dict:
@@ -258,17 +281,26 @@ def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: di
         sha256_hex = h.hexdigest()
     song_id = sha256_hex[:16]
     dest = up / f"{song_id}{Path(name).suffix.lower() or Path(tmp).suffix.lower()}"
-    if dest.exists():
-        Path(tmp).unlink(missing_ok=True)
-    else:
+    new = not dest.exists()   # (one already there was taken before: never removed here)
+    if new:
         Path(tmp).replace(dest)
+    else:
+        Path(tmp).unlink(missing_ok=True)
     try:
         info = _ffprobe(dest)
     except (ValueError, KeyError, json.JSONDecodeError):
-        dest.unlink(missing_ok=True)
+        if new:
+            dest.unlink(missing_ok=True)
         raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
+    peaks, seconds = _peaks(dest)   # its length as decoded, not as its header says
+    if seconds > MAX_AUDIO_S:
+        if new:
+            dest.unlink(missing_ok=True)
+        raise ValueError(f"'{name}' runs longer than {MAX_AUDIO_S // 3600} hours. Drop a single song instead.")
+    if seconds:
+        info["duration"] = round(seconds, 3)
     meta = {"id": song_id, "name": name, "title": Path(name).stem, "file": dest.name, **info,
-            "lufs": round(lufs(dest), 1), "peaks": _peaks(dest), "url": file_url(dest), **(extra or {})}
+            "lufs": round(lufs(dest), 1), "peaks": peaks, "url": file_url(dest), **(extra or {})}
     (up / f"{song_id}.json").write_text(json.dumps(meta), encoding="utf-8")
     return meta
 

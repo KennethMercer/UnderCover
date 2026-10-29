@@ -575,6 +575,8 @@ def download(src: Source, dest_dir: Path, progress=None) -> Path:
     # measured on the user's projects spreading gained nothing (Obama 51.9 / 51.8 min) or lost (Freeman's Q&As: the
     # audience's questions, 11.8 -> 10.3).
     trim = trim_args(src.duration, spread=(src.extra or {}).get("kind") == "scene")
+    if not trim:   # no length known (or one too short to cut): the decode is bounded by time anyway, to what a source
+        trim = ["-t", str(int(TCFG["max_minutes_per_source"] * 60))]   # keeps (a small download can decode huge)
     # Download into a private temp folder and move the finished wav into place last: an interrupted download (crash,
     # power cut) then never leaves a truncated "<id>.wav" that later runs would trust.
     import shutil
@@ -582,7 +584,8 @@ def download(src: Source, dest_dir: Path, progress=None) -> Path:
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     opts = {
-        "format": "bestaudio[abr<=160]/bestaudio/best",
+        # (a site with no sound-only format: a small video before the full one, so a long one stays under the size cap)
+        "format": "bestaudio[abr<=160]/bestaudio/best[height<=480]/best",
         "outtmpl": str(work / f"{src.id}.%(ext)s"),
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
         "postprocessor_args": {"extractaudio": trim + ["-ac", "1", "-ar", "44100"]},
