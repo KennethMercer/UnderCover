@@ -1897,9 +1897,14 @@ def u_tailnet():
             assert r["serve_on"] and not r.get("funnel_on") and r["funnel_target"] == "http://127.0.0.1:7871", r
             assert ["serve", "--bg", "--https=443", "http://127.0.0.1:7871"] in r["calls"] and tailnet.snapshot()["private"]
             assert tailnet._resets() == [["funnel", "reset"], ["serve", "reset"]], "Off in private mode leaves Serve on"
-            write(funnel_on=True, serve_on=False)   # Funnel switched on behind its back: not ready, Serve put back
+            # a public flag left on (a crash in Funnel mode), with a CLI whose serve wouldn't clear it: not ready; the
+            # flag is reset first, then Serve put back, and never public while the switch says Private
+            write(funnel_on=True, serve_on=False, serve_keeps_funnel=True)
+            resets = read()["calls"].count(["funnel", "reset"])
             assert tailnet.tick() != "ready"
             wait_for(lambda: tailnet.tick() == "ready" and read().get("serve_on"), 20, every=0.2, what="Serve put back")
+            assert read()["calls"].count(["funnel", "reset"]) > resets and not read().get("funnel_on"), read()
+            write(serve_keeps_funnel=False)
             tailnet.set_private(False)   # and back to Funnel's public link (approved before: no new approval)
             wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="back on Funnel")
             assert read()["funnel_on"] and not read().get("serve_on") and not tailnet.snapshot()["private"], read()

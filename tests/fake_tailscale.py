@@ -5,7 +5,8 @@ a JSON file named by FAKE_TS_STATE; a check moves it along (signed in, Funnel ap
                                                         funnel reset | serve ... | serve status --json |
                                                         serve reset | down | logout
     python fake_tailscale.py set '{"key": value}'      a check's own change (under the same lock as the fake's)
-Every command is appended to the state's "calls", so a check can see exactly what the app asked for."""
+Every command is appended to the state's "calls", so a check can see exactly what the app asked for. With
+"serve_keeps_funnel" set, serve leaves a Funnel flag as it was (the worst a CLI could do)."""
 import contextlib
 import json
 import os
@@ -139,7 +140,7 @@ elif args[:1] == ["serve"]:
               flush=True)
         if not wait_for("serve_approved"):
             sys.exit(1)
-    update(serve_on=True, funnel_on=False, funnel_target=target)
+    update(serve_on=True, funnel_on=bool(st.get("serve_keeps_funnel") and st.get("funnel_on")), funnel_target=target)
 elif args[:1] == ["funnel"]:
     target = args[-1]
     if not st.get("funnel_approved"):

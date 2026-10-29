@@ -37,7 +37,8 @@ CMD: dict = {}   # tests: {"tailscale": [...], "tailscaled": [...]} instead of t
 URL_RX = re.compile(r"https://login\.tailscale\.com/\S+")
 STATE = {"want": False, "phase": "off", "auth_url": None, "approve_url": None, "host": None, "error": "",
          "progress": None, "port": None, "private": False}
-_P = {"daemon": None, "up": None, "funnel": None, "serve": None, "driver": None, "out": [], "fetch_failed": 0.0}
+_P = {"daemon": None, "up": None, "funnel": None, "serve": None, "driver": None, "out": [], "fetch_failed": 0.0,
+      "public": False}
 EXPOSE = ("funnel", "serve")   # the CLI commands that publish the away listener: public, or the tailnet only
 _LOCK = threading.RLock()   # "still wanted?" and starting a process happen together, so Off can't be overtaken by a tick
 FETCH_RETRY_S = 600         # a failed download waits this long before the next try (39 MB each: never in a loop)
@@ -184,6 +185,7 @@ def _funnel_on(st: dict) -> bool:
         return False
     host = (st.get("Self") or {}).get("DNSName", "").rstrip(".")
     allowed = any(k.startswith(host) and v for k, v in (f.get("AllowFunnel") or {}).items())
+    _P["public"] = allowed
     targets = _proxies(f.get("Web") or {})
     if STATE["private"]:
         return not allowed and set(targets) == {funnel_target(STATE["port"])}
@@ -229,6 +231,9 @@ def tick():
             STATE.update(phase="ready", approve_url=None)
         else:
             m = _mode()
+            if STATE["private"] and _P["public"]:   # a public flag left from before (a crash in Funnel mode): off first,
+                _cli("funnel", "reset")              # never trusting serve to clear it
+                _P["public"] = False
             if _P[m] is None:
                 _run_bg(m, [m, "--bg", "--https=443", funnel_target(STATE["port"])])
             STATE["phase"] = "approve" if STATE["approve_url"] else "starting"
