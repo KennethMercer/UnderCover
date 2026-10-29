@@ -219,9 +219,11 @@ A voice "has cadence" when `<voice>/tts/ref.wav` exists and `extra.tts` describe
 `clip`, `project`, `cfg_weight`, `exaggeration`, `tempo` (1.0; time-stretching was heard as slurred), `gap_s` /
 `para_gap_s` (the person's own gaps), `data_minutes`, `scores` (likeness, wer, cadence_gap, rate, score, sound,
 score_voice, the pace and pitch readings, heard), `pitch_nudge` (semitones), `speak_hz` / `speak_hz_from` (the median
-pitch of the reference clip, measured with RMVPE when the pack is made, or once on its first reading for an older pack;
-null when it can't be measured), `person` (their measured cadence), `before`, `made`, `v`, `verdicts`, optional
-`engine_pin`. `tts/cadence.json` keeps every candidate tried.
+pitch of the reference clip, measured with RMVPE when the pack is made, or once on its first reading for an older pack,
+which is then marked `speak_hz_later`; null when it can't be measured), `person` (their measured cadence), `before`,
+`made`, `v`, `verdicts`, optional `engine_pin`. `tts/cadence.json` keeps every candidate tried. An older pack's numeric
+`pitch_nudge` was measured against the old target (`f0_median`), so once it aims at `speak_hz` the nudge is dropped,
+unless the user chose that pack by ear (`cadence.reading_nudge`).
 
 A voice's cadence never changes without the person's ear once it has one. A better pack found later waits in
 `tts/pending/`; both packs read the same line (`sample.wav` + `sample.json` beside each) and the person keeps one.

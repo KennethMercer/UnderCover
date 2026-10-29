@@ -1437,6 +1437,12 @@ def speech_target(v, pack: dict | None) -> float | None:
     return target(v, pack)
 
 
+def reading_nudge(pack: dict) -> float:
+    """The pack's pitch nudge as a reading applies it (a nudge aimed from the old target is dropped; see cadence)."""
+    from .cadence import reading_nudge as nudge
+    return nudge(pack)
+
+
 def remember_speak_hz(v, rmvpe) -> float | None:
     """Measure and keep the live pack's speak_hz once (a pack made before it was measured)."""
     from .cadence import remember_speak_hz as remember

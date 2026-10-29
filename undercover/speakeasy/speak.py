@@ -88,7 +88,7 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
                 "target_hz": service.speech_target(v, pack), "target_low": sp and sp["low"],
                 "pitch_from": "their cadence's reference clip" if pack.get("speak_hz") else sp and sp["how"],
                 "pitch": float(nudge or 0), "nudge": float(nudge or 0), "speed": 1.0, "pace": pace,
-                "pack_nudge": float(pack.get("pitch_nudge") or 0),   # the pack's own pitch fix (phase 12), under the user's
+                "pack_nudge": service.reading_nudge(pack),   # the pack's own pitch fix (phase 12), under the user's
                 "cfg_weight": pc["cfg_weight"] or pack.get("cfg_weight"), "exaggeration": pc["exaggeration"] or pack.get("exaggeration"),
                 "tempo": float(pack.get("tempo") or 1.0), "gap_s": round(float(pack.get("gap_s") or 0.4) * pc["gap"], 3),
                 "para_gap_s": round(float(pack.get("para_gap_s") or 0.8) * pc["gap"], 3), "has_cadence": True}
@@ -454,7 +454,8 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
         try:
             service.remember_speak_hz(v, gpu.MODELS.converter.rmvpe)
             v = get_voice(p["voice"])
-            p = {**p, "target_hz": service.speech_target(v, service.cadence_pack(v))}
+            p = {**p, "target_hz": service.speech_target(v, service.cadence_pack(v)),
+                 "pack_nudge": service.reading_nudge(service.cadence_pack(v))}
         except Exception:   # noqa: BLE001 - it reads at the voice's own pitch as before, and tries again next time
             v = get_voice(p["voice"])
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace

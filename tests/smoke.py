@@ -7023,17 +7023,35 @@ def u_speak_hz():
         kept = json.loads((v.dir / "meta.json").read_text(encoding="utf-8"))["extra"]["tts"]
         assert kept["speak_hz"] == 143.0 and kept["speak_hz_from"] == "ref.wav" and kept["clip"] == "c1", kept
         cj = json.loads((v.dir / "tts" / "cadence.json").read_text(encoding="utf-8"))   # the pack's own copy too
-        assert cj["speak_hz"] == 143.0 and cj["clip"] == "c1" and cj["tried"] == [], cj
+        assert cj["speak_hz"] == 143.0 and cj["speak_hz_later"] is True and cj["clip"] == "c1" and cj["tried"] == [], cj
         assert files() == before, (before, files())
         meta["extra"]["tts"] = dict(pack)
         (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
         deaf = _FakeRmvpe([0] * 100)
         assert K.remember_speak_hz(v.name, deaf) is None and K.remember_speak_hz(v.name, deaf) is None and deaf.calls == 1
         assert K.speech_target(K.get_voice(v.name), K.pack_of(K.get_voice(v.name))) == 180.0
+        # a numeric nudge measured from the old target (f0_median) is stale once the pack aims at its clip: dropped,
+        # unless the user chose that pack by ear; a pack made with speak_hz keeps its own (measured at the clip's pitch)
+        later = {**pack, "pitch_nudge": -1.1, "speak_hz": 190.5, "speak_hz_later": True}
+        assert kept["speak_hz_later"] is True and K.reading_nudge(later) == 0.0
+        heard = {**later, "verdicts": [{"compared": [K.pack_id(later), "other"], "winner": K.pack_id(later)}]}
+        assert K.reading_nudge(heard) == -1.1
+        assert K.reading_nudge({**pack, "pitch_nudge": -0.6, "speak_hz": 190.5}) == -0.6
+        assert K.reading_nudge({**later, "speak_hz": None}) == -1.1   # unmeasured: aims where it did, with its nudge
+        meta["extra"]["tts"] = later
+        (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        ready, speak.pack_ready = speak.pack_ready, lambda e, pin=None: True
+        try:
+            p = speak.plan("zz-speakhz-uc", nudge=0.5)
+        finally:
+            speak.pack_ready = ready
+        assert p["target_hz"] == 190.5 and p["pack_nudge"] == 0.0 and p["nudge"] == 0.5, p
     # the pack test, the A/B readings and SpeakEasy all pitch the same way (they load models, so read, not run, here)
     import inspect
     assert "speech_target(self.v, None, ref" in inspect.getsource(K.Tester.measure)
-    assert "speech_target(v, pack, ref" in inspect.getsource(K.make_samples)
+    ms = inspect.getsource(K.make_samples)
+    assert "speech_target(v, pack)" in ms and "reading_nudge(pack)" in ms and "speak_hz_later" in ms
+    assert "nudge=old_nudge" in inspect.getsource(K.train)
     mc = inspect.getsource(speak._make_cadence)
     assert mc.index("try:") < mc.index("remember_speak_hz") < mc.index("except Exception"), "a failed measure must not stop speech"
     # songs never come here: FrontMan reads no cadence pack and no speaking pitch
