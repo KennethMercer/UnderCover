@@ -3,6 +3,11 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## Not released yet
+
+**Hardening** (sections)
+- Links are handled the same way on every PC, whether or not ffmpeg is installed.
+
 ## 1.1.2 (2026-10-29)
 
 **SpeakEasy** (speakhz)

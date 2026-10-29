@@ -1613,21 +1613,20 @@ def u_netguard():
                                        "http_headers": {}, **kw}
             for proto in ("http", "https", "m3u8_native", "m3u8", "http_dash_segments"):
                 assert get_suitable_downloader(fmt(proto), y.params).__name__ in youtube.DOWNLOADERS, proto
-            # a part of a stream (section_start) takes ffmpeg; on a PC without it (GitHub's runner) yt-dlp reads the whole
-            # file with its own HTTP downloader instead: inside the guard, so a home address is still refused
-            ffmpeg = FFmpegFD.available()
+            # a part of a stream, and a live one, are refused with or without ffmpeg, by any of the downloaders (without
+            # ffmpeg yt-dlp would read them itself: the same answer on every PC, GitHub's runner included)
             for proto, kw in (("rtmp", {}), ("rtmp_ffmpeg", {}), ("rtsp", {}), ("mms", {}), ("f4m", {}),
                               ("ism", {}), ("websocket_frag", {}), ("m3u8_native", {"is_live": True}),
-                              *([("http", {"section_start": 5})] if ffmpeg else []), ("niconico_dmc", {}), ("mhtml", {}),
-                              ("youtube_live_chat", {}), ("bunnycdn", {})):
-                assert refused(lambda: y.dl(str(tmp / "x.mp4"), fmt(proto, **kw))) == youtube.CANT_FETCH, proto
-            if not ffmpeg:
-                part = {**fmt("http", section_start=5), "url": H2 + "/a.mp4"}
-                assert get_suitable_downloader(part, y.params).__name__ in youtube.DOWNLOADERS
-                assert refused(lambda: y.dl(str(tmp / "z.mp4"), part)) == safeurl.SAY
-                assert hits["home"] == [], hits
-                y.dl(str(tmp / "w.mp4"), fmt("http", section_start=5))   # on the internet: the whole file, in-process
-                assert (tmp / "w.mp4").stat().st_size == 4000 and popen == []
+                              ("http", {"section_start": 5}), ("http", {"section_end": 30}),
+                              ("http_dash_segments", {"section_start": 5}), ("niconico_dmc", {}), ("mhtml", {}),
+                              ("youtube_live_chat", {}), ("bunnycdn", {}),
+                              ("http", {"is_live": True}), ("http_dash_segments", {"is_live": True}),
+                              ("https", {"live_status": "is_live"}), ("http_dash_segments", {"live_status": "post_live"}),
+                              ("http", {"live_status": "is_upcoming"})):
+                assert refused(lambda: y.dl(str(tmp / "x.mp4"), fmt(proto, **kw))) == youtube.CANT_FETCH, (proto, kw)
+            assert not any(p.name.startswith("x.") for p in tmp.iterdir()) and popen == []
+            y.dl(str(tmp / "past.mp4"), fmt("http", was_live=True, live_status="was_live"))   # a past stream: a video
+            assert (tmp / "past.mp4").stat().st_size == 4000
             assert refused(lambda: FFmpegFD(y, y.params).download(str(tmp / "y.mp4"), fmt("m3u8"))) == youtube.CANT_FETCH
         for merged in ("bestvideo+bestaudio", "best,worst", "(bestaudio)"):
             try:

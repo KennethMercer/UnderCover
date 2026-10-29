@@ -34,8 +34,9 @@ PROTOCOLS = ("http", "https", "m3u8_native", "http_dash_segments")
 DOWNLOADERS = ("HttpFD", "HlsFD", "DashSegmentsFD")
 PROTOCOL_FILTER = "[protocol~='^(" + "|".join(PROTOCOLS) + ")$']"
 FORCED = {"external_downloader": {"default": "native"}, "concurrent_fragment_downloads": 1}
-CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, or a kind of stream it doesn't download). "
-              "Try another link.")
+LIVE = ("is_live", "is_upcoming", "post_live")   # yt-dlp's live_status values refused ("was_live" is a finished video)
+CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, a clip of a longer video, or a kind of stream it "
+              "doesn't download). Try another link, or the whole video's.")
 
 
 def safe_format(fmt: str | None) -> str:
@@ -109,6 +110,12 @@ def _watched(yt_dlp):
         def dl(self, name, info, *a, **kw):
             from yt_dlp.downloader import get_suitable_downloader
             from yt_dlp.utils import determine_protocol
+            # a part of a stream, and a stream still live (or just ended and still being processed), are refused
+            # whichever downloader would take them: yt-dlp hands some to ffmpeg and reads the rest itself, so the
+            # answer is the same on every PC. A past stream kept as a video (was_live) is a whole file, like any other.
+            if (info.get("section_start") or info.get("section_end") or info.get("is_live")
+                    or info.get("live_status") in LIVE):
+                raise safeurl.LinkRefused(CANT_FETCH)
             fd = get_suitable_downloader(info, self.params, to_stdout=(name == "-"))
             if fd.__name__ not in DOWNLOADERS or determine_protocol(info) not in PROTOCOLS:
                 raise safeurl.LinkRefused(CANT_FETCH)
