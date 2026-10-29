@@ -5,8 +5,9 @@ in brackets.
 
 ## Not released yet
 
-**Hardening** (sections)
+**Hardening** (sections, bytecap)
 - Links are handled the same way on every PC, whether or not ffmpeg is installed.
+- A download from a link stays within a sensible size.
 
 ## 1.1.2 (2026-10-29)
 
