@@ -1804,6 +1804,26 @@ def u_decode_bound():
             assert seen[-1]["postprocessor_args"]["extractaudio"][0] in ("-ss", "-filter_complex"), seen[-1]
         finally:
             songs._ydl, S._ydl, songs._bounded, songs.MAX_SONG_S = real
+    # every audio conversion yt-dlp runs is bounded in one place too (open_ydl): 3 h unless the caller's -t is tighter
+    from undercover.core import youtube as Y
+    cap = str(files.MAX_AUDIO_S)
+    assert Y.bounded_args(None) == {"extractaudio": ["-t", cap]}
+    assert Y.bounded_args({"extractaudio": ["-t", "1201"]})["extractaudio"] == ["-t", "1201"]
+    assert Y.bounded_args({"extractaudio": ["-ss", "60", "-t", "99999", "-ac", "1"]})["extractaudio"] == ["-ss", "60", "-t", cap, "-ac", "1"]
+    assert Y.bounded_args({"extractaudio": ["-t", "x"]})["extractaudio"] == ["-t", cap]
+    fc = Y.bounded_args({"extractaudio": ["-filter_complex", "[0:a]atrim=0:60[k]", "-map", "[k]", "-ac", "1"], "merger": ["-y"]})
+    assert fc["extractaudio"][-2:] == ["-t", cap] and fc["merger"] == ["-y"], fc
+    assert Y.bounded_args(["-ac", "1"]) == {"default": ["-ac", "1"], "extractaudio": ["-ac", "1", "-t", cap]}   # (default kept)
+    assert Y.bounded_args({"default": ["-ac", "1"]})["extractaudio"] == ["-ac", "1", "-t", cap]
+    assert Y.bounded_args({"extractaudio": ["-t", "00:20:01"]})["extractaudio"] == ["-t", "00:20:01"]   # (a tighter HH:MM:SS kept)
+    assert Y.bounded_args({"extractaudio": ["-t", "04:00:00"]})["extractaudio"] == ["-t", cap]
+    try:
+        import yt_dlp   # noqa: F401 - (on every install; the check runs where it is)
+        ydl = Y.open_ydl("x", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}])
+        assert ydl.params["postprocessor_args"]["extractaudio"] == ["-t", cap], ydl.params["postprocessor_args"]
+        assert "postprocessor_args" not in Y.open_ydl("x").params, "args added where nothing converts"
+    except ImportError:
+        pass
     # every other decode of a file it was given is bounded too: the waveform, the loudness, a dropped recording
     for fn in (remix.lufs, P.add_file):
         assert '"-t", str(MAX_AUDIO_S)' in inspect.getsource(fn), fn.__name__
@@ -1838,6 +1858,22 @@ def u_decode_bound():
                 except ValueError as e:
                     assert "runs longer than" in str(e), e
                 assert (up / f"{sid}.flac").exists() == already and not (up / f"{sid}.json").exists(), already
+            # nothing decoded (ffprobe reads a header, ffmpeg gets no audio from it): refused, not taken at the header's word
+            songs._ffprobe = lambda p: {"duration": 180.0, "sample_rate": 44100, "channels": 2}
+            songs._peaks = lambda p, bins=1200: ([], 0.0)
+            remix.lufs = lambda p: -20.0
+            for already in (False, True):
+                tmp = path("cache_dir") / "hollow.flac"
+                tmp.write_bytes(b"fLaC" + b"\0" * 64)
+                hid = hashlib.sha256(tmp.read_bytes()).hexdigest()[:16]
+                if already:
+                    shutil.copyfile(tmp, up / f"{hid}.flac")
+                try:
+                    songs.register_song(tmp, "Hollow.flac")
+                    raise AssertionError("a song with nothing decoded was taken")
+                except ValueError as e:
+                    assert "couldn't be read as audio" in str(e), e
+                assert (up / f"{hid}.flac").exists() == already and not (up / f"{hid}.json").exists(), already
         finally:
             songs._ffprobe, songs._peaks, remix.lufs, songs.MAX_AUDIO_S = saved
     return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
@@ -9588,7 +9624,7 @@ def _audio_reads():
         i = sf.info(str(p))
         return {"duration": float(i.duration), "sample_rate": int(i.samplerate), "channels": int(i.channels)}
     saved = songs._ffprobe, songs._peaks, remix.lufs
-    songs._ffprobe, songs._peaks, remix.lufs = probe, lambda p, bins=1200: ([], 0.0), lambda p: -20.0
+    songs._ffprobe, songs._peaks, remix.lufs = probe, lambda p, bins=1200: ([], probe(p)["duration"]), lambda p: -20.0
     try:
         yield
     finally:
