@@ -1626,6 +1626,8 @@ def u_netguard():
                 assert get_suitable_downloader(part, y.params).__name__ in youtube.DOWNLOADERS
                 assert refused(lambda: y.dl(str(tmp / "z.mp4"), part)) == safeurl.SAY
                 assert hits["home"] == [], hits
+                y.dl(str(tmp / "w.mp4"), fmt("http", section_start=5))   # on the internet: the whole file, in-process
+                assert (tmp / "w.mp4").stat().st_size == 4000 and popen == []
             assert refused(lambda: FFmpegFD(y, y.params).download(str(tmp / "y.mp4"), fmt("m3u8"))) == youtube.CANT_FETCH
         for merged in ("bestvideo+bestaudio", "best,worst", "(bestaudio)"):
             try:
