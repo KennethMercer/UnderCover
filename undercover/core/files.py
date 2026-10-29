@@ -5,6 +5,9 @@ from urllib.parse import quote
 from .config import ROOT, path
 
 AUDIO_EXT = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".webm", ".mp4"}
+# the most of any audio file that's ever decoded (ffmpeg -t): a dropped, uploaded or fetched file can hold far more
+# than its size or its own header suggests (near-silence compresses thousands of times)
+MAX_AUDIO_S = 3 * 3600
 
 
 def file_url(p: Path | str | None) -> str | None:

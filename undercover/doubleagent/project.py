@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from ..core.config import CONFIG, path
+from ..core.files import MAX_AUDIO_S
 from ..core.voices import ModelError, slug
 from ..core.timing import timed
 from .sources import Source
@@ -443,7 +444,7 @@ def add_file(proj: Project, file: Path, title: str | None = None) -> Source:
         raise ModelError("That recording is already in this project.")
     dest = proj.dir / "raw" / f"{sid}.wav"
     import subprocess
-    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(file), "-ac", "1", "-ar", str(CLIP_SR), str(dest)],
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(file), "-t", str(MAX_AUDIO_S), "-ac", "1", "-ar", str(CLIP_SR), str(dest)],
                        capture_output=True, text=True)
     if r.returncode or not dest.exists():
         raise ModelError(f"Couldn't read '{title or Path(file).name}' as audio.")

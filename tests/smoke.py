@@ -1720,18 +1720,28 @@ def u_netguard():
     return "the race, every socket call, yt-dlp's hops, the downloaders, one stream, the proxy, Deno"
 
 
-@check("a link's audio is bounded by time as well as size: a song's decode stops a second past 20 minutes and audio that reaches it is refused plainly; a training source's stops at what a source keeps, length known or not; a site with no sound-only format gives a small video first")
+@check("a link's audio is bounded by time as well as size: a song's decode stops a second past 20 minutes and audio that reaches it is refused plainly, judged from ffmpeg's own pass (a song that came as FLAC skips yt-dlp's conversion, and its header may say less than it holds); a training source's stops at what a source keeps, length known or not; a site with no sound-only format gives a small video first; the waveform, loudness and a dropped recording are decoded to a bound too")
 def u_decode_bound():
+    import inspect
     import numpy as np
     import soundfile as sf
-    from undercover.core import youtube
+    from undercover.core import files, youtube
     from undercover.core.config import path
     from undercover.core.voices import ModelError
-    from undercover.doubleagent import sources as S
-    from undercover.frontman import songs
-    seen = []
+    from undercover.doubleagent import project as P, sources as S
+    from undercover.frontman import remix, songs
+    seen, truth = [], {}
 
-    def fake(seconds, name):   # stands in for yt-dlp + ffmpeg: the decode's output, as long as the bound allows
+    def write(out: Path, seconds: float, says: float | None = None):   # a FLAC/WAV at 1 kHz; says: the length its header claims
+        sf.write(str(out), (np.random.default_rng(1).standard_normal(int(seconds * 1000)) * 0.01).astype(np.float32), 1000)
+        truth[out.name] = seconds
+        if says is not None:   # the FLAC STREAMINFO's total samples (36 bits) set to what it should say
+            b = bytearray(out.read_bytes())
+            v = int.from_bytes(b[18:26], "big")
+            b[18:26] = ((v & ~((1 << 36) - 1)) | int(says * 1000)).to_bytes(8, "big")
+            out.write_bytes(b)
+
+    def fake(seconds, name, says=None):   # stands in for yt-dlp + its conversion (as long as the bound allows)
         class Y:
             def __init__(self, **opts):
                 self.opts = opts
@@ -1745,14 +1755,29 @@ def u_decode_bound():
 
             def download(self, urls):
                 a = self.opts["postprocessor_args"]["extractaudio"]
-                n = min(seconds, float(a[a.index("-t") + 1])) if "-t" in a else seconds
-                out = Path(self.opts["outtmpl"].replace("%(ext)s", name))
-                sf.write(str(out), np.zeros(int(n * 1000), np.float32), 1000)
+                n = min(seconds, float(a[a.index("-t") + 1])) if "-t" in a and says is None else seconds   # (FLAC: no conversion)
+                write(Path(self.opts["outtmpl"].replace("%(ext)s", name)), n, says)
                 return 0
         return Y
-    real = (songs._ydl, S._ydl)
+
+    def ffmpeg(src, dst, seconds):   # stands in for ffmpeg where there's none (GitHub's runner): it decodes what's there
+        write(dst, min(truth[src.name], seconds))
+    real = (songs._ydl, S._ydl, songs._bounded, songs.MAX_SONG_S)
+    if not shutil.which("ffmpeg"):
+        songs._bounded = ffmpeg
     with isolated_data():
         try:
+            # a song that came as FLAC (no conversion, so no -t from it) whose header says 10 s and holds 60: the
+            # length comes from ffmpeg's own pass, so it's refused (the song rule made 30 s for the test)
+            songs.MAX_SONG_S = 30
+            songs._ydl = fake(60, "flac", says=10)
+            try:
+                songs.download(youtube.SongResult(id="t0", url="https://example.com/z.flac", title="Liar", raw_title="t",
+                                                  channel="", duration=0), register=lambda *a: {"id": "x"})
+                raise AssertionError("a FLAC whose header lied was taken")
+            except ModelError as e:
+                assert "runs longer than 20 minutes" in str(e), e
+            songs.MAX_SONG_S = real[3]
             # a song with no length given that runs for hours: the decode stops at the bound and it's refused
             songs._ydl = fake(5 * 3600, "flac")
             r = youtube.SongResult(id="t1", url="https://example.com/a.mp3", title="Long one", raw_title="t", channel="", duration=0)
@@ -1778,8 +1803,12 @@ def u_decode_bound():
             S.download(S.Source(id="s3", url="https://example.com/d.mp3", title="d", duration=3 * 3600), path("cache_dir") / "src")
             assert seen[-1]["postprocessor_args"]["extractaudio"][0] in ("-ss", "-filter_complex"), seen[-1]
         finally:
-            songs._ydl, S._ydl = real
-    return "a 5-hour song stopped at 20 min and refused; a source at its keep, length known or not; 480p before best"
+            songs._ydl, S._ydl, songs._bounded, songs.MAX_SONG_S = real
+    # every other decode of a file it was given is bounded too: the waveform, the loudness, a dropped recording
+    for fn in (songs._peaks, remix.lufs, P.add_file):
+        assert '"-t", str(MAX_AUDIO_S)' in inspect.getsource(fn), fn.__name__
+    assert files.MAX_AUDIO_S == 3 * 3600
+    return "a lying FLAC judged by ffmpeg's pass; a 5-hour song stopped at 20 min; a source at its keep; 480p first; peaks, loudness, add_file bounded"
 
 
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")

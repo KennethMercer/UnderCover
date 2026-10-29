@@ -20,6 +20,7 @@ from pathlib import Path
 import soundfile as sf
 
 from ..core.config import path
+from ..core.files import MAX_AUDIO_S
 from ..core.fsutil import retry
 from ..core.voices import ModelError
 from ..core.youtube import SongResult, _music_tracks, _short, _ydl
@@ -208,9 +209,13 @@ def download(r: SongResult, register, progress=None) -> dict:
                 check_blocked(e)
                 raise ModelError(f"Couldn't download '{r.title}' ({_short(e)}). UnderCover updates its YouTube "
                                  "downloader by itself when YouTube changes; try again in a while.")
-        f = next(iter(work.glob("song.flac")), None)
-        if not f:
+        got = next(iter(work.glob("song.flac")), None)
+        if not got:
             raise ModelError(f"Downloaded '{r.title}' but couldn't convert it to audio.")
+        # decoded once more by ffmpeg itself, to the bound: a file that came as FLAC skips yt-dlp's conversion (and its
+        # -t), and its own header may say less than it holds; the length is judged from what ffmpeg wrote
+        f = work / "bounded.flac"
+        _bounded(got, f, MAX_SONG_S + 1)
         if sf.info(str(f)).duration > MAX_SONG_S + 0.5:   # it ran to the bound: longer than a song, whatever it said
             raise ModelError(f"'{r.title}' runs longer than 20 minutes. Pick a single song (under 20 minutes).")
         name = re.sub(r'[<>:"/\\|?*]+', "_", r.title).strip() + ".flac"
@@ -221,6 +226,14 @@ def download(r: SongResult, register, progress=None) -> dict:
         return meta
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _bounded(src: Path, dst: Path, seconds: float) -> None:
+    """src decoded by ffmpeg into a FLAC of at most `seconds` (its header then says what's really in it)."""
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-t", str(seconds), "-vn", "-c:a", "flac", str(dst)],
+                       capture_output=True, text=True)
+    if r.returncode or not dst.exists():
+        raise ModelError("Downloaded the song but couldn't read it as audio.")
 
 
 # ---------------------------------------------------------------- songs in uploads/
@@ -242,7 +255,7 @@ def _ffprobe(p: Path) -> dict:
 def _peaks(p: Path, bins: int = 1200) -> list[float]:
     """Waveform overview: peak level per bin, decoded via ffmpeg (any format)."""
     import numpy as np
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-t", str(MAX_AUDIO_S), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
                          capture_output=True).stdout
     a = np.abs(np.frombuffer(raw, dtype=np.float32))
     if not len(a):
