@@ -3,7 +3,7 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## Not released yet
+## 1.1.2 (2026-10-29)
 
 **SpeakEasy** (speakhz)
 - A voice with cadence now reads at the pitch the person talks at in its reference clip, not at the median of
