@@ -2,6 +2,14 @@
   "about": "What's new: newest first. Whoever merges a change the user will notice adds one entry at the top: a new id, the date, a short title, 1 to 4 plain lines. The page shows the entries newer than the last one this browser saw (whatsnew.js); SafeHouse's System room lists them all.",
   "entries": [
     {
+      "id": "2026-10-29-v112",
+      "date": "2026-10-29",
+      "title": "UnderCover 1.1.2",
+      "lines": [
+        "SpeakEasy voices now read at the pitch the person talks at, not the pitch of the speeches they were trained on."
+      ]
+    },
+    {
       "id": "2026-10-28-v111",
       "date": "2026-10-28",
       "title": "UnderCover 1.1.1",
