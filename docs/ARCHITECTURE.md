@@ -1,6 +1,6 @@
 # UnderCover architecture
 
-This document describes how UnderCover is built, as of 1.1.2: the names, the modules, the code layout, the data on
+This document describes how UnderCover is built, as of 1.1.3: the names, the modules, the code layout, the data on
 disk, the engines and why they were chosen, the page, and how the app looks after itself. It is the contract a change
 is measured against. What the project is for and how decisions are made is in [MASTERPLAN.md](MASTERPLAN.md); how to
 install is in [README.md](../README.md) and [installer/GUIDE.md](../installer/GUIDE.md); how to contribute is in
