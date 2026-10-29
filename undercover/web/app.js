@@ -203,6 +203,7 @@ async function pollStatus() {
     if (s.build && !pageBuild) pageBuild = s.build;
     else if (s.build && s.build !== pageBuild) $("#uc-updated").hidden = false;
     document.body.dataset.client = s.client || "pc";   // "phone": a paired phone (phase 11); [data-pc] controls hide
+    if (typeof phoneApp === "function") phoneApp(s);   // 1.2: the away app's service worker and its alerts (phonealerts.js)
     $("#set-away-me-row").hidden = !s.away_ready || location.protocol === "https:";   // phase 20: ready on the PC
     if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
     sysStatus(s);

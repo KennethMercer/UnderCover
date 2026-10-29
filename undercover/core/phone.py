@@ -70,6 +70,7 @@ def _load() -> dict:
             data = {}
         _STATE.clear()
         _STATE.update({"enabled": bool(data.get("enabled")), "away": bool(data.get("away")),
+                       "away_private": bool(data.get("away_private")),
                        "devices": [d for d in data.get("devices") or [] if isinstance(d, dict) and d.get("hash")]})
         _FILE[0] = f
     return _STATE
@@ -105,6 +106,19 @@ def away_on() -> bool:
 def set_away(on: bool):
     with _LOCK:
         _load()["away"] = bool(on)
+        _save()
+
+
+def away_private() -> bool:
+    """Away from home on the tailnet only (Tailscale Serve, 1.2): the phone runs Tailscale, signed in to the same
+    tailnet, and nothing is on the public internet. Off (the default): Funnel's public link, no app on the phone."""
+    with _LOCK:
+        return _load()["away_private"]
+
+
+def set_away_private(on: bool):
+    with _LOCK:
+        _load()["away_private"] = bool(on)
         _save()
 
 

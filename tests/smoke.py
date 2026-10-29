@@ -1843,7 +1843,7 @@ def u_decode_bound():
     return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
 
 
-@check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
+@check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); Private (1.2) is Serve to the same listener with Funnel off, and back; exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
     from undercover.core import tailnet
@@ -1886,6 +1886,22 @@ def u_tailnet():
             assert tailnet.tick() != "ready"
             wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="the funnel re-aimed")
             assert read()["funnel_target"] == "http://127.0.0.1:7871", read()
+            # Private (1.2): the serve config reset, then Serve (its own one-time approval) to the same listener, no Funnel
+            tailnet.set_private(True)
+            assert ["serve", "reset"] in read()["calls"] and not read().get("funnel_on") and tailnet.STATE["phase"] != "ready"
+            wait_for(lambda: tailnet.tick() == "approve", 20, every=0.2, what="Serve's approval step")
+            assert "/f/serve" in tailnet.STATE["approve_url"], tailnet.STATE
+            write(serve_approved=True)
+            wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="ready on the tailnet only")
+            r = read()
+            assert r["serve_on"] and not r.get("funnel_on") and r["funnel_target"] == "http://127.0.0.1:7871", r
+            assert ["serve", "--bg", "--https=443", "http://127.0.0.1:7871"] in r["calls"] and tailnet.snapshot()["private"]
+            write(funnel_on=True, serve_on=False)   # Funnel switched on behind its back: not ready, Serve put back
+            assert tailnet.tick() != "ready"
+            wait_for(lambda: tailnet.tick() == "ready" and read().get("serve_on"), 20, every=0.2, what="Serve put back")
+            tailnet.set_private(False)   # and back to Funnel's public link (approved before: no new approval)
+            wait_for(lambda: tailnet.tick() == "ready", 20, every=0.2, what="back on Funnel")
+            assert read()["funnel_on"] and not read().get("serve_on") and not tailnet.snapshot()["private"], read()
             name = (tailnet.state_dir() / "uc-name").read_text(encoding="utf-8")
             # UnderCover exiting: the funnel reset and our daemon gone (none left behind pointing at a dead listener)
             daemon_proc = tailnet._P["daemon"]
@@ -9572,6 +9588,79 @@ def u_page_syntax():
     return "every page script parses and loads"
 
 
+@check("the away app's service worker (1.2) in headless Chrome: registered, keeps a private home address and refuses any other, answers a navigation the PC doesn't with its own page and that link; caches nothing else (skipped when there is no Chrome)")
+def u_away_sw():
+    """http://127.0.0.1 is a secure context, so Chrome registers the worker there as it would at the away address. Two
+    runs with one profile: the first registers it and hands it a good home address, then a foreign one; in the second the
+    "PC" closes every connection, and the worker's own page must name the good address alone. (--dump-dom dumps at the
+    load event, so the first page holds it open with an image the server sends only once the page has said it's done.)"""
+    import http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    sw = (ROOT / "undercover" / "web" / "sw.js").read_bytes()
+    reg = b"""<!doctype html><html><body><p id="out">waiting</p><img src="/hold" alt=""><script>
+(async () => { try {
+  await navigator.serviceWorker.register("/sw.js"); const r = await navigator.serviceWorker.ready;
+  r.active.postMessage({ home: "http://192.168.1.20:7860" });
+  await new Promise(ok => setTimeout(ok, 500));
+  r.active.postMessage({ home: "http://evil.example:7860" }); r.active.postMessage({ home: "https://192.168.1.21:7860" });
+  await new Promise(ok => setTimeout(ok, 500));
+  document.getElementById("out").textContent = "registered " + (await caches.keys()).join(",");
+} catch (e) { document.getElementById("out").textContent = "failed " + e; }
+  fetch("/said"); })();
+</script></body></html>"""
+    down, said = {"on": False}, threading.Event()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if down["on"]:   # the PC isn't answering: the connection closes with no reply
+                self.close_connection = True
+                return
+            if self.path == "/said":
+                said.set()
+            if self.path == "/hold":
+                said.wait(30)
+            body, ctype = ((sw, "text/javascript") if self.path == "/sw.js" else (b"GIF89a", "image/gif")
+                           if self.path in ("/hold", "/said") else (reg, "text/html"))
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    run = lambda prof, page: subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}",
+                                             "--dump-dom", url + page], capture_output=True,
+                                            text=True, encoding="utf-8", errors="replace", timeout=90).stdout
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            first = run(prof, "/reg")
+            assert "registered uc-home-v1" in first, first[-400:]
+            down["on"] = True
+            second = run(prof, "/")
+    finally:
+        srv.shutdown()
+    assert "Your PC isn't answering" in second and 'href="http://192.168.1.20:7860/"' in second, second[-600:]
+    assert "evil.example" not in second and "192.168.1.21" not in second, "the worker kept an address that isn't a private home one"
+    src = sw.decode("utf-8")
+    assert src.count("caches.open(") == 2 and "c.put(HOME" in src and 'r.mode !== "navigate"' in src, "the worker keeps more than the home address"
+    # the alerts (phonealerts.js): phones only, the permission asked only from a tap, generic words, night results silent
+    pa = (ROOT / "undercover" / "web" / "phonealerts.js").read_text(encoding="utf-8")
+    ask = pa.index("Notification.requestPermission(")
+    assert pa.count("Notification.requestPermission(") == 1 and pa.rfind('$("#ph-alerts-yes").onclick', 0, ask) > pa.rfind("\n}", 0, ask), "the permission is asked without a tap"
+    assert 'dataset.client !== "phone"' in pa and "DONE_WORDS[j.kind]" in pa and 'j.kind === "night"' in pa and "silent: quiet" in pa
+    assert "j.title" not in pa.split("function paWords", 1)[1].split("return null", 1)[0].replace('/^Preview/.test(j.title || "")', ""), "a notification names the job"
+    page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    assert all(f'id="{i}"' in page for i in ("ph-alert", "ph-alerts", "ph-alerts-yes", "ph-alerts-no", "ph-install", "ph-install-ok",
+                                              "ph-install-ios", "ph-install-android", "set-away-private"))
+    return "registered; its own page with the private home address when the PC is silent; a foreign one refused; the alerts' rules"
+
+
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
 def u_page_rules():
     web = ROOT / "undercover" / "web"
@@ -9984,7 +10073,7 @@ def u_tray():
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
-    ("GET", "/"), ("GET", "/index.html"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
+    ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
     ("POST", "/api/phone/claim"), ("GET", "/api/status"), ("GET", "/api/voices"), ("GET", "/api/search"), ("GET", "/api/jobs"),
     ("GET", "/api/work"), ("GET", "/api/jobs/abc123/events"), ("POST", "/api/jobs/abc123/cancel"), ("POST", "/api/jobs/abc123/retry"),
@@ -10218,6 +10307,8 @@ def a_away():
         assert _away("GET", "/pair", port, host)[0] == 403 and _away("POST", "/api/phone/claim", port, host, body={"code": "X"})[0] == 403
         status, _, page = _away("GET", "/away", port, host)
         assert status == 200 and b"Away from home" in page
+        status, hd, sw = _away("GET", "/sw.js", port, host)   # the away app's service worker (1.2): no pass needed, no data
+        assert status == 200 and "javascript" in hd.get("content-type", "") and b"HOME_RX" in sw, (status, hd)
         # a paired phone, at home, asks for its link (its button shows only now); at the away address the code becomes its pass
         assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is True
         assert api("/api/status").get("away_ready") is False, "the PC's own page offers the phone's away button"
@@ -10235,6 +10326,8 @@ def a_away():
         assert _away("POST", "/api/phone/away", port, host, body={"code": code})[0] == 403, "a code worked twice"
         s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"uc_away={away}")[2])
         assert s_["client"] == "phone" and s_["device"] == "Away phone", s_
+        assert s_["home_url"] == f"http://{PHONE_ADDR}:{sandbox_port}", s_   # the away app's way home (sw.js keeps it)
+        assert json.loads(_lan("GET", "/api/status", home)[2])["home_url"] is None and api("/api/status")["home_url"] is None
         assert _away("GET", "/api/status", port, host, cookie=f"uc_away={home}")[0] == 401, "the home token works away"
         assert _lan("GET", "/api/status", away)[0] == 401, "the away pass works at home"
         status, _, body = _away("POST", "/api/restart", port, host, cookie=f"uc_away={away}", body={})
@@ -10253,6 +10346,18 @@ def a_away():
         st = api("/api/away", {"on": True})
         port = st["port"]
         wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready again")
+        # Private (Deep Cover, 1.2): Serve on the tailnet only, kept across a restart; then back to Funnel
+        st = api("/api/away", {"private": True})
+        assert st["private"] and st["on"], st
+        wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="Serve's approval link")
+        write(serve_approved=True)
+        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready on the tailnet only")
+        assert read()["serve_on"] and not read().get("funnel_on") and read()["funnel_target"] == f"http://127.0.0.1:{port}", read()
+        from undercover.core import phone
+        assert json.loads(phone.state_file().read_text(encoding="utf-8"))["away_private"], "the private switch wasn't kept"
+        assert _lan("POST", "/api/away", home, {"private": False})[0] == 403, "a phone changed away from home"
+        api("/api/away", {"private": False})
+        wait_for(lambda: api("/api/away")["phase"] == "ready" and read().get("funnel_on"), 60, every=0.5, what="back on Funnel")
         resets = read()["calls"].count(["funnel", "reset"])
         api("/api/phone", {"on": False})
         st = api("/api/away")
@@ -10377,9 +10482,10 @@ def a_phone():
     for m, p in PHONE_SAMPLES + [("GET", "/nope"), ("POST", "/api/nope"), ("DELETE", "/api/nope")]:
         status, hd, body = _lan(m, p, body={} if m == "POST" else None)
         pol = phone_api.policy(m, p)[0]
-        if pol == "open":
+        if pol in ("open", "home"):   # (home: the page alone, no data; 1.2)
             opened += 1
-            assert status == (403 if p == "/api/phone/claim" else 200), (m, p, status, body[:200])
+            want = 403 if p == "/api/phone/claim" else 404 if p == "/sw.js" else 200   # (sw.js: the away address only)
+            assert status == want, (m, p, status, body[:200])
         else:
             assert status == 401 and body == unpaired and hd.get("connection") == "close", (m, p, status, body[:200])
     # 2. the guards before the token: another Host (DNS rebinding), a missing or foreign Origin
@@ -11831,7 +11937,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

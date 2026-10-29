@@ -310,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
             if o.scheme != "http" or o.netloc.lower() != host:
                 return self._deny(403)
         pol, what = phone_api.policy(method, urlparse(self.path).path)
-        if pol == "open":
+        if pol in ("open", "home"):   # (home: the page alone, no data; see phone_api)
             return True
         tok = self._cookie(phone.COOKIE)
         self.device = phone.device_for(tok, self.client_address[0])
@@ -405,6 +405,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._static(WEB / "index.html")
             if p == "/away":
                 return self._static(WEB / "away.html")
+            if p == "/sw.js":   # the away app's service worker (1.2): only where a phone can register one
+                return self._static(WEB / "sw.js") if self.away else self._error("Not found", 404)
             if p == "/pair":
                 return self._static(WEB / "pair.html")
             if p.startswith("/static/"):
@@ -436,6 +438,8 @@ class Handler(BaseHTTPRequestHandler):
                                    "tour": firstrun.tour_status(),   # the First assignment's spotlight tour (web/firstrun.js)
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
                                    "away_ready": self.remote and _away_ready(),
+                                   # the away app's way home when the PC doesn't answer there (sw.js keeps it)
+                                   "home_url": phone_api.url() if self.away and self.device else None,
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
                                    "app_folder": None if self.remote else str(ROOT)})
             if p == "/api/voices":

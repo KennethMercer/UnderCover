@@ -2,7 +2,11 @@
 
 ROUTES is the one list of every route and what a paired phone may do with it (the handoff's security table is made from
 it; tests/smoke.py checks that every route the code answers is in it):
-    "open"   no token needed from the network: the pairing page and its claim, the home-screen manifest and its icons
+    "open"   no token needed from the network: the pairing page and its claim, the home-screen manifest and its icons,
+             the away app's service worker (no data)
+    "home"   the page itself (no data in it: everything comes from /api), open on the home Wi-Fi only (1.2): the away
+             app's way home is a link from another site, and a SameSite=Strict cookie doesn't ride on that first load
+             (the page's own requests after it are same-site, so they carry it). At the away address: the token.
     "phone"  a paired phone may use it (everything on the basic pages)
     "pc"     refused for phones with a plain message: Restart, Quit, storage moves and clean-up, add-on installs, the
              Doctor's Fixes and diagnostics file, Phone access itself, things that open a window on the PC, and the
@@ -18,7 +22,7 @@ A route a phone asks for that isn't in the table is refused too (a new route is 
     GET  /pair                       the pairing page (no token needed)
 Away from home (phase 20; core/tailnet.py):
     GET  /api/away                   the switch and where it's got to (fetching / sign-in / approve / ready + link) (PC)
-    POST /api/away                   {on} switch it on or off (PC)
+    POST /api/away                   {on} switch it on or off; {private} Funnel (public) or Serve (the tailnet only) (PC)
     POST /api/away/forget            sign this PC out of Tailscale (PC)
     POST /api/phone/away/link        a paired phone on the home Wi-Fi asks for its away link (a single-use code)
     POST /api/phone/away             {code} at the away address: that phone's away token (cookie uc_away, Secure)
@@ -34,7 +38,8 @@ from ..core.phone import PhoneError
 _ID = r"[^/]+"
 ROUTES = [
     # the shell
-    ("GET", r"/|/index\.html", "phone", "the page"),
+    ("GET", r"/|/index\.html", "home", "the page (no data; open on the home Wi-Fi, a token at the away address)"),
+    ("GET", r"/sw\.js", "open", "the away app's service worker (no data; answered at the away address only)"),
     ("GET", r"/static/(manifest\.webmanifest|icon-192\.png|icon-512\.png)", "open", "home-screen manifest and icons"),
     ("GET", r"/static/.+", "phone", "the page's scripts, styles, fonts"),
     ("GET", r"/files/.+", "phone", "playing and downloading results (audio files only for a phone)"),
@@ -243,7 +248,7 @@ def away_open():
             if _A["srv"] is None:
                 raise PhoneError("No free port for away from home (7870-7879).", 409)
             threading.Thread(target=_A["srv"].serve_forever, daemon=True, name="away-listener").start()
-    tailnet.start(_A["port"])
+    tailnet.start(_A["port"], private=phone.away_private())
 
 
 def away_close():
@@ -259,7 +264,7 @@ def away_close():
 def away_state() -> dict:
     from ..core import tailnet
     return {**tailnet.snapshot(), "listening": _A["srv"] is not None, "port": _A["port"], "problem": _A["problem"],
-            "phone_on": phone.enabled()}
+            "phone_on": phone.enabled(), "private": phone.away_private()}
 
 
 def state() -> dict:
@@ -304,6 +309,11 @@ def _away_route(h, method, p):
     if method != "POST":
         raise LookupError("Not found")
     b = h._body()
+    if p == "/api/away" and "private" in b and "on" not in b:   # Deep Cover: "Private: my phone runs Tailscale"
+        phone.set_away_private(bool(b["private"]))
+        if tailnet.STATE["want"]:
+            tailnet.set_private(bool(b["private"]))
+        return h._json(away_state())
     if p == "/api/away":
         if b.get("on"):
             if not phone.enabled():

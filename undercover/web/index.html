@@ -95,6 +95,7 @@
   <div id="wa-toast" aria-hidden="true"></div>
 
   <div class="uc-updated" id="deep-first" hidden role="status">Deep Cover: every number, score and setting, on every page. Nothing changes until you do. <button class="linkbtn" id="deep-first-ok" type="button">Got it</button></div>
+  <div class="uc-updated" id="ph-alert" hidden role="status"></div>
   <div class="uc-updated" id="uc-updated" hidden role="status">UnderCover was updated: <button class="linkbtn" id="uc-updated-go" type="button">Reload</button></div>
   <section class="wn gp-ask" id="gp-ask" hidden role="alert" aria-labelledby="gp-k">
     <div class="wn-head"><span class="wn-k" id="gp-k">Game on</span></div>
@@ -712,10 +713,22 @@
           <div class="row"><a class="btn" id="away-signin" target="_blank" rel="noopener noreferrer" hidden>Sign in to Tailscale</a><a class="btn" id="away-approve" target="_blank" rel="noopener noreferrer" hidden>Approve the private link</a></div>
           <p class="meta" id="away-ct" hidden>Approving lists this PC's link name (a random uc-… name, nothing about you) in the public certificate logs every HTTPS site appears in.</p>
           <p id="away-link" hidden></p>
+          <div class="setting" data-deep id="set-away-private-row"><span><b>Private: my phone runs Tailscale</b><small>Only devices signed in to your Tailscale reach UnderCover, and nothing is on the public internet. The phone needs the Tailscale app, signed in to the same account. Off: a public link that only your paired phones can use, with nothing to install.</small></span>
+            <button class="switch" id="set-away-private" type="button" role="switch" aria-checked="false" aria-label="Private: my phone runs Tailscale"></button></div>
           <p class="meta" data-deep><button class="linkbtn" id="away-forget" type="button">Forget this PC's Tailscale sign-in</button></p>
         </div>
       </div>
       <div class="setting" data-phone><span><b>Phone access</b><small id="set-phone-me">This phone is paired. Phone access is managed on the PC.</small></span></div>
+      <div class="phone-box" data-phone id="ph-install" hidden>
+        <p><b>Keep UnderCover on your home screen.</b> Then it opens like an app, at home and away.</p>
+        <p class="meta" id="ph-install-ios" hidden>Tap Share, then Add to Home Screen. Open UnderCover from that icon from now on. If it asks this phone for a pass there, get the away link again on the home Wi-Fi and open it inside the app.</p>
+        <p class="meta" id="ph-install-android" hidden>Tap the browser's menu (⋮), then Install app or Add to Home screen.</p>
+        <div class="row"><button class="btn" id="ph-install-ok" type="button">Done</button></div>
+      </div>
+      <div class="phone-box" data-phone id="ph-alerts" hidden>
+        <p><b>A nudge when a job finishes?</b> While UnderCover is open on this phone, or was a moment ago, it can show a notification. It never goes through anyone else, so a locked phone won't get one.</p>
+        <div class="row"><button class="btn" id="ph-alerts-yes" type="button">Yes, nudge me</button><button class="linkbtn" id="ph-alerts-no" type="button">Not now</button></div>
+      </div>
       <div class="setting" data-phone id="set-away-me-row" hidden><span><b>Away from home</b><small>When the PC has it on: one tap here, on the home Wi-Fi, and this phone reaches UnderCover from anywhere.</small></span>
         <button class="btn" id="away-me" type="button">Use this phone away from home</button></div>
     </div>
@@ -824,6 +837,7 @@
 
 <script src="/static/app.js"></script>
 <script src="/static/jobs.js"></script>
+<script src="/static/phonealerts.js"></script>
 <script src="/static/train.js"></script>
 <script src="/static/oneshot.js"></script>
 <script src="/static/library.js"></script>

@@ -9,6 +9,8 @@ People never meet it: one switch in SafeHouse, one sign-in, one approval, then a
   - Funnel: https://<name>.<tailnet>.ts.net -> 127.0.0.1:<the away listener> ONLY (funnel_target refuses anything
     else: never the PC's own 7860, never the home-network listener). That listener asks for an away token (pairing
     stays on the home Wi-Fi; app/phone_api).
+  - Private (Deep Cover, 1.2): Serve instead of Funnel, the same name and target, reachable only from devices on the
+    tailnet (the phone runs Tailscale). Switching resets the serve config, so only one of the two is ever on.
 A driver thread walks: fetching -> starting -> sign-in (Tailscale's login URL) -> approve (the tailnet's one-time
 Funnel / HTTPS approval URL) -> ready (the link). Off: funnel reset, down. Forget: logout and the state folder gone."""
 import json
@@ -34,8 +36,9 @@ BINS = {"tailscaled.exe": "ae0195119cc8efbd88d11bff56394ff9f1c08dc9d51957a400d4c
 CMD: dict = {}   # tests: {"tailscale": [...], "tailscaled": [...]} instead of the downloaded binaries
 URL_RX = re.compile(r"https://login\.tailscale\.com/\S+")
 STATE = {"want": False, "phase": "off", "auth_url": None, "approve_url": None, "host": None, "error": "",
-         "progress": None, "port": None}
-_P = {"daemon": None, "up": None, "funnel": None, "driver": None, "out": [], "fetch_failed": 0.0}
+         "progress": None, "port": None, "private": False}
+_P = {"daemon": None, "up": None, "funnel": None, "serve": None, "driver": None, "out": [], "fetch_failed": 0.0}
+EXPOSE = ("funnel", "serve")   # the CLI commands that publish the away listener: public, or the tailnet only
 _LOCK = threading.RLock()   # "still wanted?" and starting a process happen together, so Off can't be overtaken by a tick
 FETCH_RETRY_S = 600         # a failed download waits this long before the next try (39 MB each: never in a loop)
 
@@ -151,7 +154,7 @@ def _run_bg(key: str, args: list):
                 _P["out"].append(line)
                 m = URL_RX.search(line)
                 if m:
-                    STATE["approve_url" if key == "funnel" else "auth_url"] = m.group(0)
+                    STATE["approve_url" if key in EXPOSE else "auth_url"] = m.group(0)
             p.wait()
         except OSError as e:
             STATE["error"] = f"{key}: {e}"
@@ -167,16 +170,23 @@ def _proxies(x) -> list:
     return [p for v in x for p in _proxies(v)] if isinstance(x, list) else []
 
 
+def _mode() -> str:
+    return "serve" if STATE["private"] else "funnel"
+
+
 def _funnel_on(st: dict) -> bool:
-    """Funnel is on for this node AND points at this run's away listener (after a restart the port may differ: then
-    it's set again)."""
+    """The away listener is published the way this run wants it AND points at this run's away listener (after a
+    restart the port may differ: then it's set again). Funnel: allowed on the public internet. Private (Serve): the
+    tailnet only, so Funnel must be off for this node."""
     try:
-        f = json.loads(_cli("funnel", "status", "--json") or "{}")
+        f = json.loads(_cli(_mode(), "status", "--json") or "{}")
     except (ValueError, OSError, subprocess.TimeoutExpired):
         return False
     host = (st.get("Self") or {}).get("DNSName", "").rstrip(".")
     allowed = any(k.startswith(host) and v for k, v in (f.get("AllowFunnel") or {}).items())
     targets = _proxies(f.get("Web") or {})
+    if STATE["private"]:
+        return not allowed and set(targets) == {funnel_target(STATE["port"])}
     return allowed and (not targets or set(targets) == {funnel_target(STATE["port"])})
 
 
@@ -218,20 +228,24 @@ def tick():
         if _funnel_on(st):
             STATE.update(phase="ready", approve_url=None)
         else:
-            if _P["funnel"] is None:
-                _run_bg("funnel", ["funnel", "--bg", "--https=443", funnel_target(STATE["port"])])
+            m = _mode()
+            if _P[m] is None:
+                _run_bg(m, [m, "--bg", "--https=443", funnel_target(STATE["port"])])
             STATE["phase"] = "approve" if STATE["approve_url"] else "starting"
     else:
         STATE["phase"] = "starting"
     return STATE["phase"]
 
 
-def start(port: int):
-    """Switch on: the driver walks to ready (the away listener on `port` is the only funnel target)."""
+def start(port: int, private: bool = False):
+    """Switch on: the driver walks to ready (the away listener on `port` is the only funnel target). private: Serve
+    on the tailnet instead of Funnel."""
     ok, why = platform.supports("away")
     if not ok:
         raise ModelError(why)
-    STATE.update(want=True, port=port, error="")
+    if STATE["want"]:
+        set_private(private)
+    STATE.update(want=True, port=port, error="", private=bool(private))
     _P["fetch_failed"] = 0.0   # switched on by hand: try a failed download again now
     if _P["driver"] is not None and _P["driver"].is_alive():
         return
@@ -247,9 +261,30 @@ def start(port: int):
     _P["driver"].start()
 
 
+def set_private(on: bool):
+    """Funnel or Serve. A change resets the serve config (both off) and ends a pending publish; the driver then sets
+    up the other one (Serve may ask for the tailnet's HTTPS approval once)."""
+    with _LOCK:
+        if STATE["private"] == bool(on):
+            return
+        STATE.update(private=bool(on), approve_url=None)
+        if STATE["phase"] == "ready":
+            STATE["phase"] = "starting"
+        for key in EXPOSE:
+            p = _P.get(key)
+            if p is not None and p.poll() is None:
+                p.terminate()
+            _P[key] = None
+    if _daemon_alive():
+        try:
+            _cli("serve", "reset")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
 def _end_processes():
     """Our tailscale processes, ended and waited for (the daemon's files are free after)."""
-    for key in ("up", "funnel", "daemon"):
+    for key in ("up", *EXPOSE, "daemon"):
         p = _P.get(key)
         if p is not None and p.poll() is None:
             p.terminate()
@@ -261,7 +296,8 @@ def _end_processes():
 
 
 def stop():
-    """Switch off: nothing reaches this PC from outside any more (funnel reset, down); the sign-in is kept."""
+    """Switch off: nothing reaches this PC from outside any more (funnel reset, which clears Serve too; down); the
+    sign-in is kept."""
     with _LOCK:
         STATE.update(want=False, phase="off", auth_url=None, approve_url=None)
     for args in (["funnel", "reset"], ["down"]):
@@ -284,7 +320,7 @@ def at_exit():
         _cli("funnel", "reset", timeout=3)
     except (OSError, subprocess.TimeoutExpired):
         pass
-    for key in ("up", "funnel", "daemon"):
+    for key in ("up", *EXPOSE, "daemon"):
         q = _P.get(key)
         if q is not None and q.poll() is None:
             q.terminate()   # no wait: this process is about to end, and a closing console has seconds
@@ -317,4 +353,5 @@ def snapshot() -> dict:
     return {"supported": ok, "why": why, "on": STATE["want"], "phase": STATE["phase"], "auth_url": STATE["auth_url"],
             "approve_url": STATE["approve_url"], "link": f"https://{STATE['host']}" if STATE["phase"] == "ready" else None,
             "host": STATE["host"], "error": STATE["error"], "progress": STATE["progress"],
-            "downloaded": have_binaries(), "name": node_name() if state_dir().exists() else None}
+            "downloaded": have_binaries(), "name": node_name() if state_dir().exists() else None,
+            "private": STATE["private"]}
