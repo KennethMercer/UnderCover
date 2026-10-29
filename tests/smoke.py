@@ -7015,18 +7015,27 @@ def u_speak_hz():
         # a pack made before speak_hz: measured once, kept in meta.json (None too), nothing else in the folder touched
         meta["extra"]["tts"] = dict(pack)
         (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-        before = {f.relative_to(v.dir): f.stat().st_size for f in v.dir.rglob("*") if f.is_file() and f.name != "meta.json"}
+        files = lambda: {f.relative_to(v.dir): f.stat().st_size for f in v.dir.rglob("*")
+                         if f.is_file() and f.name not in ("meta.json", "cadence.json")}
+        before = files()
         fake = _FakeRmvpe([0] * 10 + [143.0] * 60)
         assert K.remember_speak_hz(v.name, fake) == 143.0 and K.remember_speak_hz(v.name, fake) == 143.0 and fake.calls == 1
         kept = json.loads((v.dir / "meta.json").read_text(encoding="utf-8"))["extra"]["tts"]
         assert kept["speak_hz"] == 143.0 and kept["speak_hz_from"] == "ref.wav" and kept["clip"] == "c1", kept
-        after = {f.relative_to(v.dir): f.stat().st_size for f in v.dir.rglob("*") if f.is_file() and f.name != "meta.json"}
-        assert before == after, (before, after)
+        cj = json.loads((v.dir / "tts" / "cadence.json").read_text(encoding="utf-8"))   # the pack's own copy too
+        assert cj["speak_hz"] == 143.0 and cj["clip"] == "c1" and cj["tried"] == [], cj
+        assert files() == before, (before, files())
         meta["extra"]["tts"] = dict(pack)
         (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
         deaf = _FakeRmvpe([0] * 100)
         assert K.remember_speak_hz(v.name, deaf) is None and K.remember_speak_hz(v.name, deaf) is None and deaf.calls == 1
         assert K.speech_target(K.get_voice(v.name), K.pack_of(K.get_voice(v.name))) == 180.0
+    # the pack test, the A/B readings and SpeakEasy all pitch the same way (they load models, so read, not run, here)
+    import inspect
+    assert "speech_target(self.v, None, ref" in inspect.getsource(K.Tester.measure)
+    assert "speech_target(v, pack, ref" in inspect.getsource(K.make_samples)
+    mc = inspect.getsource(speak._make_cadence)
+    assert mc.index("try:") < mc.index("remember_speak_hz") < mc.index("except Exception"), "a failed measure must not stop speech"
     # songs never come here: FrontMan reads no cadence pack and no speaking pitch
     for f in (ROOT / "undercover" / "frontman").rglob("*.py"):
         s = f.read_text(encoding="utf-8")

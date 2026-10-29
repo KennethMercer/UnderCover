@@ -618,7 +618,8 @@ def speech_target(v, pack: dict | None, ref: Path | None = None, rmvpe=None) -> 
 
 def remember_speak_hz(voice_name: str, rmvpe) -> float | None:
     """The live pack's speak_hz, measured once and kept in extra.tts for a pack made before it was (None kept too, so
-    a clip that can't be measured isn't tried on every reading). Writes meta.json only; moves and deletes nothing."""
+    a clip that can't be measured isn't tried on every reading). Writes meta.json and the pack's own cadence.json (as
+    calibrate_voice_pace does, so a pack moved aside and back keeps it); moves and deletes nothing."""
     with _LOCK:
         v = get_voice(voice_name)
         pack = pack_of(v)
@@ -627,6 +628,12 @@ def remember_speak_hz(voice_name: str, rmvpe) -> float | None:
         ref = pack.get("ref", "ref.wav")
         pack.update(speak_hz=render.speak_hz(v.dir / "tts" / ref, rmvpe), speak_hz_from=ref)
         fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+        try:
+            cj = v.dir / "tts" / "cadence.json"
+            fsutil.write_text(cj, json.dumps({**json.loads(cj.read_text(encoding="utf-8")), "speak_hz": pack["speak_hz"],
+                                              "speak_hz_from": ref}, indent=1))
+        except (OSError, ValueError):
+            pass
     return pack["speak_hz"]
 
 
