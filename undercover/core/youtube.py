@@ -37,6 +37,12 @@ FORCED = {"external_downloader": {"default": "native"}, "concurrent_fragment_dow
 LIVE = ("is_live", "is_upcoming", "post_live")   # yt-dlp's live_status values refused ("was_live" is a finished video)
 CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, a clip of a longer video, or a kind of stream it "
               "doesn't download). Try another link, or the whole video's.")
+# no download grows past this (a stream nobody marks live, a radio station: no length, no size, no end). A song is
+# a few MB and a long interview's audio a few hundred; 2 GB, as a voice download's default (a fixed cap here: no
+# setting, since nothing a link is used for comes near it)
+MAX_BYTES = 2 * 10 ** 9
+TOO_BIG = ("That link kept sending more than 2 GB, far more than a song or an interview needs, so UnderCover stopped it "
+           "(most likely a radio station or another stream with no end). Try a link to a single video.")
 
 
 def safe_format(fmt: str | None) -> str:
@@ -68,9 +74,14 @@ def _watched(yt_dlp):
             return super().__exit__(*exc)
 
         def extract_info(self, url, download=True, *a, **kw):
+            log = self.params.get("logger")
+            if isinstance(log, _QuietLogger):
+                log.too_big = False
             try:
                 with safeurl.guarded():
                     info = super().extract_info(url, download, *a, **kw)
+                if getattr(log, "too_big", False):   # yt-dlp's own max_filesize stopped it, quietly: said plainly
+                    raise safeurl.LinkRefused(TOO_BIG)
             except Exception as e:
                 no = safeurl.refused_in(e)
                 if no:   # (not a YouTube breakage: the self-heal doesn't hear of it)
@@ -146,7 +157,17 @@ def open_ydl(missing: str, **opts):
     base = {"quiet": True, "no_warnings": True, "noprogress": True, "logger": _QuietLogger()}
     opts = {**base, **opts, **FORCED}
     opts["format"] = safe_format(opts.get("format"))
+    # every download is capped at MAX_BYTES: a size declared up front (max_filesize, yt-dlp's own), and what arrives
+    opts["max_filesize"] = min(MAX_BYTES, opts.get("max_filesize") or MAX_BYTES)
+    opts["progress_hooks"] = [_capped, *(opts.get("progress_hooks") or [])]
     return _watched(yt_dlp)(opts)
+
+
+def _capped(d: dict):
+    """The progress hook on every download: stop it once more than MAX_BYTES is declared or has arrived."""
+    from . import safeurl
+    if d.get("status") == "downloading" and max(d.get("downloaded_bytes") or 0, d.get("total_bytes") or 0) > MAX_BYTES:
+        raise safeurl.LinkRefused(TOO_BIG)
 
 
 SONGS_MISSING = "yt-dlp isn't installed in UnderCover's environment, so songs can't be fetched from YouTube."
@@ -157,10 +178,17 @@ def _ydl(**opts):
 
 
 class _QuietLogger:
-    def debug(self, msg): pass
-    def info(self, msg): pass
-    def warning(self, msg): pass
-    def error(self, msg): pass
+    """yt-dlp says nothing to the user; it only notes when max_filesize stopped a download (it aborts quietly)."""
+    too_big = False
+
+    def debug(self, msg): self._note(msg)
+    def info(self, msg): self._note(msg)
+    def warning(self, msg): self._note(msg)
+    def error(self, msg): self._note(msg)
+
+    def _note(self, msg):
+        if "max-filesize" in str(msg):
+            self.too_big = True
 
 
 def _short(e: Exception) -> str:

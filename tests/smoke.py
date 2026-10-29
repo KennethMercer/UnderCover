@@ -1471,7 +1471,15 @@ def u_netguard():
                 self.send_response(code)
                 for k, v in headers.items():
                     self.send_header(k, v)
-                self.send_header("Content-Length", str(len(body)))
+                if callable(body):   # a body with no length and no end, until the other side hangs up
+                    self.end_headers()
+                    try:
+                        while True:
+                            self.wfile.write(body())
+                    except OSError:
+                        return
+                if "Content-Length" not in headers:
+                    self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
         srv = http.server.ThreadingHTTPServer((ip, 0), H)
@@ -1496,6 +1504,10 @@ def u_netguard():
                 f"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n{segs}#EXT-X-ENDLIST\n".encode()
         if p == "/a.mp4":
             return 200, {"Content-Type": "video/mp4"}, b"\0" * 4000
+        if p == "/endless.mp3":   # an endless stream nobody marks live: no length, no end
+            return 200, {"Content-Type": "audio/mpeg"}, lambda: b"\xff\xfb" * 8192
+        if p == "/big.mp3":       # a size declared past the cap
+            return 200, {"Content-Type": "audio/mpeg", "Content-Length": "300000"}, b"\xff\xfb" * 150000
         return 404, {}, b""
     net = serve("127.0.0.1", net_route)     # stands in for the internet
     H1 = f"http://127.0.0.1:{net.server_port}"
@@ -1593,6 +1605,23 @@ def u_netguard():
         with youtube.open_ydl("x", outtmpl=str(tmp / "ok.%(ext)s")) as y:
             y.download([H1 + "/ok.html"])
         assert any(p.name.startswith("ok.") and p.stat().st_size == 4000 for p in tmp.iterdir()), list(tmp.iterdir())
+        # no download grows past the cap: one with no length and no end, and one whose size says so up front (the cap
+        # made small for the test; the caller's own progress hook still runs)
+        real_cap, youtube.MAX_BYTES = youtube.MAX_BYTES, 200_000
+        try:
+            for name in ("endless", "big"):
+                seen = []
+                with youtube.open_ydl("x", outtmpl=str(tmp / f"{name}.%(ext)s"), progress_hooks=[seen.append]) as y:
+                    assert y.params["max_filesize"] == 200_000 and y.params["progress_hooks"][0] is youtube._capped
+                    assert refused(lambda: y.download([H1 + f"/{name}.mp3"])) == youtube.TOO_BIG, name
+                got = sum(p.stat().st_size for p in tmp.iterdir() if p.name.startswith(name))
+                assert got <= 200_000 + 4 * 2 ** 20, (name, got)   # (past the cap by one read at most: yt-dlp's reads grow to 4 MiB)
+                assert name == "big" or seen, name   # (the endless one was under way when it was stopped)
+            with youtube.open_ydl("x", outtmpl=str(tmp / "ok2.%(ext)s")) as y:   # a cap trip doesn't stay behind
+                y.download([H1 + "/ok.html"])
+        finally:
+            youtube.MAX_BYTES = real_cap
+        assert youtube.open_ydl("x", max_filesize=10 ** 12).params["max_filesize"] == youtube.MAX_BYTES
         # yt-dlp's requests from a thread it started come back into the guard
         with youtube.open_ydl("x") as y, ThreadPoolExecutor(1) as pool:
             assert refused(lambda: pool.submit(y.urlopen, H2 + "/x").result()) == safeurl.SAY
