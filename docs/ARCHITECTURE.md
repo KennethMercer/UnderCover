@@ -218,8 +218,10 @@ own name or the first free `<name>-2`, never over a voice. The imported voice's 
 A voice "has cadence" when `<voice>/tts/ref.wav` exists and `extra.tts` describes it: `engine`, `ref`, `ref_text`,
 `clip`, `project`, `cfg_weight`, `exaggeration`, `tempo` (1.0; time-stretching was heard as slurred), `gap_s` /
 `para_gap_s` (the person's own gaps), `data_minutes`, `scores` (likeness, wer, cadence_gap, rate, score, sound,
-score_voice, the pace and pitch readings, heard), `pitch_nudge` (semitones), `person` (their measured cadence),
-`before`, `made`, `v`, `verdicts`, optional `engine_pin`. `tts/cadence.json` keeps every candidate tried.
+score_voice, the pace and pitch readings, heard), `pitch_nudge` (semitones), `speak_hz` / `speak_hz_from` (the median
+pitch of the reference clip, measured with RMVPE when the pack is made, or once on its first reading for an older pack;
+null when it can't be measured), `person` (their measured cadence), `before`, `made`, `v`, `verdicts`, optional
+`engine_pin`. `tts/cadence.json` keeps every candidate tried.
 
 A voice's cadence never changes without the person's ear once it has one. A better pack found later waits in
 `tts/pending/`; both packs read the same line (`sample.wav` + `sample.json` beside each) and the person keeps one.
@@ -316,8 +318,12 @@ Chatterbox blurred some words inside a sentence ("evening" heard as "eving") and
 Chatterbox-Turbo, the same package family with a one-step decoder, was tested through the same path and chosen blind:
 cleaner on hard words, about twice as fast, the same cadence and memory (`ENGINES["chatterbox-turbo"]`: rtf 2.5 for the
 engine alone, 3.6 GB, 2.8 GB of files). It is the default (`[cadence] engine`). Turbo ignores `cfg_weight` and `exaggeration`, copies the pace
-of its reference clip, and reads lower than the person, so `render` moves its median pitch onto the voice's own.
-Slowing the reference clip to slow the reading was heard as slurred; that code is inert. An install with only
+of its reference clip, and reads lower than the person, so `render` moves its median pitch onto where the person talks:
+the pack's `speak_hz` (`cadence.speech_target`, held inside the voice's own `f0_range`), or the voice's `f0_median`
+when there is none. The training median can be the wrong register for a calm reading: a voice trained on rallies sits
+at its shouting pitch (180 Hz against 143 in its reading clip), and the lower one was chosen blind. Songs keep
+`f0_median`. Speeding up or slowing a reading, through the reference clip or before RVC, was heard as slurred both
+times it was tried; that code is inert. An install with only
 Chatterbox's files keeps reading with it until Turbo's arrive. Every Chatterbox output carries Resemble's inaudible
 watermark. Non-commercial engines (F5-TTS, XTTS-v2) are add-ons.
 

@@ -3,6 +3,13 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## Not released yet
+
+**SpeakEasy** (speakhz)
+- A voice with cadence now reads at the pitch the person talks at in its reference clip, not at the median of
+  everything it was trained on. A voice trained on speeches to crowds no longer reads a calm line at its shouting
+  pitch.
+
 ## 1.1.1 (2026-10-28)
 
 **Hardening** (netguard)

@@ -1431,6 +1431,18 @@ def cadence_pack(v) -> dict | None:
     return pack_of(v)
 
 
+def speech_target(v, pack: dict | None) -> float | None:
+    """The pitch SpeakEasy moves a cadence reading onto: the pack's reference clip's (speak_hz), else speaking_pitch."""
+    from .cadence import speech_target as target
+    return target(v, pack)
+
+
+def remember_speak_hz(v, rmvpe) -> float | None:
+    """Measure and keep the live pack's speak_hz once (a pack made before it was measured)."""
+    from .cadence import remember_speak_hz as remember
+    return remember(v.name, rmvpe)
+
+
 def pace_needs_calibration(v) -> bool:
     """The voice's cadence hasn't had its pace matched to the person's for the engine that reads it now (phase 23)."""
     from .cadence import pace_needs_calibration as needs
