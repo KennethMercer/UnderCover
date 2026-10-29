@@ -3,6 +3,13 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## Not released yet
+
+**SpeakEasy** (tags1)
+- Directions in the text: `[pause]` (or `[pause 2s]`), `[louder]`, `[softer]`, `[higher]` and `[lower]`. A tag
+  SpeakEasy doesn't know, or doesn't use yet (the speech engine's own `[laugh]` or `[whispering]`), is never read out;
+  it's named under the result.
+
 ## 1.1.3 (2026-10-29)
 
 **Hardening** (sections, bytecap, decodecap)

@@ -108,7 +108,7 @@ def synth(text: str, reader: str, speed: float = 1.0) -> np.ndarray:
 
 # ---------------------------------------------------------------- sentences
 
-_END = re.compile(r'(?<=[.!?…])["\')\]]*\s+(?=["\'(\[]?[A-Z0-9])')
+_END = re.compile(r'(?<=[.!?…])["\')\]]*\s+(?=(?:\[[a-z][a-z ]*(?:\s+[\d.]+\s*[a-z]*)?\]\s*)*["\'(\[]?[A-Z0-9])')   # (past a [pause])
 _ABBR = re.compile(r"\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Prof|Mt|Gen|Col|Lt|Sgt|Rev|vs|etc|e\.g|i\.e|[A-Z])\.$")
 MAX_CHARS = 280   # Kokoro reads up to ~510 phonemes at once; long sentences are split at a comma or semicolon
 MAX_WORDS = 40    # and no piece longer than this many words (rc-fix10: a run-on paste's "sentence" read for minutes)

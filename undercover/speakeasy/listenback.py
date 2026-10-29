@@ -303,10 +303,16 @@ def insert_pause(x: np.ndarray, sr: int, at: float, seconds: float) -> np.ndarra
     return np.concatenate([x[:i], np.zeros(int(seconds * sr), np.float32), x[i:]])
 
 
-def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, log: dict, cancel=None) -> Path:
+def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, log: dict, cancel=None,
+           known: frozenset = frozenset()) -> Path:
     """The listen-back for one sentence: -> the take to convert (a new WAV when something was mended). cancel() -> True:
-    Stop, between its steps and during a re-read (rc-fix10)."""
+    Stop, between its steps and during a re-read (rc-fix10). known: the engine's own tags; one in the text ([laugh]) is
+    no word to hear, and the sound it makes is no extra word or stray ending (so nothing of it is cut)."""
     from ..core.jobs import Cancelled
+    from . import tags
+    engine_text = text
+    text, sounds = tags.spoken(text, known)
+    check = lambda h: [p for p in problems(text, h) if not (sounds and ("extra word" in p or p.startswith("stray ending")))]
     stopped = lambda: cancel is not None and cancel()
     s = settings()
     t0 = time.perf_counter()
@@ -317,17 +323,17 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     takes = [(Path(wav), seed)]
     heard = hear([str(wav)] + ([str(kref)] if timing else []))
     kwords = heard[1]["words"] if timing else []
-    best = (Path(wav), seed, heard[0]["words"], problems(text, heard[0]["words"]))
+    best = (Path(wav), seed, heard[0]["words"], check(heard[0]["words"]))
     tries = 1
     # read again with a new seed; keep the least bad take (cost: word by word; a stray ending is cut, so no re-read)
     while cost(best[3]) and tries < max(1, s["tries"]):
         if stopped():
             raise Cancelled()
         nseed = seed + 1000 * tries
-        fut, w2 = render.request(text, pack, ref, seed=nseed)
+        fut, w2 = render.request(engine_text, pack, ref, seed=nseed)
         client.wait(fut, cancel=cancel)
         h = hear([str(w2)])[0]["words"]
-        p = problems(text, h)
+        p = check(h)
         takes.append((Path(w2), nseed))
         if cost(p) < cost(best[3]):
             best = (Path(w2), nseed, h, p)
@@ -336,7 +342,7 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     x, sr = sf.read(str(take), dtype="float32")
     if x.ndim > 1:
         x = x.mean(1)
-    x, cut = trim_ending(x, sr, text, words)   # a stray continuation past the text's last word: off
+    x, cut = (x, 0) if sounds else trim_ending(x, sr, text, words)   # a stray continuation past the last word: off
     tw = text_words(text)
     mine, ko = {}, {}
     if timing:

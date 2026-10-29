@@ -25,21 +25,23 @@ def join_short(sents: list, min_words: int = SHORT_WORDS) -> list:
     """[{"text", "pause"}] with each very short sentence read together with the next one in its paragraph (the
     paragraph's last one with the one before). Chatterbox read alone "Listen carefully." as "E. Listen carefully." and
     "Good morning." as "Duh, good morning." (2 of 24 short sentences, against 0 of 40 longer lines; measured
-    2026-10-13): a stray sound before a sentence too short to settle into. Never across a paragraph's end."""
+    2026-10-13): a stray sound before a sentence too short to settle into. Never across a paragraph's end, a written
+    pause (`hold`) or a change of direction (`gain_db`, `pitch_st`: SpeakEasy's tags)."""
     out = [dict(s) for s in sents]
     words = lambda s: len(s["text"].split())
+    joins = lambda a, b: a.get("hold") is None and all(a.get(k, 0.0) == b.get(k, 0.0) for k in ("gain_db", "pitch_st"))
+    both = lambda a, b: {**a, **b, "text": f"{a['text']} {b['text']}", **({"sounds": True} if a.get("sounds") else {})}
     i = 0
     while i < len(out):
         s = out[i]
         if words(s) < min_words and len(out) > 1:
             para_end = s["pause"] >= 0.5
-            if not para_end and i + 1 < len(out):   # with the next one: its pause after both
-                nxt = out.pop(i + 1)
-                out[i] = {**s, "text": f"{s['text']} {nxt['text']}", "pause": nxt["pause"]}
+            if not para_end and i + 1 < len(out) and joins(s, out[i + 1]):   # with the next one: its pause after both
+                out[i] = both(s, out.pop(i + 1))
                 continue
-            if i > 0 and out[i - 1]["pause"] < 0.5:   # the paragraph's last: with the one before
+            if i > 0 and out[i - 1]["pause"] < 0.5 and joins(out[i - 1], s):   # the paragraph's last: with the one before
                 prev = out.pop(i - 1)
-                out[i - 1] = {**s, "text": f"{prev['text']} {s['text']}", "pause": s["pause"]}
+                out[i - 1] = both(prev, s)
                 i -= 1
                 continue
         i += 1
@@ -53,7 +55,8 @@ def split_clauses(sents: list, gap: float = 0.12) -> list:
     for s in sents:
         parts = [p.strip() for p in re.split(r"(?<=,)\s+", s["text"]) if p.strip()]
         for k, p in enumerate(parts):
-            out.append({**s, "text": p, "pause": s["pause"] if k == len(parts) - 1 else gap})
+            last = k == len(parts) - 1
+            out.append({**{a: b for a, b in s.items() if last or a != "hold"}, "text": p, "pause": s["pause"] if last else gap})
     return out
 
 

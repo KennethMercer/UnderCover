@@ -739,6 +739,16 @@
         <div class="row spread"><h2>1 · What should they say?</h2><span class="mono meta" id="se-count">0 words</span></div>
         <textarea class="se-text" id="se-text" aria-label="Text to speak" placeholder="Type or paste what they should say."></textarea>
         <div class="row spread"><span class="se-hint">Paste or type as much as you like (a whole chapter is fine), or drop a .txt file.</span><button class="linkbtn" id="se-clear" type="button">Clear</button></div>
+        <details class="se-tags-hint" id="se-tags-hint"><summary>Directions</summary>
+          <p class="meta">Put one in square brackets where it belongs. It's followed, never read out.</p>
+          <ul class="meta">
+            <li><code>[pause]</code> or <code>[pause 2s]</code>: a silence right there</li>
+            <li><code>[louder]</code> or <code>[softer]</code>: that sentence a step louder or softer</li>
+            <li><code>[higher]</code> or <code>[lower]</code>: that sentence a step higher or lower</li>
+          </ul>
+          <p class="meta" data-deep>A pause up to 5 s; louder or softer 4 dB; higher or lower 2 semitones, kept in the voice's range; one step each, no stacking. A tag it doesn't know is read as nothing and named under the result; so are the speech engine's own ([laugh], [sigh], [whispering] ...), which aren't used yet. Pace isn't a direction: a stretched reading sounds slurred.</p>
+          <button class="linkbtn" id="se-tags-hide" type="button">Hide this</button>
+        </details>
       </section>
 
       <section class="panel">

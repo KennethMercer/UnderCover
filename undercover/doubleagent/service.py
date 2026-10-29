@@ -1437,6 +1437,12 @@ def speech_target(v, pack: dict | None) -> float | None:
     return target(v, pack)
 
 
+def held_pitch(v, target_hz: float | None, st: float) -> float:
+    """A [higher] / [lower] direction's semitones on that pitch, kept inside the voice's range."""
+    from .cadence import held_pitch as held
+    return held(v, target_hz, st)
+
+
 def reading_nudge(pack: dict) -> float:
     """The pack's pitch nudge as a reading applies it (a nudge aimed from the old target is dropped; see cadence)."""
     from .cadence import reading_nudge as nudge

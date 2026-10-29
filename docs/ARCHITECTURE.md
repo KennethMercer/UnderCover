@@ -388,6 +388,32 @@ never into the next word heard, with a short fade, and no re-read is spent on it
 default: blind, the re-reads fixed the word and the other two did not. Whisper is language-model biased (it hears
 "evening" in "eving"), so it catches gross slips; the ear is the judge.
 
+### Directions in the text (tier 1)
+
+SpeakEasy's text takes directions in square brackets (`speakeasy/tags.py`). A direction applies to the sentence it
+sits in, and none is ever read out:
+- `[pause]`, or `[pause 2s]` up to 5 s: silence at that spot. The sentence is read as two pieces, the first ending in
+  that `hold`.
+- `[louder]` / `[softer]`: ±4 dB, by the level the sentence is set to.
+- `[higher]` / `[lower]`: ±2 semitones on the reading's pitch, held in the voice's `f0_range`
+  (`cadence.held_pitch`).
+
+One step each; they don't stack. These are done around the engine, in both reading paths.
+
+Chatterbox-Turbo has tags of its own: sounds ([laugh], [chuckle], [sigh], [cough], [gasp], [groan], [sniff],
+[shush], [clear throat]) and styles ([whispering], [happy], [angry]). The parser knows them, with friendly short forms
+(`[whisper]` → `[whispering]`). None goes to the engine yet: in the blind pairs, [laugh] was heard but didn't sound
+real, and the styles couldn't be told from none. They're taken out and named under the result as not used yet. Once
+the ear passes one, it goes in `tags.ENGINE_ON`; for a cadence voice it's then passed through in Turbo's text (read
+from its tokenizer's `added_tokens.json`).
+
+An unknown tag is read as nothing and named once under the result. An editor's bracket stays text: [sic], a
+capitalised [Name], a number. Pieces keep their directions: `join_short` never joins across a written pause or a
+change of direction. Listen-back hears only the words: a sound tag's noise is no extra word, and no stray ending to
+cut.
+
+Pace and energy aren't directions: a stretched reading was heard as slurred, twice.
+
 ### How a cadence pack is picked
 
 "Train cadence" takes minutes, not hours: transcribe the project's clips, rebuild stretches of the person's talk and

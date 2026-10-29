@@ -26,7 +26,7 @@ from ..core.jobs import Cancelled
 from ..core.cadence import engine_info, pack_engine, pack_ready
 from ..core.voices import ModelError, get_voice
 from ..doubleagent import service
-from . import tts
+from . import tags, tts
 
 MAX_CHARS = 50_000   # about 2 hours of speech
 SPEEDS = (0.7, 1.4)
@@ -170,7 +170,10 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
         raise SpeakError(f"That's {len(text):,} characters; SpeakEasy reads up to {MAX_CHARS:,} at a time (about two hours). "
                          "Split it into parts.")
     p = plan(voice, reader, speed, nudge, cadence, pace, v=v)
-    sents = tts.sentences(text)
+    # the text's directions ([pause], [louder], ... and a cadence engine's own tags the ear passed) become fields
+    known = tags.engine_tags(p.get("engine")) if p["mode"] == "cadence" else frozenset()
+    sents, unknown, held = tags.directions(tts.sentences(text), known)
+    p = {**p, "known_tags": sorted(known), "unknown_tags": unknown, "held_tags": held}
     if not sents:
         raise SpeakError("There's nothing to read in that text.")
     if p["mode"] == "cadence":
@@ -188,6 +191,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     lv = _loaded(conv, v) if v is not None else conv.voice(p["voice"])
     sr = lv.tgt_sr
     settings = Settings(pitch=p["pitch"])
+    vv = v or get_voice(p["voice"]) if p.get("target_hz") and any(s.get("pitch_st") for s in sents) else None
     pdir = parts_dir(job.id)
     pdir.mkdir(parents=True, exist_ok=True)
 
@@ -227,10 +231,11 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
                 y = np.zeros(0, np.float32)
             else:
                 a16 = resample_poly(a, 2, 3).astype(np.float32)   # 24 kHz -> 16 kHz
-                y, _ = conv.convert(a16, lv, settings)
-                y = _level(np.nan_to_num(y))
+                st = s.get("pitch_st") and (service.held_pitch(vv, p["target_hz"], s["pitch_st"]) if vv else s["pitch_st"])
+                y, _ = conv.convert(a16, lv, Settings(pitch=p["pitch"] + st) if st else settings)   # [higher]: in the voice's range
+                y = _level(np.nan_to_num(y), -20.0 + (s.get("gain_db") or 0.0))   # ([louder]: still under -1 dBFS)
             t_rvc += time.perf_counter() - t
-            gap = np.zeros(int(sr * s["pause"] * p.get("gap_scale", 1.0)), np.float32)
+            gap = np.zeros(int(sr * (s["hold"] if s.get("hold") is not None else s["pause"] * p.get("gap_scale", 1.0))), np.float32)
             y = np.concatenate([y, gap])
             f = pdir / f"s{i:04d}.wav"
             sf.write(str(f), y, sr, subtype="PCM_16")
@@ -496,7 +501,7 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
                 entry = {"job": job.id, "voice": p["voice"], "sentence": i, "text": s["text"]}
                 try:
                     wav = listenback.review(s["text"], wav, pack, ref, 1234 + i, tts.pick_reader(p["target_hz"]), entry,
-                                            cancel=lambda: job.cancel)
+                                            known=frozenset(p["known_tags"]), cancel=lambda: job.cancel)
                 except Cancelled:
                     raise
                 except Exception as e:   # noqa: BLE001 - the reading as it came is still good to use
@@ -506,12 +511,15 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
             if job.cancel:
                 raise Cancelled()
             t = time.perf_counter()
-            y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0), engine=p.get("engine"),
-                                history=pitch_hist)
-            y = _level(y)
+            lift = service.held_pitch(v, p["target_hz"], s["pitch_st"]) if s.get("pitch_st") else 0.0   # [higher] / [lower]
+            y, _ = render.finish(wav, lv, conv, p["target_hz"], tempo=tempo, nudge=p["nudge"] + p.get("pack_nudge", 0.0) + lift,
+                                 engine=p.get("engine"), history=pitch_hist)
+            y = _level(y, -20.0 + (s.get("gain_db") or 0.0))   # ([louder] / [softer]: still under -1 dBFS)
             t_rvc += time.perf_counter() - t
             pacer.tick()
             pause = 0.0 if s["pause"] == 0 else (p["para_gap_s"] if s["pause"] >= 0.5 else p["gap_s"])
+            if s.get("hold") is not None:   # a written [pause]: exactly that
+                pause = s["hold"]
             y = np.concatenate([y, np.zeros(int(sr * pause), np.float32)])
             f = pdir / f"s{i:04d}.wav"
             sf.write(str(f), y, sr, subtype="PCM_16")
@@ -569,7 +577,8 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
             "voice": p["voice"], "reader": p["reader"], "reader_auto": p["auto"], "speed": p["speed"], "pitch": p["pitch"],
             "mode": p.get("mode", "reader"), "engine": p.get("engine"), "pace": p.get("pace"),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
-            "job": job_id, "finished": round(time.time(), 3)}
+            "job": job_id, "finished": round(time.time(), 3), "directions_unknown": p.get("unknown_tags") or [],
+            "directions_held": p.get("held_tags") or []}
     with LOCK:
         fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))
         try:
@@ -643,6 +652,7 @@ def _item(m: dict) -> dict:
     size = sum(f.stat().st_size for f in (wav, mp3) if f and f.exists())
     return {**{k: m.get(k) for k in ("id", "title", "text", "voice", "reader", "reader_auto", "speed", "pitch", "created",
                                       "duration", "seconds", "file", "mp3", "mode", "engine", "pace", "kept_at")},
+            "directions_unknown": m.get("directions_unknown") or [], "directions_held": m.get("directions_held") or [],
             "kept": bool(m.get("kept")), "url": file_url(wav), "mp3_url": file_url(mp3) if mp3 and mp3.exists() else None, "size": size,
             "format": wav.suffix[1:].upper() + (" + MP3" if mp3 and mp3.exists() else "")}
 

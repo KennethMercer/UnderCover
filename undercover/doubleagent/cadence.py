@@ -608,12 +608,27 @@ def speech_target(v, pack: dict | None, ref: Path | None = None, rmvpe=None) -> 
         hz = render.speak_hz(ref, rmvpe)
     if not hz:
         return sp and sp["hz"]
+    return round(_held(v, float(hz)), 1)
+
+
+def _held(v, hz: float) -> float:
+    """hz inside the voice's own range: RVC is never pushed past what it learned (a singer's range, an octave down, as
+    speaking_pitch reads it)."""
+    from . import service
     ex = v.extra or {}
     rng = ex.get("f0_range")
-    if rng:   # RVC is never pushed past what it learned (a singer's range, an octave down, as speaking_pitch reads it)
+    if rng:
         k = 1.0 if ex.get("from_speech") else service.SUNG_TO_SPEECH
-        hz = min(max(float(hz), rng[0] * k), rng[-1] * k)
-    return round(float(hz), 1)
+        hz = min(max(hz, rng[0] * k), rng[-1] * k)
+    return hz
+
+
+def held_pitch(v, target_hz: float | None, st: float) -> float:
+    """st semitones on the reading's target pitch (SpeakEasy's [higher] / [lower]), as much of it as stays inside the
+    voice's own range."""
+    if not target_hz or not st:
+        return 0.0
+    return round(12 * math.log2(_held(v, target_hz * 2 ** (st / 12)) / target_hz), 2)
 
 
 def remember_speak_hz(voice_name: str, rmvpe) -> float | None:

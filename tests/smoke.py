@@ -7224,6 +7224,79 @@ def u_speak_hz():
     return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
 
 
+@check("directions (tags1): [pause], [louder]/[softer], [higher]/[lower] done around the engine; Turbo's own tags not used yet (named apart, never read out) and passed through once the ear passes one; unknown ones read as nothing and named once, editors' brackets left as text; pieces keep their directions; listen-back hears the words only")
+def u_tags():
+    import inspect
+    import math
+    from undercover.core.cadence import render
+    from undercover.doubleagent import cadence as K
+    from undercover.speakeasy import listenback, speak, tags, tts
+    known = frozenset({"laugh", "sigh", "whispering", "clear throat"})
+    d = lambda text, k=known: tags.directions(tts.sentences(text), k)[:2]
+    # a pause at its spot (bounded), the sentence it sits in louder, the next one as written
+    ps, unk = d("Wait for it. [pause 2s] Now we go! [louder] Go, go, go.")
+    assert [p["text"] for p in ps] == ["Wait for it.", "Now we go!", "Go, go, go."] and unk == [], ps
+    assert ps[0]["hold"] == 2.0 and "gain_db" not in ps[1] and ps[2]["gain_db"] == tags.GAIN_DB, ps
+    assert d("Long one [pause 9s] here.")[0][0]["hold"] == tags.PAUSE_MAX_S and d("A [pause] b.")[0][0]["hold"] == tags.PAUSE_S
+    assert d("Up [louder][louder] here.")[0][0]["gain_db"] == tags.GAIN_DB   # one step, no stacking past it
+    assert "gain_db" not in d("Even [louder] then [softer] out.")[0][0]
+    p = d("[higher][higher] Up here [lower][lower][lower].")[0][0]
+    assert p["text"] == "Up here." and p["pitch_st"] == -tags.PITCH_ST, p
+    # the engine's own tags pass through as it spells them (a friendly short form too); our own never reach it
+    p = d("[whisper] Keep it down, [laugh] really.")[0][0]
+    assert p["text"] == "[whispering] Keep it down, [laugh] really." and p["sounds"], p
+    assert tags.spoken(p["text"], known) == ("Keep it down, really.", True)
+    # unknown tags: read as nothing, named once; an editor's bracket, a name or a number stays text
+    ps, unk = d("The note [John] wrote [dance] was odd [sic], see [1]. [dance] again [Laughs]")
+    assert unk == ["[dance]"] and "[John]" in ps[0]["text"] and "[sic]" in ps[0]["text"] and "[1]" in ps[0]["text"], (ps, unk)
+    assert "dance" not in " ".join(p["text"] for p in ps) and "[laugh]" in ps[-1]["text"], ps
+    # the engine's tags not passed to it (none is, yet; a Reader voice, another engine): never spoken, named apart
+    ps, unk, held = tags.directions(tts.sentences("Ha [laugh] ha, [Whisper] quiet [dance] now [laugh]."), frozenset())
+    assert ps[0]["text"] == "Ha ha, quiet now." and unk == ["[dance]"] and held == ["[laugh]", "[whispering]"], (ps, unk, held)
+    assert "sounds" not in ps[0], ps
+    # a pause at a sentence's start belongs to the one before; a stop after the last tag stays
+    ps, _ = d("First. [pause 1.5 seconds] Second one [pause].")
+    assert ps[0]["hold"] == 1.5 and ps[1]["text"] == "Second one." and ps[1]["hold"] == tags.PAUSE_S, ps
+    # Turbo's tags come from its own tokenizer, and only those the ear passed (none yet) go to it
+    with isolated_data():
+        from undercover.core.config import path
+        t = path("models_dir") / "tts" / "chatterbox-turbo"
+        t.mkdir(parents=True)
+        (t / "added_tokens.json").write_text(json.dumps({"[laugh]": 1, "[sigh]": 2, "[dramatic]": 3, "[whispering]": 4,
+                                                         "<|endoftext|>": 5}), encoding="utf-8")
+        tags._ENGINE.clear()
+        was = tags.ENGINE_ON
+        try:
+            assert tags.engine_tags("chatterbox-turbo") == frozenset(), "an engine tag the ear hasn't passed is used"
+            tags._ENGINE.clear()
+            tags.ENGINE_ON = frozenset({"laugh", "whispering", "chuckle"})
+            assert tags.engine_tags("chatterbox-turbo") == {"laugh", "whispering"}
+            assert tags.engine_tags("chatterbox") == frozenset()
+        finally:
+            tags.ENGINE_ON = was
+            tags._ENGINE.clear()
+    # pieces keep their directions: a short piece isn't joined across a written pause or a change of direction
+    j = render.join_short([{"text": "Go.", "pause": 0.3, "hold": 1.0}, {"text": "Now we start this.", "pause": 0.0}])
+    assert len(j) == 2, j
+    j = render.join_short([{"text": "Go.", "pause": 0.3, "gain_db": 4.0}, {"text": "Now we start this.", "pause": 0.0}])
+    assert len(j) == 2, j
+    j = render.join_short([{"text": "Go.", "pause": 0.3, "sounds": True}, {"text": "Now we start this.", "pause": 0.0}])
+    assert len(j) == 1 and j[0]["sounds"], j
+    c = render.split_clauses([{"text": "One, two, three.", "pause": 0.0, "hold": 2.0}])
+    assert [x.get("hold") for x in c] == [None, None, 2.0], c
+    # [higher] / [lower] only as far as the voice's range goes
+    v = type("V", (), {"extra": {"f0_range": [100.0, 140.0, 150.0], "from_speech": True}})()
+    assert K.held_pitch(v, 140.0, 2.0) == round(12 * math.log2(150 / 140), 2) and K.held_pitch(v, 140.0, -2.0) == -2.0
+    assert K.held_pitch(v, None, 2.0) == 0.0
+    # listen-back hears the words only, and a sound's noise is no extra word or stray ending to cut
+    src = inspect.getsource(listenback.review)
+    assert "tags.spoken(text, known)" in src and "render.request(engine_text" in src and "(x, 0) if sounds" in src
+    ms = inspect.getsource(speak.make_speech) + inspect.getsource(speak._make_cadence)
+    assert "tags.directions(" in ms and 's.get("hold")' in ms and ms.count("held_pitch") >= 2 and "known=frozenset(" in ms   # both paths
+    assert '"directions_held"' in inspect.getsource(speak) and "directions_held" in (ROOT / "undercover/web/speakeasy.js").read_text(encoding="utf-8")
+    return "pause / louder / higher around the engine, bounded; [laugh] not used yet, named apart; [dance] named once; [sic] kept"
+
+
 @check("characters: detected from the search, scenes ranked first and talk unticked, the scenes' voice is the target, the one-shot's gate")
 def u_characters():
     import contextlib
@@ -11247,7 +11320,7 @@ def a_speech():
     assert plan["reader"] and plan["target_hz"], f"no speaking pitch / Reader for {v['name']}"
     est = api(f"/api/speak/estimate?voice={v['name']}&mode=reader&text=This%20is%20a%20smoke%20test.")   # before Generate
     assert est["estimate"] > 0 and est["mode"] == "reader", est
-    r = api("/api/speak", {"text": "This is a smoke test. One, two, three.", "voice": v["name"], "cadence": False})
+    r = api("/api/speak", {"text": "This is a smoke test. [higher] One, two, three [laugh].", "voice": v["name"], "cadence": False})
     req = urllib.request.Request(BASE + f"/api/jobs/{r['job']}/events")
     parts, final, progress = [], None, []
     with urllib.request.urlopen(req, timeout=300) as resp:
@@ -11266,6 +11339,7 @@ def a_speech():
     assert final and final["state"] == "done", f"speech job ended {final and final.get('state')}: {final and final.get('message')}"
     item = final["result"]
     assert len(parts) == 2 and all(p.get("url") for p in parts), f"expected 2 sentences with URLs, got {len(parts)}"
+    assert item["directions_held"] == ["[laugh]"] and item["directions_unknown"] == [], item   # (a [higher] read too)
     assert progress and all(e.get("total_left") is not None for e in progress), "a speech progress event without total_left"
     wav = path("output_dir") / "speech" / item["file"]
     assert wav.exists() and wav.stat().st_size > 50_000, "speech WAV missing or empty"
@@ -11755,7 +11829,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_platform, u_tray):
         fn()
