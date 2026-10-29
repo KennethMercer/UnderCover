@@ -1951,6 +1951,8 @@ def u_tailnet():
                 tailnet.MSI.update(real)
             assert not tailnet.have_binaries()
         finally:
+            with tailnet._LOCK:   # a failed step mustn't leave the stand-in daemon running
+                tailnet._end_processes()
             tailnet.bin_dir = saved[2]
             tailnet.CMD.clear()
             tailnet.CMD.update(saved[0])
