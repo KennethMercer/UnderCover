@@ -38,7 +38,8 @@ LIVE = ("is_live", "is_upcoming", "post_live")   # yt-dlp's live_status values r
 CANT_FETCH = ("UnderCover can't fetch that video safely (a live stream, a clip of a longer video, or a kind of stream it "
               "doesn't download). Try another link, or the whole video's.")
 # no download grows past this (a stream nobody marks live, a radio station: no length, no size, no end). A song is
-# a few MB and a long interview's audio a few hundred; the same 2 GB as a voice download (core/voices max_download_gb)
+# a few MB and a long interview's audio a few hundred; 2 GB, as a voice download's default (a fixed cap here: no
+# setting, since nothing a link is used for comes near it)
 MAX_BYTES = 2 * 10 ** 9
 TOO_BIG = ("That link kept sending more than 2 GB, far more than a song or an interview needs, so UnderCover stopped it "
            "(most likely a radio station or another stream with no end). Try a link to a single video.")
