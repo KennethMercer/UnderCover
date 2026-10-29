@@ -1813,7 +1813,10 @@ def u_decode_bound():
     assert Y.bounded_args({"extractaudio": ["-t", "x"]})["extractaudio"] == ["-t", cap]
     fc = Y.bounded_args({"extractaudio": ["-filter_complex", "[0:a]atrim=0:60[k]", "-map", "[k]", "-ac", "1"], "merger": ["-y"]})
     assert fc["extractaudio"][-2:] == ["-t", cap] and fc["merger"] == ["-y"], fc
-    assert Y.bounded_args(["-y"]) == {"default": ["-y"], "extractaudio": ["-t", cap]}
+    assert Y.bounded_args(["-ac", "1"]) == {"default": ["-ac", "1"], "extractaudio": ["-ac", "1", "-t", cap]}   # (default kept)
+    assert Y.bounded_args({"default": ["-ac", "1"]})["extractaudio"] == ["-ac", "1", "-t", cap]
+    assert Y.bounded_args({"extractaudio": ["-t", "00:20:01"]})["extractaudio"] == ["-t", "00:20:01"]   # (a tighter HH:MM:SS kept)
+    assert Y.bounded_args({"extractaudio": ["-t", "04:00:00"]})["extractaudio"] == ["-t", cap]
     try:
         import yt_dlp   # noqa: F401 - (on every install; the check runs where it is)
         ydl = Y.open_ydl("x", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}])

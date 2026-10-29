@@ -293,7 +293,7 @@ def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: di
             dest.unlink(missing_ok=True)
         raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
     peaks, seconds = _peaks(dest)   # its length as decoded, not as its header says
-    if not seconds:   # nothing decoded (a file its header calls audio, or no ffmpeg): no length to judge it by
+    if not seconds:   # nothing decoded (ffprobe read a header, ffmpeg found no audio): no length to judge it by
         if new:
             dest.unlink(missing_ok=True)
         raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
