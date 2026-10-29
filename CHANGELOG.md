@@ -16,6 +16,9 @@ in brackets.
 - In Deep Cover, away from home can be private: only devices signed in to your Tailscale reach it, with nothing on
   the public internet.
 
+**Fixes** (tidy1)
+- A file that only looks like a song (nothing in it plays) is refused with a plain message.
+
 ## 1.1.3 (2026-10-29)
 
 **Hardening** (sections, bytecap, decodecap)

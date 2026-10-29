@@ -162,7 +162,29 @@ def open_ydl(missing: str, **opts):
     # every download is capped at MAX_BYTES: a size declared up front (max_filesize, yt-dlp's own), and what arrives
     opts["max_filesize"] = min(MAX_BYTES, opts.get("max_filesize") or MAX_BYTES)
     opts["progress_hooks"] = [_capped, *(opts.get("progress_hooks") or [])]
+    if any(p.get("key") == "FFmpegExtractAudio" for p in opts.get("postprocessors") or []):
+        opts["postprocessor_args"] = bounded_args(opts.get("postprocessor_args"))
     return _watched(yt_dlp)(opts)
+
+
+def bounded_args(pa) -> dict:
+    """yt-dlp's postprocessor_args with the audio conversion bounded by time: at most files.MAX_AUDIO_S of output
+    (a small download can decode to hours), a caller's own tighter -t kept. An output option, so ffmpeg stops writing
+    there. A song that comes in the target format skips this conversion; songs.download bounds its own pass for that."""
+    from .files import MAX_AUDIO_S
+    pa = dict(pa) if isinstance(pa, dict) else {"default": list(pa)} if pa else {}
+    args = list(pa.get("extractaudio") or [])
+    i = len(args) - 1 - args[::-1].index("-t") if "-t" in args else None
+    if i is not None and i + 1 < len(args):
+        try:
+            if 0 < float(args[i + 1]) <= MAX_AUDIO_S:
+                return {**pa, "extractaudio": args}
+        except ValueError:
+            pass
+        args[i + 1] = str(MAX_AUDIO_S)   # past the bound, or not a number: the bound
+    else:
+        args += ["-t", str(MAX_AUDIO_S)]
+    return {**pa, "extractaudio": args}
 
 
 def _capped(d: dict):

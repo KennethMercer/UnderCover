@@ -293,12 +293,15 @@ def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: di
             dest.unlink(missing_ok=True)
         raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
     peaks, seconds = _peaks(dest)   # its length as decoded, not as its header says
+    if not seconds:   # nothing decoded (a file its header calls audio, or no ffmpeg): no length to judge it by
+        if new:
+            dest.unlink(missing_ok=True)
+        raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
     if seconds > MAX_AUDIO_S:
         if new:
             dest.unlink(missing_ok=True)
         raise ValueError(f"'{name}' runs longer than {MAX_AUDIO_S // 3600} hours. Drop a single song instead.")
-    if seconds:
-        info["duration"] = round(seconds, 3)
+    info["duration"] = round(seconds, 3)
     meta = {"id": song_id, "name": name, "title": Path(name).stem, "file": dest.name, **info,
             "lufs": round(lufs(dest), 1), "peaks": peaks, "url": file_url(dest), **(extra or {})}
     (up / f"{song_id}.json").write_text(json.dumps(meta), encoding="utf-8")
