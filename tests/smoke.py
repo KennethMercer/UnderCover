@@ -1804,23 +1804,36 @@ def u_decode_bound():
             assert seen[-1]["postprocessor_args"]["extractaudio"][0] in ("-ss", "-filter_complex"), seen[-1]
         finally:
             songs._ydl, S._ydl, songs._bounded, songs.MAX_SONG_S = real
-    # every audio conversion yt-dlp runs is bounded in one place too (open_ydl): 3 h unless the caller's -t is tighter
+    # every audio conversion yt-dlp runs is bounded in one place too (open_ydl): 3 h unless the caller's -t is tighter,
+    # judged on the list yt-dlp would really use (whichever key it comes from) and written under the key it reads first
     from undercover.core import youtube as Y
     cap = str(files.MAX_AUDIO_S)
-    assert Y.bounded_args(None) == {"extractaudio": ["-t", cap]}
-    assert Y.bounded_args({"extractaudio": ["-t", "1201"]})["extractaudio"] == ["-t", "1201"]
-    assert Y.bounded_args({"extractaudio": ["-ss", "60", "-t", "99999", "-ac", "1"]})["extractaudio"] == ["-ss", "60", "-t", cap, "-ac", "1"]
-    assert Y.bounded_args({"extractaudio": ["-t", "x"]})["extractaudio"] == ["-t", cap]
+    try:
+        from yt_dlp.utils import _configuration_args as real
+        used = lambda pa: real("ExtractAudio", pa, "ffmpeg", ["_o1", "_o", ""])   # yt-dlp's own answer
+    except ImportError:
+        used = Y._resolved
+    ea = lambda pa: used(Y.bounded_args(pa))
+    assert ea(None) == ["-t", cap]
+    assert ea({"extractaudio": ["-t", "1201"]}) == ["-t", "1201"]
+    assert ea({"extractaudio": ["-ss", "60", "-t", "99999", "-ac", "1"]}) == ["-ss", "60", "-t", cap, "-ac", "1"]
+    assert ea({"extractaudio": ["-t", "x"]}) == ["-t", cap]
     fc = Y.bounded_args({"extractaudio": ["-filter_complex", "[0:a]atrim=0:60[k]", "-map", "[k]", "-ac", "1"], "merger": ["-y"]})
-    assert fc["extractaudio"][-2:] == ["-t", cap] and fc["merger"] == ["-y"], fc
-    assert Y.bounded_args(["-ac", "1"]) == {"default": ["-ac", "1"], "extractaudio": ["-ac", "1", "-t", cap]}   # (default kept)
-    assert Y.bounded_args({"default": ["-ac", "1"]})["extractaudio"] == ["-ac", "1", "-t", cap]
-    assert Y.bounded_args({"extractaudio": ["-t", "00:20:01"]})["extractaudio"] == ["-t", "00:20:01"]   # (a tighter HH:MM:SS kept)
-    assert Y.bounded_args({"extractaudio": ["-t", "04:00:00"]})["extractaudio"] == ["-t", cap]
+    assert used(fc)[-2:] == ["-t", cap] and fc["merger"] == ["-y"], fc
+    assert ea(["-ac", "1"]) == ["-ac", "1", "-t", cap] and ea({"default": ["-ac", "1"]}) == ["-ac", "1", "-t", cap]   # (default kept)
+    assert ea({"extractaudio": ["-t", "00:20:01"]}) == ["-t", "00:20:01"]   # (a tighter HH:MM:SS kept)
+    assert ea({"extractaudio": ["-t", "04:00:00"]}) == ["-t", cap]
+    # the keys yt-dlp also reads can't loosen it: a later -t from "ffmpeg", or a key that replaces "extractaudio"
+    assert used({"extractaudio": ["-ac", "1"], "ffmpeg": ["-t", "99999"]})[-1] == "99999"   # (what it would do unbounded)
+    assert ea({"extractaudio": ["-ac", "1"], "ffmpeg": ["-t", "99999"]}) == ["-ac", "1", "-t", cap]
+    for k in ("extractaudio+ffmpeg_o1", "extractaudio+ffmpeg_o", "extractaudio+ffmpeg"):
+        assert ea({k: ["-ac", "1"], "extractaudio": ["-t", "60"]}) == ["-ac", "1", "-t", cap], k
+        assert ea({k: ["-t", "99999"]}) == ["-t", cap], k
+    assert Y._resolved({"extractaudio": ["-ac", "1"], "ffmpeg": ["-t", "9"]}) == ["-ac", "1", "-t", "9"]   # (the fallback's order)
     try:
         import yt_dlp   # noqa: F401 - (on every install; the check runs where it is)
         ydl = Y.open_ydl("x", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}])
-        assert ydl.params["postprocessor_args"]["extractaudio"] == ["-t", cap], ydl.params["postprocessor_args"]
+        assert used(ydl.params["postprocessor_args"]) == ["-t", cap], ydl.params["postprocessor_args"]
         assert "postprocessor_args" not in Y.open_ydl("x").params, "args added where nothing converts"
     except ImportError:
         pass
