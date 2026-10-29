@@ -2,9 +2,11 @@
 a JSON file named by FAKE_TS_STATE; a check moves it along (signed in, Funnel approved) by writing that file.
     python fake_tailscale.py daemon [flags...]        the daemon: marks itself alive, then waits to be stopped
     python fake_tailscale.py cli --socket=X <command>  status --json | up ... | funnel ... | funnel status --json |
-                                                        funnel reset | down | logout
+                                                        funnel reset | serve ... | serve status --json |
+                                                        serve reset | down | logout
     python fake_tailscale.py set '{"key": value}'      a check's own change (under the same lock as the fake's)
-Every command is appended to the state's "calls", so a check can see exactly what the app asked for."""
+Every command is appended to the state's "calls", so a check can see exactly what the app asked for. With
+"serve_keeps_funnel" set, serve leaves a Funnel flag as it was (the worst a CLI could do)."""
 import contextlib
 import json
 import os
@@ -125,11 +127,20 @@ elif args[:1] == ["up"]:
     if not wait_for("signed_in"):
         sys.exit(1)
     update(backend="Running")   # signed in (again: after `down`, `up` reconnects with the kept state)
-elif args[:3] == ["funnel", "status", "--json"]:
+elif args[:3] in (["funnel", "status", "--json"], ["serve", "status", "--json"]):   # one serve config, either view
+    on = st.get("funnel_on") or st.get("serve_on")
     print(json.dumps({"TCP": {"443": {"HTTPS": True}}, "Web": {f"{host}:443": {"Handlers": {"/": {"Proxy": st.get("funnel_target")}}}},
-                      "AllowFunnel": {f"{host}:443": True}} if st.get("funnel_on") else {}))
-elif args[:2] == ["funnel", "reset"]:
-    update(funnel_on=False, funnel_target=None)
+                      **({"AllowFunnel": {f"{host}:443": True}} if st.get("funnel_on") else {})} if on else {}))
+elif args[:2] in (["funnel", "reset"], ["serve", "reset"]):   # either resets the whole config
+    update(funnel_on=False, serve_on=False, funnel_target=None)
+elif args[:1] == ["serve"]:
+    target = args[-1]
+    if not st.get("serve_approved"):
+        print("Serve is not enabled on your tailnet.\nTo enable, visit:\n\n https://login.tailscale.com/f/serve?node=fake\n",
+              flush=True)
+        if not wait_for("serve_approved"):
+            sys.exit(1)
+    update(serve_on=True, funnel_on=bool(st.get("serve_keeps_funnel") and st.get("funnel_on")), funnel_target=target)
 elif args[:1] == ["funnel"]:
     target = args[-1]
     if not st.get("funnel_approved"):
@@ -137,7 +148,7 @@ elif args[:1] == ["funnel"]:
               flush=True)
         if not wait_for("funnel_approved"):
             sys.exit(1)
-    update(funnel_on=True, funnel_target=target)
+    update(funnel_on=True, serve_on=False, funnel_target=target)
 elif args[:1] == ["down"]:
     update(backend="Stopped")
 elif args[:1] == ["logout"]:

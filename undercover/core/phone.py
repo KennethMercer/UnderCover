@@ -70,6 +70,7 @@ def _load() -> dict:
             data = {}
         _STATE.clear()
         _STATE.update({"enabled": bool(data.get("enabled")), "away": bool(data.get("away")),
+                       "away_private": bool(data.get("away_private")),
                        "devices": [d for d in data.get("devices") or [] if isinstance(d, dict) and d.get("hash")]})
         _FILE[0] = f
     return _STATE
@@ -105,6 +106,19 @@ def away_on() -> bool:
 def set_away(on: bool):
     with _LOCK:
         _load()["away"] = bool(on)
+        _save()
+
+
+def away_private() -> bool:
+    """Away from home on the tailnet only (Tailscale Serve, 1.2): the phone runs Tailscale, signed in to the same
+    tailnet, and nothing is on the public internet. Off (the default): Funnel's public link, no app on the phone."""
+    with _LOCK:
+        return _load()["away_private"]
+
+
+def set_away_private(on: bool):
+    with _LOCK:
+        _load()["away_private"] = bool(on)
         _save()
 
 
@@ -153,6 +167,33 @@ def lan_address() -> str | None:
     except OSError:
         return None
     return a if usable(a) else None
+
+
+_NETS: dict = {}   # the PC's address -> its home network (the prefix query takes ~0.5 s, so it's kept)
+HOME_PREFIX = 24     # when the OS doesn't say: a home router's usual size, and the narrower guess is the safer one
+
+
+def home_net(own: str | None = None):
+    """The PC's own home network (its address and the interface's prefix): a home token is good only from inside it."""
+    own = own or lan_address()
+    if not own:
+        return None
+    if own not in _NETS:
+        from . import platform
+        try:
+            n = platform.prefix_length(own)
+        except Exception:   # noqa: BLE001 - not on this OS, or the query failed: the usual home size
+            n = None
+        _NETS[own] = ipaddress.ip_network(f"{own}/{n or HOME_PREFIX}", strict=False)
+    return _NETS[own]
+
+
+def on_home_net(addr: str, own: str | None = None) -> bool:
+    try:
+        net = home_net(own)
+        return net is not None and ipaddress.ip_address(addr) in net
+    except ValueError:
+        return False
 
 
 def usable(addr: str) -> bool:
@@ -256,8 +297,9 @@ def devices() -> list[dict]:
 
 def device_for(token: str | None, addr: str = "", away: bool = False) -> dict | None:
     """The paired device this token belongs to (None: no token, unknown, revoked, or phone access is off). away: the
-    token is checked against the device's away token (the away-from-home address), never its home one."""
-    if not token:
+    token is checked against the device's away token (the away-from-home address), never its home one. addr: where a
+    home token comes from; it's good only from the PC's own home network (a copy taken elsewhere does nothing here)."""
+    if not token or (addr and not away and not on_home_net(addr)):
         return None
     h = hash_token(token)
     with _LOCK:
@@ -398,7 +440,7 @@ def windows_check(addr: str, port: int, programs: set, wait: bool = True, fresh:
     (fresh: read again now). wait=False (the server's fast check, startup): never blocks; with nothing cached it starts
     the reading in the background and returns None."""
     import time as _t
-    ipaddress.ip_address(addr)   # only a real address goes into the PowerShell line
+    addr = str(ipaddress.IPv4Address(addr))   # only a plain IPv4 address goes into the PowerShell line
     hit = _WIN.get((addr, port))
     if hit and not fresh and _t.time() - hit[0] < WIN_KEEP:
         return hit[1]

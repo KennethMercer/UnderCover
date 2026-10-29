@@ -523,6 +523,7 @@ function renderAway() {
   $("#set-away-row").hidden = !s.supported || !s.phone_on;
   $("#set-away").setAttribute("aria-checked", s.on);
   $("#away-box").hidden = !s.on;
+  $("#set-away-private").setAttribute("aria-checked", !!s.private);
   let say = AWAY_SAY[s.phase] || "";
   if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
   $("#away-step").textContent = s.problem || (s.error ? `${say} (${s.error})` : say);
@@ -531,13 +532,18 @@ function renderAway() {
   ap.hidden = !(s.phase === "approve" && s.approve_url); if (s.approve_url) ap.href = s.approve_url;
   $("#away-ct").hidden = s.phase !== "approve";
   $("#away-link").hidden = !s.link;
-  if (s.link) $("#away-link").innerHTML = `Your away link: <b class="mono">${esc(s.link)}</b>. On a paired phone, at home on the Wi-Fi: Settings, <b>Use this phone away from home</b>.`;
+  if (s.link) $("#away-link").innerHTML = `Your away link: <b class="mono">${esc(s.link)}</b>. On a paired phone, at home on the Wi-Fi: Settings, <b>Use this phone away from home</b>.`
+    + (s.private ? " The phone needs the Tailscale app, signed in to the same account." : "");
   clearInterval(AW.poll);
   if (s.on && s.phase !== "ready") AW.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadAway(); }, 3000);
 }
 $("#set-away").onclick = async () => {
   const on = $("#set-away").getAttribute("aria-checked") !== "true";
   try { AW.st = await api("/api/away", { json: { on } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
+};
+$("#set-away-private").onclick = async () => {   // Deep Cover: Serve on the tailnet instead of Funnel's public link
+  const priv = $("#set-away-private").getAttribute("aria-checked") !== "true";
+  try { AW.st = await api("/api/away", { json: { private: priv } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
 };
 confirmClick($("#away-forget"), "Forget? Click again", async () => { AW.st = await api("/api/away/forget", { json: {} }); renderAway(); });
 // the phone: on the home Wi-Fi it asks for its single-use away link and opens it (app.js shows it only while the PC has

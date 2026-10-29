@@ -565,9 +565,25 @@ Off by default. On, the server also listens on the PC's private home-network add
 come from this PC must carry a paired device's token (`Handler._gate`): our own Host, a same-origin Origin on anything
 but GET, an HttpOnly SameSite=Strict cookie stored on the PC as its SHA-256; else 401. Pairing is a QR code of
 `http://<address>:<port>/pair#<code>` (six characters, five minutes, once). `app/phone_api.ROUTES` is the one table of
-every route and its policy (open / phone / pc). Away from home (`core/tailnet.py`) runs a hidden userspace Tailscale
-(pinned MSI, hashes checked, no driver, no service) whose Funnel points only at a third, dedicated listener with its own
-away token (`away.html`). Never plain port forwarding. Windows-only for now (`platform.supports("away")`).
+every route and its policy (open / home / phone / pc). Away from home (`core/tailnet.py`) runs a hidden userspace
+Tailscale (pinned MSI, hashes checked, no driver, no service) whose Funnel points only at a third, dedicated listener
+with its own away token (`away.html`). Never plain port forwarding. Windows-only for now (`platform.supports("away")`).
+
+Private (Deep Cover, 1.2: "Private: my phone runs Tailscale", `phone.away_private`): Serve instead of Funnel, to the
+same listener and name, so only devices on the user's tailnet reach it and nothing is public. Switching resets the
+serve config first, so the two are never on together; the driver checks the mode it wants (`tailnet._funnel_on`).
+
+The home-screen app (1.2) lives at the away address, the one of the two that is HTTPS, so it is the only place a
+service worker and notifications are allowed. `web/sw.js` (served there only, `/sw.js`, policy open) caches no page
+and nothing of the user's. It keeps the home-network address (`home_url` in `/api/status`, sent only to a paired phone
+at the away address, accepted only in private-address form), and when a navigation gets no answer in 20 s it serves a
+page of its own that says so and links to that address. The page itself (`/`, policy home) opens on the home Wi-Fi
+without a token: it holds no data, and the way back from the away app is a link from another site, on which a
+SameSite=Strict cookie doesn't ride (the page's own requests after it do). At the away address it needs the token.
+Job alerts are local only (`web/phonealerts.js`): while the page runs on a phone, a finished job gives a banner, a buzz
+on Android, the app badge and, at the away address with the phone's permission, a notification through the worker.
+No push service, so a locked phone or one that has stopped the page hears nothing. The words are generic ("Cover
+ready"), and the overnight queue's results are silent.
 
 Request rules on every listener (1.1): an Origin, when a request has one, is this server's own scheme, host and port;
 a request another site's page makes (`Sec-Fetch-Site: cross-site`) is refused, except following a link to a page;
