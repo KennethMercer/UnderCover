@@ -6958,6 +6958,109 @@ def u_pace_pitch():
             f"+{fast['pitch_off_st']} past their registers -> nudge {K.nudge_for(m)}; a debate pitch and Obama's 235 Hz: no nudge")
 
 
+class _FakeRmvpe:
+    """Stands in for RMVPE (no model loaded): the pitch track it returns, and how often it was asked."""
+
+    def __init__(self, f0):
+        self.f0, self.calls = f0, 0
+
+    def infer_from_audio(self, x, thred=0.03):
+        import numpy as np
+        self.calls += 1
+        return np.asarray(self.f0, dtype=np.float32)
+
+
+@check("speak_hz: a cadence reading aims at the pitch of the pack's reference clip, held in the voice's range; kept once; songs and Readers unchanged")
+def u_speak_hz():
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.cadence import render
+    from undercover.doubleagent import cadence as K
+    from undercover.speakeasy import speak
+    with isolated_data():
+        from undercover.core.config import path
+        d = path("cache_dir") / "speakhz"
+        d.mkdir(parents=True)
+        clip = d / "ref.wav"
+        sf.write(str(clip), (np.random.default_rng(3).standard_normal(32000) * 0.1).astype(np.float32), 16000)
+        # the median of the voiced frames; unvoiced ones (0) don't count, nor does a clip with too little voice
+        assert render.speak_hz(clip, _FakeRmvpe([0] * 40 + [140.0] * 50 + [150.0] * 50)) == 145.0
+        assert render.speak_hz(clip, _FakeRmvpe([0] * 100 + [140.0] * 10)) is None
+        assert render.speak_hz(d / "missing.wav", _FakeRmvpe([140.0] * 50)) is None
+        sf.write(str(d / "short.wav"), np.zeros(4000, np.float32), 16000)
+        assert render.speak_hz(d / "short.wav", _FakeRmvpe([140.0] * 50)) is None
+        # measured numbers (2026-10-28): a voice trained on rallies (180 Hz), its reading reference at 143
+        ex = {"trained": True, "f0_median": 180.0, "f0_range": [109.3, 180.0, 254.4], "from_speech": True}
+        v = _fake_voice("zz-speakhz-uc", "trained in UnderCover: Zed, 9.0 min, epoch 5", ex)
+        pack = _fake_pack(v.dir / "tts", "c1", 0.7)
+        assert K.speech_target(v, pack) == 180.0   # no speak_hz yet: as before
+        assert K.speech_target(v, {**pack, "speak_hz": 143.0}) == 143.0
+        assert K.speech_target(v, {**pack, "speak_hz": 90.0}) == 109.3   # never past the range the voice learned
+        assert K.speech_target(v, {**pack, "speak_hz": None}) == 180.0   # measured and unmeasurable: as before
+        assert K.speech_target(v, None, clip, _FakeRmvpe([143.0] * 50)) == 143.0   # a candidate clip, measured on the spot
+        singer = _fake_voice("zz-speakhz-sung", "", {"trained": True, "f0_median": 300.0, "f0_range": [200.0, 300.0, 400.0]})
+        assert K.speech_target(singer, {"speak_hz": 120.0}) == 120.0 and K.speech_target(singer, {"speak_hz": 250.0}) == 200.0
+        # SpeakEasy's plan: a pack with speak_hz aims there; the Reader path (no pack) keeps the voice's speaking pitch
+        meta = json.loads((v.dir / "meta.json").read_text(encoding="utf-8"))
+        meta["extra"]["tts"] = {**pack, "speak_hz": 143.0, "speak_hz_from": "ref.wav"}
+        (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        ready, speak.pack_ready = speak.pack_ready, lambda e, pin=None: True
+        try:
+            p = speak.plan("zz-speakhz-uc")
+            r = speak.plan("zz-speakhz-uc", cadence=False)
+        finally:
+            speak.pack_ready = ready
+        assert p["mode"] == "cadence" and p["target_hz"] == 143.0 and "reference clip" in p["pitch_from"], p
+        assert r["mode"] == "reader" and r["target_hz"] == 180.0, r
+        # a pack made before speak_hz: measured once, kept in meta.json (None too), nothing else in the folder touched
+        meta["extra"]["tts"] = dict(pack)
+        (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        files = lambda: {f.relative_to(v.dir): f.stat().st_size for f in v.dir.rglob("*")
+                         if f.is_file() and f.name not in ("meta.json", "cadence.json")}
+        before = files()
+        fake = _FakeRmvpe([0] * 10 + [143.0] * 60)
+        assert K.remember_speak_hz(v.name, fake) == 143.0 and K.remember_speak_hz(v.name, fake) == 143.0 and fake.calls == 1
+        kept = json.loads((v.dir / "meta.json").read_text(encoding="utf-8"))["extra"]["tts"]
+        assert kept["speak_hz"] == 143.0 and kept["speak_hz_from"] == "ref.wav" and kept["clip"] == "c1", kept
+        cj = json.loads((v.dir / "tts" / "cadence.json").read_text(encoding="utf-8"))   # the pack's own copy too
+        assert cj["speak_hz"] == 143.0 and cj["speak_hz_later"] is True and cj["clip"] == "c1" and cj["tried"] == [], cj
+        assert files() == before, (before, files())
+        meta["extra"]["tts"] = dict(pack)
+        (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        deaf = _FakeRmvpe([0] * 100)
+        assert K.remember_speak_hz(v.name, deaf) is None and K.remember_speak_hz(v.name, deaf) is None and deaf.calls == 1
+        assert K.speech_target(K.get_voice(v.name), K.pack_of(K.get_voice(v.name))) == 180.0
+        # a numeric nudge measured from the old target (f0_median) is stale once the pack aims at its clip: dropped,
+        # unless the user chose that pack by ear; a pack made with speak_hz keeps its own (measured at the clip's pitch)
+        later = {**pack, "pitch_nudge": -1.1, "speak_hz": 190.5, "speak_hz_later": True}
+        assert kept["speak_hz_later"] is True and K.reading_nudge(later) == 0.0
+        heard = {**later, "verdicts": [{"compared": [K.pack_id(later), "other"], "winner": K.pack_id(later)}]}
+        assert K.reading_nudge(heard) == -1.1
+        assert K.reading_nudge({**pack, "pitch_nudge": -0.6, "speak_hz": 190.5}) == -0.6
+        assert K.reading_nudge({**later, "speak_hz": None}) == -1.1   # unmeasured: aims where it did, with its nudge
+        meta["extra"]["tts"] = later
+        (v.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        ready, speak.pack_ready = speak.pack_ready, lambda e, pin=None: True
+        try:
+            p = speak.plan("zz-speakhz-uc", nudge=0.5)
+        finally:
+            speak.pack_ready = ready
+        assert p["target_hz"] == 190.5 and p["pack_nudge"] == 0.0 and p["nudge"] == 0.5, p
+    # the pack test, the A/B readings and SpeakEasy all pitch the same way (they load models, so read, not run, here)
+    import inspect
+    assert "speech_target(self.v, None, ref" in inspect.getsource(K.Tester.measure)
+    ms = inspect.getsource(K.make_samples)
+    assert "speech_target(v, pack)" in ms and "reading_nudge(pack)" in ms and "speak_hz_later" in ms
+    assert "nudge=old_nudge" in inspect.getsource(K.train)
+    mc = inspect.getsource(speak._make_cadence)
+    assert mc.index("try:") < mc.index("remember_speak_hz") < mc.index("except Exception"), "a failed measure must not stop speech"
+    # songs never come here: FrontMan reads no cadence pack and no speaking pitch
+    for f in (ROOT / "undercover" / "frontman").rglob("*.py"):
+        s = f.read_text(encoding="utf-8")
+        assert "speak_hz" not in s and "speech_target" not in s and "cadence_pack" not in s, f
+    return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
+
+
 @check("characters: detected from the search, scenes ranked first and talk unticked, the scenes' voice is the target, the one-shot's gate")
 def u_characters():
     import contextlib
@@ -11489,7 +11592,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_platform, u_tray):
         fn()

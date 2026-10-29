@@ -80,13 +80,15 @@ def plan(voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.
     if pack and cadence is not False and pack_ready(pack.get("engine", "chatterbox"), pack.get("engine_pin")):
         eng = pack_engine(pack)   # a Chatterbox-family pack reads with the default of them, or the engine its voice is pinned to
         info = engine_info(eng)
+        # pitched where the person talks in the pack's own reference clip, not the training data's median (rallies, shouting)
         return {"voice": v.name, "mode": "cadence", "engine": eng, "engine_name": info["name"],
                 "ref_rate": pack.get("pace_ref_rate") if info.get("pace_by_ref") else None,   # its pace, calibrated (phase 23)
                 "rtf": info["rtf"], "person": (v.extra or {}).get("person") or pack.get("project"),
                 "reader": None, "auto": True, "reader_label": None, "reader_hz": None,
-                "target_hz": sp and sp["hz"], "target_low": sp and sp["low"], "pitch_from": sp and sp["how"],
+                "target_hz": service.speech_target(v, pack), "target_low": sp and sp["low"],
+                "pitch_from": "their cadence's reference clip" if pack.get("speak_hz") else sp and sp["how"],
                 "pitch": float(nudge or 0), "nudge": float(nudge or 0), "speed": 1.0, "pace": pace,
-                "pack_nudge": float(pack.get("pitch_nudge") or 0),   # the pack's own pitch fix (phase 12), under the user's
+                "pack_nudge": service.reading_nudge(pack),   # the pack's own pitch fix (phase 12), under the user's
                 "cfg_weight": pc["cfg_weight"] or pack.get("cfg_weight"), "exaggeration": pc["exaggeration"] or pack.get("exaggeration"),
                 "tempo": float(pack.get("tempo") or 1.0), "gap_s": round(float(pack.get("gap_s") or 0.4) * pc["gap"], 3),
                 "para_gap_s": round(float(pack.get("para_gap_s") or 0.8) * pc["gap"], 3), "has_cadence": True}
@@ -448,6 +450,14 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
                 raise Cancelled()
         service.calibrate_pace(v, _stop)
         v = get_voice(p["voice"])
+    if "speak_hz" not in service.cadence_pack(v):   # a pack made before its clip's pitch was measured: once, kept
+        try:
+            service.remember_speak_hz(v, gpu.MODELS.converter.rmvpe)
+            v = get_voice(p["voice"])
+            p = {**p, "target_hz": service.speech_target(v, service.cadence_pack(v)),
+                 "pack_nudge": service.reading_nudge(service.cadence_pack(v))}
+        except Exception:   # noqa: BLE001 - it reads at the voice's own pitch as before, and tries again next time
+            v = get_voice(p["voice"])
     pack = {**service.cadence_pack(v), "cfg_weight": p["cfg_weight"], "exaggeration": p["exaggeration"]}   # the pace
     ref = render.paced_ref(service.cadence_ref(v), pack.get("pace_ref_rate") if engine_info(p["engine"]).get("pace_by_ref") else None)
     job.push(stage="reading", frac=0.0, message="Getting ready", plan=p, sentences=[s["text"] for s in sents],

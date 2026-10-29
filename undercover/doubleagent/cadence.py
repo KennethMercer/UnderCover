@@ -524,6 +524,7 @@ class Tester:
         self.lv = self.conv.voice(voice.name)
         sp = service.speaking_pitch(voice)
         self.hz = sp and sp["hz"]
+        self._hz_of: dict = {}   # each reference clip's reading pitch (speech_target), measured once
         self.emb = SpeakerEmbedder()
         e = proj.load_embeddings().get(f"speaker:{proj.reference.get('cluster')}")
         if e is None:
@@ -545,9 +546,12 @@ class Tester:
         (phase 12). nudge: semitones the voice's RVC adds (a pack's pitch nudge)."""
         from scipy.signal import resample_poly
         rows, sims, outs, everyday, f0s = [], [], [], [], []
+        if ref is not None and ref not in self._hz_of:   # pitched as SpeakEasy will read this pack: at its clip's pitch
+            self._hz_of[ref] = speech_target(self.v, None, ref, self.conv.rmvpe)
+        hz = self._hz_of.get(ref, self.hz)
         for i, (s, w) in enumerate(zip(TEST + PACE_TEST, wavs)):
             self.check()
-            y, sr = render.finish(w, self.lv, self.conv, self.hz, tempo=tempo, nudge=nudge, keep_wav=True, engine=C.reading_engine(None))
+            y, sr = render.finish(w, self.lv, self.conv, hz, tempo=tempo, nudge=nudge, keep_wav=True, engine=C.reading_engine(None))
             g = np.gcd(sr, 16000)
             y16 = resample_poly(y, 16000 // g, sr // g).astype(np.float32)
             r = features(y16, s, self.conv.rmvpe)
@@ -589,6 +593,59 @@ def _cleanup(wavs):
 
 
 # ---------------------------------------------------------------- a voice's pack
+
+def speech_target(v, pack: dict | None, ref: Path | None = None, rmvpe=None) -> float | None:
+    """The pitch (Hz) a reading with this pack is moved onto: the person's own speaking pitch in the pack's reference
+    clip (its speak_hz; measured here when the pack has none yet and rmvpe and ref are given), held inside the voice's
+    own range; the voice's speaking pitch (service.speaking_pitch) when there's none. A voice's f0_median is its whole
+    training data's: one trained on rallies sat at 180 Hz, its reading reference at 143, and the ear chose the lower
+    one blind (2026-10-28). Speech only: songs never come here."""
+    from . import service
+    sp = service.speaking_pitch(v)
+    pack = pack or {}
+    hz = pack.get("speak_hz")
+    if hz is None and "speak_hz" not in pack and rmvpe is not None and ref is not None:
+        hz = render.speak_hz(ref, rmvpe)
+    if not hz:
+        return sp and sp["hz"]
+    ex = v.extra or {}
+    rng = ex.get("f0_range")
+    if rng:   # RVC is never pushed past what it learned (a singer's range, an octave down, as speaking_pitch reads it)
+        k = 1.0 if ex.get("from_speech") else service.SUNG_TO_SPEECH
+        hz = min(max(float(hz), rng[0] * k), rng[-1] * k)
+    return round(float(hz), 1)
+
+
+def remember_speak_hz(voice_name: str, rmvpe) -> float | None:
+    """The live pack's speak_hz, measured once and kept in extra.tts for a pack made before it was (None kept too, so
+    a clip that can't be measured isn't tried on every reading). Writes meta.json and the pack's own cadence.json (as
+    calibrate_voice_pace does, so a pack moved aside and back keeps it); moves and deletes nothing."""
+    with _LOCK:
+        v = get_voice(voice_name)
+        pack = pack_of(v)
+        if pack is None or "speak_hz" in pack:
+            return pack and pack.get("speak_hz")
+        ref = pack.get("ref", "ref.wav")
+        got = {"speak_hz": render.speak_hz(v.dir / "tts" / ref, rmvpe), "speak_hz_from": ref, "speak_hz_later": True}
+        pack.update(got)
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json(), indent=2))
+        try:
+            cj = v.dir / "tts" / "cadence.json"
+            fsutil.write_text(cj, json.dumps({**json.loads(cj.read_text(encoding="utf-8")), **got}, indent=1))
+        except (OSError, ValueError):
+            pass
+    return pack["speak_hz"]
+
+
+def reading_nudge(pack: dict) -> float:
+    """The pack's pitch nudge as a reading applies it. A nudge measured before the pack had speak_hz (speak_hz_later)
+    was aimed from the voice's f0_median, the old target, so it's stale now that readings aim at the clip's pitch:
+    dropped, unless the user chose this pack by ear (then it's theirs, and kept)."""
+    n = float(pack.get("pitch_nudge") or 0)
+    if n and pack.get("speak_hz") and pack.get("speak_hz_later") and not approved_by_user(pack):
+        return 0.0
+    return n
+
 
 def pack_of(v) -> dict | None:
     t = (v.extra or {}).get("tts")
@@ -707,13 +764,16 @@ def train(job, voice_name: str, push, control=None) -> dict:
         if old:
             push("testing", len(cands) / (len(cands) + 1), "Comparing with the current cadence")
             try:
-                wavs = tester.read(old, v.dir / "tts" / old.get("ref", "ref.wav"))
+                old_ref = v.dir / "tts" / old.get("ref", "ref.wav")
+                wavs = tester.read(old, old_ref)
+                # its nudge as SpeakEasy applies it now (an old pack's numeric one aimed from f0_median is dropped)
+                old_nudge = reading_nudge(old if "speak_hz" in old else
+                                          {**old, "speak_hz": render.speak_hz(old_ref, tester.conv.rmvpe), "speak_hz_later": True})
                 try:
                     before = tester.measure(wavs, float(old.get("tempo", 1.0)), ref=v.dir / "tts" / old.get("ref", "ref.wav"),
-                                            nudge=float(old.get("pitch_nudge") or 0))
+                                            nudge=old_nudge)
                     before["heard"] = heard(before)   # as it sounds today, with its own nudge
-                    before["pitch_raw_st"] = None if before.get("pitch_st") is None else round(
-                        before["pitch_st"] - float(old.get("pitch_nudge") or 0), 2)
+                    before["pitch_raw_st"] = None if before.get("pitch_st") is None else round(before["pitch_st"] - old_nudge, 2)
                 finally:
                     _cleanup(wavs)
             except (ModelError, C.WorkerError):
@@ -740,6 +800,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
                 "tempo": win["tempo"], "gap_s": round(gap, 3), "para_gap_s": round(max(0.7, gap * 1.6), 3),
                 "data_minutes": mins,
                 "pitch_nudge": win["pitch_nudge"],
+                "speak_hz": render.speak_hz(work / f"{win['clip']}.wav", tester.conv.rmvpe), "speak_hz_from": "ref.wav",
                 "scores": {k: win.get(k) for k in ("likeness", "wer", "cadence_gap", "rate", "score", "score_voice", "sound",
                                                     "heard", "pace", "pace_target", "pace_ratio", "pace_heard", "pace_pen",
                                                     "clip_pace", "f0_hz", "pitch_st", "pitch_raw_st", "pitch_off_st")},
@@ -1043,7 +1104,6 @@ def sample_file(voice_name: str, which: str) -> Path:
 def make_samples(job, voice_name: str) -> dict:
     """Read AB_LINE once with the live pack and once with the pending one (engine + the voice's RVC), each saved with
     its pack (sample.wav + sample.json), so the A/B costs GPU time once. Readings already there are kept."""
-    from . import service
     v = get_voice(voice_name)
     cur, pen = pack_of(v), pending_of(v)
     if not (cur and pen):
@@ -1053,15 +1113,17 @@ def make_samples(job, voice_name: str) -> dict:
     todo = [(d, pack, pid) for d, pack, pid in ((tts, cur, ids[0]), (tts / "pending", pen, ids[1])) if not _sample_ok(d, pid)]
     conv = gpu.MODELS.converter
     lv = conv.voice(v.name)
-    sp = service.speaking_pitch(v)
     for i, (d, pack, pid) in enumerate(todo):
         if job.cancel:
             raise Cancelled()
         job.push(stage="reading", frac=i / max(1, len(todo)), message=f"Reading the line with the {'new' if d != tts else 'current'} cadence")
-        fut, wav = render.request(AB_LINE, pack, d / pack.get("ref", "ref.wav"), seed=AB_SEED)
+        ref = d / pack.get("ref", "ref.wav")
+        if "speak_hz" not in pack:   # pitched as SpeakEasy will read it once it's measured (its old nudge dropped too)
+            pack = {**pack, "speak_hz": render.speak_hz(ref, conv.rmvpe), "speak_hz_later": True}
+        fut, wav = render.request(AB_LINE, pack, ref, seed=AB_SEED)
         render.client.wait(fut, cancel=lambda: job.cancel)
-        y, sr = render.finish(wav, lv, conv, sp and sp["hz"], tempo=float(pack.get("tempo", 1.0)),
-                              nudge=float(pack.get("pitch_nudge") or 0), engine=C.pack_engine(pack))
+        y, sr = render.finish(wav, lv, conv, speech_target(v, pack), tempo=float(pack.get("tempo", 1.0)),
+                              nudge=reading_nudge(pack), engine=C.pack_engine(pack))
         y = render.level(y)   # SpeakEasy's loudness, so both sound as they would there
         with _LOCK:
             fresh = get_voice(v.name)

@@ -111,6 +111,20 @@ def trim(x: np.ndarray, sr: int = 16000, db: float = -45.0, keep: float = 0.05) 
     return x[max(0, on[0] - k):on[-1] + k]
 
 
+def speak_hz(ref: Path, rmvpe) -> float | None:
+    """The median pitch of a pack's reference clip: the person talking, in the register the engine imitates (a voice's
+    f0_median is its whole training data's, rallies and shouting included). None when too little of it is voiced."""
+    try:
+        x = trim(load16(ref))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if len(x) < 16000 // 2:
+        return None
+    f0 = rmvpe.infer_from_audio(x, thred=0.03)
+    f0 = f0[f0 > 0]
+    return round(float(np.median(f0)), 1) if len(f0) > 20 else None
+
+
 def stretch(x: np.ndarray, tempo: float) -> np.ndarray:
     """Slow down (tempo < 1) or speed up without changing pitch, before RVC (which re-synthesises the voice, so the
     stretch's own artefacts mostly go). 1.0 = unchanged."""
