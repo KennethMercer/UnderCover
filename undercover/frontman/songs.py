@@ -252,17 +252,19 @@ def _ffprobe(p: Path) -> dict:
             "channels": int(st.get("channels", 0))}
 
 
-def _peaks(p: Path, bins: int = 1200) -> list[float]:
-    """Waveform overview: peak level per bin, decoded via ffmpeg (any format)."""
+def _peaks(p: Path, bins: int = 1200) -> tuple[list[float], float]:
+    """Waveform overview (peak level per bin) and how long the audio really is (the seconds ffmpeg decoded, a second
+    past MAX_AUDIO_S at most; a file's own header can say less than it holds), decoded via ffmpeg (any format)."""
     import numpy as np
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-t", str(MAX_AUDIO_S), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-t", str(MAX_AUDIO_S + 1), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
                          capture_output=True).stdout
     a = np.abs(np.frombuffer(raw, dtype=np.float32))
     if not len(a):
-        return []
+        return [], 0.0
+    seconds = len(a) / 4000
     a = a[: len(a) // bins * bins].reshape(bins, -1).max(axis=1) if len(a) >= bins else a
     top = float(a.max()) or 1.0
-    return [round(float(x) / top, 3) for x in a]
+    return [round(float(x) / top, 3) for x in a], seconds
 
 
 def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: dict | None = None) -> dict:
@@ -279,17 +281,26 @@ def register_song(tmp: Path, name: str, sha256_hex: str | None = None, extra: di
         sha256_hex = h.hexdigest()
     song_id = sha256_hex[:16]
     dest = up / f"{song_id}{Path(name).suffix.lower() or Path(tmp).suffix.lower()}"
-    if dest.exists():
-        Path(tmp).unlink(missing_ok=True)
-    else:
+    new = not dest.exists()   # (one already there was taken before: never removed here)
+    if new:
         Path(tmp).replace(dest)
+    else:
+        Path(tmp).unlink(missing_ok=True)
     try:
         info = _ffprobe(dest)
     except (ValueError, KeyError, json.JSONDecodeError):
-        dest.unlink(missing_ok=True)
+        if new:
+            dest.unlink(missing_ok=True)
         raise ValueError(f"'{name}' couldn't be read as audio. Try converting it to mp3, wav or flac.")
+    peaks, seconds = _peaks(dest)   # its length as decoded, not as its header says
+    if seconds > MAX_AUDIO_S:
+        if new:
+            dest.unlink(missing_ok=True)
+        raise ValueError(f"'{name}' runs longer than {MAX_AUDIO_S // 3600} hours. Drop a single song instead.")
+    if seconds:
+        info["duration"] = round(seconds, 3)
     meta = {"id": song_id, "name": name, "title": Path(name).stem, "file": dest.name, **info,
-            "lufs": round(lufs(dest), 1), "peaks": _peaks(dest), "url": file_url(dest), **(extra or {})}
+            "lufs": round(lufs(dest), 1), "peaks": peaks, "url": file_url(dest), **(extra or {})}
     (up / f"{song_id}.json").write_text(json.dumps(meta), encoding="utf-8")
     return meta
 

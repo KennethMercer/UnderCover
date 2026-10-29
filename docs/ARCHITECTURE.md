@@ -564,7 +564,8 @@ so the answer doesn't depend on ffmpeg being there. No download grows past `yout
 said plainly. The audio made from it is bounded by time too (ffmpeg `-t`): a song a second past its 20 minutes, by
 ffmpeg's own pass (a file that came as FLAC skips yt-dlp's conversion, and its header may say less than it holds), and
 refused when it gets there; a training source at what a source keeps. Every other decode of a file it was given
-(the waveform, the loudness, a dropped recording) stops at `files.MAX_AUDIO_S` (3 hours). A configured proxy is reached at its own address, and links behind it are checked by name. A voice zip unpacks under a running size
+(the waveform, the loudness, a dropped recording) stops at `files.MAX_AUDIO_S` (3 hours); a song is taken
+by the length its waveform pass decoded, not the one its header gives, and refused past that bound. A configured proxy is reached at its own address, and links behind it are checked by name. A voice zip unpacks under a running size
 cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerShell is started by its full path.
 
 ### System tray

@@ -1805,10 +1805,42 @@ def u_decode_bound():
         finally:
             songs._ydl, S._ydl, songs._bounded, songs.MAX_SONG_S = real
     # every other decode of a file it was given is bounded too: the waveform, the loudness, a dropped recording
-    for fn in (songs._peaks, remix.lufs, P.add_file):
+    for fn in (remix.lufs, P.add_file):
         assert '"-t", str(MAX_AUDIO_S)' in inspect.getsource(fn), fn.__name__
-    assert files.MAX_AUDIO_S == 3 * 3600
-    return "a lying FLAC judged by ffmpeg's pass; a 5-hour song stopped at 20 min; a source at its keep; 480p first; peaks, loudness, add_file bounded"
+    assert '"-t", str(MAX_AUDIO_S + 1)' in inspect.getsource(songs._peaks) and files.MAX_AUDIO_S == 3 * 3600
+    # a dropped or uploaded song whose header lies is judged by what's decoded (the bound made 30 s for the test), and
+    # a file already taken before is never removed by a refusal
+    import hashlib
+    saved = songs._ffprobe, songs._peaks, remix.lufs, songs.MAX_AUDIO_S
+    with isolated_data():
+        try:
+            songs.MAX_AUDIO_S = 30
+            if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):   # (the runner: ffmpeg's decode stood in for)
+                songs._ffprobe = lambda p: {"duration": float(sf.info(str(p)).duration), "sample_rate": 1000, "channels": 1}
+                songs._peaks = lambda p, bins=1200: ([], float(min(truth[Path(p).name], songs.MAX_AUDIO_S + 1)))
+                remix.lufs = lambda p: -20.0
+            up = path("uploads_dir")
+            up.mkdir(parents=True, exist_ok=True)
+            liar = path("cache_dir") / "liar.flac"
+            liar.parent.mkdir(parents=True, exist_ok=True)
+            write(liar, 60, says=10)
+            assert abs(sf.info(str(liar)).duration - 10) < 0.01   # (the header says 10 s)
+            sid = hashlib.sha256(liar.read_bytes()).hexdigest()[:16]
+            truth[f"{sid}.flac"] = 60
+            for already in (False, True):
+                if already:
+                    shutil.copyfile(liar, up / f"{sid}.flac")
+                tmp = path("cache_dir") / "drop.flac"
+                shutil.copyfile(liar, tmp)
+                try:
+                    songs.register_song(tmp, "Liar.flac")
+                    raise AssertionError("a song whose header lied was taken")
+                except ValueError as e:
+                    assert "runs longer than" in str(e), e
+                assert (up / f"{sid}.flac").exists() == already and not (up / f"{sid}.json").exists(), already
+        finally:
+            songs._ffprobe, songs._peaks, remix.lufs, songs.MAX_AUDIO_S = saved
+    return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
 
 
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); exit, off and forget clean up; a wrong download is refused")
@@ -9416,7 +9448,7 @@ def _audio_reads():
         i = sf.info(str(p))
         return {"duration": float(i.duration), "sample_rate": int(i.samplerate), "channels": int(i.channels)}
     saved = songs._ffprobe, songs._peaks, remix.lufs
-    songs._ffprobe, songs._peaks, remix.lufs = probe, lambda p, bins=1200: [], lambda p: -20.0
+    songs._ffprobe, songs._peaks, remix.lufs = probe, lambda p, bins=1200: ([], 0.0), lambda p: -20.0
     try:
         yield
     finally:
