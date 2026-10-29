@@ -544,14 +544,20 @@ def port_owner(port: int) -> str | None:
     return row.split('","')[0].strip('"') if row.startswith('"') else None
 
 
+def _ipv4(addr: str) -> str:
+    """The one way an address goes into a command line: a plain IPv4 address, written back by ipaddress itself (an
+    IPv6 address may carry a zone part with any characters in it, so it never gets this far). ValueError otherwise."""
+    import ipaddress
+    return str(ipaddress.IPv4Address(addr))
+
+
 def network_and_firewall(addr: str) -> tuple[str, str, str]:
     """(the network profile of the connection holding `addr` as JSON, the firewall profiles' state, the inbound rules):
     the raw reports core/phone.py parses. Read only; run side by side (~1 s)."""
+    addr = _ipv4(addr)   # (first: a bad address is refused the same way on every OS)
     if not WINDOWS:
         raise _not("Checking the network type and the firewall")
     import concurrent.futures
-    import ipaddress
-    ipaddress.ip_address(addr)   # only a real address goes into the PowerShell line
     ps = (f"$i = (Get-NetIPAddress -IPAddress '{addr}' -ErrorAction SilentlyContinue | Select-Object -First 1).InterfaceIndex; "
           "if ($i) { Get-NetConnectionProfile -InterfaceIndex $i | Select-Object Name,InterfaceAlias,NetworkCategory | "
           "ConvertTo-Json -Compress }")
@@ -565,9 +571,8 @@ def network_and_firewall(addr: str) -> tuple[str, str, str]:
 def prefix_length(addr: str) -> int | None:
     """The network prefix of the interface holding `addr` (24 for a 255.255.255.0 home network), or None when the OS
     doesn't say. Read only (~0.5 s on Windows: PowerShell; Linux: `ip`)."""
-    import ipaddress
     import re
-    ipaddress.ip_address(addr)   # only a real address goes into the command line
+    addr = _ipv4(addr)
     try:
         if WINDOWS:
             out = run_text([_powershell(), "-NoProfile", "-NonInteractive", "-Command",

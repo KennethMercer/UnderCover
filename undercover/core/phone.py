@@ -440,7 +440,7 @@ def windows_check(addr: str, port: int, programs: set, wait: bool = True, fresh:
     (fresh: read again now). wait=False (the server's fast check, startup): never blocks; with nothing cached it starts
     the reading in the background and returns None."""
     import time as _t
-    ipaddress.ip_address(addr)   # only a real address goes into the PowerShell line
+    addr = str(ipaddress.IPv4Address(addr))   # only a plain IPv4 address goes into the PowerShell line
     hit = _WIN.get((addr, port))
     if hit and not fresh and _t.time() - hit[0] < WIN_KEEP:
         return hit[1]
