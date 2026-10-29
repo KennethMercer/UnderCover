@@ -576,7 +576,7 @@ serve config first, so the two are never on together; the driver checks the mode
 The home-screen app (1.2) lives at the away address, the one of the two that is HTTPS, so it is the only place a
 service worker and notifications are allowed. `web/sw.js` (served there only, `/sw.js`, policy open) caches no page
 and nothing of the user's. It keeps the home-network address (`home_url` in `/api/status`, sent only to a paired phone
-at the away address, accepted only in private-address form), and when a navigation gets no answer in 12 s it serves a
+at the away address, accepted only in private-address form), and when a navigation gets no answer in 20 s it serves a
 page of its own that says so and links to that address. The page itself (`/`, policy home) opens on the home Wi-Fi
 without a token: it holds no data, and the way back from the away app is a link from another site, on which a
 SameSite=Strict cookie doesn't ride (the page's own requests after it do). At the away address it needs the token.

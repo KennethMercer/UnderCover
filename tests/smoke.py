@@ -1896,6 +1896,7 @@ def u_tailnet():
             r = read()
             assert r["serve_on"] and not r.get("funnel_on") and r["funnel_target"] == "http://127.0.0.1:7871", r
             assert ["serve", "--bg", "--https=443", "http://127.0.0.1:7871"] in r["calls"] and tailnet.snapshot()["private"]
+            assert tailnet._resets() == [["funnel", "reset"], ["serve", "reset"]], "Off in private mode leaves Serve on"
             write(funnel_on=True, serve_on=False)   # Funnel switched on behind its back: not ready, Serve put back
             assert tailnet.tick() != "ready"
             wait_for(lambda: tailnet.tick() == "ready" and read().get("serve_on"), 20, every=0.2, what="Serve put back")

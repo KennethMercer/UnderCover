@@ -282,6 +282,12 @@ def set_private(on: bool):
             pass
 
 
+def _resets() -> list:
+    """What takes the away listener off the net: funnel reset (the whole serve config, Funnel's and Serve's), and in
+    private mode serve reset as well, so a Serve config can't outlive Off whatever the CLI's reset covers."""
+    return [["funnel", "reset"]] + ([["serve", "reset"]] if STATE["private"] else [])
+
+
 def _end_processes():
     """Our tailscale processes, ended and waited for (the daemon's files are free after)."""
     for key in ("up", *EXPOSE, "daemon"):
@@ -300,7 +306,7 @@ def stop():
     sign-in is kept."""
     with _LOCK:
         STATE.update(want=False, phase="off", auth_url=None, approve_url=None)
-    for args in (["funnel", "reset"], ["down"]):
+    for args in (*_resets(), ["down"]):
         try:
             _cli(*args)
         except (OSError, subprocess.TimeoutExpired):
@@ -316,10 +322,11 @@ def at_exit():
     if p is None or p.poll() is not None:
         return
     STATE["want"] = False
-    try:
-        _cli("funnel", "reset", timeout=3)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    for args in _resets():
+        try:
+            _cli(*args, timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     for key in ("up", *EXPOSE, "daemon"):
         q = _P.get(key)
         if q is not None and q.poll() is None:

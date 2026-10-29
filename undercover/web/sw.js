@@ -5,7 +5,7 @@
 // against the private-address forms below), so that when the PC doesn't answer here, the phone gets a small page of
 // its own that says so and offers that address. It also opens UnderCover when a job notification is tapped.
 // Hooks for the look chat: the offline page's #sw-down, #sw-home.
-const STORE = "uc-home-v1", HOME = "/__uc/home", WAIT_MS = 12000;
+const STORE = "uc-home-v1", HOME = "/__uc/home", WAIT_MS = 20000;   // (a busy PC over a slow phone line still makes it)
 const HOME_RX = /^http:\/\/(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):\d{2,5}$/;
 
 self.addEventListener("install", () => self.skipWaiting());

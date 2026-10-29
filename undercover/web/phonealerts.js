@@ -12,7 +12,7 @@
 // Words are generic on purpose (a lock screen shows them): "Cover ready", never a song's or a voice's name. The look
 // chat designs #ph-alert, #ph-alerts and #ph-install; the copy and the hooks are here. Uses DONE_WORDS (jobs.js), $ and
 // store (app.js).
-const PA = { unseen: 0, sw: null, timer: 0 };
+const PA = { unseen: 0, sw: null, refused: false, timer: 0 };
 const paSecure = () => location.protocol === "https:";
 const paStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const paIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -57,10 +57,10 @@ document.addEventListener("visibilitychange", () => {
 
 // app.js hands every /api/status here (s.client, s.home_url)
 async function phoneApp(s) {
-  if (s.client !== "phone" || !paSecure() || !("serviceWorker" in navigator)) return;
+  if (s.client !== "phone" || !paSecure() || !("serviceWorker" in navigator) || PA.refused) return;
   if (!PA.sw) {
     try { await navigator.serviceWorker.register("/sw.js"); PA.sw = await navigator.serviceWorker.ready; }
-    catch { PA.sw = null; return; }
+    catch { PA.refused = true; return; }   // (a private tab, storage blocked: once is enough to ask)
     paCards();
   }
   if (s.home_url) PA.sw.active?.postMessage({ home: s.home_url });   // (the active one: on a first visit nothing controls the page yet)

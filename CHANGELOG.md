@@ -12,8 +12,7 @@ in brackets.
 
 **Phone** (phone12)
 - The away link works as a home-screen app. When the PC doesn't answer there, it says so and offers the home address.
-- While UnderCover is open on the phone, it tells you when a job finishes. It all stays on your own devices: no
-  notification service is involved.
+- While UnderCover is open on the phone, it tells you when a job finishes. No notification service is involved.
 - In Deep Cover, away from home can be private: only devices signed in to your Tailscale reach it, with nothing on
   the public internet.
 
