@@ -118,17 +118,30 @@ def _upload(h):
         tmp.unlink(missing_ok=True)   # moved into place by register_song when it worked
 
 
+def _checked_options(h, body: dict):
+    """_options, with a request the cover can't take (a duet's options, _duet_options) answered as a plain 400."""
+    from ..core.voices import ModelError
+    try:
+        return _options(body)
+    except ModelError as e:
+        h._error(str(e))
+        return None
+
+
 def _estimate(h, body: dict):
     from .pipeline import estimate
     meta = song_meta(body.get("song", ""))
-    opts = _options(body)
-    h._json(estimate(path("uploads_dir") / meta["file"], opts))
+    opts = _checked_options(h, body)
+    if opts is not None:
+        h._json(estimate(path("uploads_dir") / meta["file"], opts))
 
 
 def _start_cover(h, body: dict):
     from ..core.voices import get_voice
     meta = song_meta(body.get("song", ""))
-    opts = _options(body)
+    opts = _checked_options(h, body)
+    if opts is None:
+        return
     get_voice(opts.voice)  # friendly error now rather than inside the job
     if opts.backing_voice:
         get_voice(opts.backing_voice)
@@ -408,7 +421,9 @@ def _start_auto(h, body: dict):
 def _start_preview(h, body: dict):
     from ..core.voices import get_voice
     meta = song_meta(body.get("song", ""))
-    opts = _options(body)
+    opts = _checked_options(h, body)
+    if opts is None:
+        return
     get_voice(opts.voice)
     variants = body.get("variants") or []
     if not 1 <= len(variants) <= 6:
