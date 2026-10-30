@@ -255,7 +255,8 @@ the first while the rest are made.
 `output/history.jsonl`, one JSON object per finished cover (`frontman/history.py`): `id` (permanent, 10 hex
 characters; every cover route uses it), `output`, `song`, `voice`, `title` (+ `title_set` after a rename), `stems`,
 `converted_vocal`, `converted_backing`, `notes`, `seconds`, `options`, `created`, `kept`, `kept_at`. `history.record`
-is the one place a finished cover is added.
+is the one place a finished cover is added. A duet's `options` carry `duet_voice`, `duet_way`, `duet_octave` and
+`duet_plan` (`[[start_s, end_s, "A" | "B" | "AB"], ...]` from 0 to the song's end), so Make again sings it the same way.
 
 ### Recent tray
 
@@ -437,6 +438,28 @@ with each through the engine and the voice, and score each pack. The score is li
 A new pack replaces nothing by itself. For a voice that already speaks, it is offered only when it beats the live pack
 by more than `KEEP_MARGIN` = 0.02 (the best of five noisy scores is biased upward; a 0.013 margin was a tie by ear), and
 then waits in `tts/pending/` for the ear.
+
+### Duets by sections
+
+A cover can be shared by two voices taking turns (`frontman/duets.py`). The lead is converted once in each voice,
+inside `Converter.shared_f0`, so the pitch track is read once. Both voices sing in one key for the song, each at its
+own best octave: `duets.joint_fit` picks the key with the lowest summed `fit.pick_fit` cost. The two takes are then
+stitched by a plan.
+
+- **Lines** come from Whisper's words on the whole vocal (lead and backing mixed, through the speech worker). A line
+  ends at a 0.25 s gap or at 10 words, and one under 4 words or 1.5 s joins the next.
+- **A chorus** is where 6 words in a row come back 15 or more words later. A run of 2 or more such lines is a chorus
+  block.
+- **Cuts** fall in the middle of the lead's quietest run between two lines, with a 40 ms equal-power crossfade there.
+  Each voice sings at -3 dB when both do.
+- **Ways** (`duets.WAYS`): `turns` alternates verses and sings the choruses together; `lines` alternates lines.
+  `DUET_DEFAULT` is the one place the default is set.
+- **Too few words** (under 20 heard): the voices take turns every two phrases of the lead, never together.
+
+A song sung as a duet already (`separate.lead_missing`) is sung by one voice, and the notes say why. The cover's
+options take `duet_voice` (an installed voice that isn't the lead), `duet_way`, `duet_octave` (-2 to 2) and a plan in
+`duets.check_plan`'s shape, all checked in `frontman/api._duet_options`. The one-shot reads "<song> as A and B" (also
+"with", "&", "a duet of ...") when the second singer is a voice here (`oneshot.split_duet`).
 
 ### The one-shot's checks and gates
 

@@ -10,6 +10,10 @@ in brackets.
   SpeakEasy doesn't know, or doesn't use yet (the speech engine's own `[laugh]` or `[whispering]`), is never read out;
   it's named under the result.
 
+**FrontMan** (duets1)
+- Duets: pick a second singer and they share the song, taking turns on the verses and singing the choruses together,
+  or a line each. In the one-shot, name both: "<song> as <one singer> and <another>".
+
 **Phone** (phone12)
 - The away link works as a home-screen app. When the PC doesn't answer there, it says so and offers the home address.
 - While UnderCover is open on the phone, it tells you when a job finishes. No notification service is involved.

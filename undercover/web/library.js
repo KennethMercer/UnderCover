@@ -141,7 +141,7 @@ function rows() {
   const q = $("#lib-q").value.trim().toLowerCase(), sort = $("#lib-sort").value, voice = $("#lib-filter").hidden ? "" : $("#lib-filter").value;
   let list = (L.data[L.cat] || []).slice();
   if (L.cat === "voices") list = list.filter(x => !x.waiting_beside);   // a retrained one waiting lives under its owner (renderList)
-  const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${voiceDisplay(x.voice)} ${x.backing_voice || ""} ${voiceDisplay(x.backing_voice)}` : L.cat === "speech" ? `${x.title} ${x.text} ${x.voice} ${voiceDisplay(x.voice)}` : L.cat === "songs" ? `${x.title} ${x.source}`
+  const text = x => L.cat === "covers" ? `${x.title} ${x.voice} ${voiceDisplay(x.voice)} ${x.backing_voice || ""} ${voiceDisplay(x.backing_voice)} ${x.duet_voice || ""} ${voiceDisplay(x.duet_voice)}` : L.cat === "speech" ? `${x.title} ${x.text} ${x.voice} ${voiceDisplay(x.voice)}` : L.cat === "songs" ? `${x.title} ${x.source}`
     : L.cat === "voices" ? `${x.name} ${voiceDisplay(x.name)} ${x.source}` : `${x.person} ${x.name}`;
   if (q) list = list.filter(x => text(x).toLowerCase().includes(q));
   if (voice) list = list.filter(x => x.voice === voice);
@@ -196,7 +196,7 @@ function renderList() {
     const id = idOf(x), check = L.cat === "covers";
     let title, sub, side;
     if (L.cat === "covers") {
-      title = x.title; sub = facts([voiceDisplay(x.voice) + (x.backing_voice ? ` + ${voiceDisplay(x.backing_voice)}` : ""),
+      title = x.title; sub = facts([voiceDisplay(x.voice) + (x.duet_voice ? ` & ${voiceDisplay(x.duet_voice)}` : "") + (x.backing_voice ? ` + ${voiceDisplay(x.backing_voice)}` : ""),
         x.options?.octave ? { t: `Octave ${x.options.octave > 0 ? "+" : ""}${x.options.octave}`, deep: true } : "", { t: upFirst(dayWord(x.created)), muted: true }, { t: dayTime(x.created), deep: true }]);
       side = keepTag(x) + `<span class="mono">${x.duration ? fmtTime(x.duration) : ""}</span><span class="tag">${esc(x.format)}</span>`;
     } else if (L.cat === "speech") {
@@ -317,7 +317,7 @@ function coverDetail(d, c) {
   const settings = [o.octave ? `voice octave ${o.octave > 0 ? "+" : ""}${o.octave}` : "same octave", o.key ? `key ${o.key > 0 ? "+" : ""}${o.key}` : "key unchanged",
                     c.backing_voice ? `backing by ${voiceDisplay(c.backing_voice)}` : o.backing_voice ? "lead + backing converted" : o.karaoke ? "lead only" : "",
                     o.dereverb ? "de-reverb" : "", o.polish === false ? "" : "polish", o.quality ? `${o.quality} quality` : ""].filter(Boolean).join(" · ");
-  d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3>${facts([{ html: `Sung by <b>${vname(c.voice)}</b>${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""}` }, { t: upFirst(dayWord(c.created)), muted: true }, { t: dayTime(c.created), deep: true }])}</div></div>
+  d.innerHTML = `<div class="dhead">${art(c.title, true)}<div style="min-width:0"><h3>${esc(c.title)}</h3>${facts([{ html: `Sung by <b>${vname(c.voice)}</b>${c.duet_voice ? ` &amp; <b>${vname(c.duet_voice)}</b>` : ""}${c.backing_voice ? ` + ${vname(c.backing_voice)}` : ""}` }, { t: upFirst(dayWord(c.created)), muted: true }, { t: dayTime(c.created), deep: true }])}</div></div>
     ${playerHtml()}
     <div class="row"><span class="meta">Listen to</span><span class="lactions" id="lib-src"><button class="btn" data-src="url" aria-pressed="true">Cover</button>${c.original ? `<button class="btn" data-src="original">Original</button>` : ""}${c.vocal ? `<button class="btn" data-src="vocal">Vocal only</button>` : ""}</span></div>
     <dl class="kv"><dt data-deep>Settings</dt><dd data-deep>${esc(settings)}</dd>
