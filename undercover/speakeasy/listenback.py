@@ -48,9 +48,16 @@ PAUSE_MARKS = ",.;:!?…—–-"
 # Turbo's sampling holds a stop's closure and restarts now and then; with SpeakEasy's fixed seeds that take came back
 # every time (research 2026-10-29: 0.3-0.6 s on the hung take, 0.01-0.2 s on other seeds). Heard from the audio:
 # Whisper's word edges stop early on a held sound
-HANG_S = 0.25
+HANG_S = 0.20          # (0.25 let a 0.24 s hang at "earned the" through; on 100 readings no cluster has the silence below)
 HANG_SILENT_S, SILENT_DB = 0.10, 35.0   # ...with one silence this long in it (a held closure; a cluster like "clock struck"
                                         # spans as long with short closures between noise, 30-80 ms each: no hang)
+# a break: words that run into each other (no stop consonant at the join, as "was earned") with a silence this long
+# between them. A stop's closure is a natural silence; here any silence is heard as a pause (the user's ear, 2026-10-30:
+# a re-read that "put the pause between 'was' and 'earned'", 0.14 s vowel to vowel, 0.07 s of it silent)
+BREAK_SILENT_S = 0.06
+STOP_SLACK_S = 0.08    # takes are compared by their longest join, a stop's closure given this much
+_STOP_END = re.compile(r"(?:[pbtdkg]|ck)(?:e|ed)?$")   # (by spelling: "earned", "made", "struck")
+_STOP_START = re.compile(r"(?:p|b|t(?!h)|d|k|g|c(?![eiy])|q)")
 VOWEL_DB, VOWEL_S = 15.0, 0.06   # a vowel: within 15 dB of the take's loud level, 60 ms or more (a stop's release is shorter)
 FADE_S = 0.015
 TRAIL_S = 0.25         # a stray ending is cut this long after the text's last word (its decay kept)
@@ -134,7 +141,7 @@ def settings() -> dict:
     # defaults from the user's blind A/Bs (2026-10-13): re-reads on (they fixed "evening"); the word stretch fixed
     # nothing and the comma lengthening flubbed "insist", so both stay off unless switched on
     return {"listen_back": bool(s.get("listen_back", True)), "stretch_words": bool(s.get("stretch_words", False)),
-            "comma_lengthen": bool(s.get("comma_lengthen", False)), "tries": int(s.get("listen_back_tries", 3))}
+            "comma_lengthen": bool(s.get("comma_lengthen", False)), "tries": int(s.get("listen_back_tries", 5))}
 
 
 def _clean(w: str) -> str:
@@ -231,7 +238,36 @@ def _vowels(db: np.ndarray) -> list:
 def hangs(text: str, words: list, x: np.ndarray, sr: int) -> list[str]:
     """Hangs in a take: two words next to each other in the text with no pause marked between them, whose vowels
     are HANG_S or more apart in the audio (the first word's last vowel to the next one's first) with one silence of
-    HANG_SILENT_S or more between them (on the 2026-10-29 readings: every hung take, and no consonant cluster)."""
+    HANG_SILENT_S or more between them (on the 2026-10-29 readings: every hung take, and no consonant cluster); and
+    breaks, where two words that run into each other (no stop at the join) have BREAK_SILENT_S of silence between."""
+    return _flags(joins(text, words, x, sr))
+
+
+def _stop_join(a: str, b: str) -> bool:
+    """Does the join from word a to word b have a stop consonant (a closure: a natural short silence)?"""
+    return bool(_STOP_END.search(_clean(a)) or _STOP_START.match(_clean(b)))
+
+
+def _flags(found: list) -> list[str]:
+    out = []
+    for j in found:
+        if j["v2v"] >= HANG_S and j["silent"] >= HANG_SILENT_S:
+            out.append(f"hang after {j['after']!r} ({j['v2v']:.2f} s)")
+        elif not j["stop"] and j["silent"] >= BREAK_SILENT_S:
+            out.append(f"break after {j['after']!r} ({j['silent']:.2f} s silent)")
+    return out
+
+
+def longest_join(found: list) -> float:
+    """A take's longest join inside a phrase (vowel to vowel, a stop's closure given STOP_SLACK_S): how takes with the
+    same problems are compared. 0.0 when there's none."""
+    return round(max([j["v2v"] - (STOP_SLACK_S if j["stop"] else 0.0) for j in found] or [0.0]), 3)
+
+
+def joins(text: str, words: list, x: np.ndarray, sr: int) -> list[dict]:
+    """Every join inside a phrase (two words next to each other in the text, no pause marked, both heard), measured in
+    the take: [{after, v2v (the first word's last vowel to the next one's first, s), silent (its longest silence, s),
+    stop (a stop consonant at the join)}]."""
     want = [w for w, _ in text_words(text)]
     idx = _align(want, words)
     pause = _pause_after(text)
@@ -254,8 +290,9 @@ def hangs(text: str, words: list, x: np.ndarray, sr: int) -> list[str]:
             continue
         end = mine[-1][1]
         nxt = next((r for r in runs if r[0] >= end and r[0] <= words[k2][2] + 0.1), None)
-        if nxt is not None and nxt[0] - end >= HANG_S and longest_silence(end, nxt[0]) >= HANG_SILENT_S:
-            out.append(f"hang after {want[i]!r} ({nxt[0] - end:.2f} s)")
+        if nxt is not None:
+            out.append({"after": want[i], "v2v": round(nxt[0] - end, 2), "silent": longest_silence(end, nxt[0]),
+                        "stop": _stop_join(want[i], want[i + 1])})
     return out
 
 
@@ -380,8 +417,10 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     from . import tags
     engine_text = text
     text, sounds = tags.spoken(text, known)
-    check = lambda h, f: ([p for p in problems(text, h) if not (sounds and ("extra word" in p or p.startswith("stray ending")))]
-                          + hangs(text, h, *_mono(f)))   # (a hang is heard in the take itself: a re-read mends it)
+    def check(h, f):   # -> (problems, the take's longest join): a hang is heard in the take itself, and a re-read mends it
+        found = joins(text, h, *_mono(f))
+        return ([p for p in problems(text, h) if not (sounds and ("extra word" in p or p.startswith("stray ending")))]
+                + _flags(found)), longest_join(found)
     stopped = lambda: cancel is not None and cancel()
     s = settings()
     t0 = time.perf_counter()
@@ -392,10 +431,11 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     takes = [(Path(wav), seed)]
     heard = hear([str(wav)] + ([str(kref)] if timing else []))
     kwords = heard[1]["words"] if timing else []
-    best = (Path(wav), seed, heard[0]["words"], check(heard[0]["words"], wav))
+    best = (Path(wav), seed, heard[0]["words"], *check(heard[0]["words"], wav))
     first = best[3]
     tries = 1
-    # read again with a new seed; keep the least bad take (cost: word by word; a stray ending is cut, so no re-read)
+    # read again with a new seed; keep the least bad take (cost: word by word; a stray ending is cut, so no re-read),
+    # and of takes as bad, the one whose longest join is shortest (a hang left after every try is the smallest one)
     while cost(best[3]) and tries < max(1, s["tries"]):
         if stopped():
             raise Cancelled()
@@ -403,10 +443,10 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
         fut, w2 = render.request(engine_text, pack, ref, seed=nseed)
         client.wait(fut, cancel=cancel)
         h = hear([str(w2)])[0]["words"]
-        p = check(h, w2)
+        p, gap = check(h, w2)
         takes.append((Path(w2), nseed))
-        if cost(p) < cost(best[3]):
-            best = (Path(w2), nseed, h, p)
+        if (cost(p), gap) < (cost(best[3]), best[4]):
+            best = (Path(w2), nseed, h, p, gap)
         tries += 1
     take, words = best[0], best[2]
     x, sr = sf.read(str(take), dtype="float32")
@@ -433,7 +473,7 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     for a, b, f, why in sorted(edits, key=lambda e: e[0], reverse=True):
         x = insert_pause(x, sr, a, f) if why.startswith("pause") else stretch_span(x, sr, a, b, f)
     left = [p for p in best[3] if not (cut and p.startswith("stray ending"))]   # (what the cut mended isn't left)
-    log.update(tries=tries, seed=best[1], first_problems=first, problems=left,
+    log.update(tries=tries, seed=best[1], first_problems=first, problems=left, longest_join=best[4],
                edits=[(why, round(f, 2)) for *_, f, why in edits] + ([("stray ending cut", cut)] if cut else []),
                seconds=round(time.perf_counter() - t0, 2))
     kref.unlink(missing_ok=True)

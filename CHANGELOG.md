@@ -5,9 +5,10 @@ in brackets.
 
 ## Not released yet
 
-**SpeakEasy** (hangfix)
-- A reading that stops oddly in the middle of a phrase is heard and read again. A thumbs-down for odd pauses or pace
-  reads it again too, with a new take.
+**SpeakEasy** (hangfix, hangtune)
+- A reading that stops oddly in the middle of a phrase is heard and read again. So is a short break between words
+  that should run together ("was earned"). It's tried up to five times, and the smoothest take is kept. A thumbs-down
+  for odd pauses or pace reads it again too, with a new take.
 
 **SpeakEasy** (tags1)
 - Directions in the text: `[pause]` (or `[pause 2s]`), `[louder]`, `[softer]`, `[higher]` and `[lower]`. A tag
