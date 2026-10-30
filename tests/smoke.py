@@ -7451,6 +7451,24 @@ def u_duets():
         assert FA._duet_options({"duet_voice": "second-uc", "duet_plan": [[0, 180.5, "A"]]}, "lead-uc", duration=180.0)["duet_plan"]
         import json as _json
         assert _json.loads('{"o": NaN, "i": Infinity}')["i"] == float("inf")   # (what a request body can carry)
+        # a preview's versions are checked the same way, and may change only what a preview offers
+        pv = {"voice": "lead-uc", "options": {"fit": True}}
+        FA._preview_variants(pv, [{"octave": -1, "label": "An octave lower"}, {"key": 2}, {"pitch_correction": 0.4}, {"polish": False}], 180.0)
+        for bad in ([{"octave": float("nan")}], [{"key": float("inf")}], [{"octave": big}], [{"pitch_correction": "x"}],
+                    [{"voice": "other-uc"}], [{"duet_voice": "second-uc"}], [{"duet_plan": [[0, 1, "A"]]}], [{"index_ratio": 1}],
+                    ["octave"], [{"octave": 1, "label": "x" * 81}], [{"octave": 1, "label": 5}]):
+            try:
+                FA._preview_variants(pv, bad, 180.0)
+                raise AssertionError(f"preview version taken: {str(bad)[:60]}")
+            except V.ModelError:
+                pass
+        for bad in (float("nan"), float("inf"), big, "1", True, 0.5, 13):
+            try:
+                FA._whole(bad, 12)
+                raise AssertionError(f"{bad!r} taken as an octave")
+            except V.ModelError:
+                pass
+        assert FA._whole(-2, 12) == -2 and FA._whole(3.0, 12) == 3
         for bad in ({"duet_voice": "nobody-uc"}, {"duet_voice": "lead-uc"}, {"duet_voice": "../x"}, {"duet_voice": ["second-uc"]},
                     {"duet_voice": "second-uc", "duet_way": "chorus"}, {"duet_voice": "second-uc", "duet_octave": 3},
                     {"duet_voice": "second-uc", "duet_octave": 0.5}, {"duet_voice": "second-uc", "duet_octave": True},

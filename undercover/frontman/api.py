@@ -214,8 +214,12 @@ def _cover_octaves(h, item_id: str, body: dict):
     it = get(item_id)
     variants = []
     old = dict(it.get("options") or {})
+    from ..core.voices import ModelError
     for v in (body.get("variants") or [])[:2]:
-        change = {k: int(v[k]) for k in AGAIN_KEYS if k in v}
+        try:
+            change = {k: _whole(v[k], 12) for k in AGAIN_KEYS if isinstance(v, dict) and k in v}
+        except ModelError as e:
+            return h._error(str(e))
         if "octave" in change and old.get("backing_octave") == old.get("octave"):
             change["backing_octave"] = change["octave"]
         variants.append({"label": f"octave {change.get('octave', old.get('octave', 0)):+d}, key {change.get('key', old.get('key', 0)):+d}",
@@ -430,8 +434,13 @@ def _start_preview(h, body: dict):
         return
     get_voice(opts.voice)
     variants = body.get("variants") or []
-    if not 1 <= len(variants) <= 6:
+    if not isinstance(variants, list) or not 1 <= len(variants) <= 6:
         return h._error("Pick between 1 and 6 versions to preview.")
+    from ..core.voices import ModelError
+    try:
+        _preview_variants(body, variants, meta.get("duration"))
+    except ModelError as e:
+        return h._error(str(e))
     song = path("uploads_dir") / meta["file"]
     job = Job("cover", title=f"Preview: {meta['title']} · {label_of(opts.voice)}")  # same GPU queue as covers
     job.voices = {v for v in (opts.voice, opts.backing_voice) if v}
@@ -460,6 +469,30 @@ def _start_preview(h, body: dict):
 
     GPU_QUEUE.put((job, run))
     h._json({"job": job.id})
+
+
+PREVIEW_KEYS = ("octave", "key", "pitch_correction", "polish", "backing_octave")   # what a preview's versions may change
+
+
+def _preview_variants(body: dict, variants: list, duration: float | None = None):
+    """A preview's versions, checked as a cover's options are: each a plain set of the keys a preview offers (and a
+    short label), and the request's options with each one laid over them pass _options. ModelError otherwise."""
+    from ..core.voices import ModelError
+    for v in variants:
+        label = v.get("label", "") if isinstance(v, dict) else None
+        if (not isinstance(v, dict) or set(v) - set(PREVIEW_KEYS) - {"label"} or not isinstance(label, str)
+                or len(label) > 80):
+            raise ModelError("Those preview versions aren't ones UnderCover makes.")
+        _options({**body, "options": {**(body.get("options") or {}), **{k: x for k, x in v.items() if k != "label"}}},
+                 duration)
+
+
+def _whole(v, bound: int) -> int:
+    """A whole number from -bound to bound (the range first: it refuses NaN, Infinity and huge integers alike)."""
+    from ..core.voices import ModelError
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not -bound <= v <= bound or v != int(v):
+        raise ModelError(f"An octave or key is a whole number from -{bound} to {bound}.")
+    return int(v)
 
 
 def _options(body: dict, duration: float | None = None):
