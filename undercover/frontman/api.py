@@ -182,6 +182,8 @@ def _cover_again(h, item_id: str, body: dict):
     old = dict(it.get("options") or {})
     change = {k: v for k, v in (body.get("options") or {}).items() if k in AGAIN_KEYS}
     opts = {**old, **change}
+    if change:   # the ear's own octave or key: kept, not fitted over again
+        opts["fit"] = False
     if "octave" in change and old.get("backing_octave") == old.get("octave"):
         opts["backing_octave"] = change["octave"]
     _start_cover(h, {"song": Path(it.get("song") or "").stem, "voice": opts.pop("voice", None) or it.get("voice"),

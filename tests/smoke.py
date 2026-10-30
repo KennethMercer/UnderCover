@@ -7396,6 +7396,11 @@ def u_duets():
     finally:
         OS.installed_for = real_inst
     assert OS.parse_request("Hello by Adele as Michael Jackson and Barry White")["person"] == "Michael Jackson and Barry White"
+    from undercover.frontman.pipeline import CoverOptions
+    handed = OS.cover_options_of(CoverOptions(voice="a", duet_voice="b", duet_plan=[[0.0, 9.0, "A"]]))
+    assert handed.get("duet_voice") == "b" and "duet_plan" not in handed, handed   # a plan stays with its own cover
+    import inspect as _i
+    assert 'opts["fit"] = False' in _i.getsource(FA._cover_again)   # the ear's octave or key is kept on Make again
     # the cover's duet options: checked strictly (an installed voice, not the lead; a known way; an octave -2..2; a plan's shape)
     real_get = V.get_voice
 
@@ -11600,7 +11605,7 @@ def _cover_target():
     return song, voice
 
 
-@check("duet: a cover in two voices end to end (By line), its plan in the history, Make again keeps it; bad duet options refused plainly (then deleted)")
+@check("duet: a cover in two voices end to end (Take turns, the default: both on the choruses), its plan in the history, Make again keeps it and an octave fix is kept; bad duet options refused plainly (then deleted)")
 def a_duet():
     _tray_room("/api/history")
     song, voice = _cover_target()
@@ -11620,7 +11625,7 @@ def a_duet():
             assert e.code == 400 and why in json.loads(e.read())["error"], (bad, e.code)
     before = {c["id"] for c in api("/api/history")}
     api("/api/covers", {"song": song["id"], "voice": voice, "options": {"fit": True, "karaoke": True, "dereverb": True, "quality": "high",
-                                                                        "duet_voice": second, "duet_way": "lines"}})
+                                                                        "duet_voice": second}})
     wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="duet finished")
     made = []
     try:
@@ -11629,17 +11634,20 @@ def a_duet():
         h = new[0]
         made.append(h["id"])
         plan = h["options"].get("duet_plan")
-        assert h["duet_voice"] == second and h["options"]["duet_way"] == "lines" and isinstance(plan, list) and len(plan) >= 1, h["options"]
+        from undercover.frontman.duets import DUET_DEFAULT
+        assert h["duet_voice"] == second and h["options"]["duet_way"] == DUET_DEFAULT and isinstance(plan, list) and len(plan) >= 1, h["options"]
         assert any(n.startswith("Duet:") for n in h["notes"]), h["notes"]
         assert {w for _, _, w in plan} <= {"A", "B", "AB"} and plan[0][0] == 0, plan
-        # Make again: the same song, voices and plan
+        # Make again, an octave down (the ear's fix): the same song, voices and plan, and the octave as asked
+        oct0 = h["options"].get("octave") or 0
         before2 = {x["id"] for x in api("/api/history")}
-        api(f"/api/history/{h['id']}/again", {"options": {}})
+        api(f"/api/history/{h['id']}/again", {"options": {"octave": oct0 - 1}})
         wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="duet made again")
         again = [x for x in api("/api/history") if x["id"] not in before2]
         assert again, "Make again made nothing"
         made.append(again[0]["id"])
         assert again[0]["options"]["duet_plan"] == plan and again[0]["duet_voice"] == second, again[0]["options"]
+        assert again[0]["options"]["octave"] == oct0 - 1 and not again[0]["options"].get("fit"), again[0]["options"]
         return f"{song['title'][:30]}: {voice} & {second}, {len(plan)} parts, kept on Make again"
     finally:
         for cid in made:

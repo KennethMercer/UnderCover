@@ -594,6 +594,7 @@ const CHECKS = ["karaoke", "dereverb", "pitch_cleanup", "polish", "fit"];
 function loadOpts() {
   const saved = store.get("uc-opts", {});
   delete saved.pitch;  // old vocal-only pitch setting (put the vocal out of key); replaced by key + octave
+  delete saved.duet_plan;   // a duet's plan belongs to the cover it was made for
   if (typeof saved.reverb === "number" && ![0.15, 0.3].includes(saved.reverb)) delete saved.reverb;  // old slider value -> new Auto default
   S.opts = { ...S.defaults, ...saved };
   syncControls();
@@ -727,7 +728,7 @@ $("#convert").onclick = async () => {
   if (!S.song || !S.voice || S.job || S.osBusy) return;
   $("#err").hidden = true;
   try {
-    const { job } = await api("/api/covers", { json: { song: S.song.id, voice: S.voice, options: S.opts } });
+    const { job } = await api("/api/covers", { json: { song: S.song.id, voice: S.voice, options: { ...S.opts, duet_plan: undefined } } });   // (a duet's plan is its cover's own)
     S.job = job; summary(); startProgress(job);
   } catch (e) { showError(e.message, "Couldn't start the cover"); }
 };

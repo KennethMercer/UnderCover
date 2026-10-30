@@ -552,7 +552,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             plan["duet"].update(way=DUET_DEFAULT, display=label_of(duet["voice"]))
             push("cover", 0.0, f"{label_of(v.name)} and {label_of(duet['voice'])} take turns")
         else:
-            plan["duet"]["alone"] = (f"{duet['with']} isn't one of your voices yet, so {label_of(v.name)} sings it alone. "
+            plan["duet"]["alone"] = (f"{duet['with']} is the same voice as {label_of(v.name)} here, so it sings alone."
+                                     if duet["voice"] else
+                                     f"{duet['with']} isn't one of your voices yet, so {label_of(v.name)} sings it alone. "
                                      "Get their voice in DoubleAgent, then ask again.")
             push("cover", 0.0, plan["duet"]["alone"])
     # the exact options this cover used, for "Convert to try a variation" (Internal Affairs m1: the page assumed the
@@ -644,9 +646,10 @@ def cover_eta(voice: str, song: Path | None = None) -> dict:
 
 
 def cover_options_of(opts: "CoverOptions") -> dict:
-    """A cover's options as the Convert form takes them (the voice is the plan's; unset options left out)."""
+    """A cover's options as the Convert form takes them (the voice is the plan's; unset options left out). A duet's
+    plan stays with its cover: it's cut for that song's lines, never for the next song the form converts."""
     from dataclasses import asdict
-    return {k: v for k, v in asdict(opts).items() if k != "voice" and v is not None}
+    return {k: v for k, v in asdict(opts).items() if k not in ("voice", "duet_plan") and v is not None}
 
 
 VOICE_CHOICE = re.compile(r"check|train|use:[a-z0-9][a-z0-9-]*")
