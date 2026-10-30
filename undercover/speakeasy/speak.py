@@ -29,6 +29,7 @@ from ..doubleagent import service
 from . import tags, tts
 
 MAX_CHARS = 50_000   # about 2 hours of speech
+SEED = 1234          # a reading's first seed (sentence k: SEED + k): the same text reads the same; "read it again" draws another
 SPEEDS = (0.7, 1.4)
 # Pace is made, not stretched (phase 4c): time-stretching the finished audio sounded slurred ("drunk"). A cadence voice
 # reads slower or faster through the engine's own settings plus the person's own pauses scaled; Kokoro reads at that
@@ -156,7 +157,7 @@ def render_line(job, v) -> tuple[np.ndarray, int]:
 
 
 def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float = 1.0, nudge: float = 0.0,
-                cadence=None, pace: str | None = None, save: bool = True, v=None) -> dict:
+                cadence=None, pace: str | None = None, save: bool = True, v=None, seed: int = SEED) -> dict:
     """The speech job: sentences out as they're made (events with a URL each), then the finished WAV + MP3.
     save=False (a voice's preview line): nothing is saved or listed and nothing downloads; -> {y, sr}. v: the voice
     itself, when it isn't listed yet."""
@@ -173,7 +174,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     # the text's directions ([pause], [louder], ... and a cadence engine's own tags the ear passed) become fields
     known = tags.engine_tags(p.get("engine")) if p["mode"] == "cadence" else frozenset()
     sents, unknown, held = tags.directions(tts.sentences(text), known)
-    p = {**p, "known_tags": sorted(known), "unknown_tags": unknown, "held_tags": held}
+    p = {**p, "known_tags": sorted(known), "unknown_tags": unknown, "held_tags": held, "seed": int(seed)}
     if not sents:
         raise SpeakError("There's nothing to read in that text.")
     if p["mode"] == "cadence":
@@ -487,7 +488,7 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
         for i, s in enumerate(sents):
             while len(reqs) < min(len(sents), i + ahead):
                 k = len(reqs)
-                reqs.append(render.request(sents[k]["text"], pack, ref, seed=1234 + k, progress=progress if k == 0 else None))
+                reqs.append(render.request(sents[k]["text"], pack, ref, seed=p["seed"] + k, progress=progress if k == 0 else None))
             fut, wav = reqs[i]
             t = time.perf_counter()
             try:
@@ -500,7 +501,7 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
             if lb["listen_back"]:   # hear the reading back and mend what the ear would catch (listenback.py)
                 entry = {"job": job.id, "voice": p["voice"], "sentence": i, "text": s["text"]}
                 try:
-                    wav = listenback.review(s["text"], wav, pack, ref, 1234 + i, tts.pick_reader(p["target_hz"]), entry,
+                    wav = listenback.review(s["text"], wav, pack, ref, p["seed"] + i, tts.pick_reader(p["target_hz"]), entry,
                                             known=frozenset(p["known_tags"]), cancel=lambda: job.cancel)
                 except Cancelled:
                     raise
@@ -577,7 +578,8 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
             "voice": p["voice"], "reader": p["reader"], "reader_auto": p["auto"], "speed": p["speed"], "pitch": p["pitch"],
             "mode": p.get("mode", "reader"), "engine": p.get("engine"), "pace": p.get("pace"),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "duration": round(len(y) / sr, 2), "sr": sr, "seconds": seconds,
-            "job": job_id, "finished": round(time.time(), 3), "directions_unknown": p.get("unknown_tags") or [],
+            "job": job_id, "finished": round(time.time(), 3), "seed": p.get("seed", SEED),
+            "directions_unknown": p.get("unknown_tags") or [],
             "directions_held": p.get("held_tags") or []}
     with LOCK:
         fsutil.write_text(d / f"{sid}.json", json.dumps(meta, indent=1))

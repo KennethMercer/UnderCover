@@ -7578,6 +7578,59 @@ def u_duets():
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
 
+@check("hangs (hangfix): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 250 ms or more, no pause marked in the text) and reads it again with another seed; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
+def u_hangfix():
+    import inspect
+    import numpy as np
+    from undercover.speakeasy import listenback as LB, speak as SP, api as SA
+    from undercover.core import ear
+    sr = 16000
+
+    def take(spans, blips=()):
+        """A take: a tone during each (start, end) vowel, short blips (a stop's release) where asked."""
+        x = np.zeros(int(4.0 * sr), np.float32)
+        for a, b in list(spans) + list(blips):
+            i, j = int(a * sr), int(b * sr)
+            x[i:j] = 0.3 * np.sin(2 * np.pi * 180 * np.arange(j - i) / sr)
+        return x
+    # "a clock struck eleven slowly": Whisper's word edges (they stop early on a held sound, as on a real take)
+    words = [["a", 0.10, 0.25, 0.9], ["clock", 0.30, 0.70, 0.9], ["struck", 0.75, 1.15, 0.9], ["eleven", 1.20, 1.80, 0.9],
+             ["slowly", 1.85, 2.40, 0.9]]
+    vowels = [(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.65, 1.95), (2.00, 2.40)]   # "eleven" starts 0.55 s after "struck" ends
+    hung = take(vowels, blips=[(1.30, 1.33)])   # a detached release, alone in the gap
+    got = LB.hangs("A clock struck eleven slowly.", words, hung, sr)
+    assert len(got) == 1 and got[0].startswith("hang after 'struck'") and "0.55" in got[0], got
+    assert LB.hangs("A clock struck, eleven slowly.", words, hung, sr) == [], "a comma's pause was called a hang"
+    fine = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.18, 1.75), (1.85, 2.40)])   # an ordinary k: 80 ms
+    assert LB.hangs("A clock struck eleven slowly.", words, fine, sr) == []
+    edge = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.32, 1.75), (1.85, 2.40)])   # 220 ms: under the bound
+    assert LB.hangs("A clock struck eleven slowly.", words, edge, sr) == [] and LB.HANG_S == 0.25
+    # a long cluster (as "clock struck": closures between noise, none of them 100 ms) is no hang, however long
+    cl = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.45, 1.75), (1.85, 2.40)])
+    noise = 0.02 * np.random.default_rng(0).standard_normal(int(0.07 * sr)).astype(np.float32)
+    for a in (1.16, 1.30):   # noise (an s, an r) between short silent closures (60, 70, 80 ms)
+        cl[int(a * sr):int(a * sr) + len(noise)] = noise
+    assert LB.hangs("A clock struck eleven slowly.", words, cl, sr) == [], "a consonant cluster was called a hang"
+    assert LB.cost(got) == 1, "a hang doesn't count toward reading it again"
+    src = inspect.getsource(LB.review)
+    assert "hangs(text, h, *_mono(f))" in src and "check(h, w2)" in src and "check(heard[0][\"words\"], wav)" in src
+    # the seed: the same text reads the same (SEED + its sentence), kept with the speech; "reseed" draws a fresh one
+    assert inspect.signature(SP.make_speech).parameters["seed"].default == SP.SEED == 1234
+    ms = inspect.getsource(SP._make_cadence)
+    assert 'seed=p["seed"] + k' in ms and 'p["seed"] + i' in ms and "1234" not in ms
+    assert '"seed": p.get("seed", SEED)' in inspect.getsource(SP._save)
+    assert SA._seed({}) == SP.SEED and SA._seed({"reseed": "yes"}) == SP.SEED and SA._seed({"reseed": 1}) == SP.SEED
+    fresh = {SA._seed({"reseed": True}) for _ in range(5)}
+    assert SP.SEED not in fresh and len(fresh) > 1, fresh
+    # the ear: pace and odd pauses both read it again with new seeds (no new button)
+    pace = ear.fix_for("speech", ["pace"], {"name": "x"}, {"pace": "natural"}, "s1")
+    assert pace["do"]["options"]["reseed"] is True and pace["alt"]["options"]["reseed"] is True, pace
+    pauses = ear.fix_for("speech", ["pauses"], {"name": "x"}, {}, "s1")
+    assert pauses["reason"] == "pauses" and pauses["do"]["action"] == "respeak" and pauses["do"]["options"] == {"reseed": True}, pauses
+    assert "reseed: a.options?.reseed === true" in (ROOT / "undercover" / "web" / "ear.js").read_text(encoding="utf-8")
+    return "a 0.55 s hang heard past a release blip, a comma and 80-220 ms joins left alone; re-read; reseed on pace/pauses"
+
+
 @check("directions (tags1): [pause], [louder]/[softer], [higher]/[lower] done around the engine; Turbo's own tags not used yet (named apart, never read out) and passed through once the ear passes one; unknown ones read as nothing and named once, editors' brackets left as text; pieces keep their directions; listen-back hears the words only")
 def u_tags():
     import inspect
@@ -7864,8 +7917,8 @@ def u_ear():
         f = ear.fix_for("cover", ["unlike"], {"name": "zed", "person": "Zed"}, {}, "x")
         assert f["do"]["body"] == {"kind": "new", "target": "Zed", "now": False}, f
         h = call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pace"]})
-        assert h.out["fix"]["do"]["options"] == {"pace": "slower"} and h.out["item"]["settings"] == {"pace": "natural", "mode": "cadence", "reader": "am_michael"}, h.out
-        assert call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pauses"]}).out["fix"] is None
+        assert h.out["fix"]["do"]["options"] == {"pace": "slower", "reseed": True} and h.out["item"]["settings"] == {"pace": "natural", "mode": "cadence", "reader": "am_michael"}, h.out
+        assert call("POST", "/api/ear/rate", {"kind": "speech", "id": sid, "thumb": "down", "reasons": ["pauses"]}).out["fix"]["do"]["options"] == {"reseed": True}   # (hangfix: odd pauses, read again)
         # speech read by a stock Reader (no cadence): learning their cadence is the fix, not more training
         f = ear.fix_for("speech", ["unlike"], {"name": "zed-uc", "trained": True}, {"mode": "reader"}, sid)
         assert f["do"]["body"] == {"kind": "cadence", "target": "zed-uc", "now": False}, f
@@ -12419,7 +12472,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_duets, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()

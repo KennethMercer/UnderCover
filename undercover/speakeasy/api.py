@@ -100,6 +100,15 @@ def _num(v, default: float) -> float:
         return default
 
 
+def _seed(body: dict) -> int:
+    """The reading's first seed: the usual one (the same text reads the same), or, with "reseed": true (a speech
+    thumbed down for its pace or its pauses, read again), a fresh one."""
+    if body.get("reseed") is True:
+        import secrets
+        return speak.SEED + 1 + secrets.randbelow(10 ** 6)
+    return speak.SEED
+
+
 def _start(h, body: dict):
     text = (body.get("text") or "").strip()
     if not text:
@@ -108,7 +117,7 @@ def _start(h, body: dict):
         raise speak.SpeakError(f"That's {len(text):,} characters; SpeakEasy reads up to {speak.MAX_CHARS:,} at a time. Split it into parts.")
     args = dict(text=text, voice=body.get("voice") or "", reader=body.get("reader") or "auto",
                 speed=_num(body.get("speed"), 1.0), nudge=_num(body.get("nudge"), 0.0),
-                cadence=False if body.get("cadence") is False else None, pace=body.get("pace"))
+                cadence=False if body.get("cadence") is False else None, pace=body.get("pace"), seed=_seed(body))
     p = speak.plan(args["voice"], args["reader"], args["speed"], args["nudge"], args["cadence"], args["pace"])   # a bad voice/Reader fails now
     job = Job("speech", title=f"{text[:40].strip()}{'…' if len(text) > 40 else ''} · {label_of(args['voice'])}")
     job.voices = {args["voice"]}
