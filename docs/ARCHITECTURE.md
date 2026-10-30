@@ -475,7 +475,8 @@ stitched by the plan.
   nearest the lead's change.
 - **Too few words** (under 20 heard): there's no chorus to find, and the voices take every two lines in turn.
 
-A song sung as a duet already (`separate.lead_missing`) is sung by one voice, and the notes say why. The cover's
+A song sung as a duet already (`separate.lead_missing`: the split finds no lead line) is sung by one voice, and the
+notes say why; a duet's two singers take turns on its whole vocal instead, backing and all. The cover's
 options take `duet_voice` (an installed voice that isn't the lead), `duet_way`, `duet_backing`, `duet_octave` (-2 to 2) and a plan in
 `duets.check_plan`'s shape, all checked in `frontman/api._duet_options`. The one-shot reads "<song> as A and B" (also
 "with", "&", "a duet of ...") when the second singer is a voice here (`oneshot.split_duet`).

@@ -216,12 +216,11 @@ class CoverEngine:
         secs["separate"] = round(time.perf_counter() - t, 2)
         report("separating", 1.0, "Stems ready")
         if karaoke and not stems.get("backing"):   # core.separate found no lead to split from the backing (a duet)
-            notes.append(DUET_NOTE)
-            if dvoice:   # sung as a duet already: there's no one lead line to share between two voices
-                from dataclasses import replace as _r
-                notes.append(f"So {label_of(dvoice.name)} wasn't used: taking turns needs one lead line to share.")
-                dvoice = None
-                opts = _r(opts, duet_voice=None, duet_way=None, duet_octave=None, duet_plan=None)   # (the history: one voice)
+            # (a cover sings the whole vocal as one voice; a duet's two take turns on it, as one sung with the split
+            # off did before duets3: the second singer asked for is never dropped)
+            notes.append(DUET_NOTE if not dvoice else
+                         f"Two singers in harmony: UnderCover can't separate them yet, so {label_of(voice.name)} and "
+                         f"{label_of(dvoice.name)} take turns on the whole vocal, its backing with it.")
         if opts.fit and not dvoice:   # (a duet's fit waits for its plan: each singer weighed by their share)
             opts = self._fit(opts, voice, stems, notes, bvoice)
 

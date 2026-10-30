@@ -11871,17 +11871,17 @@ def _duet_with(song, voice):
             assert e.code == 400 and why in json.loads(e.read())["error"], (bad, e.code)
     made = []
     try:
-        # (the test song's karaoke split finds no lead, as a song sung in harmony: then one voice, said, and no duet
-        # kept in its options; with karaoke off the two share the whole vocal)
+        # (the test song's karaoke split finds no lead, as a song sung in harmony: a duet always splits, and then the
+        # two take turns on the whole vocal, said; the second singer is never dropped)
         before = {c["id"] for c in api("/api/history")}
         api("/api/covers", {"song": song["id"], "voice": voice, "options": {"karaoke": True, "quality": "high", "duet_voice": second}})
         wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="the karaoke cover finished")
         solo = [h for h in api("/api/history") if h["id"] not in before]
         assert solo, "no cover in the history"
         made.append(solo[0]["id"])
+        assert solo[0].get("duet_voice") == second and solo[0]["options"].get("duet_plan"), solo[0]
         if any(n.startswith("Two singers in harmony") for n in solo[0]["notes"]):
-            assert not solo[0].get("duet_voice") and "duet_voice" not in solo[0]["options"], solo[0]
-            assert any("wasn't used" in n for n in solo[0]["notes"]), solo[0]["notes"]
+            assert any("take turns on the whole vocal" in n for n in solo[0]["notes"]), solo[0]["notes"]
         before = {c["id"] for c in api("/api/history")}
         api("/api/covers", {"song": song["id"], "voice": voice, "options": {"fit": True, "karaoke": False, "dereverb": True, "quality": "high",
                                                                             "duet_voice": second}})
