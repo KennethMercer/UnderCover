@@ -18,7 +18,6 @@ POST   /api/history/<id>/again              {options} the cover made again: its 
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
 """
 import hashlib
-import math
 import re
 import time
 import uuid
@@ -194,8 +193,9 @@ def _cover_again(h, item_id: str, body: dict):
     the backing was at the lead's octave, it moves with it."""
     from .history import get
     it = get(item_id)   # LookupError when it's gone
-    old = dict(it.get("options") or {})
-    change = {k: v for k, v in (body.get("options") or {}).items() if k in AGAIN_KEYS}
+    old = _stored_options(it)
+    change = body.get("options") if isinstance(body.get("options"), dict) else {}
+    change = {k: v for k, v in change.items() if k in AGAIN_KEYS}
     opts = {**old, **change}
     if change:   # the ear's own octave or key: kept, not fitted over again
         opts["fit"] = False
@@ -211,11 +211,12 @@ def _cover_octaves(h, item_id: str, body: dict):
     from .history import get
     it = get(item_id)
     variants = []
-    old = dict(it.get("options") or {})
+    old = _stored_options(it)
     from ..core.voices import ModelError
-    for v in (body.get("variants") or [])[:2]:
+    asked = body.get("variants") if isinstance(body.get("variants"), list) else []
+    for v in asked[:2]:
         try:
-            change = {k: _whole(v[k], 12) for k in AGAIN_KEYS if isinstance(v, dict) and k in v}
+            change = {k: _whole(v[k], OCTAVES if k == "octave" else 12) for k in AGAIN_KEYS if isinstance(v, dict) and k in v}
         except ModelError as e:
             return h._error(str(e))
         if "octave" in change and old.get("backing_octave") == old.get("octave"):
@@ -227,6 +228,16 @@ def _cover_octaves(h, item_id: str, body: dict):
     opts = {k: v for k, v in old.items() if k != "voice"}
     _start_preview(h, {"song": Path(it.get("song") or "").stem, "voice": old.get("voice") or it.get("voice"),
                        "options": opts, "variants": variants})
+
+
+def _stored_options(it: dict) -> dict:
+    """A history item's own options, for Make again and its previews: a plain dict, and a duet's plan only when it's
+    a list (anything else is ignored, and the duet finds its plan again from the song)."""
+    old = it.get("options")
+    old = dict(old) if isinstance(old, dict) else {}
+    if not isinstance(old.get("duet_plan"), list):
+        old.pop("duet_plan", None)
+    return old
 
 
 def _presep(h, song_id: str, body: dict):
@@ -436,7 +447,7 @@ def _start_preview(h, body: dict):
         return h._error("Pick between 1 and 6 versions to preview.")
     from ..core.voices import ModelError
     try:
-        _preview_variants(body, variants, meta.get("duration"))
+        variants = _preview_variants(body, variants, meta.get("duration"))   # the checked values, not the request's
     except ModelError as e:
         return h._error(str(e))
     song = path("uploads_dir") / meta["file"]
@@ -472,17 +483,22 @@ def _start_preview(h, body: dict):
 PREVIEW_KEYS = ("octave", "key", "pitch_correction", "polish", "backing_octave")   # what a preview's versions may change
 
 
-def _preview_variants(body: dict, variants: list, duration: float | None = None):
+def _preview_variants(body: dict, variants: list, duration: float | None = None) -> list:
     """A preview's versions, checked as a cover's options are: each a plain set of the keys a preview offers (and a
-    short label), and the request's options with each one laid over them pass _options. ModelError otherwise."""
+    short label), and the request's options with each one laid over them pass _options. -> the versions as checked
+    (each value as _options read it), for the job. ModelError otherwise."""
     from ..core.voices import ModelError
+    base = body.get("options") if isinstance(body.get("options"), dict) else {}
+    out = []
     for v in variants:
         label = v.get("label", "") if isinstance(v, dict) else None
         if (not isinstance(v, dict) or set(v) - set(PREVIEW_KEYS) - {"label"} or not isinstance(label, str)
                 or len(label) > 80):
             raise ModelError("Those preview versions aren't ones UnderCover makes.")
-        _options({**body, "options": {**(body.get("options") or {}), **{k: x for k, x in v.items() if k != "label"}}},
-                 duration)
+        change = {k: x for k, x in v.items() if k != "label"}
+        o = _options({**body, "options": {**base, **change}}, duration)
+        out.append({**({"label": label} if "label" in v else {}), **{k: getattr(o, k) for k in change}})
+    return out
 
 
 def _whole(v, bound: int) -> int:
@@ -493,22 +509,31 @@ def _whole(v, bound: int) -> int:
     return int(v)
 
 
+OCTAVES = 2   # an octave (the lead's or the backing's) is a whole number from -2 to 2, as the fit and the page use
+RANGES = {"key": (-12, 12), "index_ratio": (0, 1), "protect": (0, 0.5), "volume_envelope": (0, 1),
+          "reverb": (0, 1), "backing_db": (-24, 12), "pitch_correction": (0, 1)}   # what a cover's other numbers may be
+
+
 def _options(body: dict, duration: float | None = None):
+    """A request's cover options as CoverOptions, each value checked: a number within its setting's range (RANGES,
+    OCTAVES), a voice's name a string. ModelError (a plain 400) for anything else; LookupError with no voice."""
     from .pipeline import CoverOptions
     from ..core.voices import ModelError
     o = body.get("options") or {}
+    if not isinstance(o, dict):
+        raise ModelError("Those cover settings aren't ones UnderCover makes.")
 
-    def num(k):   # a setting's number: finite only (JSON can carry NaN, Infinity and integers no float can hold)
+    def num(k):   # a setting's number, in its range (the range first: it refuses NaN, Infinity and huge integers alike)
         v = o.get(k)
         if v in (None, ""):
             return None
-        try:
-            f = float(v) if not isinstance(v, bool) else math.nan
-        except (TypeError, ValueError, OverflowError):
-            f = math.nan
-        if not math.isfinite(f):
-            raise ModelError(f"One of the cover's settings ({k}) isn't a number UnderCover can use.")
-        return f
+        lo, hi = RANGES[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+            raise ModelError(f"One of the cover's settings ({k}) is a number from {lo} to {hi}.")
+        return float(v)
+
+    def octave_of(k):
+        return _whole(o[k], OCTAVES) if o.get(k) not in (None, "") else None
     fmt = o.get("format")
     if fmt not in (None, "mp3", "flac", "wav"):
         fmt = None
@@ -516,9 +541,10 @@ def _options(body: dict, duration: float | None = None):
     voice = body.get("voice") or ""
     if not voice:
         raise LookupError("Pick a voice first.")
-    octave = int(num("octave")) if num("octave") is not None else None
-    boct = int(num("backing_octave")) if num("backing_octave") is not None else None
     bvoice = o.get("backing_voice") or None
+    if not all(isinstance(v, str) and len(v) <= 200 for v in (voice, bvoice) if v is not None):
+        raise ModelError("That voice isn't one of yours.")
+    octave, boct = octave_of("octave"), octave_of("backing_octave")
     duet = _duet_options(o, voice, duration)
     return CoverOptions(**duet, voice=voice, key=num("key"), octave=octave, index_ratio=num("index_ratio"), protect=num("protect"),
                         volume_envelope=num("volume_envelope"), dereverb=bool(o.get("dereverb")),
