@@ -11616,7 +11616,7 @@ def _duet_with(song, voice):
     others = [v["name"] for v in api("/api/voices") if v["name"].endswith("-uc") and v["name"] != voice]
     assert song and voice and others, "need a song (or test/smoke.wav) and two voices"
     second = others[0]
-    for bad, why in (({"duet_voice": "no-such-voice"}, "isn't"), ({"duet_voice": voice}, "two different"),
+    for bad, why in (({"duet_voice": "no-such-voice"}, "no voice called"), ({"duet_voice": voice}, "two different"),
                      ({"duet_voice": second, "duet_way": "chorus"}, "one of these ways"),
                      ({"duet_voice": second, "duet_plan": [[0, 1, "C"]]}, "plan")):
         req = urllib.request.Request(BASE + "/api/covers", data=json.dumps({"song": song["id"], "voice": voice, "options": bad}).encode(),
@@ -11626,21 +11626,45 @@ def _duet_with(song, voice):
             raise AssertionError(f"duet options taken: {bad}")
         except urllib.error.HTTPError as e:
             assert e.code == 400 and why in json.loads(e.read())["error"], (bad, e.code)
-    before = {c["id"] for c in api("/api/history")}
-    api("/api/covers", {"song": song["id"], "voice": voice, "options": {"fit": True, "karaoke": True, "dereverb": True, "quality": "high",
-                                                                        "duet_voice": second}})
-    wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="duet finished")
     made = []
     try:
+        # (the test song's karaoke split finds no lead, as a song sung in harmony: then one voice, said, and no duet
+        # kept in its options; with karaoke off the two share the whole vocal)
+        before = {c["id"] for c in api("/api/history")}
+        api("/api/covers", {"song": song["id"], "voice": voice, "options": {"karaoke": True, "quality": "high", "duet_voice": second}})
+        wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="the karaoke cover finished")
+        solo = [h for h in api("/api/history") if h["id"] not in before]
+        assert solo, "no cover in the history"
+        made.append(solo[0]["id"])
+        if any(n.startswith("Two singers in harmony") for n in solo[0]["notes"]):
+            assert not solo[0].get("duet_voice") and "duet_voice" not in solo[0]["options"], solo[0]
+            assert any("wasn't used" in n for n in solo[0]["notes"]), solo[0]["notes"]
+        before = {c["id"] for c in api("/api/history")}
+        api("/api/covers", {"song": song["id"], "voice": voice, "options": {"fit": True, "karaoke": False, "dereverb": True, "quality": "high",
+                                                                            "duet_voice": second}})
+        wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="duet finished")
         new = [h for h in api("/api/history") if h["id"] not in before]
         assert new, "no duet in the history"
         h = new[0]
         made.append(h["id"])
         plan = h["options"].get("duet_plan")
         from undercover.frontman.duets import DUET_DEFAULT
-        assert h["duet_voice"] == second and h["options"]["duet_way"] == DUET_DEFAULT and isinstance(plan, list) and len(plan) >= 1, h["options"]
+        assert h["duet_voice"] == second and h["options"].get("duet_way") == DUET_DEFAULT and isinstance(plan, list) and len(plan) >= 1, (h["options"], h["notes"])
         assert any(n.startswith("Duet:") for n in h["notes"]), h["notes"]
         assert {w for _, _, w in plan} <= {"A", "B", "AB"} and plan[0][0] == 0, plan
+        # a plan of three parts (Make again's own shape): A, then B, then both, the two takes stitched for real
+        found = len(plan)
+        d = float(song.get("duration") or api(f"/api/songs/{song['id']}").get("duration") or 30)
+        plan = [[0.0, round(d / 3, 3), "A"], [round(d / 3, 3), round(2 * d / 3, 3), "B"], [round(2 * d / 3, 3), round(d, 3), "AB"]]
+        before = {c["id"] for c in api("/api/history")}
+        api("/api/covers", {"song": song["id"], "voice": voice, "options": {"karaoke": False, "quality": "high", "duet_voice": second,
+                                                                            "duet_plan": plan}})
+        wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="the three-part duet finished")
+        new = [x for x in api("/api/history") if x["id"] not in before]
+        assert new and new[0]["options"]["duet_plan"] == plan, new and new[0]["options"]
+        h = new[0]
+        made.append(h["id"])
+        assert any("both" in n and n.startswith("Duet:") for n in h["notes"]), h["notes"]
         # Make again, an octave down (the ear's fix): the same song, voices and plan, and the octave as asked
         oct0 = h["options"].get("octave") or 0
         before2 = {x["id"] for x in api("/api/history")}
@@ -11651,7 +11675,7 @@ def _duet_with(song, voice):
         made.append(again[0]["id"])
         assert again[0]["options"]["duet_plan"] == plan and again[0]["duet_voice"] == second, again[0]["options"]
         assert again[0]["options"]["octave"] == oct0 - 1 and not again[0]["options"].get("fit"), again[0]["options"]
-        return f"{song['title'][:30]}: {voice} & {second}, {len(plan)} parts, kept on Make again"
+        return f"{song['title'][:30]}: {voice} & {second}, {found} part(s) found; a 3-part plan sung and kept on Make again"
     finally:
         for cid in made:
             api(f"/api/library/covers/{cid}", method="DELETE")

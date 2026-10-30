@@ -194,8 +194,10 @@ class CoverEngine:
         if karaoke and not stems.get("backing"):   # core.separate found no lead to split from the backing (a duet)
             notes.append(DUET_NOTE)
             if dvoice:   # sung as a duet already: there's no one lead line to share between two voices
+                from dataclasses import replace as _r
                 notes.append(f"So {label_of(dvoice.name)} wasn't used: taking turns needs one lead line to share.")
                 dvoice = None
+                opts = _r(opts, duet_voice=None, duet_way=None, duet_octave=None, duet_plan=None)   # (the history: one voice)
         if opts.fit:
             opts = self._fit_duet(opts, voice, dvoice, stems, notes, bvoice) if dvoice else self._fit(opts, voice, stems, notes, bvoice)
 
