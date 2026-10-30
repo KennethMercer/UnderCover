@@ -137,6 +137,20 @@ class CoverEngine:
         return replace(opts, key=fit["key"], octave=a, duet_octave=b, pitch=None,
                        backing_octave=a if same_backing else opts.backing_octave)
 
+    def _duet_backing(self, opts: "CoverOptions", cstems: dict, notes: list) -> bool:
+        """Is a duet's backing converted (in each section's singer, by the duet's own plan)? Exactly when a cover's
+        would be: a backing voice is chosen. "Original singer" keeps the original backing, as in a cover; the one-shot
+        chooses one unless the backing is stacked harmony (oneshot.chordal_backing). Nothing when there's hardly
+        any backing."""
+        from .remix import lufs
+        back = cstems.get("backing")
+        if not opts.backing_voice or not back:
+            return False
+        if lufs(back) < -45:
+            notes.append("This song has almost no backing vocals, so they weren't converted.")
+            return False
+        return True
+
     def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report) -> "CoverOptions":
         """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
         (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. The plan and the
@@ -239,7 +253,10 @@ class CoverEngine:
         work.mkdir(parents=True, exist_ok=True)
         if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself
             opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report)
-        passes = 1 + bool(dvoice) + bool(bvoice)
+        dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in each section's singer too
+        if dback:
+            bvoice = None   # (one backing voice gives way to the duet's two)
+        passes = 1 + bool(dvoice) + bool(bvoice) + 2 * dback
         share = 1.0 / passes
         from ..core import lowprofile
         lowprofile.free_for("convert")   # (under the cap: the separator goes before the conversion; back on first use)
@@ -272,6 +289,25 @@ class CoverEngine:
                                                  progress=lambda f: report("converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
+        if dback:   # the backing as the lead: each section's backing in that section's singer, at that singer's octave
+            from dataclasses import replace as _replace
+            from .duets import moved_to_quiet, stitch
+            back16 = load_16k(cstems["backing"])
+            aoct = (s.pitch - key) / 12
+            doct = opts.duet_octave if opts.duet_octave is not None else aoct
+            with self.converter.shared_f0():
+                ba, bsr = self.converter.convert(back16, voice.name, s, progress=lambda f: report(
+                    "converting", 1 - 2 * share + share * f, f"Converting the backing vocals to {label_of(voice.name)}"))
+                bb, dbsr = self.converter.convert(back16, dvoice.name, _replace(s, pitch=key + 12 * doct), progress=lambda f: report(
+                    "converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(dvoice.name)} too"))
+            if dbsr != bsr:
+                from math import gcd
+                from scipy.signal import resample_poly
+                g = gcd(bsr, dbsr)
+                bb = resample_poly(bb, bsr // g, dbsr // g).astype(np.float32)
+            conv_backing = work / f"{_safe(title)}__{voice.name}__{dvoice.name}__backing__{stamp}.flac"
+            bplan = moved_to_quiet(opts.duet_plan, back16)   # (each change at the backing's own pause near the lead's)
+            sf.write(str(conv_backing), np.clip(stitch(ba, bb, bplan, bsr), -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
         report("converting", 1.0, "Vocal converted")
 
@@ -580,6 +616,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
         conv = conv * 2 - 1.5  # second conversion; shared models are already loaded
     if opts.duet_voice:   # a duet: the lead converted again (its pitch track shared), and its words heard once
         conv += dur / med(speeds["synth"], 40.0) + (0.0 if opts.duet_plan else 5.0 + dur / 30.0)
+        if karaoke:   # and the backing in both singers (when it's converted: a guess, the rule needs the stems)
+            conv += 2 * dur / med(speeds["synth"], 40.0)
     key, _ = pitch_plan(opts)
     mix = 1.0 + dur / 120.0 + (dur / 50.0 if key else 0.0)  # Rubber Band key shift ~50x realtime
     return {"separating": round(sep, 1), "converting": round(conv, 1), "mixing": round(mix, 1),

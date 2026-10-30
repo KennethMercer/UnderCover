@@ -446,15 +446,20 @@ inside `Converter.shared_f0`, so the pitch track is read once. Both voices sing 
 own best octave: `duets.joint_fit` picks the key with the lowest summed `fit.pick_fit` cost. The two takes are then
 stitched by a plan.
 
-- **Lines** come from Whisper's words on the whole vocal (lead and backing mixed, through the speech worker). A line
-  ends at a 0.25 s gap or at 10 words, and one under 4 words or 1.5 s joins the next.
-- **A chorus** is where 6 words in a row come back 15 or more words later. A run of 2 or more such lines is a chorus
-  block.
-- **Cuts** fall in the middle of the lead's quietest run between two lines, with a 40 ms equal-power crossfade there.
-  Each voice sings at -3 dB when both do.
-- **Ways** (`duets.WAYS`): `turns` alternates verses and sings the choruses together; `lines` alternates lines.
-  `DUET_DEFAULT` is the one place the default is set.
-- **Too few words** (under 20 heard): the voices take turns every two phrases of the lead, never together.
+- **Lines** are the lead's own: stretches of singing between silences of 100 ms or more, 35 dB under its loud level
+  (`duets.phrases`). A line under 1.5 s joins the next across a gap under 0.6 s.
+- **Cuts** fall only in the middle of those silences, with a 40 ms equal-power crossfade there, so no voice changes
+  inside a word. Whisper's word times are never used for a cut: they stop early on a held note.
+- **A chorus** is a line most of whose words are inside a run of 6 that comes back 15 or more words later in Whisper's
+  words on the whole vocal (lead and backing mixed, through the speech worker). A run of 2 or more such lines is a
+  chorus block.
+- **Ways** (`duets.WAYS`): `turns` alternates verses, and each chorus goes to whoever sang the verse before it;
+  `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
+  one place the default is set.
+- **The backing** is converted exactly when a cover's would be (`pipeline._duet_backing`): when a backing voice is
+  chosen. "Original singer" keeps the original backing; the one-shot chooses one unless the backing is stacked
+  harmony. Each section's backing is then sung by that section's singer, stitched by the same plan.
+- **Too few words** (under 20 heard): there's no chorus to find, and the voices take every two lines in turn.
 
 A song sung as a duet already (`separate.lead_missing`) is sung by one voice, and the notes say why. The cover's
 options take `duet_voice` (an installed voice that isn't the lead), `duet_way`, `duet_octave` (-2 to 2) and a plan in

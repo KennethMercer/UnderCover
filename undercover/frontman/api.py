@@ -199,6 +199,8 @@ def _cover_again(h, item_id: str, body: dict):
     opts = {**old, **change}
     if change:   # the ear's own octave or key: kept, not fitted over again
         opts["fit"] = False
+    if any(len(p) == 3 and p[2] not in ("A", "B") for p in opts.get("duet_plan") or [] if isinstance(p, list)):
+        opts.pop("duet_plan")   # a plan from before one-singer-at-a-time ("both"): found again from the song
     if "octave" in change and old.get("backing_octave") == old.get("octave"):
         opts["backing_octave"] = change["octave"]
     _start_cover(h, {"song": Path(it.get("song") or "").stem, "voice": opts.pop("voice", None) or it.get("voice"),
@@ -244,8 +246,10 @@ def _presep(h, song_id: str, body: dict):
     """Separate a just-loaded song in the background with the page's saved settings, so the first cover skips
     that step (review C3). Only when the GPU is idle; a cover of another song, or with other separation settings,
     cancels it."""
-    meta = song_meta(song_id)
     o = body.get("options") or {}
+    if not isinstance(o, dict):
+        return h._error("Those cover settings aren't ones UnderCover makes.")
+    meta = song_meta(song_id)
     want = (song_id, o.get("quality") if o.get("quality") in ("fast", "high", "max") else None,
             bool(o.get("dereverb")), bool(o.get("karaoke") or o.get("backing_voice")))
     busy = GPU_QUEUE.qsize() or any(not j.finished for j in JOBS.values() if j.kind != "presep")
