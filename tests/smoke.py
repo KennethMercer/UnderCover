@@ -7434,14 +7434,33 @@ def u_duets():
                 raise AssertionError(f"taken: {bad}")
             except V.ModelError:
                 pass
-        for k in ("octave", "key", "index_ratio", "backing_octave", "reverb"):
-            for v in (float("nan"), float("inf"), big, "x", True):
+        for k in ("octave", "key", "index_ratio", "backing_octave", "reverb", "protect", "pitch_correction", "backing_db",
+                  "volume_envelope"):
+            for v in (float("nan"), float("inf"), big, "x", "1", True, 1e300, -1e300, [1], {"v": 1}):
                 try:
                     FA._options({"voice": "lead-uc", "options": {k: v}})
                     raise AssertionError(f"{k}={v!r} taken")
                 except V.ModelError:
                     pass
         assert FA._options({"voice": "lead-uc", "options": {"octave": -1, "key": 2.5}}).octave == -1
+        # each setting within its range (what the page and the fit can set), the edges taken and one step past refused
+        for k, (lo, hi) in {**FA.RANGES, "octave": (-2, 2), "backing_octave": (-2, 2)}.items():
+            for v in (lo, hi):
+                got = getattr(FA._options({"voice": "lead-uc", "options": {k: v}}), k)
+                assert got == v and type(got) is (int if k.endswith("octave") else float), (k, v, got)
+            for v in (lo - 1, hi + 1):
+                try:
+                    FA._options({"voice": "lead-uc", "options": {k: v}})
+                    raise AssertionError(f"{k}={v!r} taken")
+                except V.ModelError:
+                    pass
+        for bad in ({"voice": "lead-uc", "options": ["octave"]}, {"voice": "lead-uc", "options": {"backing_voice": ["x"]}},
+                    {"voice": ["lead-uc"]}, {"voice": "lead-uc", "options": {"octave": 0.5}}):
+            try:
+                FA._options(bad)
+                raise AssertionError(f"taken: {str(bad)[:60]}")
+            except V.ModelError:
+                pass
         # a plan is held to the song's length when the request is made, not after the song is separated
         try:
             FA._duet_options({"duet_voice": "second-uc", "duet_plan": [[0, 400, "A"]]}, "lead-uc", duration=180.0)
@@ -7453,8 +7472,11 @@ def u_duets():
         assert _json.loads('{"o": NaN, "i": Infinity}')["i"] == float("inf")   # (what a request body can carry)
         # a preview's versions are checked the same way, and may change only what a preview offers
         pv = {"voice": "lead-uc", "options": {"fit": True}}
-        FA._preview_variants(pv, [{"octave": -1, "label": "An octave lower"}, {"key": 2}, {"pitch_correction": 0.4}, {"polish": False}], 180.0)
+        got = FA._preview_variants(pv, [{"octave": -1, "label": "An octave lower"}, {"key": 2}, {"pitch_correction": 0.4}, {"polish": False}], 180.0)
+        assert got == [{"label": "An octave lower", "octave": -1}, {"key": 2.0}, {"pitch_correction": 0.4}, {"polish": False}], got
+        assert type(got[1]["key"]) is float   # the job gets the checked values, not the request's
         for bad in ([{"octave": float("nan")}], [{"key": float("inf")}], [{"octave": big}], [{"pitch_correction": "x"}],
+                    [{"octave": 1e300}], [{"backing_octave": -1e200}], [{"pitch_correction": 1e9}], [{"octave": "1"}], [{"key": "3"}],
                     [{"voice": "other-uc"}], [{"duet_voice": "second-uc"}], [{"duet_plan": [[0, 1, "A"]]}], [{"index_ratio": 1}],
                     ["octave"], [{"octave": 1, "label": "x" * 81}], [{"octave": 1, "label": 5}]):
             try:
@@ -7469,6 +7491,13 @@ def u_duets():
             except V.ModelError:
                 pass
         assert FA._whole(-2, 12) == -2 and FA._whole(3.0, 12) == 3
+        # Make again reads a history item's options as a dict, and a stored plan only when it's a list
+        for stored, want in (({"options": {"octave": 1, "duet_plan": 5}}, {"octave": 1}), ({"options": ["x"]}, {}),
+                             ({"options": {"duet_plan": "junk"}}, {}), ({}, {}),
+                             ({"options": {"duet_plan": [[0, 1, "A"]]}}, {"duet_plan": [[0, 1, "A"]]})):
+            assert FA._stored_options(stored) == want, (stored, FA._stored_options(stored))
+        assert "_stored_options(it)" in _i.getsource(FA._cover_again) and "_stored_options(it)" in _i.getsource(FA._cover_octaves)
+        assert "variants = _preview_variants(" in _i.getsource(FA._start_preview)
         for bad in ({"duet_voice": "nobody-uc"}, {"duet_voice": "lead-uc"}, {"duet_voice": "../x"}, {"duet_voice": ["second-uc"]},
                     {"duet_voice": "second-uc", "duet_way": "chorus"}, {"duet_voice": "second-uc", "duet_octave": 3},
                     {"duet_voice": "second-uc", "duet_octave": 0.5}, {"duet_voice": "second-uc", "duet_octave": True},
