@@ -18,6 +18,7 @@ POST   /api/history/<id>/again              {options} the cover made again: its 
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
 """
 import hashlib
+import math
 import re
 import time
 import uuid
@@ -118,11 +119,12 @@ def _upload(h):
         tmp.unlink(missing_ok=True)   # moved into place by register_song when it worked
 
 
-def _checked_options(h, body: dict):
-    """_options, with a request the cover can't take (a duet's options, _duet_options) answered as a plain 400."""
+def _checked_options(h, body: dict, duration: float | None = None):
+    """_options, with a request the cover can't take (a number that isn't one, a duet's options) answered as a plain
+    400. duration: the song's length, so a duet's plan is held to it before anything is queued."""
     from ..core.voices import ModelError
     try:
-        return _options(body)
+        return _options(body, duration)
     except ModelError as e:
         h._error(str(e))
         return None
@@ -131,7 +133,7 @@ def _checked_options(h, body: dict):
 def _estimate(h, body: dict):
     from .pipeline import estimate
     meta = song_meta(body.get("song", ""))
-    opts = _checked_options(h, body)
+    opts = _checked_options(h, body, meta.get("duration"))
     if opts is not None:
         h._json(estimate(path("uploads_dir") / meta["file"], opts))
 
@@ -139,7 +141,7 @@ def _estimate(h, body: dict):
 def _start_cover(h, body: dict):
     from ..core.voices import get_voice
     meta = song_meta(body.get("song", ""))
-    opts = _checked_options(h, body)
+    opts = _checked_options(h, body, meta.get("duration"))
     if opts is None:
         return
     get_voice(opts.voice)  # friendly error now rather than inside the job
@@ -421,7 +423,7 @@ def _start_auto(h, body: dict):
 def _start_preview(h, body: dict):
     from ..core.voices import get_voice
     meta = song_meta(body.get("song", ""))
-    opts = _checked_options(h, body)
+    opts = _checked_options(h, body, meta.get("duration"))
     if opts is None:
         return
     get_voice(opts.voice)
@@ -458,10 +460,22 @@ def _start_preview(h, body: dict):
     h._json({"job": job.id})
 
 
-def _options(body: dict):
+def _options(body: dict, duration: float | None = None):
     from .pipeline import CoverOptions
+    from ..core.voices import ModelError
     o = body.get("options") or {}
-    num = lambda k: float(o[k]) if o.get(k) not in (None, "") else None
+
+    def num(k):   # a setting's number: finite only (JSON can carry NaN, Infinity and integers no float can hold)
+        v = o.get(k)
+        if v in (None, ""):
+            return None
+        try:
+            f = float(v) if not isinstance(v, bool) else math.nan
+        except (TypeError, ValueError, OverflowError):
+            f = math.nan
+        if not math.isfinite(f):
+            raise ModelError(f"One of the cover's settings ({k}) isn't a number UnderCover can use.")
+        return f
     fmt = o.get("format")
     if fmt not in (None, "mp3", "flac", "wav"):
         fmt = None
@@ -472,7 +486,7 @@ def _options(body: dict):
     octave = int(num("octave")) if num("octave") is not None else None
     boct = int(num("backing_octave")) if num("backing_octave") is not None else None
     bvoice = o.get("backing_voice") or None
-    duet = _duet_options(o, voice)
+    duet = _duet_options(o, voice, duration)
     return CoverOptions(**duet, voice=voice, key=num("key"), octave=octave, index_ratio=num("index_ratio"), protect=num("protect"),
                         volume_envelope=num("volume_envelope"), dereverb=bool(o.get("dereverb")),
                         karaoke=bool(o.get("karaoke")), quality=q, format=fmt,
@@ -483,7 +497,7 @@ def _options(body: dict):
                         polish=o.get("polish", True) is not False, fit=bool(o.get("fit")))
 
 
-def _duet_options(o: dict, voice: str) -> dict:
+def _duet_options(o: dict, voice: str, duration: float | None = None) -> dict:
     """A duet's options from a request (1.2, duets.py), checked strictly: the second singer an installed voice that
     isn't the first, the way one of duets.WAYS, its octave a whole number from -2 to 2, a plan (Make again's) only in
     duets.check_plan's shape. ModelError (a plain 400) for anything else; nothing when no second singer is asked for."""
@@ -502,7 +516,8 @@ def _duet_options(o: dict, voice: str) -> dict:
         raise ModelError(f"A duet is shared one of these ways: {', '.join(WAYS)}.")
     doct = o.get("duet_octave")
     if doct not in (None, ""):
-        if isinstance(doct, bool) or not isinstance(doct, (int, float)) or doct != int(doct) or not -2 <= doct <= 2:
+        if (isinstance(doct, bool) or not isinstance(doct, (int, float))
+                or not -2 <= doct <= 2 or doct != int(doct)):   # (the range first: it refuses NaN, Infinity and 10**400 alike)
             raise ModelError("The second singer's octave is a whole number from -2 to 2.")
         doct = int(doct)
     else:
@@ -510,7 +525,7 @@ def _duet_options(o: dict, voice: str) -> dict:
     plan = o.get("duet_plan")
     if plan not in (None, ""):
         try:
-            plan = check_plan(plan)
+            plan = check_plan(plan, float(duration) if duration else None)
         except ValueError as e:
             raise ModelError(str(e)) from None
     else:

@@ -7413,6 +7413,32 @@ def u_duets():
         ok = FA._duet_options({"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0, 2, "A"], [2, 5, "AB"]]}, "lead-uc")
         assert ok == {"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0.0, 2.0, "A"], [2.0, 5.0, "AB"]]}, ok
         assert FA._duet_options({}, "lead-uc") == {} and FA._duet_options({"duet_voice": ""}, "lead-uc") == {}
+        # numbers no setting can be (JSON carries NaN, Infinity and huge integers): a plain refusal, never a 500
+        big = 10 ** 400
+        for bad in ({"duet_octave": float("nan")}, {"duet_octave": float("inf")}, {"duet_octave": -float("inf")}, {"duet_octave": big},
+                    {"duet_plan": [[0, big, "A"]]}, {"duet_plan": [[0, float("inf"), "A"]]}, {"duet_plan": [[0, 1, "A"], [1, big, "B"]]}):
+            try:
+                FA._duet_options({"duet_voice": "second-uc", **bad}, "lead-uc")
+                raise AssertionError(f"taken: {bad}")
+            except V.ModelError:
+                pass
+        for k in ("octave", "key", "index_ratio", "backing_octave", "reverb"):
+            for v in (float("nan"), float("inf"), big, "x", True):
+                try:
+                    FA._options({"voice": "lead-uc", "options": {k: v}})
+                    raise AssertionError(f"{k}={v!r} taken")
+                except V.ModelError:
+                    pass
+        assert FA._options({"voice": "lead-uc", "options": {"octave": -1, "key": 2.5}}).octave == -1
+        # a plan is held to the song's length when the request is made, not after the song is separated
+        try:
+            FA._duet_options({"duet_voice": "second-uc", "duet_plan": [[0, 400, "A"]]}, "lead-uc", duration=180.0)
+            raise AssertionError("a plan longer than the song was queued")
+        except V.ModelError:
+            pass
+        assert FA._duet_options({"duet_voice": "second-uc", "duet_plan": [[0, 180.5, "A"]]}, "lead-uc", duration=180.0)["duet_plan"]
+        import json as _json
+        assert _json.loads('{"o": NaN, "i": Infinity}')["i"] == float("inf")   # (what a request body can carry)
         for bad in ({"duet_voice": "nobody-uc"}, {"duet_voice": "lead-uc"}, {"duet_voice": "../x"}, {"duet_voice": ["second-uc"]},
                     {"duet_voice": "second-uc", "duet_way": "chorus"}, {"duet_voice": "second-uc", "duet_octave": 3},
                     {"duet_voice": "second-uc", "duet_octave": 0.5}, {"duet_voice": "second-uc", "duet_octave": True},

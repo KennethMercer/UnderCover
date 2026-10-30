@@ -204,7 +204,7 @@ def check_plan(plan, duration: float | None = None) -> list:
             raise bad
         try:
             a, b = float(p[0]), float(p[1])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # (an integer too big for a float)
             raise bad from None
         if not (math.isfinite(a) and math.isfinite(b)) or abs(a - at) > 1e-3 or b <= a:
             raise bad
