@@ -136,8 +136,8 @@ class CoverEngine:
         b = fit["octave"].get("B", opts.duet_octave if opts.duet_octave is not None else a)
         names = {"A": label_of(voice.name), "B": label_of(dvoice.name)}
         line = f"Fit for two: key {fit['key']:+d}, {names['A']} at octave {a:+d}, {names['B']} at octave {b:+d}."
-        far = max(fit["off"], key=lambda k: abs(fit["off"][k]))
-        if len(fit["off"]) == 2 and abs(fit["off"][far]) >= FAR_ST:   # one sits far from their own key: said plainly
+        far = max(fit["off"], key=lambda k: abs(fit["off"][k])) if len(fit["off"]) == 2 else None   # (both must sing)
+        if far and abs(fit["off"][far]) >= FAR_ST:   # one sits far from their own key: said plainly
             other = "B" if far == "A" else "A"
             line += (f" {names[far]} sings {abs(fit['off'][far])} semitones {'higher' if fit['off'][far] > 0 else 'lower'}"
                      f" than their own best key: the key follows {names[other]}, who sings "

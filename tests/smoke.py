@@ -7409,6 +7409,19 @@ def u_duets():
     fsrc = _i2.getsource(_PL2.CoverEngine._fit_duet)
     assert "singer_frames(opts.duet_plan, len(f0))" in fsrc and "abs(fit[\"off\"][far]) >= FAR_ST" in fsrc
     msrc = _i2.getsource(_PL2.CoverEngine.make_cover)   # the fit for two after the plan (it needs who sings when)
+    # a song whose plan gives one singer all of it, with almost no melody heard (the test song): no singer is named,
+    # and nothing fails (the first --full of duets3: max() of nothing)
+    import tempfile as _tf
+    import soundfile as _sf
+    with _tf.TemporaryDirectory() as _td:
+        _w = Path(_td) / "v.wav"
+        _sf.write(str(_w), np.zeros(16000, np.float32), 16000)
+        _eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(infer_from_audio=lambda x, thred=0.03: np.zeros(100))))
+        _v = lambda n, r: SimpleNamespace(name=n, extra={"f0_range": r})
+        _notes = []
+        _o = _PL2.CoverEngine._fit_duet(_eng, _PL2.CoverOptions(voice="a-uc", duet_voice="b-uc", duet_plan=[[0.0, 1.0, "A"]]),
+                                        _v("a-uc", [183.0, 314.0, 512.0]), _v("b-uc", [61.0, 146.0, 269.0]), {"vocals": _w}, _notes)
+        assert _o.key is not None and len(_notes) == 1 and _notes[0].startswith("Fit for two") and "semitones" not in _notes[0], _notes
     assert msrc.index("self._duet_plan(") < msrc.index("self._fit_duet(") < msrc.index("key, s.pitch = pitch_plan(opts)")
     # the one-shot: "A and B" (also with, &, duet of): only with a voice here for the second (or the first), never a
     # whole name that is one voice, nor two names neither of which is here
