@@ -7498,6 +7498,19 @@ def u_duets():
             assert FA._stored_options(stored) == want, (stored, FA._stored_options(stored))
         assert "_stored_options(it)" in _i.getsource(FA._cover_again) and "_stored_options(it)" in _i.getsource(FA._cover_octaves)
         assert "variants = _preview_variants(" in _i.getsource(FA._start_preview)
+        # so do the song's preparation and the ear's reader: options that aren't a dict are a plain refusal or {}
+        said = []
+        FA._presep(SimpleNamespace(_json=lambda o: said.append(("ok", o)), _error=lambda m, s=400: said.append(("error", m))),
+                   "no-such-song", {"options": ["quality"]})
+        assert said and said[0][0] == "error", said
+        from undercover.app import ear_api as EA
+        from undercover.frontman import history as FH
+        real_hget = FH.get
+        try:
+            FH.get = lambda i: {"voice": "lead-uc", "options": "junk"}
+            assert EA._item("cover", "x") == ("lead-uc", {})
+        finally:
+            FH.get = real_hget
         for bad in ({"duet_voice": "nobody-uc"}, {"duet_voice": "lead-uc"}, {"duet_voice": "../x"}, {"duet_voice": ["second-uc"]},
                     {"duet_voice": "second-uc", "duet_way": "chorus"}, {"duet_voice": "second-uc", "duet_octave": 3},
                     {"duet_voice": "second-uc", "duet_octave": 0.5}, {"duet_voice": "second-uc", "duet_octave": True},

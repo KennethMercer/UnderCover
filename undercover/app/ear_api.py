@@ -31,8 +31,9 @@ def _item(kind: str, item_id: str) -> tuple[str | None, dict]:
     """(voice, settings) of the cover or speech being rated (LookupError when it's gone)."""
     if kind == "cover":
         from ..frontman import history
+        from ..frontman.api import _stored_options
         it = history.get(item_id)
-        return it.get("voice"), dict(it.get("options") or {})
+        return it.get("voice"), _stored_options(it)
     if kind == "speech":
         from ..speakeasy import speak
         it = speak.get_speech(item_id)
