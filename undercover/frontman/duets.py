@@ -24,6 +24,8 @@ import numpy as np
 
 DUET_DEFAULT = "turns"   # the ear decides (the blind pairs): a one-line change
 WAYS = ("turns", "lines")
+BACKINGS = ("singers", "original")   # a duet's backing: in the singers' voices (backing_plan), or the song's own
+BACKING_DEFAULT = "singers"   # the user's favourite (2026-10-30): a singer harmonising with himself
 WHO = ("A", "B")
 SILENCE_DB, SILENCE_S = 35.0, 0.10            # where a voice may change: the lead this far down, this long
 MIN_PHRASE_S = 0.3                            # shorter bursts of sound aren't a line
@@ -32,6 +34,7 @@ NGRAM, NGRAM_APART = 6, 15                    # a chorus: 6 words that come back
 MIN_WORDS = 20                                # fewer heard: no chorus to find
 FADE_S = 0.04                                 # the crossfade at a change
 MAX_PARTS = 2000                              # a plan longer than this is no song's (check_plan)
+FAR_ST = 3                                    # a singer this many semitones from their own best key is named (joint_fit)
 SR16 = 16000
 
 
@@ -191,26 +194,57 @@ def find_plan(lead16: np.ndarray, words: list, way: str, duration: float) -> tup
     return plan_of(rows, who_sings(rows, way, fallback), duration), rows, fallback
 
 
-def moved_to_quiet(plan: list, x16: np.ndarray, span: float = 1.0) -> list:
-    """The plan with each change moved to the quietest point of x16 (another stem, the backing) within span seconds
-    of it, never past halfway to the next change or the last: the backing's own pause near the lead's, so its voice
-    doesn't change mid-word either. The first start and the last end stay."""
+def _who_at(plan: list, a: float, b: float) -> str:
+    """Who sings most of a..b in the plan (a tie: the earlier one)."""
+    have = {}
+    for s, e, w in plan:
+        have[w] = have.get(w, 0.0) + max(0.0, min(b, e) - max(a, s))
+    first = next((w for s, e, w in plan if e > a), plan[-1][2])
+    return max(have, key=lambda w: (have[w], w == first))
+
+
+def backing_plan(plan: list, x16: np.ndarray) -> list:
+    """The backing's own plan: its phrases are its singing between its own silences (SILENCE_S or more, SILENCE_DB
+    under its loud level), and each phrase is sung whole by whoever sings most of the lead under it. The voice changes
+    only inside a silence between two phrases, at the point of it nearest the lead's change; a phrase that runs on past
+    the lead's change mostly in the old singer is finished by the old singer. The user heard the backing change voice
+    halfway through a phrase (2026-10-30): on Hello the backing sings from 3:26.9 to 3:51.2 with only 15-25 dB dips
+    between its syllables, and its one silence near the lead's change at 3:28.7 ends at 3:26.9."""
     if len(plan) < 2:
         return [list(p) for p in plan]
     db = _db(x16)
-    cuts = [p[1] for p in plan[:-1]]
-    moved = []
-    for k, c in enumerate(cuts):
-        lo = max(c - span, (plan[k][0] + c) / 2)
-        hi = min(c + span, (c + plan[k + 1][1]) / 2)
-        a, b = int(lo * 100), max(int(lo * 100) + 1, int(hi * 100))
-        seg = db[a:min(b, len(db))]
-        moved.append(round((a + int(np.argmin(seg))) / 100 + 0.005, 3) if len(seg) else c)
+    if not len(db):
+        return [list(p) for p in plan]
+    sung = db > np.percentile(db, 95) - SILENCE_DB
+    need = int(round(SILENCE_S * 100))
+    sang, start, quiet = [], None, 0   # the backing's phrases [t0, t1]
+    for i, v in enumerate(sung):
+        if v:
+            start = i if start is None else start
+            quiet = 0
+        elif start is not None:
+            quiet += 1
+            if quiet >= need:
+                sang.append([start / 100, (i - quiet + 1) / 100])
+                start, quiet = None, 0
+    if start is not None:
+        sang.append([start / 100, len(db) / 100])
+    if not sang:
+        return [list(p) for p in plan]
+    who = [_who_at(plan, a, b) for a, b in sang]
+    changes = [p[1] for p in plan[:-1]]
+    half = FADE_S / 2
     out, at = [], plan[0][0]
-    for k, p in enumerate(plan):
-        end = moved[k] if k < len(moved) else p[1]
-        out.append([at, end, p[2]])
-        at = end
+    for k in range(1, len(sang)):
+        if who[k] == who[k - 1]:
+            continue
+        lo, hi = sang[k - 1][1] + half, sang[k][0] - half   # the silence between the two phrases
+        near = min(changes, key=lambda c: 0.0 if lo <= c <= hi else min(abs(c - lo), abs(c - hi)))
+        cut = round(min(max(near, lo), hi), 3)
+        if cut > at:
+            out.append([at, cut, who[k - 1]])
+            at = cut
+    out.append([at, plan[-1][1], who[-1]])
     return out
 
 
@@ -237,22 +271,44 @@ def stitch(a: np.ndarray, b: np.ndarray, plan: list, sr: int) -> np.ndarray:
     return (a[:n] * wa + b[:n] * wb).astype(np.float32)
 
 
-def joint_fit(ranges: dict, f0: np.ndarray) -> dict | None:
-    """One key for the song (the band moves once), each voice at its best octave in it: the key whose summed
-    fit.pick_fit cost (at that fixed key) is lowest. ranges: {"A": (f0_range, from_speech), "B": ...}; a voice
-    without a measured range is left out. -> {key, octave: {A, B}, outside: {A, B}} or None (neither has one)."""
-    from .fit import KEY_COST, MAX_KEY, pick_fit
+def singer_frames(plan: list, n: int) -> np.ndarray:
+    """Who sings each 10 ms frame of the pitch track (n frames), by the plan: an array of "A" / "B"."""
+    who = np.full(n, plan[-1][2] if plan else "A", dtype="<U1")
+    for s, e, w in plan:
+        who[int(round(s * 100)):int(round(e * 100))] = w
+    return who
+
+
+def joint_fit(ranges: dict, f0: np.ndarray, who: np.ndarray | None = None) -> dict | None:
+    """One key for the song (the band moves once), each voice at its best octave in it: the key whose fit.pick_fit
+    cost (at that fixed key) is lowest. With the plan's singer per frame (`who`, singer_frames), each voice's cost is
+    read on the melody it sings and weighed by its share of the sung melody, so the singer who carries the most of
+    the song sits nearest his own key (the user heard one sound out of place at a key shared evenly, 2026-10-30);
+    without it, the costs on the whole melody are summed. ranges: {"A": (f0_range, from_speech), "B": ...}; a voice
+    without a measured range is left out. -> {key, octave: {A, B}, outside: {A, B}, share: {A, B}, alone: {A: {key,
+    octave}}, off: {A, B} (semitones each one sings from where he'd sing alone: + higher)} or None (neither has one)."""
+    from .fit import MAX_KEY, pick_fit
     have = {k: v for k, v in ranges.items() if v and v[0]}
     if not have:
         return None
+    sung = f0 > 0
+    if who is None:
+        mine, weight = {k: f0 for k in have}, {k: 1.0 for k in have}
+    else:
+        mine = {k: np.where(who[:len(f0)] == k, f0, 0.0) for k in have}
+        weight = {k: float((mine[k] > 0).sum() / max(1, int(sung.sum()))) for k in have}
     best = None
     for key in sorted(range(-MAX_KEY, MAX_KEY + 1), key=abs):
-        g = f0 * 2.0 ** (key / 12)
-        per = {k: pick_fit(rng, bool(speech), g, max_key=0) for k, (rng, speech) in have.items()}
-        cost = sum(x["cost"] for x in per.values()) + len(per) * KEY_COST * abs(key)
+        # (each cost at this key as a single voice's fit counts it: the key's own cost, and the voice ending up higher)
+        per = {k: pick_fit(rng, bool(speech), mine[k], fixed_key=key) for k, (rng, speech) in have.items()}
+        cost = sum(weight[k] * x["cost"] for k, x in per.items())
         if best is None or cost < best["cost"] - 1e-9:
             best = {"key": key, "cost": round(cost, 4), "octave": {k: x["octave"] for k, x in per.items()},
                     "outside": {k: x["outside"] for k, x in per.items()}}
+    alone = {k: pick_fit(rng, bool(speech), mine[k]) for k, (rng, speech) in have.items()}
+    best["share"] = {k: round(w, 3) for k, w in weight.items()} if who is not None else None
+    best["alone"] = {k: {"key": a["key"], "octave": a["octave"]} for k, a in alone.items()}
+    best["off"] = {k: 12 * (best["octave"][k] - a["octave"]) + best["key"] - a["key"] for k, a in alone.items()}
     return best
 
 
