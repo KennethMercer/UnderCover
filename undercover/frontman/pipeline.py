@@ -43,6 +43,10 @@ class CoverOptions:
     fit: bool | None = None           # set octave + key from the voice's range and the song's melody (overrides both)
     lead_gate: bool | None = None     # only singing gets converted (phase 15; default on): see leadgate.py
     chorus: str | None = None         # lines in the backing stem: convert | top | keep (leadgate.CHORUS_MODES; None: config)
+    duet_voice: str | None = None     # a second singer taking turns with `voice` (1.2, duets.py)
+    duet_way: str | None = None       # how they share it: duets.WAYS (None: duets.DUET_DEFAULT)
+    duet_octave: int | None = None    # the second singer's octave on top of the song key (None: the lead's)
+    duet_plan: list | None = None     # who sings when, [[start, end, who], ...] (found by the engine; kept for Make again)
 
 
 @dataclass
@@ -108,6 +112,57 @@ class CoverEngine:
         return replace(opts, octave=fit["octave"], key=fit["key"], pitch=None,
                        backing_octave=fit["octave"] if same_backing else opts.backing_octave)
 
+    def _fit_duet(self, opts: "CoverOptions", voice, dvoice, stems: dict, notes: list, bvoice) -> "CoverOptions":
+        """The fit for two (duets.joint_fit): one key for the song, each voice at its own best octave in it. A voice
+        with no measured range keeps the chosen octave."""
+        from dataclasses import replace
+        from .duets import joint_fit
+        from ..core.engine.convert import load_16k
+
+        def rng(v):
+            ex = v.extra or {}
+            r = ex.get("f0_range") or ex.get("person_range")
+            return (r, ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")) if r else None
+        f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
+        fit = joint_fit({"A": rng(voice), "B": rng(dvoice)}, f0)
+        if fit is None:
+            notes.append(f"Fit to voice: neither {label_of(voice.name)} nor {label_of(dvoice.name)} has a measured range yet, "
+                         "so your octave and key were used.")
+            return opts
+        a = fit["octave"].get("A", opts.octave if opts.octave is not None else 0)
+        b = fit["octave"].get("B", opts.duet_octave if opts.duet_octave is not None else a)
+        notes.append(f"Fit for two: key {fit['key']:+d}, {label_of(voice.name)} at octave {a:+d}, "
+                     f"{label_of(dvoice.name)} at octave {b:+d}.")
+        same_backing = bvoice is not None and bvoice.name == voice.name
+        return replace(opts, key=fit["key"], octave=a, duet_octave=b, pitch=None,
+                       backing_octave=a if same_backing else opts.backing_octave)
+
+    def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report) -> "CoverOptions":
+        """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
+        (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. The plan and the
+        way go into the options (the history keeps them), and the notes say who sings what."""
+        from dataclasses import replace
+        from .duets import DUET_DEFAULT, check_plan, describe, find_plan, heard_words
+        from ..core.engine.convert import load_16k
+        lead16 = load_16k(cstems["vocals"])
+        dur = len(lead16) / 16000
+        way = opts.duet_way or DUET_DEFAULT
+        if opts.duet_plan:
+            plan = check_plan(opts.duet_plan, dur)
+        else:
+            report("converting", 0.0, "Listening for the verses and choruses")
+            try:
+                words = heard_words(cstems["vocals"], cstems.get("backing"), work)
+            except Exception as e:   # noqa: BLE001 - no recogniser here (or it failed): shared by phrases instead
+                print(f"Duet: the words couldn't be heard ({type(e).__name__}: {e}); sharing it by phrases.", flush=True)
+                words = []
+            plan, _rows, fallback = find_plan(lead16, words, way, dur)
+            if fallback:
+                notes.append("UnderCover couldn't make out enough of the words, so the two voices take turns every "
+                             "two phrases.")
+        notes.append(describe(plan, {"A": label_of(voice.name), "B": label_of(dvoice.name)}))
+        return replace(opts, duet_way=way, duet_plan=plan)
+
     def make_cover(self, song: Path, opts: CoverOptions, out: Path | None = None,
                    progress: Progress | None = None, title: str | None = None,
                    stems: dict | None = None, record: bool = True, key_song: Path | None = None) -> CoverResult:
@@ -126,6 +181,7 @@ class CoverEngine:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         voice = get_voice(opts.voice)  # fail fast if not installed
         bvoice = get_voice(opts.backing_voice) if opts.backing_voice else None
+        dvoice = get_voice(opts.duet_voice) if opts.duet_voice else None   # a duet's second singer (duets.py)
         karaoke = True if bvoice else opts.karaoke  # a backing voice needs the lead/backing split
         secs, notes = {}, []
 
@@ -137,8 +193,11 @@ class CoverEngine:
         report("separating", 1.0, "Stems ready")
         if karaoke and not stems.get("backing"):   # core.separate found no lead to split from the backing (a duet)
             notes.append(DUET_NOTE)
+            if dvoice:   # sung as a duet already: there's no one lead line to share between two voices
+                notes.append(f"So {label_of(dvoice.name)} wasn't used: taking turns needs one lead line to share.")
+                dvoice = None
         if opts.fit:
-            opts = self._fit(opts, voice, stems, notes, bvoice)
+            opts = self._fit_duet(opts, voice, dvoice, stems, notes, bvoice) if dvoice else self._fit(opts, voice, stems, notes, bvoice)
 
         report("converting", 0.0, f"Converting the vocal to {label_of(voice.name)}")
         t = time.perf_counter()
@@ -174,13 +233,31 @@ class CoverEngine:
         elif bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
-        lead_share = 0.5 if bvoice else 1.0
-        from ..core import lowprofile
-        lowprofile.free_for("convert")   # (under the cap: the separator goes before the conversion; back on first use)
-        audio, sr = self.converter.convert(load_16k(cstems["vocals"]), voice.name, s,
-                                           progress=lambda f: report("converting", f * lead_share, f"Converting the lead vocal to {label_of(voice.name)}"))
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
+        if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself
+            opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report)
+        passes = 1 + bool(dvoice) + bool(bvoice)
+        share = 1.0 / passes
+        from ..core import lowprofile
+        lowprofile.free_for("convert")   # (under the cap: the separator goes before the conversion; back on first use)
+        import contextlib
+        lead16 = load_16k(cstems["vocals"])
+        with self.converter.shared_f0() if dvoice else contextlib.nullcontext():   # (a duet: the pitch track read once)
+            audio, sr = self.converter.convert(lead16, voice.name, s,
+                                               progress=lambda f: report("converting", f * share, f"Converting the lead vocal to {label_of(voice.name)}"))
+            if dvoice:
+                from dataclasses import replace as _replace
+                from .duets import stitch
+                doct = opts.duet_octave if opts.duet_octave is not None else (s.pitch - key) / 12
+                daudio, dsr = self.converter.convert(lead16, dvoice.name, _replace(s, pitch=key + 12 * doct),
+                                                     progress=lambda f: report("converting", share * (1 + f), f"Converting the lead vocal to {label_of(dvoice.name)} too"))
+                if dsr != sr:   # two voices trained at different rates: the second one's take at the first one's
+                    from math import gcd
+                    from scipy.signal import resample_poly
+                    g = gcd(sr, dsr)
+                    daudio = resample_poly(daudio, sr // g, dsr // g).astype(np.float32)
+                audio = stitch(audio, daudio, opts.duet_plan, sr)
         # 24-bit FLAC: ~half the size of float WAV, far below audible precision (kept for "vocal only" downloads)
         conv_path = work / f"{_safe(title)}__{voice.name}__{stamp}.flac"
         sf.write(str(conv_path), np.clip(audio, -1, 1), sr, subtype="PCM_24")
@@ -190,7 +267,7 @@ class CoverEngine:
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
             bs = replace(s, pitch=key + 12 * boct)
             baudio, bsr = self.converter.convert(load_16k(cstems["backing"]), bvoice.name, bs,
-                                                 progress=lambda f: report("converting", 0.5 + 0.5 * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
+                                                 progress=lambda f: report("converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
@@ -203,7 +280,8 @@ class CoverEngine:
             if getattr(opts, k) is not None:
                 setattr(ms, k, getattr(opts, k))
         # the file people download says who sings, as the pages name them (the voice ids stay in the history)
-        names = label_of(voice.name) + (f" + {label_of(bvoice.name)}" if bvoice and bvoice.name != voice.name else "")
+        names = (label_of(voice.name) + (f" & {label_of(dvoice.name)}" if dvoice else "")
+                 + (f" + {label_of(bvoice.name)}" if bvoice and bvoice.name not in (voice.name, getattr(dvoice, "name", None)) else ""))
         out = out or _unique(path("output_dir") / f"{_safe(title)} ({_safe(names)})", ms.format)   # "AC/DC" is a name, not a path
         final = remix(cstems["instrumental"], conv_path, cstems["vocals"], out, song=song,
                       backing=conv_backing or cstems.get("backing"), s=ms,
@@ -392,6 +470,7 @@ def history_items() -> list[dict]:
             "backing": file_url(h.get("converted_backing")),
             "backing_voice": (h.get("options", {}).get("backing_voice")
                               if h.get("converted_backing") and h.get("options", {}).get("backing_voice") != h["voice"] else None),
+            "duet_voice": h.get("options", {}).get("duet_voice") or None,   # a duet's second singer (duets.py)
             "notes": h.get("notes", []),
         })
     return out
@@ -497,6 +576,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
     conv = dur / med(speeds["synth"], 40.0) + dur / med(speeds["f0"], 90.0) + 2.0
     if opts.backing_voice:
         conv = conv * 2 - 1.5  # second conversion; shared models are already loaded
+    if opts.duet_voice:   # a duet: the lead converted again (its pitch track shared), and its words heard once
+        conv += dur / med(speeds["synth"], 40.0) + (0.0 if opts.duet_plan else 5.0 + dur / 30.0)
     key, _ = pitch_plan(opts)
     mix = 1.0 + dur / 120.0 + (dur / 50.0 if key else 0.0)  # Rubber Band key shift ~50x realtime
     return {"separating": round(sep, 1), "converting": round(conv, 1), "mixing": round(mix, 1),

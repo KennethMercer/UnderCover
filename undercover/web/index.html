@@ -200,6 +200,19 @@
       <h2>2 · Voice</h2>
       <div class="search sfield" role="search"><svg class="ico" aria-hidden="true"><use href="#g-search"/></svg><input id="q" type="search" autocomplete="off" placeholder="Search your voices, find new ones, or paste a link" aria-label="Search your voices or find new ones"><button class="btn" id="q-go" type="button">Search</button></div>
       <div class="voices" id="voices" aria-label="Installed voices"></div>
+      <!-- a duet (1.2, frontman/duets.py): a second singer and how they share the song; plain hooks, the look is Q's -->
+      <div class="field fm-duet" id="fm-duet-box">
+        <label for="fm-duet">Sing it with someone?</label>
+        <select id="fm-duet" class="select"><option value="">+ Second singer</option></select>
+        <div id="fm-duet-way-box" hidden>
+          <span class="flabel" id="fm-duet-way-l">How do they share it?</span>
+          <div class="seg" id="fm-duet-way" role="group" aria-labelledby="fm-duet-way-l">
+            <button type="button" data-v="turns">Take turns</button>
+            <button type="button" data-v="lines">Line by line</button>
+          </div>
+          <p class="meta" id="fm-duet-note"></p>
+        </div>
+      </div>
       <div class="online-h" id="online-h" hidden></div>
       <div class="voices" id="online" hidden></div>
     </div>

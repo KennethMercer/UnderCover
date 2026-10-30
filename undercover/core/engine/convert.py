@@ -6,6 +6,7 @@ with HuBERT, RMVPE and recently used voices kept loaded on the GPU.
     python -m undercover.core.engine.convert vocals.wav --voice plankton --pitch 4
 """
 import argparse
+import contextlib
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -90,6 +91,17 @@ class Converter:
             self.hubert = load_hubert(mdir / CCFG["hubert_dir"], self.device, self.half)
             self.rmvpe = RMVPE(mdir / CCFG["rmvpe"], self.device, self.half)
         self.voices: OrderedDict[str, LoadedVoice] = OrderedDict()
+        self._f0_memo: dict | None = None   # shared_f0: the pitch track read once for the same vocal
+
+    @contextlib.contextmanager
+    def shared_f0(self):
+        """Inside it, the pitch track of a stretch of audio is read once and reused: the same vocal converted in two
+        voices (a duet) pays RMVPE once. The track depends on the audio alone; each voice's shift comes after."""
+        self._f0_memo = {}
+        try:
+            yield
+        finally:
+            self._f0_memo = None
 
     def voice(self, name: str) -> LoadedVoice:
         if name in self.voices:
@@ -109,7 +121,17 @@ class Converter:
     def _f0(self, audio16: np.ndarray, p_len: int, s: "Settings"):
         from .rvc.f0fix import clean_f0, snap_to_key
         pitch = s.pitch
-        f0 = self.rmvpe.infer_from_audio(audio16, thred=0.03)[:p_len]
+        memo, key = self._f0_memo, None
+        if memo is not None:
+            import hashlib
+            key = (len(audio16), hashlib.blake2b(np.ascontiguousarray(audio16).tobytes(), digest_size=16).digest())
+        if memo is not None and key in memo:
+            f0 = memo[key]
+        else:
+            f0 = self.rmvpe.infer_from_audio(audio16, thred=0.03)
+            if memo is not None:
+                memo[key] = f0
+        f0 = np.array(f0[:p_len])
         if len(f0) < p_len:
             f0 = np.pad(f0, (0, p_len - len(f0)))
         if s.pitch_cleanup:

@@ -134,8 +134,8 @@ def _start_cover(h, body: dict):
         get_voice(opts.backing_voice)
     song = path("uploads_dir") / meta["file"]
     _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice)))
-    job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}")
-    job.voices = {v for v in (opts.voice, opts.backing_voice) if v}   # what it reads with (jobs.jobs_using)
+    job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}" + (f" & {label_of(opts.duet_voice)}" if opts.duet_voice else ""))
+    job.voices = {v for v in (opts.voice, opts.backing_voice, opts.duet_voice) if v}   # what it reads with (jobs.jobs_using)
     JOBS[job.id] = job
     try:   # its own time after the song's preparation (which does the separating), added to that wait
         from .pipeline import estimate
@@ -307,7 +307,7 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     """What a one-shot request would do, without downloading anything (shown before it starts). An ambiguous bare
     title answers `ask: true` with 2-3 `choices` ({artist, year, title, song_url}) instead of silently picking; while
     an earlier answer is in effect (until a different song is requested) it comes back as `chosen` + `others`."""
-    from ..core.voices import ModelError, display_name, slug
+    from ..core.voices import ModelError, display_name, get_voice, slug
     from . import ambiguity, oneshot
     from ..doubleagent import service
     try:
@@ -315,6 +315,9 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     except ModelError as e:
         return h._error(str(e))
     song, person, artist = req["song"], req["person"], req["artist"]
+    duet = oneshot.split_duet(person)   # "... as A and B" (duets.py): A as below, B a voice here
+    if duet:
+        person = duet["person"]
     inst = service.installed_for(person)
     trained = [v for v in inst if v.extra.get("trained")]
     demo = service.demo_for(person, inst)   # "... as Agent Smoke": installed, nothing to check, look up or ask
@@ -341,6 +344,10 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
                                               **({"after_failed": failed} if failed else {})})
     out = {"song_query": f"{song} by {artist}" if artist else song, "song": song, "artist": artist, "person": person,
            "style": req["style"], "voice": voice, "ask": False}
+    if duet:
+        from .duets import DUET_DEFAULT
+        out["duet"] = {"with": duet["with"], "voice": duet["voice"], "way": DUET_DEFAULT,
+                       "display": display_name(get_voice(duet["voice"])) if duet["voice"] else duet["with"]}
     sample = None if req["style"] else oneshot.sample_song(song, artist)   # the first run's song, on the desk
     here = (path("uploads_dir") / sample["file"]) if sample else None if req["style"] else oneshot.library_song(song, artist)
     if sample:
@@ -448,7 +455,8 @@ def _options(body: dict):
     octave = int(num("octave")) if num("octave") is not None else None
     boct = int(num("backing_octave")) if num("backing_octave") is not None else None
     bvoice = o.get("backing_voice") or None
-    return CoverOptions(voice=voice, key=num("key"), octave=octave, index_ratio=num("index_ratio"), protect=num("protect"),
+    duet = _duet_options(o, voice)
+    return CoverOptions(**duet, voice=voice, key=num("key"), octave=octave, index_ratio=num("index_ratio"), protect=num("protect"),
                         volume_envelope=num("volume_envelope"), dereverb=bool(o.get("dereverb")),
                         karaoke=bool(o.get("karaoke")), quality=q, format=fmt,
                         reverb=None if o.get("reverb") in (None, "", "auto") else num("reverb"),
@@ -458,6 +466,41 @@ def _options(body: dict):
                         polish=o.get("polish", True) is not False, fit=bool(o.get("fit")))
 
 
+def _duet_options(o: dict, voice: str) -> dict:
+    """A duet's options from a request (1.2, duets.py), checked strictly: the second singer an installed voice that
+    isn't the first, the way one of duets.WAYS, its octave a whole number from -2 to 2, a plan (Make again's) only in
+    duets.check_plan's shape. ModelError (a plain 400) for anything else; nothing when no second singer is asked for."""
+    from .duets import WAYS, check_plan
+    from ..core.voices import ModelError, get_voice
+    dv = o.get("duet_voice")
+    if dv in (None, ""):
+        return {}
+    if not isinstance(dv, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,80}", dv):
+        raise ModelError("That second singer isn't one of your voices.")
+    get_voice(dv)   # installed (ModelError otherwise)
+    if dv == voice:
+        raise ModelError("Pick someone else to sing with: a duet needs two different voices.")
+    way = o.get("duet_way") or None
+    if way is not None and way not in WAYS:
+        raise ModelError(f"A duet is shared one of these ways: {', '.join(WAYS)}.")
+    doct = o.get("duet_octave")
+    if doct not in (None, ""):
+        if isinstance(doct, bool) or not isinstance(doct, (int, float)) or doct != int(doct) or not -2 <= doct <= 2:
+            raise ModelError("The second singer's octave is a whole number from -2 to 2.")
+        doct = int(doct)
+    else:
+        doct = None
+    plan = o.get("duet_plan")
+    if plan not in (None, ""):
+        try:
+            plan = check_plan(plan)
+        except ValueError as e:
+            raise ModelError(str(e)) from None
+    else:
+        plan = None
+    return {"duet_voice": dv, "duet_way": way, "duet_octave": doct, "duet_plan": plan}
+
+
 def _ui_defaults() -> dict:
     c, r, s = CONFIG["conversion"], CONFIG["remix"], CONFIG["separation"]
     return {"key": c["key"], "octave": c["octave"], "index_ratio": c["index_ratio"], "protect": c["protect"],
@@ -465,4 +508,9 @@ def _ui_defaults() -> dict:
             "karaoke": s["karaoke"], "reverb": r["reverb"], "format": r["format"],
             "backing_voice": "", "backing_octave": 0, "backing_db": r["backing_db"],
             "pitch_cleanup": c["pitch_cleanup"], "pitch_correction": c["pitch_correction"], "polish": r["polish"],
-            "fit": False}
+            "fit": False, "duet_voice": "", "duet_way": _duet_default()}
+
+
+def _duet_default() -> str:
+    from .duets import DUET_DEFAULT
+    return DUET_DEFAULT

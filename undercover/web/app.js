@@ -470,7 +470,7 @@ async function loadVoices(select) {
   if (S.voice && !S.voices.some(v => v.name === S.voice)) S.voice = null;
   if (!S.voice && S.voices.length === 1) S.voice = S.voices[0].name;
   store.set("uc-voice", S.voice);
-  renderVoices(); renderBackingSelect(); summary(); refreshEstimate();
+  renderVoices(); renderBackingSelect(); renderDuet(); summary(); refreshEstimate();
 }
 function voiceDesc(v) {
   const src = (v.source || "").match(/huggingface\.co\/([^/]+\/[^/]+)/);
@@ -495,7 +495,7 @@ function renderVoices() {
       <span class="vside">${voiceLineButton(v.name)}<button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
-    const pick = () => { S.voice = el.dataset.v; S.deskVoice = true; store.set("uc-voice", S.voice); renderVoices(); summary(); refreshEstimate(); syncBuild(); };
+    const pick = () => { S.voice = el.dataset.v; S.deskVoice = true; store.set("uc-voice", S.voice); renderVoices(); renderDuet(); summary(); refreshEstimate(); syncBuild(); };
     el.addEventListener("click", e => { if (!e.target.closest(".remove, .vline")) pick(); });
     el.addEventListener("keydown", e => { if (e.target.closest(".remove, .vline")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });   // Enter on Remove is Remove's own
   });
@@ -602,6 +602,7 @@ function syncControls() {
   for (const k in SLIDERS) { $("#" + k).value = S.opts[k]; $(`#${k}-o`).textContent = SLIDERS[k](S.opts[k]); }
   for (const k of CHECKS) $("#" + k).checked = !!S.opts[k];
   renderBackingSelect();
+  renderDuet();
   for (const id of SEGS) $$(`#${id} button`).forEach(b => b.setAttribute("aria-pressed", b.dataset.v === String(S.opts[id])));
   fitState();
   summary();
@@ -638,7 +639,27 @@ function renderBackingSelect() {
   $("#karaoke").disabled = on;
 }
 $("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.target.value; renderBackingSelect(); saveOpts(); summary(); refreshEstimate(); });
+// A duet (1.2): a second singer takes turns with the voice (frontman/duets.py), shared one of two ways. Never the lead
+// itself, and only a voice that's installed.
+const DUET_WAYS = { turns: "Verses take turns, and you'll hear both together on the choruses.", lines: "A line each, all the way through." };
+function renderDuet() {
+  const sel = $("#fm-duet");
+  if ((S.voicesLoaded && S.opts.duet_voice && !S.voices.some(v => v.name === S.opts.duet_voice)) || S.opts.duet_voice === S.voice) S.opts.duet_voice = "";
+  sel.innerHTML = `<option value="">+ Second singer</option>` + S.voices.filter(v => v.name !== S.voice)
+    .map(v => `<option value="${esc(v.name)}">${esc(voiceDisplay(v.name))}</option>`).join("");
+  sel.value = S.opts.duet_voice || "";
+  const way = DUET_WAYS[S.opts.duet_way] ? S.opts.duet_way : (S.defaults.duet_way || "turns");
+  $("#fm-duet-way-box").hidden = !S.opts.duet_voice;
+  $$("#fm-duet-way button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === way)));
+  $("#fm-duet-note").textContent = S.opts.duet_voice ? DUET_WAYS[way] : "";
+}
+$("#fm-duet").addEventListener("change", e => { S.opts.duet_voice = e.target.value; renderDuet(); saveOpts(); });
+$("#fm-duet-way").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  S.opts.duet_way = b.dataset.v; renderDuet(); saveOpts();
+});
 $("#summary").addEventListener("click", e => {   // "Use the original singer's backing": one click to drop a carried-over backing voice
+  if (e.target.closest("#clear-duet")) { S.opts.duet_voice = ""; renderDuet(); saveOpts(); return; }
   if (!e.target.closest("#clear-backing")) return;
   S.opts.backing_voice = ""; renderBackingSelect(); saveOpts(); summary(); refreshEstimate();
 });
@@ -661,7 +682,8 @@ function summary() {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     // a backing voice carried over (Use these settings) stays on when the lead changes: it is said here, with a way to clear it, never silently (IA P9-3)
     const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
-    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
+    const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b> <button class="linkbtn" type="button" id="clear-duet">Just one singer</button>` : "";
+    $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${du}${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }
 }
 function pitchText(o) {
@@ -838,12 +860,12 @@ const active = () => ab === "cover" ? aCover : aOrig;
 
 // covers of the same song in the same voice(s) are told apart: the first keeps its title, the later ones say (2), (3)
 function coverTitle(h) {
-  const same = HIST.filter(x => x.title === h.title && x.voice === h.voice && (x.backing_voice || "") === (h.backing_voice || ""))
+  const same = HIST.filter(x => x.title === h.title && x.voice === h.voice && (x.backing_voice || "") === (h.backing_voice || "") && (x.duet_voice || "") === (h.duet_voice || ""))
     .sort((a, b) => String(a.created).localeCompare(String(b.created)) || String(a.id).localeCompare(String(b.id)));
   const n = same.findIndex(x => x.id === h.id);
   return `${h.title}${n > 0 ? ` (${n + 1})` : ""}`;
 }
-const coverName = h => `${coverTitle(h)} · ${voiceDisplay(h.voice)}${h.backing_voice ? " + " + voiceDisplay(h.backing_voice) : ""}`;
+const coverName = h => `${coverTitle(h)} · ${voiceDisplay(h.voice)}${h.duet_voice ? " & " + voiceDisplay(h.duet_voice) : ""}${h.backing_voice ? " + " + voiceDisplay(h.backing_voice) : ""}`;
 async function showResult(item, seconds) {
   S.result = item; playingHist = item.id;
   $("#result").hidden = false;
@@ -1080,7 +1102,7 @@ function renderHistory() {
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
     return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(coverTitle(h))}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong>${facts([
-        { html: `${vname(h.voice)}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}` }, { t: upFirst(dayWord(h.created)), muted: true }, { t: dayTime(h.created), deep: true }, ...(bits ? bits.split(" · ").map(t => ({ t, deep: true })) : [])])}</div>
+        { html: `${vname(h.voice)}${h.duet_voice ? " &amp; " + vname(h.duet_voice) : ""}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}` }, { t: upFirst(dayWord(h.created)), muted: true }, { t: dayTime(h.created), deep: true }, ...(bits ? bits.split(" · ").map(t => ({ t, deep: true })) : [])])}</div>
       <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("") + recentMore("hist-more", !!S.histAll, HIST.length);
   $("#hist-more")?.addEventListener("click", () => { S.histAll = !S.histAll; renderHistory(); $("#hist-more")?.focus({ preventScroll: true }); });   // the redraw keeps the keyboard on the button

@@ -7297,6 +7297,152 @@ def u_speak_hz():
     return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
 
 
+@check("duets (1.2): lines from words, choruses where words come back, Take turns and By line, the fallback by phrases; the stitch changes voice only in the quiet with an equal-power fade; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
+def u_duets():
+    import numpy as np
+    from types import SimpleNamespace
+    from undercover.frontman import duets as D
+    from undercover.frontman import api as FA, oneshot as OS
+    from undercover.core import voices as V
+    from undercover.core.engine import convert as C
+    # a song's shape, made of text and times (no audio from anyone's song): verse, chorus, verse, chorus, bridge, chorus
+    verse = lambda k: [" ".join(f"w{k}x{i}x{j}" for j in range(6)) for i in range(3)]   # words of its own each time
+    chorus = ["hello from the other side tonight", "i must have called a thousand times", "to tell you i am sorry now"]
+    song = [("verse", verse(1)), ("chorus", chorus), ("verse", verse(2)), ("chorus", chorus), ("verse", verse(3)), ("chorus", chorus)]
+    ws, t, spans = [], 1.0, []
+    for kind, lines_ in song:
+        a = t
+        for ln in lines_:
+            for w in ln.split():
+                ws.append([w, round(t, 2), round(t + 0.3, 2), 0.9])
+                t += 0.32
+            t += 0.8   # the breath between lines
+        spans.append((kind, a, t))
+    dur = t + 1.0
+    sr = D.SR16
+    x = np.zeros(int(dur * sr), np.float32)   # the lead: singing during each word, quiet between lines
+    for _, s, e, _ in ws:
+        i, j = int(s * sr), int(e * sr)
+        x[i:j] = 0.3 * np.sin(2 * np.pi * 220 * np.arange(j - i) / sr)
+    rows = D.sections(x, ws)
+    assert [r["text"] for r in rows] == [ln for _, lines_ in song for ln in lines_], [r["text"] for r in rows]
+    bl = D.blocks(rows)
+    assert [b["kind"] for b in bl] == ["verse", "chorus"] * 3, bl
+    turns = D.who_sings(rows, "turns")
+    assert [turns[b["rows"][0]] for b in bl] == ["A", "AB", "B", "AB", "A", "AB"], turns
+    assert D.who_sings(rows, "lines") == ["A", "B"] * 9
+    for way in D.WAYS:
+        plan = D.plan_of(rows, D.who_sings(rows, way), dur)
+        assert plan[0][0] == 0 and abs(plan[-1][1] - dur) < 1e-6 and D.check_plan(plan, dur) == plan, plan
+        words = [(s, e) for _, s, e, _ in ws]
+        for _, cut, _ in plan[:-1]:   # every change sits between two words, in the quiet
+            assert not any(s - 0.005 < cut < e + 0.005 for s, e in words), (way, cut)
+            assert abs(x[int(cut * sr) - 80:int(cut * sr) + 80]).max() == 0, (way, cut)
+    assert D.DUET_DEFAULT in D.WAYS and FA._ui_defaults()["duet_way"] == D.DUET_DEFAULT
+    try:
+        D.who_sings(rows, "chorus")
+        raise AssertionError("an unknown way was taken")
+    except ValueError:
+        pass
+    # too few words heard: by phrases, every 2, never together
+    plan, prow, fb = D.find_plan(x, ws[:5], "turns", dur)
+    assert fb and len(prow) == 18 and [w for _, _, w in plan] == ["A", "B"] * 4 + ["A"] and "AB" not in str(plan), plan
+    # the stitch: A's take, then B's, then both; the length is the shorter take's; equal power through the change
+    n = 3 * sr
+    a = np.sin(2 * np.pi * 300 * np.arange(n + 500) / sr).astype(np.float32)
+    b = np.sin(2 * np.pi * 500 * np.arange(n) / sr).astype(np.float32)
+    y = D.stitch(a, b, [[0.0, 1.0, "A"], [1.0, 2.0, "B"], [2.0, 3.0, "AB"]], sr)
+    g = 10 ** (D.TOGETHER_DB / 20)
+    assert len(y) == n and np.allclose(y[sr // 2], a[sr // 2]) and np.allclose(y[3 * sr // 2], b[3 * sr // 2], atol=1e-6)
+    assert np.allclose(y[5 * sr // 2], g * (a[5 * sr // 2] + b[5 * sr // 2]), atol=1e-6)
+    ones = np.ones(n, np.float32)
+    ya, yb = D.stitch(ones, 0 * ones, [[0.0, 1.0, "A"], [1.0, 3.0, "B"]], sr), D.stitch(0 * ones, ones, [[0.0, 1.0, "A"], [1.0, 3.0, "B"]], sr)
+    k = slice(sr - int(sr * D.FADE_S / 2) + 1, sr + int(sr * D.FADE_S / 2) - 1)
+    assert np.allclose(ya[k] ** 2 + yb[k] ** 2, 1, atol=1e-4) and ya[sr - 1000] == 1 and yb[sr + 1000] == 1
+    # a plan from outside: only the plain shape
+    for bad in (None, "x", [], [[0, 1]], [[0, 1, "C"]], [[0.5, 1, "A"]], [[0, 1, "A"], [1.5, 2, "B"]], [[0, float("nan"), "A"]],
+                [[0, 2, "A"], [2, 1, "B"]], [[0, "1", "A"], [1, {}, "B"]], [[0, 1, "A"]] * (D.MAX_PARTS + 1)):
+        try:
+            D.check_plan(bad)
+            raise AssertionError(f"plan taken: {str(bad)[:60]}")
+        except ValueError:
+            pass
+    try:
+        D.check_plan([[0, 500, "A"]], duration=200)
+        raise AssertionError("a plan longer than the song was taken")
+    except ValueError:
+        pass
+    # the fit for two: one key; a low voice an octave under a high one; a voice with no range left out
+    f0 = 220 * 2 ** (np.random.default_rng(0).integers(-5, 6, 4000) / 12)
+    fit = D.joint_fit({"A": ([180.0, 260.0, 400.0], False), "B": ([70.0, 110.0, 170.0], False)}, f0)
+    assert fit["octave"]["A"] - fit["octave"]["B"] == 1 and -7 <= fit["key"] <= 7, fit
+    assert D.joint_fit({"A": None, "B": None}, f0) is None and set(D.joint_fit({"A": ([180.0, 260.0, 400.0], False), "B": None}, f0)["octave"]) == {"A"}
+    # the one-shot: "A and B" (also with, &, duet of): only with a voice here for the second (or the first), never a
+    # whole name that is one voice, nor two names neither of which is here
+    vs = {"michael-jackson-uc": "michael jackson", "barry-white-uc": "barry white", "simon-and-garfunkel-uc": "simon and garfunkel"}
+    real_inst = OS.installed_for
+
+    def inst(person):
+        key = "-".join(person.lower().replace("&", "and").split())
+        return [SimpleNamespace(name=n) for n, who in vs.items() if who == person.lower().strip() or n.startswith(key + "-")]
+    OS.installed_for = inst
+    try:
+        for text in ("Michael Jackson and Barry White", "Michael Jackson with Barry White", "a duet of Michael Jackson & Barry White",
+                     "Michael Jackson and Barry White duet"):
+            assert OS.split_duet(text) == {"person": "Michael Jackson", "with": "Barry White", "voice": "barry-white-uc"}, text
+        assert OS.split_duet("Michael Jackson and Prince") == {"person": "Michael Jackson", "with": "Prince", "voice": None}
+        assert OS.split_duet("Simon and Garfunkel") is None and OS.split_duet("Hall and Oates") is None
+        assert OS.split_duet("Michael Jackson") is None and OS.split_duet("Michael Jackson and Michael Jackson") is None
+    finally:
+        OS.installed_for = real_inst
+    assert OS.parse_request("Hello by Adele as Michael Jackson and Barry White")["person"] == "Michael Jackson and Barry White"
+    # the cover's duet options: checked strictly (an installed voice, not the lead; a known way; an octave -2..2; a plan's shape)
+    real_get = V.get_voice
+
+    def fake_get(name):
+        if name not in ("lead-uc", "second-uc"):
+            raise V.ModelError(f"No voice named {name}")
+        return SimpleNamespace(name=name)
+    V.get_voice = fake_get
+    try:
+        ok = FA._duet_options({"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0, 2, "A"], [2, 5, "AB"]]}, "lead-uc")
+        assert ok == {"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0.0, 2.0, "A"], [2.0, 5.0, "AB"]]}, ok
+        assert FA._duet_options({}, "lead-uc") == {} and FA._duet_options({"duet_voice": ""}, "lead-uc") == {}
+        for bad in ({"duet_voice": "nobody-uc"}, {"duet_voice": "lead-uc"}, {"duet_voice": "../x"}, {"duet_voice": ["second-uc"]},
+                    {"duet_voice": "second-uc", "duet_way": "chorus"}, {"duet_voice": "second-uc", "duet_octave": 3},
+                    {"duet_voice": "second-uc", "duet_octave": 0.5}, {"duet_voice": "second-uc", "duet_octave": True},
+                    {"duet_voice": "second-uc", "duet_octave": "1"}, {"duet_voice": "second-uc", "duet_plan": [[0, 1, "C"]]},
+                    {"duet_voice": "second-uc", "duet_plan": "junk"}):
+            try:
+                FA._duet_options(bad, "lead-uc")
+                raise AssertionError(f"taken: {bad}")
+            except V.ModelError:
+                pass
+    finally:
+        V.get_voice = real_get
+    # the pitch track read once for the same vocal inside shared_f0 (a duet's two conversions), not outside it
+    calls = []
+    rm = SimpleNamespace(infer_from_audio=lambda au, thred: (calls.append(1), np.full(len(au) // 160 + 1, 200.0, np.float32))[1])
+    fake = SimpleNamespace(rmvpe=rm, device="cpu", _f0_memo=None)
+    aud = np.random.default_rng(1).standard_normal(16000).astype(np.float32)
+    s = C.Settings(pitch=0.0, pitch_cleanup=False)
+    C.Converter._f0(fake, aud, 100, s)
+    C.Converter._f0(fake, aud, 100, s)
+    assert len(calls) == 2
+    calls.clear()
+    with C.Converter.shared_f0(fake):
+        p1 = C.Converter._f0(fake, aud, 100, C.Settings(pitch=0.0, pitch_cleanup=False))[1]
+        p2 = C.Converter._f0(fake, aud, 100, C.Settings(pitch=-12.0, pitch_cleanup=False))[1]
+        C.Converter._f0(fake, aud[::-1].copy(), 100, s)
+    assert len(calls) == 2 and fake._f0_memo is None, calls   # the same audio once; other audio its own
+    assert np.allclose(p2.cpu().numpy(), p1.cpu().numpy() / 2)   # each voice's shift after the shared track
+    import inspect
+    from undercover.frontman import pipeline as PL
+    src = inspect.getsource(PL.CoverEngine.make_cover)
+    assert "self.converter.shared_f0() if dvoice" in src and "stitch(audio, daudio, opts.duet_plan, sr)" in src
+    return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
+
+
 @check("directions (tags1): [pause], [louder]/[softer], [higher]/[lower] done around the engine; Turbo's own tags not used yet (named apart, never read out) and passed through once the ear passes one; unknown ones read as nothing and named once, editors' brackets left as text; pieces keep their directions; listen-back hears the words only")
 def u_tags():
     import inspect
@@ -11454,6 +11600,52 @@ def _cover_target():
     return song, voice
 
 
+@check("duet: a cover in two voices end to end (By line), its plan in the history, Make again keeps it; bad duet options refused plainly (then deleted)")
+def a_duet():
+    _tray_room("/api/history")
+    song, voice = _cover_target()
+    others = [v["name"] for v in api("/api/voices") if v["name"].endswith("-uc") and v["name"] != voice]
+    if not song or not others:
+        return "skipped: needs a song with cached stems and two voices"
+    second = others[0]
+    for bad, why in (({"duet_voice": "no-such-voice"}, "isn't"), ({"duet_voice": voice}, "two different"),
+                     ({"duet_voice": second, "duet_way": "chorus"}, "one of these ways"),
+                     ({"duet_voice": second, "duet_plan": [[0, 1, "C"]]}, "plan")):
+        req = urllib.request.Request(BASE + "/api/covers", data=json.dumps({"song": song["id"], "voice": voice, "options": bad}).encode(),
+                                     method="POST", headers={"Content-Type": "application/json", "Origin": BASE})
+        try:
+            urllib.request.urlopen(req, timeout=30)
+            raise AssertionError(f"duet options taken: {bad}")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400 and why in json.loads(e.read())["error"], (bad, e.code)
+    before = {c["id"] for c in api("/api/history")}
+    api("/api/covers", {"song": song["id"], "voice": voice, "options": {"fit": True, "karaoke": True, "dereverb": True, "quality": "high",
+                                                                        "duet_voice": second, "duet_way": "lines"}})
+    wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="duet finished")
+    made = []
+    try:
+        new = [h for h in api("/api/history") if h["id"] not in before]
+        assert new, "no duet in the history"
+        h = new[0]
+        made.append(h["id"])
+        plan = h["options"].get("duet_plan")
+        assert h["duet_voice"] == second and h["options"]["duet_way"] == "lines" and isinstance(plan, list) and len(plan) >= 1, h["options"]
+        assert any(n.startswith("Duet:") for n in h["notes"]), h["notes"]
+        assert {w for _, _, w in plan} <= {"A", "B", "AB"} and plan[0][0] == 0, plan
+        # Make again: the same song, voices and plan
+        before2 = {x["id"] for x in api("/api/history")}
+        api(f"/api/history/{h['id']}/again", {"options": {}})
+        wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="duet made again")
+        again = [x for x in api("/api/history") if x["id"] not in before2]
+        assert again, "Make again made nothing"
+        made.append(again[0]["id"])
+        assert again[0]["options"]["duet_plan"] == plan and again[0]["duet_voice"] == second, again[0]["options"]
+        return f"{song['title'][:30]}: {voice} & {second}, {len(plan)} parts, kept on Make again"
+    finally:
+        for cid in made:
+            api(f"/api/library/covers/{cid}", method="DELETE")
+
+
 @check("cover: end to end, from a song with cached stems or the test song (then deleted)")
 def a_cover():
     _tray_room("/api/history")
@@ -12035,7 +12227,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_duets, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()
@@ -12059,6 +12251,7 @@ def main():
                         fn()
                     if not a.no_cover:
                         a_cover()
+                        a_duet()
                         a_desk_oneshot()
                         a_speech()
                         a_jobs_feed()

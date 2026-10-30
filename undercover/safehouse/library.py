@@ -131,7 +131,7 @@ def _duplicate_voices(hist: list) -> list[dict]:
             pass
     used: dict = {}
     for h in hist:
-        for name in {h.get("voice"), (h.get("options") or {}).get("backing_voice")} - {None}:
+        for name in {h.get("voice"), (h.get("options") or {}).get("backing_voice"), (h.get("options") or {}).get("duet_voice")} - {None}:
             used[name] = used.get(name, 0) + 1
 
     def why(v):   # what makes this the voice to keep, strongest first
@@ -210,6 +210,7 @@ def covers() -> list[dict]:
             "id": h["id"], "title": h.get("title") or o.stem, "voice": h["voice"],
             "kept": h["kept"], "kept_at": h.get("kept_at"), "recent": h["recent"],
             "backing_voice": opts.get("backing_voice") if opts.get("backing_voice") != h["voice"] else None,
+            "duet_voice": opts.get("duet_voice") or None,
             "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": opts, "notes": h.get("notes", []),
             "file": o.name, "format": o.suffix.lstrip(".").upper(), "size": _size(o), "duration": m.get("duration"),
             "song_id": song_id if m else None, "song_source": m.get("source_url"),
@@ -410,7 +411,8 @@ def voices() -> list[dict]:
         if ex.get("trained") and ex.get("project"):
             pv = path("cache_dir") / "training" / ex["project"] / "train" / "previews" / f"e{ex.get('epoch')}.wav"
             sample = file_url(pv) if pv.exists() else None
-        used = [h for h in hist if h["voice"] == v.name or h.get("options", {}).get("backing_voice") == v.name]
+        used = [h for h in hist if h["voice"] == v.name or v.name in (h.get("options", {}).get("backing_voice"),
+                                                                       h.get("options", {}).get("duet_voice"))]
         pack = pack_of(v)   # its cadence (phase 4), listed and deleted with the voice or on its own
         cad = {"size": pack_size(v), "engine": pack.get("engine"), "made": pack.get("made"),
                "data_minutes": pack.get("data_minutes")} if pack else None

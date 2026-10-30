@@ -101,6 +101,33 @@ def parse_request(text: str) -> dict:
     return {"song": song.strip(), "person": person, "style": style, "artist": artist, "by_only": by_only, "whole": whole}
 
 
+_DUET_JOIN = re.compile(r"\s+(?:and|&|with)\s+", re.I)
+
+
+def split_duet(person: str) -> dict | None:
+    """"Hello as Obama and SpongeBob" (also "with", "&", "a duet of ..."): two singers taking turns, in the order
+    written (1.2, duets.py). Only when the second one is a voice here, or the first is and the second isn't (then the
+    first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"), and not for two
+    names neither of which is here (a band's name). -> {person, with, voice (the second's, or None)} or None."""
+    from ..core.voices import slug
+    p = re.sub(r"^(?:an?\s+)?duet\s+(?:of|by|between|with)?\s*", "", (person or "").strip(), flags=re.I)
+    p = re.sub(r"\s+(?:as\s+)?(?:an?\s+)?duet$", "", p, flags=re.I)
+    parts = [x.strip(" \"'") for x in _DUET_JOIN.split(p, maxsplit=1)]
+    if len(parts) != 2 or not all(parts):
+        return None
+    key = slug(p)
+    if any(v.name == key or v.name.startswith(key + "-") for v in installed_for(p) or []):
+        return None   # the whole name is one voice
+    a, b = parts
+    if slug(a) == slug(b):   # the same name twice is one singer
+        return None
+    va, vb = installed_for(a) or [], installed_for(b) or []
+    vb = [v for v in vb if not va or v.name != va[0].name]
+    if not (va or vb):
+        return None
+    return {"person": a, "with": b, "voice": vb[0].name if vb else None}
+
+
 def parse(text: str) -> tuple[str, str]:
     """-> (song query, person). Raises ModelError with an example when it can't tell them apart."""
     song, person, _artist, _by_only = parse_full(text)
@@ -271,6 +298,9 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
 
     req = ambiguity.settle(parse_request(text))
     title_q, person, style, artist = req["song"], req["person"], req["style"], req["artist"]
+    duet = split_duet(person)   # "... as A and B": A as usual, B a voice here taking turns (duets.py)
+    if duet:
+        person = duet["person"]
     search_q = f"{title_q} {artist}" if artist else title_q
     # the library's sample song, named (the first run's "Hold On as Agent Smoke"): used from the library, nothing searched
     lib = None if (song_url or choice or style) else sample_song(title_q, artist)
@@ -290,6 +320,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             job.title = f"One-shot: {text} · {went}"
     song_q = f"{title_q} by {artist}" if artist else title_q   # what people read; the search uses search_q
     plan.update(song_query=song_q, person=person, style=style, artist=artist)
+    if duet:
+        plan["duet"] = {"with": duet["with"], "voice": duet["voice"]}
 
     # Network work for the voice starts now, alongside the song's download and separation (review C6): if there's no
     # voice trained here for this person, find their clips and pre-download the first sources (no GPU involved).
@@ -512,6 +544,17 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     opts = CoverOptions(voice=v.name, key=key, octave=octave, quality="high", dereverb=True, karaoke=True,
                         backing_voice=None if chordal else v.name, backing_octave=octave,
                         backing_db=-3.0 if chordal else None, polish=True, pitch_cleanup=True)
+    if duet:   # the second singer: a voice here, in the order written; the fit for two sets the key and both octaves
+        from dataclasses import replace
+        from .duets import DUET_DEFAULT
+        if duet["voice"] and duet["voice"] != v.name:
+            opts = replace(opts, duet_voice=duet["voice"], duet_way=DUET_DEFAULT, fit=True)
+            plan["duet"].update(way=DUET_DEFAULT, display=label_of(duet["voice"]))
+            push("cover", 0.0, f"{label_of(v.name)} and {label_of(duet['voice'])} take turns")
+        else:
+            plan["duet"]["alone"] = (f"{duet['with']} isn't one of your voices yet, so {label_of(v.name)} sings it alone. "
+                                     "Get their voice in DoubleAgent, then ask again.")
+            push("cover", 0.0, plan["duet"]["alone"])
     # the exact options this cover used, for "Convert to try a variation" (Internal Affairs m1: the page assumed the
     # backing was converted, so a variation of a stacked-harmony song converted the harmonies after all)
     plan["settings"]["options"] = cover_options_of(opts)
