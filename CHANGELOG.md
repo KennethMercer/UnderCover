@@ -12,7 +12,7 @@ in brackets.
 
 **FrontMan** (duets1)
 - Duets: pick a second singer and they share the song, taking turns on the verses and singing the choruses together,
-  or a line each. "Hello as Obama and SpongeBob" works in the one-shot too.
+  or a line each. In the one-shot, name both: "<song> as <one singer> and <another>".
 
 **Phone** (phone12)
 - The away link works as a home-screen app. When the PC doesn't answer there, it says so and offers the home address.
