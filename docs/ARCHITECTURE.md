@@ -456,9 +456,9 @@ stitched by a plan.
 - **Ways** (`duets.WAYS`): `turns` alternates verses, and each chorus goes to whoever sang the verse before it;
   `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
   one place the default is set.
-- **The backing** is converted the way a cover would convert it (`pipeline._duet_backing`): when a backing voice is
-  asked for, or, as the one-shot decides, unless it's stacked harmony. Each section's backing is then sung by that
-  section's singer, stitched by the same plan.
+- **The backing** is converted exactly when a cover's would be (`pipeline._duet_backing`): when a backing voice is
+  chosen. "Original singer" keeps the original backing; the one-shot chooses one unless the backing is stacked
+  harmony. Each section's backing is then sung by that section's singer, stitched by the same plan.
 - **Too few words** (under 20 heard): there's no chorus to find, and the voices take every two lines in turn.
 
 A song sung as a duet already (`separate.lead_missing`) is sung by one voice, and the notes say why. The cover's

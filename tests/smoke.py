@@ -7490,22 +7490,26 @@ def u_duets():
     mp = D.moved_to_quiet([[0.0, 5.0, "A"], [5.0, 9.0, "B"], [9.0, 20.0, "A"]], back)
     assert 5.55 <= mp[0][1] <= 5.85 and mp[1][0] == mp[0][1] and mp[0][0] == 0 and mp[-1][1] == 20.0, mp
     assert 7.0 <= mp[1][1] <= 10.0 and D.check_plan(mp, 20.0) == mp, mp
-    # the backing: converted as a cover would (asked for, or unless it's stacked harmony), never when there's none
-    from undercover.frontman import remix as RM, oneshot as OS2
-    real_lufs, real_ch = RM.lufs, OS2.chordal_backing
+    # the backing: converted exactly when a cover's would be (a backing voice chosen; "Original singer" keeps it),
+    # never when there's none or hardly any
+    from undercover.frontman import remix as RM
+    real_lufs = RM.lufs
     eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=None))
     try:
         RM.lufs = lambda p: -20.0
-        for back, bv, chordal, want in ((None, None, False, False), ("b.flac", None, False, True), ("b.flac", "x-uc", True, True),
-                                        ("b.flac", None, True, False)):
-            OS2.chordal_backing = lambda p, rm, c=chordal: c
-            notes = []
-            got = PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice=bv), {"backing": back} if back else {}, notes)
-            assert got is want and (not chordal or bv or not back or any("stacked" in n for n in notes)), (back, bv, chordal, got, notes)
+        for back, bv, want in ((None, None, False), (None, "x-uc", False), ("b.flac", None, False), ("b.flac", "", False),
+                               ("b.flac", "x-uc", True)):
+            got = PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice=bv), {"backing": back} if back else {}, [])
+            assert got is want, (back, bv, got)
         RM.lufs = lambda p: -60.0
-        assert PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice="x-uc"), {"backing": "b.flac"}, []) is False
+        notes = []
+        assert PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice="x-uc"), {"backing": "b.flac"}, notes) is False
+        assert any("almost no backing" in n for n in notes), notes
     finally:
-        RM.lufs, OS2.chordal_backing = real_lufs, real_ch
+        RM.lufs = real_lufs
+    import inspect as _ins
+    from undercover.frontman import oneshot as OS3
+    assert "backing_voice=None if chordal else v.name" in _ins.getsource(OS3.run)   # (the one-shot chooses, as before)
     # Make again: a plan from before one singer at a time (with "both") isn't sent back; it's found again
     assert 'opts.pop("duet_plan")' in inspect.getsource(FA._cover_again)
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")

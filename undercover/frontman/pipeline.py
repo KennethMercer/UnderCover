@@ -138,19 +138,16 @@ class CoverEngine:
                        backing_octave=a if same_backing else opts.backing_octave)
 
     def _duet_backing(self, opts: "CoverOptions", cstems: dict, notes: list) -> bool:
-        """Is a duet's backing converted (in each section's singer, by the duet's own plan)? As a cover decides it:
-        asked for (a backing voice chosen), or, as the one-shot does, unless the backing is stacked harmony
-        (oneshot.chordal_backing: RVC follows one pitch, so the original singers keep those). Nothing when there's
-        hardly any backing."""
+        """Is a duet's backing converted (in each section's singer, by the duet's own plan)? Exactly when a cover's
+        would be: a backing voice is chosen. "Original singer" keeps the original backing, as in a cover; the one-shot
+        chooses one unless the backing is stacked harmony (oneshot.chordal_backing). Nothing when there's hardly
+        any backing."""
         from .remix import lufs
         back = cstems.get("backing")
-        if not back or lufs(back) < -45:
+        if not opts.backing_voice or not back:
             return False
-        if opts.backing_voice:
-            return True
-        from .oneshot import chordal_backing
-        if chordal_backing(back, self.converter.rmvpe):
-            notes.append("The backing vocals are stacked harmonies, so the original singers keep them.")
+        if lufs(back) < -45:
+            notes.append("This song has almost no backing vocals, so they weren't converted.")
             return False
         return True
 
