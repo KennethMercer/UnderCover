@@ -12124,6 +12124,25 @@ def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
         meta["index"] = str(vdst / "model.index")
     (vdst / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     assert str(ROOT) not in json.dumps(meta), "a path into the real app folder is left in the copied voice's meta.json"
+    # a second singer for the duet check: another trained voice, its model, index and meta only
+    def plain(d):   # (no cadence pack: its folder isn't copied, and the speech checks mustn't pick it)
+        try:
+            return not (json.loads((d / "meta.json").read_text(encoding="utf-8")).get("extra") or {}).get("tts")
+        except (OSError, ValueError):
+            return False
+    other = next((d for d in sorted(real["voices_dir"].iterdir()) if d.name.endswith("-uc") and d.name != voice
+                  and (d / "model.pth").exists() and (d / "meta.json").exists() and plain(d)), None)
+    if other is not None:
+        odst = mine["voices_dir"] / other.name
+        odst.mkdir(parents=True)
+        for f in ("model.pth", "model.index", "meta.json"):
+            if (other / f).exists():
+                shutil.copyfile(other / f, odst / f)
+        om = json.loads((odst / "meta.json").read_text(encoding="utf-8"))
+        om["dir"], om["pth"] = str(odst), str(odst / "model.pth")
+        om["index"] = str(odst / "model.index") if (odst / "model.index").exists() else None
+        (odst / "meta.json").write_text(json.dumps(om), encoding="utf-8")
+        assert str(ROOT) not in json.dumps(om), "a path into the real app folder is left in the second voice's meta.json"
     pdst = mine["cache_dir"] / "training" / src
     pdst.mkdir(parents=True)
     for f in ("project.json", "embeddings.npz"):
