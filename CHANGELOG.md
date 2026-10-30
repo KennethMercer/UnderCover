@@ -5,6 +5,10 @@ in brackets.
 
 ## Not released yet
 
+**SpeakEasy** (hangfix)
+- A reading that stops oddly in the middle of a phrase is heard and read again. A thumbs-down for odd pauses or pace
+  reads it again too, with a new take.
+
 **SpeakEasy** (tags1)
 - Directions in the text: `[pause]` (or `[pause 2s]`), `[louder]`, `[softer]`, `[higher]` and `[lower]`. A tag
   SpeakEasy doesn't know, or doesn't use yet (the speech engine's own `[laugh]` or `[whispering]`), is never read out;

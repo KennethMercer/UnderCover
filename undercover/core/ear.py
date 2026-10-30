@@ -234,11 +234,15 @@ def fix_for(kind: str, reasons, voice: dict | None, settings: dict | None, item_
         cur = settings.get("pace") or "natural"
         slower = "natural" if cur == "slower" else "slower"
         faster = "natural" if cur == "faster" else "faster"
+        # (each with new seeds too: an odd rhythm can be one take's, research 2026-10-29)
         return {"reason": "pace", "say": "Too fast, or too slow?",
                 "do": {"label": "Read it again slower" if slower == "slower" else "Read it again at the natural pace",
-                       "action": "respeak", "id": item_id, "options": {"pace": slower}},
+                       "action": "respeak", "id": item_id, "options": {"pace": slower, "reseed": True}},
                 "alt": {"label": "Faster" if faster == "faster" else "At the natural pace", "action": "respeak", "id": item_id,
-                        "options": {"pace": faster}}}
+                        "options": {"pace": faster, "reseed": True}}}
+    if kind == "speech" and "pauses" in reasons:   # odd pauses: most often that one take's (a held stop, a restart)
+        return {"reason": "pauses", "say": "Odd pauses?",
+                "do": {"label": "Read it again", "action": "respeak", "id": item_id, "options": {"reseed": True}}}
     return None
 
 

@@ -44,6 +44,14 @@ DRAWL_S = 0.30         # a one-syllable word held this long, not the last and wi
 DRAWL_LINE = 4         # ...in a short line only: in flowing speech Whisper's word edges can't tell a held word from a
                        # stressed one (on the golden set's 18 speech readings, every line flagged a word at 0.30 s)
 PAUSE_MARKS = ",.;:!?…—–-"
+# a hang: from one word's vowel to the next one's, inside a phrase (no pause marked in the text), this long or more.
+# Turbo's sampling holds a stop's closure and restarts now and then; with SpeakEasy's fixed seeds that take came back
+# every time (research 2026-10-29: 0.3-0.6 s on the hung take, 0.01-0.2 s on other seeds). Heard from the audio:
+# Whisper's word edges stop early on a held sound
+HANG_S = 0.25
+HANG_SILENT_S, SILENT_DB = 0.10, 35.0   # ...with one silence this long in it (a held closure; a cluster like "clock struck"
+                                        # spans as long with short closures between noise, 30-80 ms each: no hang)
+VOWEL_DB, VOWEL_S = 15.0, 0.06   # a vowel: within 15 dB of the take's loud level, 60 ms or more (a stop's release is shorter)
 FADE_S = 0.015
 TRAIL_S = 0.25         # a stray ending is cut this long after the text's last word (its decay kept)
 
@@ -196,6 +204,66 @@ def problems(text: str, words: list) -> list[str]:
     return out
 
 
+def _levels(x: np.ndarray, sr: int) -> np.ndarray:
+    """10 ms frames, dB under the take's loud level (its 95th percentile)."""
+    hop = sr // 100
+    n = len(x) // hop
+    if not n:
+        return np.zeros(0)
+    db = 10 * np.log10((x[:n * hop].reshape(n, hop).astype(np.float64) ** 2).mean(1) + 1e-12)
+    return db - np.percentile(db, 95)
+
+
+def _vowels(db: np.ndarray) -> list:
+    """The take's vowels as (start, end) seconds: loud runs of VOWEL_S or more."""
+    loud = db > -VOWEL_DB
+    out, s = [], None
+    for i, v in enumerate(list(loud) + [False]):
+        if v and s is None:
+            s = i
+        elif not v and s is not None:
+            if (i - s) / 100 >= VOWEL_S:
+                out.append((s / 100, i / 100))
+            s = None
+    return out
+
+
+def hangs(text: str, words: list, x: np.ndarray, sr: int) -> list[str]:
+    """Hangs in a take: two words next to each other in the text with no pause marked between them, whose vowels
+    are HANG_S or more apart in the audio (the first word's last vowel to the next one's first) with one silence of
+    HANG_SILENT_S or more between them (on the 2026-10-29 readings: every hung take, and no consonant cluster)."""
+    want = [w for w, _ in text_words(text)]
+    idx = _align(want, words)
+    pause = _pause_after(text)
+    db = _levels(x, sr)
+    runs = _vowels(db)
+
+    def longest_silence(a, b):
+        best = run = 0
+        for v in db[int(a * 100):int(b * 100)] < -SILENT_DB:
+            run = run + 1 if v else 0
+            best = max(best, run)
+        return best / 100
+    out = []
+    for i in range(len(want) - 1):
+        k1, k2 = idx[i], idx[i + 1]
+        if pause[i] or k1 is None or k2 is None or k2 != k1 + 1:
+            continue
+        mine = [r for r in runs if words[k1][1] - 0.1 <= r[0] < words[k1][2] + 0.05]   # the first word's vowels
+        if not mine:
+            continue
+        end = mine[-1][1]
+        nxt = next((r for r in runs if r[0] >= end and r[0] <= words[k2][2] + 0.1), None)
+        if nxt is not None and nxt[0] - end >= HANG_S and longest_silence(end, nxt[0]) >= HANG_SILENT_S:
+            out.append(f"hang after {want[i]!r} ({nxt[0] - end:.2f} s)")
+    return out
+
+
+def _mono(f: Path) -> tuple[np.ndarray, int]:
+    x, sr = sf.read(str(f), dtype="float32")
+    return (x.mean(1) if x.ndim > 1 else x), sr
+
+
 def _tail(want: list, idx: list, words: list) -> list:
     """The heard words after the text's last word, when that last word was heard: a stray continuation (1.1: an engine
     repeating "I'll take it from there" on every seed, so no re-read could mend it)."""
@@ -312,7 +380,8 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     from . import tags
     engine_text = text
     text, sounds = tags.spoken(text, known)
-    check = lambda h: [p for p in problems(text, h) if not (sounds and ("extra word" in p or p.startswith("stray ending")))]
+    check = lambda h, f: ([p for p in problems(text, h) if not (sounds and ("extra word" in p or p.startswith("stray ending")))]
+                          + hangs(text, h, *_mono(f)))   # (a hang is heard in the take itself: a re-read mends it)
     stopped = lambda: cancel is not None and cancel()
     s = settings()
     t0 = time.perf_counter()
@@ -323,7 +392,8 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     takes = [(Path(wav), seed)]
     heard = hear([str(wav)] + ([str(kref)] if timing else []))
     kwords = heard[1]["words"] if timing else []
-    best = (Path(wav), seed, heard[0]["words"], check(heard[0]["words"]))
+    best = (Path(wav), seed, heard[0]["words"], check(heard[0]["words"], wav))
+    first = best[3]
     tries = 1
     # read again with a new seed; keep the least bad take (cost: word by word; a stray ending is cut, so no re-read)
     while cost(best[3]) and tries < max(1, s["tries"]):
@@ -333,7 +403,7 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
         fut, w2 = render.request(engine_text, pack, ref, seed=nseed)
         client.wait(fut, cancel=cancel)
         h = hear([str(w2)])[0]["words"]
-        p = check(h)
+        p = check(h, w2)
         takes.append((Path(w2), nseed))
         if cost(p) < cost(best[3]):
             best = (Path(w2), nseed, h, p)
@@ -363,7 +433,7 @@ def review(text: str, wav: Path, pack: dict, ref: Path, seed: int, reader: str, 
     for a, b, f, why in sorted(edits, key=lambda e: e[0], reverse=True):
         x = insert_pause(x, sr, a, f) if why.startswith("pause") else stretch_span(x, sr, a, b, f)
     left = [p for p in best[3] if not (cut and p.startswith("stray ending"))]   # (what the cut mended isn't left)
-    log.update(tries=tries, seed=best[1], first_problems=problems(text, heard[0]["words"]), problems=left,
+    log.update(tries=tries, seed=best[1], first_problems=first, problems=left,
                edits=[(why, round(f, 2)) for *_, f, why in edits] + ([("stray ending cut", cut)] if cut else []),
                seconds=round(time.perf_counter() - t0, 2))
     kref.unlink(missing_ok=True)

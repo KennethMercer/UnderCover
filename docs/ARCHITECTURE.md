@@ -385,7 +385,15 @@ reads a sentence, listen-back (`speakeasy/listenback.py`) hears it back: a word 
 added inside the line gets the sentence read again with a new seed, and the least bad take is kept (`cost`, word by
 word: ten extra words weigh ten, not one). Words past the text's last word are a stray ending (1.1: an engine repeated
 its last phrase on every seed, so no re-read could mend it): `trim_ending` cuts the take TRAIL_S after that word,
-never into the next word heard, with a short fade, and no re-read is spent on it. Its word stretch and comma lengthening are off by
+never into the next word heard, with a short fade, and no re-read is spent on it.
+
+A hang is caught the same way (`listenback.hangs`, heard in the take's audio): two words with no pause marked between
+them, whose vowels are 0.25 s or more apart with one silence of 0.1 s or more in between. That's a held closure and a
+restart. A consonant cluster spans as long, with short closures between noise. Each reading's first seed is
+`speak.SEED` plus its sentence's index, kept with the speech, so the same text reads the same. A thumbs-down for its
+pace or its pauses reads it again with a fresh seed (`reseed` on `/api/speak`).
+
+Its word stretch and comma lengthening are off by
 default: blind, the re-reads fixed the word and the other two did not. Whisper is language-model biased (it hears
 "evening" in "eving"), so it catches gross slips; the ear is the judge.
 

@@ -116,7 +116,8 @@ async function earDo(a, kind, item) {
   }
   if (a.action === "respeak" && kind === "speech" && item) {   // the same text again, read the way it asks
     const r = await api("/api/speak", { json: { text: item.text, voice: item.voice, reader: item.reader, pace: a.options?.pace || item.pace,
-                                                 nudge: item.nudge ?? item.pitch ?? 0, cadence: item.mode === "cadence" ? null : false } });
+                                                 nudge: item.nudge ?? item.pitch ?? 0, cadence: item.mode === "cadence" ? null : false,
+                                                 reseed: a.options?.reseed === true } });   // (a new take, not the same one again)
     showTab("speakeasy");
     seStart(r.job, r.plan, r.estimate);
     return refreshJobs(true);
