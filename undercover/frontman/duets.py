@@ -266,7 +266,7 @@ def joint_fit(ranges: dict, f0: np.ndarray) -> dict | None:
 
 
 def describe(plan: list, names: dict) -> str:
-    """The cover's note: who sings when ("Duet: 0:00 Obama · 1:07 both · 2:01 SpongeBob"); a long line-by-line plan
+    """The cover's note: who sings when ("Duet: 0:00 <first> · 1:07 both · 2:01 <second>"); a long line-by-line plan
     in a sentence."""
     who = lambda w: "both" if w == "AB" else names[w]
     if len(plan) <= 10:

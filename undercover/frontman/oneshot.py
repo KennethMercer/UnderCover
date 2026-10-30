@@ -105,7 +105,7 @@ _DUET_JOIN = re.compile(r"\s+(?:and|&|with)\s+", re.I)
 
 
 def split_duet(person: str) -> dict | None:
-    """"Hello as Obama and SpongeBob" (also "with", "&", "a duet of ..."): two singers taking turns, in the order
+    """"<song> as <one singer> and <another>" (also "with", "&", "a duet of ..."): two singers taking turns, in the order
     written (1.2, duets.py). Only when the second one is a voice here, or the first is and the second isn't (then the
     first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"), and not for two
     names neither of which is here (a band's name). -> {person, with, voice (the second's, or None)} or None."""
