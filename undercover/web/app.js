@@ -659,7 +659,8 @@ function renderDuet() {
   $("#fm-duet-way-box").hidden = !S.opts.duet_voice;
   $$("#fm-duet-way button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === way)));
   $("#fm-duet-note").textContent = S.opts.duet_voice ? DUET_WAYS[way] : "";
-  const back = S.opts.duet_backing in DUET_BACKINGS ? S.opts.duet_backing : S.defaults.duet_backing in DUET_BACKINGS ? S.defaults.duet_backing : "singers";
+  const own = v => typeof v === "string" && Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v);   // (a stored value is only data)
+  const back = own(S.opts.duet_backing) ? S.opts.duet_backing : own(S.defaults.duet_backing) ? S.defaults.duet_backing : "singers";
   if (S.opts.duet_voice) S.opts.duet_backing = back;
   $$("#fm-duet-backing button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === back)));
   $("#fm-duet-backing-note").textContent = S.opts.duet_voice ? DUET_BACKINGS[back] : "";

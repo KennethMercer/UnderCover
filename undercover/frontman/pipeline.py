@@ -360,7 +360,7 @@ class CoverEngine:
         from ..core.separate import separate
         report = progress or (lambda *a: None)
         song = Path(song).resolve()
-        karaoke = True if opts.backing_voice else opts.karaoke
+        karaoke = True if opts.backing_voice or opts.duet_voice else opts.karaoke   # (as the cover would split it)
         report("separating", 0.0, "Separating vocals (needed once; the full cover reuses it)")
         stems = separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality, one_voice_if_no_lead=True,
                          progress=lambda f, step: report("separating", f, "Separating vocals"))
@@ -511,17 +511,17 @@ def history_items() -> list[dict]:
     for h in history():
         if not h["recent"]:
             continue
+        o = h.get("options") if isinstance(h.get("options"), dict) else {}   # (the history's own file, read as data)
         out.append({
             "id": h["id"], "title": h.get("title") or Path(h["song"]).stem, "voice": h["voice"],
             "kept": h["kept"], "kept_at": h.get("kept_at"), "recent": h["recent"],
-            "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": h.get("options", {}),
+            "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": o,
             "output": file_url(h["output"]), "output_name": Path(h["output"]).name,
             "original": file_url(h["song"]), "vocal": file_url(h.get("converted_vocal")),
             "backing": file_url(h.get("converted_backing")),
-            "backing_voice": (h.get("options", {}).get("backing_voice")
-                              if h.get("converted_backing") and h.get("options", {}).get("backing_voice") != h["voice"]
-                              and not h.get("options", {}).get("duet_voice") else None),   # (a duet's backing is its singers')
-            "duet_voice": h.get("options", {}).get("duet_voice") or None,   # a duet's second singer (duets.py)
+            "backing_voice": (o.get("backing_voice") if h.get("converted_backing") and o.get("backing_voice") != h["voice"]
+                              and not o.get("duet_voice") else None),   # (a duet's backing is its singers')
+            "duet_voice": o.get("duet_voice") or None,   # a duet's second singer (duets.py)
             "notes": h.get("notes", []),
         })
     return out

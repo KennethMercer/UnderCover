@@ -63,11 +63,8 @@ def repeated(ws: list) -> set:
     return out
 
 
-def phrases(x16: np.ndarray) -> list:
-    """The lead's sung lines: stretches of singing between silences of SILENCE_S or more (SILENCE_DB under its loud
-    level). A line shorter than LINE_MIN_S joins the next when the silence between them is under JOIN_GAP_S. Each line
-    but the last ends with `cut`, the middle of the silence after it: the only places a voice may change.
-    -> [{t0, t1, text, rep, cut}]"""
+def _sung_runs(x16: np.ndarray) -> list:
+    """A stem's singing: stretches between silences of SILENCE_S or more (SILENCE_DB under its loud level), [[t0, t1]]."""
     db = _db(x16)
     if not len(db):
         return []
@@ -85,7 +82,15 @@ def phrases(x16: np.ndarray) -> list:
                 start, quiet = None, 0
     if start is not None:
         out.append([start / 100, len(db) / 100])
-    out = [r for r in out if r[1] - r[0] >= MIN_PHRASE_S]
+    return out
+
+
+def phrases(x16: np.ndarray) -> list:
+    """The lead's sung lines: stretches of singing between silences of SILENCE_S or more (SILENCE_DB under its loud
+    level). A line shorter than LINE_MIN_S joins the next when the silence between them is under JOIN_GAP_S. Each line
+    but the last ends with `cut`, the middle of the silence after it: the only places a voice may change.
+    -> [{t0, t1, text, rep, cut}]"""
+    out = [r for r in _sung_runs(x16) if r[1] - r[0] >= MIN_PHRASE_S]
     merged = []
     for r in out:
         if merged and merged[-1][1] - merged[-1][0] < LINE_MIN_S and r[0] - merged[-1][1] < JOIN_GAP_S:
@@ -210,41 +215,23 @@ def backing_plan(plan: list, x16: np.ndarray) -> list:
     the lead's change mostly in the old singer is finished by the old singer. The user heard the backing change voice
     halfway through a phrase (2026-10-30): on Hello the backing sings from 3:26.9 to 3:51.2 with only 15-25 dB dips
     between its syllables, and its one silence near the lead's change at 3:28.7 ends at 3:26.9."""
-    if len(plan) < 2:
-        return [list(p) for p in plan]
-    db = _db(x16)
-    if not len(db):
-        return [list(p) for p in plan]
-    sung = db > np.percentile(db, 95) - SILENCE_DB
-    need = int(round(SILENCE_S * 100))
-    sang, start, quiet = [], None, 0   # the backing's phrases [t0, t1]
-    for i, v in enumerate(sung):
-        if v:
-            start = i if start is None else start
-            quiet = 0
-        elif start is not None:
-            quiet += 1
-            if quiet >= need:
-                sang.append([start / 100, (i - quiet + 1) / 100])
-                start, quiet = None, 0
-    if start is not None:
-        sang.append([start / 100, len(db) / 100])
+    sang = _sung_runs(x16) if len(plan) >= 2 else []   # the backing's phrases [t0, t1]
     if not sang:
         return [list(p) for p in plan]
     who = [_who_at(plan, a, b) for a, b in sang]
     changes = [p[1] for p in plan[:-1]]
-    half = FADE_S / 2
-    out, at = [], plan[0][0]
+    half, end = FADE_S / 2, plan[-1][1]
+    out, at, cur = [], plan[0][0], who[0]
     for k in range(1, len(sang)):
-        if who[k] == who[k - 1]:
+        if who[k] == cur:
             continue
         lo, hi = sang[k - 1][1] + half, sang[k][0] - half   # the silence between the two phrases
         near = min(changes, key=lambda c: 0.0 if lo <= c <= hi else min(abs(c - lo), abs(c - hi)))
         cut = round(min(max(near, lo), hi), 3)
-        if cut > at:
-            out.append([at, cut, who[k - 1]])
-            at = cut
-    out.append([at, plan[-1][1], who[-1]])
+        if at < cut < end:   # (a backing that runs on past the lead's end changes nothing there)
+            out.append([at, cut, cur])
+            at, cur = cut, who[k]
+    out.append([at, end, cur])
     return out
 
 
@@ -308,7 +295,8 @@ def joint_fit(ranges: dict, f0: np.ndarray, who: np.ndarray | None = None) -> di
     alone = {k: pick_fit(rng, bool(speech), mine[k]) for k, (rng, speech) in have.items()}
     best["share"] = {k: round(w, 3) for k, w in weight.items()} if who is not None else None
     best["alone"] = {k: {"key": a["key"], "octave": a["octave"]} for k, a in alone.items()}
-    best["off"] = {k: 12 * (best["octave"][k] - a["octave"]) + best["key"] - a["key"] for k, a in alone.items()}
+    best["off"] = {k: 12 * (best["octave"][k] - a["octave"]) + best["key"] - a["key"] for k, a in alone.items()
+                   if a["register_st"] is not None}   # (a voice the plan gives no melody to has no key of its own)
     return best
 
 

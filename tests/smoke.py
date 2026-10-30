@@ -7403,6 +7403,7 @@ def u_duets():
     for k in "AB":   # a singer who sings all of it gets their own best fit: the other weighs nothing
         alone = D.joint_fit(far, mel, D.singer_frames([[0.0, 100.0, k]], 10000))
         assert alone["off"][k] == 0 and alone["share"][k] == 1.0 and alone["key"] == alone["alone"][k]["key"], alone
+        assert set(alone["off"]) == {k}, alone   # (the other sings nothing: no key of their own to be far from)
     import inspect as _i2
     from undercover.frontman import pipeline as _PL2
     fsrc = _i2.getsource(_PL2.CoverEngine._fit_duet)
@@ -7593,6 +7594,10 @@ def u_duets():
     one = np.full(20 * sr, 0.3, np.float32)
     assert D.backing_plan(lead_plan, one) == [[0.0, 20.0, "A"]]
     assert D.backing_plan([[0.0, 20.0, "B"]], back) == [[0.0, 20.0, "B"]]
+    # a backing that runs on past the lead's end changes nothing there (a tie goes to the earlier singer)
+    tail = np.full(12 * sr, 0.3, np.float32)
+    tail[int(10.3 * sr):int(10.6 * sr)] = 0.0
+    assert D.backing_plan([[0.0, 5.0, "A"], [5.0, 10.0, "B"]], tail) == [[0.0, 10.0, "A"]]
     # the backing in a duet: in the singers' voices unless the original is asked for (duets.BACKING_DEFAULT is the
     # singers', the user's favourite); never when there's none or hardly any. A backing voice isn't a duet's.
     assert D.BACKING_DEFAULT == "singers" and D.BACKINGS == ("singers", "original")
@@ -7627,6 +7632,8 @@ def u_duets():
     assert 'id="fm-duet-backing"' in duet_box and 'data-v="singers"' in duet_box and 'data-v="original"' in duet_box
     js = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
     assert "S.opts.duet_backing = b.dataset.v" in js and "S.defaults.duet_backing" in js and "sel.hidden = duet" in js
+    assert "Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v)" in js   # (a stored "constructor" is no backing)
+    assert "karaoke = True if opts.backing_voice or opts.duet_voice else opts.karaoke" in inspect.getsource(PL.CoverEngine.make_preview)
     assert "together" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"})
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
