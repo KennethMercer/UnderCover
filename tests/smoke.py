@@ -10814,7 +10814,7 @@ def a_presep_progress():
         assert r.get("started"), r
         pre = r["job"]
         voice = next(v["name"] for v in api("/api/voices") if not v.get("demo"))
-        prev = api("/api/preview", {"song": sid, "voice": voice, "variants": [{"label": "A", "options": {}}]})["job"]
+        prev = api("/api/preview", {"song": sid, "voice": voice, "variants": [{"label": "A"}]})["job"]
         seen = {"pre": None, "prev": None}
 
         def look():
