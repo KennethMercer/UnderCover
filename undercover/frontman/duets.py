@@ -191,6 +191,29 @@ def find_plan(lead16: np.ndarray, words: list, way: str, duration: float) -> tup
     return plan_of(rows, who_sings(rows, way, fallback), duration), rows, fallback
 
 
+def moved_to_quiet(plan: list, x16: np.ndarray, span: float = 1.0) -> list:
+    """The plan with each change moved to the quietest point of x16 (another stem, the backing) within span seconds
+    of it, never past halfway to the next change or the last: the backing's own pause near the lead's, so its voice
+    doesn't change mid-word either. The first start and the last end stay."""
+    if len(plan) < 2:
+        return [list(p) for p in plan]
+    db = _db(x16)
+    cuts = [p[1] for p in plan[:-1]]
+    moved = []
+    for k, c in enumerate(cuts):
+        lo = max(c - span, (plan[k][0] + c) / 2)
+        hi = min(c + span, (c + plan[k + 1][1]) / 2)
+        a, b = int(lo * 100), max(int(lo * 100) + 1, int(hi * 100))
+        seg = db[a:min(b, len(db))]
+        moved.append(round((a + int(np.argmin(seg))) / 100 + 0.005, 3) if len(seg) else c)
+    out, at = [], plan[0][0]
+    for k, p in enumerate(plan):
+        end = moved[k] if k < len(moved) else p[1]
+        out.append([at, end, p[2]])
+        at = end
+    return out
+
+
 def stitch(a: np.ndarray, b: np.ndarray, plan: list, sr: int) -> np.ndarray:
     """The duet's take: each part from take a or take b, with an equal-power crossfade of FADE_S centred on every
     change (inside the lead's silence). The length is the shorter take's."""

@@ -294,7 +294,7 @@ class CoverEngine:
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
         if dback:   # the backing as the lead: each section's backing in that section's singer, at that singer's octave
             from dataclasses import replace as _replace
-            from .duets import stitch
+            from .duets import moved_to_quiet, stitch
             back16 = load_16k(cstems["backing"])
             aoct = (s.pitch - key) / 12
             doct = opts.duet_octave if opts.duet_octave is not None else aoct
@@ -309,7 +309,8 @@ class CoverEngine:
                 g = gcd(bsr, dbsr)
                 bb = resample_poly(bb, bsr // g, dbsr // g).astype(np.float32)
             conv_backing = work / f"{_safe(title)}__{voice.name}__{dvoice.name}__backing__{stamp}.flac"
-            sf.write(str(conv_backing), np.clip(stitch(ba, bb, opts.duet_plan, bsr), -1, 1), bsr, subtype="PCM_24")
+            bplan = moved_to_quiet(opts.duet_plan, back16)   # (each change at the backing's own pause near the lead's)
+            sf.write(str(conv_backing), np.clip(stitch(ba, bb, bplan, bsr), -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
         report("converting", 1.0, "Vocal converted")
 
@@ -618,6 +619,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
         conv = conv * 2 - 1.5  # second conversion; shared models are already loaded
     if opts.duet_voice:   # a duet: the lead converted again (its pitch track shared), and its words heard once
         conv += dur / med(speeds["synth"], 40.0) + (0.0 if opts.duet_plan else 5.0 + dur / 30.0)
+        if karaoke:   # and the backing in both singers (when it's converted: a guess, the rule needs the stems)
+            conv += 2 * dur / med(speeds["synth"], 40.0)
     key, _ = pitch_plan(opts)
     mix = 1.0 + dur / 120.0 + (dur / 50.0 if key else 0.0)  # Rubber Band key shift ~50x realtime
     return {"separating": round(sep, 1), "converting": round(conv, 1), "mixing": round(mix, 1),

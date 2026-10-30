@@ -7483,7 +7483,13 @@ def u_duets():
     from undercover.frontman import pipeline as PL
     src = inspect.getsource(PL.CoverEngine.make_cover)
     assert "self.converter.shared_f0() if dvoice" in src and "stitch(audio, daudio, opts.duet_plan, sr)" in src
-    assert "stitch(ba, bb, opts.duet_plan, bsr)" in src and "bvoice = None" in src   # the backing by the same plan
+    assert "stitch(ba, bb, bplan, bsr)" in src and "moved_to_quiet(opts.duet_plan, back16)" in src and "bvoice = None" in src
+    # the backing's changes go to its own pause near the lead's (within a second, never past halfway to the next)
+    back = np.full(20 * sr, 0.3, np.float32)
+    back[int(5.6 * sr):int(5.8 * sr)] = 0.0   # the backing's pause, 0.6 s after the lead's
+    mp = D.moved_to_quiet([[0.0, 5.0, "A"], [5.0, 9.0, "B"], [9.0, 20.0, "A"]], back)
+    assert 5.55 <= mp[0][1] <= 5.85 and mp[1][0] == mp[0][1] and mp[0][0] == 0 and mp[-1][1] == 20.0, mp
+    assert 7.0 <= mp[1][1] <= 10.0 and D.check_plan(mp, 20.0) == mp, mp
     # the backing: converted as a cover would (asked for, or unless it's stacked harmony), never when there's none
     from undercover.frontman import remix as RM, oneshot as OS2
     real_lufs, real_ch = RM.lufs, OS2.chordal_backing
