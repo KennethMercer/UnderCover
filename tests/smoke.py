@@ -11608,10 +11608,13 @@ def _cover_target():
 @check("duet: a cover in two voices end to end (Take turns, the default: both on the choruses), its plan in the history, Make again keeps it and an octave fix is kept; bad duet options refused plainly (then deleted)")
 def a_duet():
     _tray_room("/api/history")
-    song, voice = _cover_target()
+    with _a_song() as (song, voice):
+        return _duet_with(song, voice)
+
+
+def _duet_with(song, voice):
     others = [v["name"] for v in api("/api/voices") if v["name"].endswith("-uc") and v["name"] != voice]
-    if not song or not others:
-        return "skipped: needs a song with cached stems and two voices"
+    assert song and voice and others, "need a song (or test/smoke.wav) and two voices"
     second = others[0]
     for bad, why in (({"duet_voice": "no-such-voice"}, "isn't"), ({"duet_voice": voice}, "two different"),
                      ({"duet_voice": second, "duet_way": "chorus"}, "one of these ways"),
@@ -11654,9 +11657,10 @@ def a_duet():
             api(f"/api/library/covers/{cid}", method="DELETE")
 
 
-@check("cover: end to end, from a song with cached stems or the test song (then deleted)")
-def a_cover():
-    _tray_room("/api/history")
+@contextlib.contextmanager
+def _a_song():
+    """(song, voice) for a cover check: a song with cached stems, or the test song brought in for the check and
+    removed after (an empty library, as the sandbox's is)."""
     song, voice = _cover_target()
     added = None
     test_song = Path(os.environ.get("UNDERCOVER_DATA_ROOT") or ROOT) / "test" / "smoke.wav"   # test/ isn't in git
@@ -11669,10 +11673,17 @@ def a_cover():
             added = song = json.loads(r.read())
         song.setdefault("title", "smoke-test-song")
     try:
-        return _cover_with(song, voice)
+        yield song, voice
     finally:
         if added:
             api(f"/api/library/songs/{added['id']}", method="DELETE")   # the song and its stems
+
+
+@check("cover: end to end, from a song with cached stems or the test song (then deleted)")
+def a_cover():
+    _tray_room("/api/history")
+    with _a_song() as (song, voice):
+        return _cover_with(song, voice)
 
 
 def _cover_with(song, voice):
