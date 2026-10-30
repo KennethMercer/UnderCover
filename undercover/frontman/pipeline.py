@@ -137,6 +137,23 @@ class CoverEngine:
         return replace(opts, key=fit["key"], octave=a, duet_octave=b, pitch=None,
                        backing_octave=a if same_backing else opts.backing_octave)
 
+    def _duet_backing(self, opts: "CoverOptions", cstems: dict, notes: list) -> bool:
+        """Is a duet's backing converted (in each section's singer, by the duet's own plan)? As a cover decides it:
+        asked for (a backing voice chosen), or, as the one-shot does, unless the backing is stacked harmony
+        (oneshot.chordal_backing: RVC follows one pitch, so the original singers keep those). Nothing when there's
+        hardly any backing."""
+        from .remix import lufs
+        back = cstems.get("backing")
+        if not back or lufs(back) < -45:
+            return False
+        if opts.backing_voice:
+            return True
+        from .oneshot import chordal_backing
+        if chordal_backing(back, self.converter.rmvpe):
+            notes.append("The backing vocals are stacked harmonies, so the original singers keep them.")
+            return False
+        return True
+
     def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report) -> "CoverOptions":
         """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
         (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. The plan and the
@@ -239,7 +256,10 @@ class CoverEngine:
         work.mkdir(parents=True, exist_ok=True)
         if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself
             opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report)
-        passes = 1 + bool(dvoice) + bool(bvoice)
+        dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in each section's singer too
+        if dback:
+            bvoice = None   # (one backing voice gives way to the duet's two)
+        passes = 1 + bool(dvoice) + bool(bvoice) + 2 * dback
         share = 1.0 / passes
         from ..core import lowprofile
         lowprofile.free_for("convert")   # (under the cap: the separator goes before the conversion; back on first use)
@@ -272,6 +292,24 @@ class CoverEngine:
                                                  progress=lambda f: report("converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
+        if dback:   # the backing as the lead: each section's backing in that section's singer, at that singer's octave
+            from dataclasses import replace as _replace
+            from .duets import stitch
+            back16 = load_16k(cstems["backing"])
+            aoct = (s.pitch - key) / 12
+            doct = opts.duet_octave if opts.duet_octave is not None else aoct
+            with self.converter.shared_f0():
+                ba, bsr = self.converter.convert(back16, voice.name, s, progress=lambda f: report(
+                    "converting", 1 - 2 * share + share * f, f"Converting the backing vocals to {label_of(voice.name)}"))
+                bb, dbsr = self.converter.convert(back16, dvoice.name, _replace(s, pitch=key + 12 * doct), progress=lambda f: report(
+                    "converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(dvoice.name)} too"))
+            if dbsr != bsr:
+                from math import gcd
+                from scipy.signal import resample_poly
+                g = gcd(bsr, dbsr)
+                bb = resample_poly(bb, bsr // g, dbsr // g).astype(np.float32)
+            conv_backing = work / f"{_safe(title)}__{voice.name}__{dvoice.name}__backing__{stamp}.flac"
+            sf.write(str(conv_backing), np.clip(stitch(ba, bb, opts.duet_plan, bsr), -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
         report("converting", 1.0, "Vocal converted")
 

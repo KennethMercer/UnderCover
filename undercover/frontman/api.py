@@ -199,6 +199,8 @@ def _cover_again(h, item_id: str, body: dict):
     opts = {**old, **change}
     if change:   # the ear's own octave or key: kept, not fitted over again
         opts["fit"] = False
+    if any(len(p) == 3 and p[2] not in ("A", "B") for p in opts.get("duet_plan") or [] if isinstance(p, list)):
+        opts.pop("duet_plan")   # a plan from before one-singer-at-a-time ("both"): found again from the song
     if "octave" in change and old.get("backing_octave") == old.get("octave"):
         opts["backing_octave"] = change["octave"]
     _start_cover(h, {"song": Path(it.get("song") or "").stem, "voice": opts.pop("voice", None) or it.get("voice"),

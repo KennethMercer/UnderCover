@@ -642,14 +642,17 @@ function renderBackingSelect() {
 $("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.target.value; renderBackingSelect(); saveOpts(); summary(); refreshEstimate(); });
 // A duet (1.2): a second singer takes turns with the voice (frontman/duets.py), shared one of two ways. Never the lead
 // itself, and only a voice that's installed.
-const DUET_WAYS = { turns: "Verses take turns, and you'll hear both together on the choruses.", lines: "A line each, all the way through." };
+// (Line by line stays hidden until it passes the ear; style A's segmented control and strip are the look chat's)
+const DUET_WAYS = { turns: "They take a verse each, and each chorus goes to whoever sang the verse before it.", lines: "A line each, changing only where the singer breathes." };
 function renderDuet() {
   const sel = $("#fm-duet");
   if ((S.voicesLoaded && S.opts.duet_voice && !S.voices.some(v => v.name === S.opts.duet_voice)) || S.opts.duet_voice === S.voice) S.opts.duet_voice = "";
   sel.innerHTML = `<option value="">+ Second singer</option>` + S.voices.filter(v => v.name !== S.voice)
     .map(v => `<option value="${esc(v.name)}">${esc(voiceDisplay(v.name))}</option>`).join("");
   sel.value = S.opts.duet_voice || "";
-  const way = DUET_WAYS[S.opts.duet_way] ? S.opts.duet_way : (S.defaults.duet_way || "turns");
+  const shown = $$("#fm-duet-way button").filter(b => !b.hidden).map(b => b.dataset.v);   // (a hidden way isn't kept from before)
+  const way = shown.includes(S.opts.duet_way) ? S.opts.duet_way : shown.includes(S.defaults.duet_way) ? S.defaults.duet_way : shown[0];
+  if (S.opts.duet_voice) S.opts.duet_way = way;
   $("#fm-duet-way-box").hidden = !S.opts.duet_voice;
   $$("#fm-duet-way button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === way)));
   $("#fm-duet-note").textContent = S.opts.duet_voice ? DUET_WAYS[way] : "";

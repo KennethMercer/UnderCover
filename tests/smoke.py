@@ -7297,7 +7297,7 @@ def u_speak_hz():
     return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
 
 
-@check("duets (1.2): lines from words, choruses where words come back, Take turns and By line, the fallback by phrases; the stitch changes voice only in the quiet with an equal-power fade; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
+@check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, Take turns with each chorus sung by that verse's singer and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
 def u_duets():
     import numpy as np
     from types import SimpleNamespace
@@ -7320,7 +7320,7 @@ def u_duets():
         spans.append((kind, a, t))
     dur = t + 1.0
     sr = D.SR16
-    x = np.zeros(int(dur * sr), np.float32)   # the lead: singing during each word, quiet between lines
+    x = np.zeros(int(dur * sr), np.float32)   # the lead: singing during each word (20 ms between words), quiet between lines
     for _, s, e, _ in ws:
         i, j = int(s * sr), int(e * sr)
         x[i:j] = 0.3 * np.sin(2 * np.pi * 220 * np.arange(j - i) / sr)
@@ -7328,9 +7328,22 @@ def u_duets():
     assert [r["text"] for r in rows] == [ln for _, lines_ in song for ln in lines_], [r["text"] for r in rows]
     bl = D.blocks(rows)
     assert [b["kind"] for b in bl] == ["verse", "chorus"] * 3, bl
-    turns = D.who_sings(rows, "turns")
-    assert [turns[b["rows"][0]] for b in bl] == ["A", "AB", "B", "AB", "A", "AB"], turns
-    assert D.who_sings(rows, "lines") == ["A", "B"] * 9
+    turns = D.who_sings(rows, "turns")   # each chorus goes to whoever sang the verse before it, alone
+    assert [turns[b["rows"][0]] for b in bl] == ["A", "A", "B", "B", "A", "A"] and "AB" not in turns, turns
+    assert D.who_sings(rows, "lines") == ["A", "B"] * 9 and "AB" not in D.WHO and len(D.WAYS) == 2
+    # a line boundary in Whisper's words where the lead never stops (a held note through it) is no place to switch:
+    # those two lines are one line, sung by one voice
+    held = x.copy()
+    a0, b0 = int(rows[1]["t1"] * sr), int(rows[2]["t0"] * sr)
+    held[a0:b0] = 0.3 * np.sin(2 * np.pi * 220 * np.arange(b0 - a0) / sr)
+    hrows = D.sections(held, ws)
+    assert len(hrows) == 17 and hrows[1]["text"] == rows[1]["text"] + " " + rows[2]["text"], [r["text"] for r in hrows]
+    for way in D.WAYS:
+        hp = D.plan_of(hrows, D.who_sings(hrows, way), dur)
+        assert not any(rows[1]["t1"] - 0.05 < c < rows[2]["t0"] + 0.05 for _, c, _ in hp[:-1]), (way, hp)
+        for _, c, _ in hp[:-1]:   # and every change is where the lead is silent, 100 ms or more around it
+            i = int(c * sr)
+            assert abs(held[i - int(0.05 * sr):i + int(0.05 * sr)]).max() == 0, (way, c)
     for way in D.WAYS:
         plan = D.plan_of(rows, D.who_sings(rows, way), dur)
         assert plan[0][0] == 0 and abs(plan[-1][1] - dur) < 1e-6 and D.check_plan(plan, dur) == plan, plan
@@ -7344,23 +7357,22 @@ def u_duets():
         raise AssertionError("an unknown way was taken")
     except ValueError:
         pass
-    # too few words heard: by phrases, every 2, never together
+    # too few words heard: no chorus to find, every 2 lines
     plan, prow, fb = D.find_plan(x, ws[:5], "turns", dur)
-    assert fb and len(prow) == 18 and [w for _, _, w in plan] == ["A", "B"] * 4 + ["A"] and "AB" not in str(plan), plan
-    # the stitch: A's take, then B's, then both; the length is the shorter take's; equal power through the change
+    assert fb and len(prow) == 18 and [w for _, _, w in plan] == ["A", "B"] * 4 + ["A"], plan
+    # the stitch: A's take, then B's, then A's; the length is the shorter take's; equal power through the change
     n = 3 * sr
     a = np.sin(2 * np.pi * 300 * np.arange(n + 500) / sr).astype(np.float32)
     b = np.sin(2 * np.pi * 500 * np.arange(n) / sr).astype(np.float32)
-    y = D.stitch(a, b, [[0.0, 1.0, "A"], [1.0, 2.0, "B"], [2.0, 3.0, "AB"]], sr)
-    g = 10 ** (D.TOGETHER_DB / 20)
+    y = D.stitch(a, b, [[0.0, 1.0, "A"], [1.0, 2.0, "B"], [2.0, 3.0, "A"]], sr)
     assert len(y) == n and np.allclose(y[sr // 2], a[sr // 2]) and np.allclose(y[3 * sr // 2], b[3 * sr // 2], atol=1e-6)
-    assert np.allclose(y[5 * sr // 2], g * (a[5 * sr // 2] + b[5 * sr // 2]), atol=1e-6)
+    assert np.allclose(y[5 * sr // 2], a[5 * sr // 2], atol=1e-6)
     ones = np.ones(n, np.float32)
     ya, yb = D.stitch(ones, 0 * ones, [[0.0, 1.0, "A"], [1.0, 3.0, "B"]], sr), D.stitch(0 * ones, ones, [[0.0, 1.0, "A"], [1.0, 3.0, "B"]], sr)
     k = slice(sr - int(sr * D.FADE_S / 2) + 1, sr + int(sr * D.FADE_S / 2) - 1)
     assert np.allclose(ya[k] ** 2 + yb[k] ** 2, 1, atol=1e-4) and ya[sr - 1000] == 1 and yb[sr + 1000] == 1
     # a plan from outside: only the plain shape
-    for bad in (None, "x", [], [[0, 1]], [[0, 1, "C"]], [[0.5, 1, "A"]], [[0, 1, "A"], [1.5, 2, "B"]], [[0, float("nan"), "A"]],
+    for bad in (None, "x", [], [[0, 1]], [[0, 1, "C"]], [[0, 1, "AB"]], [[0.5, 1, "A"]], [[0, 1, "A"], [1.5, 2, "B"]], [[0, float("nan"), "A"]],
                 [[0, 2, "A"], [2, 1, "B"]], [[0, "1", "A"], [1, {}, "B"]], [[0, 1, "A"]] * (D.MAX_PARTS + 1)):
         try:
             D.check_plan(bad)
@@ -7410,8 +7422,8 @@ def u_duets():
         return SimpleNamespace(name=name)
     V.get_voice = fake_get
     try:
-        ok = FA._duet_options({"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0, 2, "A"], [2, 5, "AB"]]}, "lead-uc")
-        assert ok == {"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0.0, 2.0, "A"], [2.0, 5.0, "AB"]]}, ok
+        ok = FA._duet_options({"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0, 2, "A"], [2, 5, "B"]]}, "lead-uc")
+        assert ok == {"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0.0, 2.0, "A"], [2.0, 5.0, "B"]]}, ok
         assert FA._duet_options({}, "lead-uc") == {} and FA._duet_options({"duet_voice": ""}, "lead-uc") == {}
         # numbers no setting can be (JSON carries NaN, Infinity and huge integers): a plain refusal, never a 500
         big = 10 ** 400
@@ -7471,6 +7483,28 @@ def u_duets():
     from undercover.frontman import pipeline as PL
     src = inspect.getsource(PL.CoverEngine.make_cover)
     assert "self.converter.shared_f0() if dvoice" in src and "stitch(audio, daudio, opts.duet_plan, sr)" in src
+    assert "stitch(ba, bb, opts.duet_plan, bsr)" in src and "bvoice = None" in src   # the backing by the same plan
+    # the backing: converted as a cover would (asked for, or unless it's stacked harmony), never when there's none
+    from undercover.frontman import remix as RM, oneshot as OS2
+    real_lufs, real_ch = RM.lufs, OS2.chordal_backing
+    eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=None))
+    try:
+        RM.lufs = lambda p: -20.0
+        for back, bv, chordal, want in ((None, None, False, False), ("b.flac", None, False, True), ("b.flac", "x-uc", True, True),
+                                        ("b.flac", None, True, False)):
+            OS2.chordal_backing = lambda p, rm, c=chordal: c
+            notes = []
+            got = PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice=bv), {"backing": back} if back else {}, notes)
+            assert got is want and (not chordal or bv or not back or any("stacked" in n for n in notes)), (back, bv, chordal, got, notes)
+        RM.lufs = lambda p: -60.0
+        assert PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice="x-uc"), {"backing": "b.flac"}, []) is False
+    finally:
+        RM.lufs, OS2.chordal_backing = real_lufs, real_ch
+    # Make again: a plan from before one singer at a time (with "both") isn't sent back; it's found again
+    assert 'opts.pop("duet_plan")' in inspect.getsource(FA._cover_again)
+    page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    assert 'data-v="lines" hidden' in page and 'id="fm-duet-strip"' in page   # By line waits for the ear; style A's strip
+    assert "together" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"})
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
 
@@ -11631,7 +11665,7 @@ def _cover_target():
     return song, voice
 
 
-@check("duet: a cover in two voices end to end (Take turns, the default: both on the choruses), its plan in the history, Make again keeps it and an octave fix is kept; bad duet options refused plainly (then deleted)")
+@check("duet: a cover in two voices end to end (Take turns, the default: one singer at a time), its plan in the history, Make again keeps it and an octave fix is kept; bad duet options refused plainly (then deleted)")
 def a_duet():
     _tray_room("/api/history")
     with _a_song() as (song, voice):
@@ -11677,11 +11711,11 @@ def _duet_with(song, voice):
         from undercover.frontman.duets import DUET_DEFAULT
         assert h["duet_voice"] == second and h["options"].get("duet_way") == DUET_DEFAULT and isinstance(plan, list) and len(plan) >= 1, (h["options"], h["notes"])
         assert any(n.startswith("Duet:") for n in h["notes"]), h["notes"]
-        assert {w for _, _, w in plan} <= {"A", "B", "AB"} and plan[0][0] == 0, plan
-        # a plan of three parts (Make again's own shape): A, then B, then both, the two takes stitched for real
+        assert {w for _, _, w in plan} <= {"A", "B"} and plan[0][0] == 0, plan
+        # a plan of three parts (Make again's own shape): A, then B, then A, the two takes stitched for real
         found = len(plan)
         d = float(song.get("duration") or api(f"/api/songs/{song['id']}").get("duration") or 30)
-        plan = [[0.0, round(d / 3, 3), "A"], [round(d / 3, 3), round(2 * d / 3, 3), "B"], [round(2 * d / 3, 3), round(d, 3), "AB"]]
+        plan = [[0.0, round(d / 3, 3), "A"], [round(d / 3, 3), round(2 * d / 3, 3), "B"], [round(2 * d / 3, 3), round(d, 3), "A"]]
         before = {c["id"] for c in api("/api/history")}
         api("/api/covers", {"song": song["id"], "voice": voice, "options": {"karaoke": False, "quality": "high", "duet_voice": second,
                                                                             "duet_plan": plan}})
@@ -11690,7 +11724,7 @@ def _duet_with(song, voice):
         assert new and new[0]["options"]["duet_plan"] == plan, new and new[0]["options"]
         h = new[0]
         made.append(h["id"])
-        assert any("both" in n and n.startswith("Duet:") for n in h["notes"]), h["notes"]
+        assert any(n.startswith("Duet:") and n.count("·") == 2 for n in h["notes"]), h["notes"]
         # Make again, an octave down (the ear's fix): the same song, voices and plan, and the octave as asked
         oct0 = h["options"].get("octave") or 0
         before2 = {x["id"] for x in api("/api/history")}

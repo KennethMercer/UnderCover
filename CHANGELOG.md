@@ -11,8 +11,9 @@ in brackets.
   it's named under the result.
 
 **FrontMan** (duets1)
-- Duets: pick a second singer and they share the song, taking turns on the verses and singing the choruses together,
-  or a line each. In the one-shot, name both: "<song> as <one singer> and <another>".
+- Duets: pick a second singer and they share the song, a verse each, with each chorus sung by whoever sang the verse
+  before it. The backing vocals follow the same turns. In the one-shot, name both: "<song> as <one singer> and
+  <another>".
 
 **Phone** (phone12)
 - The away link works as a home-screen app. When the PC doesn't answer there, it says so and offers the home address.

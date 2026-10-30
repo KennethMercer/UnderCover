@@ -1,16 +1,20 @@
 """Duets by sections (1.2): one song, two voices taking turns. The lead vocal is converted once in each voice (the
-pitch track read once, `Converter.shared_f0`), then the two takes are stitched by section: a voice changes only at the
-quietest point between two sung lines, with a short equal-power crossfade there, so no join falls inside a word.
+pitch track read once, `Converter.shared_f0`), then the two takes are stitched by section. A voice changes only where
+the lead itself is silent (SILENCE_S or more, SILENCE_DB under its loud level), in the middle of that silence, with a
+short equal-power crossfade, so no join falls inside a word. The backing is converted the same way, in each section's
+singer, when a cover would convert it (pipeline._duet_backing).
 
-Sections come from the vocal itself. Whisper's words on the whole vocal (lead and backing, so a thin lead still has its
-lyrics) make lines: a line ends at a LINE_GAP_S gap between words or at LINE_MAX_WORDS, and a line too short to be sung
-on its own joins the next. A chorus is where runs of NGRAM words come back later in the song (so it doesn't depend on
-where lines fall). Two ways to share it (WAYS): "turns" (verses alternate, choruses together) and "lines" (lines
-alternate). DUET_DEFAULT is the one a duet gets when nobody says: the ear's verdict on the blind pairs decides it.
-A song Whisper hears too little of (MIN_WORDS) is shared by its phrases instead: every 2 phrases, never together.
+The sung lines are the lead's own: stretches of singing between those silences, a line too short to be sung on its own
+joined to the next. Whisper's words on the whole vocal (lead and backing, so a thin lead still has its lyrics) only say
+which lines are a chorus: where runs of NGRAM words come back later in the song. Its word times are never used for a
+cut (they stop early on a held note, so a gap in them can be the singer still singing: research, 2026-10-29). Two ways
+to share it (WAYS): "turns" (verses alternate; each chorus goes to the one who sang the verse before it) and "lines"
+(the lines alternate). DUET_DEFAULT is the one a duet gets when nobody says. Two voices singing the same line at once
+sounded fake to the ear (2026-10-29), so a plan has one singer at a time. A song Whisper hears too little of
+(MIN_WORDS) has no chorus to find: the lines alternate every two.
 
 Songs sung as duets (two singers in harmony at once) are another thing: core.separate.lead_missing finds them and the
-cover is sung by one voice, as before (pipeline.DUET_NOTE). The plan is `[[start_s, end_s, who], ...]`, who A, B or AB,
+cover is sung by one voice, as before (pipeline.DUET_NOTE). The plan is `[[start_s, end_s, who], ...]`, who A or B,
 covering the song from 0; `check_plan` is the one gate for a plan that comes from outside (the history's Make again)."""
 import math
 import re
@@ -18,15 +22,15 @@ from pathlib import Path
 
 import numpy as np
 
-DUET_DEFAULT = "turns"   # the ear decides (the duets29 blind pairs): a one-line change
+DUET_DEFAULT = "turns"   # the ear decides (the blind pairs): a one-line change
 WAYS = ("turns", "lines")
-WHO = ("A", "B", "AB")
-LINE_GAP_S, LINE_MAX_WORDS = 0.25, 10         # lines from words
-LINE_MIN_WORDS, LINE_MIN_S, JOIN_GAP_S = 4, 1.5, 0.6   # "Hello," alone isn't a sung line: it joins the next
+WHO = ("A", "B")
+SILENCE_DB, SILENCE_S = 35.0, 0.10            # where a voice may change: the lead this far down, this long
+MIN_PHRASE_S = 0.3                            # shorter bursts of sound aren't a line
+LINE_MIN_S, JOIN_GAP_S = 1.5, 0.6             # "Hello," alone isn't a sung line: it joins the next across a short gap
 NGRAM, NGRAM_APART = 6, 15                    # a chorus: 6 words that come back 15+ words later
-MIN_WORDS = 20                                # fewer heard: shared by phrases instead
-QUIET_DB, GAP_S, MIN_PHRASE_S = 35.0, 0.25, 0.3   # phrases (the fallback): singing within 35 dB of the loud level
-FADE_S, TOGETHER_DB = 0.04, -3.0              # the crossfade at a change; each voice's level when both sing
+MIN_WORDS = 20                                # fewer heard: no chorus to find
+FADE_S = 0.04                                 # the crossfade at a change
 MAX_PARTS = 2000                              # a plan longer than this is no song's (check_plan)
 SR16 = 16000
 
@@ -39,36 +43,6 @@ def _db(x: np.ndarray, sr: int = SR16) -> np.ndarray:
 
 def _norm(w: str) -> str:
     return re.sub(r"[^a-z0-9']", "", w.lower())
-
-
-def lines(ws: list) -> list:
-    """Whisper's words [[word, start, end, ...], ...] grouped into sung lines: [[word index, ...], ...]."""
-    out, cur = [], []
-    for i, w in enumerate(ws):
-        if cur and w[1] - ws[cur[-1]][2] >= LINE_GAP_S:
-            out.append(cur)
-            cur = []
-        cur.append(i)
-    if cur:
-        out.append(cur)
-    split = []
-    while out:   # none longer than LINE_MAX_WORDS: split at its widest gap, 3 or more words each side
-        ln = out.pop(0)
-        if len(ln) <= LINE_MAX_WORDS:
-            split.append(ln)
-            continue
-        k = max(range(3, len(ln) - 2), key=lambda j: ws[ln[j]][1] - ws[ln[j - 1]][2])
-        out[:0] = [ln[:k], ln[k:]]
-    merged = []
-    for ln in split:
-        if merged:
-            prev = merged[-1]
-            short = len(prev) < LINE_MIN_WORDS or ws[prev[-1]][2] - ws[prev[0]][1] < LINE_MIN_S
-            if short and ws[ln[0]][1] - ws[prev[-1]][2] < JOIN_GAP_S and len(prev) + len(ln) <= LINE_MAX_WORDS + LINE_MIN_WORDS:
-                merged[-1] = prev + ln
-                continue
-        merged.append(ln)
-    return merged
 
 
 def repeated(ws: list) -> set:
@@ -86,56 +60,50 @@ def repeated(ws: list) -> set:
     return out
 
 
-def quietest(x16: np.ndarray, a: float, b: float) -> float:
-    """Where a voice may change between a and b (s): the middle of the longest run of the lead's quietest 10 ms frames
-    (within 1 dB of the quietest), so the crossfade sits in the quiet, clear of the words either side."""
-    db = _db(x16)
-    lo, hi = max(0, int(a * 100)), max(int(a * 100) + 1, int(b * 100))
-    seg = db[lo:min(hi, len(db))]
-    if not len(seg):
-        return round(max(a, 0.0), 3)
-    low = seg <= seg.min() + 1.0
-    best, start = (0, 0), None
-    for i, v in enumerate(list(low) + [False]):
-        if v and start is None:
-            start = i
-        elif not v and start is not None:
-            best, start = max(best, (i - start, -start)), None
-    n, s = best[0], -best[1]
-    return round((lo + s) / 100 + n / 200, 3)
-
-
-def sections(x16: np.ndarray, ws: list) -> list:
-    """The sung lines: [{t0, t1, text, rep (a chorus line), cut (where the next line may start in another voice)}]."""
-    rep = repeated(ws)
-    rows = [{"t0": ws[ln[0]][1], "t1": ws[ln[-1]][2], "text": " ".join(str(ws[i][0]).strip() for i in ln),
-             "rep": sum(i in rep for i in ln) >= len(ln) / 2} for ln in lines(ws)]
-    for r, nxt in zip(rows, rows[1:]):
-        r["cut"] = quietest(x16, r["t1"] - 0.05, nxt["t0"] + 0.05)
-    return rows
-
-
 def phrases(x16: np.ndarray) -> list:
-    """The fallback's lines: runs of singing in the lead, split at GAP_S of quiet: [{t0, t1, text, rep, cut}]."""
+    """The lead's sung lines: stretches of singing between silences of SILENCE_S or more (SILENCE_DB under its loud
+    level). A line shorter than LINE_MIN_S joins the next when the silence between them is under JOIN_GAP_S. Each line
+    but the last ends with `cut`, the middle of the silence after it: the only places a voice may change.
+    -> [{t0, t1, text, rep, cut}]"""
     db = _db(x16)
     if not len(db):
         return []
-    on = db > np.percentile(db, 95) - QUIET_DB
+    sung = db > np.percentile(db, 95) - SILENCE_DB
+    need = int(round(SILENCE_S * 100))
     out, start, quiet = [], None, 0
-    for i, v in enumerate(on):
+    for i, v in enumerate(sung):
         if v:
             start = i if start is None else start
             quiet = 0
         elif start is not None:
             quiet += 1
-            if quiet / 100 >= GAP_S:
-                out.append((start / 100, (i - quiet + 1) / 100))
+            if quiet >= need:
+                out.append([start / 100, (i - quiet + 1) / 100])
                 start, quiet = None, 0
     if start is not None:
-        out.append((start / 100, len(db) / 100))
-    rows = [{"t0": round(a, 2), "t1": round(b, 2), "text": "", "rep": False} for a, b in out if b - a >= MIN_PHRASE_S]
+        out.append([start / 100, len(db) / 100])
+    out = [r for r in out if r[1] - r[0] >= MIN_PHRASE_S]
+    merged = []
+    for r in out:
+        if merged and merged[-1][1] - merged[-1][0] < LINE_MIN_S and r[0] - merged[-1][1] < JOIN_GAP_S:
+            merged[-1][1] = r[1]
+        else:
+            merged.append(r)
+    rows = [{"t0": round(a, 2), "t1": round(b, 2), "text": "", "rep": False} for a, b in merged]
     for r, nxt in zip(rows, rows[1:]):
-        r["cut"] = quietest(x16, r["t1"], nxt["t0"])
+        r["cut"] = round((r["t1"] + nxt["t0"]) / 2, 3)
+    return rows
+
+
+def sections(x16: np.ndarray, ws: list) -> list:
+    """The lead's lines (phrases), each with Whisper's words that fall in it and whether it's a chorus line (half its
+    words or more are in a run that comes back). The words never move a cut."""
+    rows = phrases(x16)
+    rep = repeated(ws)
+    for r in rows:
+        mine = [i for i, w in enumerate(ws) if r["t0"] - 0.15 <= (w[1] + w[2]) / 2 <= r["t1"] + 0.15]
+        r["text"] = " ".join(str(ws[i][0]).strip() for i in mine)
+        r["rep"] = bool(mine) and sum(i in rep for i in mine) >= len(mine) / 2
     return rows
 
 
@@ -159,26 +127,27 @@ def blocks(rows: list) -> list:
 
 
 def who_sings(rows: list, way: str, fallback: bool = False) -> list:
-    """Who sings each line. turns: verses alternate A, B, ... from A, choruses AB. lines: A, B, A, B. The fallback
-    (phrases, no lyrics): every 2 phrases, never together."""
+    """Who sings each line, one singer at a time. turns: verses alternate A, B, ... from A, and each chorus goes to
+    the one who sang the verse before it (A when a chorus comes first). lines: A, B, A, B. The fallback (no chorus
+    to find): every 2 lines."""
     if way not in WAYS:
         raise ValueError(f"A duet is shared one of these ways: {', '.join(WAYS)}.")
     if fallback:
         return ["A" if (i // 2) % 2 == 0 else "B" for i in range(len(rows))]
     if way == "lines":
         return ["A" if i % 2 == 0 else "B" for i in range(len(rows))]
-    out, who = [None] * len(rows), "B"
+    out, who = [None] * len(rows), None
     for b in blocks(rows):
         if b["kind"] == "verse":
-            who = "A" if who == "B" else "B"
+            who = "A" if who in (None, "B") else "B"
         for i in b["rows"]:
-            out[i] = "AB" if b["kind"] == "chorus" else who
+            out[i] = who or "A"
     return out
 
 
 def plan_of(rows: list, who: list, duration: float) -> list:
     """[[start, end, who], ...] from 0 to the song's end, a part per run of lines with the same singer; the parts
-    meet at the cut between two lines."""
+    meet at the cut between two lines (in the lead's silence)."""
     if not rows:
         return [[0.0, round(duration, 3), "A"]]
     parts = []
@@ -193,7 +162,7 @@ def plan_of(rows: list, who: list, duration: float) -> list:
 
 
 def check_plan(plan, duration: float | None = None) -> list:
-    """The one gate for a plan from outside: a list of [start, end, who], who A / B / AB, starting at 0, each part
+    """The one gate for a plan from outside: a list of [start, end, who], who A or B, starting at 0, each part
     starting where the last ended, times finite and in order, at most MAX_PARTS. -> the plan as floats. ValueError."""
     bad = ValueError("That duet plan isn't one UnderCover can use. Make the duet again from its song.")
     if not isinstance(plan, list) or not 1 <= len(plan) <= MAX_PARTS:
@@ -223,11 +192,10 @@ def find_plan(lead16: np.ndarray, words: list, way: str, duration: float) -> tup
 
 
 def stitch(a: np.ndarray, b: np.ndarray, plan: list, sr: int) -> np.ndarray:
-    """The duet's lead: each part from take a, take b, or both (each TOGETHER_DB down), with an equal-power crossfade
-    of FADE_S centred on every change. The length is the shorter take's."""
+    """The duet's take: each part from take a or take b, with an equal-power crossfade of FADE_S centred on every
+    change (inside the lead's silence). The length is the shorter take's."""
     n = min(len(a), len(b))
-    g = 10 ** (TOGETHER_DB / 20)
-    weight = {"A": (1.0, 0.0), "B": (0.0, 1.0), "AB": (g, g)}
+    weight = {"A": (1.0, 0.0), "B": (0.0, 1.0)}
     wa, wb = np.zeros(n, np.float32), np.zeros(n, np.float32)
     for s, e, w in plan:
         i, j = int(round(s * sr)), n if e >= plan[-1][1] else int(round(e * sr))
@@ -266,13 +234,11 @@ def joint_fit(ranges: dict, f0: np.ndarray) -> dict | None:
 
 
 def describe(plan: list, names: dict) -> str:
-    """The cover's note: who sings when ("Duet: 0:00 <first> · 1:07 both · 2:01 <second>"); a long line-by-line plan
-    in a sentence."""
-    who = lambda w: "both" if w == "AB" else names[w]
+    """The cover's note: who sings when ("Duet: 0:00 <first> · 1:07 <second> · 2:01 <first>"); a long line-by-line
+    plan in a sentence."""
     if len(plan) <= 10:
-        return "Duet: " + " · ".join(f"{int(a // 60)}:{int(a % 60):02d} {who(w)}" for a, _, w in plan) + "."
-    return (f"Duet: {names['A']} and {names['B']} take turns line by line ({len(plan) - 1} changes)"
-            + ("; both on the choruses." if any(w == "AB" for _, _, w in plan) else "."))
+        return "Duet: " + " · ".join(f"{int(a // 60)}:{int(a % 60):02d} {names[w]}" for a, _, w in plan) + "."
+    return f"Duet: {names['A']} and {names['B']} take turns line by line ({len(plan) - 1} changes)."
 
 
 def heard_words(lead: Path, backing: Path | None, work: Path, cancel=None) -> list:
