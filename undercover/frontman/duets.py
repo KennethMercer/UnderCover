@@ -40,6 +40,7 @@ REGISTER_MARGIN = 0.04                        # a section goes to the singer it 
                                               # much more (fit.pick_fit). On three songs, notes under a range cost 0.04-0.14
                                               # (Hello's low verses: the user gave the first to the low voice, 2026-10-31);
                                               # two singers a semitone apart in the shared key differ by 0.025
+MIN_SHARE = 0.25                              # each duet singer keeps this much of the sung melody or more (with_floor)
 SR16 = 16000
 
 
@@ -320,24 +321,25 @@ def section_costs(rows: list, bl: list, f0: np.ndarray, ranges: dict, key: int, 
         v = g[g > 0]
         per = {k: pick_fit(r, bool(s), g, fixed_key=key, fixed_octave=octaves.get(k, 0)) for k, (r, s) in ranges.items()}
         out.append({"cost": {k: x["cost"] for k, x in per.items() if x["register_st"] is not None},
-                    "low": bool(len(v)) and float(np.median(v)) < med})
+                    "low": bool(len(v)) and float(np.median(v)) < med, "n": int(len(v))})
     return out
 
 
-def by_register(bl: list, costs: list, n_rows: int) -> tuple[list, list]:
+def by_register(bl: list, costs: list, n_rows: int, allow: set | None = None) -> tuple[list, list]:
     """Turns with the register (2026-10-31, the user gave Hello's low first verse to the low voice). A section goes
     to the singer it fits when the other's price there (section_costs) is REGISTER_MARGIN or more above; a chorus
     right after a verse the register decided goes to whichever of the two it fits better, by any margin (the low verse
     to the low voice, its chorus to the high one). The rest keeps Turns from there: a verse to the other singer than
-    the verse before it, a chorus to the singer of the verse before it. -> (who sings each line, [(block index, who)]
-    for the sections the register gave to someone Turns wouldn't have)"""
+    the verse before it, a chorus to the singer of the verse before it. allow: only these sections may be decided by
+    the register (with_floor); the others follow Turns. -> (who sings each line, [(block index, who)] for the sections
+    the register gave to someone Turns wouldn't have)"""
     who, moved = [None] * n_rows, []
     last_verse, cur, decided = None, None, False
     for k, (b, c) in enumerate(zip(bl, costs)):
         verse = b["kind"] == "verse"
         default = ("A" if last_verse in (None, "B") else "B") if verse else (cur or "A")
         fits = None
-        if len(c["cost"]) == 2 and c["cost"]["A"] != c["cost"]["B"]:
+        if (allow is None or k in allow) and len(c["cost"]) == 2 and c["cost"]["A"] != c["cost"]["B"]:
             d = c["cost"]["B"] - c["cost"]["A"]
             if abs(d) >= (0.0 if not verse and decided else REGISTER_MARGIN):
                 fits = "A" if d > 0 else "B"
@@ -354,23 +356,44 @@ def by_register(bl: list, costs: list, n_rows: int) -> tuple[list, list]:
     return who, moved
 
 
+def with_floor(bl: list, costs: list, n_rows: int) -> tuple[list, list]:
+    """by_register, with each singer keeping MIN_SHARE or more of the sections' sung melody (a duet should sound like
+    one: on Toxic the register alone gave the low voice 87%, MasterPlan 2026-10-31). When the register would push one
+    of them under it, only its strongest calls are kept (the biggest price gaps first, as many as keep both at the
+    floor) and the rest follow Turns; with none kept, it's Turns as it was."""
+    def short(who):
+        have = {"A": 0, "B": 0}
+        for b, c in zip(bl, costs):
+            have[who[b["rows"][0]]] += c.get("n", 0)
+        total = have["A"] + have["B"]
+        return total > 0 and min(have.values()) < MIN_SHARE * total
+    who, moved = by_register(bl, costs, n_rows)
+    if not short(who):
+        return who, moved
+    gap = lambda k: abs(costs[k]["cost"]["B"] - costs[k]["cost"]["A"]) if len(costs[k]["cost"]) == 2 else 0.0
+    ranked = sorted((k for k in range(len(bl)) if gap(k) > 0), key=gap, reverse=True)
+    for n in range(len(ranked) - 1, 0, -1):   # (all of them is the plan above, already short)
+        who, moved = by_register(bl, costs, n_rows, set(ranked[:n]))
+        if not short(who):
+            return who, moved
+    return by_register(bl, costs, n_rows, set())
+
+
 def turns_by_register(rows: list, f0: np.ndarray, ranges: dict, duration: float, pitches: dict | None = None) -> tuple[list, list]:
     """Turns whose sections go to the singer whose register fits them (by_register), priced at the two voices' key on
     the whole song (joint_fit with no plan: the same whichever of them comes first), or at the cover's own key and
     octaves (`pitches` {key, octave: {A, B}}: the fit off). The fit for two then weighs the plan this gives. (Priced
     at the fit of the plan itself, found again as the plan moved, the key followed whoever held the most and then
     everything fitted them: on Toxic the plan swung between rounds, research 2026-10-31.) Both singers need a
-    measured range, and both keep a part: a register that would give one of them the whole song leaves Turns as it
-    is. -> (plan, [(kind, who, low)] for each section the register moved)"""
+    measured range, and each keeps MIN_SHARE of the song or more (with_floor). -> (plan, [(kind, who, low)] for each
+    section the register moved)"""
     base = who_sings(rows, "turns")
     if not rows or len([k for k in ranges if ranges[k] and ranges[k][0]]) < 2:
         return plan_of(rows, base, duration), []
     bl = blocks(rows)
     at = pitches or joint_fit(ranges, f0)
     costs = section_costs(rows, bl, f0, ranges, at["key"], at["octave"])
-    who, mv = by_register(bl, costs, len(rows))
-    if "A" not in who or "B" not in who:
-        return plan_of(rows, base, duration), []
+    who, mv = with_floor(bl, costs, len(rows))
     return plan_of(rows, who, duration), [(bl[k]["kind"], w, costs[k]["low"]) for k, w in mv]
 
 

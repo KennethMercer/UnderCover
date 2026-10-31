@@ -7449,9 +7449,24 @@ def u_duets():
     assert D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [("chorus", "B", True), ("verse", "B", False)]) \
         == "Duet: 0:00 a · 0:09 b. By range: b takes the low chorus and the high verse."
     assert "By range" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [])
+    # the share floor (MasterPlan 2026-10-31: a duet should sound like one): on Toxic's measured prices (at the even
+    # key, -3) the register alone gives the low voice 87% of the sung melody; each singer keeps a quarter or more, by
+    # keeping only the strongest calls (the two low verses: its biggest price gaps) and Turns for the rest. Hello's
+    # plan keeps every call: both are over the floor already
+    tk = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 3 + ["verse"])]
+    tox = [{"cost": {"A": 0.2, "B": round(0.2 + x, 3)}, "low": x < 0, "n": m} for x, m in
+           zip([-0.107, -0.007, -0.082, 0.014, -0.137, 0.026, -0.457], [2137, 220, 1362, 515, 514, 149, 245])]
+    assert D.by_register(tk, tox, 7)[0] == ["B", "B", "B", "A", "B", "A", "B"]   # (Michael Jackson 13%)
+    fw, fm = D.with_floor(tk, tox, 7)
+    assert fw == ["B", "B", "A", "A", "B", "B", "B"] and fm == [(0, "B"), (6, "B")], (fw, fm)
+    share_a = sum(c["n"] for w, c in zip(fw, tox) if w == "A") / sum(c["n"] for c in tox)
+    assert D.MIN_SHARE <= share_a < 0.5, share_a
+    hn = [dict(x, n=m) for x, m in zip(hello, [4117, 3990, 2859, 4336, 1708, 4422])]
+    assert D.with_floor(kinds, hn, 6) == D.by_register(kinds, hn, 6)
+    assert D.with_floor(tk, [dict(c, n=0) for c in tox], 7) == D.by_register(tk, tox, 7)   # (no melody counted: no floor to hold)
     # on the shape above, priced at the cover's own pitches (the fit off): low verses go to the low voice and the
-    # high choruses to the high one; high verses the other way round; a song all low for one voice keeps Turns (both
-    # keep a part); a singer without a range keeps Turns
+    # high choruses to the high one; high verses the other way round; a song all low for one voice keeps the
+    # strongest move only, and both keep a quarter or more; a singer without a range keeps Turns
     def tune(vhz, chz):
         g, r = np.zeros(int(dur * 100)), np.random.default_rng(1)
         for _, s, e, _ in ws:
@@ -7465,7 +7480,9 @@ def u_duets():
     up, um = D.turns_by_register(rows, tune(330, 150), far, dur, level)
     assert [w for _, _, w in up] == ["A", "B"] * 3 and {(k, w) for k, w, _ in um} == {("chorus", "B"), ("verse", "A")}, (up, um)
     plain = D.plan_of(rows, D.who_sings(rows, "turns"), dur)
-    assert D.turns_by_register(rows, tune(110, 120), far, dur, level) == (plain, [])
+    lp, lm2 = D.turns_by_register(rows, tune(110, 120), far, dur, level)
+    assert [w for _, _, w in lp] == ["B", "A"] and [(k, w) for k, w, _ in lm2] == [("verse", "B")] * 2, (lp, lm2)
+    assert all(e - s >= D.MIN_SHARE * dur for s, e, _ in lp), lp
     assert D.turns_by_register(rows, tune(110, 300), {"A": far["A"], "B": None}, dur, level) == (plain, [])
     jp, jm = D.turns_by_register(rows, tune(110, 300), far, dur)   # at the fit for two of its own plan
     assert D.check_plan(jp, dur) == jp and {w for _, _, w in jp} == {"A", "B"} and all(w in "AB" for _, w, _ in jm), (jp, jm)
