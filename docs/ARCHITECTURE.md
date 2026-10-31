@@ -467,6 +467,12 @@ stitched by the plan.
 - **Ways** (`duets.WAYS`): `turns` alternates verses, and each chorus goes to whoever sang the verse before it;
   `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
   one place the default is set.
+- **Turns by register** (`duets.turns_by_register`, when both voices have a measured range): each verse and chorus
+  is priced for each singer (`fit.pick_fit` on its melody, at the two voices' key on the whole song and each one's
+  octave; with the fit off, at the cover's own key and octaves). A section goes to the singer it fits when the other's
+  price is `REGISTER_MARGIN` (0.04) or more above; the chorus after such a verse goes to whichever it fits better.
+  The rest keeps Turns from there. Both singers keep a part, or Turns stays as it was. The plan line names what moved
+  ("By range: B takes the low verses and A the high choruses"). A plan from Make again is kept as it is.
 - **The backing** (`duet_backing`, `duets.BACKINGS`): in the singers' voices (`BACKING_DEFAULT`) or the original.
   A backing voice isn't used in a duet. The one-shot keeps the original when the backing is stacked harmony
   (`oneshot.chordal_backing`); nothing is converted when there's hardly any backing (`pipeline._duet_backing`). The

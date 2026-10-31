@@ -7411,18 +7411,62 @@ def u_duets():
     msrc = _i2.getsource(_PL2.CoverEngine.make_cover)   # the fit for two after the plan (it needs who sings when)
     # a song whose plan gives one singer all of it, with almost no melody heard (the test song): no singer is named,
     # and nothing fails (the first --full of duets3: max() of nothing)
-    import tempfile as _tf
-    import soundfile as _sf
-    with _tf.TemporaryDirectory() as _td:
-        _w = Path(_td) / "v.wav"
-        _sf.write(str(_w), np.zeros(16000, np.float32), 16000)
-        _eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(infer_from_audio=lambda x, thred=0.03: np.zeros(100))))
-        _v = lambda n, r: SimpleNamespace(name=n, extra={"f0_range": r})
-        _notes = []
-        _o = _PL2.CoverEngine._fit_duet(_eng, _PL2.CoverOptions(voice="a-uc", duet_voice="b-uc", duet_plan=[[0.0, 1.0, "A"]]),
-                                        _v("a-uc", [183.0, 314.0, 512.0]), _v("b-uc", [61.0, 146.0, 269.0]), {"vocals": _w}, _notes)
-        assert _o.key is not None and len(_notes) == 1 and _notes[0].startswith("Fit for two") and "semitones" not in _notes[0], _notes
+    _v = lambda n, r: SimpleNamespace(name=n, extra={"f0_range": r})
+    _notes = []
+    _o = _PL2.CoverEngine._fit_duet(None, _PL2.CoverOptions(voice="a-uc", duet_voice="b-uc", duet_plan=[[0.0, 1.0, "A"]]),
+                                    _v("a-uc", [183.0, 314.0, 512.0]), _v("b-uc", [61.0, 146.0, 269.0]), lambda: np.zeros(100), _notes)
+    assert _o.key is not None and len(_notes) == 1 and _notes[0].startswith("Fit for two") and "semitones" not in _notes[0], _notes
     assert msrc.index("self._duet_plan(") < msrc.index("self._fit_duet(") < msrc.index("key, s.pitch = pitch_plan(opts)")
+    # the lead's pitch track is read once, for the plan's register and the fit for two (duets4)
+    assert "functools.cache(" in msrc and msrc.count("infer_from_audio(") == 1 and "lead_f0()" in fsrc and "infer_from_audio" not in fsrc
+    # Turns by register (duets4: the user gave Hello's low first verse to the low voice): a section goes to the singer
+    # whose range fits it when the other's fit there costs REGISTER_MARGIN more; the chorus after such a verse to
+    # whichever it fits better; the rest keeps Turns from there
+    from undercover.frontman.fit import pick_fit
+    assert pick_fit([183.0, 314.0, 512.0], False, mel, fixed_key=-2, fixed_octave=1)["octave"] == 1
+    assert pick_fit([183.0, 314.0, 512.0], False, np.zeros(10), fixed_octave=-1)["octave"] == -1
+    kinds = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 3)]
+    c = lambda a, b: {"cost": {"A": a, "B": b}, "low": b < a}
+    hello = [c(0.158, 0.053), c(0.044, 0.069), c(0.188, 0.049), c(0.041, 0.068), c(0.165, 0.186), c(0.042, 0.067)]   # (measured)
+    hw, hm = D.by_register(kinds, hello, 6)
+    assert hw == ["B", "A", "B", "A", "A", "A"] and hm == [(0, "B"), (1, "A"), (2, "B"), (3, "A")], (hw, hm)
+    flat = [c(0.05, 0.07), c(0.05, 0.03), c(0.05, 0.02), c(0.05, 0.074), c(0.05, 0.05), c(0.02, 0.05)]   # nothing decides
+    assert D.by_register(kinds, flat, 6) == (["A", "A", "B", "B", "A", "A"], []), D.by_register(kinds, flat, 6)
+    # a chorus after a verse Turns gave stays with that verse's singer though the other fits it a little better; a
+    # section with too little melody heard (no price) follows Turns
+    late = [c(0.05, 0.05), c(0.05, 0.02), {"cost": {}, "low": False}, c(0.10, 0.02), c(0.02, 0.10), c(0.05, 0.05)]
+    lw, lm = D.by_register(kinds, late, 6)
+    assert lw == ["A", "A", "B", "B", "A", "A"] and lm == [], (lw, lm)
+    assert D.describe([[0, 9, "B"], [9, 20, "A"]], {"A": "a", "B": "b"}, [("verse", "B", True), ("chorus", "A", False), ("verse", "B", True)]) \
+        == "Duet: 0:00 b · 0:09 a. By range: b takes the low verses and a the high chorus."
+    assert D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [("chorus", "B", True), ("verse", "B", False)]) \
+        == "Duet: 0:00 a · 0:09 b. By range: b takes the low chorus and the high verse."
+    assert "By range" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [])
+    # on the shape above, priced at the cover's own pitches (the fit off): low verses go to the low voice and the
+    # high choruses to the high one; high verses the other way round; a song all low for one voice keeps Turns (both
+    # keep a part); a singer without a range keeps Turns
+    def tune(vhz, chz):
+        g, r = np.zeros(int(dur * 100)), np.random.default_rng(1)
+        for _, s, e, _ in ws:
+            kind = next(k for k, a0, b0 in spans if a0 <= s < b0)
+            g[int(s * 100):int(e * 100)] = (vhz if kind == "verse" else chz) * 2 ** (r.integers(-2, 3, int(e * 100) - int(s * 100)) / 12)
+        return g
+    level = {"key": 0, "octave": {"A": 0, "B": 0}}
+    tp, tm = D.turns_by_register(rows, tune(110, 300), far, dur, level)
+    assert [w for _, _, w in tp] == ["B", "A"] * 3 and [(k, w) for k, w, _ in tm] == [("verse", "B"), ("chorus", "A")] * 3, (tp, tm)
+    assert D.check_plan(tp, dur) == tp and D.describe(tp, {"A": "a", "B": "b"}, tm).endswith("By range: b takes the low verses and a the high choruses.")
+    up, um = D.turns_by_register(rows, tune(330, 150), far, dur, level)
+    assert [w for _, _, w in up] == ["A", "B"] * 3 and {(k, w) for k, w, _ in um} == {("chorus", "B"), ("verse", "A")}, (up, um)
+    plain = D.plan_of(rows, D.who_sings(rows, "turns"), dur)
+    assert D.turns_by_register(rows, tune(110, 120), far, dur, level) == (plain, [])
+    assert D.turns_by_register(rows, tune(110, 300), {"A": far["A"], "B": None}, dur, level) == (plain, [])
+    jp, jm = D.turns_by_register(rows, tune(110, 300), far, dur)   # at the fit for two of its own plan
+    assert D.check_plan(jp, dur) == jp and {w for _, _, w in jp} == {"A", "B"} and all(w in "AB" for _, w, _ in jm), (jp, jm)
+    assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=2, octave=-1)) == {"key": 2, "octave": {"A": -1, "B": -1}}
+    assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=-3, octave=0, duet_octave=-1)) == {"key": -3, "octave": {"A": 0, "B": -1}}
+    psrc = _i2.getsource(_PL2.CoverEngine._duet_plan)   # Turns found from the song only (a stored plan is kept as it is)
+    assert 'way == "turns" and not fallback and lead_f0 is not None and ranges["A"] and ranges["B"]' in psrc
+    assert "None if opts.fit else _duet_pitches(opts)" in psrc and "describe(plan, {" in psrc and ", moved)" in psrc
     # the one-shot: "A and B" (also with, &, duet of): only with a voice here for the second (or the first), never a
     # whole name that is one voice, nor two names neither of which is here
     vs = {"michael-jackson-uc": "michael jackson", "barry-white-uc": "barry white", "simon-and-garfunkel-uc": "simon and garfunkel"}
