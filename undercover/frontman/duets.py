@@ -8,9 +8,9 @@ The sung lines are the lead's own: stretches of singing between those silences, 
 joined to the next. Whisper's words on the whole vocal (lead and backing, so a thin lead still has its lyrics) only say
 which lines are a chorus: where runs of NGRAM words come back later in the song. Its word times are never used for a
 cut (they stop early on a held note, so a gap in them can be the singer still singing: research, 2026-10-29). Two ways
-to share it (WAYS): "turns" (verses alternate; each chorus goes to the one who sang the verse before it; a section
-whose melody fits one singer's range clearly better goes to that one, turns_by_register) and "lines" (the lines
-alternate). DUET_DEFAULT is the one a duet gets when nobody says. Two voices singing the same line at once
+to share it (WAYS): "turns" (one singer on the verses, the other on the choruses, so the voice changes at every
+verse-to-chorus boundary; the range picks which, turns_by_register) and "lines" (the lines alternate). A pre-chorus
+that repeats counts with its verse, not its chorus (mark_pre_chorus). DUET_DEFAULT is the one a duet gets when nobody says. Two voices singing the same line at once
 sounded fake to the ear (2026-10-29), so a plan has one singer at a time. A song Whisper hears too little of
 (MIN_WORDS) has no chorus to find: the lines alternate every two.
 
@@ -36,11 +36,11 @@ MIN_WORDS = 20                                # fewer heard: no chorus to find
 FADE_S = 0.04                                 # the crossfade at a change
 MAX_PARTS = 2000                              # a plan longer than this is no song's (check_plan)
 FAR_ST = 3                                    # a singer this many semitones from their own best key is named (joint_fit)
-REGISTER_MARGIN = 0.04                        # a section goes to the singer it fits when the other's fit there costs this
-                                              # much more (fit.pick_fit). On three songs, notes under a range cost 0.04-0.14
+REGISTER_MARGIN = 0.04                        # a section leaves its singer when the other's fit there costs this much
+                                              # less (fit.pick_fit). On three songs, notes under a range cost 0.04-0.14
                                               # (Hello's low verses: the user gave the first to the low voice, 2026-10-31);
                                               # two singers a semitone apart in the shared key differ by 0.025
-MIN_SHARE = 0.15                              # each duet singer keeps this much of the sung melody or more (with_floor).
+MIN_SHARE = 0.15                              # each duet singer keeps this much of the sung melody or more (by_register).
                                               # The ear (2026-10-31) took Pink Pony Club's 80/20 by range over a
                                               # quarter's floor; Toxic's 87/13 is still too little of one singer
 SR16 = 16000
@@ -56,19 +56,19 @@ def _norm(w: str) -> str:
     return re.sub(r"[^a-z0-9']", "", w.lower())
 
 
-def repeated(ws: list) -> set:
-    """The indexes of words inside a run of NGRAM words that comes back NGRAM_APART or more words away."""
+def _runs(ws: list) -> list:
+    """The runs of NGRAM words that come back NGRAM_APART or more words away: each run's start indexes."""
     t = [_norm(w[0]) for w in ws]
     seen: dict = {}
     for i in range(len(t) - NGRAM + 1):
         if all(t[i:i + NGRAM]):
             seen.setdefault(tuple(t[i:i + NGRAM]), []).append(i)
-    out = set()
-    for starts in seen.values():
-        if len(starts) > 1 and max(starts) - min(starts) >= NGRAM_APART:
-            for i in starts:
-                out.update(range(i, i + NGRAM))
-    return out
+    return [s for s in seen.values() if len(s) > 1 and max(s) - min(s) >= NGRAM_APART]
+
+
+def repeated(ws: list) -> set:
+    """The indexes of words inside a run of NGRAM words that comes back NGRAM_APART or more words away."""
+    return {j for starts in _runs(ws) for i in starts for j in range(i, i + NGRAM)}
 
 
 def _sung_runs(x16: np.ndarray) -> list:
@@ -116,17 +116,44 @@ def sections(x16: np.ndarray, ws: list) -> list:
     words or more are in a run that comes back). The words never move a cut."""
     rows = phrases(x16)
     rep = repeated(ws)
+    words = []
     for r in rows:
         mine = [i for i, w in enumerate(ws) if r["t0"] - 0.15 <= (w[1] + w[2]) / 2 <= r["t1"] + 0.15]
         r["text"] = " ".join(str(ws[i][0]).strip() for i in mine)
         r["rep"] = bool(mine) and sum(i in rep for i in mine) >= len(mine) / 2
+        words.append(mine)
+    mark_pre_chorus(rows, words, ws)
     return rows
+
+
+def mark_pre_chorus(rows: list, words: list, ws: list) -> None:
+    """A pre-chorus repeats too, so it reads as chorus, and a change of voice would land inside its sentence (Pink
+    Pony Club's "If Santa Monica | I swear it's calling me", 2026-10-31). It comes back in fewer choruses than the
+    chorus's own lines: each chorus line is reached by how many chorus blocks its words' runs come back in (the median
+    of its words, so a line that ends on the chorus's first words still counts as what it mostly is). The lines
+    opening a chorus block that reach fewer than the most any line does, and at least two, are marked `pre`, and
+    blocks() gives them to the verse. A pre-chorus sung before every chorus reaches as far as the chorus and stays in
+    it: repeats alone can't tell the two apart. words: each row's indexes in ws."""
+    bl = [b for b in blocks(rows) if b["kind"] == "chorus"]
+    block_of = {w: k for k, b in enumerate(bl) for r in b["rows"] for w in words[r]}
+    reach: dict = {}
+    for starts in _runs(ws):
+        n = len({block_of[i] for i in starts if i in block_of})
+        for j in {j for i in starts for j in range(i, i + NGRAM)}:
+            reach[j] = max(reach.get(j, 0), n)
+    line = lambda r: float(np.median([reach[w] for w in words[r] if reach.get(w)] or [0]))
+    most = max((line(r) for b in bl for r in b["rows"]), default=0.0)
+    for b in bl:
+        for r in b["rows"]:
+            if not 2 <= line(r) < most:
+                break
+            rows[r]["pre"] = True
 
 
 def blocks(rows: list) -> list:
     """Verses and choruses: a run of 2+ chorus lines is a chorus (one other line inside it still is), the rest verses.
     -> [{"kind": "verse" | "chorus", "rows": [row index, ...]}]"""
-    kind = ["chorus" if r["rep"] else "verse" for r in rows]
+    kind = ["chorus" if r["rep"] and not r.get("pre") else "verse" for r in rows]
     for i in range(1, len(kind) - 1):
         if kind[i] == "verse" and kind[i - 1] == kind[i + 1] == "chorus":
             kind[i] = "chorus"
@@ -143,21 +170,20 @@ def blocks(rows: list) -> list:
 
 
 def who_sings(rows: list, way: str, fallback: bool = False) -> list:
-    """Who sings each line, one singer at a time. turns: verses alternate A, B, ... from A, and each chorus goes to
-    the one who sang the verse before it (A when a chorus comes first). lines: A, B, A, B. The fallback (no chorus
-    to find): every 2 lines."""
+    """Who sings each line, one singer at a time. turns: A on the verses and B on the choruses, so the voice changes
+    at every verse-to-chorus boundary (the user, 2026-10-31: "the verse and chorus should be separate";
+    turns_by_register picks which of them takes which). lines: A, B, A, B. The fallback (no chorus to find): every
+    2 lines."""
     if way not in WAYS:
         raise ValueError(f"A duet is shared one of these ways: {', '.join(WAYS)}.")
     if fallback:
         return ["A" if (i // 2) % 2 == 0 else "B" for i in range(len(rows))]
     if way == "lines":
         return ["A" if i % 2 == 0 else "B" for i in range(len(rows))]
-    out, who = [None] * len(rows), None
+    out = [None] * len(rows)
     for b in blocks(rows):
-        if b["kind"] == "verse":
-            who = "A" if who in (None, "B") else "B"
         for i in b["rows"]:
-            out[i] = who or "A"
+            out[i] = "A" if b["kind"] == "verse" else "B"
     return out
 
 
@@ -327,96 +353,104 @@ def section_costs(rows: list, bl: list, f0: np.ndarray, ranges: dict, key: int, 
     return out
 
 
-def by_register(bl: list, costs: list, n_rows: int, allow: set | None = None) -> tuple[list, list]:
-    """Turns with the register (2026-10-31, the user gave Hello's low first verse to the low voice). A section goes
-    to the singer it fits when the other's price there (section_costs) is REGISTER_MARGIN or more above; a chorus
-    right after a verse the register decided goes to whichever of the two it fits better, by any margin (the low verse
-    to the low voice, its chorus to the high one). The rest keeps Turns from there: a verse to the other singer than
-    the verse before it, a chorus to the singer of the verse before it. allow: only these sections may be decided by
-    the register (with_floor); the others follow Turns. -> (who sings each line, [(block index, who)] for the sections
-    the register gave to someone Turns wouldn't have)"""
-    who, moved = [None] * n_rows, []
-    last_verse, cur, decided = None, None, False
-    for k, (b, c) in enumerate(zip(bl, costs)):
-        verse = b["kind"] == "verse"
-        default = ("A" if last_verse in (None, "B") else "B") if verse else (cur or "A")
-        fits = None
-        if (allow is None or k in allow) and len(c["cost"]) == 2 and c["cost"]["A"] != c["cost"]["B"]:
-            d = c["cost"]["B"] - c["cost"]["A"]
-            if abs(d) >= (0.0 if not verse and decided else REGISTER_MARGIN):
-                fits = "A" if d > 0 else "B"
-        w = fits or default
-        if w != default:
-            moved.append((k, w))
-        if verse:
-            last_verse, decided = w, fits is not None
-        else:
-            decided = False
-        cur = w
-        for i in b["rows"]:
-            who[i] = w
-    return who, moved
+def _other(w: str) -> str:
+    return "B" if w == "A" else "A"
 
 
-def with_floor(bl: list, costs: list, n_rows: int) -> tuple[list, list]:
-    """by_register, with each singer keeping MIN_SHARE or more of the sections' sung melody (a duet should sound like
-    one: on Toxic the register alone gave the low voice 87%, MasterPlan 2026-10-31). When the register would push one
-    of them under it, only its strongest calls are kept (the biggest price gaps first, as many as keep both at the
-    floor) and the rest follow Turns; with none kept, it's Turns as it was."""
-    def short(who):
+def by_register(bl: list, costs: list, n_rows: int) -> tuple[list, dict]:
+    """Turns: one singer on the verses and the other on the choruses, whichever way round suits the song better
+    (section_costs, each section by its sung melody, its price gap capped at REGISTER_MARGIN: one section far out of a
+    voice's range is an exception, not the song's shape; A on the verses when nothing says). A section stays with its
+    side unless the other singer's price there is REGISTER_MARGIN or more below. Each singer keeps MIN_SHARE of the
+    sections' sung melody or more: first without those exceptions, and past that the two trade (verse and chorus,
+    then the other way round), which still changes voice at each boundary (a song nearly all verse, say).
+    -> (who sings each line, {verses, choruses, by_range, trade, moved: [(block index, who)]})"""
+    role = lambda kind, v: v if kind == "verse" else _other(v)
+    lean = 0.0   # > 0: A on the verses suits the song better
+    for b, c in zip(bl, costs):
+        if len(c["cost"]) == 2:
+            gap = float(np.clip(c["cost"]["B"] - c["cost"]["A"], -REGISTER_MARGIN, REGISTER_MARGIN))
+            lean += c.get("n", 0) * (gap if b["kind"] == "verse" else -gap)
+    v = "B" if lean < 0 else "A"
+
+    def lines(who_block):
+        out = [None] * n_rows
+        for b, w in zip(bl, who_block):
+            for i in b["rows"]:
+                out[i] = w
+        return out
+
+    def short(who_block):
         have = {"A": 0, "B": 0}
-        for b, c in zip(bl, costs):
-            have[who[b["rows"][0]]] += c.get("n", 0)
-        total = have["A"] + have["B"]
-        return total > 0 and min(have.values()) < MIN_SHARE * total
-    who, moved = by_register(bl, costs, n_rows)
-    if not short(who):
-        return who, moved
-    gap = lambda k: abs(costs[k]["cost"]["B"] - costs[k]["cost"]["A"]) if len(costs[k]["cost"]) == 2 else 0.0
-    ranked = sorted((k for k in range(len(bl)) if gap(k) > 0), key=gap, reverse=True)
-    for n in range(len(ranked) - 1, 0, -1):   # (all of them is the plan above, already short)
-        who, moved = by_register(bl, costs, n_rows, set(ranked[:n]))
-        if not short(who):
-            return who, moved
-    return by_register(bl, costs, n_rows, set())
+        for w, c in zip(who_block, costs):
+            have[w] += c.get("n", 0)
+        return min(have.values()) < MIN_SHARE * (have["A"] + have["B"])
+    plain = [role(b["kind"], v) for b in bl]
+    who, moved = list(plain), []
+    for k, c in enumerate(costs):
+        if len(c["cost"]) == 2:
+            w, o = plain[k], _other(plain[k])
+            if c["cost"][w] - c["cost"][o] >= REGISTER_MARGIN:
+                who[k] = o
+                moved.append((k, o))
+    if short(who):
+        who, moved = list(plain), []
+    trade = short(who)
+    if trade:
+        cur, seen = v, 0
+        for k, b in enumerate(bl):
+            if b["kind"] == "verse":
+                cur = v if seen % 2 == 0 else _other(v)
+                seen += 1
+            who[k] = cur if b["kind"] == "verse" else _other(cur)
+    return lines(who), {"verses": v, "choruses": _other(v), "by_range": lean != 0, "trade": trade, "moved": moved}
 
 
-def turns_by_register(rows: list, f0: np.ndarray, ranges: dict, duration: float, pitches: dict | None = None) -> tuple[list, list]:
-    """Turns whose sections go to the singer whose register fits them (by_register), priced at the two voices' key on
-    the whole song (joint_fit with no plan: the same whichever of them comes first), or at the cover's own key and
-    octaves (`pitches` {key, octave: {A, B}}: the fit off). The fit for two then weighs the plan this gives. (Priced
-    at the fit of the plan itself, found again as the plan moved, the key followed whoever held the most and then
-    everything fitted them: on Toxic the plan swung between rounds, research 2026-10-31.) Both singers need a
-    measured range, and each keeps MIN_SHARE of the song or more (with_floor). -> (plan, [(kind, who, low)] for each
-    section the register moved)"""
-    base = who_sings(rows, "turns")
-    if not rows or len([k for k in ranges if ranges[k] and ranges[k][0]]) < 2:
-        return plan_of(rows, base, duration), []
+def turns_by_register(rows: list, f0: np.ndarray | None, ranges: dict, duration: float, pitches: dict | None = None) -> tuple[list, dict | None]:
+    """Turns (by_register), priced at the two voices' key on the whole song (joint_fit with no plan: the same whichever
+    of them comes first), or at the cover's own key and octaves (`pitches` {key, octave: {A, B}}: the fit off). The fit
+    for two then weighs the plan this gives. (Priced at the fit of the plan itself, found again as the plan moved, the
+    key followed whoever held the most and then everything fitted them: on Toxic the plan swung between rounds,
+    research 2026-10-31.) Without both singers' measured ranges, A takes the verses. -> (plan, what by_register says
+    with `moved` as [(kind, who, low)], for describe; None for a song with no chorus found)"""
     bl = blocks(rows)
-    at = pitches or joint_fit(ranges, f0)
-    costs = section_costs(rows, bl, f0, ranges, at["key"], at["octave"])
-    who, mv = with_floor(bl, costs, len(rows))
-    return plan_of(rows, who, duration), [(bl[k]["kind"], w, costs[k]["low"]) for k, w in mv]
+    if not any(b["kind"] == "chorus" for b in bl):
+        return plan_of(rows, who_sings(rows, "turns"), duration), None
+    both = f0 is not None and len([k for k in ranges if ranges[k] and ranges[k][0]]) == 2
+    if both:
+        at = pitches or joint_fit(ranges, f0)
+        costs = section_costs(rows, bl, f0, ranges, at["key"], at["octave"])
+    else:
+        costs = [{"cost": {}, "low": False, "n": 0} for _ in bl]
+    who, said = by_register(bl, costs, len(rows))
+    said["moved"] = [(bl[k]["kind"], w, costs[k]["low"]) for k, w in said["moved"]]
+    return plan_of(rows, who, duration), said
 
 
-def describe(plan: list, names: dict, moved: list | None = None) -> str:
+def describe(plan: list, names: dict, said: dict | None = None) -> str:
     """The cover's note: who sings when ("Duet: 0:00 <first> · 1:07 <second> · 2:01 <first>"); a long line-by-line
-    plan in a sentence. With the sections the register moved (turns_by_register), the line says so: "By range:
-    <second> takes the low verses and <first> the high choruses."."""
+    plan in a sentence. With Turns' own word (turns_by_register), who takes what: "<second> takes the verses and
+    <first> the choruses, by range.", and any section that left its side."""
     if len(plan) <= 10:
         line = "Duet: " + " · ".join(f"{int(a // 60)}:{int(a % 60):02d} {names[w]}" for a, _, w in plan) + "."
     else:
         line = f"Duet: {names['A']} and {names['B']} take turns line by line ({len(plan) - 1} changes)."
-    if moved:
+    if not said:
+        return line
+    if said["trade"]:
+        return line + " The two trade verses and choruses, so each keeps a share of the song."
+    line += (f" {names[said['verses']]} takes the verses and {names[said['choruses']]} the choruses"
+             f"{', by range' if said['by_range'] else ''}.")
+    if said["moved"]:
         by: dict = {}   # who -> {(low, kind): how many}, in the song's order
-        for kind, w, low in moved:
+        for kind, w, low in said["moved"]:
             got = by.setdefault(w, {})
             got[(low, kind)] = got.get((low, kind), 0) + 1
         both = lambda xs: xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
-        said = [f"{names[w]}{' takes' if not i else ''} " + both([
+        parts = [f"{names[w]} " + both([
             f"the {'low' if low else 'high'} {kind if n == 1 else {'verse': 'verses', 'chorus': 'choruses'}[kind]}"
-            for (low, kind), n in what.items()]) for i, (w, what) in enumerate(by.items())]
-        line += " By range: " + (" and " if all(len(w) == 1 for w in by.values()) else "; ").join(said) + "."
+            for (low, kind), n in what.items()]) for w, what in by.items()]
+        line += " It suits their range better: " + " and ".join(parts) + "."
     return line
 
 

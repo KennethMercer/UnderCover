@@ -464,16 +464,20 @@ stitched by the plan.
 - **A chorus** is a line most of whose words are inside a run of 6 that comes back 15 or more words later in Whisper's
   words on the whole vocal (lead and backing mixed, through the speech worker). A run of 2 or more such lines is a
   chorus block.
-- **Ways** (`duets.WAYS`): `turns` alternates verses, and each chorus goes to whoever sang the verse before it;
-  `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
+- **A pre-chorus** that repeats reads as chorus at first. `duets.mark_pre_chorus` gives it back to the verse: the lines
+  opening a chorus block whose words come back in fewer chorus blocks than the chorus's own lines. A pre-chorus sung
+  before every chorus can't be told from the chorus by repeats, and stays in it.
+- **Ways** (`duets.WAYS`): `turns` puts one singer on the verses and the other on the choruses, so the voice changes at
+  every verse-to-chorus boundary; `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
   one place the default is set.
-- **Turns by register** (`duets.turns_by_register`, when both voices have a measured range): each verse and chorus
-  is priced for each singer (`fit.pick_fit` on its melody, at the two voices' key on the whole song and each one's
-  octave; with the fit off, at the cover's own key and octaves). A section goes to the singer it fits when the other's
-  price is `REGISTER_MARGIN` (0.04) or more above; the chorus after such a verse goes to whichever it fits better.
-  The rest keeps Turns from there. Each singer keeps `MIN_SHARE` (15%) of the sung melody or more
-  (`duets.with_floor`): past that, only the calls with the biggest price gaps are kept. The plan line names what moved
-  ("By range: B takes the low verses and A the high choruses"). A plan from Make again is kept as it is.
+- **Who takes what** (`duets.turns_by_register`, `by_register`): with both voices' ranges measured, each verse and
+  chorus is priced for each singer (`fit.pick_fit` on its melody, at the two voices' key on the whole song and each
+  one's octave; with the fit off, at the cover's own key and octaves), and the way round that suits the song better
+  wins, each section's price gap capped at `REGISTER_MARGIN` (0.04). Without them, the first voice takes the verses. A
+  section leaves its side only when the other's price is `REGISTER_MARGIN` or more below. Each singer keeps `MIN_SHARE`
+  (15%) of the sung melody or more: first the exceptions go, and past that the two trade (verse and chorus, then the
+  other way round). The plan line says who takes what ("B takes the verses and A the choruses, by range"). A plan from
+  Make again is kept as it is.
 - **The backing** (`duet_backing`, `duets.BACKINGS`): in the singers' voices (`BACKING_DEFAULT`) or the original.
   A backing voice isn't used in a duet. The one-shot keeps the original when the backing is stacked harmony
   (`oneshot.chordal_backing`); nothing is converted when there's hardly any backing (`pipeline._duet_backing`). The

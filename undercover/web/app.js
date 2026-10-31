@@ -645,7 +645,7 @@ $("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.t
 // A duet (1.2): a second singer takes turns with the voice (frontman/duets.py), shared one of two ways. Never the lead
 // itself, and only a voice that's installed.
 // (Line by line stays hidden until it passes the ear; style A's segmented control and strip are the look chat's)
-const DUET_WAYS = { turns: "They take a verse each, and each chorus goes to whoever sang the verse before it.", lines: "A line each, changing only where the singer breathes." };
+const DUET_WAYS = { turns: "One takes the verses and the other the choruses, by whose range suits them.", lines: "A line each, changing only where the singer breathes." };
 const DUET_BACKINGS = { singers: "Each backing line is sung by whoever has the lead under it.", original: "The song's own backing singers stay." };
 function renderDuet() {
   const sel = $("#fm-duet");

@@ -156,18 +156,18 @@ class CoverEngine:
     def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report,
                    lead_f0=None) -> "CoverOptions":
         """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
-        (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. Turns gives each
-        section to the singer whose range fits it (duets.turns_by_register, on the lead's pitch track `lead_f0`) when
-        both have a measured range: at the two voices' key on the whole song, or at the cover's own key and octaves
-        with the fit off. The
-        plan and the way go into the options (the history keeps them), and the notes say who sings what."""
+        (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. Turns puts one
+        singer on the verses and the other on the choruses; when both have a measured range, the range says which
+        (duets.turns_by_register, on the lead's pitch track `lead_f0`: at the two voices' key on the whole song, or at
+        the cover's own key and octaves with the fit off). The plan and the way go into the options (the history keeps
+        them), and the notes say who sings what."""
         from dataclasses import replace
         from .duets import DUET_DEFAULT, check_plan, describe, find_plan, heard_words, turns_by_register
         from ..core.engine.convert import load_16k
         lead16 = load_16k(cstems["vocals"])
         dur = len(lead16) / 16000
         way = opts.duet_way or DUET_DEFAULT
-        moved = []
+        said = None
         if opts.duet_plan:
             plan = check_plan(opts.duet_plan, dur)
         else:
@@ -181,10 +181,11 @@ class CoverEngine:
             if fallback:
                 notes.append("UnderCover couldn't make out enough of the words, so the two voices take turns every "
                              "two phrases.")
-            ranges = {"A": _range_of(voice), "B": _range_of(dvoice)}
-            if way == "turns" and not fallback and lead_f0 is not None and ranges["A"] and ranges["B"]:
-                plan, moved = turns_by_register(rows, lead_f0(), ranges, dur, None if opts.fit else _duet_pitches(opts))
-        notes.append(describe(plan, {"A": label_of(voice.name), "B": label_of(dvoice.name)}, moved))
+            if way == "turns" and not fallback:
+                ranges = {"A": _range_of(voice), "B": _range_of(dvoice)}
+                f0 = lead_f0() if lead_f0 is not None and ranges["A"] and ranges["B"] else None
+                plan, said = turns_by_register(rows, f0, ranges, dur, None if opts.fit else _duet_pitches(opts))
+        notes.append(describe(plan, {"A": label_of(voice.name), "B": label_of(dvoice.name)}, said))
         return replace(opts, duet_way=way, duet_plan=plan)
 
     def make_cover(self, song: Path, opts: CoverOptions, out: Path | None = None,
