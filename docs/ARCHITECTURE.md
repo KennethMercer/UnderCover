@@ -459,14 +459,21 @@ stitched by the plan.
 
 - **Lines** are the lead's own: stretches of singing between silences of 100 ms or more, 35 dB under its loud level
   (`duets.phrases`). A line under 1.5 s joins the next across a gap under 0.6 s.
-- **Cuts** fall only in the middle of those silences, with a 40 ms equal-power crossfade there, so no voice changes
-  inside a word. Whisper's word times are never used for a cut: they stop early on a held note.
+- **Cuts** fall in the middle of those silences, or at the lead's drop between two lines sung without one (below), with a
+  40 ms equal-power crossfade there, so no voice changes inside a word. A gap in Whisper's word times is never a cut:
+  they stop early on a held note.
 - **A chorus** is a line most of whose words are inside a run of 6 that comes back 15 or more words later in Whisper's
   words on the whole vocal (lead and backing mixed, through the speech worker). A run of 2 or more such lines is a
   chorus block.
 - **A pre-chorus** that repeats reads as chorus at first. `duets.mark_pre_chorus` gives it back to the verse: the lines
   opening a chorus block whose words come back in fewer chorus blocks than the chorus's own lines. A pre-chorus sung
   before every chorus can't be told from the chorus by repeats, and stays in it.
+- **Between sentences** (`duets.sentence_edges`): a chorus's edge in a silence under `SENTENCE_GAP_S` (0.5 s) has to prove
+  itself by the words. The chorus starts where the words that come back as far as its own lines start, and ends earlier
+  when its last words don't come back, each at the first line start from there: Whisper's sentence end
+  (`.?!:;`, not a comma) before the word, or its capital on it. When that line start has no silence, the row splits at
+  the lead's own drop (`DIP_DB`, 15 dB or more down) within `DIP_BEFORE_S`/`DIP_AFTER_S` of Whisper's start of the word.
+  Not the deepest dip nearby: that's often a consonant. With no such place, the edge stays where it was.
 - **Ways** (`duets.WAYS`): `turns` puts one singer on the verses and the other on the choruses, so the voice changes at
   every verse-to-chorus boundary; `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
   one place the default is set.

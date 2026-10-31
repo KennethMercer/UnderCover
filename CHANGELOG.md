@@ -15,10 +15,11 @@ in brackets.
   SpeakEasy doesn't know, or doesn't use yet (the speech engine's own `[laugh]` or `[whispering]`), is never read out;
   it's named under the result.
 
-**FrontMan** (duets1, duets4, duets5)
+**FrontMan** (duets1, duets4, duets5, duets6)
 - Duets: pick a second singer and they share the song, one on the verses and the other on the choruses, so the voice
   changes as each chorus comes in. Their ranges decide who takes which, and a section that clearly suits the other
-  singer goes to them. The cover's notes say who took what. The backing vocals are sung by the two singers too, each backing line whole by whoever has the lead
+  singer goes to them. The cover's notes say who took what. The change lands between sentences, even where the singer
+  doesn't stop for breath. The backing vocals are sung by the two singers too, each backing line whole by whoever has the lead
   under it, or kept as the original: your choice, beside the second singer. In the one-shot, name both: "<song> as
   <one singer> and <another>".
 

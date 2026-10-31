@@ -7297,7 +7297,7 @@ def u_speak_hz():
     return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
 
 
-@check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
+@check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
 def u_duets():
     import numpy as np
     from types import SimpleNamespace
@@ -7504,16 +7504,17 @@ def u_duets():
     assert '"of the song." if fit["share"][other] > 0.5 else' in fsrc   # (the key "follows" only a singer with most of the song)
     # a pre-chorus that repeats, and doesn't come before every chorus, counts with its verse (Pink Pony Club's mid-sentence
     # cut, 2026-10-31); one sung before every chorus stays in it (repeats can't tell them apart)
-    def sung(parts):
+    def sung(parts, breath=0.8, full=False):   # each part a line; full: no drop at all between the words of one
         pw_, tt = [], 1.0
         for ln in parts:
             for w in ln.split():
                 pw_.append([w, round(tt, 2), round(tt + 0.3, 2), 0.9])
                 tt += 0.32
-            tt += 0.8
+            tt += breath
         xx = np.zeros(int((tt + 1) * sr), np.float32)
-        for _, s, e, _ in pw_:
-            i, j = int(s * sr), int(e * sr)
+        for k_, (_, s, e, _) in enumerate(pw_):
+            i = int(s * sr)
+            j = int(pw_[k_ + 1][1] * sr) if full and k_ + 1 < len(pw_) and pw_[k_ + 1][1] - e < 0.1 else int(e * sr)
             xx[i:j] = 0.3 * np.sin(2 * np.pi * 220 * np.arange(j - i) / sr)
         return D.sections(xx, pw_)
     pre = ["cause a scene and tell the", "whole wide world about it now"]
@@ -7524,6 +7525,53 @@ def u_duets():
     assert [b["kind"] for b in pbl] == ["verse", "chorus"] * 3 and pbl[0]["rows"] == [0, 1, 2, 3, 4] and pbl[1]["rows"] == [5, 6, 7], pbl
     every = sung(verse(1) + pre + chorus + verse(2) + pre + chorus + verse(3) + pre + chorus)
     assert not any(r.get("pre") for r in every) and [b["kind"] for b in D.blocks(every)] == ["verse", "chorus"] * 3
+    # a change lands between sentences, not just in a silence (Pink Pony Club, 2026-10-31): the chorus starts at the line
+    # where its words start coming back in every chorus, inside a line the lead sang without a breath, and not at the
+    # silence in the middle of its sentence; it ends where its words stop coming back
+    open_ = "God what have you done now you are a pink pony girl"
+    tail_ = ["and you dance at the club oh mama", "keep on dancing at the pony club"]
+    pre2 = "won't make my mama proud today and she is gonna scream"
+    song6 = (verse(1) + [f"{pre2} {open_}"] + tail_ + ["Up and jars are on the floor"]
+             + verse(2) + [f"{pre2} {open_}"] + tail_ + ["Up and lights are on the door"]
+             + verse(3) + [f"saying {open_}"] + tail_)
+    srows = sung(song6, 0.4)
+    sbl = [b for b in D.blocks(srows) if b["kind"] == "chorus"]
+    assert len(sbl) == 3 and all(srows[b["rows"][0]]["text"].startswith("God what have you") for b in sbl), [r["text"] for r in srows]
+    assert srows[sbl[0]["rows"][0] - 1]["text"] == pre2, srows[sbl[0]["rows"][0] - 1]
+    assert srows[sbl[2]["rows"][0] - 1]["text"] == "saying" and srows[sbl[2]["rows"][-1]]["text"] == tail_[-1]
+    assert srows[sbl[0]["rows"][-1] + 1]["text"].startswith("Up and jars")
+    c6 = srows[sbl[0]["rows"][0] - 1]["cut"]   # (the split row's cut is the lead's drop before the word, Whisper's "God")
+    assert srows[sbl[0]["rows"][0] - 1]["t1"] == srows[sbl[0]["rows"][0]]["t0"] == c6
+    flat = sung(song6, 0.4, full=True)   # sung at full voice through it, with no drop: the edge stays where the silence is
+    assert not any(r["text"].startswith("God") for r in flat), [r["text"] for r in flat]
+    wide = sung(song6, D.SENTENCE_GAP_S + 0.1)   # a real pause is between sentences, whatever the words say
+    assert any(r["text"] == tail_[0] for r in wide) and not any(r["text"].startswith("God") and "scream" in r["text"] for r in wide)
+    assert [b["kind"] for b in D.blocks(wide)].count("chorus") == 3
+    # a line start on a word in no row, or a drop before its row starts, is no place: the edge stays, and the plan is in order
+    w_ = [[f"w{i}", 1.0 + i, 1.5 + i, 0.9] for i in range(6)]
+    tone = 0.3 * np.ones(8 * sr, np.float32)
+    w_[3][0] = "Next"
+    r_ = [{"t0": 1.0, "t1": 3.0, "text": "", "rep": False, "cut": 3.2}, {"t0": 3.4, "t1": 7.0, "text": "", "rep": True, "cut": 7.2},
+          {"t0": 7.4, "t1": 8.0, "text": "", "rep": True}]
+    ww = [[0, 1], [2, 4, 5], [5]]   # (word 3 was in no row)
+    D.sentence_edges(r_, ww, w_, {3: 2, 4: 2, 5: 2, 2: 2}, 2.0, tone)
+    assert len(r_) == 3, r_
+    tone[int(3.3 * sr):int(3.35 * sr)] = 0.0   # the drop is before the row that has the word
+    w2 = [list(w) for w in w_]
+    w2[3][1] = 3.42
+    r2 = [dict(r) for r in r_]
+    ww2 = [[0, 1], [2, 3, 4, 5], [5]]
+    w2[2][1], w2[2][2] = 3.41, 3.415
+    r2[0]["t1"] = 3.0
+    D.sentence_edges(r2, ww2, w2, {1: 2, 2: 2, 3: 2, 4: 2, 5: 2}, 2.0, tone)
+    assert len(r2) == 3 and all(a["t0"] < a["t1"] for a in r2), r2
+    t_ = lambda w: [w, 1.0, 1.2, 0.9]
+    assert D._starts_line([t_("done?"), t_("you're")], 1) and D._starts_line([t_("scream"), t_("God,")], 1)
+    assert not D._starts_line([t_("girl,"), t_("and")], 1) and not D._starts_line([t_("the"), t_("club")], 1)
+    lvl = np.zeros(1000)
+    lvl[[300, 600]] = -90.0, -40.0
+    assert D._dip(lvl, -15.0, 6.0) == 6.0 and D._dip(lvl, -15.0, 4.0) is None and D._dip(lvl, -15.0, 9.99) is None
+    assert D._dip(lvl, -15.0, 5.85) == 6.0   # (the consonant at 3.00 is deeper, and it's far from the word)
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=2, octave=-1)) == {"key": 2, "octave": {"A": -1, "B": -1}}
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=-3, octave=0, duet_octave=-1)) == {"key": -3, "octave": {"A": 0, "B": -1}}
     psrc = _i2.getsource(_PL2.CoverEngine._duet_plan)   # Turns found from the song only (a stored plan is kept as it is)
