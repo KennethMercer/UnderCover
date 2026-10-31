@@ -921,7 +921,7 @@ def u_listenback():
     saved = CONFIG.get("speakeasy")
     try:
         CONFIG.pop("speakeasy", None)
-        assert lb.settings() == {"listen_back": True, "stretch_words": False, "comma_lengthen": False, "tries": 3}
+        assert lb.settings() == {"listen_back": True, "stretch_words": False, "comma_lengthen": False, "tries": 5}
     finally:
         if saved is not None:
             CONFIG["speakeasy"] = saved
@@ -1011,7 +1011,7 @@ def u_listenback_extra():
                                                  (None, take(f"m{len(reads)}.wav", W("Press", "the", "button.", "I'll", "take", "it", "there."))))[1]
             log = {}
             lb.review(text, garbled, {}, t / "ref.wav", 1234, "bm_george", log)
-            assert log["problems"] == ["missing 'from'"] and log["seed"] == 2234 and len(reads) == 2, log
+            assert log["problems"] == ["missing 'from'"] and log["seed"] == 2234 and len(reads) == 4, log   # (5 tries)
         finally:
             lb.hear, lb.render.request, lb.client.wait = saved[:3]
             if saved[3] is None:
@@ -7578,7 +7578,7 @@ def u_duets():
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
 
-@check("hangs (hangfix): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 250 ms or more, no pause marked in the text) and reads it again with another seed; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
+@check("hangs (hangfix, hangtune): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 200 ms or more with 100 ms silent, no pause marked in the text), or a break (60 ms of silence where the words run into each other, no stop at the join), and reads it again with another seed, up to 5 tries, keeping the take whose longest join is shortest among takes as bad; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
 def u_hangfix():
     import inspect
     import numpy as np
@@ -7601,19 +7601,42 @@ def u_hangfix():
     got = LB.hangs("A clock struck eleven slowly.", words, hung, sr)
     assert len(got) == 1 and got[0].startswith("hang after 'struck'") and "0.55" in got[0], got
     assert LB.hangs("A clock struck, eleven slowly.", words, hung, sr) == [], "a comma's pause was called a hang"
-    fine = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.18, 1.75), (1.85, 2.40)])   # an ordinary k: 80 ms
+    fine = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.18, 1.75), (1.80, 2.40)])   # an ordinary k: 80 ms
     assert LB.hangs("A clock struck eleven slowly.", words, fine, sr) == []
-    edge = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.32, 1.75), (1.85, 2.40)])   # 220 ms: under the bound
-    assert LB.hangs("A clock struck eleven slowly.", words, edge, sr) == [] and LB.HANG_S == 0.25
+    edge = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.29, 1.75), (1.80, 2.40)])   # 190 ms: under the bound
+    assert LB.hangs("A clock struck eleven slowly.", words, edge, sr) == [] and LB.HANG_S == 0.20
+    held = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.31, 1.75), (1.80, 2.40)])   # 210 ms, all of it silent
+    assert [h[:19] for h in LB.hangs("A clock struck eleven slowly.", words, held, sr)] == ["hang after 'struck'"]
     # a long cluster (as "clock struck": closures between noise, none of them 100 ms) is no hang, however long
-    cl = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.45, 1.75), (1.85, 2.40)])
+    cl = take([(0.10, 0.25), (0.32, 0.68), (0.80, 1.10), (1.45, 1.75), (1.80, 2.40)])
     noise = 0.02 * np.random.default_rng(0).standard_normal(int(0.07 * sr)).astype(np.float32)
     for a in (1.16, 1.30):   # noise (an s, an r) between short silent closures (60, 70, 80 ms)
         cl[int(a * sr):int(a * sr) + len(noise)] = noise
     assert LB.hangs("A clock struck eleven slowly.", words, cl, sr) == [], "a consonant cluster was called a hang"
     assert LB.cost(got) == 1, "a hang doesn't count toward reading it again"
+    # a break: "was earned" runs on (no stop at the join), so 70 ms of silence there is heard as a pause (the user's
+    # ear, 2026-10-30); 40 ms isn't, and the same 70 ms before a stop ("was cold": a k's closure) is natural
+    ww = [["it", 0.10, 0.20, 0.9], ["was", 0.30, 0.45, 0.9], ["earned", 0.55, 0.95, 0.9], ["the", 1.00, 1.10, 0.9],
+          ["hard", 1.15, 1.50, 0.9], ["way", 1.55, 1.95, 0.9]]
+    run_on = lambda gap: take([(0.10, 0.20), (0.30, 0.50), (0.50 + gap, 0.95), (0.98, 1.10), (1.13, 1.50), (1.53, 1.95)])
+    br = LB.hangs("It was earned the hard way.", ww, run_on(0.07), sr)
+    assert len(br) == 1 and br[0].startswith("break after 'was' (0.0"), br
+    assert LB.hangs("It was earned the hard way.", ww, run_on(0.04), sr) == []
+    cw = [["it", 0.10, 0.20, 0.9], ["was", 0.30, 0.45, 0.9], ["cold", 0.55, 0.95, 0.9], ["the", 1.00, 1.10, 0.9],
+          ["hard", 1.15, 1.50, 0.9], ["way", 1.55, 1.95, 0.9]]
+    assert LB.hangs("It was cold the hard way.", cw, run_on(0.07), sr) == [], "a stop's closure was called a break"
+    assert LB._stop_join("earned", "the") and LB._stop_join("made", "it") and LB._stop_join("a", "clock")
+    assert not LB._stop_join("was", "earned") and not LB._stop_join("voice", "in") and not LB._stop_join("the", "city")
+    # of takes as bad, the one whose longest join is shortest: the 70 ms break over the 0.30 s hang
+    hw = [["it", 0.10, 0.20, 0.9], ["was", 0.30, 0.45, 0.9], ["earned", 0.52, 0.95, 0.9], ["the", 1.25, 1.40, 0.9],
+          ["hard", 1.45, 1.60, 0.9], ["way", 1.65, 1.95, 0.9]]
+    hj = LB.joins("It was earned the hard way.", hw, take([(0.10, 0.20), (0.30, 0.50), (0.52, 0.95), (1.25, 1.40),
+                                                            (1.45, 1.60), (1.65, 1.95)]), sr)
+    bj = LB.joins("It was earned the hard way.", ww, run_on(0.07), sr)
+    assert LB.cost(LB._flags(hj)) == LB.cost(LB._flags(bj)) == 1 and LB.longest_join(bj) < LB.longest_join(hj), (hj, bj)
     src = inspect.getsource(LB.review)
-    assert "hangs(text, h, *_mono(f))" in src and "check(h, w2)" in src and "check(heard[0][\"words\"], wav)" in src
+    assert "joins(text, h, *_mono(f))" in src and "check(h, w2)" in src and "check(heard[0][\"words\"], wav)" in src
+    assert "(cost(p), gap) < (cost(best[3]), best[4])" in src
     # the seed: the same text reads the same (SEED + its sentence), kept with the speech; "reseed" draws a fresh one
     assert inspect.signature(SP.make_speech).parameters["seed"].default == SP.SEED == 1234
     ms = inspect.getsource(SP._make_cadence)
