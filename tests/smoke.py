@@ -7498,8 +7498,10 @@ def u_duets():
     assert D.MIN_SHARE * dur <= sum(e - s for s, e, w in lp if w == "A") < 0.9 * dur, (lp, ln)
     jp, jn = D.turns_by_register(rows, tune(110, 300), far, dur)   # at the two voices' key on the whole song
     assert D.check_plan(jp, dur) == jp and {w for _, _, w in jp} == {"A", "B"} and set(jn) >= {"verses", "moved"}, (jp, jn)
-    nochorus = [dict(r, rep=False) for r in rows]
-    assert D.turns_by_register(nochorus, None, {}, dur)[1] is None
+    nochorus = [dict(r, rep=False) for r in rows]   # no chorus found: the second singer still sings, and the note says why
+    np_, ns_ = D.turns_by_register(nochorus, None, {}, dur)
+    assert ns_ == {"no_chorus": True} and {w for _, _, w in np_} == {"A", "B"} and "No chorus stood out" in D.describe(np_, n2, ns_), (np_, ns_)
+    assert '"of the song." if fit["share"][other] > 0.5 else' in fsrc   # (the key "follows" only a singer with most of the song)
     # a pre-chorus that repeats, and doesn't come before every chorus, counts with its verse (Pink Pony Club's mid-sentence
     # cut, 2026-10-31); one sung before every chorus stays in it (repeats can't tell them apart)
     def sung(parts):

@@ -151,7 +151,8 @@ def mark_pre_chorus(rows: list, words: list, ws: list) -> None:
 
 
 def blocks(rows: list) -> list:
-    """Verses and choruses: a run of 2+ chorus lines is a chorus (one other line inside it still is), the rest verses.
+    """Verses and choruses: a run of 2+ chorus lines is a chorus (one other line inside it still is), the rest verses
+    (a pre-chorus with them, mark_pre_chorus).
     -> [{"kind": "verse" | "chorus", "rows": [row index, ...]}]"""
     kind = ["chorus" if r["rep"] and not r.get("pre") else "verse" for r in rows]
     for i in range(1, len(kind) - 1):
@@ -411,11 +412,12 @@ def turns_by_register(rows: list, f0: np.ndarray | None, ranges: dict, duration:
     of them comes first), or at the cover's own key and octaves (`pitches` {key, octave: {A, B}}: the fit off). The fit
     for two then weighs the plan this gives. (Priced at the fit of the plan itself, found again as the plan moved, the
     key followed whoever held the most and then everything fitted them: on Toxic the plan swung between rounds,
-    research 2026-10-31.) Without both singers' measured ranges, A takes the verses. -> (plan, what by_register says
-    with `moved` as [(kind, who, low)], for describe; None for a song with no chorus found)"""
+    research 2026-10-31.) Without both singers' measured ranges, A takes the verses. A song with no chorus found is one
+    long verse: the two take every two lines, or the second singer would never sing. -> (plan, what by_register says
+    with `moved` as [(kind, who, low)], for describe)"""
     bl = blocks(rows)
     if not any(b["kind"] == "chorus" for b in bl):
-        return plan_of(rows, who_sings(rows, "turns"), duration), None
+        return plan_of(rows, who_sings(rows, "turns", True), duration), {"no_chorus": True}
     both = f0 is not None and len([k for k in ranges if ranges[k] and ranges[k][0]]) == 2
     if both:
         at = pitches or joint_fit(ranges, f0)
@@ -437,6 +439,8 @@ def describe(plan: list, names: dict, said: dict | None = None) -> str:
         line = f"Duet: {names['A']} and {names['B']} take turns line by line ({len(plan) - 1} changes)."
     if not said:
         return line
+    if said.get("no_chorus"):
+        return line + " No chorus stood out in this song, so they take every two lines in turn."
     if said["trade"]:
         return line + " The two trade verses and choruses, so each keeps a share of the song."
     line += (f" {names[said['verses']]} takes the verses and {names[said['choruses']]} the choruses"

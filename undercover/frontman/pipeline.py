@@ -134,8 +134,9 @@ class CoverEngine:
         if far and abs(fit["off"][far]) >= FAR_ST:   # one sits far from their own key: said plainly
             other = "B" if far == "A" else "A"
             line += (f" {names[far]} sings {abs(fit['off'][far])} semitones {'higher' if fit['off'][far] > 0 else 'lower'}"
-                     f" than their own best key: the key follows {names[other]}, who sings "
-                     f"{fit['share'][other]:.0%} of the song.")
+                     f" than their own best key" + (f": the key follows {names[other]}, who sings {fit['share'][other]:.0%} "
+                                                    "of the song." if fit["share"][other] > 0.5 else ", to share one with "
+                                                    f"{names[other]}."))
         notes.append(line)
         return replace(opts, key=fit["key"], octave=a, duet_octave=b, pitch=None)
 
