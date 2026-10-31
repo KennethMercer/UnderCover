@@ -158,7 +158,8 @@ class CoverEngine:
         """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
         (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. Turns gives each
         section to the singer whose range fits it (duets.turns_by_register, on the lead's pitch track `lead_f0`) when
-        both have a measured range: at the fit for two, or at the cover's own key and octaves with the fit off. The
+        both have a measured range: at the two voices' key on the whole song, or at the cover's own key and octaves
+        with the fit off. The
         plan and the way go into the options (the history keeps them), and the notes say who sings what."""
         from dataclasses import replace
         from .duets import DUET_DEFAULT, check_plan, describe, find_plan, heard_words, turns_by_register

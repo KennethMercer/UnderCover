@@ -7437,6 +7437,13 @@ def u_duets():
     late = [c(0.05, 0.05), c(0.05, 0.02), {"cost": {}, "low": False}, c(0.10, 0.02), c(0.02, 0.10), c(0.05, 0.05)]
     lw, lm = D.by_register(kinds, late, 6)
     assert lw == ["A", "A", "B", "B", "A", "A"] and lm == [], (lw, lm)
+    # a song that opens on its chorus: Turns gives it and the first verse to A (who_sings), and so does the register
+    # when nothing decides; a low first verse after it goes to the low voice
+    ck = [{"kind": k, "rows": [i]} for i, k in enumerate(["chorus", "verse", "chorus", "verse"])]
+    cr = [{"text": "", "rep": k == "chorus"} for k in ("chorus",) * 2 + ("verse",) * 3 + ("chorus",) * 2 + ("verse",) * 3]
+    assert [D.who_sings(cr, "turns")[i] for i in (0, 2, 5, 7)] == ["A", "A", "A", "B"]
+    assert D.by_register(ck, [c(0.05, 0.05)] * 4, 4)[0] == ["A", "A", "A", "B"]
+    assert D.by_register(ck, [c(0.05, 0.05), c(0.15, 0.05), c(0.03, 0.06), c(0.05, 0.05)], 4) == (["A", "B", "A", "A"], [(1, "B"), (2, "A")])
     assert D.describe([[0, 9, "B"], [9, 20, "A"]], {"A": "a", "B": "b"}, [("verse", "B", True), ("chorus", "A", False), ("verse", "B", True)]) \
         == "Duet: 0:00 b · 0:09 a. By range: b takes the low verses and a the high chorus."
     assert D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [("chorus", "B", True), ("verse", "B", False)]) \
