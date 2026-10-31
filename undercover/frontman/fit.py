@@ -27,7 +27,8 @@ CLOSE = 0.03         # two registers this close in cost: both are worth hearing
 ALT_APART = 5        # ...when they're at least this many semitones apart (not the same pitch reached another way)
 
 
-def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: int = MAX_KEY, fixed_key: int | None = None) -> dict:
+def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: int = MAX_KEY, fixed_key: int | None = None,
+             fixed_octave: int | None = None) -> dict:
     """Octave (vocal only) + key (whole song) that put the melody where the voice is comfortable: its median at the
     voice's own register (the training median, +SPEECH_LIFT for a voice trained on speech) and as much of it as
     possible inside the voice's range (5th-95th percentile, -2 / +3 semitones of slack, +7 more for speech).
@@ -36,18 +37,20 @@ def pick_fit(f0_range: list, from_speech: bool, song_f0: np.ndarray, max_key: in
     little (ties keep the original key). -> {octave, key, outside, below, above, cost, register_st, alt?}: register_st
     is the melody's median after the shift against the voice's comfortable pitch; `alt` is the best with another
     octave when it's within CLOSE (the page can offer both as a quick blind pick). fixed_key: only that key is tried
-    (the fit for two, duets.joint_fit: one key for both voices, each one's cost counting it as a single voice's would)."""
+    (the fit for two, duets.joint_fit: one key for both voices, each one's cost counting it as a single voice's would);
+    fixed_octave: only that octave (a duet's sections priced for a voice at the octave it sings the song in,
+    duets.by_register)."""
     lo, mid, hi = f0_range
     lo, hi = lo * 2 ** (-2 / 12), hi * 2 ** ((3 + (7 if from_speech else 0)) / 12)
     f = song_f0[song_f0 > 0]
     if len(f) < 50:
-        return {"octave": 0, "key": fixed_key or 0, "outside": 0.0, "below": 0.0, "above": 0.0, "cost": 0.0, "register_st": None}
+        return {"octave": fixed_octave or 0, "key": fixed_key or 0, "outside": 0.0, "below": 0.0, "above": 0.0, "cost": 0.0, "register_st": None}
     med = float(np.median(f))
     comfy = mid * 2 ** ((SPEECH_LIFT if from_speech else 0.0) / 12) if mid else None
     floor = f0_range[0] * 2 ** ((FLOOR_LIFT if from_speech else 0.0) / 12)
     low = float(np.percentile(f, 10))
     per_octave = {}
-    for octave in (0, -1, 1, -2, 2):
+    for octave in ((fixed_octave,) if fixed_octave is not None else (0, -1, 1, -2, 2)):
         best = None
         for key in ([fixed_key] if fixed_key is not None else sorted(range(-max_key, max_key + 1), key=abs)):   # nearest first wins ties
             shift = octave + key / 12

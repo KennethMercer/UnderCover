@@ -113,21 +113,15 @@ class CoverEngine:
         return replace(opts, octave=fit["octave"], key=fit["key"], pitch=None,
                        backing_octave=fit["octave"] if same_backing else opts.backing_octave)
 
-    def _fit_duet(self, opts: "CoverOptions", voice, dvoice, stems: dict, notes: list) -> "CoverOptions":
+    def _fit_duet(self, opts: "CoverOptions", voice, dvoice, lead_f0, notes: list) -> "CoverOptions":
         """The fit for two (duets.joint_fit): one key for the song, each voice at its own best octave in it, each one
         weighed by how much of the song the plan gives it (so it runs after _duet_plan). A voice with no measured
         range keeps the chosen octave. When one of them sings FAR_ST or more from where they'd sing alone, the note
-        says so."""
+        says so. lead_f0: the lead's pitch track, read once (make_cover)."""
         from dataclasses import replace
         from .duets import FAR_ST, joint_fit, singer_frames
-        from ..core.engine.convert import load_16k
-
-        def rng(v):
-            ex = v.extra or {}
-            r = ex.get("f0_range") or ex.get("person_range")
-            return (r, ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")) if r else None
-        f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
-        fit = joint_fit({"A": rng(voice), "B": rng(dvoice)}, f0, singer_frames(opts.duet_plan, len(f0)))
+        f0 = lead_f0()
+        fit = joint_fit({"A": _range_of(voice), "B": _range_of(dvoice)}, f0, singer_frames(opts.duet_plan, len(f0)))
         if fit is None:
             notes.append(f"Fit to voice: neither {label_of(voice.name)} nor {label_of(dvoice.name)} has a measured range yet, "
                          "so your octave and key were used.")
@@ -159,16 +153,21 @@ class CoverEngine:
             return False
         return True
 
-    def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report) -> "CoverOptions":
+    def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report,
+                   lead_f0=None) -> "CoverOptions":
         """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
-        (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. The plan and the
-        way go into the options (the history keeps them), and the notes say who sings what."""
+        (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. Turns gives each
+        section to the singer whose range fits it (duets.turns_by_register, on the lead's pitch track `lead_f0`) when
+        both have a measured range: at the two voices' key on the whole song, or at the cover's own key and octaves
+        with the fit off. The
+        plan and the way go into the options (the history keeps them), and the notes say who sings what."""
         from dataclasses import replace
-        from .duets import DUET_DEFAULT, check_plan, describe, find_plan, heard_words
+        from .duets import DUET_DEFAULT, check_plan, describe, find_plan, heard_words, turns_by_register
         from ..core.engine.convert import load_16k
         lead16 = load_16k(cstems["vocals"])
         dur = len(lead16) / 16000
         way = opts.duet_way or DUET_DEFAULT
+        moved = []
         if opts.duet_plan:
             plan = check_plan(opts.duet_plan, dur)
         else:
@@ -178,11 +177,14 @@ class CoverEngine:
             except Exception as e:   # noqa: BLE001 - no recogniser here (or it failed): shared by phrases instead
                 print(f"Duet: the words couldn't be heard ({type(e).__name__}: {e}); sharing it by phrases.", flush=True)
                 words = []
-            plan, _rows, fallback = find_plan(lead16, words, way, dur)
+            plan, rows, fallback = find_plan(lead16, words, way, dur)
             if fallback:
                 notes.append("UnderCover couldn't make out enough of the words, so the two voices take turns every "
                              "two phrases.")
-        notes.append(describe(plan, {"A": label_of(voice.name), "B": label_of(dvoice.name)}))
+            ranges = {"A": _range_of(voice), "B": _range_of(dvoice)}
+            if way == "turns" and not fallback and lead_f0 is not None and ranges["A"] and ranges["B"]:
+                plan, moved = turns_by_register(rows, lead_f0(), ranges, dur, None if opts.fit else _duet_pitches(opts))
+        notes.append(describe(plan, {"A": label_of(voice.name), "B": label_of(dvoice.name)}, moved))
         return replace(opts, duet_way=way, duet_plan=plan)
 
     def make_cover(self, song: Path, opts: CoverOptions, out: Path | None = None,
@@ -251,9 +253,11 @@ class CoverEngine:
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
         if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself; then the fit
-            opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report)
+            import functools
+            lead_f0 = functools.cache(lambda: self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03))
+            opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report, lead_f0)
             if opts.fit:
-                opts = self._fit_duet(opts, voice, dvoice, stems, notes)
+                opts = self._fit_duet(opts, voice, dvoice, lead_f0, notes)
         key, s.pitch = pitch_plan(opts)
         from .remix import lufs, prefetch
         # mix prep (stem loudness, key-shifted instrumental) runs on the CPU while the GPU converts
@@ -470,6 +474,22 @@ def pitch_plan(opts: CoverOptions) -> tuple[float, float]:
     key = float(c["key"] if opts.key is None else opts.key)
     octave = int(c["octave"] if opts.octave is None else opts.octave)
     return key, key + 12 * octave
+
+
+def _range_of(voice) -> tuple | None:
+    """A voice's measured range for the fit: (f0_range, trained on speech?), trained here or the checked person's;
+    None when it has none."""
+    ex = voice.extra or {}
+    r = ex.get("f0_range") or ex.get("person_range")
+    return (r, ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")) if r else None
+
+
+def _duet_pitches(opts: CoverOptions) -> dict:
+    """A duet's key and each singer's octave as the cover will sing them with the fit off (pitch_plan; the second
+    singer at the lead's octave unless given): {key, octave: {A, B}} for duets.turns_by_register."""
+    key, vocal = pitch_plan(opts)
+    a = int(round((vocal - key) / 12))
+    return {"key": int(round(key)), "octave": {"A": a, "B": a if opts.duet_octave is None else int(opts.duet_octave)}}
 
 
 def _unique(base: Path, fmt: str) -> Path:
