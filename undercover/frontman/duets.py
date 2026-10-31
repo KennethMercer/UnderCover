@@ -161,7 +161,7 @@ def mark_pre_chorus(rows: list, words: list, ws: list) -> tuple[dict, float]:
 def _starts_line(ws: list, k: int) -> bool:
     """Does Whisper start a line at word k: a sentence's end before it, or a capital on it? (A comma isn't one: "a pink
     pony girl, and you dance at the club".)"""
-    return str(ws[k - 1][0]).rstrip()[-1:] in tuple(".?!:;") or str(ws[k][0]).lstrip()[:1].isupper()
+    return not k or str(ws[k - 1][0]).rstrip()[-1:] in tuple(".?!:;") or str(ws[k][0]).lstrip()[:1].isupper()
 
 
 def _dip(db: np.ndarray, floor: float, start: float) -> float | None:
@@ -208,7 +208,7 @@ def sentence_edges(rows: list, words: list, ws: list, reach: dict, most: float, 
         a, z = b["rows"][0], b["rows"][-1]
         if b["kind"] != "chorus" or not words[a] or not words[z]:
             continue
-        old = s = words[a][0], words[z][-1] + 1
+        old = s = words[a][0], words[z][-1] + (words[z][-1] not in first)   # (a last word the next row shares is that row's)
         if a and gap(a - 1) < SENTENCE_GAP_S:
             k = next((w for w in words[a] if reach.get(w, 0) >= most), words[a][0])   # (a row that opens on something else)
             while 0 < k <= words[a][0] and reach.get(k - 1, 0) >= most:
@@ -228,6 +228,8 @@ def sentence_edges(rows: list, words: list, ws: list, reach: dict, most: float, 
         spans.append((old, s))
     for k in sorted((k for k, t in cuts.items() if t is not None), reverse=True):
         r = next(r for r, m in enumerate(words) if k in m)   # (rows are added as this goes: row_of is out of date)
+        if not rows[r]["t0"] < cuts[k] < rows[r]["t1"]:   # (a split just made left this one's dip outside the row)
+            continue
         n = words[r].index(k)
         tail = dict(rows[r], t0=cuts[k], text=text(words[r][n:]))
         rows[r].update(t1=cuts[k], cut=cuts[k], text=text(words[r][:n]))

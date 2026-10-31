@@ -7565,7 +7565,13 @@ def u_duets():
     r2[0]["t1"] = 3.0
     D.sentence_edges(r2, ww2, w2, {1: 2, 2: 2, 3: 2, 4: 2, 5: 2}, 2.0, tone)
     assert len(r2) == 3 and all(a["t0"] < a["t1"] for a in r2), r2
+    # a chorus's last word that the next row shares (rows under 0.3 s apart) doesn't make that verse row a chorus row
+    w3 = [[f"w{i}", 1.0 + i, 1.5 + i, 0.9] for i in range(7)]
+    r3 = [{"t0": a, "t1": a + 1.0, "text": "", "rep": b, "cut": a + 1.05} for a, b in ((1.0, False), (2.1, True), (3.2, True), (4.3, False))]
+    D.sentence_edges(r3, [[0, 1], [2, 3], [4, 5], [5, 6]], w3, {2: 2, 3: 2, 4: 2, 5: 2}, 2.0, tone)
+    assert [r["rep"] for r in r3] == [False, True, True, False], r3
     t_ = lambda w: [w, 1.0, 1.2, 0.9]
+    assert D._starts_line([t_("end."), t_("first")], 0)   # (the song's first word, whatever its last one says)
     assert D._starts_line([t_("done?"), t_("you're")], 1) and D._starts_line([t_("scream"), t_("God,")], 1)
     assert not D._starts_line([t_("girl,"), t_("and")], 1) and not D._starts_line([t_("the"), t_("club")], 1)
     lvl = np.zeros(1000)
