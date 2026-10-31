@@ -147,7 +147,7 @@ def _start_cover(h, body: dict):
     if opts.backing_voice:
         get_voice(opts.backing_voice)
     song = path("uploads_dir") / meta["file"]
-    _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice)))
+    _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice or opts.duet_voice)))
     job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}" + (f" & {label_of(opts.duet_voice)}" if opts.duet_voice else ""))
     job.voices = {v for v in (opts.voice, opts.backing_voice, opts.duet_voice) if v}   # what it reads with (jobs.jobs_using)
     JOBS[job.id] = job
@@ -251,7 +251,7 @@ def _presep(h, song_id: str, body: dict):
         return h._error("Those cover settings aren't ones UnderCover makes.")
     meta = song_meta(song_id)
     want = (song_id, o.get("quality") if o.get("quality") in ("fast", "high", "max") else None,
-            bool(o.get("dereverb")), bool(o.get("karaoke") or o.get("backing_voice")))
+            bool(o.get("dereverb")), bool(o.get("karaoke") or o.get("backing_voice") or o.get("duet_voice")))
     busy = GPU_QUEUE.qsize() or any(not j.finished for j in JOBS.values() if j.kind != "presep")
     if busy or any(not j.finished and getattr(j, "presep", None) == want for j in JOBS.values()):
         return h._json({"started": False})
@@ -550,6 +550,8 @@ def _options(body: dict, duration: float | None = None):
         raise ModelError("That voice isn't one of yours.")
     octave, boct = octave_of("octave"), octave_of("backing_octave")
     duet = _duet_options(o, voice, duration)
+    if duet:   # a duet's backing is duet_backing's (the singers' voices or the original), never a third voice
+        bvoice, boct = None, None
     return CoverOptions(**duet, voice=voice, key=num("key"), octave=octave, index_ratio=num("index_ratio"), protect=num("protect"),
                         volume_envelope=num("volume_envelope"), dereverb=bool(o.get("dereverb")),
                         karaoke=bool(o.get("karaoke")), quality=q, format=fmt,
@@ -562,9 +564,9 @@ def _options(body: dict, duration: float | None = None):
 
 def _duet_options(o: dict, voice: str, duration: float | None = None) -> dict:
     """A duet's options from a request (1.2, duets.py), checked strictly: the second singer an installed voice that
-    isn't the first, the way one of duets.WAYS, its octave a whole number from -2 to 2, a plan (Make again's) only in
-    duets.check_plan's shape. ModelError (a plain 400) for anything else; nothing when no second singer is asked for."""
-    from .duets import WAYS, check_plan
+    isn't the first, the way one of duets.WAYS and the backing one of duets.BACKINGS, its octave a whole number from
+    -2 to 2, a plan (Make again's) only in duets.check_plan's shape. ModelError (a plain 400) for anything else; nothing when no second singer is asked for."""
+    from .duets import BACKINGS, WAYS, check_plan
     from ..core.voices import ModelError, get_voice
     dv = o.get("duet_voice")
     if dv in (None, ""):
@@ -577,6 +579,9 @@ def _duet_options(o: dict, voice: str, duration: float | None = None) -> dict:
     way = o.get("duet_way") or None
     if way is not None and way not in WAYS:
         raise ModelError(f"A duet is shared one of these ways: {', '.join(WAYS)}.")
+    back = o.get("duet_backing") or None
+    if back is not None and back not in BACKINGS:
+        raise ModelError("A duet's backing is sung by the two singers or kept as the original.")
     doct = o.get("duet_octave")
     if doct not in (None, ""):
         if (isinstance(doct, bool) or not isinstance(doct, (int, float))
@@ -593,7 +598,7 @@ def _duet_options(o: dict, voice: str, duration: float | None = None) -> dict:
             raise ModelError(str(e)) from None
     else:
         plan = None
-    return {"duet_voice": dv, "duet_way": way, "duet_octave": doct, "duet_plan": plan}
+    return {"duet_voice": dv, "duet_way": way, "duet_octave": doct, "duet_plan": plan, "duet_backing": back}
 
 
 def _ui_defaults() -> dict:
@@ -603,9 +608,9 @@ def _ui_defaults() -> dict:
             "karaoke": s["karaoke"], "reverb": r["reverb"], "format": r["format"],
             "backing_voice": "", "backing_octave": 0, "backing_db": r["backing_db"],
             "pitch_cleanup": c["pitch_cleanup"], "pitch_correction": c["pitch_correction"], "polish": r["polish"],
-            "fit": False, "duet_voice": "", "duet_way": _duet_default()}
+            "fit": False, "duet_voice": "", "duet_way": _duet_default(), "duet_backing": _duet_default("backing")}
 
 
-def _duet_default() -> str:
-    from .duets import DUET_DEFAULT
-    return DUET_DEFAULT
+def _duet_default(what: str = "way") -> str:
+    from .duets import BACKING_DEFAULT, DUET_DEFAULT
+    return BACKING_DEFAULT if what == "backing" else DUET_DEFAULT

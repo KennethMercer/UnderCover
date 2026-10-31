@@ -548,7 +548,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
         from dataclasses import replace
         from .duets import DUET_DEFAULT
         if duet["voice"] and duet["voice"] != v.name:
-            opts = replace(opts, duet_voice=duet["voice"], duet_way=DUET_DEFAULT, fit=True)
+            opts = replace(opts, duet_voice=duet["voice"], duet_way=DUET_DEFAULT, fit=True, backing_voice=None,
+                           duet_backing="original" if chordal else None)   # (stacked harmony: the original, as for one)
             plan["duet"].update(way=DUET_DEFAULT, display=label_of(duet["voice"]))
             push("cover", 0.0, f"{label_of(v.name)} and {label_of(duet['voice'])} take turns")
         else:

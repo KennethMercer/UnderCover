@@ -627,23 +627,26 @@ function renderBackingSelect() {
   if (S.voicesLoaded && S.opts.backing_voice && !S.voices.some(v => v.name === S.opts.backing_voice)) S.opts.backing_voice = "";
   sel.innerHTML = `<option value="">Original singer</option>` + S.voices.map(v => `<option value="${esc(v.name)}">${esc(voiceDisplay(v.name))}</option>`).join("");
   sel.value = S.opts.backing_voice || "";
-  const on = !!S.opts.backing_voice;
+  const duet = !!S.opts.duet_voice;   // a duet's backing is its own choice (#fm-duet-backing), never a third voice
+  const on = !!S.opts.backing_voice && !duet;
   let hear = $("#backing-line");
   if (!hear) { sel.insertAdjacentHTML("afterend", `<span id="backing-line" class="vline-beside"></span>`); hear = $("#backing-line"); }
   hear.innerHTML = on ? voiceLineButton(S.opts.backing_voice) : "";
   bindVoiceLines(hear);
+  sel.hidden = duet;
   $("#backing-opts").hidden = !on;
-  $("#backing-note").textContent = on
-    ? "Lead and backing are split automatically. The backing voice follows one note at a time, so big stacked harmonies come out thinner."
+  $("#backing-note").textContent = duet ? "In a duet, the backing vocals are chosen with the second singer."
+    : on ? "Lead and backing are split automatically. The backing voice follows one note at a time, so big stacked harmonies come out thinner."
     : "Pick a second voice to sing the backing vocals, or keep the original singer's backing.";
-  $("#karaoke").checked = on || !!S.opts.karaoke;
-  $("#karaoke").disabled = on;
+  $("#karaoke").checked = on || duet || !!S.opts.karaoke;
+  $("#karaoke").disabled = on || duet;
 }
 $("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.target.value; renderBackingSelect(); saveOpts(); summary(); refreshEstimate(); });
 // A duet (1.2): a second singer takes turns with the voice (frontman/duets.py), shared one of two ways. Never the lead
 // itself, and only a voice that's installed.
 // (Line by line stays hidden until it passes the ear; style A's segmented control and strip are the look chat's)
 const DUET_WAYS = { turns: "They take a verse each, and each chorus goes to whoever sang the verse before it.", lines: "A line each, changing only where the singer breathes." };
+const DUET_BACKINGS = { singers: "Each backing line is sung by whoever has the lead under it.", original: "The song's own backing singers stay." };
 function renderDuet() {
   const sel = $("#fm-duet");
   if ((S.voicesLoaded && S.opts.duet_voice && !S.voices.some(v => v.name === S.opts.duet_voice)) || S.opts.duet_voice === S.voice) S.opts.duet_voice = "";
@@ -656,14 +659,24 @@ function renderDuet() {
   $("#fm-duet-way-box").hidden = !S.opts.duet_voice;
   $$("#fm-duet-way button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === way)));
   $("#fm-duet-note").textContent = S.opts.duet_voice ? DUET_WAYS[way] : "";
+  const own = v => typeof v === "string" && Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v);   // (a stored value is only data)
+  const back = own(S.opts.duet_backing) ? S.opts.duet_backing : own(S.defaults.duet_backing) ? S.defaults.duet_backing : "singers";
+  if (S.opts.duet_voice) S.opts.duet_backing = back;
+  $$("#fm-duet-backing button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === back)));
+  $("#fm-duet-backing-note").textContent = S.opts.duet_voice ? DUET_BACKINGS[back] : "";
+  renderBackingSelect();
 }
-$("#fm-duet").addEventListener("change", e => { S.opts.duet_voice = e.target.value; renderDuet(); saveOpts(); });
+$("#fm-duet").addEventListener("change", e => { S.opts.duet_voice = e.target.value; renderDuet(); saveOpts(); summary(); refreshEstimate(); });
 $("#fm-duet-way").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   S.opts.duet_way = b.dataset.v; renderDuet(); saveOpts();
 });
+$("#fm-duet-backing").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  S.opts.duet_backing = b.dataset.v; renderDuet(); saveOpts(); summary(); refreshEstimate();
+});
 $("#summary").addEventListener("click", e => {   // "Use the original singer's backing": one click to drop a carried-over backing voice
-  if (e.target.closest("#clear-duet")) { S.opts.duet_voice = ""; renderDuet(); saveOpts(); return; }
+  if (e.target.closest("#clear-duet")) { S.opts.duet_voice = ""; renderDuet(); saveOpts(); summary(); refreshEstimate(); return; }
   if (!e.target.closest("#clear-backing")) return;
   S.opts.backing_voice = ""; renderBackingSelect(); saveOpts(); summary(); refreshEstimate();
 });
@@ -673,7 +686,8 @@ function summary() {
   const o = S.opts;
   previewSync();
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
-    (o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
+    (o.duet_voice ? (o.duet_backing === "original" ? " · original backing" : " · backing in their voices")
+      : o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
   const busy = !!S.job || !!S.osBusy;   // a one-shot cover uses the GPU queue too
   $("#convert").disabled = !ready || busy;
@@ -685,7 +699,7 @@ function summary() {
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     // a backing voice carried over (Use these settings) stays on when the lead changes: it is said here, with a way to clear it, never silently (IA P9-3)
-    const bk = S.opts.backing_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
+    const bk = S.opts.backing_voice && !S.opts.duet_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
     const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b> <button class="linkbtn" type="button" id="clear-duet">Just one singer</button>` : "";
     $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${du}${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }

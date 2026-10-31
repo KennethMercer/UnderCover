@@ -255,8 +255,9 @@ the first while the rest are made.
 `output/history.jsonl`, one JSON object per finished cover (`frontman/history.py`): `id` (permanent, 10 hex
 characters; every cover route uses it), `output`, `song`, `voice`, `title` (+ `title_set` after a rename), `stems`,
 `converted_vocal`, `converted_backing`, `notes`, `seconds`, `options`, `created`, `kept`, `kept_at`. `history.record`
-is the one place a finished cover is added. A duet's `options` carry `duet_voice`, `duet_way`, `duet_octave` and
-`duet_plan` (`[[start_s, end_s, "A" | "B" | "AB"], ...]` from 0 to the song's end), so Make again sings it the same way.
+is the one place a finished cover is added. A duet's `options` carry `duet_voice`, `duet_way`, `duet_octave`,
+`duet_backing` and `duet_plan` (`[[start_s, end_s, "A" | "B"], ...]` from 0 to the song's end), so Make again sings it
+the same way.
 
 ### Recent tray
 
@@ -451,8 +452,10 @@ then waits in `tts/pending/` for the ear.
 
 A cover can be shared by two voices taking turns (`frontman/duets.py`). The lead is converted once in each voice,
 inside `Converter.shared_f0`, so the pitch track is read once. Both voices sing in one key for the song, each at its
-own best octave: `duets.joint_fit` picks the key with the lowest summed `fit.pick_fit` cost. The two takes are then
-stitched by a plan.
+own best octave: `duets.joint_fit` picks the key with the lowest `fit.pick_fit` cost, each voice's cost read on the
+melody its sections hold and weighed by its share of the sung melody (so the fit runs after the plan). When one of
+them sits `FAR_ST` (3) semitones or more from where they'd sing alone, the fit's note says so. The two takes are then
+stitched by the plan.
 
 - **Lines** are the lead's own: stretches of singing between silences of 100 ms or more, 35 dB under its loud level
   (`duets.phrases`). A line under 1.5 s joins the next across a gap under 0.6 s.
@@ -464,13 +467,17 @@ stitched by a plan.
 - **Ways** (`duets.WAYS`): `turns` alternates verses, and each chorus goes to whoever sang the verse before it;
   `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
   one place the default is set.
-- **The backing** is converted exactly when a cover's would be (`pipeline._duet_backing`): when a backing voice is
-  chosen. "Original singer" keeps the original backing; the one-shot chooses one unless the backing is stacked
-  harmony. Each section's backing is then sung by that section's singer, stitched by the same plan.
+- **The backing** (`duet_backing`, `duets.BACKINGS`): in the singers' voices (`BACKING_DEFAULT`) or the original.
+  A backing voice isn't used in a duet. The one-shot keeps the original when the backing is stacked harmony
+  (`oneshot.chordal_backing`); nothing is converted when there's hardly any backing (`pipeline._duet_backing`). The
+  backing has its own plan (`duets.backing_plan`): its phrases are its singing between its own silences, each is sung
+  whole by whoever sings most of the lead under it, and its voice changes only inside its own silence, at the point
+  nearest the lead's change.
 - **Too few words** (under 20 heard): there's no chorus to find, and the voices take every two lines in turn.
 
-A song sung as a duet already (`separate.lead_missing`) is sung by one voice, and the notes say why. The cover's
-options take `duet_voice` (an installed voice that isn't the lead), `duet_way`, `duet_octave` (-2 to 2) and a plan in
+A song sung as a duet already (`separate.lead_missing`: the split finds no lead line) is sung by one voice, and the
+notes say why; a duet's two singers take turns on its whole vocal instead, backing and all. The cover's
+options take `duet_voice` (an installed voice that isn't the lead), `duet_way`, `duet_backing`, `duet_octave` (-2 to 2) and a plan in
 `duets.check_plan`'s shape, all checked in `frontman/api._duet_options`. The one-shot reads "<song> as A and B" (also
 "with", "&", "a duet of ...") when the second singer is a voice here (`oneshot.split_duet`).
 

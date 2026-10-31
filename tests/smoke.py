@@ -7352,6 +7352,7 @@ def u_duets():
             assert not any(s - 0.005 < cut < e + 0.005 for s, e in words), (way, cut)
             assert abs(x[int(cut * sr) - 80:int(cut * sr) + 80]).max() == 0, (way, cut)
     assert D.DUET_DEFAULT in D.WAYS and FA._ui_defaults()["duet_way"] == D.DUET_DEFAULT
+    assert FA._ui_defaults()["duet_backing"] == D.BACKING_DEFAULT
     try:
         D.who_sings(rows, "chorus")
         raise AssertionError("an unknown way was taken")
@@ -7389,6 +7390,39 @@ def u_duets():
     fit = D.joint_fit({"A": ([180.0, 260.0, 400.0], False), "B": ([70.0, 110.0, 170.0], False)}, f0)
     assert fit["octave"]["A"] - fit["octave"]["B"] == 1 and -7 <= fit["key"] <= 7, fit
     assert D.joint_fit({"A": None, "B": None}, f0) is None and set(D.joint_fit({"A": ([180.0, 260.0, 400.0], False), "B": None}, f0)["octave"]) == {"A"}
+    # weighed by the plan: each singer's cost on the melody they sing, by their share, so the one who carries the
+    # song sits nearer their own key ("off": semitones from where they'd sing alone); two far-apart singers
+    far = {"A": ([183.0, 314.0, 512.0], False), "B": ([61.0, 146.0, 269.0], False)}
+    mel = 230 * 2 ** (np.random.default_rng(2).integers(-4, 5, 10000) / 12)
+    assert list(D.singer_frames([[0.0, 80.0, "A"], [80.0, 100.0, "B"]], 10000)[[0, 7999, 8000, 9999]]) == ["A", "A", "B", "B"]
+    even = D.joint_fit(far, mel)
+    mostly_a = D.joint_fit(far, mel, D.singer_frames([[0.0, 80.0, "A"], [80.0, 100.0, "B"]], 10000))
+    mostly_b = D.joint_fit(far, mel, D.singer_frames([[0.0, 20.0, "A"], [20.0, 100.0, "B"]], 10000))
+    assert mostly_a["share"] == {"A": 0.8, "B": 0.2} and even["share"] is None, (mostly_a, even)
+    assert mostly_b["share"] == {"A": 0.2, "B": 0.8} and set(mostly_a["alone"]) == {"A", "B"}, mostly_b
+    for k in "AB":   # a singer who sings all of it gets their own best fit: the other weighs nothing
+        alone = D.joint_fit(far, mel, D.singer_frames([[0.0, 100.0, k]], 10000))
+        assert alone["off"][k] == 0 and alone["share"][k] == 1.0 and alone["key"] == alone["alone"][k]["key"], alone
+        assert set(alone["off"]) == {k}, alone   # (the other sings nothing: no key of their own to be far from)
+    import inspect as _i2
+    from undercover.frontman import pipeline as _PL2
+    fsrc = _i2.getsource(_PL2.CoverEngine._fit_duet)
+    assert "singer_frames(opts.duet_plan, len(f0))" in fsrc and "abs(fit[\"off\"][far]) >= FAR_ST" in fsrc
+    msrc = _i2.getsource(_PL2.CoverEngine.make_cover)   # the fit for two after the plan (it needs who sings when)
+    # a song whose plan gives one singer all of it, with almost no melody heard (the test song): no singer is named,
+    # and nothing fails (the first --full of duets3: max() of nothing)
+    import tempfile as _tf
+    import soundfile as _sf
+    with _tf.TemporaryDirectory() as _td:
+        _w = Path(_td) / "v.wav"
+        _sf.write(str(_w), np.zeros(16000, np.float32), 16000)
+        _eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(infer_from_audio=lambda x, thred=0.03: np.zeros(100))))
+        _v = lambda n, r: SimpleNamespace(name=n, extra={"f0_range": r})
+        _notes = []
+        _o = _PL2.CoverEngine._fit_duet(_eng, _PL2.CoverOptions(voice="a-uc", duet_voice="b-uc", duet_plan=[[0.0, 1.0, "A"]]),
+                                        _v("a-uc", [183.0, 314.0, 512.0]), _v("b-uc", [61.0, 146.0, 269.0]), {"vocals": _w}, _notes)
+        assert _o.key is not None and len(_notes) == 1 and _notes[0].startswith("Fit for two") and "semitones" not in _notes[0], _notes
+    assert msrc.index("self._duet_plan(") < msrc.index("self._fit_duet(") < msrc.index("key, s.pitch = pitch_plan(opts)")
     # the one-shot: "A and B" (also with, &, duet of): only with a voice here for the second (or the first), never a
     # whole name that is one voice, nor two names neither of which is here
     vs = {"michael-jackson-uc": "michael jackson", "barry-white-uc": "barry white", "simon-and-garfunkel-uc": "simon and garfunkel"}
@@ -7422,8 +7456,11 @@ def u_duets():
         return SimpleNamespace(name=name)
     V.get_voice = fake_get
     try:
-        ok = FA._duet_options({"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0, 2, "A"], [2, 5, "B"]]}, "lead-uc")
-        assert ok == {"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0.0, 2.0, "A"], [2.0, 5.0, "B"]]}, ok
+        ok = FA._duet_options({"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0, 2, "A"], [2, 5, "B"]],
+                               "duet_backing": "original"}, "lead-uc")
+        assert ok == {"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0.0, 2.0, "A"], [2.0, 5.0, "B"]],
+                      "duet_backing": "original"}, ok
+        assert FA._duet_options({"duet_voice": "second-uc"}, "lead-uc")["duet_backing"] is None   # (the default: the singers')
         assert FA._duet_options({}, "lead-uc") == {} and FA._duet_options({"duet_voice": ""}, "lead-uc") == {}
         # numbers no setting can be (JSON carries NaN, Infinity and huge integers): a plain refusal, never a 500
         big = 10 ** 400
@@ -7515,7 +7552,8 @@ def u_duets():
                     {"duet_voice": "second-uc", "duet_way": "chorus"}, {"duet_voice": "second-uc", "duet_octave": 3},
                     {"duet_voice": "second-uc", "duet_octave": 0.5}, {"duet_voice": "second-uc", "duet_octave": True},
                     {"duet_voice": "second-uc", "duet_octave": "1"}, {"duet_voice": "second-uc", "duet_plan": [[0, 1, "C"]]},
-                    {"duet_voice": "second-uc", "duet_plan": "junk"}):
+                    {"duet_voice": "second-uc", "duet_plan": "junk"}, {"duet_voice": "second-uc", "duet_backing": "both"},
+                    {"duet_voice": "second-uc", "duet_backing": ["original"]}):
             try:
                 FA._duet_options(bad, "lead-uc")
                 raise AssertionError(f"taken: {bad}")
@@ -7543,37 +7581,72 @@ def u_duets():
     from undercover.frontman import pipeline as PL
     src = inspect.getsource(PL.CoverEngine.make_cover)
     assert "self.converter.shared_f0() if dvoice" in src and "stitch(audio, daudio, opts.duet_plan, sr)" in src
-    assert "stitch(ba, bb, bplan, bsr)" in src and "moved_to_quiet(opts.duet_plan, back16)" in src and "bvoice = None" in src
-    # the backing's changes go to its own pause near the lead's (within a second, never past halfway to the next)
+    assert "stitch(ba, bb, bplan, bsr)" in src and "backing_plan(opts.duet_plan, back16)" in src and "bvoice = None" in src
+    assert "karaoke = True if bvoice or dvoice else opts.karaoke" in src   # (a duet always splits lead and backing)
+    # the backing's own plan: each of its phrases (between its own silences) sung whole by whoever sings most of the
+    # lead under it; a change only inside the backing's silence, at the point of it nearest the lead's change
+    lead_plan = [[0.0, 5.0, "A"], [5.0, 9.0, "B"], [9.0, 20.0, "A"]]
     back = np.full(20 * sr, 0.3, np.float32)
-    back[int(5.6 * sr):int(5.8 * sr)] = 0.0   # the backing's pause, 0.6 s after the lead's
-    mp = D.moved_to_quiet([[0.0, 5.0, "A"], [5.0, 9.0, "B"], [9.0, 20.0, "A"]], back)
-    assert 5.55 <= mp[0][1] <= 5.85 and mp[1][0] == mp[0][1] and mp[0][0] == 0 and mp[-1][1] == 20.0, mp
-    assert 7.0 <= mp[1][1] <= 10.0 and D.check_plan(mp, 20.0) == mp, mp
-    # the backing: converted exactly when a cover's would be (a backing voice chosen; "Original singer" keeps it),
-    # never when there's none or hardly any
+    back[int(5.6 * sr):int(5.8 * sr)] = 0.0   # a silence 0.6 s after the lead's change
+    back[int(12.0 * sr):int(12.5 * sr)] = 0.0
+    bp = D.backing_plan(lead_plan, back)
+    # 0-5.6 is mostly A (the old singer finishes it), 5.8-12.0 mostly B, 12.5-20 A: changes in the two silences
+    assert [w for *_, w in bp] == ["A", "B", "A"] and 5.6 <= bp[0][1] <= 5.8 and 12.0 <= bp[1][1] <= 12.5, bp
+    assert bp[0][0] == 0.0 and bp[-1][1] == 20.0 and D.check_plan(bp, 20.0) == bp, bp
+    inside = np.full(20 * sr, 0.3, np.float32)
+    inside[int(4.0 * sr):int(6.0 * sr)] = 0.0   # the lead's change falls inside a backing silence: it stays there
+    inside[int(8.5 * sr):int(9.5 * sr)] = 0.0
+    assert D.backing_plan(lead_plan, inside) == [[0.0, 5.0, "A"], [5.0, 9.0, "B"], [9.0, 20.0, "A"]]
+    # Hello's 3:28 change: the backing sings on from 3:26.9 with no silence till 3:51; its phrase is mostly the new
+    # singer's, so it changes in the silence before it (never halfway through, as the user heard)
+    hello = np.full(30 * sr, 0.3, np.float32)
+    hello[int(5.8 * sr):int(6.9 * sr)] = 0.0
+    hp = D.backing_plan([[0.0, 8.7, "B"], [8.7, 30.0, "A"]], hello)
+    assert hp == [[0.0, round(6.9 - D.FADE_S / 2, 3), "B"], [round(6.9 - D.FADE_S / 2, 3), 30.0, "A"]], hp
+    # one long phrase across a short part: the backing doesn't change at all; none (all silent): the lead's plan
+    one = np.full(20 * sr, 0.3, np.float32)
+    assert D.backing_plan(lead_plan, one) == [[0.0, 20.0, "A"]]
+    assert D.backing_plan([[0.0, 20.0, "B"]], back) == [[0.0, 20.0, "B"]]
+    # a backing that runs on past the lead's end changes nothing there (a tie goes to the earlier singer)
+    tail = np.full(12 * sr, 0.3, np.float32)
+    tail[int(10.3 * sr):int(10.6 * sr)] = 0.0
+    assert D.backing_plan([[0.0, 5.0, "A"], [5.0, 10.0, "B"]], tail) == [[0.0, 10.0, "A"]]
+    # the backing in a duet: in the singers' voices unless the original is asked for (duets.BACKING_DEFAULT is the
+    # singers', the user's favourite); never when there's none or hardly any. A backing voice isn't a duet's.
+    assert D.BACKING_DEFAULT == "singers" and D.BACKINGS == ("singers", "original")
     from undercover.frontman import remix as RM
     real_lufs = RM.lufs
     eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=None))
     try:
         RM.lufs = lambda p: -20.0
-        for back, bv, want in ((None, None, False), (None, "x-uc", False), ("b.flac", None, False), ("b.flac", "", False),
-                               ("b.flac", "x-uc", True)):
-            got = PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice=bv), {"backing": back} if back else {}, [])
-            assert got is want, (back, bv, got)
+        for back, how, want in ((None, None, False), (None, "singers", False), ("b.flac", None, True),
+                                ("b.flac", "singers", True), ("b.flac", "original", False)):
+            got = PL.CoverEngine._duet_backing(eng, SimpleNamespace(duet_backing=how, backing_voice=None),
+                                               {"backing": back} if back else {}, [])
+            assert got is want, (back, how, got)
         RM.lufs = lambda p: -60.0
         notes = []
-        assert PL.CoverEngine._duet_backing(eng, SimpleNamespace(backing_voice="x-uc"), {"backing": "b.flac"}, notes) is False
+        assert PL.CoverEngine._duet_backing(eng, SimpleNamespace(duet_backing=None), {"backing": "b.flac"}, notes) is False
         assert any("almost no backing" in n for n in notes), notes
     finally:
         RM.lufs = real_lufs
     import inspect as _ins
     from undercover.frontman import oneshot as OS3
-    assert "backing_voice=None if chordal else v.name" in _ins.getsource(OS3.run)   # (the one-shot chooses, as before)
+    os_src = _ins.getsource(OS3.run)
+    assert "backing_voice=None if chordal else v.name" in os_src   # (one singer: the one-shot chooses, as before)
+    assert 'duet_backing="original" if chordal else None' in os_src   # (a duet: stacked harmony keeps the original)
+    est = lambda **k: PL.estimate_for(100.0, PL.CoverOptions(voice="v", duet_voice="w", duet_plan=[[0, 1, "A"]], **k))["converting"]
+    assert est(duet_backing="original") < est() == est(duet_backing="singers") == est(duet_backing="singers", backing_voice="x")
     # Make again: a plan from before one singer at a time (with "both") isn't sent back; it's found again
     assert 'opts.pop("duet_plan")' in inspect.getsource(FA._cover_again)
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert 'data-v="lines" hidden' in page and 'id="fm-duet-strip"' in page   # By line waits for the ear; style A's strip
+    duet_box = page[page.index('id="fm-duet-way-box"'):page.index("</div>", page.index('id="fm-duet-backing-note"'))]
+    assert 'id="fm-duet-backing"' in duet_box and 'data-v="singers"' in duet_box and 'data-v="original"' in duet_box
+    js = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    assert "S.opts.duet_backing = b.dataset.v" in js and "S.defaults.duet_backing" in js and "sel.hidden = duet" in js
+    assert "Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v)" in js   # (a stored "constructor" is no backing)
+    assert "karaoke = True if opts.backing_voice or opts.duet_voice else opts.karaoke" in inspect.getsource(PL.CoverEngine.make_preview)
     assert "together" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"})
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
@@ -11834,17 +11907,17 @@ def _duet_with(song, voice):
             assert e.code == 400 and why in json.loads(e.read())["error"], (bad, e.code)
     made = []
     try:
-        # (the test song's karaoke split finds no lead, as a song sung in harmony: then one voice, said, and no duet
-        # kept in its options; with karaoke off the two share the whole vocal)
+        # (the test song's karaoke split finds no lead, as a song sung in harmony: a duet always splits, and then the
+        # two take turns on the whole vocal, said; the second singer is never dropped)
         before = {c["id"] for c in api("/api/history")}
         api("/api/covers", {"song": song["id"], "voice": voice, "options": {"karaoke": True, "quality": "high", "duet_voice": second}})
         wait_for(lambda: api("/api/status").get("cover_job") is None, 900, every=3, what="the karaoke cover finished")
         solo = [h for h in api("/api/history") if h["id"] not in before]
         assert solo, "no cover in the history"
         made.append(solo[0]["id"])
+        assert solo[0].get("duet_voice") == second and solo[0]["options"].get("duet_plan"), solo[0]
         if any(n.startswith("Two singers in harmony") for n in solo[0]["notes"]):
-            assert not solo[0].get("duet_voice") and "duet_voice" not in solo[0]["options"], solo[0]
-            assert any("wasn't used" in n for n in solo[0]["notes"]), solo[0]["notes"]
+            assert any("take turns on the whole vocal" in n for n in solo[0]["notes"]), solo[0]["notes"]
         before = {c["id"] for c in api("/api/history")}
         api("/api/covers", {"song": song["id"], "voice": voice, "options": {"fit": True, "karaoke": False, "dereverb": True, "quality": "high",
                                                                             "duet_voice": second}})

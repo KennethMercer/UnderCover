@@ -47,6 +47,7 @@ class CoverOptions:
     duet_way: str | None = None       # how they share it: duets.WAYS (None: duets.DUET_DEFAULT)
     duet_octave: int | None = None    # the second singer's octave on top of the song key (None: the lead's)
     duet_plan: list | None = None     # who sings when, [[start, end, who], ...] (found by the engine; kept for Make again)
+    duet_backing: str | None = None   # a duet's backing: duets.BACKINGS (None: duets.BACKING_DEFAULT, the singers' voices)
 
 
 @dataclass
@@ -112,11 +113,13 @@ class CoverEngine:
         return replace(opts, octave=fit["octave"], key=fit["key"], pitch=None,
                        backing_octave=fit["octave"] if same_backing else opts.backing_octave)
 
-    def _fit_duet(self, opts: "CoverOptions", voice, dvoice, stems: dict, notes: list, bvoice) -> "CoverOptions":
-        """The fit for two (duets.joint_fit): one key for the song, each voice at its own best octave in it. A voice
-        with no measured range keeps the chosen octave."""
+    def _fit_duet(self, opts: "CoverOptions", voice, dvoice, stems: dict, notes: list) -> "CoverOptions":
+        """The fit for two (duets.joint_fit): one key for the song, each voice at its own best octave in it, each one
+        weighed by how much of the song the plan gives it (so it runs after _duet_plan). A voice with no measured
+        range keeps the chosen octave. When one of them sings FAR_ST or more from where they'd sing alone, the note
+        says so."""
         from dataclasses import replace
-        from .duets import joint_fit
+        from .duets import FAR_ST, joint_fit, singer_frames
         from ..core.engine.convert import load_16k
 
         def rng(v):
@@ -124,27 +127,32 @@ class CoverEngine:
             r = ex.get("f0_range") or ex.get("person_range")
             return (r, ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")) if r else None
         f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
-        fit = joint_fit({"A": rng(voice), "B": rng(dvoice)}, f0)
+        fit = joint_fit({"A": rng(voice), "B": rng(dvoice)}, f0, singer_frames(opts.duet_plan, len(f0)))
         if fit is None:
             notes.append(f"Fit to voice: neither {label_of(voice.name)} nor {label_of(dvoice.name)} has a measured range yet, "
                          "so your octave and key were used.")
             return opts
         a = fit["octave"].get("A", opts.octave if opts.octave is not None else 0)
         b = fit["octave"].get("B", opts.duet_octave if opts.duet_octave is not None else a)
-        notes.append(f"Fit for two: key {fit['key']:+d}, {label_of(voice.name)} at octave {a:+d}, "
-                     f"{label_of(dvoice.name)} at octave {b:+d}.")
-        same_backing = bvoice is not None and bvoice.name == voice.name
-        return replace(opts, key=fit["key"], octave=a, duet_octave=b, pitch=None,
-                       backing_octave=a if same_backing else opts.backing_octave)
+        names = {"A": label_of(voice.name), "B": label_of(dvoice.name)}
+        line = f"Fit for two: key {fit['key']:+d}, {names['A']} at octave {a:+d}, {names['B']} at octave {b:+d}."
+        far = max(fit["off"], key=lambda k: abs(fit["off"][k])) if len(fit["off"]) == 2 else None   # (both must sing)
+        if far and abs(fit["off"][far]) >= FAR_ST:   # one sits far from their own key: said plainly
+            other = "B" if far == "A" else "A"
+            line += (f" {names[far]} sings {abs(fit['off'][far])} semitones {'higher' if fit['off'][far] > 0 else 'lower'}"
+                     f" than their own best key: the key follows {names[other]}, who sings "
+                     f"{fit['share'][other]:.0%} of the song.")
+        notes.append(line)
+        return replace(opts, key=fit["key"], octave=a, duet_octave=b, pitch=None)
 
     def _duet_backing(self, opts: "CoverOptions", cstems: dict, notes: list) -> bool:
-        """Is a duet's backing converted (in each section's singer, by the duet's own plan)? Exactly when a cover's
-        would be: a backing voice is chosen. "Original singer" keeps the original backing, as in a cover; the one-shot
-        chooses one unless the backing is stacked harmony (oneshot.chordal_backing). Nothing when there's hardly
-        any backing."""
+        """Is a duet's backing converted (each phrase in the singer of its section, duets.backing_plan)? Unless the
+        cover asks for the original (duet_backing, duets.BACKING_DEFAULT: the singers' voices); the one-shot asks for
+        it when the backing is stacked harmony (oneshot.chordal_backing). Nothing when there's hardly any backing."""
+        from .duets import BACKING_DEFAULT
         from .remix import lufs
         back = cstems.get("backing")
-        if not opts.backing_voice or not back:
+        if (opts.duet_backing or BACKING_DEFAULT) == "original" or not back:
             return False
         if lufs(back) < -45:
             notes.append("This song has almost no backing vocals, so they weren't converted.")
@@ -196,7 +204,9 @@ class CoverEngine:
         voice = get_voice(opts.voice)  # fail fast if not installed
         bvoice = get_voice(opts.backing_voice) if opts.backing_voice else None
         dvoice = get_voice(opts.duet_voice) if opts.duet_voice else None   # a duet's second singer (duets.py)
-        karaoke = True if bvoice else opts.karaoke  # a backing voice needs the lead/backing split
+        if dvoice:   # a duet's backing is its own choice (duet_backing: the singers' voices or the original), never a third voice
+            bvoice = None
+        karaoke = True if bvoice or dvoice else opts.karaoke  # a backing voice, and a duet's one lead line, need the split
         secs, notes = {}, []
 
         report("separating", 0.0, "Separating vocals from the instrumental")
@@ -206,14 +216,13 @@ class CoverEngine:
         secs["separate"] = round(time.perf_counter() - t, 2)
         report("separating", 1.0, "Stems ready")
         if karaoke and not stems.get("backing"):   # core.separate found no lead to split from the backing (a duet)
-            notes.append(DUET_NOTE)
-            if dvoice:   # sung as a duet already: there's no one lead line to share between two voices
-                from dataclasses import replace as _r
-                notes.append(f"So {label_of(dvoice.name)} wasn't used: taking turns needs one lead line to share.")
-                dvoice = None
-                opts = _r(opts, duet_voice=None, duet_way=None, duet_octave=None, duet_plan=None)   # (the history: one voice)
-        if opts.fit:
-            opts = self._fit_duet(opts, voice, dvoice, stems, notes, bvoice) if dvoice else self._fit(opts, voice, stems, notes, bvoice)
+            # (a cover sings the whole vocal as one voice; a duet's two take turns on it, as one sung with the split
+            # off did before duets3: the second singer asked for is never dropped)
+            notes.append(DUET_NOTE if not dvoice else
+                         f"Two singers in harmony: UnderCover can't separate them yet, so {label_of(voice.name)} and "
+                         f"{label_of(dvoice.name)} take turns on the whole vocal, its backing with it.")
+        if opts.fit and not dvoice:   # (a duet's fit waits for its plan: each singer weighed by their share)
+            opts = self._fit(opts, voice, stems, notes, bvoice)
 
         report("converting", 0.0, f"Converting the vocal to {label_of(voice.name)}")
         t = time.perf_counter()
@@ -224,7 +233,6 @@ class CoverEngine:
         if s.pitch_correction > 0:
             k = song_key(key_song or song)
             s.song_key = (k["tonic"], k["mode"])
-        key, s.pitch = pitch_plan(opts)
         # is the lead stem singing? (phase 15) an instrument left in it isn't turned into singing, and lines the
         # karaoke split put in the backing are converted too; the stems themselves stay as they were
         cstems = stems
@@ -240,6 +248,13 @@ class CoverEngine:
                        if mode == "top" and g["chorus"] and stems.get("backing") else None)
                 cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top)
                 notes += gate_note(g, mode)
+        work = path("cache_dir") / "converted"
+        work.mkdir(parents=True, exist_ok=True)
+        if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself; then the fit
+            opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report)
+            if opts.fit:
+                opts = self._fit_duet(opts, voice, dvoice, stems, notes)
+        key, s.pitch = pitch_plan(opts)
         from .remix import lufs, prefetch
         # mix prep (stem loudness, key-shifted instrumental) runs on the CPU while the GPU converts
         prefetch([cstems["vocals"], cstems.get("backing"), cstems.get("reverb"), song], key=key,
@@ -249,10 +264,6 @@ class CoverEngine:
         elif bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
-        work = path("cache_dir") / "converted"
-        work.mkdir(parents=True, exist_ok=True)
-        if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself
-            opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report)
         dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in each section's singer too
         if dback:
             bvoice = None   # (one backing voice gives way to the duet's two)
@@ -291,7 +302,7 @@ class CoverEngine:
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
         if dback:   # the backing as the lead: each section's backing in that section's singer, at that singer's octave
             from dataclasses import replace as _replace
-            from .duets import moved_to_quiet, stitch
+            from .duets import backing_plan, stitch
             back16 = load_16k(cstems["backing"])
             aoct = (s.pitch - key) / 12
             doct = opts.duet_octave if opts.duet_octave is not None else aoct
@@ -306,7 +317,7 @@ class CoverEngine:
                 g = gcd(bsr, dbsr)
                 bb = resample_poly(bb, bsr // g, dbsr // g).astype(np.float32)
             conv_backing = work / f"{_safe(title)}__{voice.name}__{dvoice.name}__backing__{stamp}.flac"
-            bplan = moved_to_quiet(opts.duet_plan, back16)   # (each change at the backing's own pause near the lead's)
+            bplan = backing_plan(opts.duet_plan, back16)   # (each backing phrase whole, by whoever sings most of it)
             sf.write(str(conv_backing), np.clip(stitch(ba, bb, bplan, bsr), -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
         report("converting", 1.0, "Vocal converted")
@@ -348,7 +359,7 @@ class CoverEngine:
         from ..core.separate import separate
         report = progress or (lambda *a: None)
         song = Path(song).resolve()
-        karaoke = True if opts.backing_voice else opts.karaoke
+        karaoke = True if opts.backing_voice or opts.duet_voice else opts.karaoke   # (as the cover would split it)
         report("separating", 0.0, "Separating vocals (needed once; the full cover reuses it)")
         stems = separate(song, opts.dereverb, karaoke, separator=self.separator, quality=opts.quality, one_voice_if_no_lead=True,
                          progress=lambda f, step: report("separating", f, "Separating vocals"))
@@ -499,16 +510,17 @@ def history_items() -> list[dict]:
     for h in history():
         if not h["recent"]:
             continue
+        o = h.get("options") if isinstance(h.get("options"), dict) else {}   # (the history's own file, read as data)
         out.append({
             "id": h["id"], "title": h.get("title") or Path(h["song"]).stem, "voice": h["voice"],
             "kept": h["kept"], "kept_at": h.get("kept_at"), "recent": h["recent"],
-            "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": h.get("options", {}),
+            "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": o,
             "output": file_url(h["output"]), "output_name": Path(h["output"]).name,
             "original": file_url(h["song"]), "vocal": file_url(h.get("converted_vocal")),
             "backing": file_url(h.get("converted_backing")),
-            "backing_voice": (h.get("options", {}).get("backing_voice")
-                              if h.get("converted_backing") and h.get("options", {}).get("backing_voice") != h["voice"] else None),
-            "duet_voice": h.get("options", {}).get("duet_voice") or None,   # a duet's second singer (duets.py)
+            "backing_voice": (o.get("backing_voice") if h.get("converted_backing") and o.get("backing_voice") != h["voice"]
+                              and not o.get("duet_voice") else None),   # (a duet's backing is its singers')
+            "duet_voice": o.get("duet_voice") or None,   # a duet's second singer (duets.py)
             "notes": h.get("notes", []),
         })
     return out
@@ -604,7 +616,7 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
     cached = stem_dir.exists() and bool(stem_files(stem_dir))
     sep = 0.0 if cached else dur / sep_rt
     # extra passes run on the vocal stem; each is skipped when its own output is already cached
-    karaoke = bool(opts.backing_voice or (opts.karaoke if opts.karaoke is not None else SEP["karaoke"]))
+    karaoke = bool(opts.backing_voice or opts.duet_voice or (opts.karaoke if opts.karaoke is not None else SEP["karaoke"]))
     dereverb = bool(opts.dereverb if opts.dereverb is not None else SEP["dereverb"])
     k_dir = stem_dir / ("karaoke_" + Path(SEP["karaoke_model"]).stem)
     d_dir = (k_dir if karaoke else stem_dir) / ("dereverb_" + Path(SEP["dereverb_model"]).stem)
@@ -612,11 +624,12 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
     passes = (karaoke and not done(k_dir)) + (dereverb and not done(d_dir))
     sep += passes * dur / med(speeds.get("extra", []), 13.6)  # measured ~13.6x realtime (2026-10-09)
     conv = dur / med(speeds["synth"], 40.0) + dur / med(speeds["f0"], 90.0) + 2.0
-    if opts.backing_voice:
+    if opts.backing_voice and not opts.duet_voice:
         conv = conv * 2 - 1.5  # second conversion; shared models are already loaded
     if opts.duet_voice:   # a duet: the lead converted again (its pitch track shared), and its words heard once
+        from .duets import BACKING_DEFAULT
         conv += dur / med(speeds["synth"], 40.0) + (0.0 if opts.duet_plan else 5.0 + dur / 30.0)
-        if karaoke:   # and the backing in both singers (when it's converted: a guess, the rule needs the stems)
+        if (opts.duet_backing or BACKING_DEFAULT) != "original":   # and the backing in both singers
             conv += 2 * dur / med(speeds["synth"], 40.0)
     key, _ = pitch_plan(opts)
     mix = 1.0 + dur / 120.0 + (dur / 50.0 if key else 0.0)  # Rubber Band key shift ~50x realtime
