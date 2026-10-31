@@ -40,7 +40,9 @@ REGISTER_MARGIN = 0.04                        # a section goes to the singer it 
                                               # much more (fit.pick_fit). On three songs, notes under a range cost 0.04-0.14
                                               # (Hello's low verses: the user gave the first to the low voice, 2026-10-31);
                                               # two singers a semitone apart in the shared key differ by 0.025
-MIN_SHARE = 0.25                              # each duet singer keeps this much of the sung melody or more (with_floor)
+MIN_SHARE = 0.15                              # each duet singer keeps this much of the sung melody or more (with_floor).
+                                              # The ear (2026-10-31) took Pink Pony Club's 80/20 by range over a
+                                              # quarter's floor; Toxic's 87/13 is still too little of one singer
 SR16 = 16000
 
 

@@ -471,7 +471,7 @@ stitched by the plan.
   is priced for each singer (`fit.pick_fit` on its melody, at the two voices' key on the whole song and each one's
   octave; with the fit off, at the cover's own key and octaves). A section goes to the singer it fits when the other's
   price is `REGISTER_MARGIN` (0.04) or more above; the chorus after such a verse goes to whichever it fits better.
-  The rest keeps Turns from there. Each singer keeps `MIN_SHARE` (a quarter) of the sung melody or more
+  The rest keeps Turns from there. Each singer keeps `MIN_SHARE` (15%) of the sung melody or more
   (`duets.with_floor`): past that, only the calls with the biggest price gaps are kept. The plan line names what moved
   ("By range: B takes the low verses and A the high choruses"). A plan from Make again is kept as it is.
 - **The backing** (`duet_backing`, `duets.BACKINGS`): in the singers' voices (`BACKING_DEFAULT`) or the original.

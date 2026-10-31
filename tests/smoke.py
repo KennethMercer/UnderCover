@@ -7450,9 +7450,10 @@ def u_duets():
         == "Duet: 0:00 a · 0:09 b. By range: b takes the low chorus and the high verse."
     assert "By range" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [])
     # the share floor (MasterPlan 2026-10-31: a duet should sound like one): on Toxic's measured prices (at the even
-    # key, -3) the register alone gives the low voice 87% of the sung melody; each singer keeps a quarter or more, by
-    # keeping only the strongest calls (the two low verses: its biggest price gaps) and Turns for the rest. Hello's
-    # plan keeps every call: both are over the floor already
+    # key, -3) the register alone gives the low voice 87% of the sung melody; each singer keeps MIN_SHARE (15%) or
+    # more, by keeping only the strongest calls (the two low verses: its biggest price gaps) and Turns for the rest.
+    # Hello's plan keeps every call: both are over the floor already. Pink Pony Club's 80/20 stands (the ear took it
+    # over a quarter's floor, 2026-10-31)
     tk = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 3 + ["verse"])]
     tox = [{"cost": {"A": 0.2, "B": round(0.2 + x, 3)}, "low": x < 0, "n": m} for x, m in
            zip([-0.107, -0.007, -0.082, 0.014, -0.137, 0.026, -0.457], [2137, 220, 1362, 515, 514, 149, 245])]
@@ -7462,11 +7463,18 @@ def u_duets():
     share_a = sum(c["n"] for w, c in zip(fw, tox) if w == "A") / sum(c["n"] for c in tox)
     assert D.MIN_SHARE <= share_a < 0.5, share_a
     hn = [dict(x, n=m) for x, m in zip(hello, [4117, 3990, 2859, 4336, 1708, 4422])]
+    tk7 = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 3 + ["verse"])]
+    ppc = [{"cost": {"A": 0.2, "B": round(0.2 + x, 3)}, "low": x < 0, "n": m} for x, m in
+           zip([-0.039, 0.025, -0.05, 0.021, -0.045, 0.026, 0.026], [1814, 4093, 1765, 4000, 1594, 2654, 966])]
+    pw, pm = D.with_floor(tk7, ppc, 7)
+    assert (pw, pm) == D.by_register(tk7, ppc, 7) and pw == ["A", "A", "B", "A", "B", "A", "A"], (pw, pm)
+    share_b = sum(c["n"] for w, c in zip(pw, ppc) if w == "B") / sum(c["n"] for c in ppc)
+    assert D.MIN_SHARE <= share_b < 0.25, share_b
     assert D.with_floor(kinds, hn, 6) == D.by_register(kinds, hn, 6)
     assert D.with_floor(tk, [dict(c, n=0) for c in tox], 7) == D.by_register(tk, tox, 7)   # (no melody counted: no floor to hold)
     # on the shape above, priced at the cover's own pitches (the fit off): low verses go to the low voice and the
     # high choruses to the high one; high verses the other way round; a song all low for one voice keeps the
-    # strongest move only, and both keep a quarter or more; a singer without a range keeps Turns
+    # strongest move only, and both keep MIN_SHARE or more; a singer without a range keeps Turns
     def tune(vhz, chz):
         g, r = np.zeros(int(dur * 100)), np.random.default_rng(1)
         for _, s, e, _ in ws:
