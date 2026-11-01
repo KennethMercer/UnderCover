@@ -113,7 +113,7 @@ function planTime(p) {
   }
   const v = p.voice?.how, tr = trainWords(p);   // no number of the page's own: training's is the estimator's, a quick cover's the plan's
   const chk = p.check_s != null ? etaWords({ low: p.check_s, high: p.check_s }) : "a few minutes";   // (the check's work, then the cover)
-  return v === "train" ? tr || "about an hour" : v === "check" ? `${chk} to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
+  return v === "train" ? tr || "a few hours" : v === "check" ? `${chk} to check${tr ? `; ${tr} if it has to train` : ""}` : "a few minutes";
 }
 // the plan's own training estimate (train_s: the one the job and the voice question use), else the estimator's
 const trainWords = p => { if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s }); const e = estWords("new", p.person, "singing"); if (!e && p.person && !EST.asked.has(estKey("new", p.person, "singing"))) estimateFor("new", p.person, "singing").then(() => { if (OS.last?.plan === p) drawPlan(p); }); return e; };

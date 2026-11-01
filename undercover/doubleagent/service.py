@@ -766,7 +766,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
         quick = False
         if not good and not prefer_train:
             # quick first (phase 15): a voice that sounds somewhat like them makes a cover in minutes; training one
-            # takes about an hour. Said plainly, with the way to a closer voice (tick Train a new voice).
+            # takes hours. Said plainly, with the way to a closer voice (tick Train a new voice).
             good = ear.prefer(sorted([c for c in checked if c.get("verdict") == "weak"], key=lambda c: -c["score"]),
                               name=lambda c: c["name"], score=lambda c: c["score"])[:1]
             quick = bool(good)
@@ -798,7 +798,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                 plan["voice"]["quality"] = {
                     "ok": False, "quick": True,
                     "summary": f"Quick: using “{display_name(v)}”, which sounds somewhat like {person} ({good[0]['score']:.2f}). "
-                               f"For a closer voice, tick Train a new voice (about 1 hour).",
+                               f"For a closer voice, tick Train a new voice ({jobs.eta_words(train_estimate_s(person))}).",
                     "advice": f"Train a proper voice for {person} tonight",
                     "action": {"kind": "new", "target": person, "now": False}}
                 push("voice", 1.0, plan["voice"]["quality"]["summary"])

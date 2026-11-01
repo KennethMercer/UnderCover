@@ -6,7 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
-from ..core import addons, jobs
+from ..core import addons, jobs, storage
 from ..core.files import file_url
 from ..core.config import CONFIG, ROOT, path
 from ..core.voices import ModelError
@@ -170,19 +170,22 @@ def _duplicate_voices(hist: list) -> list[dict]:
 # ---------------------------------------------------------------- inventories
 
 def summary() -> dict:
+    """What the Library and Storage say UnderCover holds. `total` is the Storage groups' own sum (storage.where), so the
+    room's number and its tab's are one number; the categories split the same folders, so "temporary" is the working
+    folder less stems and training, and "app" every model file (a hand-kept list of model folders left Whisper out)."""
     cache = path("cache_dir")
-    temp = [cache / "converted", cache / "keyshift", cache / "previews", cache / "_work", path("logs_dir")]
-    temp += [p for p in cache.iterdir() if p.is_dir() and p.name.startswith(TEMP_PREFIXES)]
     out_files = [p for p in path("output_dir").iterdir() if p.is_file() and p.name != "history.jsonl"]
+    groups = storage.where()
+    stems, training = _size(cache / "stems"), _size(cache / "training")
     cats = {
         "covers": sum(_size(p) for p in out_files),
         "speech": speak.storage(),
         "songs": _size(path("uploads_dir")),
-        "stems": _size(cache / "stems"),
+        "stems": stems,
         "voices": _size(path("voices_dir")),
-        "training": _size(cache / "training"),
-        "temporary": sum(_size(p) for p in temp),
-        "app": sum(_size(path("models_dir") / d) for d in ("rvc", "separator", "speaker", "tts")),
+        "training": training,
+        "temporary": max(0, groups["working"]["size"] - stems - training),
+        "app": groups["models"]["size"],
     }
     du = shutil.disk_usage(ROOT)
     cv, sp = covers(), speak.list_speech()
@@ -193,7 +196,7 @@ def summary() -> dict:
     # voices and training are always kept (and have no Recent)
     tabs = {"kept": {**counts, "covers": sum(1 for x in cv if x["kept"]), "speech": sum(1 for x in sp if x["kept"])},
             "recent": {"covers": sum(1 for x in cv if x["recent"]), "speech": sum(1 for x in sp if x["recent"])}}
-    return {"categories": cats, "total": sum(cats.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
+    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
             **ytdlp_info(), "counts": counts, "tabs": tabs}
 
 
