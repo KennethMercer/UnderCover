@@ -7798,12 +7798,12 @@ def u_duets():
         notes = []
         assert PL.CoverEngine._duet_backing(eng, SimpleNamespace(duet_backing=None), {"backing": "b.flac"}, notes) is False
         assert any("almost no backing" in n for n in notes), notes
-        assert not any("changes hands" in n for n in notes), notes
+        assert not any("not on the lead" in n for n in notes), notes
         RM.lufs = lambda p: -20.0
         for how, said in (("other", True), ("singers", False), ("original", False), (None, False)):
             notes = []
             PL.CoverEngine._duet_backing(eng, SimpleNamespace(duet_backing=how), {"backing": "b.flac"}, notes)
-            assert any("changes hands" in n for n in notes) is said, (how, notes)   # the plan's note says so
+            assert any("not on the lead" in n for n in notes) is said, (how, notes)   # the plan's note says so
     finally:
         RM.lufs = real_lufs
     assert 'if opts.duet_backing == "other":' in inspect.getsource(PL.CoverEngine.make_cover)

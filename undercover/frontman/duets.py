@@ -368,8 +368,8 @@ def backing_plan(plan: list, x16: np.ndarray) -> list:
 def other_singer(plan: list) -> list:
     """The same plan and the same changes, each part in the other voice: the backing by whoever isn't on the lead, so
     it changes hands with Turns ("other", the user on Hello's second chorus, 2026-11-01). Each takes it at their own
-    octave for the song, as their own backing does: no third conversion, and the lead's silence and the backing's own
-    still say where it changes."""
+    octave for the song, as their own backing does: no third conversion. A backing phrase that runs past the lead's
+    change stays whole (backing_plan), so for that moment one singer has both parts."""
     return [[a, b, _other(w)] for a, b, w in plan]
 
 

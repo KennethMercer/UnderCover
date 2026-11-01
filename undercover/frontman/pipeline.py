@@ -154,7 +154,7 @@ class CoverEngine:
             notes.append("This song has almost no backing vocals, so they weren't converted.")
             return False
         if opts.duet_backing == "other":
-            notes.append("The backing changes hands with the lead: whoever isn't on the lead sings it.")
+            notes.append("The backing goes to the singer not on the lead, one backing phrase at a time.")
         return True
 
     def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report,
