@@ -47,7 +47,7 @@ class CoverOptions:
     duet_way: str | None = None       # how they share it: duets.WAYS (None: duets.DUET_DEFAULT)
     duet_octave: int | None = None    # the second singer's octave on top of the song key (None: the lead's)
     duet_plan: list | None = None     # who sings when, [[start, end, who], ...] (found by the engine; kept for Make again)
-    duet_backing: str | None = None   # a duet's backing: duets.BACKINGS (None: duets.BACKING_DEFAULT, the singers' voices)
+    duet_backing: str | None = None   # a duet's backing: duets.BACKINGS (None: duets.BACKING_DEFAULT, by whoever has the lead)
 
 
 @dataclass
@@ -141,9 +141,10 @@ class CoverEngine:
         return replace(opts, key=fit["key"], octave=a, duet_octave=b, pitch=None)
 
     def _duet_backing(self, opts: "CoverOptions", cstems: dict, notes: list) -> bool:
-        """Is a duet's backing converted (each phrase in the singer of its section, duets.backing_plan)? Unless the
-        cover asks for the original (duet_backing, duets.BACKING_DEFAULT: the singers' voices); the one-shot asks for
-        it when the backing is stacked harmony (oneshot.chordal_backing). Nothing when there's hardly any backing."""
+        """Is a duet's backing converted (each phrase in the singer of its section, duets.backing_plan, or in the
+        one not on the lead, duets.other_singer)? Unless the cover asks for the original (duet_backing,
+        duets.BACKING_DEFAULT: by whoever has the lead); the one-shot asks for it when the backing is stacked harmony
+        (oneshot.chordal_backing). Nothing when there's hardly any backing."""
         from .duets import BACKING_DEFAULT
         from .remix import lufs
         back = cstems.get("backing")
@@ -152,6 +153,8 @@ class CoverEngine:
         if lufs(back) < -45:
             notes.append("This song has almost no backing vocals, so they weren't converted.")
             return False
+        if opts.duet_backing == "other":
+            notes.append("The backing changes hands with the lead: whoever isn't on the lead sings it.")
         return True
 
     def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report,
@@ -208,7 +211,7 @@ class CoverEngine:
         voice = get_voice(opts.voice)  # fail fast if not installed
         bvoice = get_voice(opts.backing_voice) if opts.backing_voice else None
         dvoice = get_voice(opts.duet_voice) if opts.duet_voice else None   # a duet's second singer (duets.py)
-        if dvoice:   # a duet's backing is its own choice (duet_backing: the singers' voices or the original), never a third voice
+        if dvoice:   # a duet's backing is its own choice (duet_backing: duets.BACKINGS), never a third voice
             bvoice = None
         karaoke = True if bvoice or dvoice else opts.karaoke  # a backing voice, and a duet's one lead line, need the split
         secs, notes = {}, []
@@ -270,7 +273,7 @@ class CoverEngine:
         elif bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
-        dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in each section's singer too
+        dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in the two singers too
         if dback:
             bvoice = None   # (one backing voice gives way to the duet's two)
         passes = 1 + bool(dvoice) + bool(bvoice) + 2 * dback
@@ -306,9 +309,9 @@ class CoverEngine:
                                                  progress=lambda f: report("converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
-        if dback:   # the backing as the lead: each section's backing in that section's singer, at that singer's octave
+        if dback:   # the backing as the lead: each singer's take at that singer's octave, then shared out by the plan
             from dataclasses import replace as _replace
-            from .duets import backing_plan, stitch
+            from .duets import backing_plan, other_singer, stitch
             back16 = load_16k(cstems["backing"])
             aoct = (s.pitch - key) / 12
             doct = opts.duet_octave if opts.duet_octave is not None else aoct
@@ -324,6 +327,8 @@ class CoverEngine:
                 bb = resample_poly(bb, bsr // g, dbsr // g).astype(np.float32)
             conv_backing = work / f"{_safe(title)}__{voice.name}__{dvoice.name}__backing__{stamp}.flac"
             bplan = backing_plan(opts.duet_plan, back16)   # (each backing phrase whole, by whoever sings most of it)
+            if opts.duet_backing == "other":
+                bplan = other_singer(bplan)
             sf.write(str(conv_backing), np.clip(stitch(ba, bb, bplan, bsr), -1, 1), bsr, subtype="PCM_24")
         secs["convert"] = round(time.perf_counter() - t, 2)
         report("converting", 1.0, "Vocal converted")

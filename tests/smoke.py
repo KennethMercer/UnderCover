@@ -7621,6 +7621,10 @@ def u_duets():
         assert ok == {"duet_voice": "second-uc", "duet_way": "lines", "duet_octave": -1, "duet_plan": [[0.0, 2.0, "A"], [2.0, 5.0, "B"]],
                       "duet_backing": "original"}, ok
         assert FA._duet_options({"duet_voice": "second-uc"}, "lead-uc")["duet_backing"] is None   # (the default: the singers')
+        for back in D.BACKINGS:   # each one by the same gate: a cover, a preview and Make again all come through _options
+            assert FA._duet_options({"duet_voice": "second-uc", "duet_backing": back}, "lead-uc")["duet_backing"] == back
+            got = FA._options({"voice": "lead-uc", "options": {"duet_voice": "second-uc", "duet_backing": back}})
+            assert got.duet_backing == back, got
         assert FA._duet_options({}, "lead-uc") == {} and FA._duet_options({"duet_voice": ""}, "lead-uc") == {}
         # numbers no setting can be (JSON carries NaN, Infinity and huge integers): a plain refusal, never a 500
         big = 10 ** 400
@@ -7713,7 +7717,8 @@ def u_duets():
                     {"duet_voice": "second-uc", "duet_octave": 0.5}, {"duet_voice": "second-uc", "duet_octave": True},
                     {"duet_voice": "second-uc", "duet_octave": "1"}, {"duet_voice": "second-uc", "duet_plan": [[0, 1, "C"]]},
                     {"duet_voice": "second-uc", "duet_plan": "junk"}, {"duet_voice": "second-uc", "duet_backing": "both"},
-                    {"duet_voice": "second-uc", "duet_backing": ["original"]}):
+                    {"duet_voice": "second-uc", "duet_backing": ["original"]}, {"duet_voice": "second-uc", "duet_backing": ["other"]},
+                    {"duet_voice": "second-uc", "duet_backing": "Other"}, {"duet_voice": "second-uc", "duet_backing": 1}):
             try:
                 FA._duet_options(bad, "lead-uc")
                 raise AssertionError(f"taken: {bad}")
@@ -7773,14 +7778,19 @@ def u_duets():
     assert D.backing_plan([[0.0, 5.0, "A"], [5.0, 10.0, "B"]], tail) == [[0.0, 10.0, "A"]]
     # the backing in a duet: in the singers' voices unless the original is asked for (duets.BACKING_DEFAULT is the
     # singers', the user's favourite); never when there's none or hardly any. A backing voice isn't a duet's.
-    assert D.BACKING_DEFAULT == "singers" and D.BACKINGS == ("singers", "original")
+    assert D.BACKING_DEFAULT == "singers" and D.BACKINGS == ("singers", "other", "original")
+    # the backing by the singer not on the lead: the same changes, in the backing's own silence, each part in the other voice
+    assert D.other_singer(bp) == [[bp[0][0], bp[0][1], "B"], [bp[1][0], bp[1][1], "A"], [bp[2][0], bp[2][1], "B"]] and D.other_singer(D.other_singer(bp)) == bp
+    assert D.other_singer([[0.0, 10.0, "A"]]) == [[0.0, 10.0, "B"]]   # (one singer on the lead all song: the other backs them)
+    take = np.ones(sr, np.float32), np.zeros(sr, np.float32)
+    assert D.stitch(*take, [[0.0, 1.0, "A"]], sr).min() == 1.0 and D.stitch(*take, D.other_singer([[0.0, 1.0, "A"]]), sr).max() == 0.0
     from undercover.frontman import remix as RM
     real_lufs = RM.lufs
     eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=None))
     try:
         RM.lufs = lambda p: -20.0
         for back, how, want in ((None, None, False), (None, "singers", False), ("b.flac", None, True),
-                                ("b.flac", "singers", True), ("b.flac", "original", False)):
+                                ("b.flac", "singers", True), ("b.flac", "other", True), ("b.flac", "original", False)):
             got = PL.CoverEngine._duet_backing(eng, SimpleNamespace(duet_backing=how, backing_voice=None),
                                                {"backing": back} if back else {}, [])
             assert got is want, (back, how, got)
@@ -7788,15 +7798,22 @@ def u_duets():
         notes = []
         assert PL.CoverEngine._duet_backing(eng, SimpleNamespace(duet_backing=None), {"backing": "b.flac"}, notes) is False
         assert any("almost no backing" in n for n in notes), notes
+        assert not any("changes hands" in n for n in notes), notes
+        RM.lufs = lambda p: -20.0
+        for how, said in (("other", True), ("singers", False), ("original", False), (None, False)):
+            notes = []
+            PL.CoverEngine._duet_backing(eng, SimpleNamespace(duet_backing=how), {"backing": "b.flac"}, notes)
+            assert any("changes hands" in n for n in notes) is said, (how, notes)   # the plan's note says so
     finally:
         RM.lufs = real_lufs
+    assert 'if opts.duet_backing == "other":' in inspect.getsource(PL.CoverEngine.make_cover)
     import inspect as _ins
     from undercover.frontman import oneshot as OS3
     os_src = _ins.getsource(OS3.run)
     assert "backing_voice=None if chordal else v.name" in os_src   # (one singer: the one-shot chooses, as before)
     assert 'duet_backing="original" if chordal else None' in os_src   # (a duet: stacked harmony keeps the original)
     est = lambda **k: PL.estimate_for(100.0, PL.CoverOptions(voice="v", duet_voice="w", duet_plan=[[0, 1, "A"]], **k))["converting"]
-    assert est(duet_backing="original") < est() == est(duet_backing="singers") == est(duet_backing="singers", backing_voice="x")
+    assert est(duet_backing="original") < est() == est(duet_backing="singers") == est(duet_backing="singers", backing_voice="x") == est(duet_backing="other")   # (no third conversion)
     # Make again: a plan from before one singer at a time (with "both") isn't sent back; it's found again
     assert 'opts.pop("duet_plan")' in inspect.getsource(FA._cover_again)
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")

@@ -550,7 +550,7 @@ def _options(body: dict, duration: float | None = None):
         raise ModelError("That voice isn't one of yours.")
     octave, boct = octave_of("octave"), octave_of("backing_octave")
     duet = _duet_options(o, voice, duration)
-    if duet:   # a duet's backing is duet_backing's (the singers' voices or the original), never a third voice
+    if duet:   # a duet's backing is duet_backing's (duets.BACKINGS), never a third voice
         bvoice, boct = None, None
     return CoverOptions(**duet, voice=voice, key=num("key"), octave=octave, index_ratio=num("index_ratio"), protect=num("protect"),
                         volume_envelope=num("volume_envelope"), dereverb=bool(o.get("dereverb")),
@@ -581,7 +581,7 @@ def _duet_options(o: dict, voice: str, duration: float | None = None) -> dict:
         raise ModelError(f"A duet is shared one of these ways: {', '.join(WAYS)}.")
     back = o.get("duet_backing") or None
     if back is not None and back not in BACKINGS:
-        raise ModelError("A duet's backing is sung by the two singers or kept as the original.")
+        raise ModelError("A duet's backing is sung by the singer on the lead, by the other singer, or kept as the original.")
     doct = o.get("duet_octave")
     if doct not in (None, ""):
         if (isinstance(doct, bool) or not isinstance(doct, (int, float))

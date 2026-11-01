@@ -2,8 +2,8 @@
 pitch track read once, `Converter.shared_f0`), then the two takes are stitched by section. A voice changes only where
 the lead itself is silent (SILENCE_S or more, SILENCE_DB under its loud level), in the middle of that silence, with a
 short equal-power crossfade, so no join falls inside a word, or where it drops between two lines that run together
-(sentence_edges). The backing is converted the same way, in each section's singer, when a cover would convert it
-(pipeline._duet_backing).
+(sentence_edges). The backing is converted the same way, in each section's singer or the one not on the lead (BACKINGS),
+when a cover would convert it (pipeline._duet_backing).
 
 The sung lines are the lead's own: stretches of singing between those silences, a line too short to be sung on its own
 joined to the next. Whisper's words on the whole vocal (lead and backing, so a thin lead still has its lyrics) only say
@@ -27,7 +27,8 @@ import numpy as np
 
 DUET_DEFAULT = "turns"   # the ear decides (the blind pairs): a one-line change
 WAYS = ("turns", "lines")
-BACKINGS = ("singers", "original")   # a duet's backing: in the singers' voices (backing_plan), or the song's own
+BACKINGS = ("singers", "other", "original")   # a duet's backing: by whoever has the lead (backing_plan), by the one who
+                                              # hasn't (other_singer), or the song's own
 BACKING_DEFAULT = "singers"   # the user's favourite (2026-10-30): a singer harmonising with himself
 WHO = ("A", "B")
 SILENCE_DB, SILENCE_S = 35.0, 0.10            # where a voice may change: the lead this far down, this long
@@ -362,6 +363,14 @@ def backing_plan(plan: list, x16: np.ndarray) -> list:
             at, cur = cut, who[k]
     out.append([at, end, cur])
     return out
+
+
+def other_singer(plan: list) -> list:
+    """The same plan and the same changes, each part in the other voice: the backing by whoever isn't on the lead, so
+    it changes hands with Turns ("other", the user on Hello's second chorus, 2026-11-01). Each takes it at their own
+    octave for the song, as their own backing does: no third conversion, and the lead's silence and the backing's own
+    still say where it changes."""
+    return [[a, b, _other(w)] for a, b, w in plan]
 
 
 def stitch(a: np.ndarray, b: np.ndarray, plan: list, sr: int) -> np.ndarray:
