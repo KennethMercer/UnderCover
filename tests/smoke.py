@@ -7297,7 +7297,7 @@ def u_speak_hz():
     return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
 
 
-@check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, Take turns with each chorus sung by that verse's singer and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
+@check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
 def u_duets():
     import numpy as np
     from types import SimpleNamespace
@@ -7328,8 +7328,9 @@ def u_duets():
     assert [r["text"] for r in rows] == [ln for _, lines_ in song for ln in lines_], [r["text"] for r in rows]
     bl = D.blocks(rows)
     assert [b["kind"] for b in bl] == ["verse", "chorus"] * 3, bl
-    turns = D.who_sings(rows, "turns")   # each chorus goes to whoever sang the verse before it, alone
-    assert [turns[b["rows"][0]] for b in bl] == ["A", "A", "B", "B", "A", "A"] and "AB" not in turns, turns
+    turns = D.who_sings(rows, "turns")   # one singer on the verses, the other on the choruses, alone
+    assert [turns[b["rows"][0]] for b in bl] == ["A", "B"] * 3 and "AB" not in turns, turns
+    assert not any(r.get("pre") for r in rows)   # (every chorus whole: no pre-chorus to mark)
     assert D.who_sings(rows, "lines") == ["A", "B"] * 9 and "AB" not in D.WHO and len(D.WAYS) == 2
     # a line boundary in Whisper's words where the lead never stops (a held note through it) is no place to switch:
     # those two lines are one line, sung by one voice
@@ -7419,62 +7420,63 @@ def u_duets():
     assert msrc.index("self._duet_plan(") < msrc.index("self._fit_duet(") < msrc.index("key, s.pitch = pitch_plan(opts)")
     # the lead's pitch track is read once, for the plan's register and the fit for two (duets4)
     assert "functools.cache(" in msrc and msrc.count("infer_from_audio(") == 1 and "lead_f0()" in fsrc and "infer_from_audio" not in fsrc
-    # Turns by register (duets4: the user gave Hello's low first verse to the low voice): a section goes to the singer
-    # whose range fits it when the other's fit there costs REGISTER_MARGIN more; the chorus after such a verse to
-    # whichever it fits better; the rest keeps Turns from there
+    # Turns (duets5, the user 2026-10-31: "the verse and chorus should be separate"): one singer on the verses, the other
+    # on the choruses, whichever way round costs less over the song; a section leaves its side only when the other's
+    # price is REGISTER_MARGIN or more below; each keeps MIN_SHARE of the sung melody or more
     from undercover.frontman.fit import pick_fit
     assert pick_fit([183.0, 314.0, 512.0], False, mel, fixed_key=-2, fixed_octave=1)["octave"] == 1
     assert pick_fit([183.0, 314.0, 512.0], False, np.zeros(10), fixed_octave=-1)["octave"] == -1
     kinds = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 3)]
-    c = lambda a, b: {"cost": {"A": a, "B": b}, "low": b < a}
-    hello = [c(0.158, 0.053), c(0.044, 0.069), c(0.188, 0.049), c(0.041, 0.068), c(0.165, 0.186), c(0.042, 0.067)]   # (measured)
-    hw, hm = D.by_register(kinds, hello, 6)
-    assert hw == ["B", "A", "B", "A", "A", "A"] and hm == [(0, "B"), (1, "A"), (2, "B"), (3, "A")], (hw, hm)
-    flat = [c(0.05, 0.07), c(0.05, 0.03), c(0.05, 0.02), c(0.05, 0.074), c(0.05, 0.05), c(0.02, 0.05)]   # nothing decides
-    assert D.by_register(kinds, flat, 6) == (["A", "A", "B", "B", "A", "A"], []), D.by_register(kinds, flat, 6)
-    # a chorus after a verse Turns gave stays with that verse's singer though the other fits it a little better; a
-    # section with too little melody heard (no price) follows Turns
-    late = [c(0.05, 0.05), c(0.05, 0.02), {"cost": {}, "low": False}, c(0.10, 0.02), c(0.02, 0.10), c(0.05, 0.05)]
-    lw, lm = D.by_register(kinds, late, 6)
-    assert lw == ["A", "A", "B", "B", "A", "A"] and lm == [], (lw, lm)
-    # a song that opens on its chorus: Turns gives it and the first verse to A (who_sings), and so does the register
-    # when nothing decides; a low first verse after it goes to the low voice
+    c = lambda a, b, n=100: {"cost": {"A": a, "B": b}, "low": b < a, "n": n}
+    share = lambda who, cs, w: sum(x["n"] for k, x in zip(who, cs) if k == w) / sum(x["n"] for x in cs)
+    hello = [c(0.158, 0.053, 4117), c(0.044, 0.069, 3990), c(0.188, 0.049, 2859), c(0.041, 0.068, 4336), c(0.165, 0.186, 1708), c(0.042, 0.067, 4422)]   # (measured)
+    hw, hs = D.by_register(kinds, hello, 6)
+    assert hw == ["B", "A"] * 3 and hs == {"verses": "B", "choruses": "A", "by_range": True, "trade": False, "moved": []}, (hw, hs)
+    swapped = [c(x["cost"]["B"], x["cost"]["A"], x["n"]) for x in hello]
+    assert D.by_register(kinds, swapped, 6)[0] == ["A", "B"] * 3   # (the same voices on the same sections, whoever is named first)
+    fw, fs = D.by_register(kinds, [c(0.05, 0.07), c(0.05, 0.03), c(0.05, 0.02), c(0.05, 0.074), c(0.05, 0.05), c(0.02, 0.05)], 6)   # gaps under the margin
+    assert fw == ["B", "A"] * 3 and not fs["moved"] and not fs["trade"], (fw, fs)   # (over the song, B on the verses costs less)
+    nw, ns = D.by_register(kinds, [{"cost": {}, "low": False, "n": 0}] * 6, 6)   # no prices at all: A on the verses
+    assert nw == ["A", "B"] * 3 and ns["by_range"] is False and not ns["trade"], (nw, ns)
+    # a section clearly better in the other voice leaves its side; one with too little melody heard (no price) stays
+    high = [c(0.05, 0.10), c(0.10, 0.05), c(0.05, 0.10), c(0.10, 0.05), c(0.30, 0.05), {"cost": {}, "low": False, "n": 100}]
+    mw, ms = D.by_register(kinds, high, 6)
+    assert mw == ["A", "B", "A", "B", "B", "B"] and ms["moved"] == [(4, "B")], (mw, ms)
+    # a song that opens on its chorus
     ck = [{"kind": k, "rows": [i]} for i, k in enumerate(["chorus", "verse", "chorus", "verse"])]
     cr = [{"text": "", "rep": k == "chorus"} for k in ("chorus",) * 2 + ("verse",) * 3 + ("chorus",) * 2 + ("verse",) * 3]
-    assert [D.who_sings(cr, "turns")[i] for i in (0, 2, 5, 7)] == ["A", "A", "A", "B"]
-    assert D.by_register(ck, [c(0.05, 0.05)] * 4, 4)[0] == ["A", "A", "A", "B"]
-    assert D.by_register(ck, [c(0.05, 0.05), c(0.15, 0.05), c(0.03, 0.06), c(0.05, 0.05)], 4) == (["A", "B", "A", "A"], [(1, "B"), (2, "A")])
-    assert D.describe([[0, 9, "B"], [9, 20, "A"]], {"A": "a", "B": "b"}, [("verse", "B", True), ("chorus", "A", False), ("verse", "B", True)]) \
-        == "Duet: 0:00 b · 0:09 a. By range: b takes the low verses and a the high chorus."
-    assert D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [("chorus", "B", True), ("verse", "B", False)]) \
-        == "Duet: 0:00 a · 0:09 b. By range: b takes the low chorus and the high verse."
-    assert "By range" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"}, [])
-    # the share floor (MasterPlan 2026-10-31: a duet should sound like one): on Toxic's measured prices (at the even
-    # key, -3) the register alone gives the low voice 87% of the sung melody; each singer keeps MIN_SHARE (15%) or
-    # more, by keeping only the strongest calls (the two low verses: its biggest price gaps) and Turns for the rest.
-    # Hello's plan keeps every call: both are over the floor already. Pink Pony Club's 80/20 stands (the ear took it
-    # over a quarter's floor, 2026-10-31)
+    assert [D.who_sings(cr, "turns")[i] for i in (0, 2, 5, 7)] == ["B", "A", "B", "A"]
+    assert D.by_register(ck, [c(0.05, 0.05)] * 4, 4)[0] == ["B", "A", "B", "A"]
+    # the floor: Toxic's measured prices (its choruses are short) leave the low voice 83%, over the floor, and a change
+    # at every boundary. Exceptions that would leave one singer short go; a song nearly all verse has the two trade
     tk = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 3 + ["verse"])]
-    tox = [{"cost": {"A": 0.2, "B": round(0.2 + x, 3)}, "low": x < 0, "n": m} for x, m in
+    tox = [c(0.2, round(0.2 + x, 3), m) for x, m in
            zip([-0.107, -0.007, -0.082, 0.014, -0.137, 0.026, -0.457], [2137, 220, 1362, 515, 514, 149, 245])]
-    assert D.by_register(tk, tox, 7)[0] == ["B", "B", "B", "A", "B", "A", "B"]   # (Michael Jackson 13%)
-    fw, fm = D.with_floor(tk, tox, 7)
-    assert fw == ["B", "B", "A", "A", "B", "B", "B"] and fm == [(0, "B"), (6, "B")], (fw, fm)
-    share_a = sum(c["n"] for w, c in zip(fw, tox) if w == "A") / sum(c["n"] for c in tox)
-    assert D.MIN_SHARE <= share_a < 0.5, share_a
-    hn = [dict(x, n=m) for x, m in zip(hello, [4117, 3990, 2859, 4336, 1708, 4422])]
-    tk7 = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 3 + ["verse"])]
-    ppc = [{"cost": {"A": 0.2, "B": round(0.2 + x, 3)}, "low": x < 0, "n": m} for x, m in
-           zip([-0.039, 0.025, -0.05, 0.021, -0.045, 0.026, 0.026], [1814, 4093, 1765, 4000, 1594, 2654, 966])]
-    pw, pm = D.with_floor(tk7, ppc, 7)
-    assert (pw, pm) == D.by_register(tk7, ppc, 7) and pw == ["A", "A", "B", "A", "B", "A", "A"], (pw, pm)
-    share_b = sum(c["n"] for w, c in zip(pw, ppc) if w == "B") / sum(c["n"] for c in ppc)
-    assert D.MIN_SHARE <= share_b < 0.25, share_b
-    assert D.with_floor(kinds, hn, 6) == D.by_register(kinds, hn, 6)
-    assert D.with_floor(tk, [dict(c, n=0) for c in tox], 7) == D.by_register(tk, tox, 7)   # (no melody counted: no floor to hold)
-    # on the shape above, priced at the cover's own pitches (the fit off): low verses go to the low voice and the
-    # high choruses to the high one; high verses the other way round; a song all low for one voice keeps the
-    # strongest move only, and both keep MIN_SHARE or more; a singer without a range keeps Turns
+    tw, ts = D.by_register(tk, tox, 7)
+    assert tw == ["B", "A", "B", "A", "B", "A", "B"] and not ts["trade"] and D.MIN_SHARE <= share(tw, tox, "A") < 0.2, (tw, ts)
+    ppc = [c(0.2, round(0.2 + x, 3), m) for x, m in
+           zip([-0.026, 0.027, -0.036, 0.027, -0.045, 0.026, 0.026], [2500, 3500, 2400, 3300, 1594, 2654, 966])]
+    pw, ps = D.by_register(tk, ppc, 7)
+    assert pw == ["B", "A", "B", "A", "B", "A", "B"] and ps["verses"] == "B" and not ps["moved"], (pw, ps)
+    takes = [c(0.05, 0.10), c(0.05, 0.20), c(0.05, 0.10), c(0.05, 0.20)]   # (A fits it all: both choruses would go to A)
+    alt = [{"kind": k, "rows": [i]} for i, k in enumerate(["verse", "chorus"] * 2)]
+    aw, ao = D.by_register(alt, takes, 4)
+    assert aw == ["A", "B", "A", "B"] and ao["moved"] == [] and not ao["trade"], (aw, ao)
+    thin = [c(0.05, 0.05, 900), c(0.05, 0.05, 50), c(0.05, 0.05, 900), c(0.05, 0.05, 50)]
+    vw, vs = D.by_register(alt, thin, 4)
+    assert vw == ["A", "B", "B", "A"] and vs["trade"] and share(vw, thin, "A") == 0.5, (vw, vs)
+    assert D.by_register(alt, [dict(x, n=0) for x in thin], 4)[0] == ["A", "B"] * 2   # (no melody counted: no floor to hold)
+    n2 = {"A": "a", "B": "b"}
+    tw2 = [[0, 9, "B"], [9, 20, "A"]]
+    said = {"verses": "B", "choruses": "A", "by_range": True, "trade": False, "moved": []}
+    assert D.describe(tw2, n2, said) == "Duet: 0:00 b · 0:09 a. b takes the verses and a the choruses, by range."
+    assert D.describe(tw2, n2, dict(said, by_range=False)) == "Duet: 0:00 b · 0:09 a. b takes the verses and a the choruses."
+    assert D.describe(tw2, n2, dict(said, trade=True)) == "Duet: 0:00 b · 0:09 a. The two trade verses and choruses, so each keeps a share of the song."
+    assert D.describe(tw2, n2, dict(said, moved=[("verse", "A", False), ("verse", "A", False), ("chorus", "B", True)])).endswith(
+        "It suits their range better: a the high verses and b the low chorus.")
+    assert D.describe(tw2, n2) == "Duet: 0:00 b · 0:09 a."
+    # the shape at the top, priced at the cover's own pitches (the fit off): low verses to the low voice, high ones to
+    # the high voice; both ranges or A on the verses; no chorus found, no word on who takes what
     def tune(vhz, chz):
         g, r = np.zeros(int(dur * 100)), np.random.default_rng(1)
         for _, s, e, _ in ws:
@@ -7482,23 +7484,105 @@ def u_duets():
             g[int(s * 100):int(e * 100)] = (vhz if kind == "verse" else chz) * 2 ** (r.integers(-2, 3, int(e * 100) - int(s * 100)) / 12)
         return g
     level = {"key": 0, "octave": {"A": 0, "B": 0}}
-    tp, tm = D.turns_by_register(rows, tune(110, 300), far, dur, level)
-    assert [w for _, _, w in tp] == ["B", "A"] * 3 and [(k, w) for k, w, _ in tm] == [("verse", "B"), ("chorus", "A")] * 3, (tp, tm)
-    assert D.check_plan(tp, dur) == tp and D.describe(tp, {"A": "a", "B": "b"}, tm).endswith("By range: b takes the low verses and a the high choruses.")
-    up, um = D.turns_by_register(rows, tune(330, 150), far, dur, level)
-    assert [w for _, _, w in up] == ["A", "B"] * 3 and {(k, w) for k, w, _ in um} == {("chorus", "B"), ("verse", "A")}, (up, um)
+    tp, tn = D.turns_by_register(rows, tune(110, 300), far, dur, level)
+    assert [w for _, _, w in tp] == ["B", "A"] * 3 and tn["verses"] == "B" and tn["by_range"], (tp, tn)
+    assert D.check_plan(tp, dur) == tp and D.describe(tp, n2, tn).endswith("b takes the verses and a the choruses, by range.")
+    up, un = D.turns_by_register(rows, tune(330, 150), far, dur, level)
+    assert [w for _, _, w in up] == ["A", "B"] * 3 and un["verses"] == "A", (up, un)
     plain = D.plan_of(rows, D.who_sings(rows, "turns"), dur)
-    lp, lm2 = D.turns_by_register(rows, tune(110, 120), far, dur, level)
-    assert [w for _, _, w in lp] == ["B", "A"] and [(k, w) for k, w, _ in lm2] == [("verse", "B")] * 2, (lp, lm2)
-    assert all(e - s >= D.MIN_SHARE * dur for s, e, _ in lp), lp
-    assert D.turns_by_register(rows, tune(110, 300), {"A": far["A"], "B": None}, dur, level) == (plain, [])
-    jp, jm = D.turns_by_register(rows, tune(110, 300), far, dur)   # at the fit for two of its own plan
-    assert D.check_plan(jp, dur) == jp and {w for _, _, w in jp} == {"A", "B"} and all(w in "AB" for _, w, _ in jm), (jp, jm)
+    assert [w for _, _, w in plain] == ["A", "B"] * 3
+    for nf0, rg in ((tune(110, 300), {"A": far["A"], "B": None}), (None, far)):   # a singer without a range, or no pitch track
+        op, on = D.turns_by_register(rows, nf0, rg, dur, level)
+        assert op == plain and on["by_range"] is False, (op, on)
+    lp, ln = D.turns_by_register(rows, tune(110, 120), far, dur, level)   # all low for one voice: a duet all the same
+    assert D.MIN_SHARE * dur <= sum(e - s for s, e, w in lp if w == "A") < 0.9 * dur, (lp, ln)
+    jp, jn = D.turns_by_register(rows, tune(110, 300), far, dur)   # at the two voices' key on the whole song
+    assert D.check_plan(jp, dur) == jp and {w for _, _, w in jp} == {"A", "B"} and set(jn) >= {"verses", "moved"}, (jp, jn)
+    nochorus = [dict(r, rep=False) for r in rows]   # no chorus found: the second singer still sings, and the note says why
+    np_, ns_ = D.turns_by_register(nochorus, None, {}, dur)
+    assert ns_ == {"no_chorus": True} and {w for _, _, w in np_} == {"A", "B"} and "No chorus stood out" in D.describe(np_, n2, ns_), (np_, ns_)
+    assert '"of the song." if fit["share"][other] > 0.5 else' in fsrc   # (the key "follows" only a singer with most of the song)
+    # a pre-chorus that repeats, and doesn't come before every chorus, counts with its verse (Pink Pony Club's mid-sentence
+    # cut, 2026-10-31); one sung before every chorus stays in it (repeats can't tell them apart)
+    def sung(parts, breath=0.8, full=False):   # each part a line; full: no drop at all between the words of one
+        pw_, tt = [], 1.0
+        for ln in parts:
+            for w in ln.split():
+                pw_.append([w, round(tt, 2), round(tt + 0.3, 2), 0.9])
+                tt += 0.32
+            tt += breath
+        xx = np.zeros(int((tt + 1) * sr), np.float32)
+        for k_, (_, s, e, _) in enumerate(pw_):
+            i = int(s * sr)
+            j = int(pw_[k_ + 1][1] * sr) if full and k_ + 1 < len(pw_) and pw_[k_ + 1][1] - e < 0.1 else int(e * sr)
+            xx[i:j] = 0.3 * np.sin(2 * np.pi * 220 * np.arange(j - i) / sr)
+        return D.sections(xx, pw_)
+    pre = ["cause a scene and tell the", "whole wide world about it now"]
+    third = lambda k: [" ".join(f"w{k}p{i}x{j}" for j in range(6)) for i in range(2)]
+    prows = sung(verse(1) + pre + chorus + verse(2) + pre + chorus + verse(3) + chorus)
+    assert [i for i, r in enumerate(prows) if r.get("pre")] == [3, 4, 11, 12], [(i, r.get("pre")) for i, r in enumerate(prows)]
+    pbl = D.blocks(prows)
+    assert [b["kind"] for b in pbl] == ["verse", "chorus"] * 3 and pbl[0]["rows"] == [0, 1, 2, 3, 4] and pbl[1]["rows"] == [5, 6, 7], pbl
+    every = sung(verse(1) + pre + chorus + verse(2) + pre + chorus + verse(3) + pre + chorus)
+    assert not any(r.get("pre") for r in every) and [b["kind"] for b in D.blocks(every)] == ["verse", "chorus"] * 3
+    # a change lands between sentences, not just in a silence (Pink Pony Club, 2026-10-31): the chorus starts at the line
+    # where its words start coming back in every chorus, inside a line the lead sang without a breath, and not at the
+    # silence in the middle of its sentence; it ends where its words stop coming back
+    open_ = "God what have you done now you are a pink pony girl"
+    tail_ = ["and you dance at the club oh mama", "keep on dancing at the pony club"]
+    pre2 = "won't make my mama proud today and she is gonna scream"
+    song6 = (verse(1) + [f"{pre2} {open_}"] + tail_ + ["Up and jars are on the floor"]
+             + verse(2) + [f"{pre2} {open_}"] + tail_ + ["Up and lights are on the door"]
+             + verse(3) + [f"saying {open_}"] + tail_)
+    srows = sung(song6, 0.4)
+    sbl = [b for b in D.blocks(srows) if b["kind"] == "chorus"]
+    assert len(sbl) == 3 and all(srows[b["rows"][0]]["text"].startswith("God what have you") for b in sbl), [r["text"] for r in srows]
+    assert srows[sbl[0]["rows"][0] - 1]["text"] == pre2, srows[sbl[0]["rows"][0] - 1]
+    assert srows[sbl[2]["rows"][0] - 1]["text"] == "saying" and srows[sbl[2]["rows"][-1]]["text"] == tail_[-1]
+    assert srows[sbl[0]["rows"][-1] + 1]["text"].startswith("Up and jars")
+    c6 = srows[sbl[0]["rows"][0] - 1]["cut"]   # (the split row's cut is the lead's drop before the word, Whisper's "God")
+    assert srows[sbl[0]["rows"][0] - 1]["t1"] == srows[sbl[0]["rows"][0]]["t0"] == c6
+    flat = sung(song6, 0.4, full=True)   # sung at full voice through it, with no drop: the edge stays where the silence is
+    assert not any(r["text"].startswith("God") for r in flat), [r["text"] for r in flat]
+    wide = sung(song6, D.SENTENCE_GAP_S + 0.1)   # a real pause is between sentences, whatever the words say
+    assert any(r["text"] == tail_[0] for r in wide) and not any(r["text"].startswith("God") and "scream" in r["text"] for r in wide)
+    assert [b["kind"] for b in D.blocks(wide)].count("chorus") == 3
+    # a line start on a word in no row, or a drop before its row starts, is no place: the edge stays, and the plan is in order
+    w_ = [[f"w{i}", 1.0 + i, 1.5 + i, 0.9] for i in range(6)]
+    tone = 0.3 * np.ones(8 * sr, np.float32)
+    w_[3][0] = "Next"
+    r_ = [{"t0": 1.0, "t1": 3.0, "text": "", "rep": False, "cut": 3.2}, {"t0": 3.4, "t1": 7.0, "text": "", "rep": True, "cut": 7.2},
+          {"t0": 7.4, "t1": 8.0, "text": "", "rep": True}]
+    ww = [[0, 1], [2, 4, 5], [5]]   # (word 3 was in no row)
+    D.sentence_edges(r_, ww, w_, {3: 2, 4: 2, 5: 2, 2: 2}, 2.0, tone)
+    assert len(r_) == 3, r_
+    tone[int(3.3 * sr):int(3.35 * sr)] = 0.0   # the drop is before the row that has the word
+    w2 = [list(w) for w in w_]
+    w2[3][1] = 3.42
+    r2 = [dict(r) for r in r_]
+    ww2 = [[0, 1], [2, 3, 4, 5], [5]]
+    w2[2][1], w2[2][2] = 3.41, 3.415
+    r2[0]["t1"] = 3.0
+    D.sentence_edges(r2, ww2, w2, {1: 2, 2: 2, 3: 2, 4: 2, 5: 2}, 2.0, tone)
+    assert len(r2) == 3 and all(a["t0"] < a["t1"] for a in r2), r2
+    # a chorus's last word that the next row shares (rows under 0.3 s apart) doesn't make that verse row a chorus row
+    w3 = [[f"w{i}", 1.0 + i, 1.5 + i, 0.9] for i in range(7)]
+    r3 = [{"t0": a, "t1": a + 1.0, "text": "", "rep": b, "cut": a + 1.05} for a, b in ((1.0, False), (2.1, True), (3.2, True), (4.3, False))]
+    D.sentence_edges(r3, [[0, 1], [2, 3], [4, 5], [5, 6]], w3, {2: 2, 3: 2, 4: 2, 5: 2}, 2.0, tone)
+    assert [r["rep"] for r in r3] == [False, True, True, False], r3
+    t_ = lambda w: [w, 1.0, 1.2, 0.9]
+    assert D._starts_line([t_("end."), t_("first")], 0)   # (the song's first word, whatever its last one says)
+    assert D._starts_line([t_("done?"), t_("you're")], 1) and D._starts_line([t_("scream"), t_("God,")], 1)
+    assert not D._starts_line([t_("girl,"), t_("and")], 1) and not D._starts_line([t_("the"), t_("club")], 1)
+    lvl = np.zeros(1000)
+    lvl[[300, 600]] = -90.0, -40.0
+    assert D._dip(lvl, -15.0, 6.0) == 6.0 and D._dip(lvl, -15.0, 4.0) is None and D._dip(lvl, -15.0, 9.99) is None
+    assert D._dip(lvl, -15.0, 5.85) == 6.0   # (the consonant at 3.00 is deeper, and it's far from the word)
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=2, octave=-1)) == {"key": 2, "octave": {"A": -1, "B": -1}}
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=-3, octave=0, duet_octave=-1)) == {"key": -3, "octave": {"A": 0, "B": -1}}
     psrc = _i2.getsource(_PL2.CoverEngine._duet_plan)   # Turns found from the song only (a stored plan is kept as it is)
-    assert 'way == "turns" and not fallback and lead_f0 is not None and ranges["A"] and ranges["B"]' in psrc
-    assert "None if opts.fit else _duet_pitches(opts)" in psrc and "describe(plan, {" in psrc and ", moved)" in psrc
+    assert 'if way == "turns" and not fallback:' in psrc and 'lead_f0 is not None and ranges["A"] and ranges["B"]' in psrc
+    assert "None if opts.fit else _duet_pitches(opts)" in psrc and "describe(plan, {" in psrc and ", said)" in psrc
     # the one-shot: "A and B" (also with, &, duet of): only with a voice here for the second (or the first), never a
     # whole name that is one voice, nor two names neither of which is here
     vs = {"michael-jackson-uc": "michael jackson", "barry-white-uc": "barry white", "simon-and-garfunkel-uc": "simon and garfunkel"}
