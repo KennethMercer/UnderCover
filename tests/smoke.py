@@ -4856,6 +4856,7 @@ def u_rcfix7():
     assert [jobs.eta_words(x) for x in (20, 300, 3660, 8180, 10800)] == [
         "under a minute", "about 5 min", "about 61 min", "about 2\u00bd hours", "about 3 hours"]
     assert "jobs.eta_words(tr)" in rv and "about 1 hour" not in inspect.getsource(service)
+    assert "jobs.eta_words(plan.get('train_est_s') or train_estimate_s(person))" in rv   # (the quick voice's note: the same one number)
     assert 'out["train_s"] = round(service.train_estimate_s(person) + oneshot.cover_eta("", here)["high"])' in inspect.getsource(FA._auto_plan)
     assert "if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s });" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
     run = inspect.getsource(oneshot.run)

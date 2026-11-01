@@ -798,7 +798,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                 plan["voice"]["quality"] = {
                     "ok": False, "quick": True,
                     "summary": f"Quick: using “{display_name(v)}”, which sounds somewhat like {person} ({good[0]['score']:.2f}). "
-                               f"For a closer voice, tick Train a new voice ({jobs.eta_words(train_estimate_s(person))}).",
+                               f"For a closer voice, tick Train a new voice ({jobs.eta_words(plan.get('train_est_s') or train_estimate_s(person))}).",
                     "advice": f"Train a proper voice for {person} tonight",
                     "action": {"kind": "new", "target": person, "now": False}}
                 push("voice", 1.0, plan["voice"]["quality"]["summary"])
