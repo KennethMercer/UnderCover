@@ -7544,6 +7544,9 @@ def u_duets():
             i = int(s * sr)
             j = int(pw_[k_ + 1][1] * sr) if full and k_ + 1 < len(pw_) and pw_[k_ + 1][1] - e < 0.1 else int(e * sr)
             xx[i:j] = 0.3 * np.sin(2 * np.pi * 220 * np.arange(j - i) / sr)
+            if k_ + 1 < len(pw_) and j < int(pw_[k_ + 1][1] * sr) and pw_[k_ + 1][1] - e < 0.1:   # (two words sung together stay
+                n_ = int(pw_[k_ + 1][1] * sr) - j                                                  # shallow: it's no stop)
+                xx[j:j + n_] = 0.03 * np.sin(2 * np.pi * 220 * np.arange(n_) / sr)
         return D.sections(xx, pw_)
     pre = ["cause a scene and tell the", "whole wide world about it now"]
     third = lambda k: [" ".join(f"w{k}p{i}x{j}" for j in range(6)) for i in range(2)]
@@ -7603,9 +7606,34 @@ def u_duets():
     assert D._starts_line([t_("done?"), t_("you're")], 1) and D._starts_line([t_("scream"), t_("God,")], 1)
     assert not D._starts_line([t_("girl,"), t_("and")], 1) and not D._starts_line([t_("the"), t_("club")], 1)
     lvl = np.zeros(1000)
-    lvl[[300, 600]] = -90.0, -40.0
+    lvl[[300, 600]] = -90.0, -25.0
     assert D._dip(lvl, -15.0, 6.0) == 6.0 and D._dip(lvl, -15.0, 4.0) is None and D._dip(lvl, -15.0, 9.99) is None
     assert D._dip(lvl, -15.0, 5.85) == 6.0   # (the consonant at 3.00 is deeper, and it's far from the word)
+    # a word's own stop is short and nearly silent: passed over for a real break, however deep it goes; two lines run
+    # together stay shallow, however short; a stretch long enough is a break at any depth (a cut there stays where it was)
+    def lv(*dips):
+        y = np.zeros(1000)
+        for at, ms, depth in dips:
+            y[at:at + ms // 10] = depth
+        return y
+    assert D._dip(lv((600, 60, -97.0)), -15.0, 6.0) is None                       # (the k of "scream": no break at all)
+    assert D._dip(lv((600, 60, -97.0), (612, 40, -21.0)), -15.0, 6.0) == 6.12     # (the shallower one is the break)
+    assert D._dip(lv((600, 40, -21.0)), -15.0, 6.0) == 6.0                        # ("scream | God", 40 ms at -21 dB)
+    assert D._dip(lv((600, 150, -60.0)), -15.0, 6.0) == 6.0                       # (150 ms: a break)
+    assert D._dip(lv((590, 60, -40.0), (596, 90, -20.0)), -15.0, 6.0) == 5.9      # (a stretch counts whole: 150 ms)
+    assert D._dip(lv((600, 300, -5.0), (610, 40, -21.0)), -15.0, 6.0) == 6.1      # (a dip DIP_DB down, not any quiet)
+    # a name's capital doesn't start a line. A name: capitals in a row, coming back. Not "I", not a word said twice, not
+    # one capital once: that's nearly always a line's first word
+    nw = lambda s: [[w, 1.0, 1.2, 0.9] for w in s.split()]
+    song = nw("down in West Hollywood I'm gonna dance in West Hollywood and Still here at the Pink Pony Club, Pink Pony Club. Hello Hello I Know I Know")
+    names = D._names(song)
+    assert names == {"west", "hollywood", "pink", "pony", "club"}, names
+    k = [w[0] for w in song].index("Hollywood")
+    assert not D._starts_line(song, k, names) and D._starts_line(song, k)   # (the call without names reads every capital)
+    assert D._starts_line(song, [w[0] for w in song].index("Still"), names) and D._starts_line(song, [w[0] for w in song].index("I'm"), names)
+    assert not D._starts_line(song, 2, names), "the first word of a name"
+    assert D._starts_line(nw("end. West Hollywood"), 1, {"west"})           # (a sentence's end is one, whatever the word)
+    assert D._names([]) == set()
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=2, octave=-1)) == {"key": 2, "octave": {"A": -1, "B": -1}}
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=-3, octave=0, duet_octave=-1)) == {"key": -3, "octave": {"A": 0, "B": -1}}
     psrc = _i2.getsource(_PL2.CoverEngine._duet_plan)   # Turns found from the song only (a stored plan is kept as it is)

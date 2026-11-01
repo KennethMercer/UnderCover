@@ -471,9 +471,11 @@ stitched by the plan.
 - **Between sentences** (`duets.sentence_edges`): a chorus's edge in a silence under `SENTENCE_GAP_S` (0.5 s) has to prove
   itself by the words. The chorus starts where the words that come back as far as its own lines start, and ends earlier
   when its last words don't come back, each at the first line start from there: Whisper's sentence end
-  (`.?!:;`, not a comma) before the word, or its capital on it. When that line start has no silence, the row splits at
-  the lead's own drop (`DIP_DB`, 15 dB or more down) within `DIP_BEFORE_S`/`DIP_AFTER_S` of Whisper's start of the word.
-  Not the deepest dip nearby: that's often a consonant. With no such place, the edge stays where it was.
+  (`.?!:;`, not a comma) before the word, or its capital on it, unless that's a name (`duets._names`: capitals in a row
+  that come back). When that line start has no silence, the row splits at the lead's own drop (`DIP_DB`, 15 dB or more
+  down) within `DIP_BEFORE_S`/`DIP_AFTER_S` of Whisper's start of the word. A short drop that goes nearly silent
+  (under `MIN_BREAK_S`, `STOP_DB` down) is a word's own consonant, and is passed over. With no such place, the edge stays
+  where it was.
 - **Ways** (`duets.WAYS`): `turns` puts one singer on the verses and the other on the choruses, so the voice changes at
   every verse-to-chorus boundary; `lines` alternates lines. One singer at a time: two converts of the same line sounded fake. `DUET_DEFAULT` is the
   one place the default is set.

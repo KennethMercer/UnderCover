@@ -34,6 +34,7 @@ SILENCE_DB, SILENCE_S = 35.0, 0.10            # where a voice may change: the le
 SENTENCE_GAP_S = 0.5                          # a silence this long is between sentences, whatever the words say
 DIP_DB = 15.0                                 # where two lines run together a voice may change at the lead's dip, this far
 DIP_BEFORE_S, DIP_AFTER_S = 0.12, 0.20        # down or more, this close to Whisper's start of the second (_dip)
+MIN_BREAK_S, STOP_DB = 0.13, 35.0             # shorter than this and this far down, it's a word's own consonant (_dip)
 MIN_PHRASE_S = 0.3                            # shorter bursts of sound aren't a line
 LINE_MIN_S, JOIN_GAP_S = 1.5, 0.6             # "Hello," alone isn't a sung line: it joins the next across a short gap
 NGRAM, NGRAM_APART = 6, 15                    # a chorus: 6 words that come back 15+ words later
@@ -158,22 +159,64 @@ def mark_pre_chorus(rows: list, words: list, ws: list) -> tuple[dict, float]:
     return reach, most
 
 
-def _starts_line(ws: list, k: int) -> bool:
-    """Does Whisper start a line at word k: a sentence's end before it, or a capital on it? (A comma isn't one: "a pink
-    pony girl, and you dance at the club".)"""
-    return not k or str(ws[k - 1][0]).rstrip()[-1:] in tuple(".?!:;") or str(ws[k][0]).lstrip()[:1].isupper()
+def _names(ws: list) -> set:
+    """The song's names, as words (_norm) a capital doesn't start a line on: two or more different words in a row with
+    capitals and nothing between them, coming back in the song ("West Hollywood", "Santa Monica", "Pink Pony Club"). "I"
+    doesn't count: it's capital anywhere. A name of one word can't be told from a line's first word without a word list,
+    and a capital that turns up once is nearly always that first word ("Still", "When": eight songs, 2026-11-01)."""
+    runs: dict = {}
+    run: list = []
+
+    def close():
+        if len(run) > 1 and len(set(run)) == len(run):
+            runs[tuple(run)] = runs.get(tuple(run), 0) + 1
+        run.clear()
+    for w in ws:
+        t = str(w[0]).strip()
+        if t[:1].isupper() and not re.fullmatch(r"i('.*)?", _norm(t)):
+            run.append(_norm(t))
+            if t[-1:] in tuple(".,?!:;"):
+                close()
+        else:
+            close()
+    close()
+    return {w for r, n in runs.items() if n >= 2 for w in r}
+
+
+def _starts_line(ws: list, k: int, names: set = frozenset()) -> bool:
+    """Does Whisper start a line at word k: a sentence's end before it, or a capital on it that isn't a name? (A comma
+    isn't one: "a pink pony girl, and you dance at the club".)"""
+    return (not k or str(ws[k - 1][0]).rstrip()[-1:] in tuple(".?!:;")
+            or (str(ws[k][0]).lstrip()[:1].isupper() and _norm(str(ws[k][0])) not in names))
 
 
 def _dip(db: np.ndarray, floor: float, start: float) -> float | None:
     """Where the lead drops between two lines that run together, around the second's first word (its start in Whisper,
-    which is good to 0.1 s where its ends aren't): the lowest point there, DIP_DB or more down. Only near the word: the
-    deepest dips of all are a word's own consonants (the k of "scream", 90 ms at -90 dB, was no breath: research,
-    2026-10-31). -> its time, or None when the two run together at full voice."""
-    a = max(0, int((start - DIP_BEFORE_S) * 100))
-    near = db[a:int((start + DIP_AFTER_S) * 100)]
-    if not len(near) or near.min() > floor:
-        return None
-    return (a + int(np.argmin(near))) / 100
+    which is good to 0.1 s where its ends aren't): the lowest point there of a stretch DIP_DB or more down that is a
+    break and not a word's own consonant. A stop closes the mouth, so it is short and nearly silent (the k of "scream",
+    60 ms at -97 dB; the b of "Club", 60 ms at -50): a stretch shorter than MIN_BREAK_S that falls STOP_DB is one, and
+    the next lowest is looked at. Two lines run together stay shallow however short ("scream | God", 40 ms at -21 dB).
+    -> its time, or None when the two run together at full voice."""
+    a, z = max(0, int((start - DIP_BEFORE_S) * 100)), min(len(db), int((start + DIP_AFTER_S) * 100))
+    spots = []
+    i = a
+    while i < z:
+        if db[i] > floor:
+            i += 1
+            continue
+        lo, hi = i, i
+        while lo > 0 and db[lo - 1] <= floor:
+            lo -= 1
+        while hi + 1 < len(db) and db[hi + 1] <= floor:
+            hi += 1
+        low = max(lo, a) + int(np.argmin(db[max(lo, a):min(hi + 1, z)]))
+        spots.append((float(db[low]), low, (hi - lo + 1) / 100))
+        i = hi + 1
+    closed = floor + DIP_DB - STOP_DB
+    for depth, low, length in sorted(spots):
+        if length >= MIN_BREAK_S or depth > closed:
+            return low / 100
+    return None
 
 
 def sentence_edges(rows: list, words: list, ws: list, reach: dict, most: float, x16: np.ndarray) -> None:
@@ -186,12 +229,13 @@ def sentence_edges(rows: list, words: list, ws: list, reach: dict, most: float, 
     db = _db(x16)
     floor = float(np.percentile(db, 95)) - DIP_DB if len(db) else 0.0
     first = {m[0] for m in words if m}
+    names = _names(ws)
     row_of = {w: r for r, m in reversed(list(enumerate(words))) for w in m}   # (a word by two rows: the first; by none: no place)
     text = lambda m: " ".join(str(ws[i][0]).strip() for i in m)
 
     def line_start(k: int, stop: int) -> tuple | None:
         for j in range(k, stop + 1):
-            if j not in row_of or not _starts_line(ws, j):
+            if j not in row_of or not _starts_line(ws, j, names):
                 continue
             if j in first:
                 return j, None
