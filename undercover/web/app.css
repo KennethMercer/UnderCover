@@ -826,6 +826,7 @@ body[data-doctor="bad"] .room[data-room="system"]::after { content: ""; width: 6
 .lib-tools input, .lib-tools select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--fg); font: inherit; min-width: 0; }
 .lib-tools input { flex: 1 1 220px; }
 .lib { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.lib.solo { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 860px) { .lib { grid-template-columns: 1fr; } }
 .lib .items { padding: 6px; gap: 2px; max-height: 70vh; overflow: auto; }
 .litem { display: grid; grid-template-columns: 22px 42px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; }

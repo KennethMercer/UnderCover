@@ -235,10 +235,12 @@ function renderRunRoom() {
     : [w.armed ? (w.starts_now ? "Starts now" : w.start ? `Starts ${clock(w.start)}` : "") : "Not started yet",
     w.total_min ? `about ${fmtMin(w.total_min)}` : "", w.done_by ? `done by about ${clock(w.done_by)}` : ""].filter(Boolean).join(" · ");
   $("#rn-opts").hidden = !left.length;
-  $("#rn-when").hidden = false;   // one time control, "Starts at [11:00 PM]" (consult round 2, 4.1): settable any time; the word is a button only when a press would arm the queue
+  // one time control, "Starts at [11:00 PM]" (consult round 2, 4.1); the word is a button only when a press would arm the queue. It comes with the
+  // first job: over an empty night it was a clock for nothing (a queue already armed keeps it, for "Don't start more")
+  $("#rn-when").hidden = !left.length && !w?.armed;
   showTimes(w);
   const same = at && startTime() === w.settings.start_at;   // the field still says what's saved; edited, the word offers the new time
-  $("#rn-at").textContent = same ? "Starts at" : left.length ? "Start at" : "Tonight's work starts at";
+  $("#rn-at").textContent = same ? "Starts at" : "Start at";
   $("#rn-at").disabled = same || !left.length;
   $("#rn-at").setAttribute("aria-pressed", same);
   $("#rn-go").hidden = !left.length; $("#rn-go").setAttribute("aria-pressed", going); $("#rn-go").textContent = going ? "Running now" : "Start now";
@@ -259,7 +261,7 @@ function renderRunRoom() {
   if (w) { $("#rn-finish").checked = !!w.settings.finish_by; $("#rn-awake").checked = w.settings.keep_awake !== false; }
 
   // recent: the last five finished, and how they ended (from each job's final event)
-  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep").slice(0, 5);
+  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep" && !(j.kind === "speakwarm" && j.state === "done")).slice(0, 5);   // the app's own warm-up, unless it failed
   put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = willRetry(j) ? ["warn", "waiting to retry"] : ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");

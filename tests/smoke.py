@@ -10394,6 +10394,13 @@ def u_page_rules():
     se = (web / "speakeasy.js").read_text(encoding="utf-8")
     assert "RECENT_SHOW = 5, RECENT_TRAY = 15" in app and "S.histAll ? RECENT_TRAY : RECENT_SHOW" in app and "SE.recAll ? RECENT_TRAY : RECENT_SHOW" in se and 'recentMore("se-recent-more"' in se, "a module's Recent lost its five and Show more"
     assert "!c.trained ? `<button class=\"mini\" type=\"button\" data-own=" in da and 'c.singing === false ? "speaking" : ""' in da and "Speaking or singing?" in da, "Train my own lost a downloaded voice, or stopped asking speaking or singing"
+    # look6 (the outside designer's second pass): the Library's tabs count the chosen kind and an empty list has no second empty beside it; every room shows on a
+    # phone; Tonight's clock comes with the first job and the app's warm-up stays out of Recent; a phone's voice rows and top bar stay short
+    lib, jobsj, shellc, lookc, sec = [(web / n).read_text(encoding="utf-8") for n in ("library.js", "jobs.js", "shell.css", "look.css", "speakeasy.css")]
+    assert 'tabCounts("kept")[L.cat]' in lib and 'd.hidden = none ||' in lib and ".lib.solo" in css, "the Library's counts or its one empty are gone"
+    assert "repeat(3, minmax(0, 1fr))" in lookc and "overflow: visible" in lookc, "a phone's rooms went back to a row that hides four of the six"
+    assert '$("#rn-when").hidden = !left.length && !w?.armed' in work and 'j.kind === "speakwarm" && j.state === "done"' in work and 'speakwarm: "speakeasy"' in jobsj and 'speakwarm: "warming up"' in jobsj, "Tonight's clock over an empty night, or the warm-up in Recent"
+    assert "fact.muted:not(.keep)" in sec and "vname(SE.voice)" not in se and ".top .lp-label, .top .deep-btn span" in shellc and "clip-path: inset(50%)" in shellc, "a phone's voice rows or top bar grew back, or a label left the screen reader"
     assert "data-fall" in da and 'store.set("uc-da-filters"' in da and 'store.get("uc-da-filters"' in da, "Your voices' filters lost All or the memory"
     from undercover.doubleagent import night as _nt
     _v = type("V", (), {"name": "someone-singing-v2", "extra": {}, "display": None})()

@@ -152,6 +152,11 @@
 body.drawer-open { overflow: hidden; }
 
 /* ---------- phone ---------- */
+/* the top bar's right side: icons alone where it's the busiest corner (a phone) or would run into the tabs (a tablet's top bar); the labels stay as names for a screen reader */
+@media (max-width: 420px), (min-width: 681px) and (max-width: 860px) {
+  .top .lp-label, .top .deep-btn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .top .lp-btn, .top .deep-btn { min-width: 36px; min-height: 36px; justify-content: center; }
+}
 @media (max-width: 680px) {
   .top { backdrop-filter: none; background: var(--bg); }   /* a backdrop-filter would trap the fixed bottom bar */
   .top-in { padding: 8px 16px; gap: 10px; justify-content: space-between; }

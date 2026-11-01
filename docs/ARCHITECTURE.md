@@ -599,8 +599,9 @@ SpeakEasy: a text box with a time estimate, a voice picker grouped "Trained in D
 voice's cadence status, Pace (Slower, Natural or Faster, made at generation, never time-stretched), "Now speaking"
 sentence by sentence while the rest are made, WAV / MP3 when finished, Recent (the newest 5, Show more for all 15).
 
-SafeHouse: a strip of rooms (`#safehouse/<room>`): Library (Kept / Recent views), Running (now, tonight, recent, last
-night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the
+SafeHouse: a strip of rooms (`#safehouse/<room>`; on a phone all six show, three by two, the icon over the name): Library
+(Kept / Recent views, counting the kind that's chosen), Running (now, tonight with its start time once a job waits, recent,
+last night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the
 Vault), Add-ons, System (the Doctor, GPU and models, the YouTube downloader, What's new, Restart, Quit, the diagnostics
 file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause).
 
