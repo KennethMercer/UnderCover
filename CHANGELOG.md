@@ -23,6 +23,9 @@ in brackets.
   under it, or kept as the original: your choice, beside the second singer. In the one-shot, name both: "<song> as
   <one singer> and <another>".
 
+**SafeHouse** (consult2)
+- Storage gives one total. The room's number and its tab's now agree, and every model file counts, Whisper's included.
+
 **Phone** (phone12)
 - The away link works as a home-screen app. When the PC doesn't answer there, it says so and offers the home address.
 - While UnderCover is open on the phone, it tells you when a job finishes. No notification service is involved.

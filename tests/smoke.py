@@ -4855,7 +4855,8 @@ def u_rcfix7():
     # 3. one estimate: the page's words; the plan carries the training's; the job uses the one-shot's own stage estimates
     assert [jobs.eta_words(x) for x in (20, 300, 3660, 8180, 10800)] == [
         "under a minute", "about 5 min", "about 61 min", "about 2\u00bd hours", "about 3 hours"]
-    assert "jobs.eta_words(tr)" in rv and "(about 1 hour)\"" not in inspect.getsource(service)
+    assert "jobs.eta_words(tr)" in rv and "about 1 hour" not in inspect.getsource(service)
+    assert "jobs.eta_words(plan.get('train_est_s') or train_estimate_s(person))" in rv   # (the quick voice's note: the same one number)
     assert 'out["train_s"] = round(service.train_estimate_s(person) + oneshot.cover_eta("", here)["high"])' in inspect.getsource(FA._auto_plan)
     assert "if (p.train_s != null) return etaWords({ low: p.train_s, high: p.train_s });" in (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
     run = inspect.getsource(oneshot.run)
@@ -5027,6 +5028,20 @@ def u_rceta():
             enough = types.SimpleNamespace(kept_seconds=lambda: 35 * 60.0, sources=[], mode="speaking", person="Obama", name="obama", reference={})
             assert night._estimate_new(enough, {"kind": "new", "target": "x"})["prepare"] == 0
             assert night.estimate({"kind": "new", "target": "Nobody Yet"})["total"] == night._estimate_new(None, {"kind": "new"})["total"]
+            # consult 2: the time a new voice is said to take, on a card with no speed measured: Low profile's burst doubles
+            # the steps, and a real run confirms it (0.35 s a step, 0.70 under it: 20790 steps, "about 4½ hours")
+            from undercover.core import lowprofile as LP
+            night._sec_per_step = real
+            real_on, real_factor = LP.on, LP.factor
+            try:
+                plain = night._estimate_new(None, {"kind": "new", "mode": "speaking"})["total"]
+                LP.on, LP.factor = (lambda: True), (lambda: 2.0)
+                assert night._sec_per_step() == night.SEC_PER_STEP * 2.0
+                under = night._estimate_new(None, {"kind": "new", "mode": "speaking"})["total"]
+                assert 130 <= plain <= 150 and 255 <= under <= 275, (plain, under)
+            finally:
+                LP.on, LP.factor = real_on, real_factor
+                night._sec_per_step = lambda: sps
             # the shape is measured from every training (medians of the last 12), the defaults until then
             assert night.train_shape() == night.TRAIN_SHAPE
             assert night.train_shape("character")["kept_per_prep_min"] == night.KIND_PREP["character"]   # (scenes yield less)
@@ -6773,6 +6788,19 @@ def u_storage():
         (app / "models/voices/v1/meta.json").write_text(json.dumps({"dir": str(app / "models/voices/v1")}), encoding="utf-8")
         (app / "uploads/s.mp3").write_bytes(b"s" * 3000)
         (app / "output/c.mp3").write_bytes(b"c" * 2000)
+        # one total (consult 2): the Library's number is the Storage groups' own sum, every model folder in it (a hand-kept
+        # list of folders left Whisper out, and the two numbers disagreed), voices once, and what's in the cache said
+        from undercover.safehouse import library
+        for f, n in (("models/whisper/w.bin", 7000), ("cache/stems/x/v.flac", 1000), ("cache/training/p/c.wav", 2000), ("cache/keys/k.json", 300)):
+            (app / f).parent.mkdir(parents=True, exist_ok=True)
+            (app / f).write_bytes(b"x" * n)
+        s, g = library.summary(), storage.where()
+        assert s["total"] == sum(x["size"] for x in g.values()), (s["total"], g)
+        cats = s["categories"]
+        assert cats["app"] == 12000 and cats["stems"] == 1000 and cats["training"] == 2000 and cats["temporary"] == 300, cats
+        assert s["total"] == sum(cats.values()), (s["total"], cats)   # (nothing unsaid)
+        shutil.rmtree(app / "models/whisper")
+        shutil.rmtree(app / "cache")
         (app / "output/history.jsonl").write_text(json.dumps({"output": str(app / "output/c.mp3")}) + "\n", encoding="utf-8")
         storage.move("models", str(mod), FakeJob())                      # model files go; voices stay
         assert (mod / "models/tts/m.bin").exists() and not (mod / "models/voices").exists()
@@ -10406,7 +10434,7 @@ def u_page_rules():
     jb = (web / "jobs.js").read_text(encoding="utf-8")
     assert 'id="clear-backing"' in app and "function drawPlan" in osj and "data-cad-go" in da and "jfTimer" in jb and "saveStartTime" in work, "a pass-9 page fix is gone"
     # smallfix6 hooks: a tonight add that starts now / waits, queue rows that wait, no times of the page's own in the one-shot
-    assert "starts_now" in work and "waits_next_night" in work and "trainWords" in osj and "about 1 hour" not in osj and "about 1 hour" not in ix, "a smallfix6 hook or an estimator time is gone"
+    assert "starts_now" in work and "waits_next_night" in work and "trainWords" in osj and "about 1 hour" not in osj and "about an hour" not in osj and "about 1 hour" not in ix, "a smallfix6 hook or an estimator time is gone"
     # qa17 (the consultant's small batch): one press on the one-shot with the time in the button; basic says "speak", Deep says "cadence"; the night's work is "tonight";
     # the real-person line once; Deep Cover's first flip has its line; empty states are one line and one button; no legend under Your voices
     sej = (web / "speakeasy.js").read_text(encoding="utf-8")
