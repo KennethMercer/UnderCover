@@ -67,6 +67,7 @@ a.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
   .se-vlist .voice .facts { gap: 4px; }
   .se-vlist .voice .fact { padding-inline: 7px; }
   .se-vlist .voice .se-cad { font-family: var(--body); font-size: 12.5px; }
+  .se-vlist .voice .se-wide { display: none; }
   .se-vlist .voice .se-vact:has(.mini) { grid-column: 2 / -1; justify-content: flex-start; }
   .se-go .convert { width: 100%; }
 }

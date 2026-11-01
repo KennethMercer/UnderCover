@@ -80,7 +80,7 @@ function seVoices() {
     const bits = v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : v.trained ? [upFirst(v.kind), v.undertrained ? { t: "Under-trained", muted: true, cls: "keep" } : ""]
                            : ["Downloaded", v.person ? { t: `Checked: ${v.person}`, muted: true } : "", v.kind === "singing" ? { t: "Singing", muted: true } : ""];
     const c = v.cadence || {};
-    const cad = c.has ? `<span class="y">Speaks</span>` : c.queue === "running" ? "Learning to speak" : c.queue ? "Learns tonight" : "Can't speak yet";
+    const cad = c.has ? `<span class="y">Speaks</span>` : c.queue === "running" ? "Learning to speak" : c.queue ? `Learns<span class="se-wide"> to speak</span> tonight` : "Can't speak yet";
     const act = c.has || c.queue || !c.can ? ""
       : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">Let it speak</button>`;
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">

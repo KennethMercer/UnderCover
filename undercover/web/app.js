@@ -95,7 +95,7 @@ function noteVoices(list) {
 }
 const voiceDisplay = id => VOICES.get(id)?.display || id || "";
 const voiceTrained = id => { const t = VOICES.get(id)?.trained; return t != null ? !!t : /-uc$/.test(id || ""); };
-// sr: the screen-reader-only "(trained in UnderCover)"; lines that already say "trained here" next to the name pass false so it isn't read twice
+// sr: the screen-reader-only "(trained in UnderCover)"; lines that already say "trained here", or sentences it would only interrupt (SpeakEasy's bar), pass false
 const vname = (id, sr = true) => id ? `<span class="vname" data-voice="${esc(id)}"${voiceTrained(id) ? ' data-trained="1" title="Trained in UnderCover"' : ""}>${esc(voiceDisplay(id))}${sr && voiceTrained(id) ? '<span class="sr-only"> (trained in UnderCover)</span>' : ""}</span>` : "";
 // How like the person a voice sounds, in a word and its dot (the server's likeness_word, on every voice API: "great" |
 // "good" | "fair" | "poor"; poor = a downloaded voice the check judged bad or broken; null = not measured, so nothing).

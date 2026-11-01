@@ -261,7 +261,7 @@ function renderRunRoom() {
   if (w) { $("#rn-finish").checked = !!w.settings.finish_by; $("#rn-awake").checked = w.settings.keep_awake !== false; }
 
   // recent: the last five finished, and how they ended (from each job's final event)
-  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep" && !(j.kind === "speakwarm" && j.state === "done")).slice(0, 5);   // the app's own warm-up, unless it failed
+  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep" && !(j.kind === "speakwarm" && (j.final?.state || j.state) === "done")).slice(0, 5);   // the app's own warm-up, unless it failed
   put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = willRetry(j) ? ["warn", "waiting to retry"] : ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");
@@ -283,8 +283,8 @@ const startWork = async body => {
 $("#rn-at").onclick = () => startWork({ at: startTime() });
 $("#rn-at-time").onchange = e => {
   store.set("uc-queue-at", e.target.value || null);
-  // the time saves the moment it's set, jobs queued or not (the user set 02:00 with jobs queued, pressed nothing, and "done by" still counted
-  // from 23:00). It goes through the settings, never through Start at: arming the queue also lifts its pause (smallfix6 addendum). An armed
+  // the time saves the moment it's set (the user set 02:00 with jobs queued, pressed nothing, and "done by" still counted from 23:00); the field
+  // shows once a job waits, so a first job takes the saved time and it can be changed from there. It goes through the settings, never through Start at: arming the queue also lifts its pause (smallfix6 addendum). An armed
   // queue simply starts at the new time; a stopped one with jobs still wants the "Start at" press, and the word stays a button until then.
   if (e.target.value) saveStartTime(e.target.value); else renderQueue();
 };

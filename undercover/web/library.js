@@ -55,7 +55,7 @@ async function loadSummary() {
   if (!s.ytdlp_job) $("#lib-ytdlp-go").textContent = s.ytdlp_offer ? "Update now" : "Check for a fix";   // (1.1: a release under 48 h is the user's click)
   $("#lib-ytdlp-auto").checked = !!s.ytdlp_auto;
   if (s.ytdlp_job && !L.ytdlpWatch) ytdlpWatch(s.ytdlp_job);
-  renderKf();   // the tabs' totals and the chips' numbers
+  renderKf();   // the tabs' numbers and the chips'
 }
 // System room: YouTube changes often; the check fetches PyPI's newest yt-dlp + its solver, tests it, and uses it only if
 // it works at least as well (else keeps or goes back to the last known good). A job: progress on the button.
