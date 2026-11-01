@@ -7634,6 +7634,11 @@ def u_duets():
     assert not D._starts_line(song, 2, names), "the first word of a name"
     assert D._starts_line(nw("end. West Hollywood"), 1, {"west"})           # (a sentence's end is one, whatever the word)
     assert D._names([]) == set()
+    # a row that opens on a name still opens the chorus: its silence is proof enough. Inside a row a name's capital isn't one
+    w5 = [[w, 1.0 + i, 1.5 + i, 0.9] for i, w in enumerate("a b Pink Pony c d Pink Pony e f".split())]
+    r5 = [{"t0": 1.0 + 1.1 * i, "t1": 2.0 + 1.1 * i, "text": "", "rep": i in (2, 3), "cut": 2.05 + 1.1 * i} for i in range(5)]
+    D.sentence_edges(r5, [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]], w5, {i: 2 for i in range(2, 8)}, 2.0, tone)
+    assert [r["rep"] for r in r5] == [False, True, True, True, False], r5
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=2, octave=-1)) == {"key": 2, "octave": {"A": -1, "B": -1}}
     assert _PL2._duet_pitches(_PL2.CoverOptions(voice="a", key=-3, octave=0, duet_octave=-1)) == {"key": -3, "octave": {"A": 0, "B": -1}}
     psrc = _i2.getsource(_PL2.CoverEngine._duet_plan)   # Turns found from the song only (a stored plan is kept as it is)

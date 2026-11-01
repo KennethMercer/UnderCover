@@ -235,7 +235,7 @@ def sentence_edges(rows: list, words: list, ws: list, reach: dict, most: float, 
 
     def line_start(k: int, stop: int) -> tuple | None:
         for j in range(k, stop + 1):
-            if j not in row_of or not _starts_line(ws, j, names):
+            if j not in row_of or not _starts_line(ws, j, () if j in first else names):   # (a row's own silence needs no more)
                 continue
             if j in first:
                 return j, None
