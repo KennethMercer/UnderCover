@@ -279,7 +279,7 @@ details.adv[open] summary { border-bottom: 1px solid var(--line); }
 .fm-duet .lab { font-weight: 600; font-size: 14px; }
 .fm-duet .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; justify-self: start; }
 .fm-duet .seg button { flex: none; display: inline-flex; align-items: center; padding: 6px 14px; font-size: 14px; white-space: nowrap; }
-.fm-duet .seg button[data-v="mine"]:disabled { color: var(--accent); opacity: .7; }
+.fm-duet .seg button:disabled { opacity: .7; }
 .fm-duet .seg .deepmark { margin-left: 6px; font-size: 11px; }
 .fm-duet .short { display: none; }
 .fm-duet .meta { margin: 0; }

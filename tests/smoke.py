@@ -7892,7 +7892,7 @@ def u_duets():
     assert "!b.hidden && !b.disabled" in js   # (a stored way can't land on a shut button)
     # the strip is the engine's plan or nothing: drawn from the cover's own, hidden with none
     assert "strip.hidden = " in js and "!plan;" in js and "plan.map(([a, b, who])" in js and 'class="strip" id="fm-duet-strip" aria-hidden="true" hidden' in page
-    assert js.count("renderDuetPlan();") == 3   # (a voice or a way, a song, the history)
+    assert "syncBuild();\n  renderDuetPlan();" in js and "renderHistory();\n  renderDuetPlan();" in js   # (a song, the history; renderDuet for a voice or a way)
     assert "karaoke = True if opts.backing_voice or opts.duet_voice else opts.karaoke" in inspect.getsource(PL.CoverEngine.make_preview)
     assert "together" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"})
     long = D.describe([[i, i + 1, "AB"[i % 2]] for i in range(12)], {"A": "a", "B": "b"}, {"no_chorus": True})

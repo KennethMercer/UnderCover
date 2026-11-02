@@ -653,9 +653,9 @@ const DUET_WAYS = { turns: "One takes the verses and the other the choruses, by 
 const DUET_BACKINGS = { singers: "Under each line, the backing is sung by whoever has the lead there.", other: "The backing goes to whoever isn't on the lead, one backing phrase at a time.",
                         original: "The song's own backing singers stay." };
 const DUET_BACK_SAID = { singers: "backing in their own voices", other: "backing by the other singer", original: "the original backing" };
+const duetBackSaid = v => Object.hasOwn(DUET_BACK_SAID, v) ? DUET_BACK_SAID[v] : DUET_BACK_SAID.singers;
 function renderDuet() {
-  const pick = $("#fm-duet"), two = S.opts.duet_voice;
-  if ((S.voicesLoaded && two && !S.voices.some(v => v.name === two)) || two === S.voice) S.opts.duet_voice = "";
+  if ((S.voicesLoaded && S.opts.duet_voice && !S.voices.some(v => v.name === S.opts.duet_voice)) || S.opts.duet_voice === S.voice) S.opts.duet_voice = "";
   const duet = S.opts.duet_voice;
   $("#fm-duet-box").hidden = !S.voice;   // a second singer needs a first
   $("#fm-duet-box").classList.toggle("two", !!duet);
@@ -663,11 +663,7 @@ function renderDuet() {
   $("#fm-duet-add").hidden = !!duet;
   $("#fm-duet-chips").innerHTML = duet && S.voice ? `<span class="vchip a"><span class="av">${vinitial(S.voice)}</span>${vname(S.voice)}<small>lead</small></span>
     <span class="vchip b"><span class="av">${vinitial(duet)}</span>${vname(duet)}<button class="x" id="fm-duet-x" type="button" aria-label="Just one singer" title="Just one singer">×</button></span>` : "";
-  const others = voiceOrder(S.voices.filter(v => v.name !== S.voice));
-  pick.innerHTML = others.length ? others.map(v => `<div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="false" data-v="${esc(v.name)}">
-      <span class="avatar">${vinitial(v.name)}</span><span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b>${facts(voiceFacts(v))}</span></div>`).join("")
-    : `<p class="meta">No other voice here yet. <button class="linkbtn" type="button" data-goto="doubleagent">Get a voice</button></p>`;
-  if (duet) duetPick(false);
+  duetPick(!duet && !$("#fm-duet").hidden);
   const shown = $$("#fm-duet-way button").filter(b => !b.hidden && !b.disabled).map(b => b.dataset.v);   // (a hidden way isn't kept from before)
   const way = shown.includes(S.opts.duet_way) ? S.opts.duet_way : shown.includes(S.defaults.duet_way) ? S.defaults.duet_way : shown[0];
   if (S.opts.duet_voice) S.opts.duet_way = way;
@@ -699,15 +695,26 @@ function duetDeepLine(h, plan) {
 }
 function renderDuetPlan() {
   const o = S.opts, duet = o.duet_voice;
-  const h = duet && S.song ? HIST.find(x => x.original === S.song.url && x.voice === S.voice && x.duet_voice === duet && x.options?.duet_way === o.duet_way && duetPlanOf(x)) : null;
-  const plan = h && duetPlanOf(h), strip = $("#fm-duet-strip");
-  $("#fm-duet-note").textContent = duet ? (plan && duetSaid(h, plan)) || DUET_WAYS[o.duet_way] : "";
+  const covers = duet && S.song ? HIST.filter(x => x.original === S.song.url && x.voice === S.voice && x.duet_voice === duet && x.options?.duet_way === o.duet_way && duetPlanOf(x)) : [];
+  const h = covers[0], plan = h && duetPlanOf(h), strip = $("#fm-duet-strip");
+  const said = covers.filter(x => JSON.stringify(duetPlanOf(x)) === JSON.stringify(plan)).map(x => duetSaid(x, plan)).find(Boolean);   // (Make again's note has none: it's the cover that found the plan's)
+  $("#fm-duet-note").textContent = duet ? said || DUET_WAYS[o.duet_way] : "";
   strip.hidden = $("#fm-duet-legend").hidden = $("#fm-duet-deep").hidden = !plan;
   strip.innerHTML = plan ? plan.map(([a, b, who]) => `<i class="${who.toLowerCase()}" style="flex-grow:${b - a}"></i>`).join("") : "";
   $("#fm-duet-legend").innerHTML = plan ? [[S.voice, "a"], [duet, "b"]].map(([id, c]) => `<span><i class="dot ${c}"></i>${esc(voiceDisplay(id))}</span>`).join("") : "";
   $("#fm-duet-deep").textContent = plan ? duetDeepLine(h, plan) : "";
 }
-function duetPick(open) { $("#fm-duet").hidden = !open; $("#fm-duet-add").setAttribute("aria-expanded", String(open)); }
+function duetPick(open) {
+  const pick = $("#fm-duet");
+  pick.hidden = !open;
+  $("#fm-duet-add").setAttribute("aria-expanded", String(open));
+  if (!open) return;
+  const others = voiceOrder(S.voices.filter(v => v.name !== S.voice));
+  pick.setAttribute("role", others.length ? "listbox" : "group");
+  pick.innerHTML = others.length ? others.map(v => `<div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="false" data-v="${esc(v.name)}">
+      <span class="avatar">${vinitial(v.name)}</span><span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b>${facts(voiceFacts(v))}</span></div>`).join("")
+    : `<p class="meta">No other voice here yet. <button class="linkbtn" type="button" data-goto="doubleagent">Get a voice</button></p>`;
+}
 const duetChoose = name => $("#fm-duet").dispatchEvent(new CustomEvent("change", { detail: name }));
 $("#fm-duet-add").addEventListener("click", () => duetPick($("#fm-duet").hidden));
 $("#fm-duet-chips").addEventListener("click", e => { if (e.target.closest("#fm-duet-x")) { duetChoose(""); $("#fm-duet-add").focus(); } });
@@ -715,8 +722,8 @@ $("#fm-duet").addEventListener("click", e => {
   const row = e.target.closest(".voice.pick"); if (!row) return;
   duetChoose(row.dataset.v); $("#fm-duet-x")?.focus();
 });
+$("#fm-duet-box").addEventListener("keydown", e => { if (e.key === "Escape" && !$("#fm-duet").hidden) { duetPick(false); $("#fm-duet-add").focus(); } });
 $("#fm-duet").addEventListener("keydown", e => {
-  if (e.key === "Escape") { duetPick(false); return $("#fm-duet-add").focus(); }
   const row = e.target.closest(".voice.pick");
   if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); row.click(); }
 });
@@ -740,7 +747,7 @@ function summary() {
   const o = S.opts;
   previewSync();
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
-    (o.duet_voice ? ` · ${DUET_BACK_SAID[o.duet_backing] || DUET_BACK_SAID.singers}`
+    (o.duet_voice ? ` · ${duetBackSaid(o.duet_backing)}`
       : o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
   const busy = !!S.job || !!S.osBusy;   // a one-shot cover uses the GPU queue too
@@ -754,7 +761,7 @@ function summary() {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     // a backing voice carried over (Use these settings) stays on when the lead changes: it is said here, with a way to clear it, never silently (IA P9-3)
     const bk = S.opts.backing_voice && !S.opts.duet_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
-    const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b>, taking turns <button class="linkbtn" type="button" id="clear-duet">Just one singer</button> <span class="meta">· ${DUET_BACK_SAID[o.duet_backing] || DUET_BACK_SAID.singers}</span>` : "";
+    const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b>, taking turns <button class="linkbtn" type="button" id="clear-duet">Just one singer</button> <span class="meta">· ${duetBackSaid(o.duet_backing)}</span>` : "";
     $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${du}${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }
 }
