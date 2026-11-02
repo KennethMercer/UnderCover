@@ -40,7 +40,7 @@ MAX_SNAP_S = 2.0                 # an edge has to find a place to land this clos
 MOVED_S = 0.1                    # an edge moved less than this isn't worth saying
 PAD_S = 0.5                      # context either side of a snippet, for the pitch tracker at its edges
 EDGE_S = 0.05                    # this close to the song's start or end, an edge is that end
-EDIT_ID = re.compile(r"e[0-9]{1,4}")
+EDIT_ID = re.compile(r"e[0-9]{1,7}")   # (ids only go up, undo or not)
 FIELDS = ("op", "part", "who", "octave", "t0", "t1", "words", "words_hash", "section", "by", "note")
 LOCK = threading.RLock()
 SECTION_KINDS = ("verse", "chorus")
@@ -135,7 +135,7 @@ def load(cover_id: str) -> dict | None:
             return None
         doc = json.loads(f.read_text(encoding="utf-8"))
         return _sound(doc, cover_id)
-    except (OSError, ValueError, KeyError, TypeError, ModelError):
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, ModelError):
         return None
 
 
@@ -584,7 +584,7 @@ def mix(engine, item: dict, doc: dict) -> Path | None:
     d = folder(doc["cover"])
     done = compile_list(doc)
     if not any(p[4] for v in done.values() for p in v):
-        for f in d.glob("result*"):
+        for f in (*d.glob("result.*"), *d.glob("take-*.flac")):
             f.unlink(missing_ok=True)
         return None
     opts = _options(item)
@@ -602,8 +602,8 @@ def mix(engine, item: dict, doc: dict) -> Path | None:
                  reverb_ref=stems.get("reverb"))
 
 
-def result_of(doc: dict) -> Path | None:
-    got = sorted(folder(doc["cover"]).glob("result.*"))
+def result_of(cover_id: str) -> Path | None:
+    got = sorted(folder(cover_id).glob("result.*"))
     return got[0] if got else None
 
 
@@ -648,13 +648,13 @@ def step(engine, item: dict, by: int) -> dict:
     return doc
 
 
-def keep(item: dict, doc: dict) -> dict:
+def keep(item: dict) -> dict:
     """The edited song as a new cover in the history, the one it came from untouched. Its list comes with it, with its own copy of
     the base takes, so an undo past Keep still works when the old cover has gone."""
     import uuid
     from .pipeline import _append_history, _safe, _unique, CoverResult
-    res = result_of(doc)
-    if res is None:
+    doc, res = load(item["id"]), result_of(item["id"])
+    if doc is None or res is None:
         raise ModelError("There's nothing edited to keep.")
     done = compile_list(doc)
     base = base_files(item, doc)
@@ -676,11 +676,16 @@ def keep(item: dict, doc: dict) -> dict:
     # (the list's copy first: recording the new cover may roll the old one, and this folder, off the tray)
     tmp = d.parent / f"keep-{uuid.uuid4().hex[:10]}"
     tmp.mkdir(parents=True)
-    for f in d.glob("e*.flac"):
-        shutil.copy2(f, tmp / f.name)
-    for name, src in (("base-lead.flac", base["lead"]), ("base-backing.flac", base["backing"])):
-        if src is not None:
-            shutil.copy2(src, tmp / name)
+    try:
+        for f in d.glob("e*.flac"):
+            shutil.copy2(f, tmp / f.name)
+        for name, src in (("base-lead.flac", base["lead"]), ("base-backing.flac", base["backing"])):
+            if src is not None:
+                shutil.copy2(src, tmp / name)
+    except OSError:
+        shutil.rmtree(tmp, ignore_errors=True)
+        out.unlink(missing_ok=True)
+        raise
     r = CoverResult(output=out, song=Path(item["song"]), voice=item["voice"], stems=item.get("stems") or {}, converted_vocal=vocal,
                     converted_backing=backing, notes=list(item.get("notes") or []) + ["Edited from a cover: its list came with it."],
                     seconds={}, options=o, created=time.strftime("%Y-%m-%d %H:%M:%S"), title=title)

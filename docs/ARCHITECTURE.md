@@ -504,6 +504,30 @@ options take `duet_voice` (an installed voice that isn't the lead), `duet_way`, 
 `duets.check_plan`'s shape, all checked in `frontman/api._duet_options`. The one-shot reads "<song> as A and B" (also
 "with", "&", "a duet of ...") when the second singer is a voice here (`oneshot.split_duet`).
 
+### Edit list
+
+One list per cover, `cache/converted/edits/<cover id>/edit.json`, its snippets beside it (`frontman/edits.py`). A duet's is written
+when the cover is recorded, keeping the words it heard. Any other cover's is made the first time it's opened (`POST
+/api/history/<id>/edits/open`, about 18 s to hear the words). The history line only carries `edits: n`, the count that's live.
+
+- **An edit** asks for a `singer` or an `octave` on the `lead` or the `backing`, over a stretch given by times, by words or by a
+  section. The page and an AI send the same request (`by`, and `note`, plain text, at most 200 characters). `key` is reserved and
+  refused. Later edits paint over earlier ones.
+- **`check_edit` is the one gate**, and it answers before any GPU: every field, the stretch resolved, its edges snapped, and the plan it
+  leaves through `check_plan`. A word index counts only against `words_hash`. An edge goes to the nearest silence (the backing's
+  own, for the backing), or for the lead to a dip when there's no silence within 2 s, and the edit says what it moved past. With no place
+  to land it's refused, naming the word.
+- **`compile_list`** is pure: plans and edits as far as the cursor -> parts `[start, end, who, octave, src, base]`. `plan_of` makes
+  the lead a plan, so `duet_plan` stays true. A stretch given back to what the base has there needs no snippet.
+- **Rendering** converts the stretch with 0.5 s of context either side, through the cover's own settings, lays it over the base takes
+  with a voice change's crossfade, and mixes the **whole song** (`remix`): a stretch mixed alone comes out of balance. The cover isn't
+  touched. **Undo and redo** move the cursor and mix again, with no conversion. A new edit cuts off what lay past the cursor.
+- **Keep** writes a new cover beside the old one, `edited_from`, with its list and its own copy of the base takes.
+- **Stored data:** `load()` checks every field of `edit.json` and answers "no list" for anything off, a file over 4 MB included. File
+  names come from an edit's id and nothing else. The list goes with its cover through `storage.remove_files`, and Storage's "Temporary
+  conversion files" leaves the base takes of a cover with live edits.
+- **Routes** are in `frontman/api.py`, one job at a time per cover in the GPU queue, PC only (`app/phone_api`). Page: not yet.
+
 ### The one-shot's checks and gates
 
 A community voice found for a one-shot is checked before it is used (`doubleagent/voicecheck.py`): phrases spoken by

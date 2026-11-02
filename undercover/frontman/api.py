@@ -60,7 +60,7 @@ def handle(h, method: str, p: str) -> bool:
             from . import edits
             from .history import get
             doc = edits.load(get(m.group(1))["id"])
-            h._json(edits.view(doc) if doc else {"none": True})
+            h._json({**edits.view(doc), "result": file_url(edits.result_of(doc["cover"]))} if doc else {"none": True})
         elif m := re.fullmatch(r"/api/songs/([0-9a-f]{16})/key", p):
             from .pipeline import song_key
             h._json(song_key(path("uploads_dir") / song_meta(m.group(1))["file"]))
@@ -263,7 +263,7 @@ def _edit(h, item_id: str, what: str | None, body: dict):
     try:
         if what is None:
             answer["edit"] = edits.check_edit(body, doc)
-        elif what == "keep" and edits.result_of(doc) is None:
+        elif what == "keep" and edits.result_of(item_id) is None:
             raise ModelError("There's nothing edited to keep.")
     except ModelError as e:
         return h._error(str(e))
@@ -273,14 +273,15 @@ def _edit(h, item_id: str, what: str | None, body: dict):
             if job.cancel:
                 raise Cancelled()
             job.push(stage="converting", frac=round(frac, 3), message=msg)
+        cur = get(item_id)   # (as it is now: it may have waited its turn)
         if what == "open":
-            edits.prepare(ENGINE, it, report)
+            edits.prepare(ENGINE, cur, report)
         elif what is None:
-            edits.apply(ENGINE, it, body, report)
+            edits.apply(ENGINE, cur, body, report)
         elif what in ("undo", "redo"):
-            edits.step(ENGINE, it, -1 if what == "undo" else 1)
+            edits.step(ENGINE, cur, -1 if what == "undo" else 1)
         else:
-            new = edits.keep(it, doc)
+            new = edits.keep(cur)
             return job.finish("done", message="Finished", result=next((x for x in history_items() if x["id"] == new["id"]), None))
         job.finish("done", message="Finished", edits=item_id)
 

@@ -7541,8 +7541,8 @@ def u_edits():
             E.mix = real_mix
             r = E.folder(it["id"]) / "result.flac"
             shutil.copy2(a, r)
-            assert E.result_of(got) == r
-            new = E.keep(H.get(it["id"]), got)
+            assert E.result_of(it["id"]) == r
+            new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
             assert H.get(it["id"]).get("edited_from") is None and Path(H.get(it["id"])["output"]) == out
             assert D.check_plan(new["options"]["duet_plan"], 60.0) == [[0.0, 20.4, "A"], [20.4, 40.4, "B"], [40.4, 60.0, "A"]], new["options"]
@@ -11111,6 +11111,7 @@ PHONE_SAMPLES = [
     ("POST", "/api/open-folder"), ("POST", "/api/restart"), ("POST", "/api/quit"),
     ("GET", "/api/ear"), ("POST", "/api/ear/rate"), ("POST", "/api/ear/forget"),
     ("POST", "/api/history/0123456789/again"), ("POST", "/api/history/0123456789/octaves"),
+    ("GET", "/api/history/0123456789/edits"), ("POST", "/api/history/0123456789/edits"), ("POST", "/api/history/0123456789/edits/undo"),
     ("GET", "/api/config"), ("GET", "/api/history"), ("GET", "/api/songs/search"), ("GET", "/api/auto/plan"),
     ("GET", "/api/songs/0123456789abcdef"), ("GET", "/api/songs/0123456789abcdef/key"),
     *[("POST", p) for p in ("/api/upload", "/api/estimate", "/api/covers", "/api/preview", "/api/songs/youtube", "/api/auto",
