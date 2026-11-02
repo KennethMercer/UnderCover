@@ -161,6 +161,13 @@ def files_of(item: dict) -> list:
             if f and str(f) != "None"]
 
 
+def dirs_of(item: dict) -> list:
+    """The cover's edit list and its snippets (frontman/edits.py), when it has them."""
+    from . import edits
+    d = edits.dir_of(item)
+    return [d] if d is not None else []
+
+
 def record(rec: dict) -> dict:
     """Add a finished cover, then roll the recent tray (never raises: a failed roll-off must not fail the cover).
     Returns the stored item (with its new id)."""
@@ -188,7 +195,7 @@ def roll_off(new_id_: str) -> str | None:
         within = [path("output_dir"), path("cache_dir") / "converted"]
         files = files_of(lv)
         try:
-            storage.remove_files(files, within)   # refuses everything (and removes nothing) if one path is out of bounds
+            storage.remove_files(files, within, dirs=dirs_of(lv))   # refuses everything (and removes nothing) if one path is out of bounds
         except Exception:
             if resolved_output(lv) is None:   # the cover itself went (a leftover was locked): its line would hide the rest forever
                 remove_line(lv["id"])

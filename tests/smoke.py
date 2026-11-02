@@ -7325,6 +7325,267 @@ def u_speak_hz():
     return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
 
 
+@check("a cover's edit list: every bad request refused at the gate, snapping, compile, undo, a stored list read as data, a whole edit and Keep")
+def u_edits():
+    """A cover's edit list: the gate on every kind of bad request, snapping, compile, undo, a stored list read back as data, the
+    overlay, and a whole edit with a stand-in converter and mix, in its own folders."""
+    import json as J
+    from types import SimpleNamespace
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.voices import ModelError
+    from undercover.frontman import api as A, duets as D, edits as E, history as H
+
+    def refused(req, doc, has=""):
+        try:
+            E.check_edit(req, doc)
+        except ModelError as e:
+            assert has in str(e), (str(e), has)
+            return
+        raise AssertionError(f"taken: {req}")
+    words = [[f" w{i}", 2.0 + i * 0.5, 2.4 + i * 0.5, 0.9] for i in range(100)]   # 2.0 to 52 s
+    rows = [{"t0": 2.0, "t1": 20.0, "text": "", "rep": False}, {"t0": 21.0, "t1": 30.0, "text": "", "rep": True},
+            {"t0": 31.0, "t1": 40.0, "text": "", "rep": True}, {"t0": 41.0, "t1": 52.0, "text": "", "rep": False}]
+    plan = [[0.0, 20.5, "B"], [20.5, 60.0, "A"]]
+    pts = {"lead": [[20.0, 21.0], [40.0, 41.0], [10.0, 10.3]], "backing": [[30.0, 31.0]], "dips": [15.0, 25.0, 45.0]}
+    gate = {"instrument": [], "chorus": [], "mode": "keep"}
+
+    def fresh(i="0123456789", **k):
+        return E.new_doc(i, words, rows, plan, plan, 60.0, {"A": 0, "B": -1}, pts, gate, k.get("duet", True), k.get("backing", True))
+    doc = fresh()
+    assert [s["kind"] for s in doc["sections"]] == ["verse", "chorus", "verse"] and doc["sections"][1]["t1"] == 40.0, doc["sections"]
+    sing = {"op": "singer", "part": "lead", "who": "B"}
+    # three addresses, one truth; the edges snap, to a silence first
+    e = E.check_edit({**sing, "t0": 20.4, "t1": 40.4}, doc)
+    assert (e["t0"], e["t1"]) == (20.4, 40.4) and e["moved"] == "", e
+    e = E.check_edit({**sing, "t0": 19.0, "t1": 39.0}, doc)
+    assert (e["t0"], e["t1"]) == (20.02, 40.02) and 'The start moved past "w34"' in e["moved"] and 'The end moved past "w74"' in e["moved"], e
+    assert e["words"] == [36, 75], e
+    e = E.check_edit({**sing, "section": 1}, doc)
+    assert (e["t0"], e["t1"]) == (20.98, 40.02), e
+    e = E.check_edit({**sing, "words": [40, 74], "words_hash": doc["words_hash"]}, doc)
+    assert (e["t0"], e["t1"], e["by"]) == (20.98, 40.02, "user"), e
+    e = E.check_edit({**sing, "t0": 0.01, "t1": 59.99}, doc)
+    assert (e["t0"], e["t1"]) == (0.0, 60.0), e   # the ends of the song are ends
+    e = E.check_edit({**sing, "t0": 44.0, "t1": 59.99}, doc)
+    assert (e["t0"], e["t1"]) == (45.0, 60.0) and "between two sung sounds" in e["moved"], e   # a dip only with no silence near, and it says so
+    # what's refused, and the list unchanged
+    for bad in ([], "x", None, 3, {**sing}, {**sing, "t0": 1}, {**sing, "t0": 1, "t1": 9, "section": 0},
+                {**sing, "t0": 1, "t1": 9, "path": "../x"}, {**sing, "t0": float("nan"), "t1": 9}, {**sing, "t0": 1, "t1": float("inf")},
+                {**sing, "t0": 10 ** 400, "t1": 9}, {**sing, "t0": True, "t1": 9}, {**sing, "t0": "1", "t1": 9}, {**sing, "t0": 9, "t1": 1},
+                {**sing, "t0": -3, "t1": 9}, {**sing, "t0": 1, "t1": 90}, {**sing, "section": 9}, {**sing, "section": True}, {**sing, "section": "1"},
+                {**sing, "words": [5, 2], "words_hash": doc["words_hash"]}, {**sing, "words": [0, 100], "words_hash": doc["words_hash"]},
+                {**sing, "words": [0, 1.5], "words_hash": doc["words_hash"]}, {**sing, "words": [True, 2], "words_hash": doc["words_hash"]},
+                {**sing, "words": "all", "words_hash": doc["words_hash"]}, {"op": "singer", "part": "lead", "who": "C", "t0": 1, "t1": 9},
+                {"op": "singer", "part": "lead", "who": "original", "t0": 20.2, "t1": 40.2}, {"op": "singer", "part": "drums", "who": "A", "t0": 1, "t1": 9},
+                {"op": "delete", "part": "lead", "t0": 1, "t1": 9}, {"op": "octave", "part": "lead", "octave": 3, "t0": 20.2, "t1": 40.2},
+                {"op": "octave", "part": "lead", "octave": 0.5, "t0": 20.2, "t1": 40.2}, {"op": "octave", "part": "lead", "octave": True, "t0": 20.2, "t1": 40.2},
+                {"op": "octave", "part": "lead", "t0": 20.2, "t1": 40.2}, {**sing, "t0": 20.2, "t1": 40.2, "by": "root"},
+                {**sing, "t0": 20.2, "t1": 40.2, "note": "x" * 201}, {**sing, "t0": 20.2, "t1": 40.2, "note": 5}):
+        refused(bad, doc)
+    refused({**sing, "words": [0, 1], "words_hash": "0" * 16}, doc, "another version")
+    refused({"op": "key", "part": "lead", "t0": 20.2, "t1": 40.2}, doc, "key")
+    refused({**sing, "t0": 20.2, "t1": 20.3}, doc, "too short")
+    refused({**sing, "t0": 5.0, "t1": 20.2}, doc, 'near the start, at "w6"')   # no silence or dip in reach, and the word's named
+    assert doc["edits"] == [] and doc["cursor"] == 0
+    e = E.check_edit({"op": "singer", "part": "backing", "who": "A", "t0": 29.0, "t1": 31.0}, doc)   # the backing's own silence, never the lead's
+    refused({"op": "singer", "part": "backing", "who": "A", "t0": 2.0, "t1": 31.0}, doc, "no place")
+    one = fresh(duet=False)
+    refused({**sing, "t0": 20.2, "t1": 40.2}, one, "one singer")
+    refused({"op": "octave", "part": "backing", "octave": 1, "t0": 30.2, "t1": 30.9}, one, "backing")
+    assert E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 20.2, "t1": 40.2}, one)["octave"] == 1
+    refused({"op": "octave", "part": "backing", "octave": 1, "t0": 30.2, "t1": 30.9}, fresh(backing=False), "backing")
+    full = fresh()
+    full["edits"] = [{"id": f"e{i}", "op": "octave", "part": "lead", "octave": 1, "t0": 20.2, "t1": 40.2, "files": {}} for i in range(1, E.MAX_EDITS + 1)]
+    full["cursor"] = E.MAX_EDITS
+    refused({**sing, "t0": 20.2, "t1": 40.2}, full, "at most")
+    # compile: layers, the base's own value given back, the plan's shape
+    d = fresh()
+    e1 = E.check_edit({"op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4}, d)
+    d["edits"], d["cursor"] = [e1], 1
+    e2 = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 30.0 - 9.5, "t1": 40.4}, d)
+    d["edits"], d["cursor"] = [e1, e2], 2
+    assert e2["id"] == "e2"
+    done = E.compile_list(d)
+    assert [p[:5] for p in done["lead"]] == [[0.0, 20.5, "B", None, None], [20.5, 40.4, "B", 1, "e2"], [40.4, 60.0, "A", None, None]], done
+    assert E.plan_of(done["lead"]) == [[0.0, 40.4, "B"], [40.4, 60.0, "A"]]
+    assert D.check_plan(E.plan_of(done["lead"]), 60.0)
+    assert E.compile_list(d, [])["lead"][0][:3] == [0.0, 20.5, "B"]
+    d["cursor"] = 1   # undo: the list as far as the cursor
+    assert [p[3:5] for p in E.compile_list(d)["lead"]] == [[None, None], [None, "e1"], [None, None]]
+    d["cursor"] = 2
+    e3 = E.check_edit({"op": "octave", "part": "lead", "octave": -1, "t0": 20.5, "t1": 40.4}, d)   # B's own octave: back to no change of it
+    d["edits"], d["cursor"] = [e1, e2, e3], 3
+    assert E.compile_list(d)["lead"][1][3:5] == [None, "e3"]
+    e4 = E.check_edit({"op": "singer", "part": "lead", "who": "A", "t0": 20.5, "t1": 40.4}, d)   # the base's singer again: no snippet needed
+    d["edits"], d["cursor"] = [e1, e2, e3, e4], 4
+    assert not any(p[4] == "e4" for p in E.compile_list(d)["lead"]), E.compile_list(d)
+    b = fresh()
+    bk = E.check_edit({"op": "singer", "part": "backing", "who": "original", "t0": 30.2, "t1": 60.0}, b)
+    b["edits"], b["cursor"] = [bk], 1
+    refused({"op": "octave", "part": "backing", "octave": 1, "t0": 30.5, "t1": 60.0}, b, "own pitch")
+    assert E.compile_list(b)["backing"][-1][2:5] == ["original", None, "e1"]
+    # the stored list is data: anything off, and there is no list
+    with isolated_data():
+        ok = fresh("abcdef0123")
+        E.save(ok)
+        assert E.load("abcdef0123")["cursor"] == 0
+        f = E.folder("abcdef0123") / "edit.json"
+
+        def tampered(**k):
+            f.write_text(J.dumps({**ok, **k}), encoding="utf-8")
+            return E.load("abcdef0123")
+        snippet = {"id": "e1", "op": "singer", "part": "lead", "who": "A", "t0": 1.0, "t1": 2.0, "from_s": 0.5, "at": "", "moved": None,
+                   "files": {"lead": "e1-lead.flac"}}
+        assert tampered(edits=[snippet], cursor=1) is not None
+        for k in ({"version": 2}, {"cover": "0000000000"}, {"cursor": 9}, {"cursor": -1}, {"cursor": True}, {"words_hash": "x"}, {"plan": "x"},
+                  {"plan": [[0.0, 5.0, "C"]]}, {"backing_plan": [[1.0, 5.0, "A"]]}, {"duration": float("nan")}, {"octaves": {"A": 9, "B": 0}},
+                  {"sections": [{"kind": "x", "t0": 0, "t1": 1}]}, {"points": {"lead": [[1]], "backing": [], "dips": []}}, {"gate": {}},
+                  {"edits": [{**snippet, "id": "../../x"}], "cursor": 1}, {"edits": [{**snippet, "files": {"lead": "../../../secret.flac"}}], "cursor": 1},
+                  {"edits": [{**snippet, "files": {"backing": "e1-lead.flac"}}], "cursor": 1}, {"edits": [snippet, snippet], "cursor": 2},
+                  {"edits": [{**snippet, "t1": 900.0}], "cursor": 1}, {"edits": [{**snippet, "op": "key"}], "cursor": 1},
+                  {"edits": [{k_: v for k_, v in snippet.items() if k_ != "from_s"}], "cursor": 1}, {"edits": [{**snippet, "moved": 5}], "cursor": 1}):
+            assert tampered(**k) is None, k
+        f.write_text("not json", encoding="utf-8")
+        assert E.load("abcdef0123") is None
+        f.write_bytes(b" " * (E.MAX_FILE + 1))
+        assert E.load("abcdef0123") is None
+        assert E.load("0000000000") is None
+        for bad in ("../x", "abc", "ABCDEF0123", "abcdef0123/..", None, 5):
+            try:
+                E.folder(bad)
+            except ModelError:
+                continue
+            raise AssertionError(bad)
+    # the overlay: the rest of the take to the sample, the stretch replaced, equal power at the join
+    base, piece = np.full(1000, 0.5, np.float32), np.full(400, -0.5, np.float32)
+    keep = base.copy()
+    E.overlay(base, piece, 0.3, 0.4, 0.6, 1000)   # (sr 1000: the fade is 40 samples)
+    assert np.array_equal(base[:380], keep[:380]) and np.array_equal(base[620:], keep[620:]) and (base[420:580] == -0.5).all()
+    assert abs(base[400] - 0.5 * (np.cos(np.pi / 4) - np.sin(np.pi / 4))) < 0.05, base[398:402]
+    # a whole edit, a stand-in converter and mix: the list changes only when it worked; undo; a new edit cuts off what lay past
+    with isolated_data():
+        from undercover.core.config import path
+        sr = 40000
+        work = path("cache_dir") / "converted"
+        work.mkdir(parents=True, exist_ok=True)
+        st = {}
+        for k in ("vocals", "backing", "instrumental", "reverb"):
+            st[k] = work.parent / f"{k}.flac"
+            sf.write(str(st[k]), np.zeros((16000 * 60, 1), np.float32), 16000)
+        a, b = work / "lead.flac", work / "back.flac"
+        sf.write(str(a), np.full(sr * 60, 0.1, np.float32), sr, subtype="PCM_24")
+        sf.write(str(b), np.full(sr * 60, 0.1, np.float32), sr, subtype="PCM_24")
+        song = path("uploads_dir") / "s.flac"
+        song.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(song), np.zeros((16000, 1), np.float32), 16000)
+        out = path("output_dir") / "cover.flac"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(out), np.zeros((16000, 1), np.float32), 16000)
+        it = H.record({"output": str(out), "song": str(song), "voice": "mj", "stems": {k: str(v) for k, v in st.items()}, "converted_vocal": str(a),
+                       "converted_backing": str(b), "title": "T", "options": {"voice": "mj", "duet_voice": "bw", "key": -5, "octave": 0, "duet_octave": -1,
+                                                                              "duet_plan": plan}})
+        E.save(fresh(it["id"]))
+        calls = []
+
+        def convert(x, voice, s, progress=None):
+            calls.append((voice, s.pitch, len(x)))
+            if voice == "boom":
+                raise RuntimeError("no")
+            return np.full(int(len(x) / 16000 * 48000), 0.9, np.float32), 48000
+        engine = SimpleNamespace(converter=SimpleNamespace(convert=convert), separator=None)
+        real_mix = E.mix
+        mixes = []
+        E.mix = lambda en, i, doc: mixes.append([*E._take(i, doc, "lead", E.base_files(i, doc)["lead"], E.compile_list(doc)["lead"]).parts[-1:]])
+        try:
+            quiet = lambda *x: None
+            doc = E.apply(engine, it, {"op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4}, quiet)
+            assert calls == [("bw", -17.0, 16000 * 21)], calls   # one singer, their octave, half a second of context each side
+            assert doc["cursor"] == 1 and doc["edits"][0]["files"] == {"lead": "e1-lead.flac"} and H.get(it["id"])["edits"] == 1
+            info = sf.info(str(E.folder(it["id"]) / "e1-lead.flac"))
+            assert info.samplerate == sr and abs(info.duration - 21.0) < 0.01, info   # at the base's rate
+            take, _ = sf.read(str(E.folder(it["id"]) / "take-lead.flac"), dtype="float32")
+            assert abs(take[sr * 30] - 0.9) < 0.01 and abs(take[sr * 10] - 0.1) < 0.01 and abs(take[sr * 50] - 0.1) < 0.01
+            calls.clear()
+            E.apply(engine, it, {"op": "octave", "part": "lead", "octave": 1, "t0": 20.4, "t1": 40.4, "by": "ai", "note": "up"}, quiet)
+            assert calls == [("bw", 7.0, 16000 * 21)], calls   # both: an octave edit keeps who's singing
+            E.step(engine, it, -1)
+            assert E.load(it["id"])["cursor"] == 1 and H.get(it["id"])["edits"] == 1
+            E.step(engine, it, 1)
+            assert E.load(it["id"])["cursor"] == 2
+            try:
+                E.step(engine, it, 1)
+                raise AssertionError("redo past the end")
+            except ModelError:
+                pass
+            E.step(engine, it, -1)
+            E.step(engine, it, -1)
+            assert H.get(it["id"]).get("edits") is None
+            assert not (E.folder(it["id"]) / "take-lead.flac").exists()   # nothing edited: no take left to be kept by mistake
+            E.step(engine, it, 1)
+            real = engine.converter.convert
+            engine.converter.convert = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the GPU went"))
+            before = E.load(it["id"])
+            try:
+                E.apply(engine, it, {"op": "singer", "part": "lead", "who": "A", "t0": 0.0, "t1": 20.4}, quiet)
+                raise AssertionError("no error")
+            except RuntimeError:
+                pass
+            assert E.load(it["id"]) == before   # a render that failed leaves the list as it was
+            engine.converter.convert = real
+            E.apply(engine, it, {"op": "singer", "part": "lead", "who": "A", "t0": 0.0, "t1": 20.4}, quiet)
+            got = E.load(it["id"])
+            assert [e["id"] for e in got["edits"]] == ["e1", "e3"] and got["cursor"] == 2   # e2 lay past the cursor
+            assert not (E.folder(it["id"]) / "e2-lead.flac").exists()
+            # Keep: a new cover beside the old one, its list with it, working after the old one goes
+            E.mix = real_mix
+            r = E.folder(it["id"]) / "result.flac"
+            shutil.copy2(a, r)
+            assert E.result_of(got) == r
+            new = E.keep(H.get(it["id"]), got)
+            assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
+            assert H.get(it["id"]).get("edited_from") is None and Path(H.get(it["id"])["output"]) == out
+            assert D.check_plan(new["options"]["duet_plan"], 60.0) == [[0.0, 20.4, "A"], [20.4, 40.4, "B"], [40.4, 60.0, "A"]], new["options"]
+            nd = E.load(new["id"])
+            assert nd["cover"] == new["id"] and (E.folder(new["id"]) / "base-lead.flac").is_file() and (E.folder(new["id"]) / "e1-lead.flac").is_file()
+            # the list goes with its cover, and through the allow-list
+            assert H.dirs_of(H.get(it["id"])) == [E.folder(it["id"])]
+            E.forget(H.get(it["id"]), [work])
+            assert not E.folder(it["id"]).exists()
+            assert E.base_files(H.get(new["id"]), nd)["lead"] == E.folder(new["id"]) / "base-lead.flac"
+        finally:
+            E.mix = real_mix
+        # the route: refused at once and nothing queued; one job a cover at a time
+        said = []
+        h = SimpleNamespace(_json=lambda o, *a: said.append(("json", o)), _error=lambda m, *a: said.append(("error", m)))
+        q = SimpleNamespace(put=lambda x: said.append(("queued", x[0])), qsize=lambda: 0)
+        real_q, A.GPU_QUEUE = A.GPU_QUEUE, q
+        try:
+            A._edit(h, new["id"], None, {"op": "key", "part": "lead", "t0": 1, "t1": 2})
+            assert [s[0] for s in said] == ["error"] and "key" in said[0][1], said
+            said.clear()
+            A._edit(h, new["id"], None, {**sing, "t0": 20.2, "t1": 40.2})
+            assert [s[0] for s in said] == ["queued", "json"] and said[1][1]["edit"]["t0"] == 20.2, said
+            job = said[0][1]
+            assert job.kind == "cover" and job.editing == new["id"] and job.voices == {"mj", "bw"}, vars(job)
+            said.clear()
+            A._edit(h, new["id"], "undo", {})
+            assert said == [("error", "This cover is still taking its last edit.")], said
+            A.JOBS.pop(job.id)
+            said.clear()
+            A._edit(h, new["id"], "open", {})
+            assert said[0][0] == "json" and said[0][1]["ready"] is True, said
+            said.clear()
+            A._edit(h, it["id"], "undo", {})
+            assert said == [("error", "This cover has no edit list yet. Open it first.")], said
+        finally:
+            A.GPU_QUEUE = real_q
+    src = (Path(ROOT) / "undercover" / "frontman" / "pipeline.py").read_text(encoding="utf-8")
+    assert "edits.at_make(res.id" in src and "heard.update(words=words, rows=rows)" in src
+    assert '"edits": h.get("edits") or 0' in src
+    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes"
+
+
 @check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
 def u_duets():
     import numpy as np
@@ -12806,7 +13067,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()

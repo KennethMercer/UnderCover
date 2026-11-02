@@ -158,13 +158,13 @@ class CoverEngine:
         return True
 
     def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report,
-                   lead_f0=None) -> "CoverOptions":
+                   lead_f0=None, heard: dict | None = None) -> "CoverOptions":
         """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
         (Whisper on the whole vocal) and the lead's quiet; with too few words heard, by its phrases. Turns puts one
         singer on the verses and the other on the choruses; when both have a measured range, the range says which
         (duets.turns_by_register, on the lead's pitch track `lead_f0`: at the two voices' key on the whole song, or at
         the cover's own key and octaves with the fit off). The plan and the way go into the options (the history keeps
-        them), and the notes say who sings what."""
+        them), and the notes say who sings what. heard: gets the words and lines, which the edit list keeps."""
         from dataclasses import replace
         from .duets import DUET_DEFAULT, check_plan, describe, find_plan, heard_words, turns_by_register
         from ..core.engine.convert import load_16k
@@ -182,6 +182,8 @@ class CoverEngine:
                 print(f"Duet: the words couldn't be heard ({type(e).__name__}: {e}); sharing it by phrases.", flush=True)
                 words = []
             plan, rows, fallback = find_plan(lead16, words, way, dur)
+            if heard is not None:
+                heard.update(words=words, rows=rows)
             if fallback:
                 notes.append("UnderCover couldn't make out enough of the words, so the two voices take turns every "
                              "two phrases.")
@@ -243,9 +245,10 @@ class CoverEngine:
         # is the lead stem singing? (phase 15) an instrument left in it isn't turned into singing, and lines the
         # karaoke split put in the backing are converted too; the stems themselves stay as they were
         cstems = stems
+        gate, heard = {}, {}
         if opts.lead_gate is not False:
             from .leadgate import CHORUS_MODES, apply as gate_apply, note as gate_note, plan as gate_plan, split_top
-            g = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
+            g = gate = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
             if g["instrument"] or g["chorus"]:
                 gwork = path("cache_dir") / "converted"
                 gwork.mkdir(parents=True, exist_ok=True)
@@ -260,7 +263,7 @@ class CoverEngine:
         if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself; then the fit
             import functools
             lead_f0 = functools.cache(lambda: self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03))
-            opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report, lead_f0)
+            opts = self._duet_plan(opts, voice, dvoice, cstems, work, notes, report, lead_f0, heard)
             if opts.fit:
                 opts = self._fit_duet(opts, voice, dvoice, lead_f0, notes)
         key, s.pitch = pitch_plan(opts)
@@ -300,7 +303,7 @@ class CoverEngine:
         # 24-bit FLAC: ~half the size of float WAV, far below audible precision (kept for "vocal only" downloads)
         conv_path = work / f"{_safe(title)}__{voice.name}__{stamp}.flac"
         sf.write(str(conv_path), np.clip(audio, -1, 1), sr, subtype="PCM_24")
-        conv_backing = None
+        conv_backing = bplan = None
         if bvoice:
             from dataclasses import replace
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
@@ -358,6 +361,12 @@ class CoverEngine:
                           created=time.strftime("%Y-%m-%d %H:%M:%S"), title=title)
         if record:
             res.id = _append_history(res)["id"]
+            if heard:
+                try:
+                    from . import edits
+                    edits.at_make(res.id, opts, heard["words"], heard["rows"], lead16, back16 if dback else None, bplan, gate)
+                except Exception as e:   # noqa: BLE001 - the cover stands; its words are heard again if it's edited
+                    print(f"Edit list: not written ({type(e).__name__}: {e}).", flush=True)
         return res
 
     def make_preview(self, song: Path, opts: CoverOptions, variants: list[dict], seconds: float = 15.0,
@@ -544,7 +553,7 @@ def history_items() -> list[dict]:
             "created": h.get("created", ""), "seconds": h.get("seconds", {}), "options": o,
             "output": file_url(h["output"]), "output_name": Path(h["output"]).name,
             "original": file_url(h["song"]), "vocal": file_url(h.get("converted_vocal")),
-            "backing": file_url(h.get("converted_backing")),
+            "backing": file_url(h.get("converted_backing")), "edits": h.get("edits") or 0,
             "backing_voice": (o.get("backing_voice") if h.get("converted_backing") and o.get("backing_voice") != h["voice"]
                               and not o.get("duet_voice") else None),   # (a duet's backing is its singers')
             "duet_voice": o.get("duet_voice") or None,   # a duet's second singer (duets.py)

@@ -16,6 +16,11 @@ POST   /api/history/<id>/octaves            {variants: [{octave, key}, {octave, 
 POST   /api/history/<id>/again              {options} the cover made again: its song, voice and settings, with these
                                             changed (the ear's fix: {octave: -1}; the backing follows the lead's octave)
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
+GET    /api/history/<id>/edits              the cover's edit list (edits.view), or {none: true}
+POST   /api/history/<id>/edits              an edit (edits.check_edit): refused at once with a plain 400, else -> {job, edit}
+POST   /api/history/<id>/edits/open         hear the words of a cover that has no list yet -> {job}
+POST   /api/history/<id>/edits/undo|redo    the cursor moves and the song is mixed again -> {job}
+POST   /api/history/<id>/edits/keep         the edited song as a new cover -> {job}
 """
 import hashlib
 import re
@@ -51,6 +56,11 @@ def handle(h, method: str, p: str) -> bool:
                 h._error(str(e))
         elif p == "/api/auto/plan":
             _auto_plan(h, (q.get("text") or [""])[0], (q.get("train") or ["0"])[0] == "1", (q.get("subject") or [""])[0] or None)
+        elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/edits", p):
+            from . import edits
+            from .history import get
+            doc = edits.load(get(m.group(1))["id"])
+            h._json(edits.view(doc) if doc else {"none": True})
         elif m := re.fullmatch(r"/api/songs/([0-9a-f]{16})/key", p):
             from .pipeline import song_key
             h._json(song_key(path("uploads_dir") / song_meta(m.group(1))["file"]))
@@ -70,6 +80,8 @@ def handle(h, method: str, p: str) -> bool:
             _cover_again(h, m.group(1), h._body())
         elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/octaves", p):
             _cover_octaves(h, m.group(1), h._body())
+        elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/edits(?:/(open|undo|redo|keep))?", p):
+            _edit(h, m.group(1), m.group(2), h._body())
         elif p == "/api/preview":
             _start_preview(h, h._body())
         elif p == "/api/songs/youtube":
@@ -230,6 +242,54 @@ def _cover_octaves(h, item_id: str, body: dict):
     opts = {k: v for k, v in old.items() if k != "voice"}
     _start_preview(h, {"song": Path(it.get("song") or "").stem, "voice": old.get("voice") or it.get("voice"),
                        "options": opts, "variants": variants})
+
+
+def _edit(h, item_id: str, what: str | None, body: dict):
+    """One step on a cover's edit list, as a job in the GPU queue, one at a time per cover. An edit goes through the gate first, so
+    a refusal comes back at once."""
+    from ..core.voices import ModelError
+    from . import edits
+    from .history import get
+    it = get(item_id)   # LookupError when it's gone
+    if any(getattr(j, "editing", None) == item_id and not j.finished for j in JOBS.values()):
+        return h._error("This cover is still taking its last edit.")
+    doc = edits.load(item_id)
+    if what == "open":
+        if doc:
+            return h._json({"cover": item_id, "ready": True})
+    elif doc is None:
+        return h._error("This cover has no edit list yet. Open it first.")
+    answer = {}
+    try:
+        if what is None:
+            answer["edit"] = edits.check_edit(body, doc)
+        elif what == "keep" and edits.result_of(doc) is None:
+            raise ModelError("There's nothing edited to keep.")
+    except ModelError as e:
+        return h._error(str(e))
+
+    def run(job: Job):
+        def report(frac, msg):
+            if job.cancel:
+                raise Cancelled()
+            job.push(stage="converting", frac=round(frac, 3), message=msg)
+        if what == "open":
+            edits.prepare(ENGINE, it, report)
+        elif what is None:
+            edits.apply(ENGINE, it, body, report)
+        elif what in ("undo", "redo"):
+            edits.step(ENGINE, it, -1 if what == "undo" else 1)
+        else:
+            new = edits.keep(it, doc)
+            return job.finish("done", message="Finished", result=next((x for x in history_items() if x["id"] == new["id"]), None))
+        job.finish("done", message="Finished", edits=item_id)
+
+    job = Job("cover", title=edits.title_of(it))
+    job.voices = edits.voices_of(it)   # what it reads with (jobs.jobs_using)
+    job.editing = item_id
+    JOBS[job.id] = job
+    GPU_QUEUE.put((job, run))
+    h._json({"job": job.id, **answer})
 
 
 def _stored_options(it: dict) -> dict:
