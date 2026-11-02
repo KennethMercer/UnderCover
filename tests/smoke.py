@@ -7618,6 +7618,35 @@ def u_edits():
                 assert "as often" in str(e)
             E.save(full)
             E.mix = real_mix
+            # a mix promotes only its own takes, and a result held open leaves the takes where they were
+            import undercover.frontman.remix as RX
+
+            def fake_remix(inst, vocal, orig, out, **k):
+                f = out.with_name(out.name + ".flac")
+                shutil.copy2(a, f)
+                return f
+            real_rx, RX.remix = RX.remix, fake_remix
+            real_replace, fnew = os.replace, E.folder(new["id"])
+            try:
+                (fnew / "next-backing.flac").write_bytes(b"stale")
+                E.mix(engine, H.get(new["id"]), E.load(new["id"]))
+                assert (fnew / "take-lead.flac").exists() and not (fnew / "take-backing.flac").exists() and not list(fnew.glob("next*")), list(fnew.iterdir())
+                (fnew / "take-lead.flac").unlink()
+
+                def held_open(s, d):
+                    if Path(d).name.startswith("result"):
+                        raise RuntimeError("held")
+                    real_replace(s, d)
+                os.replace = held_open
+                try:
+                    E.mix(engine, H.get(new["id"]), E.load(new["id"]))
+                    raise AssertionError("no error")
+                except RuntimeError:
+                    pass
+                os.replace = real_replace
+                assert not (fnew / "take-lead.flac").exists() and (fnew / "result.flac").exists()
+            finally:
+                os.replace, RX.remix = real_replace, real_rx
             # a list that can't be read is set aside, never written over; on a kept cover there's no fresh start
             real_heard, real_voice = E.duets.heard_words, E.get_voice
             E.duets.heard_words, E.get_voice = (lambda *a, **k: []), (lambda n: n)

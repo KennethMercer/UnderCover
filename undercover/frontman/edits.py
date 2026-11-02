@@ -584,18 +584,18 @@ def _take(item: dict, doc: dict, part: str, base: Path, parts: list) -> Path:
 
 
 def _promote(d: Path, mixed: Path | None) -> Path | None:
-    """The takes and the result this mix made take over from the last one's, only now that it has worked: Keep takes what's here."""
+    """The takes and the result this mix made take over from the last one's, only now that it has worked: Keep takes what's here.
+    The result first: a player may hold it open, and then the takes stay with it."""
+    res = None if mixed is None else d / f"result{mixed.suffix}"
+    if mixed is not None:
+        fsutil.retry(lambda: os.replace(mixed, res))
+    _drop([f for f in d.glob("result.*") if f != res])
     for part in PARTS:
         nxt, f = d / f"next-{part}.flac", d / f"take-{part}.flac"
         if nxt.exists():
             fsutil.retry(lambda n=nxt, f=f: os.replace(n, f))
         else:
             _drop([f])
-    _drop(list(d.glob("result.*")))
-    if mixed is None:
-        return None
-    res = d / f"result{mixed.suffix}"
-    fsutil.retry(lambda: os.replace(mixed, res))
     return res
 
 
@@ -607,6 +607,7 @@ def mix(engine, item: dict, doc: dict) -> Path | None:
     from .remix import remix
     d = folder(doc["cover"])
     done = compile_list(doc)
+    _drop(list(d.glob("next*")))   # (what a mix that failed left: only this one's are promoted)
     if not any(p[4] for v in done.values() for p in v):
         return _promote(d, None)
     opts = _options(item)
