@@ -200,24 +200,36 @@
       <h2>2 · Voice</h2>
       <div class="search sfield" role="search"><svg class="ico" aria-hidden="true"><use href="#g-search"/></svg><input id="q" type="search" autocomplete="off" placeholder="Search your voices, find new ones, or paste a link" aria-label="Search your voices or find new ones"><button class="btn" id="q-go" type="button">Search</button></div>
       <div class="voices" id="voices" aria-label="Installed voices"></div>
-      <!-- a duet (1.2, frontman/duets.py): a second singer and how they share the song; plain hooks, the look is Q's -->
-      <div class="field fm-duet" id="fm-duet-box">
-        <label for="fm-duet">Sing it with someone?</label>
-        <select id="fm-duet" class="select"><option value="">+ Second singer</option></select>
-        <div id="fm-duet-way-box" hidden>
-          <span class="flabel" id="fm-duet-way-l">How do they share it?</span>
-          <div class="seg" id="fm-duet-way" role="group" aria-labelledby="fm-duet-way-l">
-            <button type="button" data-v="turns">Take turns</button>
-            <button type="button" data-v="lines" hidden>Line by line</button>
+      <!-- a duet (frontman/duets.py): who sings, how they share it, who sings the backing -->
+      <div class="fm-duet" id="fm-duet-box">
+        <div class="singers">
+          <span class="q" id="fm-duet-q">Sing it with someone?</span>
+          <button class="addvoice" id="fm-duet-add" type="button" aria-expanded="false" aria-controls="fm-duet">+ Second singer</button>
+          <span class="duetchips" id="fm-duet-chips"></span>
+        </div>
+        <div class="voices picker" id="fm-duet" role="listbox" aria-label="Second singer" hidden></div>
+        <div class="ctls" id="fm-duet-way-box" hidden>
+          <div class="ctl">
+            <span class="lab" id="fm-duet-way-l">How do they share it?</span>
+            <div class="seg" id="fm-duet-way" role="group" aria-labelledby="fm-duet-way-l">
+              <button type="button" data-v="turns">Take turns</button>
+              <button type="button" data-v="lines" hidden>Line by line</button>
+              <button type="button" data-v="mine" data-deep disabled title="You'll draw the split on the song. Not built yet.">I'll choose <span class="deepmark wide"><svg class="ico" aria-hidden="true"><use href="#g-deep"/></svg>Deep Cover</span></button>
+            </div>
+            <p class="meta" id="fm-duet-note"></p>
+            <div class="strip" id="fm-duet-strip" aria-hidden="true" hidden></div>
+            <div class="legend" id="fm-duet-legend" hidden></div>
+            <p class="deepline" id="fm-duet-deep" data-deep hidden></p>
           </div>
-          <div class="strip" id="fm-duet-strip" aria-hidden="true"></div>
-          <p class="meta" id="fm-duet-note"></p>
-          <span class="flabel" id="fm-duet-backing-l">Backing vocals</span>
-          <div class="seg" id="fm-duet-backing" role="group" aria-labelledby="fm-duet-backing-l">
-            <button type="button" data-v="singers">In their voices</button>
-            <button type="button" data-v="original">The original</button>
+          <div class="ctl">
+            <span class="lab" id="fm-duet-backing-l">Backing vocals</span>
+            <div class="seg" id="fm-duet-backing" role="group" aria-labelledby="fm-duet-backing-l">
+              <button type="button" data-v="singers"><span class="wide">Their own voices</span><span class="short">Their own</span></button>
+              <button type="button" data-v="other"><span class="wide">The other singer</span><span class="short">The other</span></button>
+              <button type="button" data-v="original"><span class="wide">The original</span><span class="short">Original</span></button>
+            </div>
+            <p class="meta" id="fm-duet-backing-note"></p>
           </div>
-          <p class="meta" id="fm-duet-backing-note"></p>
         </div>
       </div>
       <div class="online-h" id="online-h" hidden></div>

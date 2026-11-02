@@ -441,6 +441,7 @@ $("#build-toggle")?.addEventListener("click", () => { S.buildOpen = $("#build").
 function renderSong() {
   previewSync();   // versions made for another song are put away
   syncBuild();
+  renderDuetPlan();
   if (!S.song) return setDrop("empty");
   setDrop("loaded");
   const s = S.song;
@@ -477,21 +478,24 @@ function voiceDesc(v) {
   return `RVC ${v.version} · ${v.sr ? v.sr / 1000 + " kHz" : "?"}${src ? " · " + src[1].split("/")[1].replace(/_+/g, " ").slice(0, 40) : ""}`;
 }
 const rmArmed = name => S.rmArm?.name === name && Date.now() - S.rmArm.at < 4000;   // Remove's first click, still standing
+const voiceFacts = v => [...(v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : [voiceTrained(v.name) ? "Trained here" : "Downloaded"]),
+  typeof earHint === "function" && earHint(v) ? { html: earHint(v), muted: true } : "", ...voiceDesc(v).split(" · ").map(t => ({ t, deep: true }))];
+function voiceOrder(list) {
+  const sunk = [...list].sort((a, b) => (a.likeness_word === "poor") - (b.likeness_word === "poor"));   // the ones that aren't really them sink
+  return typeof earSort === "function" ? earSort(sunk) : sunk;   // the ones you've liked rise (ear.js)
+}
 function renderVoices() {
   const q = $("#q").value.trim().toLowerCase();
   const isLink = /^https?:\/\//i.test(q);
-  const list = isLink ? [] : S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q) || voiceDisplay(v.name).toLowerCase().includes(q))
-    .sort((a, b) => (a.likeness_word === "poor") - (b.likeness_word === "poor"));   // the ones that aren't really them sink
-  const shownList = typeof earSort === "function" ? earSort(list) : list;   // the ones you've liked rise (ear.js)
+  const list = isLink ? [] : voiceOrder(S.voices.filter(v => !q || v.name.includes(q.replace(/\s+/g, "-")) || v.name.includes(q) || voiceDisplay(v.name).toLowerCase().includes(q)));
   const box = $("#voices");
   const kept = document.activeElement?.dataset?.rm;   // a keyboard user on a Remove button stays on it when the list draws again
   if (!S.voices.length && !q) box.innerHTML = `<div class="empty"><b>No voices yet.</b><button class="btn" type="button" data-goto="doubleagent">Get a voice</button><small class="meta">or search above (try “spongebob”)</small></div>`;
   else if (!list.length && !isLink) box.innerHTML = `<p class="meta">No installed voice matches “${esc(q)}”.</p>`;
-  else box.innerHTML = shownList.map(v => `
+  else box.innerHTML = list.map(v => `
     <div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === S.voice}" data-v="${esc(v.name)}">
       <span class="avatar">${vinitial(v.name)}</span>
-      <span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b>${facts([...(v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : [voiceTrained(v.name) ? "Trained here" : "Downloaded"]),
-        typeof earHint === "function" && earHint(v) ? { html: earHint(v), muted: true } : "", ...voiceDesc(v).split(" · ").map(t => ({ t, deep: true }))])}</span>
+      <span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b>${facts(voiceFacts(v))}</span>
       <span class="vside">${voiceLineButton(v.name)}<button class="remove${rmArmed(v.name) ? " confirm" : ""}"${rmArmed(v.name) ? ` data-armed-at="${S.rmArm.at}"` : ""} data-rm="${esc(v.name)}" aria-label="Remove ${esc(voiceDisplay(v.name))}">${rmArmed(v.name) ? "Confirm remove" : "Remove"}</button><span class="tag" data-deep>${v.index ? "index" : "no index"}</span></span>
     </div>`).join("");
   $$(".voice.pick", box).forEach(el => {
@@ -644,29 +648,79 @@ function renderBackingSelect() {
 $("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.target.value; renderBackingSelect(); saveOpts(); summary(); refreshEstimate(); });
 // A duet (1.2): a second singer takes turns with the voice (frontman/duets.py), shared one of two ways. Never the lead
 // itself, and only a voice that's installed.
-// (Line by line stays hidden until it passes the ear; style A's segmented control and strip are the look chat's)
+// (Line by line stays hidden until it passes the ear; I'll choose waits for its editor)
 const DUET_WAYS = { turns: "One takes the verses and the other the choruses, by whose range suits them.", lines: "A line each, changing only where the singer breathes." };
-const DUET_BACKINGS = { singers: "Each backing line is sung by whoever has the lead under it.", original: "The song's own backing singers stay." };
+const DUET_BACKINGS = { singers: "Under each line, the backing is sung by whoever has the lead there.", other: "The backing goes to whoever isn't on the lead, one backing phrase at a time.",
+                        original: "The song's own backing singers stay." };
+const DUET_BACK_SAID = { singers: "backing in their own voices", other: "backing by the other singer", original: "the original backing" };
 function renderDuet() {
-  const sel = $("#fm-duet");
-  if ((S.voicesLoaded && S.opts.duet_voice && !S.voices.some(v => v.name === S.opts.duet_voice)) || S.opts.duet_voice === S.voice) S.opts.duet_voice = "";
-  sel.innerHTML = `<option value="">+ Second singer</option>` + S.voices.filter(v => v.name !== S.voice)
-    .map(v => `<option value="${esc(v.name)}">${esc(voiceDisplay(v.name))}</option>`).join("");
-  sel.value = S.opts.duet_voice || "";
-  const shown = $$("#fm-duet-way button").filter(b => !b.hidden).map(b => b.dataset.v);   // (a hidden way isn't kept from before)
+  const pick = $("#fm-duet"), two = S.opts.duet_voice;
+  if ((S.voicesLoaded && two && !S.voices.some(v => v.name === two)) || two === S.voice) S.opts.duet_voice = "";
+  const duet = S.opts.duet_voice;
+  $("#fm-duet-box").hidden = !S.voice;   // a second singer needs a first
+  $("#fm-duet-box").classList.toggle("two", !!duet);
+  $("#fm-duet-q").textContent = duet ? "Singing it" : "Sing it with someone?";
+  $("#fm-duet-add").hidden = !!duet;
+  $("#fm-duet-chips").innerHTML = duet && S.voice ? `<span class="vchip a"><span class="av">${vinitial(S.voice)}</span>${vname(S.voice)}<small>lead</small></span>
+    <span class="vchip b"><span class="av">${vinitial(duet)}</span>${vname(duet)}<button class="x" id="fm-duet-x" type="button" aria-label="Just one singer" title="Just one singer">×</button></span>` : "";
+  const others = voiceOrder(S.voices.filter(v => v.name !== S.voice));
+  pick.innerHTML = others.length ? others.map(v => `<div class="voice pick" role="option" tabindex="0" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="false" data-v="${esc(v.name)}">
+      <span class="avatar">${vinitial(v.name)}</span><span class="vtext"><b>${vname(v.name, false)}${likeDot(v.likeness_word)}</b>${facts(voiceFacts(v))}</span></div>`).join("")
+    : `<p class="meta">No other voice here yet. <button class="linkbtn" type="button" data-goto="doubleagent">Get a voice</button></p>`;
+  if (duet) duetPick(false);
+  const shown = $$("#fm-duet-way button").filter(b => !b.hidden && !b.disabled).map(b => b.dataset.v);   // (a hidden way isn't kept from before)
   const way = shown.includes(S.opts.duet_way) ? S.opts.duet_way : shown.includes(S.defaults.duet_way) ? S.defaults.duet_way : shown[0];
   if (S.opts.duet_voice) S.opts.duet_way = way;
   $("#fm-duet-way-box").hidden = !S.opts.duet_voice;
   $$("#fm-duet-way button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === way)));
-  $("#fm-duet-note").textContent = S.opts.duet_voice ? DUET_WAYS[way] : "";
   const own = v => typeof v === "string" && Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v);   // (a stored value is only data)
   const back = own(S.opts.duet_backing) ? S.opts.duet_backing : own(S.defaults.duet_backing) ? S.defaults.duet_backing : "singers";
   if (S.opts.duet_voice) S.opts.duet_backing = back;
   $$("#fm-duet-backing button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === back)));
   $("#fm-duet-backing-note").textContent = S.opts.duet_voice ? DUET_BACKINGS[back] : "";
+  renderDuetPlan();
   renderBackingSelect();
 }
-$("#fm-duet").addEventListener("change", e => { S.opts.duet_voice = e.target.value; renderDuet(); saveOpts(); summary(); refreshEstimate(); });
+// The picture of the song exists only once it has been sung: the newest cover of this song by these two has the engine's own plan
+// and its own sentence, and Convert finds the plan again. Before that the general sentence, and no strip: never a made-up picture.
+const duetPlanOf = h => { const p = h.options?.duet_plan; return Array.isArray(p) && p.length && p.every(x => Array.isArray(x) && x[1] > x[0] && ["A", "B"].includes(x[2])) ? p : null; };   // (the history's own file, read as data)
+// the note is "Duet: 0:00 A · 1:07 B. A takes the verses and B the choruses, by range.", or a count for a long plan: the sentence is what follows
+function duetSaid(h, plan) {
+  const note = (h.notes || []).find(n => typeof n === "string" && n.startsWith("Duet: "));
+  if (!note) return "";
+  const end = note.includes(" changes). ") ? " changes). " : `${voiceDisplay(plan.at(-1)[2] === "A" ? h.voice : h.duet_voice)}. `;
+  const at = note.indexOf(end, note.lastIndexOf(" · ") + 1);
+  return at < 0 ? "" : note.slice(at + end.length);
+}
+function duetDeepLine(h, plan) {
+  const o = h.options, n = plan.length - 1, a = +(o.octave || 0), b = +(o.duet_octave ?? a);
+  const moved = (id, oct) => oct ? `${voiceDisplay(id)} ${Math.abs(oct) > 1 ? `${Math.abs(oct)} octaves` : "an octave"} ${oct > 0 ? "up" : "down"}` : "";
+  return [`${n} ${n === 1 ? "change" : "changes"}`, +o.key ? `key ${fmtPitch(o.key)} for both` : "original key", moved(h.voice, a), moved(h.duet_voice, b)].filter(Boolean).join(" · ");
+}
+function renderDuetPlan() {
+  const o = S.opts, duet = o.duet_voice;
+  const h = duet && S.song ? HIST.find(x => x.original === S.song.url && x.voice === S.voice && x.duet_voice === duet && x.options?.duet_way === o.duet_way && duetPlanOf(x)) : null;
+  const plan = h && duetPlanOf(h), strip = $("#fm-duet-strip");
+  $("#fm-duet-note").textContent = duet ? (plan && duetSaid(h, plan)) || DUET_WAYS[o.duet_way] : "";
+  strip.hidden = $("#fm-duet-legend").hidden = $("#fm-duet-deep").hidden = !plan;
+  strip.innerHTML = plan ? plan.map(([a, b, who]) => `<i class="${who.toLowerCase()}" style="flex-grow:${b - a}"></i>`).join("") : "";
+  $("#fm-duet-legend").innerHTML = plan ? [[S.voice, "a"], [duet, "b"]].map(([id, c]) => `<span><i class="dot ${c}"></i>${esc(voiceDisplay(id))}</span>`).join("") : "";
+  $("#fm-duet-deep").textContent = plan ? duetDeepLine(h, plan) : "";
+}
+function duetPick(open) { $("#fm-duet").hidden = !open; $("#fm-duet-add").setAttribute("aria-expanded", String(open)); }
+const duetChoose = name => $("#fm-duet").dispatchEvent(new CustomEvent("change", { detail: name }));
+$("#fm-duet-add").addEventListener("click", () => duetPick($("#fm-duet").hidden));
+$("#fm-duet-chips").addEventListener("click", e => { if (e.target.closest("#fm-duet-x")) { duetChoose(""); $("#fm-duet-add").focus(); } });
+$("#fm-duet").addEventListener("click", e => {
+  const row = e.target.closest(".voice.pick"); if (!row) return;
+  duetChoose(row.dataset.v); $("#fm-duet-x")?.focus();
+});
+$("#fm-duet").addEventListener("keydown", e => {
+  if (e.key === "Escape") { duetPick(false); return $("#fm-duet-add").focus(); }
+  const row = e.target.closest(".voice.pick");
+  if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); row.click(); }
+});
+$("#fm-duet").addEventListener("change", e => { S.opts.duet_voice = e.detail; renderDuet(); saveOpts(); summary(); refreshEstimate(); });
 $("#fm-duet-way").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   S.opts.duet_way = b.dataset.v; renderDuet(); saveOpts();
@@ -686,7 +740,7 @@ function summary() {
   const o = S.opts;
   previewSync();
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
-    (o.duet_voice ? (o.duet_backing === "original" ? " · original backing" : " · backing in their voices")
+    (o.duet_voice ? ` · ${DUET_BACK_SAID[o.duet_backing] || DUET_BACK_SAID.singers}`
       : o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
   const busy = !!S.job || !!S.osBusy;   // a one-shot cover uses the GPU queue too
@@ -700,7 +754,7 @@ function summary() {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     // a backing voice carried over (Use these settings) stays on when the lead changes: it is said here, with a way to clear it, never silently (IA P9-3)
     const bk = S.opts.backing_voice && !S.opts.duet_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
-    const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b> <button class="linkbtn" type="button" id="clear-duet">Just one singer</button>` : "";
+    const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b>, taking turns <button class="linkbtn" type="button" id="clear-duet">Just one singer</button> <span class="meta">· ${DUET_BACK_SAID[o.duet_backing] || DUET_BACK_SAID.singers}</span>` : "";
     $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${du}${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }
 }
@@ -1110,6 +1164,7 @@ async function loadHistory() {
   if (mine) { S.result.kept = mine.kept; renderKeep(); $("#result-h").textContent = coverName(S.result); }
   else if (ok && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // it rolled off the tray (or was deleted)
   renderHistory();
+  renderDuetPlan();
 }
 function renderHistory() {
   const box = $("#hist");
