@@ -12,10 +12,10 @@
 const JF = { list: [], at: 0, ch: {}, subs: new Set(), polling: null, seen: new Set(), titled: null };
 
 // which module a job belongs to (colour, label, where the bar's click goes)
-const JOB_OWNER = { cover: "frontman", presep: "frontman", auto: "frontman", install: "frontman", speech: "speakeasy",
+const JOB_OWNER = { cover: "frontman", presep: "frontman", auto: "frontman", install: "frontman", speech: "speakeasy", speakwarm: "speakeasy",
                     addon: "safehouse", move: "safehouse", doctor: "safehouse", ytdlp: "safehouse" };
 const jobOwner = kind => JOB_OWNER[kind] || "doubleagent";   // train, train-*, night (the overnight queue)
-const JOB_KIND = { cover: "cover", presep: "separating", auto: "one-shot", install: "voice install", speech: "speech",
+const JOB_KIND = { cover: "cover", presep: "separating", auto: "one-shot", install: "voice install", speech: "speech", speakwarm: "warming up", voicepreview: "voice preview",
                    train: "training", "train-prepare": "preparing clips", "train-auto": "new voice", "train-export": "adding a voice",
                    "train-transcribe": "transcripts", "cadence-ab": "listening copies", "improve-ab": "listening copies", smaller: "making it smaller", night: "voice work",
                    addon: "add-on", move: "moving files", doctor: "check-up", ytdlp: "YouTube downloader" };

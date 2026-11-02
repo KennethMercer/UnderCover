@@ -77,15 +77,15 @@ function seVoices() {
   const list = SE.voices.filter(v => !q || `${v.name} ${v.person || ""} ${voiceDisplay(v.name)}`.toLowerCase().includes(q));
   $("#se-vcount").textContent = `${SE.voices.length} voice${SE.voices.length === 1 ? "" : "s"}`;
   const row = v => {
-    const bits = v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : v.trained ? [upFirst(v.kind), v.undertrained ? { t: "Under-trained", muted: true } : ""]
+    const bits = v.demo ? ["Demo voice", { t: "Not a real person", muted: true }] : v.trained ? [upFirst(v.kind), v.undertrained ? { t: "Under-trained", muted: true, cls: "keep" } : ""]
                            : ["Downloaded", v.person ? { t: `Checked: ${v.person}`, muted: true } : "", v.kind === "singing" ? { t: "Singing", muted: true } : ""];
     const c = v.cadence || {};
-    const cad = c.has ? `<span class="y">Speaks</span>` : c.queue === "running" ? "Learning to speak" : c.queue ? "Learns to speak tonight" : "Can't speak yet";
+    const cad = c.has ? `<span class="y">Speaks</span>` : c.queue === "running" ? "Learning to speak" : c.queue ? `Learns<span class="se-wide"> to speak</span> tonight` : "Can't speak yet";
     const act = c.has || c.queue || !c.can ? ""
       : `<button class="mini" type="button" data-cad="${esc(v.name)}" title="${esc(c.why || "")}">Let it speak</button>`;
     return `<div class="voice" role="option" tabindex="0" data-v="${esc(v.name)}" aria-label="${esc(voiceDisplay(v.name))}" aria-selected="${v.name === SE.voice}">
       <div class="avatar" aria-hidden="true">${vinitial(v.name)}</div>
-      <div class="vtext"><b>${vname(v.name)}</b>${facts([{ html: `<span class="se-cad">${cad}</span>` }, ...bits, v.trained && v.likeness != null ? { t: `likeness ${(+v.likeness).toFixed(2)}`, deep: true } : ""])}</div>
+      <div class="vtext"><b>${vname(v.name, false)}</b>${facts([{ html: `<span class="se-cad">${cad}</span>` }, ...bits, v.trained && v.likeness != null ? { t: `likeness ${(+v.likeness).toFixed(2)}`, deep: true } : ""])}</div>
       <div class="se-vact">${voiceLineButton(v.name)}${act}</div></div>`;
   };
   const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
@@ -221,8 +221,8 @@ function seSummary() {
   const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${first}${est.waiting ? ` (${esc(est.waiting)} ahead in the queue)` : ""}`
     : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
   const when = `${cad ? "the way they really do" : "read by the Reader"}${ready} · ready to play after the ${cad ? "first few sentences" : "first sentence"}`;
-  $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
-    : `<b>${vname(SE.voice)}</b> <span class="meta">· type or paste something for them to say</span>`;
+  $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice, false)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
+    : `<b>${vname(SE.voice, false)}</b> <span class="meta">· type or paste something for them to say</span>`;
 }
 
 // ------------------------------------------------------------ Generate + Now speaking

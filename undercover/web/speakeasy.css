@@ -61,7 +61,13 @@ a.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
   .se-rrow { grid-template-columns: 34px 1fr; }
   .se-rrow .row { grid-column: 2; flex-wrap: wrap; }   /* the buttons go under the title, so the title keeps its width (IA M2) */
   .se-rrow .dur { display: none; }
-  .se-vlist .voice { grid-template-columns: 34px 1fr; }
-  .se-vlist .voice .se-vact { grid-column: 2; justify-content: flex-start; }
+  /* a voice row is one line of pills: the least important ones wait for the desktop (Deep Cover keeps them all); the play button stays on the row,
+     and only Let it speak takes a line of its own */
+  body:not(.deep) .se-vlist .voice .fact.muted:not(.keep) { display: none; }
+  .se-vlist .voice .facts { gap: 4px; }
+  .se-vlist .voice .fact { padding-inline: 7px; }
+  .se-vlist .voice .se-cad { font-family: var(--body); font-size: 12.5px; }
+  .se-vlist .voice .se-wide { display: none; }
+  .se-vlist .voice .se-vact:has(.mini) { grid-column: 2 / -1; justify-content: flex-start; }
   .se-go .convert { width: 100%; }
 }

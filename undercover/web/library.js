@@ -55,7 +55,7 @@ async function loadSummary() {
   if (!s.ytdlp_job) $("#lib-ytdlp-go").textContent = s.ytdlp_offer ? "Update now" : "Check for a fix";   // (1.1: a release under 48 h is the user's click)
   $("#lib-ytdlp-auto").checked = !!s.ytdlp_auto;
   if (s.ytdlp_job && !L.ytdlpWatch) ytdlpWatch(s.ytdlp_job);
-  renderKf();   // the tabs' totals and the chips' numbers
+  renderKf();   // the tabs' numbers and the chips'
 }
 // System room: YouTube changes often; the check fetches PyPI's newest yt-dlp + its solver, tests it, and uses it only if
 // it works at least as well (else keeps or goes back to the last known good). A job: progress on the button.
@@ -93,8 +93,8 @@ const refreshAll = async keepSel => { await Promise.all([loadSummary(), loadCat(
 
 // ------------------------------------------------------------ chips, tools
 // The numbers follow the tab that's showing: under Kept each chip counts its kept things, under Recent only covers and
-// speech have a number (the others have no recent tray). The tabs count every category. (The user, 2026-10-12: "Covers 1"
-// under an empty Kept made no sense.)
+// speech have a number (the others have no recent tray). The tabs count the chosen kind, so a tab never says 5 over a 0 (the
+// outside designer's second pass). (The user, 2026-10-12: "Covers 1" under an empty Kept made no sense.)
 const kfNow = () => hasTray() ? L.kf : "kept";
 function tabCounts(kf) {
   const t = L.summary?.tabs?.[kf];
@@ -105,7 +105,7 @@ function tabCounts(kf) {
 function renderCats() {
   const c = tabCounts(kfNow());
   $("#lib-cats").innerHTML = CATS.map(([k, label]) => `<button class="cat" data-cat="${k}" aria-pressed="${k === L.cat}" aria-label="${label}${c[k] != null ? `, ${c[k]}` : ""}"><b>${label}</b>${c[k] != null ? `<small>${c[k]}</small>` : ""}</button>`).join("");
-  $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderCats(); loadCat(); });
+  $$("#lib-cats .cat").forEach(b => b.onclick = () => { if (L.cat === b.dataset.cat) return; L.cat = b.dataset.cat; store.set("uc-lib-cat", L.cat); L.audio.pause(); $("#lib-q").value = ""; renderKf(); loadCat(); });
 }
 function renderTools() {
   $("#lib-q").placeholder = { covers: "Search covers by song or voice", speech: "Search speech by text or voice", songs: "Search songs", voices: "Search voices", training: "Search training projects" }[L.cat];
@@ -125,11 +125,11 @@ function renderTools() {
 L.kf = store.get("uc-lib-kf", "kept");
 const hasTray = () => L.cat === "covers" || L.cat === "speech";
 function renderKf() {
-  const tray = hasTray(), sum = o => Object.values(o).reduce((n, v) => n + (+v || 0), 0);
+  const tray = hasTray();
   // Songs, voices and training are always kept: neither tab is lit for them (Kept used to switch itself on), and both say why
   $$("#lib-kfilter .tab").forEach(b => { b.setAttribute("aria-pressed", tray && b.dataset.v === L.kf); b.disabled = !tray; b.title = tray ? "" : "These are always kept"; });
-  $("#lib-n-kept").textContent = L.summary ? sum(tabCounts("kept")) : "";
-  $("#lib-n-recent").textContent = L.summary ? sum(tabCounts("recent")) : "";
+  $("#lib-n-kept").textContent = L.summary ? tabCounts("kept")[L.cat] ?? "" : "";
+  $("#lib-n-recent").textContent = L.summary && tray ? tabCounts("recent")[L.cat] ?? "" : "";
   renderCats();   // the chips' numbers follow the tab
 }
 $$("#lib-kfilter .tab").forEach(b => b.onclick = () => { L.kf = b.dataset.v; store.set("uc-lib-kf", L.kf); L.sel = null; renderKf(); renderList(); renderDetail(); });
@@ -166,7 +166,9 @@ const narrowQ = matchMedia("(max-width: 680px)");
 function placeDetail() {
   const d = $("#lib-detail"), row = narrowQ.matches && L.sel != null ? $('#lib-list .litem[aria-selected="true"]') : null;
   if (row) row.after(d); else if (d.parentNode === $("#lib-list")) $("#lib-list").after(d);
-  d.hidden = narrowQ.matches && !row;
+  const none = !$("#lib-list .litem");   // an empty list says so itself: no second empty beside it, and the list takes the width
+  d.hidden = none || (narrowQ.matches && !row);
+  $("#view-library .lib").classList.toggle("solo", none);
 }
 narrowQ.addEventListener("change", placeDetail);
 // a retrained voice waiting beside this one (voice list's waiting_beside): nested under its owner, with the way to the A/B
