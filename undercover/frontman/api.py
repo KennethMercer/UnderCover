@@ -260,9 +260,12 @@ def _edit(h, item_id: str, what: str | None, body: dict):
     elif doc is None:
         return h._error("This cover has no edit list yet. Open it first.")
     answer = {}
+    to = None if doc is None else doc["cursor"] + {"undo": -1, "redo": 1}.get(what, 0)
     try:
         if what is None:
             answer["edit"] = edits.check_edit(body, doc)
+        elif what in ("undo", "redo") and not 0 <= to <= len(doc["edits"]):
+            raise ModelError(f"There's nothing to {what}.")
         elif what == "keep" and edits.result_of(item_id) is None:
             raise ModelError("There's nothing edited to keep.")
     except ModelError as e:
@@ -279,7 +282,7 @@ def _edit(h, item_id: str, what: str | None, body: dict):
         elif what is None:
             edits.apply(ENGINE, cur, body, report)
         elif what in ("undo", "redo"):
-            edits.step(ENGINE, cur, -1 if what == "undo" else 1)
+            edits.step(ENGINE, cur, to)
         else:
             new = edits.keep(cur)
             return job.finish("done", message="Finished", result=next((x for x in history_items() if x["id"] == new["id"]), None))

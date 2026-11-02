@@ -10,6 +10,7 @@ nowhere else.
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import threading
@@ -34,6 +35,8 @@ ORIGINAL = "original"            # a stretch of backing as the song has it
 OCTAVE_BOUND = 2
 MAX_EDITS = 500                  # an edit list longer than this is no one's (the list is refused beyond it)
 MAX_FILE = 4_000_000             # edit.json over this isn't one the app wrote
+MAX_BYTES = 2_000_000_000        # a list's snippets, on disk
+MAX_SAID = 400                   # a stored sentence (`moved`)
 MAX_NOTE = 200
 MIN_EDIT_S = 0.3
 MAX_SNAP_S = 2.0                 # an edge has to find a place to land this close, or the edit is refused
@@ -42,6 +45,7 @@ PAD_S = 0.5                      # context either side of a snippet, for the pit
 EDGE_S = 0.05                    # this close to the song's start or end, an edge is that end
 EDIT_ID = re.compile(r"e[0-9]{1,7}")   # (ids only go up, undo or not)
 FIELDS = ("op", "part", "who", "octave", "t0", "t1", "words", "words_hash", "section", "by", "note")
+STORED = ("id", "op", "part", "who", "octave", "by", "note", "t0", "t1", "words", "at", "moved", "files", "from_s")
 LOCK = threading.RLock()
 SECTION_KINDS = ("verse", "chorus")
 
@@ -79,8 +83,8 @@ def _octave(v) -> int:
     return int(v)
 
 
-def _spans(v) -> list:
-    """[[a, b], ...], in order; anything else isn't one of ours."""
+def _spans(v, end: float) -> list:
+    """[[a, b], ...], inside the song; anything else isn't one of ours."""
     if not isinstance(v, list):
         raise ValueError("spans")
     out = []
@@ -88,16 +92,19 @@ def _spans(v) -> list:
         if not isinstance(p, list) or len(p) != 2:
             raise ValueError("spans")
         a, b = _num(p[0], "spans"), _num(p[1], "spans")
-        if b < a:
+        if not 0 <= a <= b <= end + 1:
             raise ValueError("spans")
         out.append([a, b])
     return out
 
 
-def _times(v) -> list:
+def _times(v, end: float) -> list:
     if not isinstance(v, list):
         raise ValueError("times")
-    return [_num(t, "times") for t in v]
+    out = [_num(t, "times") for t in v]
+    if any(not 0 <= t <= end + 1 for t in out):
+        raise ValueError("times")
+    return out
 
 
 def _fields_of(e: dict) -> dict:
@@ -146,9 +153,10 @@ def _sound(doc, cover_id: str) -> dict:
     if not isinstance(words, list) or doc["words_hash"] != hash_words(words):
         raise ValueError("words")
     for w in words:
-        if not isinstance(w, list) or len(w) < 3 or not isinstance(w[0], str):
+        if not isinstance(w, list) or not 3 <= len(w) <= 4 or not isinstance(w[0], str):
             raise ValueError("words")
-        _num(w[1], "words"), _num(w[2], "words")
+        for x in w[1:]:
+            _num(x, "words")
     duration = _num(doc["duration"], "duration")
     if duration <= 0:
         raise ValueError("duration")
@@ -165,13 +173,16 @@ def _sound(doc, cover_id: str) -> dict:
     for k in WHO:
         _octave(octs[k])
     pts = doc["points"]
-    _spans(pts["lead"]), _spans(pts["backing"]), _times(pts["dips"])
+    _spans(pts["lead"], duration), _spans(pts["backing"], duration), _times(pts["dips"], duration)
     if not isinstance(doc["duet"], bool) or not isinstance(doc["backing"], bool):
         raise ValueError("flags")
+    from .leadgate import CHORUS_MODES
     gate = doc["gate"]
-    _spans(gate["instrument"]), _spans(gate["chorus"])
-    if not isinstance(gate["mode"], str):
+    _spans(gate["instrument"], duration), _spans(gate["chorus"], duration)
+    if gate["mode"] not in CHORUS_MODES:
         raise ValueError("gate")
+    if not (doc.get("kept") is None or isinstance(doc["kept"], str)):
+        raise ValueError("kept")
     if not isinstance(doc["edits"], list) or len(doc["edits"]) > MAX_EDITS:
         raise ValueError("edits")
     seen = set()
@@ -187,14 +198,24 @@ def _sound(doc, cover_id: str) -> dict:
             raise ValueError("edits")
         if any(n != snippet_name(e) for n in e["files"].values()):   # (no other file name is ever read from this list)
             raise ValueError("edits")
-        if e["files"]:
-            _num(e["from_s"], "edits")
-        if not (e.get("moved") is None or isinstance(e["moved"], str)) or not isinstance(e.get("at", ""), str):
+        if e["files"] and not 0 <= _num(e["from_s"], "edits") <= t0:
+            raise ValueError("edits")
+        moved, at, ws = e.get("moved"), e.get("at", ""), e.get("words")
+        if not (moved is None or (isinstance(moved, str) and len(moved) <= MAX_SAID)) or not isinstance(at, str) or len(at) > 32:
+            raise ValueError("edits")
+        if ws is not None and (not isinstance(ws, list) or len(ws) != 2 or any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(words) for i in ws)):
+            raise ValueError("edits")
+        if set(e) - set(STORED):
             raise ValueError("edits")
     c = doc["cursor"]
     if isinstance(c, bool) or not isinstance(c, int) or not 0 <= c <= len(doc["edits"]):
         raise ValueError("cursor")
     return doc
+
+
+def _drop(files: list, within: Path | None = None):
+    """Delete through the allow-list, as every delete here does."""
+    storage.remove_files(files, [within or path("cache_dir") / "converted"])
 
 
 def save(doc: dict):
@@ -552,12 +573,12 @@ def _original(stems: dict, key: float, at: float, end: float, sr: int) -> np.nda
 
 
 def _take(item: dict, doc: dict, part: str, base: Path, parts: list) -> Path:
-    """The base with every edited part laid over it, as a file for the mix (the base itself when nothing's edited)."""
+    """The base with every edited part laid over it, as a file for the mix (the base itself when nothing's edited). It's the next
+    take until the mix has worked (_promote)."""
     import soundfile as sf
     d = folder(doc["cover"])
-    f = d / f"take-{part}.flac"
+    f = d / f"next-{part}.flac"
     if not any(p[4] for p in parts):
-        f.unlink(missing_ok=True)
         return base
     y, sr = sf.read(str(base), dtype="float32", always_2d=False)
     if y.ndim > 1:
@@ -575,6 +596,22 @@ def _take(item: dict, doc: dict, part: str, base: Path, parts: list) -> Path:
     return f
 
 
+def _promote(d: Path, mixed: Path | None) -> Path | None:
+    """The takes and the result this mix made take over from the last one's, only now that it has worked: Keep takes what's here."""
+    for part in PARTS:
+        nxt, f = d / f"next-{part}.flac", d / f"take-{part}.flac"
+        if nxt.exists():
+            fsutil.retry(lambda n=nxt, f=f: os.replace(n, f))
+        else:
+            _drop([f])
+    _drop(list(d.glob("result.*")))
+    if mixed is None:
+        return None
+    res = d / f"result{mixed.suffix}"
+    fsutil.retry(lambda: os.replace(mixed, res))
+    return res
+
+
 def mix(engine, item: dict, doc: dict) -> Path | None:
     """The whole song mixed again with the list as far as its cursor -> the result, in the list's folder (None when nothing's
     edited: the cover itself stands). Whole, because a stretch mixed alone comes out of balance; the rest of the song stays
@@ -584,9 +621,7 @@ def mix(engine, item: dict, doc: dict) -> Path | None:
     d = folder(doc["cover"])
     done = compile_list(doc)
     if not any(p[4] for v in done.values() for p in v):
-        for f in (*d.glob("result.*"), *d.glob("take-*.flac")):
-            f.unlink(missing_ok=True)
-        return None
+        return _promote(d, None)
     opts = _options(item)
     base = base_files(item, doc)
     stems = _stems(engine, item, doc, opts)
@@ -597,9 +632,9 @@ def mix(engine, item: dict, doc: dict) -> Path | None:
             setattr(ms, k, getattr(opts, k))
     lead = _take(item, doc, "lead", base["lead"], done["lead"])
     back = _take(item, doc, "backing", base["backing"], done["backing"]) if base["backing"] else None
-    return remix(stems["instrumental"], lead, stems["vocals"], d / "result", song=Path(item["song"]),
-                 backing=back or stems.get("backing"), s=ms, backing_ref=stems.get("backing") if back else None,
-                 reverb_ref=stems.get("reverb"))
+    return _promote(d, remix(stems["instrumental"], lead, stems["vocals"], d / "next", song=Path(item["song"]),
+                             backing=back or stems.get("backing"), s=ms, backing_ref=stems.get("backing") if back else None,
+                             reverb_ref=stems.get("reverb")))
 
 
 def result_of(cover_id: str) -> Path | None:
@@ -608,8 +643,8 @@ def result_of(cover_id: str) -> Path | None:
 
 
 def apply(engine, item: dict, req: dict, report) -> dict:
-    """Run one checked edit: convert it, add it, mix. The list changes only when the render worked. Anything past the cursor
-    is cut off first (a new edit after an undo)."""
+    """Run one checked edit: convert it, mix with it, and only then add it, so the list never runs ahead of the audio. Anything
+    past the cursor is cut off (a new edit after an undo)."""
     with LOCK:
         doc = load(item["id"])
     if doc is None:
@@ -618,81 +653,108 @@ def apply(engine, item: dict, req: dict, report) -> dict:
         edit = check_edit(req, doc)
     except ValueError as e:
         raise ModelError(str(e)) from None
+    d = folder(item["id"])
+    if sum(f.stat().st_size for f in d.glob("e*.flac")) > MAX_BYTES:
+        raise ModelError("This cover's edits have grown too large. Keep it, and go on from the new one.")
     report(0.05, "Singing the change")
-    _render(engine, item, doc, edit, report)
+    mine = d / snippet_name(edit)
+    live = doc["edits"][:doc["cursor"]]
+    new = {**doc, "edits": live + [edit], "cursor": len(live) + 1}
+    try:
+        _render(engine, item, doc, edit, report)
+        report(0.9, "Mixing the song")
+        mix(engine, item, new)
+    except BaseException:   # (cancelled too)
+        _drop([mine])
+        raise
     with LOCK:
-        for old in doc["edits"][doc["cursor"]:]:
-            (folder(doc["cover"]) / snippet_name(old)).unlink(missing_ok=True)
-        doc["edits"] = doc["edits"][:doc["cursor"]] + [edit]
-        doc["cursor"] = len(doc["edits"])
-        save(doc)
-    report(0.9, "Mixing the song")
-    mix(engine, item, doc)
-    hstore.update(item["id"], edits=doc["cursor"] or None)
-    return doc
+        save(new)
+    _drop([d / snippet_name(e) for e in doc["edits"][doc["cursor"]:]])
+    hstore.update(item["id"], edits=new["cursor"])
+    return new
 
 
-def step(engine, item: dict, by: int) -> dict:
-    """Undo (-1) or redo (+1): the cursor moves, and the song is mixed again. No conversion."""
+def step(engine, item: dict, to: int) -> dict:
+    """Undo or redo: the cursor goes to `to` (the same answer if this runs twice), and the song is mixed again. No conversion."""
     with LOCK:
         doc = load(item["id"])
-        if doc is None:
-            raise ModelError("This cover's edit list has gone. Open it again.")
-        c = doc["cursor"] + by
-        if not 0 <= c <= len(doc["edits"]):
-            raise ModelError("There's nothing to undo." if by < 0 else "There's nothing to redo.")
-        doc["cursor"] = c
-        save(doc)
-    mix(engine, item, doc)
-    hstore.update(item["id"], edits=doc["cursor"] or None)
-    return doc
+    if doc is None:
+        raise ModelError("This cover's edit list has gone. Open it again.")
+    if not 0 <= to <= len(doc["edits"]):
+        raise ModelError("There's nothing more to undo or redo.")
+    new = {**doc, "cursor": to}
+    mix(engine, item, new)
+    with LOCK:
+        save(new)
+    hstore.update(item["id"], edits=to or None)
+    return new
+
+
+def _state(doc: dict) -> str:
+    return hashlib.sha256(",".join(e["id"] for e in doc["edits"][:doc["cursor"]]).encode("utf-8")).hexdigest()[:16]
 
 
 def keep(item: dict) -> dict:
     """The edited song as a new cover in the history, the one it came from untouched. Its list comes with it, with its own copy of
-    the base takes, so an undo past Keep still works when the old cover has gone."""
+    the base takes, so an undo past Keep still works when the old cover has gone. A version is kept once: each new cover rolls the
+    oldest off the tray, and the one this came from is spared that."""
     import uuid
     from .pipeline import _append_history, _safe, _unique, CoverResult
     doc, res = load(item["id"]), result_of(item["id"])
-    if doc is None or res is None:
+    if doc is None or res is None or not doc["cursor"]:
         raise ModelError("There's nothing edited to keep.")
+    if doc.get("kept") == _state(doc):
+        raise ModelError("This version is already kept.")
     done = compile_list(doc)
     base = base_files(item, doc)
     d = folder(doc["cover"])
     fmt = res.suffix.lstrip(".")
     title = item.get("title") or Path(item["output"]).stem
-    out = _unique(path("output_dir") / f"{_safe(title)} (edited)", fmt)
-    shutil.copy2(res, out)
+    name, tag = _safe(title)[:80], uuid.uuid4().hex[:10]
+    out = _unique(path("output_dir") / f"{name} (edited)", fmt)
     work = path("cache_dir") / "converted"
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    vocal, backing = work / f"{_safe(title)}__edited__{stamp}.flac", None
-    shutil.copy2(d / "take-lead.flac" if (d / "take-lead.flac").exists() else base["lead"], vocal)
-    if base["backing"]:
-        backing = work / f"{_safe(title)}__edited__backing__{stamp}.flac"
-        shutil.copy2(d / "take-backing.flac" if (d / "take-backing.flac").exists() else base["backing"], backing)
+    vocal, backing = work / f"{name}__edited__{tag}.flac", work / f"{name}__edited__backing__{tag}.flac" if base["backing"] else None
     o = dict(item.get("options") if isinstance(item.get("options"), dict) else {})
     if doc["duet"]:
         o["duet_plan"] = plan_of(done["lead"])
-    # (the list's copy first: recording the new cover may roll the old one, and this folder, off the tray)
-    tmp = d.parent / f"keep-{uuid.uuid4().hex[:10]}"
-    tmp.mkdir(parents=True)
+    tmp = d.parent / f"keep-{tag}"
+    live = doc["edits"][:doc["cursor"]]
     try:
-        for f in d.glob("e*.flac"):
-            shutil.copy2(f, tmp / f.name)
-        for name, src in (("base-lead.flac", base["lead"]), ("base-backing.flac", base["backing"])):
+        shutil.copy2(res, out)
+        shutil.copy2(d / "take-lead.flac" if (d / "take-lead.flac").exists() else base["lead"], vocal)
+        if backing:
+            shutil.copy2(d / "take-backing.flac" if (d / "take-backing.flac").exists() else base["backing"], backing)
+        tmp.mkdir(parents=True)
+        for e in live:
+            for f in e["files"].values():
+                shutil.copy2(d / f, tmp / f)
+        for n, src in (("base-lead.flac", base["lead"]), ("base-backing.flac", base["backing"])):
             if src is not None:
-                shutil.copy2(src, tmp / name)
+                shutil.copy2(src, tmp / n)
     except OSError:
-        shutil.rmtree(tmp, ignore_errors=True)
-        out.unlink(missing_ok=True)
+        _drop([out], path("output_dir"))
+        _drop([p for p in (vocal, backing) if p])
+        storage.remove_files([], [work], dirs=[tmp])
         raise
     r = CoverResult(output=out, song=Path(item["song"]), voice=item["voice"], stems=item.get("stems") or {}, converted_vocal=vocal,
                     converted_backing=backing, notes=list(item.get("notes") or []) + ["Edited from a cover: its list came with it."],
                     seconds={}, options=o, created=time.strftime("%Y-%m-%d %H:%M:%S"), title=title)
-    new = _append_history(r)
-    tmp.rename(folder(new["id"]))
-    save({**doc, "cover": new["id"]})
-    return hstore.update(new["id"], edits=doc["cursor"], edited_from=item["id"])
+    new = _append_history(r, spare=(item["id"],))
+    try:   # (past here the new cover stands, so nothing may fail the job and run it twice)
+        tmp.rename(folder(new["id"]))
+        save({**doc, "cover": new["id"], "edits": live, "kept": _state(doc)})
+        save({**doc, "kept": _state(doc)})
+        return hstore.update(new["id"], edits=doc["cursor"], edited_from=item["id"])
+    except OSError as e:
+        print(f"Edit list: kept, but its list stayed behind ({type(e).__name__}: {e}).", flush=True)
+        return new
+
+
+def strays() -> list:
+    """Folders here with no cover: a Keep that stopped short, or a delete that found a file in use."""
+    root = path("cache_dir") / "converted" / "edits"
+    live = {i.get("id") for i in hstore.finished()}
+    return [p for p in root.iterdir() if p.is_dir() and p.name not in live] if root.exists() else []
 
 
 def dir_of(item: dict) -> Path | None:
@@ -714,6 +776,12 @@ def prepare(engine, item: dict, report) -> dict:
     """The list of a cover that has none: an older one, Make again's, or one voice's. Its words are heard here (about 18 s)."""
     from ..core.engine.convert import load_16k
     from .leadgate import plan as gate_plan
+    have = load(item["id"])
+    if have is not None:   # (it may have waited its turn)
+        return have
+    d = folder(item["id"])
+    if d.exists():
+        _drop([*d.glob("result.*"), *d.glob("take-*.flac")])
     opts = _options(item)
     get_voice(opts.voice)
     base_files(item, {"cover": item["id"]})
@@ -762,10 +830,3 @@ def at_make(item_id: str, opts, words: list, rows: list, lead: np.ndarray, back:
                   snap_points(lead, back, words), _gate_of(gate, opts), True, bplan is not None)
     with LOCK:
         save(doc)
-
-
-def forget(item: dict, within: list) -> None:
-    """The list goes with its cover, through the allow-list of every delete."""
-    d = dir_of(item)
-    if d is not None and d.exists():
-        storage.remove_files([], within, dirs=[d])

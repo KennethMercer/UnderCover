@@ -517,12 +517,12 @@ def _unique(base: Path, fmt: str) -> Path:
     return cand.with_name(f"{cand.name}.{fmt}")
 
 
-def _append_history(r: CoverResult) -> dict:
+def _append_history(r: CoverResult, spare: tuple = ()) -> dict:
     rec = asdict(r)
     rec.pop("id", None)
     rec.update(output=str(r.output), song=str(r.song), converted_vocal=str(r.converted_vocal),
                converted_backing=str(r.converted_backing) if r.converted_backing else None)
-    return hstore.record(rec)   # adds the permanent id, then rolls the recent tray (frontman/history.py)
+    return hstore.record(rec, spare)   # adds the permanent id, then rolls the recent tray (frontman/history.py)
 
 
 def history() -> list[dict]:

@@ -459,6 +459,9 @@ def _cleanup_groups() -> dict:
     g["converted"] = {"title": "Temporary conversion files",
                       "detail": "Converted vocals from past covers (the covers are kept; their \"vocal only\" download goes)",
                       "paths": conv, "default": True}
+    from ..frontman.edits import strays
+    g["edit_strays"] = {"title": "Edit lists of covers that have gone", "detail": "Left over from a delete or a Keep that stopped short",
+                        "paths": strays(), "default": True}
     g["keyshift"] = {"title": "Saved key changes", "detail": "Transposed backing tracks, re-made in a few seconds when needed",
                      "paths": [f for f in (cache / "keyshift").glob("*") if f.is_file()], "default": True}
     old = []

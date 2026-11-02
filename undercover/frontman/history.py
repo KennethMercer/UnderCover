@@ -168,28 +168,28 @@ def dirs_of(item: dict) -> list:
     return [d] if d is not None else []
 
 
-def record(rec: dict) -> dict:
+def record(rec: dict, spare: tuple = ()) -> dict:
     """Add a finished cover, then roll the recent tray (never raises: a failed roll-off must not fail the cover).
-    Returns the stored item (with its new id)."""
+    spare: ids that don't roll off this time. Returns the stored item (with its new id)."""
     with LOCK:
         items = _load()
         rec = {**rec, "id": new_id({i.get("id") for i in items})}
         _write(items + [rec])   # not an append: after a power cut the last line may be half written and would swallow this one
         try:
-            roll_off(rec["id"])
+            roll_off(rec["id"], spare)
         except Exception as e:   # noqa: BLE001
             tray.log(f"roll-off (covers): failed, nothing removed: {type(e).__name__}: {e}")
         return rec
 
 
-def roll_off(new_id_: str) -> str | None:
+def roll_off(new_id_: str, spare: tuple = ()) -> str | None:
     """After the cover `new_id_` finished: the tray's one leaver, if any, is deleted when it isn't kept. Returns its id
     when something was deleted."""
     from ..core import storage
     with LOCK:
         items = finished()
         lv = tray.leaver(items)
-        if lv is None:
+        if lv is None or lv.get("id") in spare:
             return None
         assert lv.get("id") != new_id_ and not lv.get("kept"), "roll-off picked the new or a kept cover"
         within = [path("output_dir"), path("cache_dir") / "converted"]

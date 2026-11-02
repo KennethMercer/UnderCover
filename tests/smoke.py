@@ -7444,7 +7444,10 @@ def u_edits():
                   {"edits": [{**snippet, "id": "../../x"}], "cursor": 1}, {"edits": [{**snippet, "files": {"lead": "../../../secret.flac"}}], "cursor": 1},
                   {"edits": [{**snippet, "files": {"backing": "e1-lead.flac"}}], "cursor": 1}, {"edits": [snippet, snippet], "cursor": 2},
                   {"edits": [{**snippet, "t1": 900.0}], "cursor": 1}, {"edits": [{**snippet, "op": "key"}], "cursor": 1},
-                  {"edits": [{k_: v for k_, v in snippet.items() if k_ != "from_s"}], "cursor": 1}, {"edits": [{**snippet, "moved": 5}], "cursor": 1}):
+                  {"edits": [{k_: v for k_, v in snippet.items() if k_ != "from_s"}], "cursor": 1}, {"edits": [{**snippet, "moved": 5}], "cursor": 1},
+                  {"edits": [{**snippet, "from_s": 1.5}], "cursor": 1}, {"edits": [{**snippet, "extra": "x"}], "cursor": 1}, {"edits": [{**snippet, "words": [0, 500]}], "cursor": 1},
+                  {"edits": [{**snippet, "moved": "x" * 401}], "cursor": 1}, {"words": [[" a", 1.0, 2.0, float("nan")]], "words_hash": E.hash_words([[" a", 1.0, 2.0, float("nan")]])},
+                  {"points": {"lead": [[100.0, 900.0]], "backing": [], "dips": []}}, {"points": {"lead": [], "backing": [], "dips": [-5.0]}}, {"gate": {**gate, "mode": "x"}}, {"kept": 5}):
             assert tampered(**k) is None, k
         f.write_text("not json", encoding="utf-8")
         assert E.load("abcdef0123") is None
@@ -7496,7 +7499,16 @@ def u_edits():
         engine = SimpleNamespace(converter=SimpleNamespace(convert=convert), separator=None)
         real_mix = E.mix
         mixes = []
-        E.mix = lambda en, i, doc: mixes.append([*E._take(i, doc, "lead", E.base_files(i, doc)["lead"], E.compile_list(doc)["lead"]).parts[-1:]])
+        def stand_in(en, i, doc):
+            mixes.append(doc["cursor"])
+            if fail_mix:
+                raise RuntimeError("the mix went")
+            E._take(i, doc, "lead", E.base_files(i, doc)["lead"], E.compile_list(doc)["lead"])
+            r = E.folder(i["id"]) / "next.flac"
+            shutil.copy2(a, r)
+            return E._promote(E.folder(i["id"]), r if any(p[4] for p in E.compile_list(doc)["lead"]) else None)
+        E.mix = stand_in
+        fail_mix = []
         try:
             quiet = lambda *x: None
             doc = E.apply(engine, it, {"op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4}, quiet)
@@ -7509,20 +7521,35 @@ def u_edits():
             calls.clear()
             E.apply(engine, it, {"op": "octave", "part": "lead", "octave": 1, "t0": 20.4, "t1": 40.4, "by": "ai", "note": "up"}, quiet)
             assert calls == [("bw", 7.0, 16000 * 21)], calls   # both: an octave edit keeps who's singing
-            E.step(engine, it, -1)
-            assert E.load(it["id"])["cursor"] == 1 and H.get(it["id"])["edits"] == 1
             E.step(engine, it, 1)
+            assert E.load(it["id"])["cursor"] == 1 and H.get(it["id"])["edits"] == 1
+            E.step(engine, it, 1)   # (a step run twice lands in the same place)
+            assert E.load(it["id"])["cursor"] == 1
+            E.step(engine, it, 2)
             assert E.load(it["id"])["cursor"] == 2
             try:
-                E.step(engine, it, 1)
+                E.step(engine, it, 3)
                 raise AssertionError("redo past the end")
             except ModelError:
                 pass
-            E.step(engine, it, -1)
-            E.step(engine, it, -1)
-            assert H.get(it["id"]).get("edits") is None
+            E.step(engine, it, 0)
+            assert H.get(it["id"]).get("edits") is None and E.result_of(it["id"]) is None
             assert not (E.folder(it["id"]) / "take-lead.flac").exists()   # nothing edited: no take left to be kept by mistake
             E.step(engine, it, 1)
+            fail_mix.append(1)   # the list never runs ahead of the audio: a mix that fails leaves it where it was
+            before = E.load(it["id"])
+            try:
+                E.step(engine, it, 2)
+                raise AssertionError("no error")
+            except RuntimeError:
+                pass
+            try:
+                E.apply(engine, it, {"op": "singer", "part": "lead", "who": "A", "t0": 0.0, "t1": 20.4}, quiet)
+                raise AssertionError("no error")
+            except RuntimeError:
+                pass
+            fail_mix.clear()
+            assert E.load(it["id"]) == before and not list(E.folder(it["id"]).glob("e3-*")), list(E.folder(it["id"]).iterdir())
             real = engine.converter.convert
             engine.converter.convert = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the GPU went"))
             before = E.load(it["id"])
@@ -7544,14 +7571,25 @@ def u_edits():
             assert E.result_of(it["id"]) == r
             new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
+            try:
+                E.keep(H.get(it["id"]))   # a version is kept once: each Keep rolls a cover off the tray
+                raise AssertionError("kept twice")
+            except ModelError as e:
+                assert "already kept" in str(e)
+            assert H.record({**H.get(it["id"]), "output": str(out)}, spare=(it["id"],)) and H.get(it["id"])
             assert H.get(it["id"]).get("edited_from") is None and Path(H.get(it["id"])["output"]) == out
             assert D.check_plan(new["options"]["duet_plan"], 60.0) == [[0.0, 20.4, "A"], [20.4, 40.4, "B"], [40.4, 60.0, "A"]], new["options"]
             nd = E.load(new["id"])
             assert nd["cover"] == new["id"] and (E.folder(new["id"]) / "base-lead.flac").is_file() and (E.folder(new["id"]) / "e1-lead.flac").is_file()
             # the list goes with its cover, and through the allow-list
             assert H.dirs_of(H.get(it["id"])) == [E.folder(it["id"])]
-            E.forget(H.get(it["id"]), [work])
+            from undercover.core import storage
+            storage.remove_files([], [work], dirs=H.dirs_of(H.get(it["id"])))
             assert not E.folder(it["id"]).exists()
+            stray = E.folder("0000000000")
+            stray.mkdir(parents=True)
+            assert E.strays() == [stray], E.strays()
+            shutil.rmtree(stray)
             assert E.base_files(H.get(new["id"]), nd)["lead"] == E.folder(new["id"]) / "base-lead.flac"
         finally:
             E.mix = real_mix
