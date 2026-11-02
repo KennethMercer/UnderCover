@@ -13,7 +13,6 @@ import math
 import os
 import re
 import shutil
-import threading
 import time
 from dataclasses import fields, replace
 from pathlib import Path
@@ -46,7 +45,6 @@ EDGE_S = 0.05                    # this close to the song's start or end, an edg
 EDIT_ID = re.compile(r"e[0-9]{1,7}")   # (ids only go up, undo or not)
 FIELDS = ("op", "part", "who", "octave", "t0", "t1", "words", "words_hash", "section", "by", "note")
 STORED = ("id", "op", "part", "who", "octave", "by", "note", "t0", "t1", "words", "at", "moved", "files", "from_s")
-LOCK = threading.RLock()
 SECTION_KINDS = ("verse", "chorus")
 
 
@@ -437,20 +435,6 @@ def _options(item: dict):
     return CoverOptions(**{"voice": item.get("voice"), **{k: v for k, v in o.items() if k in known}})
 
 
-def _settings(opts, song: Path):
-    """The cover's own conversion settings (make_cover's), its pitch left to the caller."""
-    from ..core.engine.convert import Settings
-    from .pipeline import song_key
-    s = Settings()
-    for k in ("index_ratio", "protect", "volume_envelope", "pitch_cleanup", "pitch_correction"):
-        if getattr(opts, k) is not None:
-            setattr(s, k, getattr(opts, k))
-    if s.pitch_correction > 0:
-        k = song_key(song)
-        s.song_key = (k["tonic"], k["mode"])
-    return s
-
-
 def _stems(engine, item: dict, doc: dict, opts) -> dict:
     """The stems the cover was sung from, as make_cover saw them: separated again if they've been cleaned up (about a minute), and
     the lead gate's changes made once in the list's folder."""
@@ -529,9 +513,9 @@ def _render(engine, item: dict, doc: dict, edit: dict, report) -> None:
         return
     opts = _options(item)
     song = Path(item.get("song") or "")
-    from .pipeline import pitch_plan
+    from .pipeline import conversion_settings, pitch_plan
     key, _ = pitch_plan(opts)
-    s = _settings(opts, song)
+    s = conversion_settings(opts, song)
     stems = _stems(engine, item, doc, opts)
     src = load_16k(stems["vocals" if edit["part"] == "lead" else "backing"])
     sr = sf.info(str(base_files(item, doc)[edit["part"]])).samplerate
@@ -616,8 +600,8 @@ def mix(engine, item: dict, doc: dict) -> Path | None:
     """The whole song mixed again with the list as far as its cursor -> the result, in the list's folder (None when nothing's
     edited: the cover itself stands). Whole, because a stretch mixed alone comes out of balance; the rest of the song stays
     where it was (0.014 dB measured)."""
-    from .pipeline import pitch_plan
-    from .remix import MixSettings, remix
+    from .pipeline import mix_settings, pitch_plan
+    from .remix import remix
     d = folder(doc["cover"])
     done = compile_list(doc)
     if not any(p[4] for v in done.values() for p in v):
@@ -626,10 +610,7 @@ def mix(engine, item: dict, doc: dict) -> Path | None:
     base = base_files(item, doc)
     stems = _stems(engine, item, doc, opts)
     key, _ = pitch_plan(opts)
-    ms = MixSettings(key=key)
-    for k in ("reverb", "vocal_db", "backing_db", "format", "polish"):
-        if getattr(opts, k) is not None:
-            setattr(ms, k, getattr(opts, k))
+    ms = mix_settings(opts, key)
     lead = _take(item, doc, "lead", base["lead"], done["lead"])
     back = _take(item, doc, "backing", base["backing"], done["backing"]) if base["backing"] else None
     return _promote(d, remix(stems["instrumental"], lead, stems["vocals"], d / "next", song=Path(item["song"]),
@@ -645,8 +626,7 @@ def result_of(cover_id: str) -> Path | None:
 def apply(engine, item: dict, req: dict, report) -> dict:
     """Run one checked edit: convert it, mix with it, and only then add it, so the list never runs ahead of the audio. Anything
     past the cursor is cut off (a new edit after an undo)."""
-    with LOCK:
-        doc = load(item["id"])
+    doc = load(item["id"])
     if doc is None:
         raise ModelError("This cover's edit list has gone. Open it again.")
     try:
@@ -667,26 +647,22 @@ def apply(engine, item: dict, req: dict, report) -> dict:
     except BaseException:   # (cancelled too)
         _drop([mine])
         raise
-    with LOCK:
-        save(new)
+    save(new)
     _drop([d / snippet_name(e) for e in doc["edits"][doc["cursor"]:]])
-    hstore.update(item["id"], edits=new["cursor"])
+    hstore.update(item["id"], edits=len(new["edits"]))
     return new
 
 
 def step(engine, item: dict, to: int) -> dict:
     """Undo or redo: the cursor goes to `to` (the same answer if this runs twice), and the song is mixed again. No conversion."""
-    with LOCK:
-        doc = load(item["id"])
+    doc = load(item["id"])
     if doc is None:
         raise ModelError("This cover's edit list has gone. Open it again.")
     if not 0 <= to <= len(doc["edits"]):
         raise ModelError("There's nothing more to undo or redo.")
     new = {**doc, "cursor": to}
     mix(engine, item, new)
-    with LOCK:
-        save(new)
-    hstore.update(item["id"], edits=to or None)
+    save(new)
     return new
 
 
@@ -801,8 +777,7 @@ def prepare(engine, item: dict, report) -> dict:
         bplan = duets.other_singer(bplan)
     gate = _gate_of(gate_plan(lead, back) if opts.lead_gate is not False else {}, opts)
     doc = new_doc(item["id"], words, rows, plan, bplan, dur, _octaves(opts), snap_points(lead, back, words), gate, bool(opts.duet_voice), conv_back)
-    with LOCK:
-        save(doc)
+    save(doc)
     return doc
 
 
@@ -828,5 +803,4 @@ def at_make(item_id: str, opts, words: list, rows: list, lead: np.ndarray, back:
     its singers sing it. A failure here costs a cover nothing: the words are heard again when the editor opens."""
     doc = new_doc(item_id, words, rows, opts.duet_plan, bplan or [list(p) for p in opts.duet_plan], len(lead) / duets.SR16, _octaves(opts),
                   snap_points(lead, back, words), _gate_of(gate, opts), True, bplan is not None)
-    with LOCK:
-        save(doc)
+    save(doc)

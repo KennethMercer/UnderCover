@@ -7514,6 +7514,7 @@ def u_edits():
             doc = E.apply(engine, it, {"op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4}, quiet)
             assert calls == [("bw", -17.0, 16000 * 21)], calls   # one singer, their octave, half a second of context each side
             assert doc["cursor"] == 1 and doc["edits"][0]["files"] == {"lead": "e1-lead.flac"} and H.get(it["id"])["edits"] == 1
+            from undercover.safehouse.library import _cleanup_groups
             info = sf.info(str(E.folder(it["id"]) / "e1-lead.flac"))
             assert info.samplerate == sr and abs(info.duration - 21.0) < 0.01, info   # at the base's rate
             take, _ = sf.read(str(E.folder(it["id"]) / "take-lead.flac"), dtype="float32")
@@ -7522,7 +7523,7 @@ def u_edits():
             E.apply(engine, it, {"op": "octave", "part": "lead", "octave": 1, "t0": 20.4, "t1": 40.4, "by": "ai", "note": "up"}, quiet)
             assert calls == [("bw", 7.0, 16000 * 21)], calls   # both: an octave edit keeps who's singing
             E.step(engine, it, 1)
-            assert E.load(it["id"])["cursor"] == 1 and H.get(it["id"])["edits"] == 1
+            assert E.load(it["id"])["cursor"] == 1 and H.get(it["id"])["edits"] == 2
             E.step(engine, it, 1)   # (a step run twice lands in the same place)
             assert E.load(it["id"])["cursor"] == 1
             E.step(engine, it, 2)
@@ -7533,7 +7534,9 @@ def u_edits():
             except ModelError:
                 pass
             E.step(engine, it, 0)
-            assert H.get(it["id"]).get("edits") is None and E.result_of(it["id"]) is None
+            assert H.get(it["id"])["edits"] == 2 and E.result_of(it["id"]) is None   # (the base stays out of Clean up: redo needs it)
+            os.utime(a, (1, 1))
+            assert a not in _cleanup_groups()["converted"]["paths"]
             assert not (E.folder(it["id"]) / "take-lead.flac").exists()   # nothing edited: no take left to be kept by mistake
             E.step(engine, it, 1)
             fail_mix.append(1)   # the list never runs ahead of the audio: a mix that fails leaves it where it was

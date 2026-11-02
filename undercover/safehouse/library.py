@@ -454,7 +454,7 @@ def _cleanup_groups() -> dict:
     now = time.time()
     hist = history()
     g = {}
-    edited = {str(f) for h in hist if h.get("edits") for f in (h.get("converted_vocal"), h.get("converted_backing")) if f}   # (an edit list's base)
+    edited = {str(f) for h in hist if h.get("edits") for f in (h.get("converted_vocal"), h.get("converted_backing")) if f}   # (an edit list's base, redo included)
     conv = [f for f in (cache / "converted").glob("*") if f.is_file() and now - _mtime(f) > DAY and str(f) not in edited]
     g["converted"] = {"title": "Temporary conversion files",
                       "detail": "Converted vocals from past covers (the covers are kept; their \"vocal only\" download goes)",

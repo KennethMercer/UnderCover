@@ -201,9 +201,9 @@ class CoverEngine:
         key_song: file to detect the musical key from (defaults to `song`)."""
         import numpy as np
         import soundfile as sf
-        from ..core.engine.convert import Settings, load_16k
+        from ..core.engine.convert import load_16k
         from ..core.voices import get_voice
-        from .remix import MixSettings, remix
+        from .remix import remix
         from ..core.separate import separate
 
         report = progress or (lambda *a: None)
@@ -235,13 +235,7 @@ class CoverEngine:
 
         report("converting", 0.0, f"Converting the vocal to {label_of(voice.name)}")
         t = time.perf_counter()
-        s = Settings()
-        for k in ("index_ratio", "protect", "volume_envelope", "pitch_cleanup", "pitch_correction"):
-            if getattr(opts, k) is not None:
-                setattr(s, k, getattr(opts, k))
-        if s.pitch_correction > 0:
-            k = song_key(key_song or song)
-            s.song_key = (k["tonic"], k["mode"])
+        s = conversion_settings(opts, key_song or song)
         # is the lead stem singing? (phase 15) an instrument left in it isn't turned into singing, and lines the
         # karaoke split put in the backing are converted too; the stems themselves stay as they were
         cstems = stems
@@ -338,10 +332,7 @@ class CoverEngine:
 
         report("mixing", 0.0, "Mixing and matching loudness")
         t = time.perf_counter()
-        ms = MixSettings(key=key)
-        for k in ("reverb", "vocal_db", "backing_db", "format", "polish"):
-            if getattr(opts, k) is not None:
-                setattr(ms, k, getattr(opts, k))
+        ms = mix_settings(opts, key)
         # the file people download says who sings, as the pages name them (the voice ids stay in the history)
         names = (label_of(voice.name) + (f" & {label_of(dvoice.name)}" if dvoice else "")
                  + (f" + {label_of(bvoice.name)}" if bvoice and bvoice.name not in (voice.name, getattr(dvoice, "name", None)) else ""))
@@ -478,6 +469,28 @@ def upload_title(song: Path) -> str | None:
 def _conv_cfg() -> dict:
     from ..core.config import CONFIG
     return CONFIG["conversion"]
+
+
+def conversion_settings(opts: CoverOptions, song: Path):
+    """A cover's conversion settings, its pitch left to the caller (a cover, and a stretch of it in the edit list)."""
+    from ..core.engine.convert import Settings
+    s = Settings()
+    for k in ("index_ratio", "protect", "volume_envelope", "pitch_cleanup", "pitch_correction"):
+        if getattr(opts, k) is not None:
+            setattr(s, k, getattr(opts, k))
+    if s.pitch_correction > 0:
+        k = song_key(song)
+        s.song_key = (k["tonic"], k["mode"])
+    return s
+
+
+def mix_settings(opts: CoverOptions, key: float):
+    from .remix import MixSettings
+    ms = MixSettings(key=key)
+    for k in ("reverb", "vocal_db", "backing_db", "format", "polish"):
+        if getattr(opts, k) is not None:
+            setattr(ms, k, getattr(opts, k))
+    return ms
 
 
 def pitch_plan(opts: CoverOptions) -> tuple[float, float]:

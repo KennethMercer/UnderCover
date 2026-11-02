@@ -251,7 +251,7 @@ def _edit(h, item_id: str, what: str | None, body: dict):
     from . import edits
     from .history import get
     it = get(item_id)   # LookupError when it's gone
-    if any(getattr(j, "editing", None) == item_id and not j.finished for j in JOBS.values()):
+    if any(getattr(j, "editing", None) == item_id and not j.finished for j in list(JOBS.values())):
         return h._error("This cover is still taking its last edit.")
     doc = edits.load(item_id)
     if what == "open":
