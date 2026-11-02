@@ -487,9 +487,12 @@ stitched by the plan.
   (15%) of the sung melody or more: first the exceptions go, and past that the two trade (verse and chorus, then the
   other way round). The plan line says who takes what ("B takes the verses and A the choruses, by range"). A plan from
   Make again is kept as it is.
-- **The backing** (`duet_backing`, `duets.BACKINGS`): in the singers' voices (`BACKING_DEFAULT`) or the original.
-  A backing voice isn't used in a duet. The one-shot keeps the original when the backing is stacked harmony
-  (`oneshot.chordal_backing`); nothing is converted when there's hardly any backing (`pipeline._duet_backing`). The
+- **The backing** (`duet_backing`, `duets.BACKINGS`): by the singer on the lead (`singers`, `BACKING_DEFAULT`), by the
+  one who isn't (`other`, `duets.other_singer`: the same changes, each part in the other voice, so the backing changes
+  hands with Turns; no page control yet), or the original. Each singer takes the backing at their own octave for the
+  song, in either case, so `other` costs no third conversion. A backing voice isn't used in a duet. The one-shot keeps
+  the original when the backing is stacked harmony (`oneshot.chordal_backing`); nothing is converted when there's
+  hardly any backing (`pipeline._duet_backing`). The
   backing has its own plan (`duets.backing_plan`): its phrases are its singing between its own silences, each is sung
   whole by whoever sings most of the lead under it, and its voice changes only inside its own silence, at the point
   nearest the lead's change.
