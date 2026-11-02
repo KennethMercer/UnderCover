@@ -7390,6 +7390,7 @@ def u_edits():
         refused(bad, doc)
     refused({**sing, "words": [0, 1], "words_hash": "0" * 16}, doc, "another version")
     refused({"op": "key", "part": "lead", "t0": 20.2, "t1": 40.2}, doc, "key")
+    assert E.check_edit({**sing, "t0": 20.2, "t1": 40.2, "note": "a\u202eb\x07c\nd\u200fé"}, doc)["note"] == "abcdé"   # (outside text, shown as text)
     long = [list(w) for w in words]   # a heard word of any length can't make an edit the list can't read back
     long[34][0], long[74][0], long[6][0] = (" " + "x" * 180,) * 3
     big = E.new_doc("0123456789", long, rows, plan, plan, 60.0, {"A": 0, "B": -1}, pts, gate, True, True)

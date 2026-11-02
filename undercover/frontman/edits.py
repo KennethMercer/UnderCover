@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import time
+import unicodedata
 from dataclasses import fields, replace
 from pathlib import Path
 
@@ -128,7 +129,7 @@ def _fields_of(e: dict) -> dict:
     note = e.get("note", "")
     if not isinstance(note, str) or len(note) > MAX_NOTE:
         raise ModelError(f"A note is plain text, at most {MAX_NOTE} characters.")
-    return {**out, "by": by, "note": note}
+    return {**out, "by": by, "note": "".join(c for c in note if unicodedata.category(c)[0] != "C")}   # (no controls, no direction overrides)
 
 
 # ------------------------------------------------------------ the file
@@ -277,7 +278,7 @@ def _address(req: dict, doc: dict) -> tuple[float, float]:
 
 def snap(t: float, part: str, doc: dict) -> tuple[float, str] | None:
     """The nearest place an edge may land -> (time, "silence" | "dip" | "end"), a silence first: nothing proves a dip is between
-    two words (snap1), though the ear didn't hear one at a join (listen-nov01b). None: no place within MAX_SNAP_S."""
+    two words, though the ear didn't hear one at a join (the maintainers' notes, snap point). None: no place within MAX_SNAP_S."""
     dur = doc["duration"]
     if t <= EDGE_S:
         return 0.0, "end"
