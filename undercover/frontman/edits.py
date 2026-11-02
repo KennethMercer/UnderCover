@@ -36,6 +36,7 @@ MAX_EDITS = 500                  # an edit list longer than this is no one's (th
 MAX_FILE = 4_000_000             # edit.json over this isn't one the app wrote
 MAX_BYTES = 2_000_000_000        # a list's snippets, on disk
 MAX_SAID = 400                   # a stored sentence (`moved`)
+MAX_WORD = 40                    # a heard word quoted in a sentence (Whisper can invent a long one, and a song is anyone's)
 MAX_NOTE = 200
 MIN_EDIT_S = 0.3
 MAX_SNAP_S = 2.0                 # an edge has to find a place to land this close, or the edit is refused
@@ -302,14 +303,14 @@ def snap(t: float, part: str, doc: dict) -> tuple[float, str] | None:
 def _word_at(doc: dict, t: float) -> str | None:
     for w in doc["words"]:
         if w[1] <= t <= w[2]:
-            return w[0].strip()
+            return w[0].strip()[:MAX_WORD]
     return None
 
 
 def _passed(doc: dict, a: float, b: float) -> str | None:
     """The word an edge moved past, going from a to b."""
     lo, hi = min(a, b), max(a, b)
-    got = [w[0].strip() for w in doc["words"] if lo <= w[1] <= hi or lo <= w[2] <= hi]
+    got = [w[0].strip()[:MAX_WORD] for w in doc["words"] if lo <= w[1] <= hi or lo <= w[2] <= hi]
     return got[0 if b > a else -1] if got else None
 
 
@@ -346,7 +347,7 @@ def check_edit(req, doc: dict) -> dict:
             raise ModelError(f"There's no place to change near the {name}" + (f", at \"{word}\"." if word else "."))
     if b[0] - a[0] < MIN_EDIT_S:
         raise ModelError("That's too short a stretch to change.")
-    moved = " ".join(m for m in (_moved("start", t0, a[0], a[1], doc), _moved("end", t1, b[0], b[1], doc)) if m)
+    moved = " ".join(m for m in (_moved("start", t0, a[0], a[1], doc), _moved("end", t1, b[0], b[1], doc)) if m)[:MAX_SAID]
     words = [i for i, w in enumerate(doc["words"]) if a[0] <= (w[1] + w[2]) / 2 <= b[0]]
     n = 1 + max((int(e["id"][1:]) for e in doc["edits"]), default=0) if doc["edits"] else 1
     edit = {"id": f"e{n}", **clean, "t0": a[0], "t1": b[0], "words": [words[0], words[-1]] if words else None,
@@ -770,6 +771,10 @@ def prepare(engine, item: dict, report) -> dict:
     if have is not None:   # (it may have waited its turn)
         return have
     d = folder(item["id"])
+    if (d / "edit.json").exists():   # (a list that can't be read is set aside, never written over)
+        fsutil.retry(lambda: os.replace(d / "edit.json", d / "edit.json.bad"))
+    if (d / "base-lead.flac").exists():   # a kept cover: a fresh list would put the edited plan on the original base
+        raise ModelError("This edited cover's list can't be read, so it can't be edited. Make it again, and edit that.")
     if d.exists():
         _drop([*d.glob("result.*"), *d.glob("take-*.flac")])
     opts = _options(item)

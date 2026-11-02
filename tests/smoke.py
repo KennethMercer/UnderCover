@@ -7390,6 +7390,14 @@ def u_edits():
         refused(bad, doc)
     refused({**sing, "words": [0, 1], "words_hash": "0" * 16}, doc, "another version")
     refused({"op": "key", "part": "lead", "t0": 20.2, "t1": 40.2}, doc, "key")
+    long = [list(w) for w in words]   # a heard word of any length can't make an edit the list can't read back
+    long[34][0], long[74][0], long[6][0] = (" " + "x" * 180,) * 3
+    big = E.new_doc("0123456789", long, rows, plan, plan, 60.0, {"A": 0, "B": -1}, pts, gate, True, True)
+    e = E.check_edit({**sing, "t0": 19.0, "t1": 39.0}, big)
+    assert len(e["moved"]) <= E.MAX_SAID and '"' + "x" * E.MAX_WORD + '"' in e["moved"], e["moved"]
+    big["edits"], big["cursor"] = [e], 1
+    assert E._sound(json.loads(json.dumps(big)), "0123456789")
+    refused({**sing, "t0": 5.0, "t1": 20.2}, big, '"' + "x" * E.MAX_WORD + '".')
     refused({**sing, "t0": 20.2, "t1": 20.3}, doc, "too short")
     refused({**sing, "t0": 5.0, "t1": 20.2}, doc, 'near the start, at "w6"')   # no silence or dip in reach, and the word's named
     assert doc["edits"] == [] and doc["cursor"] == 0
@@ -7610,6 +7618,29 @@ def u_edits():
                 assert "as often" in str(e)
             E.save(full)
             E.mix = real_mix
+            # a list that can't be read is set aside, never written over; on a kept cover there's no fresh start
+            real_heard, real_voice = E.duets.heard_words, E.get_voice
+            E.duets.heard_words, E.get_voice = (lambda *a, **k: []), (lambda n: n)
+            try:
+                plain = H.record({"output": str(out), "song": str(song), "voice": "mj", "stems": {k: str(v) for k, v in st.items()}, "converted_vocal": str(a),
+                                  "converted_backing": str(b), "title": "T", "options": {"voice": "mj", "key": -5, "octave": 0}})
+                E.folder(plain["id"]).mkdir(parents=True)
+                (E.folder(plain["id"]) / "edit.json").write_text("not ours", encoding="utf-8")
+                got2 = E.prepare(engine, plain, quiet)
+                assert got2["cursor"] == 0 and E.load(plain["id"])["duet"] is False
+                assert (E.folder(plain["id"]) / "edit.json.bad").read_text(encoding="utf-8") == "not ours"
+                f = E.folder(new["id"]) / "edit.json"
+                kept_list = f.read_bytes()
+                f.write_text("not ours", encoding="utf-8")
+                try:
+                    E.prepare(engine, H.get(new["id"]), quiet)
+                    raise AssertionError("a fresh list on a kept cover")
+                except ModelError as e:
+                    assert "can't be read" in str(e)
+                assert not f.exists() and (E.folder(new["id"]) / "edit.json.bad").read_text(encoding="utf-8") == "not ours"
+                f.write_bytes(kept_list)
+            finally:
+                E.duets.heard_words, E.get_voice = real_heard, real_voice
             assert H.get(it["id"]).get("edited_from") is None and Path(H.get(it["id"])["output"]) == out
             assert D.check_plan(new["options"]["duet_plan"], 60.0) == [[0.0, 20.4, "A"], [20.4, 40.4, "B"], [40.4, 60.0, "A"]], new["options"]
             nd = E.load(new["id"])
