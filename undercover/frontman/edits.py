@@ -688,7 +688,7 @@ def keep(item: dict) -> dict:
     if _state(doc) in was:
         raise ModelError("This version is already kept.")
     if len(was) >= MAX_EDITS:
-        raise ModelError("This cover has been kept as often as it can be. Go on from one of the kept ones.")
+        raise ModelError("This cover has been kept as often as it can be.")
     done = compile_list(doc)
     base = base_files(item, doc)
     d = folder(doc["cover"])
@@ -739,11 +739,8 @@ def strays() -> list:
     """Folders here with no line in the history: a Keep that stopped short, or a delete that found a file in use. Every line counts,
     its cover's file there or not, and no history at all means nothing can be said: the library may be on a drive that's away."""
     root = path("cache_dir") / "converted" / "edits"
-    if not root.exists() or not hstore._file().is_file():
-        return []
-    with hstore.LOCK:
-        known = {i.get("id") for i in hstore._load()}
-    return [p for p in root.iterdir() if p.is_dir() and p.name not in known] if known else []
+    known = {i.get("id") for i in hstore.every_line() or []}
+    return [p for p in root.iterdir() if p.is_dir() and p.name not in known] if known and root.exists() else []
 
 
 def clear_strays(dirs: list):

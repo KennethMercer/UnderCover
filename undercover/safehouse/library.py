@@ -454,8 +454,10 @@ def _cleanup_groups() -> dict:
     now = time.time()
     hist = history()
     g = {}
-    edited = {str(f) for h in hist if h.get("edits") for f in (h.get("converted_vocal"), h.get("converted_backing")) if f}   # (an edit list's base, redo included)
-    conv = [f for f in (cache / "converted").glob("*") if f.is_file() and now - _mtime(f) > DAY and str(f) not in edited]
+    from ..frontman.history import every_line
+    lines = every_line()   # (an edit list's base, redo included: from every line, and nothing's offered with no history to read)
+    edited = {str(f) for h in lines or [] if h.get("edits") for f in (h.get("converted_vocal"), h.get("converted_backing")) if f}
+    conv = [] if lines is None else [f for f in (cache / "converted").glob("*") if f.is_file() and now - _mtime(f) > DAY and str(f) not in edited]
     g["converted"] = {"title": "Temporary conversion files",
                       "detail": "Converted vocals from past covers (the covers are kept; their \"vocal only\" download goes)",
                       "paths": conv, "default": True}

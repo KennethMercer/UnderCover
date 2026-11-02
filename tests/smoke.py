@@ -7552,6 +7552,13 @@ def u_edits():
             assert H.get(it["id"])["edits"] == 2 and E.result_of(it["id"]) is None   # (the base stays out of Clean up: redo needs it)
             os.utime(a, (1, 1))
             assert a not in _cleanup_groups()["converted"]["paths"]
+            away, hf, hf2 = out.with_name("cover.away"), H._file(), H._file().with_name("away.jsonl")
+            out.rename(away)   # the base stays out of Clean up with the cover's file away, and with the history away too
+            assert a not in _cleanup_groups()["converted"]["paths"]
+            hf.rename(hf2)
+            assert H.every_line() is None and _cleanup_groups()["converted"]["paths"] == []
+            hf2.rename(hf)
+            away.rename(out)
             assert not (E.folder(it["id"]) / "take-lead.flac").exists()   # nothing edited: no take left to be kept by mistake
             E.step(engine, it, 1)
             fail_mix.append(1)   # the list never runs ahead of the audio: a mix that fails leaves it where it was

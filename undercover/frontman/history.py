@@ -116,6 +116,13 @@ def finished() -> list:
         return out
 
 
+def every_line() -> list | None:
+    """Every line, its cover's file there or not (finished() leaves those out, and the library may be on a drive that's away).
+    None when there's no history to read, which never means there are no covers."""
+    with LOCK:
+        return _load() if _file().is_file() else None
+
+
 def tray_ids() -> set:
     return {i["id"] for i in tray.in_tray(finished())}
 
