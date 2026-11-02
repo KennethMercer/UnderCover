@@ -7452,7 +7452,8 @@ def u_edits():
                   {"edits": [{k_: v for k_, v in snippet.items() if k_ != "from_s"}], "cursor": 1}, {"edits": [{**snippet, "moved": 5}], "cursor": 1},
                   {"edits": [{**snippet, "from_s": 1.5}], "cursor": 1}, {"edits": [{**snippet, "extra": "x"}], "cursor": 1}, {"edits": [{**snippet, "words": [0, 500]}], "cursor": 1},
                   {"edits": [{**snippet, "moved": "x" * 401}], "cursor": 1}, {"words": [[" a", 1.0, 2.0, float("nan")]], "words_hash": E.hash_words([[" a", 1.0, 2.0, float("nan")]])},
-                  {"points": {"lead": [[100.0, 900.0]], "backing": [], "dips": []}}, {"points": {"lead": [], "backing": [], "dips": [-5.0]}}, {"gate": {**gate, "mode": "x"}}, {"kept": 5}):
+                  {"points": {"lead": [[100.0, 900.0]], "backing": [], "dips": []}}, {"points": {"lead": [], "backing": [], "dips": [-5.0]}}, {"gate": {**gate, "mode": "x"}}, {"kept": 5},
+                  {"kept": "0" * 16}, {"kept": ["x"]}, {"kept": [5]}, {"kept": ["0" * 16] * (E.MAX_EDITS + 1)}):
             assert tampered(**k) is None, k
         f.write_text("not json", encoding="utf-8")
         assert E.load("abcdef0123") is None
@@ -7585,6 +7586,30 @@ def u_edits():
             except ModelError as e:
                 assert "already kept" in str(e)
             assert H.record({**H.get(it["id"]), "output": str(out)}, spare=(it["id"],)) and H.get(it["id"])
+            # each version once, however the list moves between them
+            E.mix = stand_in
+            E.step(engine, it, 1)
+            second = E.keep(H.get(it["id"]))
+            for to in (2, 1, 2):
+                E.step(engine, it, to)
+                try:
+                    E.keep(H.get(it["id"]))
+                    raise AssertionError("kept again")
+                except ModelError as e:
+                    assert "already kept" in str(e)
+            assert len(E.load(it["id"])["kept"]) == 2 and len(E.load(second["id"])["kept"]) == 2
+            full = E.load(it["id"])
+            E.step(engine, it, 0)
+            E.apply(engine, it, {"op": "singer", "part": "lead", "who": "A", "t0": 0.0, "t1": 20.4}, quiet)
+            full = E.load(it["id"])
+            E.save({**full, "kept": [f"{i:016x}" for i in range(E.MAX_EDITS)]})
+            try:
+                E.keep(H.get(it["id"]))
+                raise AssertionError("no end to it")
+            except ModelError as e:
+                assert "as often" in str(e)
+            E.save(full)
+            E.mix = real_mix
             assert H.get(it["id"]).get("edited_from") is None and Path(H.get(it["id"])["output"]) == out
             assert D.check_plan(new["options"]["duet_plan"], 60.0) == [[0.0, 20.4, "A"], [20.4, 40.4, "B"], [40.4, 60.0, "A"]], new["options"]
             nd = E.load(new["id"])

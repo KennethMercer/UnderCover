@@ -43,6 +43,7 @@ MOVED_S = 0.1                    # an edge moved less than this isn't worth sayi
 PAD_S = 0.5                      # context either side of a snippet, for the pitch tracker at its edges
 EDGE_S = 0.05                    # this close to the song's start or end, an edge is that end
 EDIT_ID = re.compile(r"e[0-9]{1,7}")   # (ids only go up, undo or not)
+STATE = re.compile(r"[0-9a-f]{16}")
 FIELDS = ("op", "part", "who", "octave", "t0", "t1", "words", "words_hash", "section", "by", "note")
 STORED = ("id", "op", "part", "who", "octave", "by", "note", "t0", "t1", "words", "at", "moved", "files", "from_s")
 SECTION_KINDS = ("verse", "chorus")
@@ -179,7 +180,8 @@ def _sound(doc, cover_id: str) -> dict:
     _spans(gate["instrument"], duration), _spans(gate["chorus"], duration)
     if gate["mode"] not in CHORUS_MODES:
         raise ValueError("gate")
-    if not (doc.get("kept") is None or isinstance(doc["kept"], str)):
+    kept = doc.get("kept", [])
+    if not isinstance(kept, list) or len(kept) > MAX_EDITS or any(not isinstance(k, str) or not STATE.fullmatch(k) for k in kept):
         raise ValueError("kept")
     if not isinstance(doc["edits"], list) or len(doc["edits"]) > MAX_EDITS:
         raise ValueError("edits")
@@ -672,15 +674,18 @@ def _state(doc: dict) -> str:
 
 def keep(item: dict) -> dict:
     """The edited song as a new cover in the history, the one it came from untouched. Its list comes with it, with its own copy of
-    the base takes, so an undo past Keep still works when the old cover has gone. A version is kept once: each new cover rolls the
-    oldest off the tray, and the one this came from is spared that."""
+    the base takes, so an undo past Keep still works when the old cover has gone. Each version is kept once, whichever way the list
+    has moved between them: each new cover rolls the oldest off the tray, and the one this came from is spared that."""
     import uuid
     from .pipeline import _append_history, _safe, _unique, CoverResult
     doc, res = load(item["id"]), result_of(item["id"])
     if doc is None or res is None or not doc["cursor"]:
         raise ModelError("There's nothing edited to keep.")
-    if doc.get("kept") == _state(doc):
+    was = doc.get("kept", [])
+    if _state(doc) in was:
         raise ModelError("This version is already kept.")
+    if len(was) >= MAX_EDITS:
+        raise ModelError("This cover has been kept as often as it can be. Go on from one of the kept ones.")
     done = compile_list(doc)
     base = base_files(item, doc)
     d = folder(doc["cover"])
@@ -718,8 +723,9 @@ def keep(item: dict) -> dict:
     new = _append_history(r, spare=(item["id"],))
     try:   # (past here the new cover stands, so nothing may fail the job and run it twice)
         tmp.rename(folder(new["id"]))
-        save({**doc, "cover": new["id"], "edits": live, "kept": _state(doc)})
-        save({**doc, "kept": _state(doc)})
+        now = was + [_state(doc)]
+        save({**doc, "cover": new["id"], "edits": live, "kept": now})
+        save({**doc, "kept": now})
         return hstore.update(new["id"], edits=doc["cursor"], edited_from=item["id"])
     except OSError as e:
         print(f"Edit list: kept, but its list stayed behind ({type(e).__name__}: {e}).", flush=True)
