@@ -340,7 +340,7 @@ function coverDetail(d, c) {
       S.song = await api(`/api/songs/${c.song_id}`); store.set("uc-song", S.song.id); renderSong();
       await loadVoices(c.voice);
       const keep = ["key", "octave", "index_ratio", "protect", "volume_envelope", "quality", "dereverb", "karaoke", "reverb", "format",
-                    "backing_voice", "backing_octave", "backing_db", "pitch_cleanup", "pitch_correction", "polish"];
+                    "backing_voice", "backing_octave", "backing_db", "pitch_cleanup", "pitch_correction", "polish", "duet_voice", "duet_way", "duet_backing"];   // (never its plan: Convert finds one)
       S.opts = { ...S.defaults, ...Object.fromEntries(keep.filter(k => o[k] !== undefined && o[k] !== null).map(k => [k, o[k]])) };
       syncControls(); saveOpts(); refreshEstimate();
       showTab("frontman"); window.scrollTo({ top: 0, behavior: "smooth" });
