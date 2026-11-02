@@ -461,7 +461,7 @@ def _cleanup_groups() -> dict:
                       "paths": conv, "default": True}
     from ..frontman.edits import strays
     g["edit_strays"] = {"title": "Edit lists of covers that have gone", "detail": "Left over from a delete or a Keep that stopped short",
-                        "paths": strays(), "default": True}
+                        "paths": strays(), "default": False}
     g["keyshift"] = {"title": "Saved key changes", "detail": "Transposed backing tracks, re-made in a few seconds when needed",
                      "paths": [f for f in (cache / "keyshift").glob("*") if f.is_file()], "default": True}
     old = []
@@ -546,6 +546,10 @@ def clean_up(groups) -> dict:
         if k not in groups:
             continue
         freed += v["size"]
+        if k == "edit_strays":   # (through the allow-list of every delete of a cover's files)
+            from ..frontman.edits import clear_strays
+            clear_strays(v["paths"])
+            continue
         for path_ in v["paths"]:
             _remove(path_)
         for d in v.get("aside", []):

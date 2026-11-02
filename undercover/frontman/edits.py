@@ -727,10 +727,18 @@ def keep(item: dict) -> dict:
 
 
 def strays() -> list:
-    """Folders here with no cover: a Keep that stopped short, or a delete that found a file in use."""
+    """Folders here with no line in the history: a Keep that stopped short, or a delete that found a file in use. Every line counts,
+    its cover's file there or not, and no history at all means nothing can be said: the library may be on a drive that's away."""
     root = path("cache_dir") / "converted" / "edits"
-    live = {i.get("id") for i in hstore.finished()}
-    return [p for p in root.iterdir() if p.is_dir() and p.name not in live] if root.exists() else []
+    if not root.exists() or not hstore._file().is_file():
+        return []
+    with hstore.LOCK:
+        known = {i.get("id") for i in hstore._load()}
+    return [p for p in root.iterdir() if p.is_dir() and p.name not in known] if known else []
+
+
+def clear_strays(dirs: list):
+    storage.remove_files([], [path("cache_dir") / "converted" / "edits"], dirs=dirs)
 
 
 def dir_of(item: dict) -> Path | None:

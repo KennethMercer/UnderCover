@@ -2332,7 +2332,8 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "core/tailnet.py::fetch_binaries::remove_files", "core/tailnet.py::forget::remove_files",
     "core/themes.py::_drop::remove_files", "core/vault.py::prune::remove_files", "core/ytdlp.py::_drop::remove_files",
     "doubleagent/improved.py::_drop_samples::remove_files", "frontman/history.py::roll_off::remove_files",
-    "frontman/edits.py::_drop::remove_files", "frontman/edits.py::keep::remove_files", "safehouse/api.py::_route::remove_files",
+    "frontman/edits.py::_drop::remove_files", "frontman/edits.py::clear_strays::remove_files", "frontman/edits.py::keep::remove_files",
+    "safehouse/api.py::_route::remove_files",
     "safehouse/smaller.py::keep_voice::remove_files", "safehouse/smaller.py::_drop_readings::remove_files",
     "safehouse/smaller.py::undo_voice::remove_files", "safehouse/smaller.py::keep_project::remove_files",
     "safehouse/smaller.py::undo_project::remove_files", "safehouse/smaller.py::restore_full_index::remove_files",
@@ -6965,12 +6966,13 @@ def u_rolloff_covers():
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
     # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and (improved.py) an improved voice's listening copies;
     # expired after its 30 days); a one-shot's candidates that weren't chosen (rc-fix7: only inside voices/.staging); a cover's
-    # edit list (two in edits.py: its own snippets, takes and result, and what a Keep that failed had copied; one with the
-    # cover's delete, the list's folder only); a new caller must be added here on purpose
+    # edit list (three in edits.py: its own snippets, takes and result, what a Keep that failed had copied, and Clean up's
+    # strays, only inside the lists' folder; one with the cover's delete, the list's folder only); a new caller must be added
+    # here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/firstrun.py", "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/voices.py", "core/ytdlp.py", "doubleagent/improved.py",
-                                                                        "frontman/edits.py", "frontman/edits.py",
+                                                                        "frontman/edits.py", "frontman/edits.py", "frontman/edits.py",
                                                                         "frontman/history.py", "safehouse/api.py", "safehouse/library.py", *["safehouse/smaller.py"] * 10,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
@@ -7595,7 +7597,35 @@ def u_edits():
             stray = E.folder("0000000000")
             stray.mkdir(parents=True)
             assert E.strays() == [stray], E.strays()
-            shutil.rmtree(stray)
+            # a cover whose file is away still has its list, and no history says nothing: the library may be on a drive that's away
+            held, hf = Path(H.get(new["id"])["output"]), H._file()
+            away, hf2 = held.with_name("held.away"), hf.with_name("away.jsonl")
+            held.rename(away)
+            assert E.strays() == [stray], E.strays()
+            hf.rename(hf2)
+            assert E.strays() == []
+            hf.write_text("", encoding="utf-8")
+            assert E.strays() == []
+            hf.unlink()
+            hf2.rename(hf)
+            hf.parent.rename(hf.parent.with_name("output-away"))
+            assert E.strays() == []
+            shutil.rmtree(hf.parent, ignore_errors=True)   # (asking for the output folder makes an empty one)
+            hf.parent.with_name("output-away").rename(hf.parent)
+            away.rename(held)
+            from undercover.safehouse import library as LB
+            g = LB._cleanup_groups()["edit_strays"]
+            assert g["default"] is False and g["paths"] == [stray], g
+            LB.clean_up(["edit_strays"])
+            assert not stray.exists() and E.folder(new["id"]).exists()
+            outside = work / "not-a-list"
+            outside.mkdir()
+            try:
+                E.clear_strays([outside])
+                raise AssertionError("deleted outside the lists' folder")
+            except ModelError:
+                pass
+            assert outside.exists()
             assert E.base_files(H.get(new["id"]), nd)["lead"] == E.folder(new["id"]) / "base-lead.flac"
         finally:
             E.mix = real_mix

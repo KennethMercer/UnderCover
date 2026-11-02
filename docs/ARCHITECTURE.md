@@ -528,7 +528,8 @@ redo included, and a kept edit's `edited_from: <id>`.
   kept cover's singers from `duet_plan` and doesn't carry its octave edits yet.
 - **Stored data:** `load()` checks every field of `edit.json` and answers "no list" for anything off, a file over 4 MB included. File
   names come from an edit's id and nothing else. The list goes with its cover through `storage.remove_files`, and Storage's "Temporary
-  conversion files" leaves the base takes of a cover with live edits.
+  conversion files" leaves the base takes of a cover with a list. Clean up offers a folder with no line in the history, unticked, and
+  offers nothing when the history can't be read: the library may be on a drive that's away.
 - **Routes** are in `frontman/api.py`, one job at a time per cover in the GPU queue, PC only (`app/phone_api`). Page: not yet.
 
 ### The one-shot's checks and gates
