@@ -2332,6 +2332,7 @@ DELETERS = {   # every call that can delete a folder or file (u_no_voice_deletes
     "core/tailnet.py::fetch_binaries::remove_files", "core/tailnet.py::forget::remove_files",
     "core/themes.py::_drop::remove_files", "core/vault.py::prune::remove_files", "core/ytdlp.py::_drop::remove_files",
     "doubleagent/improved.py::_drop_samples::remove_files", "frontman/history.py::roll_off::remove_files",
+    "frontman/edits.py::_drop::remove_files", "frontman/edits.py::keep::remove_files", "safehouse/api.py::_route::remove_files",
     "safehouse/smaller.py::keep_voice::remove_files", "safehouse/smaller.py::_drop_readings::remove_files",
     "safehouse/smaller.py::undo_voice::remove_files", "safehouse/smaller.py::keep_project::remove_files",
     "safehouse/smaller.py::undo_project::remove_files", "safehouse/smaller.py::restore_full_index::remove_files",
@@ -6963,12 +6964,14 @@ def u_rolloff_covers():
     # (phase 20, two: the fetch's leftovers and, on Forget, the node's state folder, both only inside the cache); Make
     # smaller's (phase 24, five: Keep and Undo, a voice's set-aside index and its readings, a project's set-aside folder,
     # only what Make smaller itself set aside or made, and three more for a new voice's kept full index: put back, and (improved.py) an improved voice's listening copies;
-    # expired after its 30 days); a one-shot's candidates that weren't chosen (rc-fix7: only inside voices/.staging); a
-    # new caller must be added here on purpose
+    # expired after its 30 days); a one-shot's candidates that weren't chosen (rc-fix7: only inside voices/.staging); a cover's
+    # edit list (two in edits.py: its own snippets, takes and result, and what a Keep that failed had copied; one with the
+    # cover's delete, the list's folder only); a new caller must be added here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/firstrun.py", "core/doctor.py", "core/tailnet.py",
                                                                         "core/tailnet.py", "core/themes.py",
                                                                         "core/vault.py", "core/vault.py", "core/voices.py", "core/ytdlp.py", "doubleagent/improved.py",
-                                                                        "frontman/history.py", "safehouse/library.py", *["safehouse/smaller.py"] * 10,
+                                                                        "frontman/edits.py", "frontman/edits.py",
+                                                                        "frontman/history.py", "safehouse/api.py", "safehouse/library.py", *["safehouse/smaller.py"] * 10,
                                                                         "speakeasy/speak.py"], calls
     return "16th: kept oldest leaves the tray, 17th: next oldest deleted; 30 finishes, one at a time; guards hold"
 
