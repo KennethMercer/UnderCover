@@ -454,10 +454,16 @@ def _cleanup_groups() -> dict:
     now = time.time()
     hist = history()
     g = {}
-    conv = [f for f in (cache / "converted").glob("*") if f.is_file() and now - _mtime(f) > DAY]
+    from ..frontman.history import every_line
+    lines = every_line()   # (an edit list's base, redo included: from every line, and nothing's offered with no history to read)
+    edited = {str(f) for h in lines or [] if h.get("edits") for f in (h.get("converted_vocal"), h.get("converted_backing")) if f}
+    conv = [] if lines is None else [f for f in (cache / "converted").glob("*") if f.is_file() and now - _mtime(f) > DAY and str(f) not in edited]
     g["converted"] = {"title": "Temporary conversion files",
                       "detail": "Converted vocals from past covers (the covers are kept; their \"vocal only\" download goes)",
                       "paths": conv, "default": True}
+    from ..frontman.edits import strays
+    g["edit_strays"] = {"title": "Edit lists of covers that have gone", "detail": "Left over from a delete or a Keep that stopped short",
+                        "paths": strays(), "default": False}
     g["keyshift"] = {"title": "Saved key changes", "detail": "Transposed backing tracks, re-made in a few seconds when needed",
                      "paths": [f for f in (cache / "keyshift").glob("*") if f.is_file()], "default": True}
     old = []
@@ -542,6 +548,10 @@ def clean_up(groups) -> dict:
         if k not in groups:
             continue
         freed += v["size"]
+        if k == "edit_strays":   # (through the allow-list of every delete of a cover's files)
+            from ..frontman.edits import clear_strays
+            clear_strays(v["paths"])
+            continue
         for path_ in v["paths"]:
             _remove(path_)
         for d in v.get("aside", []):

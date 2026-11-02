@@ -542,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
     def _remember_request(self, p: str, before: set):
         for jid in set(JOBS) - before:
             j = JOBS.get(jid)
-            if j is not None and j.origin is self and j.kind in self.RETRY_KINDS and isinstance(self._read, dict):
+            if j is not None and j.origin is self and j.kind in self.RETRY_KINDS and isinstance(self._read, dict) and not getattr(j, "editing", None):
                 j.retry_req = (p, dict(self._read))
             if j is not None and j.origin is self:
                 j.pc_only = phone_api.policy("POST", p)[0] == "pc"   # started by a PC-only route: the PC's to stop

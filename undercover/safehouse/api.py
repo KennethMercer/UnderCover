@@ -121,6 +121,11 @@ def _route(h, method, p):
             for f in (item["output"], item.get("converted_vocal"), item.get("converted_backing")):
                 if f and f != "None":
                     _retry(lambda f=f: Path(f).unlink(missing_ok=True))
+            try:
+                from ..core import storage
+                storage.remove_files([], [path("cache_dir") / "converted"], dirs=cover_history.dirs_of(item))   # its edit list
+            except (OSError, ModelError) as e:   # (a file in use: Clean up takes the folder later, and the line still goes)
+                print(f"Edit list of {item['id']} not removed: {type(e).__name__}: {e}", flush=True)
             cover_history.remove_line(item["id"])   # the line goes too: no hidden entries, ids are never reused
             return h._json({"ok": True})
         if method == "POST" and m.group(2) in ("keep", "unkeep"):

@@ -63,6 +63,7 @@ ROUTES = [
     ("POST", r"/api/upload|/api/estimate|/api/covers|/api/preview|/api/songs/youtube|/api/auto", "phone", "make covers"),
     ("POST", rf"/api/history/{_ID}/again", "phone", "make a cover again (the ear's fix)"),
     ("POST", rf"/api/history/{_ID}/octaves", "phone", "two octaves of a cover, for a quick blind pick"),
+    ("GET|POST", rf"/api/history/{_ID}/edits(/(open|undo|redo|keep))?", "pc", "a cover's edit list: the words editor is the PC's"),
     ("POST", rf"/api/songs/{_ID}/presep", "phone", "prepare a song"),
     # DoubleAgent
     ("GET", r"/api/work/candidates|/api/work/lookup", "phone", "voices to improve tonight"),
