@@ -8308,12 +8308,26 @@ def u_duets():
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert 'data-v="lines" hidden' in page and 'id="fm-duet-strip"' in page   # By line waits for the ear; style A's strip
     duet_box = page[page.index('id="fm-duet-way-box"'):page.index("</div>", page.index('id="fm-duet-backing-note"'))]
-    assert 'id="fm-duet-backing"' in duet_box and 'data-v="singers"' in duet_box and 'data-v="original"' in duet_box
+    assert 'id="fm-duet-backing"' in duet_box and 'data-v="singers"' in duet_box and 'data-v="other"' in duet_box and 'data-v="original"' in duet_box
+    assert 'data-v="mine" data-deep disabled' in duet_box   # I'll choose: Deep Cover's, and shut until its editor exists
     js = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
     assert "S.opts.duet_backing = b.dataset.v" in js and "S.defaults.duet_backing" in js and "sel.hidden = duet" in js
     assert "Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v)" in js   # (a stored "constructor" is no backing)
+    # every backing the engine takes has its sentence and its words (a missing one is rewritten to the default without a word)
+    for table in ("const DUET_BACKINGS = {", "const DUET_BACK_SAID = {"):
+        row = js[js.index(table):js.index("};", js.index(table))]
+        assert all(f"{b}: " in row for b in D.BACKINGS), row
+    assert "!b.hidden && !b.disabled" in js   # (a stored way can't land on a shut button)
+    # the strip is the engine's plan or nothing: drawn from the cover's own, hidden with none
+    assert "strip.hidden = " in js and "!plan;" in js and "plan.map(([a, b, who])" in js and 'class="strip" id="fm-duet-strip" aria-hidden="true" hidden' in page
+    assert "syncBuild();\n  renderDuetPlan();" in js and "renderHistory();\n  renderDuetPlan();" in js   # (a song, the history; renderDuet for a voice or a way)
+    lib = (ROOT / "undercover" / "web" / "library.js").read_text(encoding="utf-8")
+    keep = lib[lib.index("const keep = ["):lib.index("];", lib.index("const keep = ["))]
+    assert all(f'"{k}"' in keep for k in ("duet_voice", "duet_way", "duet_backing")) and '"duet_plan"' not in keep   # Use these settings: a duet stays a duet
     assert "karaoke = True if opts.backing_voice or opts.duet_voice else opts.karaoke" in inspect.getsource(PL.CoverEngine.make_preview)
     assert "together" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"})
+    long = D.describe([[i, i + 1, "AB"[i % 2]] for i in range(12)], {"A": "a", "B": "b"}, {"no_chorus": True})
+    assert " changes). No chorus" in long and long.startswith("Duet: ")   # (app.js duetSaid reads the sentence after these)
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
 
@@ -12600,6 +12614,8 @@ def _duet_with(song, voice):
         assert new, "no duet in the history"
         h = new[0]
         made.append(h["id"])
+        # the page's strip finds its cover by the song's own url, and its sentence in the plan's note
+        assert h["original"] == api(f"/api/songs/{song['id']}")["url"] and any(n.startswith("Duet: ") for n in h["notes"]), h
         plan = h["options"].get("duet_plan")
         from undercover.frontman.duets import DUET_DEFAULT
         assert h["duet_voice"] == second and h["options"].get("duet_way") == DUET_DEFAULT and isinstance(plan, list) and len(plan) >= 1, (h["options"], h["notes"])

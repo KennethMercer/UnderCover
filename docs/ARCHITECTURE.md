@@ -489,7 +489,7 @@ stitched by the plan.
   Make again is kept as it is.
 - **The backing** (`duet_backing`, `duets.BACKINGS`): by the singer on the lead (`singers`, `BACKING_DEFAULT`), by the
   one who isn't (`other`, `duets.other_singer`: the same changes, each part in the other voice, so the backing changes
-  hands with Turns; no page control yet), or the original. Each singer takes the backing at their own octave for the
+  hands with Turns), or the original. Each singer takes the backing at their own octave for the
   song, in either case, so `other` costs no third conversion. A backing voice isn't used in a duet. The one-shot keeps
   the original when the backing is stacked harmony (`oneshot.chordal_backing`); nothing is converted when there's
   hardly any backing (`pipeline._duet_backing`). The
@@ -497,6 +497,10 @@ stitched by the plan.
   whole by whoever sings most of the lead under it, and its voice changes only inside its own silence, at the point
   nearest the lead's change.
 - **Too few words** (under 20 heard): there's no chorus to find, and the voices take every two lines in turn.
+- **On the page** (`renderDuet`, `renderDuetPlan` in `app.js`): the second singer is picked from the same voice rows, and
+  the Convert bar says the backing in words. The strip is the plan of the newest cover of this song by these two, from the
+  history, and the sentence under it is that cover's note. Before the first cover the page shows a general sentence and
+  no strip, because only the engine can find a plan. A way that isn't ready is hidden (`lines`) or shut (I'll choose).
 
 A song sung as a duet already (`separate.lead_missing`: the split finds no lead line) is sung by one voice, and the
 notes say why; a duet's two singers take turns on its whole vocal instead, backing and all. The cover's

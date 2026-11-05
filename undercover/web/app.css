@@ -259,6 +259,45 @@ details.adv summary::-webkit-details-marker { display: none; }
 details.adv summary span:last-child { color: var(--muted); font-size: 13px; }
 details.adv[open] summary { border-bottom: 1px solid var(--line); }
 .adv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px 26px; padding: 16px 16px 18px; }
+/* a duet: who sings, how they share it, who sings the backing (--va and --vb are the two singers on the chips and the strip) */
+.fm-duet { --va: var(--accent); --vb: var(--wave-alt); container-type: inline-size; display: grid; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.fm-duet .ctls { display: grid; gap: 12px; }
+.fm-duet .q { font-weight: 600; font-size: 14.5px; }
+.fm-duet .singers, .fm-duet .duetchips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.fm-duet .vchip { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; background: var(--panel-3); border-radius: 99px; padding: 4px 8px 4px 4px; font-weight: 600; font-size: 14px; }
+.fm-duet .vchip .av { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font: 700 11.5px var(--body); color: var(--accent-ink); }
+.fm-duet .vchip.a .av { background: var(--va); }
+.fm-duet .vchip.b .av { background: var(--vb); }
+.fm-duet .vchip small { color: var(--muted); font-weight: 500; font-size: 12px; }
+.fm-duet .vchip .x { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); display: grid; place-items: center; font-size: 15px; line-height: 1; }
+.fm-duet .vchip .x:hover { color: var(--fg); background: var(--panel-2); }
+.fm-duet .addvoice { display: inline-flex; align-items: center; border: 0; border-radius: 99px; padding: 5px 13px; background: none; color: var(--accent); font-weight: 600; font-size: 14px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent); }
+.fm-duet .addvoice:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.fm-duet .picker { background: var(--panel); border-radius: 9px; padding: 8px; }
+.fm-duet .picker .voice { grid-template-columns: 34px minmax(0, 1fr); padding: 6px 8px; }
+.fm-duet .ctl { display: grid; gap: 7px; min-width: 0; }
+.fm-duet .lab { font-weight: 600; font-size: 14px; }
+.fm-duet .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; justify-self: start; }
+.fm-duet .seg button { flex: none; display: inline-flex; align-items: center; padding: 6px 14px; font-size: 14px; white-space: nowrap; }
+.fm-duet .seg button:disabled { opacity: .7; }
+.fm-duet .seg .deepmark { margin-left: 6px; font-size: 11px; }
+.fm-duet .short { display: none; }
+.fm-duet .meta { margin: 0; }
+.fm-duet .strip { display: flex; height: 14px; gap: 2px; border-radius: 5px; overflow: hidden; }
+.fm-duet .strip i { display: block; flex: 1 1 0; min-width: 2px; }
+.fm-duet .strip i.a, .fm-duet .dot.a { background: var(--va); }
+.fm-duet .strip i.b, .fm-duet .dot.b { background: var(--vb); }
+.fm-duet .legend { display: flex; gap: 4px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.fm-duet .legend span { display: inline-flex; gap: 6px; align-items: center; min-width: 0; }
+.fm-duet .dot { flex: none; width: 9px; height: 9px; margin: 0; border-radius: 50%; }
+.fm-duet .deepline { margin: 0; font: 400 12.5px var(--mono); color: var(--muted); }
+@container (max-width: 400px) {
+  .fm-duet.two .q, .fm-duet .wide { display: none; }
+  .fm-duet .short { display: inline; }
+  .fm-duet .seg { display: flex; }
+  .fm-duet .seg button { flex: 1 1 auto; justify-content: center; padding: 7px 8px; font-size: 13.5px; }
+}
+@media (max-width: 480px) { #clear-duet { display: none; } }   /* the × on the chip is right there */
 .field { display: grid; gap: 6px; min-width: 0; align-content: start; }
 .field label, .flabel { display: flex; justify-content: space-between; gap: 8px; font-weight: 500; }
 .field label output { font: 13px var(--mono); color: var(--accent); }
