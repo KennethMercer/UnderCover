@@ -3,7 +3,7 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
-## Not released yet
+## 1.1.4 (2026-11-05)
 
 **SpeakEasy** (hangfix, hangtune)
 - A reading that stops oddly in the middle of a phrase is heard and read again. So is a short break between words
@@ -25,6 +25,10 @@ in brackets.
 
 **SafeHouse** (consult2)
 - Storage gives one total. The room's number and its tab's now agree, and every model file counts, Whisper's included.
+
+**The page** (look6)
+- On a phone, every SafeHouse room is on show and the top bar is quieter. The Library's numbers follow what you've
+  picked, and Running keeps its clock until there's work for it.
 
 **Phone** (phone12)
 - The away link works as a home-screen app. When the PC doesn't answer there, it says so and offers the home address.
