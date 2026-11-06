@@ -540,7 +540,7 @@ def _render(engine, item: dict, doc: dict, edit: dict, report) -> None:
             takes[(who, oct_)] = _original(stems, key, at, end, sr)
             continue
         o = doc["octaves"][who] if oct_ is None else oct_
-        y, ysr = engine.converter.convert(chunk, _voice_of(who, opts), replace(s, pitch=key + 12 * o),
+        y, ysr = engine.converter.convert(chunk, _voice_of(who, opts), replace(s, pitch=key + 12 * o, one_line=edit["part"] == "backing"),
                                           progress=lambda f, n=n: report(0.1 + 0.8 * (n + f) / len(each), "Singing the change"))
         takes[(who, oct_)] = _to_rate(y, ysr, sr)
     for p in mine:
@@ -830,7 +830,7 @@ def _gate_of(g: dict, opts) -> dict:
 
 
 def save_pitch(cover_id: str, tracks: dict):
-    """The list's pitch tracks: {"lead": Hz per 10 ms, "backing": the same}."""
+    """The list's pitch tracks: {"lead": Hz per 10 ms, "backing": the same, one line held (as the backing's take reads it)}."""
     d = folder(cover_id)
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / (PITCH + ".tmp")
@@ -883,7 +883,7 @@ def read_pitch(engine, doc: dict, lead: np.ndarray, back: np.ndarray | None):
     rm = engine.converter.rmvpe
     tracks = {"lead": rm.infer_from_audio(lead, thred=0.03)}
     if doc["backing"] and back is not None:
-        tracks["backing"] = rm.infer_from_audio(back, thred=0.03)
+        tracks["backing"] = rm.infer_from_audio(back, thred=0.03, one_line=True)
     save_pitch(doc["cover"], tracks)
 
 

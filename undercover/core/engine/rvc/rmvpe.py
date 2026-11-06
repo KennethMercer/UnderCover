@@ -169,24 +169,36 @@ class RMVPE:
         cents = 20 * np.arange(360) + 1997.3794084376191
         self.cents_mapping = np.pad(cents, (4, 4))  # 368
 
+    def infer_from_audio(self, audio: np.ndarray, thred: float = 0.03, one_line: bool = False) -> np.ndarray:
+        """16 kHz mono float audio -> F0 in Hz per 10 ms frame (0 = unvoiced). one_line: through a stack of voices, one of them
+        (f0fix.hold_line), kept through a crossing of two parts inside a note (f0fix.hold_parts)."""
+        salience = self.salience(audio)
+        if not one_line:
+            return self._decode(salience, thred)
+        from .f0fix import clean_f0, hold_line, hold_parts
+        f0 = clean_f0(self._decode(hold_line(salience, thred), thred))   # (short gaps filled first: one frame can't split a note)
+        a = np.asarray(audio, np.float32)
+        level = np.array([20 * np.log10(np.sqrt(np.mean(np.square(a[i:i + 160], dtype=np.float64))) + 1e-9)
+                          for i in range(0, max(1, len(a)), 160)])
+        return hold_parts(f0, salience, level)
+
     @torch.no_grad()
-    def infer_from_audio(self, audio: np.ndarray, thred: float = 0.03) -> np.ndarray:
-        """16 kHz mono float audio -> F0 in Hz per 10 ms frame (0 = unvoiced)."""
+    def salience(self, audio: np.ndarray) -> np.ndarray:
+        """16 kHz mono float audio -> RMVPE's (frames, 360) salience, a frame per 10 ms."""
         mel = self.mel_extractor(torch.from_numpy(audio).float().to(self.device).unsqueeze(0))
         n_frames = mel.shape[-1]
         n_pad = 32 * ((n_frames - 1) // 32 + 1) - n_frames
         if n_pad:
             mel = F.pad(mel, (0, n_pad))
         hidden = self.model(mel.half() if self.half else mel)[:, :n_frames]
-        salience = hidden.squeeze(0).float().cpu().numpy()
-        return self._decode(salience, thred)
+        return hidden.squeeze(0).float().cpu().numpy()
 
     def _decode(self, salience: np.ndarray, thred: float) -> np.ndarray:
         center = np.argmax(salience, axis=1) + 4
         sal = np.pad(salience, ((0, 0), (4, 4)))
         idx = center[:, None] + np.arange(-4, 5)[None, :]                 # (frames, 9) window around peak
         win = np.take_along_axis(sal, idx, axis=1)
-        cents = (win * self.cents_mapping[idx]).sum(1) / win.sum(1)
+        cents = (win * self.cents_mapping[idx]).sum(1) / np.maximum(win.sum(1), 1e-9)
         cents[sal.max(axis=1) <= thred] = 0
         f0 = 10 * (2 ** (cents / 1200))
         f0[f0 == 10] = 0

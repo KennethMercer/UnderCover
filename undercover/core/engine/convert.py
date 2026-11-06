@@ -39,6 +39,7 @@ class Settings:
     pitch_cleanup: bool = CCFG["pitch_cleanup"]          # repair octave glitches / blips in the pitch track
     pitch_correction: float = CCFG["pitch_correction"]   # snap to the song's scale: 0 off .. 1 hard autotune
     song_key: tuple | None = None                          # (tonic 0-11, 'major'|'minor') of the ORIGINAL song
+    one_line: bool = False                                 # a backing stem: through stacked voices, one of them (f0fix.hold_line)
 
 
 class LoadedVoice:
@@ -124,11 +125,11 @@ class Converter:
         memo, key = self._f0_memo, None
         if memo is not None:
             import hashlib
-            key = (len(audio16), hashlib.blake2b(np.ascontiguousarray(audio16).tobytes(), digest_size=16).digest())
+            key = (len(audio16), s.one_line, hashlib.blake2b(np.ascontiguousarray(audio16).tobytes(), digest_size=16).digest())
         if memo is not None and key in memo:
             f0 = memo[key]
         else:
-            f0 = self.rmvpe.infer_from_audio(audio16, thred=0.03)
+            f0 = self.rmvpe.infer_from_audio(audio16, thred=0.03, one_line=s.one_line)
             if memo is not None:
                 memo[key] = f0
         f0 = np.array(f0[:p_len])
