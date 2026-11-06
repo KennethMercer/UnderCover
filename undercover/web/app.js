@@ -996,7 +996,7 @@ function drawResultWave() {
   drawWave($("#wave-res"), wavePeaks[ab] || wavePeaks.cover, frac, ab === "cover" ? "--wave-on" : "--wave-alt");
   $("#pos").textContent = `${fmtTime(a.currentTime)} / ${fmtTime(a.duration || 0)}`;
 }
-function stopAll() { aCover.pause(); aOrig.pause(); aSong.pause(); if (typeof SH === "object") SH.audio.pause(); $("#play").textContent = "▶"; $("#play").setAttribute("aria-label", "Play"); }
+function stopAll() { aCover.pause(); aOrig.pause(); aSong.pause(); $("#play").textContent = "▶"; $("#play").setAttribute("aria-label", "Play"); if (typeof SH === "object") SH.audio.pause(); }   // (and shape.js's Hear it)
 function togglePlay() {
   const a = active();
   if (!a.src) return;
