@@ -1192,8 +1192,8 @@ function renderHistory() {
     const bits = [o.key != null || o.octave != null ? pitchText(o) : (o.pitch ? `vocal ${fmtPitch(o.pitch)} st (out of key)` : null), o.quality, o.karaoke ? "lead only" : null, o.dereverb ? "de-reverb" : null,
                   h.seconds?.total ? `made in ${h.seconds.total.toFixed(1)} s` : null].filter(Boolean).join(" · ");
     return `<div class="hrow${h.id === nowPlaying ? " playing" : ""}" data-kept="${h.kept ? "true" : "false"}"><div><strong>${esc(coverTitle(h))}${typeof earMark === "function" ? earMark("cover", h.id) : ""}</strong>${facts([
-        { html: `${vname(h.voice)}${h.duet_voice ? " &amp; " + vname(h.duet_voice) : ""}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}` }, { t: upFirst(dayWord(h.created)), muted: true }, { t: dayTime(h.created), deep: true }, ...(bits ? bits.split(" · ").map(t => ({ t, deep: true })) : [])])}</div>
-      <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
+        { html: `${vname(h.voice)}${h.duet_voice ? " &amp; " + vname(h.duet_voice) : ""}${h.backing_voice ? " + " + vname(h.backing_voice) : ""}` }, { t: upFirst(dayWord(h.created)), muted: true }, { t: dayTime(h.created), deep: true }, h.edits ? { t: `Shaped · ${h.edits}`, cls: "shaped" } : "", ...(bits ? bits.split(" · ").map(t => ({ t, deep: true })) : [])])}</div>
+      <div class="hbtns"><button class="icon-btn" data-play="${h.id}" aria-label="Play ${esc(h.title)}">${h.id === nowPlaying ? "❚❚" : "▶"}</button><button class="icon-btn" type="button" data-shape="${h.id}" data-pc>Shape it</button><span class="meta" data-phone>Shape it on the PC</span><button class="icon-btn" data-keep="${h.id}" aria-pressed="${h.kept}" title="${h.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this cover for good"}">${h.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="icon-btn" href="${esc(h.output)}?download">Download</a></div></div>`;
   }).join("") + recentMore("hist-more", !!S.histAll, HIST.length);
   $("#hist-more")?.addEventListener("click", () => { S.histAll = !S.histAll; renderHistory(); $("#hist-more")?.focus({ preventScroll: true }); });   // the redraw keeps the keyboard on the button
   $$("[data-play]", box).forEach(b => b.onclick = () => {
@@ -1202,6 +1202,7 @@ function renderHistory() {
     showResult(h).then(() => { aCover.addEventListener("canplay", () => togglePlay(), { once: true }); });
   });
   $$("[data-keep]", box).forEach(b => b.onclick = () => toggleKeep(b.dataset.keep, b.getAttribute("aria-pressed") === "true"));
+  $$("[data-shape]", box).forEach(b => b.onclick = () => shapeOpen(b.dataset.shape));   // (shape.js)
 }
 
 // ------------------------------------------------------------ boot
@@ -1249,7 +1250,8 @@ addEventListener("resize", redrawAll);
     // a cover started before a reload is still running: show its progress again instead of inviting a duplicate
     // and later: a cover started somewhere else (another tab, a one-shot's "Make it with this version")
     const follow = (list, elsewhere) => {
-      const run = list.find(j => j.kind === "cover" && isRunning(j) && !/^Preview/.test(j.title || ""));
+      const run = list.find(j => j.kind === "cover" && isRunning(j) && !/^Preview/.test(j.title || "")
+        && !(typeof SH === "object" && SH.jobs.has(j.id)) && !/^Editing /.test(j.title || ""));   // (an edit list's step follows on its own page, shape.js)
       if (run && !S.job) { S.job = run.id; summary(); startProgress(run.id, elsewhere); }
     };
     follow(await refreshJobs(true), false);

@@ -11220,6 +11220,18 @@ def u_page_rules():
     assert "aside_size" in lib and "goes to Set aside" in lib, "Clean up lost the duplicate voices going to Set aside"
     assert ".hbtns { flex-wrap: wrap; }" in (web / "app.css").read_text(encoding="utf-8")
     assert ".se-rrow .row { grid-column: 2; flex-wrap: wrap; }" in (web / "speakeasy.css").read_text(encoding="utf-8")
+    # the edit list's page (shape.js). Heard words, the gate's sentences, notes and titles are outside text: never put into HTML
+    # bare, only through esc() (the maintainers' notes, editlist). Keep only by the user, after its confirm. PC only.
+    shape = (web / "shape.js").read_text(encoding="utf-8")
+    assert '<script src="/static/shape.js"></script>' in ixh and 'id="shape" hidden data-pc' in ixh
+    bare = re.findall(r"\$\{(?:e\.moved|e\.note|e\.id|quote|SH\.error|x\.c\.label|land\.s|bl\.s|SH\.said\.s|SH\.busy|SH\.keptAs|kind|at|it\.title|s"
+                      r"|(?:shWord|shName|coverTitle|shBare)\([^()]*(?:\([^()]*\))?[^()]*\))\}", shape)   # (a bare ${...} of outside text)
+    assert not bare, bare
+    assert ".innerHTML +=" not in shape and "insertAdjacentHTML" not in shape
+    assert shape.count("shKeep(") == 2 and 'k === "keep-yes") return shKeep()' in shape and 'k === "keep") { SH.confirm = true' in shape
+    assert 'data-shape="${h.id}" data-pc>Shape it</button><span class="meta" data-phone>Shape it on the PC</span>' in app
+    assert "SH.jobs.has(j.id)" in app and "!/^Editing /.test(j.title" in app   # (an edit's step isn't a cover's progress)
+    assert "/edits/price" in shape and "fit?.said" in shape and "x.ok.fit?.said" in shape   # the fit said before and as it's sung
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"
 
 
