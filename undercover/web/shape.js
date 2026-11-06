@@ -24,7 +24,7 @@ const shOctOf = p => p[3] ?? SH.doc.octaves[p[2]] ?? 0;
 function shapeOpen(id) {
   const item = HIST.find(h => h.id === id);
   if (!item) return;
-  Object.assign(SH, { id, item, doc: null, state: "loading", pick: null, probes: null, busy: null, said: null, error: null, confirm: false, keptAs: null });
+  Object.assign(SH, { id, item, doc: null, state: "loading", pick: null, probes: null, busy: null, said: null, error: null, confirm: false, keptAs: null, focus: 0, heard: 0 });
   $("#shape").hidden = false;
   shDraw();
   $("#shape").scrollIntoView({ block: "start", behavior: "smooth" });
@@ -44,7 +44,7 @@ async function shLoad(first) {
     try { const { job } = await api(`/api/history/${id}/edits/open`, { json: {} }); if (job) return shFollow(job, () => shLoad(false)); return shLoad(false); }
     catch (e) { SH.state = "error"; SH.error = e.message; return shDraw(); }
   }
-  SH.doc = v; SH.state = "ready";
+  SH.doc = v; SH.state = "ready"; SH.heard++;
   if (SH.pick && !(SH.pick[1] < v.words.length)) SH.pick = null;
   shDraw();
   if (SH.pick) shProbe();
@@ -143,7 +143,7 @@ async function shKeep() {
 // "Hear it": the result (the cover itself before any change) from a second before to a second after
 function shHear(t0, t1) {
   stopAll();
-  const src = SH.doc?.result || SH.item.output;
+  const src = SH.doc?.result ? `${SH.doc.result}?v=${SH.heard}` : SH.item.output;   // (the result keeps its file name from edit to edit)
   if (!SH.audio.src.endsWith(src)) SH.audio.src = src;
   SH.audio.currentTime = Math.max(0, t0 - 1); SH.stopAt = t1 + 1;
   SH.audio.play().catch(e => showError("The browser couldn't play this file.", "Couldn't play it"));
@@ -187,7 +187,7 @@ function shDraw() {
     <button class="linkbtn quiet" type="button" data-sh="done">Done</button></div></div>`;
   if (SH.state !== "ready") {
     const st = SH.state === "listening" ? `<b>Listening for the words…</b><span>About 20 s, once. The app hears the song through, then keeps the words with this cover.</span>`
-      : SH.state === "error" ? `<b>${esc(SH.error || "This cover can't be shaped.")}</b>${/Make it again/.test(SH.error || "") ? "" : "<span>Make it again, then shape that one.</span>"}`
+      : SH.state === "error" ? `<b>${esc(SH.error || "This cover can't be shaped.")}</b><span><button class="btn" type="button" data-sh="retry">Try again</button></span>`
       : `<b>Opening…</b>`;
     box.innerHTML = `<div class="ed">${head}<div class="state" role="status">${st}</div></div>`;
     return shWire();
@@ -265,6 +265,7 @@ function shWire() {
   $$("[data-sh]", box).forEach(b => b.onclick = () => {
     const k = b.dataset.sh;
     if (k === "done") return shapeClose();
+    if (k === "retry") { SH.state = "loading"; SH.error = null; shDraw(); return shLoad(true); }
     if (k === "undo" || k === "redo") return shStep(k);
     if (k === "keep") { SH.confirm = true; shDraw(); return $('[data-sh="keep-yes"]', box)?.focus(); }
     if (k === "keep-yes") return shKeep();
@@ -273,6 +274,7 @@ function shWire() {
   });
   $$("[data-hear]", box).forEach(b => b.onclick = () => { const [t0, t1] = b.dataset.hear.split(",").map(Number); shHear(t0, t1); });
   $$("[data-pick-c]", box).forEach(b => b.onclick = () => shSend(SH.probes[+b.dataset.pickC].c));
+  box.onkeydown = e => { if (e.key === "Escape" && SH.confirm) { SH.confirm = false; shDraw(); $('[data-sh="keep"]', box)?.focus(); } };
   const lyr = $(".lyr", box);
   if (!lyr) return;
   const choose = i => {
