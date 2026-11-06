@@ -354,10 +354,20 @@ def lead_missing(lead: Path, backing: Path) -> bool:
     """The karaoke split found no lead: its lead stem is (nearly) silent while the backing sings. Two voices in
     harmony all the way (a duet) look like backing vocals to it (phase 22: The Sound of Silence's lead stem was
     digital silence, -164 dB, against -24 dB of backing)."""
+    return _rms_db(lead) < _rms_db(backing) - LEAD_MISSING_DB
+
+
+def _rms_db(p: Path) -> float:
+    """A stem's RMS in dB over its first files.MAX_AUDIO_S, read in blocks (never the whole of a long upload in memory)."""
     import numpy as np
     import soundfile as sf
-    rms = lambda p: 20 * np.log10(np.sqrt(np.mean(sf.read(str(p), dtype="float32")[0] ** 2)) + 1e-9)
-    return rms(lead) < rms(backing) - LEAD_MISSING_DB
+    from . import files
+    total, n = 0.0, 0
+    sr = sf.info(str(p)).samplerate
+    for blk in sf.blocks(str(p), blocksize=1 << 16, dtype="float32", always_2d=True, frames=int(files.MAX_AUDIO_S * sr)):
+        total += float(np.square(blk, dtype=np.float64).sum())
+        n += blk.size
+    return 20 * np.log10(np.sqrt(total / max(n, 1)) + 1e-9)
 
 
 def separate(audio: Path, dereverb: bool | None = None, karaoke: bool | None = None,

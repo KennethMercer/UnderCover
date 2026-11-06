@@ -8348,6 +8348,14 @@ def u_duets():
         assert _PL2.backing_quiet(kd) is None   # no lead found (sung in harmony): its own note, not this one
         (kd / "instrumental.flac").write_bytes(b"not audio")   # (a split still being written)
         assert _PL2.backing_quiet(kd) is None
+        real_mq, tries = _PL2._measure_quiet, []
+        _PL2._measure_quiet = lambda a, b: (tries.append(1), 1 / 0)[1]
+        try:
+            assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [], tries   # (the failure above remembered)
+            (kd / "instrumental.flac").write_bytes(b"not audio, still")   # a new version of the stem is measured again, once
+            assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [1], tries
+        finally:
+            _PL2._measure_quiet = real_mq
     assert _PL2.estimate_for(100.0, _PL2.CoverOptions(voice="v", duet_voice="w"))["backing_quiet"] is None   # (the one-shot's plan: no song yet)
     assert "lufs(back) < BACKING_QUIET_LUFS" in _i2.getsource(_PL2.CoverEngine._duet_backing)   # one line for both
     assert "backing_quiet(k_dir) if opts.duet_voice and song is not None" in _i2.getsource(_PL2.estimate_for)
@@ -8866,6 +8874,19 @@ def u_leadgate():
         sf.write(str(back_f), 0.3 * voice[16000:16000 * 5], 16000)
         sf.write(str(quiet), 0.1 * voice[:16000 * 4], 16000)
         assert lead_missing(silent, back_f) and not lead_missing(lead_f, back_f) and not lead_missing(quiet, back_f)
+        late = Path(td) / "late.wav"   # silence, then the singing: read only up to files.MAX_AUDIO_S, in blocks
+        sf.write(str(late), np.concatenate([np.zeros(16000 * 4, np.float32), voice[:16000 * 4]]), 16000)
+        from undercover.core import files as _files
+        saved_max = _files.MAX_AUDIO_S
+        try:
+            assert not lead_missing(late, back_f)
+            _files.MAX_AUDIO_S = 3
+            assert lead_missing(late, back_f)   # (the first 3 s are all it reads)
+        finally:
+            _files.MAX_AUDIO_S = saved_max
+        import inspect as _ins
+        from undercover.core import separate as _sep
+        assert "sf.read(" not in _ins.getsource(_sep.lead_missing) + _ins.getsource(_sep._rms_db) and "sf.blocks(" in _ins.getsource(_sep._rms_db)
     return f"hook {inst:.1f} s left as it is, chorus {ch:.1f} s converted, singing untouched, stems unchanged"
 
 

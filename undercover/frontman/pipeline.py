@@ -700,11 +700,14 @@ def backing_quiet(k_dir: Path) -> bool | None:
         return None
     try:
         key = tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in (st["vocals"], st["instrumental"]))
-        if key not in _QUIET:
-            _QUIET[key] = _measure_quiet(st["vocals"], st["instrumental"])
-        return _QUIET[key]
-    except Exception:   # (ffmpeg's RemixError, a soundfile error, a stem gone mid-read)
+    except OSError:   # (a stem gone mid-look)
         return None
+    if key not in _QUIET:
+        try:
+            _QUIET[key] = _measure_quiet(st["vocals"], st["instrumental"])
+        except Exception:   # (ffmpeg's RemixError, a soundfile error, a stem gone mid-read): remembered, not read again on every
+            _QUIET[key] = None   # estimate; a split still being written changes its size, and is measured again when it's done
+    return _QUIET[key]
 
 
 _QUIET: dict = {}
