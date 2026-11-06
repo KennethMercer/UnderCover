@@ -830,7 +830,7 @@ def _gate_of(g: dict, opts) -> dict:
 
 
 def save_pitch(cover_id: str, tracks: dict):
-    """The list's pitch tracks: {"lead": Hz per 10 ms, "backing": the same, one line held (as the backing's take reads it)}."""
+    """The list's pitch tracks: {"lead": Hz per 10 ms, "backing": the same}."""
     d = folder(cover_id)
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / (PITCH + ".tmp")
@@ -883,7 +883,7 @@ def read_pitch(engine, doc: dict, lead: np.ndarray, back: np.ndarray | None):
     rm = engine.converter.rmvpe
     tracks = {"lead": rm.infer_from_audio(lead, thred=0.03)}
     if doc["backing"] and back is not None:
-        tracks["backing"] = rm.infer_from_audio(back, thred=0.03, one_line=True)
+        tracks["backing"] = rm.infer_from_audio(back, thred=0.03)
     save_pitch(doc["cover"], tracks)
 
 

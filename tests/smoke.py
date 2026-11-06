@@ -7419,12 +7419,12 @@ def u_edit_price():
             finally:
                 E.compile_list = real_fit
             assert E.price(item, doc, up)["poor"]
-            # the tracks read from the stems: the lead's, and the backing's one line held when its singers sing it
+            # the tracks read from the stems: the lead's, and the backing's when its singers sing it
             calls = []
             eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(
                 infer_from_audio=lambda au, thred, one_line=False: (calls.append(one_line), np.full(6000, 220.0, np.float32))[1])))
             E.read_pitch(eng, {**doc, "backing": True}, np.zeros(16000, np.float32), np.zeros(16000, np.float32))
-            assert calls == [False, True] and set(E.pitch_of(doc)) == {"lead", "backing"}, calls
+            assert calls == [False, False] and set(E.pitch_of(doc)) == {"lead", "backing"}, calls
     finally:
         E.get_voice, E.label_of = real
     # where it's read and where it's said: the cover and the editor's first open read the tracks; an edit and its dry run say the price
@@ -7720,7 +7720,7 @@ def u_edits():
             assert E.result_of(it["id"]) == r
             new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
-            assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, True]   # (read with an edit, kept with the list)
+            assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, False]   # (read with an edit, kept with the list)
             try:
                 E.keep(H.get(it["id"]))   # a version is kept once: each Keep rolls a cover off the tray
                 raise AssertionError("kept twice")

@@ -528,7 +528,7 @@ redo included, and a kept edit's `edited_from: <id>`.
 - **An octave edit is priced before it's sung** (`edits.price`): `fit.pick_fit` at the cover's key on the stretch's notes, at the
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
-  tracks are read once and kept with the list (`pitch.npz`: the lead, and the backing's one line held; read back as data, no
+  tracks are read once and kept with the list (`pitch.npz`: the lead's and the backing's; read back as data, no
   pickles). They're read when the cover is recorded, when the list is first opened, or with the next edit of an older list, and
   Keep carries them. `POST .../edits` answers `{job, edit, fit}`; `POST .../edits/price` runs the gate and the price and sings
   nothing, for the page to say it before the edit is offered.
