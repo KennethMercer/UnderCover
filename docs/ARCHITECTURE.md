@@ -544,7 +544,12 @@ redo included, and a kept edit's `edited_from: <id>`.
   names come from an edit's id and nothing else. The list goes with its cover through `storage.remove_files`, and Storage's "Temporary
   conversion files" leaves the base takes of a cover with edits, and offers nothing with no history to read. Clean up offers a folder
   with no line in the history, unticked, and nothing in that case either: the library may be on a drive that's away.
-- **Routes** are in `frontman/api.py`, one job at a time per cover in the GPU queue, PC only (`app/phone_api`). Page: not yet.
+- **Routes** are in `frontman/api.py`, one job at a time per cover in the GPU queue, PC only (`app/phone_api`).
+- **The page** (`web/shape.js`, "Shape it" on a Recent covers row; a paired phone's row says to use the PC): the words in lines, a
+  stretch picked from one word to another, and a bar that sends each choice through `.../edits/price` first, so what it says is the
+  gate's own sentence and the fit's. Keep always asks first. Heard words, sentences, notes and titles are shown as text, never as
+  HTML (a lint in `tests/smoke.py` checks it). Deep Cover adds the plan as a strip, each word in its singer's colour, and who made each
+  edit.
 
 ### The one-shot's checks and gates
 
