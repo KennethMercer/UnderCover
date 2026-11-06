@@ -661,13 +661,13 @@ def apply(engine, item: dict, req: dict, report) -> dict:
     save(new)
     _drop([d / snippet_name(e) for e in doc["edits"][doc["cursor"]:]])
     hstore.update(item["id"], edits=len(new["edits"]))
-    if not pitch_of(new):   # (a list from before pitch tracks: read now, so the next octave edit is priced)
-        try:
+    try:
+        if not pitch_of(new):   # (a list from before pitch tracks: read now, so the next octave edit is priced)
             from ..core.engine.convert import load_16k
             st = _stems(engine, item, new, _options(item))
             read_pitch(engine, new, load_16k(st["vocals"]), load_16k(st["backing"]) if st.get("backing") else None)
-        except Exception as e:   # noqa: BLE001 - the edit stands; the next one is unpriced
-            print(f"Edit list: pitch not read ({type(e).__name__}: {e}).", flush=True)
+    except Exception as e:   # noqa: BLE001 - the edit stands; the next one is unpriced
+        print(f"Edit list: pitch not read ({type(e).__name__}: {e}).", flush=True)
     return new
 
 
@@ -843,10 +843,26 @@ def save_pitch(cover_id: str, tracks: dict):
 def pitch_of(doc: dict) -> dict:
     """The list's pitch tracks, read back as data: only lead and backing, flat float16 arrays as long as the song, nothing else. {}
     when there are none, or they aren't sound (an octave edit is then not priced, and the next edit reads them again)."""
+    import zipfile
     f = folder(doc["cover"]) / PITCH
     try:
         if not f.is_file() or f.stat().st_size > MAX_PITCH:
             return {}
+        want = round(doc["duration"] * 100)
+        with zipfile.ZipFile(f) as zf:   # (each member checked before numpy reads it: names, stored, sizes, the header's shape)
+            infos = zf.infolist()
+            if not infos or len({i.filename for i in infos}) != len(infos) or any(
+                    i.filename not in (f"{k}.npy" for k in PARTS) or i.compress_type != zipfile.ZIP_STORED or i.file_size > MAX_PITCH
+                    for i in infos):
+                return {}
+            for i in infos:
+                with zf.open(i) as m:
+                    ver = np.lib.format.read_magic(m)
+                    if ver not in ((1, 0), (2, 0)):
+                        return {}
+                    shape, fortran, dtype = (np.lib.format.read_array_header_1_0 if ver == (1, 0) else np.lib.format.read_array_header_2_0)(m)
+                    if (dtype != np.float16 or len(shape) != 1 or abs(shape[0] - want) > 200 or shape[0] * 2 > i.file_size):
+                        return {}
         out = {}
         with np.load(f, allow_pickle=False) as z:
             for k in z.files:
@@ -858,7 +874,7 @@ def pitch_of(doc: dict) -> dict:
                     return {}
                 out[k] = a
         return out
-    except (OSError, ValueError, KeyError, TypeError, EOFError):
+    except Exception:   # noqa: BLE001 - damaged in any way (a bad zip, a header numpy can't hold): not priced
         return {}
 
 
@@ -872,6 +888,15 @@ def read_pitch(engine, doc: dict, lead: np.ndarray, back: np.ndarray | None):
 
 
 def price(item: dict, doc: dict, edit: dict) -> dict | None:
+    """price_of, and None (not priced) for anything that goes wrong in it: a price is advice, and never fails the edit."""
+    try:
+        return price_of(item, doc, edit)
+    except Exception as e:   # noqa: BLE001
+        print(f"Edit list: not priced ({type(e).__name__}).", flush=True)
+        return None
+
+
+def price_of(item: dict, doc: dict, edit: dict) -> dict | None:
     """What the fit says of an octave edit before it's sung: for each singer it moves, the share of the stretch's notes outside that
     voice's range and how far their middle sits from where the voice is comfortable (fit.pick_fit at the cover's key), at the edit's
     octave against the singer's own. -> {"poor": bool, "said": a sentence or None, "rise": the cost over the own octave's, "outside":

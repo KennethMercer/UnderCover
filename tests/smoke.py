@@ -5917,8 +5917,13 @@ def u_voicepack():
             pass
         sub_demo = P.default_subject(V.Voice(name="x", dir=t, pth=t / "x", index=None, extra={"demo": True}))
         assert sub_demo["kind"] == "synthetic"
+        for k5, (rng, kept) in enumerate(((["a", "b", "c"], None), ([1e9, 2e9, 3e9], None), ([300.0, 200.0, 100.0], None), ([100, 150.5, 250], [100.0, 150.5, 250.0]))):
+            m5 = {**m, "engine": {**m["engine"], "f0_range": rng}}   # a stranger's numbers: kept only when they're a voice's range
+            m5["pack_id"] = P.pack_id(m5)
+            v5 = P.import_pack(rewrite(t / f"r{k5}.ucvoice", change=lambda n, b, m5=m5: P.canonical(m5) if n == P.MANIFEST else b), wait=0)
+            assert v5.extra.get("f0_range") == kept, (rng, v5.extra.get("f0_range"))
         kb = round(pack.stat().st_size / 1e3)
-    return f"{kb} KB pack, identical back as pack-me-2; 6 refusals"
+    return f"{kb} KB pack, identical back as pack-me-2; 6 refusals; a pack's range kept only when it's one"
 
 
 @check("cadence pace (1.1): a clip's own pace from its transcript; two of the five reference clips go to the slowest clean ones near the best (6-12 s), never a fast one or a weak one; pace in the pick is a tie-break past the readings' noise, capped below the margin the approved Freeman pack wins its blind pair by")
@@ -7383,6 +7388,37 @@ def u_edit_price():
             assert E.pitch_of(doc) == {}
             f.write_bytes(b"\x00" * (E.MAX_PITCH + 1))
             assert E.pitch_of(doc) == {}
+            import io
+            import zipfile
+
+            def member(shape, name="lead.npy", how=zipfile.ZIP_STORED, data=b"\x00" * 64):
+                h = io.BytesIO()
+                np.lib.format.write_array_header_1_0(h, {"descr": "<f2", "fortran_order": False, "shape": shape})
+                with zipfile.ZipFile(f, "w", how) as z:
+                    z.writestr(name, h.getvalue() + data)
+            f.write_bytes(b"PK\x03\x04" + b"not a zip" * 20)   # (BadZipFile isn't any of the errors a load raises)
+            assert E.pitch_of(doc) == {} and E.price(item, doc, up) is None
+            member((10 ** 12,))   # a header that declares more than any memory: refused before numpy allocates it
+            assert E.pitch_of(doc) == {} and E.price(item, doc, up) is None
+            member((6000,), data=b"\x00" * 12000, how=zipfile.ZIP_DEFLATED)   # (only stored members)
+            assert E.pitch_of(doc) == {}
+            member((6000,), name="extra.npy", data=b"\x00" * 12000)
+            assert E.pitch_of(doc) == {}
+            member((6000,), data=b"\x00" * 100)   # (the data shorter than its header says)
+            assert E.pitch_of(doc) == {}
+            member((6000,), data=b"\x00" * 12000)
+            assert set(E.pitch_of(doc)) == {"lead"}   # (the same checks pass a sound one)
+            E.save_pitch(item["id"], {"lead": f0})
+            ranges["lead-uc"] = ["150", "250", "400"]   # a stranger's numbers: no range, so not priced
+            assert E.price(item, doc, up) is None
+            ranges["lead-uc"] = [150.0, 250.0, 400.0]
+            real_fit = E.compile_list
+            E.compile_list = lambda *a, **k: 1 / 0   # anything at all going wrong in a price: not priced, never a failed edit
+            try:
+                assert E.price(item, doc, up) is None
+            finally:
+                E.compile_list = real_fit
+            assert E.price(item, doc, up)["poor"]
             # the tracks read from the stems: the lead's, and the backing's one line held when its singers sing it
             calls = []
             eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(
@@ -7393,7 +7429,16 @@ def u_edit_price():
         E.get_voice, E.label_of = real
     # where it's read and where it's said: the cover and the editor's first open read the tracks; an edit and its dry run say the price
     assert "read_pitch(engine, doc, lead, back)" in inspect.getsource(E.at_make) and "read_pitch(engine, doc, lead, back)" in inspect.getsource(E.prepare)
-    assert "read_pitch(engine, new," in inspect.getsource(E.apply)   # (a list from before tracks gets them with its next edit)
+    src = inspect.getsource(E.apply)
+    assert "read_pitch(engine, new," in src and src.index("    try:\n        if not pitch_of(new):") > 0   # (with its next edit, inside its try)
+    from undercover.core.voices import sound_range
+    from undercover.frontman.pipeline import _range_of
+    assert sound_range([100, 200.5, 300]) == [100.0, 200.5, 300.0]
+    for bad in (None, "x", [1, 2], [100, 200, 300, 400], ["100", "200", "300"], [True, 200, 300], [300, 200, 100], [200, 200, 200],
+                [10, 200, 300], [100, 200, 1e9], [100, float("nan"), 300], [100, float("inf"), 300], {"a": 1}):
+        assert sound_range(bad) is None, bad
+    assert _range_of(SimpleNamespace(extra={"f0_range": ["a", "b", "c"], "person_range": [90, 120, 200], "person_range_speech": True})) == ([90.0, 120.0, 200.0], True)
+    assert _range_of(SimpleNamespace(extra={"f0_range": [1e9, 2e9, 3e9]})) is None
     src = inspect.getsource(A._edit)
     assert 'answer["fit"] = edits.price(it, doc, answer["edit"])' in src and 'if what == "price":\n        return h._json(answer)' in src
     from undercover.frontman import pipeline as PL

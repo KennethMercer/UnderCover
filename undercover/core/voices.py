@@ -1054,6 +1054,21 @@ def voice_labels() -> dict[str, str]:
     return _LABELS["map"]
 
 
+RANGE_HZ = (40.0, 2000.0)   # a voice's measured range (low, middle, high) lies inside this, or it isn't one
+
+
+def sound_range(r) -> list | None:
+    """A voice's range as the fit reads it ([low, middle, high] Hz, finite, ascending, inside RANGE_HZ), or None: a pack's manifest
+    and an older meta.json are read as data."""
+    import math
+    if not isinstance(r, (list, tuple)) or len(r) != 3 or any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in r):
+        return None
+    r = [float(x) for x in r]
+    if not all(math.isfinite(x) and RANGE_HZ[0] <= x <= RANGE_HZ[1] for x in r) or not r[0] <= r[1] <= r[2] or r[0] == r[2]:
+        return None
+    return r
+
+
 def label_of(name: str | None, labels: dict[str, str] | None = None) -> str:
     """One voice id as shown to people; an unknown id (a removed voice) shows as it is."""
     if not name:
