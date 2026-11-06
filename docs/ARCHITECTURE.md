@@ -374,8 +374,11 @@ side-by-side it left about 10 dB less instrument bleed in the vocal than BS-Rofo
 de-reverb pass (anvuew) runs by default, because reverb tails smear HuBERT features and pitch; the remix puts matched
 space back. A karaoke model (aufr33 / viperx) splits lead from backing when asked. Quality presets set the overlap:
 fast 12.3x realtime, high 6.6x (the default), max 3.4x. Before conversion, `frontman/leadgate.py` sends a pitched
-instrument the split called "vocal" back into the instrumental, and moves a chorus the karaoke split left in the
-backing into the conversion.
+instrument the split called "vocal" back into the instrumental. Lines the karaoke split left in the backing while the
+lead is silent are handled by `chorus`: `convert` moves them into the conversion, `top` moves only their top voice, and
+`keep` (the default) leaves them in the backing. With `keep`, what's left of the lead under those lines is silent (with
+fades), so no voice sings the split's leftovers, and the note says who sings the lines: the original singers, or the
+backing's voice when the backing is converted.
 
 ### Listen-back: Whisper
 

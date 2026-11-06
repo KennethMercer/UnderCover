@@ -140,13 +140,16 @@ def split_top(backing: Path, separator, cache: Path) -> dict:
 def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "convert", top: dict | None = None) -> dict:
     """New stem files for the conversion and the mix: the lead without the instrument parts and with the choruses
     from the backing (chorus "convert": all of it; "top": only `top["top"]`, the layers under it stay in the backing;
-    "keep": none); the backing without what moved; the instrumental with the instrument parts back in.
+    "keep": none); the backing without what moved; the instrumental with the instrument parts back in. With "keep", the
+    lead is silent in the chorus stretches (with fades): what's left of it there is the split's leftovers (the singing is
+    in the backing), and a voice converting them sings scraps at whatever pitch leaked (Toxic's duet choruses).
     Returns a copy of `stems` with the changed paths (the originals stay as they were)."""
     import soundfile as sf
+    quiet = [list(c) for c in gate["chorus"]] if chorus == "keep" else []
     if chorus == "keep" or (chorus == "top" and not top):
         gate = {**gate, "chorus": [] if chorus == "keep" else gate["chorus"]}
         chorus = "convert" if chorus == "top" else chorus
-    if not gate["instrument"] and not gate["chorus"]:
+    if not gate["instrument"] and not gate["chorus"] and not quiet:
         return stems
     lead, sr = sf.read(str(stems["vocals"]), dtype="float32", always_2d=True)
     inst, sr_i = sf.read(str(stems["instrumental"]), dtype="float32", always_2d=True)
@@ -159,6 +162,8 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "conver
     mi = _mask(gate["instrument"], n, sr)[:, None]
     out = dict(stems)
     new_lead = lead * (1 - mi)
+    if quiet:   # (the leftovers under lines kept in the backing: never turned into singing)
+        new_lead *= 1 - _mask(quiet, n, sr)[:, None]
     if gate["instrument"]:
         m = min(len(inst), n)
         inst2 = inst.copy()
@@ -192,8 +197,9 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "conver
     return out
 
 
-def note(gate: dict, chorus: str = "convert") -> list[str]:
-    """Plain sentences for the cover's notes."""
+def note(gate: dict, chorus: str = "convert", backing_converted: bool = False) -> list[str]:
+    """Plain sentences for the cover's notes. backing_converted: the backing is sung by a voice in this cover (a backing voice,
+    or a duet's singers), so lines kept in it are sung by that voice, not left to the original singers."""
     out = []
     span = lambda rs: ", ".join(f"{int(a) // 60}:{int(a) % 60:02d}-{int(b) // 60}:{int(b) % 60:02d}" for a, b in rs[:4]) + (" ..." if len(rs) > 4 else "")
     if gate["instrument"]:
@@ -204,6 +210,9 @@ def note(gate: dict, chorus: str = "convert") -> list[str]:
                    "the harmonies under it kept as they were.")
     elif gate["chorus"] and chorus != "keep":
         out.append(f"Some lines were in the backing track ({span(gate['chorus'])}): converted with the voice too.")
+    elif gate["chorus"] and backing_converted:
+        out.append(f"Some lines are in the backing track ({span(gate['chorus'])}): they're sung with the rest of the backing, "
+                   "in the backing's voice.")
     elif gate["chorus"]:
         out.append(f"Some lines are in the backing track ({span(gate['chorus'])}): left to the original singers, as the "
                    "backing harmonies are.")
