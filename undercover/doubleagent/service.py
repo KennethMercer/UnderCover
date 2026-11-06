@@ -18,7 +18,7 @@ from pathlib import Path
 import time
 
 from ..core.config import CONFIG, path
-from ..core.voices import ModelError, display_name, slug
+from ..core.voices import ModelError, display_name, slug, sound_range
 from ..core import fsutil, gpu, jobs
 from ..core.jobs import Paused
 
@@ -911,12 +911,12 @@ def speaking_pitch(v) -> dict | None:
     when nothing is known (a downloaded voice never checked against a person). SpeakEasy pitches its Reader to this."""
     ex = v.extra or {}
     hz, speech = voice_f0(v)
-    rng = ex.get("f0_range")
+    rng = sound_range(ex.get("f0_range"))   # (a pack's numbers, read as data)
     if hz and rng:
         if speech:
             return {"hz": hz, "low": rng[0], "how": "its training speech"}
         return {"hz": round(hz * SUNG_TO_SPEECH, 1), "low": round(rng[0] * SUNG_TO_SPEECH, 1), "how": "its singing, an octave down"}
-    pr = ex.get("person_range")
+    pr = sound_range(ex.get("person_range"))
     if pr:
         if ex.get("person_range_speech"):
             return {"hz": pr[1], "low": pr[0], "how": f"{ex.get('person') or 'the person'}'s real speech"}

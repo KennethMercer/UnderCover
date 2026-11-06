@@ -7439,6 +7439,13 @@ def u_edit_price():
         assert sound_range(bad) is None, bad
     assert _range_of(SimpleNamespace(extra={"f0_range": ["a", "b", "c"], "person_range": [90, 120, 200], "person_range_speech": True})) == ([90.0, 120.0, 200.0], True)
     assert _range_of(SimpleNamespace(extra={"f0_range": [1e9, 2e9, 3e9]})) is None
+    # every other reader of a voice's range reads it through the same check: SpeakEasy's hold and the Reader's pitch, the one-shot's pick
+    from undercover.doubleagent import cadence as CD, service as SV
+    from undercover.frontman import oneshot as OS
+    junk = SimpleNamespace(name="x", extra={"f0_range": ["a", "b", "c"], "f0_median": 150.0, "person_range": {"x": 1}})
+    assert CD._held(junk, 333.0) == 333.0 and CD._held(SimpleNamespace(extra={"f0_range": [100, 150, 200], "from_speech": True}), 333.0) == 200.0
+    assert SV.speaking_pitch(junk) is None
+    assert inspect.getsource(OS).count("sound_range(") >= 2 and 'rng = sound_range((v.extra or {}).get("f0_range"))' in inspect.getsource(OS)
     src = inspect.getsource(A._edit)
     assert 'answer["fit"] = edits.price(it, doc, answer["edit"])' in src and 'if what == "price":\n        return h._json(answer)' in src
     from undercover.frontman import pipeline as PL

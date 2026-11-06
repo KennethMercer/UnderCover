@@ -500,9 +500,10 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
 
     # 3. settings + cover
     vhz, speech = voice_f0(v)
-    rng = (v.extra or {}).get("f0_range")
+    from ..core.voices import sound_range
+    rng = sound_range((v.extra or {}).get("f0_range"))   # (a pack's numbers, read as data)
     if len(versions) > 1:   # pick the version that suits this voice: fits its range, separates cleanly
-        r = rng or plan.get("person_range")
+        r = rng or sound_range(plan.get("person_range"))
         sp = speech if rng else plan.get("person_speech", True)
         for x in versions:
             f0 = _LAST_F0.get(str(x["stems"]["vocals"]))
