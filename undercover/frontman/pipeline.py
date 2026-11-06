@@ -239,7 +239,7 @@ class CoverEngine:
         # is the lead stem singing? (phase 15) an instrument left in it isn't turned into singing, and lines the
         # karaoke split put in the backing are converted too; the stems themselves stay as they were
         cstems = stems
-        gate, heard = {}, {}
+        gate, heard, gate_said = {}, {}, None
         if opts.lead_gate is not False:
             from .leadgate import CHORUS_MODES, apply as gate_apply, note as gate_note, plan as gate_plan, split_top
             g = gate = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
@@ -251,7 +251,7 @@ class CoverEngine:
                 top = (split_top(stems["backing"], self.separator, Path(stems["backing"]).parent)
                        if mode == "top" and g["chorus"] and stems.get("backing") else None)
                 cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top)
-                notes += gate_note(g, mode)
+                gate_said = (len(notes), g, mode)   # (said once it's known who sings the backing)
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
         if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself; then the fit
@@ -273,6 +273,9 @@ class CoverEngine:
         dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in the two singers too
         if dback:
             bvoice = None   # (one backing voice gives way to the duet's two)
+        if gate_said:
+            at, g, mode = gate_said
+            notes[at:at] = gate_note(g, mode, backing_converted=bool(bvoice or dback))
         passes = 1 + bool(dvoice) + bool(bvoice) + 2 * dback
         share = 1.0 / passes
         from ..core import lowprofile

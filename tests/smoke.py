@@ -9072,7 +9072,24 @@ def u_leadgate():
         c0, c1 = g["chorus"][0][0] + 0.1, g["chorus"][-1][1] - 0.1
         assert rms(l2, c0, c1) > 0.9 * rms(back, c0, c1) and rms(b2, c0, c1) < 0.01 * rms(back, c0, c1), "the chorus wasn't moved"
         assert abs(rms(l2, 1, 7) - rms(lead, 1, 7)) < 1e-3, "the singing changed"
+        # "keep": the lines stay in the backing, and what's left of the lead under them (the split's leftovers) is silent,
+        # so no voice sings scraps of it (Toxic's duet choruses)
+        left = lead.copy()
+        left[16 * sr:] += 0.02 * tone[:8 * sr]
+        stems_k = {**stems, "vocals": tmp / "vocals_left.wav"}
+        sf.write(str(stems_k["vocals"]), left, sr)
+        out = G.apply(stems_k, g, tmp, "k", chorus="keep")
+        l3, _ = sf.read(str(out["vocals"]), dtype="float32")
+        assert rms(l3, c0, c1) < 0.01 * rms(left, c0, c1), "the leftovers under the backing's lines are still there to convert"
+        assert abs(rms(l3, 1, 7) - rms(left, 1, 7)) < 1e-3 and out["backing"] == stems_k["backing"], "keep changed more than the leftovers"
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
+    assert any("left to the original singers" in s for s in G.note(g, "keep"))
+    said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)
+    assert said and not any("original singers" in s for s in said) and any("in the backing's voice" in s for s in said), said
+    import inspect
+    from undercover.frontman import pipeline as _PLg
+    src = inspect.getsource(_PLg.CoverEngine.make_cover)
+    assert "gate_note(g, mode, backing_converted=bool(bvoice or dback))" in src and src.index("gate_note(g, mode,") > src.index("dback = bool(dvoice)")
     # a duet (phase 22): two voices in harmony all the way are "backing" to the karaoke model and its lead is silence;
     # then there's no lead to split off and the whole vocal is converted as one voice
     import tempfile
