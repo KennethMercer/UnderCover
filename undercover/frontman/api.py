@@ -9,7 +9,8 @@ GET    /api/auto/plan?text=&train=          what a one-shot would do (nothing do
 POST   /api/upload                          raw body + X-Filename: a song dropped on the page
 POST   /api/songs/youtube                   {url} or a search result -> fetched into uploads/
 POST   /api/songs/<id>/presep               separate in the background while the GPU is idle
-POST   /api/estimate | /api/covers | /api/preview
+POST   /api/estimate | /api/covers | /api/preview      (estimate: seconds per stage; a duet's backing_quiet: true when
+                                            the song's split is cached and its backing is almost silent, else false/null)
 POST   /api/history/<id>/octaves            {variants: [{octave, key}, {octave, key}]} 15 s previews of the cover at
                                             each (the one-shot's plan.settings_fit.alt: two octaves that fit about as
                                             well, for a quick blind pick; the pick then goes to /again) -> {job}

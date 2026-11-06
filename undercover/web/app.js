@@ -654,6 +654,13 @@ const DUET_BACKINGS = { singers: "Under each line, the backing is sung by whoeve
                         original: "The song's own backing singers stay." };
 const DUET_BACK_SAID = { singers: "backing in their own voices", other: "backing by the other singer", original: "the original backing" };
 const duetBackSaid = v => Object.hasOwn(DUET_BACK_SAID, v) ? DUET_BACK_SAID[v] : DUET_BACK_SAID.singers;
+// A song split before says it has almost no backing before Convert (the estimate measures its cached split as the cover would); a song
+// never split says nothing new: it isn't separated just to know.
+const DUET_QUIET = "This song has almost no backing vocals, so the choice makes little difference here.";
+function duetBackNote() {
+  const quiet = S.estimate?.backing_quiet === true && S.estimate.song === S.song?.id;
+  $("#fm-duet-backing-note").textContent = S.opts.duet_voice ? (quiet ? DUET_QUIET : DUET_BACKINGS[S.opts.duet_backing]) : "";
+}
 function renderDuet() {
   if ((S.voicesLoaded && S.opts.duet_voice && !S.voices.some(v => v.name === S.opts.duet_voice)) || S.opts.duet_voice === S.voice) S.opts.duet_voice = "";
   const duet = S.opts.duet_voice;
@@ -673,7 +680,7 @@ function renderDuet() {
   const back = own(S.opts.duet_backing) ? S.opts.duet_backing : own(S.defaults.duet_backing) ? S.defaults.duet_backing : "singers";
   if (S.opts.duet_voice) S.opts.duet_backing = back;
   $$("#fm-duet-backing button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === back)));
-  $("#fm-duet-backing-note").textContent = S.opts.duet_voice ? DUET_BACKINGS[back] : "";
+  duetBackNote();
   renderDuetPlan();
   renderBackingSelect();
 }
@@ -791,11 +798,12 @@ function refreshEstimate() {
   clearTimeout(estTimer);
   if (!S.song || !S.voice) { S.estimate = null; summary(); return; }
   estTimer = setTimeout(async () => {
+    const song = S.song.id;
     try {
-      S.estimate = await api("/api/estimate", { json: { song: S.song.id, voice: S.voice, options: S.opts } });
+      S.estimate = { ...await api("/api/estimate", { json: { song, voice: S.voice, options: S.opts } }), song };   // (whose song it measured)
       $("#song-cached").hidden = !S.estimate.stems_cached;
     } catch (e) { S.estimate = null; }
-    summary();
+    summary(); duetBackNote();
   }, 250);
 }
 

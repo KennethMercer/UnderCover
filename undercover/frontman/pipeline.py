@@ -17,6 +17,7 @@ from . import history as hstore
 
 
 DUET_NOTE = "Two singers in harmony: UnderCover can't separate them yet, so they're sung as one voice."   # phase 22: said plainly (the user: both ways were bad)
+BACKING_QUIET_LUFS = -45.0   # a backing stem under this has nothing worth converting (a backing voice's or a duet's)
 
 
 @dataclass
@@ -150,7 +151,7 @@ class CoverEngine:
         back = cstems.get("backing")
         if (opts.duet_backing or BACKING_DEFAULT) == "original" or not back:
             return False
-        if lufs(back) < -45:
+        if lufs(back) < BACKING_QUIET_LUFS:
             notes.append("This song has almost no backing vocals, so they weren't converted.")
             return False
         if opts.duet_backing == "other":
@@ -267,7 +268,7 @@ class CoverEngine:
                  instrumental=cstems["instrumental"], backing=None if bvoice else cstems.get("backing"))
         if bvoice and not cstems.get("backing"):   # sung as one voice (a duet): no backing stem to convert
             bvoice = None
-        elif bvoice and lufs(cstems["backing"]) < -45:  # nothing worth converting
+        elif bvoice and lufs(cstems["backing"]) < BACKING_QUIET_LUFS:  # nothing worth converting
             notes.append("This song has almost no backing vocals, so the backing voice wasn't used.")
             bvoice = None
         dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in the two singers too
@@ -682,8 +683,24 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
             conv += 2 * dur / med(speeds["synth"], 40.0)
     key, _ = pitch_plan(opts)
     mix = 1.0 + dur / 120.0 + (dur / 50.0 if key else 0.0)  # Rubber Band key shift ~50x realtime
+    quiet = backing_quiet(k_dir) if opts.duet_voice and song is not None else None   # (the page says it before Convert)
     return {"separating": round(sep, 1), "converting": round(conv, 1), "mixing": round(mix, 1),
-            "total": round(sep + conv + mix, 1), "stems_cached": cached, "song_seconds": round(dur, 1)}
+            "total": round(sep + conv + mix, 1), "stems_cached": cached, "song_seconds": round(dur, 1), "backing_quiet": quiet}
+
+
+def backing_quiet(k_dir: Path) -> bool | None:
+    """Has a song whose lead and backing are already split almost no backing, by _duet_backing's own measure? The raw
+    split is louder than or as loud as what a cover converts (the lead gate only takes lines out of the backing), so a
+    quiet one here is quiet there too. None when the split isn't in the cache (nothing is separated just to know), or
+    when it found no lead (a duet sung in harmony keeps its own note)."""
+    from ..core.separate import lead_missing, stem_files
+    from .remix import lufs
+    st = {p.stem: p for p in stem_files(k_dir)} if k_dir.is_dir() else {}
+    if len(st) != 2 or not {"vocals", "instrumental"} <= st.keys():   # (one stem alone is an interrupted split)
+        return None
+    if lufs(st["instrumental"]) >= BACKING_QUIET_LUFS:
+        return False
+    return None if lead_missing(st["vocals"], st["instrumental"]) else True
 
 
 ENGINE = CoverEngine()   # the one the server uses (state lives in core.gpu)

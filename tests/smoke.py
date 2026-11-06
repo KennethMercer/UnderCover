@@ -8328,6 +8328,28 @@ def u_duets():
     assert "together" not in D.describe([[0, 9, "A"], [9, 20, "B"]], {"A": "a", "B": "b"})
     long = D.describe([[i, i + 1, "AB"[i % 2]] for i in range(12)], {"A": "a", "B": "b"}, {"no_chorus": True})
     assert " changes). No chorus" in long and long.startswith("Duet: ")   # (app.js duetSaid reads the sentence after these)
+    # almost no backing, said before Convert: only from a split already in the cache, by _duet_backing's own line
+    import tempfile
+    import soundfile as _sf
+    with tempfile.TemporaryDirectory() as td:   # (its own folder: never the cache)
+        kd, sr = Path(td) / "karaoke_x", 44100
+        tone = (0.3 * np.sin(np.linspace(0, 2 * np.pi * 440 * 4, sr * 4))).astype(np.float32)
+        hiss = (np.random.default_rng(1).standard_normal(sr * 4) * 1e-3).astype(np.float32)   # about -60 dBFS
+        assert _PL2.backing_quiet(kd) is None   # never split: nothing to say
+        kd.mkdir()
+        _sf.write(str(kd / "vocals.flac"), tone, sr)
+        assert _PL2.backing_quiet(kd) is None   # one stem alone: an interrupted split
+        _sf.write(str(kd / "instrumental.flac"), hiss, sr)
+        assert _PL2.backing_quiet(kd) is True
+        _sf.write(str(kd / "instrumental.flac"), tone, sr)
+        assert _PL2.backing_quiet(kd) is False
+        _sf.write(str(kd / "vocals.flac"), np.zeros(sr * 4, np.float32), sr)
+        _sf.write(str(kd / "instrumental.flac"), hiss, sr)
+        assert _PL2.backing_quiet(kd) is None   # no lead found (sung in harmony): its own note, not this one
+    assert _PL2.estimate_for(100.0, _PL2.CoverOptions(voice="v", duet_voice="w"))["backing_quiet"] is None   # (the one-shot's plan: no song yet)
+    assert "lufs(back) < BACKING_QUIET_LUFS" in _i2.getsource(_PL2.CoverEngine._duet_backing)   # one line for both
+    assert "backing_quiet(k_dir) if opts.duet_voice and song is not None" in _i2.getsource(_PL2.estimate_for)
+    assert "S.estimate.song === S.song?.id" in js and "summary(); duetBackNote();" in js   # (another song's measure is never said)
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
 
