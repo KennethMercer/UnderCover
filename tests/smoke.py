@@ -8346,6 +8346,8 @@ def u_duets():
         _sf.write(str(kd / "vocals.flac"), np.zeros(sr * 4, np.float32), sr)
         _sf.write(str(kd / "instrumental.flac"), hiss, sr)
         assert _PL2.backing_quiet(kd) is None   # no lead found (sung in harmony): its own note, not this one
+        (kd / "instrumental.flac").write_bytes(b"not audio")   # (a split still being written)
+        assert _PL2.backing_quiet(kd) is None
     assert _PL2.estimate_for(100.0, _PL2.CoverOptions(voice="v", duet_voice="w"))["backing_quiet"] is None   # (the one-shot's plan: no song yet)
     assert "lufs(back) < BACKING_QUIET_LUFS" in _i2.getsource(_PL2.CoverEngine._duet_backing)   # one line for both
     assert "backing_quiet(k_dir) if opts.duet_voice and song is not None" in _i2.getsource(_PL2.estimate_for)

@@ -692,15 +692,30 @@ def backing_quiet(k_dir: Path) -> bool | None:
     """Has a song whose lead and backing are already split almost no backing, by _duet_backing's own measure? The raw
     split is louder than or as loud as what a cover converts (the lead gate only takes lines out of the backing), so a
     quiet one here is quiet there too. None when the split isn't in the cache (nothing is separated just to know), or
-    when it found no lead (a duet sung in harmony keeps its own note)."""
-    from ..core.separate import lead_missing, stem_files
-    from .remix import lufs
+    when it found no lead (a duet sung in harmony keeps its own note), or can't be read (a split still being written):
+    the estimate never fails for it. Remembered per pair of stem versions (the page asks on every change)."""
+    from ..core.separate import stem_files
     st = {p.stem: p for p in stem_files(k_dir)} if k_dir.is_dir() else {}
     if len(st) != 2 or not {"vocals", "instrumental"} <= st.keys():   # (one stem alone is an interrupted split)
         return None
-    if lufs(st["instrumental"]) >= BACKING_QUIET_LUFS:
+    try:
+        key = tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in (st["vocals"], st["instrumental"]))
+        if key not in _QUIET:
+            _QUIET[key] = _measure_quiet(st["vocals"], st["instrumental"])
+        return _QUIET[key]
+    except Exception:   # (ffmpeg's RemixError, a soundfile error, a stem gone mid-read)
+        return None
+
+
+_QUIET: dict = {}
+
+
+def _measure_quiet(lead: Path, backing: Path) -> bool | None:
+    from ..core.separate import lead_missing
+    from .remix import lufs
+    if lufs(backing) >= BACKING_QUIET_LUFS:
         return False
-    return None if lead_missing(st["vocals"], st["instrumental"]) else True
+    return None if lead_missing(lead, backing) else True
 
 
 ENGINE = CoverEngine()   # the one the server uses (state lives in core.gpu)

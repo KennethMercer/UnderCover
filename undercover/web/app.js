@@ -659,7 +659,8 @@ const duetBackSaid = v => Object.hasOwn(DUET_BACK_SAID, v) ? DUET_BACK_SAID[v] :
 const DUET_QUIET = "This song has almost no backing vocals, so the choice makes little difference here.";
 function duetBackNote() {
   const quiet = S.estimate?.backing_quiet === true && S.estimate.song === S.song?.id;
-  $("#fm-duet-backing-note").textContent = S.opts.duet_voice ? (quiet ? DUET_QUIET : DUET_BACKINGS[S.opts.duet_backing]) : "";
+  const back = Object.hasOwn(DUET_BACKINGS, S.opts.duet_backing) ? S.opts.duet_backing : "singers";
+  $("#fm-duet-backing-note").textContent = S.opts.duet_voice ? (quiet ? DUET_QUIET : DUET_BACKINGS[back]) : "";
 }
 function renderDuet() {
   if ((S.voicesLoaded && S.opts.duet_voice && !S.voices.some(v => v.name === S.opts.duet_voice)) || S.opts.duet_voice === S.voice) S.opts.duet_voice = "";
@@ -798,11 +799,12 @@ function refreshEstimate() {
   clearTimeout(estTimer);
   if (!S.song || !S.voice) { S.estimate = null; summary(); return; }
   estTimer = setTimeout(async () => {
-    const song = S.song.id;
-    try {
-      S.estimate = { ...await api("/api/estimate", { json: { song, voice: S.voice, options: S.opts } }), song };   // (whose song it measured)
-      $("#song-cached").hidden = !S.estimate.stems_cached;
-    } catch (e) { S.estimate = null; }
+    const song = S.song.id, seq = S.estSeq = (S.estSeq || 0) + 1;
+    let est = null;
+    try { est = { ...await api("/api/estimate", { json: { song, voice: S.voice, options: S.opts } }), song }; } catch (e) {}   // (whose song it measured)
+    if (seq !== S.estSeq) return;   // a later ask is on its way: an older answer landing last never wins
+    S.estimate = est;
+    if (est) $("#song-cached").hidden = !est.stems_cached;
     summary(); duetBackNote();
   }, 250);
 }
