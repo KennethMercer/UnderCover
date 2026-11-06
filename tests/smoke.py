@@ -7419,12 +7419,12 @@ def u_edit_price():
             finally:
                 E.compile_list = real_fit
             assert E.price(item, doc, up)["poor"]
-            # the tracks read from the stems: the lead's, and the backing's when its singers sing it
+            # the tracks read from the stems: the lead's, and the backing's one line held when its singers sing it
             calls = []
             eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(
                 infer_from_audio=lambda au, thred, one_line=False: (calls.append(one_line), np.full(6000, 220.0, np.float32))[1])))
             E.read_pitch(eng, {**doc, "backing": True}, np.zeros(16000, np.float32), np.zeros(16000, np.float32))
-            assert calls == [False, False] and set(E.pitch_of(doc)) == {"lead", "backing"}, calls
+            assert calls == [False, True] and set(E.pitch_of(doc)) == {"lead", "backing"}, calls
     finally:
         E.get_voice, E.label_of = real
     # where it's read and where it's said: the cover and the editor's first open read the tracks; an edit and its dry run say the price
@@ -7630,6 +7630,7 @@ def u_edits():
 
         def convert(x, voice, s, progress=None):
             calls.append((voice, s.pitch, len(x)))
+            assert s.one_line is False, s   # (a lead; a backing snippet holds one line, as the backing's take does)
             if voice == "boom":
                 raise RuntimeError("no")
             return np.full(int(len(x) / 16000 * 48000), 0.9, np.float32), 48000
@@ -7720,7 +7721,7 @@ def u_edits():
             assert E.result_of(it["id"]) == r
             new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
-            assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, False]   # (read with an edit, kept with the list)
+            assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, True]   # (read with an edit, kept with the list)
             try:
                 E.keep(H.get(it["id"]))   # a version is kept once: each Keep rolls a cover off the tray
                 raise AssertionError("kept twice")
@@ -7875,6 +7876,7 @@ def u_edits():
     src = (Path(ROOT) / "undercover" / "frontman" / "pipeline.py").read_text(encoding="utf-8")
     assert "edits.at_make(res.id" in src and "heard.update(words=words, rows=rows)" in src
     assert '"edits": h.get("edits") or 0' in src
+    assert 'one_line=edit["part"] == "backing"' in (Path(ROOT) / "undercover" / "frontman" / "edits.py").read_text(encoding="utf-8")
     return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes"
 
 
@@ -8342,7 +8344,7 @@ def u_duets():
         V.get_voice = real_get
     # the pitch track read once for the same vocal inside shared_f0 (a duet's two conversions), not outside it
     calls = []
-    rm = SimpleNamespace(infer_from_audio=lambda au, thred: (calls.append(1), np.full(len(au) // 160 + 1, 200.0, np.float32))[1])
+    rm = SimpleNamespace(infer_from_audio=lambda au, thred, one_line=False: (calls.append(one_line), np.full(len(au) // 160 + 1, 200.0, np.float32))[1])
     fake = SimpleNamespace(rmvpe=rm, device="cpu", _f0_memo=None)
     aud = np.random.default_rng(1).standard_normal(16000).astype(np.float32)
     s = C.Settings(pitch=0.0, pitch_cleanup=False)
@@ -8356,9 +8358,92 @@ def u_duets():
         C.Converter._f0(fake, aud[::-1].copy(), 100, s)
     assert len(calls) == 2 and fake._f0_memo is None, calls   # the same audio once; other audio its own
     assert np.allclose(p2.cpu().numpy(), p1.cpu().numpy() / 2)   # each voice's shift after the shared track
+    calls.clear()
+    with C.Converter.shared_f0(fake):
+        C.Converter._f0(fake, aud, 100, s)
+        C.Converter._f0(fake, aud, 100, C.Settings(pitch=0.0, pitch_cleanup=False, one_line=True))
+    assert calls == [False, True], calls   # (a voice's track and one line of a stack aren't the same track)
+    # one line through a stack; a single voice left to the frame, leaps and all
+    import warnings
+    from undercover.core.engine.rvc.f0fix import hold_line
+    from undercover.core.engine.rvc.rmvpe import RMVPE
+
+    def lines(*spans):   # (from frame, to frame, bin, height)
+        sal = np.zeros((400, 360), np.float32)
+        for a, b, k, v in spans:
+            sal[a:b, k - 1:k + 2] = np.maximum(sal[a:b, k - 1:k + 2], v * np.array([0.5, 1.0, 0.5], np.float32))
+        return sal
+    one = lines((20, 200, 100, 0.8), (200, 390, 250, 0.8))
+    assert hold_line(one) is one
+    faint = lines((0, 400, 100, 0.8), (0, 400, 250, 0.06))
+    assert np.array_equal(hold_line(faint), faint)   # (a ghost under a single voice isn't a second line)
+    stack = lines(*[(i * 20, (i + 1) * 20, 100, 0.8 if i % 2 else 0.5) for i in range(20)], *[(i * 20, (i + 1) * 20, 150, 0.5 if i % 2 else 0.8) for i in range(20)])
+    assert (stack.argmax(1)[1:] != stack.argmax(1)[:-1]).sum() == 19   # (the strongest line changes at every step)
+    held = hold_line(stack)
+    assert len(set(held.argmax(1))) == 1, set(held.argmax(1))
+    edge = lines((0, 400, 358, 0.8), (0, 400, 300, 0.5))   # at the top of the scale
+    assert set(hold_line(edge).argmax(1)) == {358}
+    part = lines((0, 100, 100, 0.8), (100, 300, 100, 0.8), (100, 300, 150, 0.5), (300, 400, 200, 0.8))
+    got = hold_line(part)   # the frames around a stack aren't touched, and the voice still leaps away after it
+    assert set(got[:100].argmax(1)) == {100} and set(got[300:].argmax(1)) == {200} and set(got[100:300].argmax(1)) == {100}
+    rests = lines((0, 190, 150, 0.8), (210, 400, 150, 0.8), (0, 400, 100, 0.5))   # the held part rests while the other sings on
+    got = hold_line(rests)
+    assert got[190:210].max() == 0 and set(got[:190].argmax(1)) | set(got[210:].argmax(1)) == {150}   # (a rest, not a leap and back)
+    after = lines((0, 100, 150, 0.8), (115, 400, 150, 0.6), (115, 400, 100, 0.6))   # a quiet, then a stack of two even parts
+    assert set(hold_line(after)[115:].argmax(1)) == {150}   # (the path waits through the quiet where the last note was)
+    # inside one sung note, where two parts cross mid-word, the part it was on is kept; a step of the tune is left as sung
+    from undercover.core.engine.rvc import f0fix as FX
+
+    def hz(m):
+        return 440.0 * 2 ** ((m - 69) / 12)
+
+    def kb(m):
+        return int(round((1200 * np.log2(hz(m) / 10) - 1997.3794084376191) / 20))
+    flat = np.full(400, -20.0)   # (one note: no dip in level)
+    two = np.zeros((400, 360), np.float32)
+    two[50:200, kb(71)] = 0.6   # the part it's on, fading out late but singing on, weakly, to the note's end
+    two[200:400, kb(71)] = 0.08
+    two[150:400, kb(75)] = 0.7   # a part 4 st above comes in at 1.5 s and is the stronger from 2 s
+    track = np.where(np.arange(400) >= 50, np.where(np.arange(400) < 200, hz(71), hz(75)), 0.0)
+    got = FX.hold_parts(track, two, flat)
+    assert np.allclose(got[60:200], hz(71)) and np.allclose(got[200:400], hz(71), rtol=1e-3), "a crossing mid-word: the part kept"
+    gone = two.copy()
+    gone[260:400, kb(71)] = 0.0   # the held part stops singing at 2.6 s: from there it follows the track
+    got = FX.hold_parts(track, gone, flat)
+    assert np.allclose(got[200:260], hz(71), rtol=1e-3) and np.allclose(got[270:400], hz(75)), "held after its part stopped"
+    step = np.zeros((400, 360), np.float32)
+    step[50:200, kb(71)] = 0.8
+    step[200:400, kb(75)] = 0.8   # one voice stepping up 4 st: no second part under it
+    assert np.array_equal(FX.hold_parts(track, step, flat), track), "a step of the tune was held"
+    smear = step.copy()
+    smear[197:200, kb(75)] = 0.6   # (the new note smeared over the last frames before the move, as RMVPE does: still a step)
+    assert np.array_equal(FX.hold_parts(track, smear, flat), track), "a smeared step taken for a crossing"
+    dip = flat.copy()
+    dip[198:202] = -40.0   # a dip in level between the notes: two notes, each free
+    assert np.array_equal(FX.hold_parts(track, two, dip), track), "held across two notes"
+    assert np.array_equal(FX.hold_parts(np.zeros(50), np.zeros((50, 360), np.float32), np.zeros(50)), np.zeros(50))
+    # the one-line read: hold_line, clean_f0, then hold_parts on the audio's level
+    calls = []
+    dec = SimpleNamespace(cents_mapping=np.pad(20 * np.arange(360) + 1997.3794084376191, (4, 4)))
+    fake = SimpleNamespace(salience=lambda au: two, _decode=lambda sal, thred: (calls.append("decode"), track.copy())[1])
+    real_hp = FX.hold_parts
+    FX.hold_parts = lambda f, sal, lv: (calls.append(("parts", len(lv))), f)[1]
+    try:
+        RMVPE.infer_from_audio(fake, np.zeros(400 * 160, np.float32), 0.03, one_line=True)
+        assert calls == ["decode", ("parts", 400)], calls
+        calls.clear()
+        RMVPE.infer_from_audio(fake, np.zeros(400 * 160, np.float32), 0.03)
+        assert calls == ["decode"], calls   # (a lead: no hold at all)
+    finally:
+        FX.hold_parts = real_hp
+    dec = SimpleNamespace(cents_mapping=np.pad(20 * np.arange(360) + 1997.3794084376191, (4, 4)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert (RMVPE._decode(dec, np.zeros((5, 360), np.float32), 0.03) == 0).all()   # (nothing left in a frame: unvoiced)
     import inspect
     from undercover.frontman import pipeline as PL
     src = inspect.getsource(PL.CoverEngine.make_cover)
+    assert src.count("one_line=True") == 3 and "self.converter.convert(lead16, voice.name, s," in src   # the backing's takes, never the lead's
     assert "self.converter.shared_f0() if dvoice" in src and "stitch(audio, daudio, opts.duet_plan, sr)" in src
     assert "stitch(ba, bb, bplan, bsr)" in src and "backing_plan(opts.duet_plan, back16)" in src and "bvoice = None" in src
     assert "karaoke = True if bvoice or dvoice else opts.karaoke" in src   # (a duet always splits lead and backing)
