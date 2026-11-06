@@ -18,7 +18,8 @@ POST   /api/history/<id>/again              {options} the cover made again: its 
                                             changed (the ear's fix: {octave: -1}; the backing follows the lead's octave)
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
 GET    /api/history/<id>/edits              the cover's edit list (edits.view), or {none: true}
-POST   /api/history/<id>/edits              an edit (edits.check_edit): refused at once with a plain 400, else -> {job, edit}
+POST   /api/history/<id>/edits              an edit (edits.check_edit): refused at once with a plain 400, else -> {job, edit, fit}
+POST   /api/history/<id>/edits/price        the same edit through the gate and priced (edits.price), nothing sung -> {edit, fit}
 POST   /api/history/<id>/edits/open         hear the words of a cover that has no list yet -> {job}
 POST   /api/history/<id>/edits/undo|redo    the cursor moves and the song is mixed again -> {job}
 POST   /api/history/<id>/edits/keep         the edited song as a new cover -> {job}
@@ -81,7 +82,7 @@ def handle(h, method: str, p: str) -> bool:
             _cover_again(h, m.group(1), h._body())
         elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/octaves", p):
             _cover_octaves(h, m.group(1), h._body())
-        elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/edits(?:/(open|undo|redo|keep))?", p):
+        elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/edits(?:/(open|undo|redo|keep|price))?", p):
             _edit(h, m.group(1), m.group(2), h._body())
         elif p == "/api/preview":
             _start_preview(h, h._body())
@@ -263,14 +264,17 @@ def _edit(h, item_id: str, what: str | None, body: dict):
     answer = {}
     to = None if doc is None else doc["cursor"] + {"undo": -1, "redo": 1}.get(what, 0)
     try:
-        if what is None:
+        if what in (None, "price"):
             answer["edit"] = edits.check_edit(body, doc)
+            answer["fit"] = edits.price(it, doc, answer["edit"])   # (the fit said before anything is sung)
         elif what in ("undo", "redo") and not 0 <= to <= len(doc["edits"]):
             raise ModelError(f"There's nothing to {what}.")
         elif what == "keep" and edits.result_of(item_id) is None:
             raise ModelError("There's nothing edited to keep.")
     except ModelError as e:
         return h._error(str(e))
+    if what == "price":
+        return h._json(answer)
 
     def run(job: Job):
         def report(frac, msg):

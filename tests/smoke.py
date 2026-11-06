@@ -7330,6 +7330,76 @@ def u_speak_hz():
     return "143 Hz from the clip over 180 from the rallies; held in range; measured once and kept; Readers and songs as before"
 
 
+@check("an octave edit priced by the fit before it's sung: a poor fit said plainly, a good one not, nothing priced it can't judge, the pitch file read as data")
+def u_edit_price():
+    """edits.price on stored pitch tracks: an octave that puts the stretch out of the voice's range is a poor fit with a sentence; one
+    that brings it into the voice's range isn't; a singer edit, no tracks, unsound tracks or a voice that's gone price nothing."""
+    import inspect
+    from types import SimpleNamespace
+    import numpy as np
+    from undercover.core.voices import ModelError
+    from undercover.frontman import api as A, edits as E
+    words = [[f" w{i}", 2.0 + i * 0.5, 2.4 + i * 0.5, 0.9] for i in range(100)]
+    rows = [{"t0": 2.0, "t1": 28.0, "text": "", "rep": False}, {"t0": 31.0, "t1": 52.0, "text": "", "rep": True}]
+    plan = [[0.0, 30.0, "A"], [30.0, 60.0, "B"]]
+    pts = {"lead": [[9.9, 10.1], [19.9, 20.1], [39.9, 40.1], [49.9, 50.1]], "backing": [], "dips": []}
+    gate = {"instrument": [], "chorus": [], "mode": "keep"}
+    ranges = {"lead-uc": [150.0, 250.0, 400.0], "second-uc": [75.0, 125.0, 200.0]}
+
+    def voice(name):
+        if name not in ranges:
+            raise ModelError("gone")
+        return SimpleNamespace(name=name, extra={"f0_range": ranges[name], "from_speech": False})
+    real = (E.get_voice, E.label_of)
+    E.get_voice, E.label_of = voice, lambda n: {"lead-uc": "Lead", "second-uc": "Second"}.get(n, n)
+    try:
+        with isolated_data():
+            item = {"id": "0123456789", "voice": "lead-uc", "options": {"voice": "lead-uc", "duet_voice": "second-uc", "key": 0, "octave": 0, "duet_octave": -1}}
+            doc = E.new_doc(item["id"], words, rows, plan, plan, 60.0, {"A": 0, "B": -1}, pts, gate, True, False)
+            up = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 10.0, "t1": 20.0}, doc)
+            assert E.price(item, doc, up) is None   # (no pitch tracks yet: not priced, not refused)
+            f0 = np.zeros(6000, np.float32)
+            f0[:3000], f0[3000:] = 250.0, 500.0   # the first half where the lead sings comfortably, the second an octave higher
+            E.save_pitch(item["id"], {"lead": f0, "drums": f0})
+            assert set(E.pitch_of(doc)) == {"lead"}   # (only the parts it knows)
+            got = E.price(item, doc, up)
+            assert got["poor"] and got["rise"] >= E.POOR_COST and got["outside"] == 1.0 and got["own_outside"] == 0.0, got
+            assert got["said"] == "Lead an octave up here is a poor fit: 100% of these notes are above the voice's range, so it may sound strained.", got
+            down = E.check_edit({"op": "octave", "part": "lead", "octave": -2, "t0": 40.0, "t1": 50.0}, doc)
+            got = E.price(item, doc, down)   # Second's own octave puts the high half over its range; two down brings it home
+            assert not got["poor"] and got["said"] is None and got["rise"] < 0 and got["own_outside"] == 1.0, got
+            assert E.price(item, doc, E.check_edit({"op": "singer", "part": "lead", "who": "B", "t0": 10.0, "t1": 20.0}, doc)) is None
+            ranges.pop("lead-uc")
+            assert E.price(item, doc, up) is None   # (a voice that's gone: its edit's own job says so)
+            ranges["lead-uc"] = [150.0, 250.0, 400.0]
+            f = E.folder(item["id"]) / E.PITCH
+            for bad in (np.zeros(10, np.float16), np.full(6000, np.nan, np.float16), np.full(6000, -1, np.float16), np.zeros(6000, np.float32),
+                        np.zeros((2, 3000), np.float16)):
+                with open(f, "wb") as fh:
+                    np.savez(fh, lead=bad)
+                assert E.pitch_of(doc) == {} and E.price(item, doc, up) is None, bad.dtype
+            with open(f, "wb") as fh:
+                np.savez(fh, lead=np.array([{"x": 1}], dtype=object))   # (a pickle in the file is never loaded)
+            assert E.pitch_of(doc) == {}
+            f.write_bytes(b"\x00" * (E.MAX_PITCH + 1))
+            assert E.pitch_of(doc) == {}
+            # the tracks read from the stems: the lead's, and the backing's one line held when its singers sing it
+            calls = []
+            eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(
+                infer_from_audio=lambda au, thred, one_line=False: (calls.append(one_line), np.full(6000, 220.0, np.float32))[1])))
+            E.read_pitch(eng, {**doc, "backing": True}, np.zeros(16000, np.float32), np.zeros(16000, np.float32))
+            assert calls == [False, True] and set(E.pitch_of(doc)) == {"lead", "backing"}, calls
+    finally:
+        E.get_voice, E.label_of = real
+    # where it's read and where it's said: the cover and the editor's first open read the tracks; an edit and its dry run say the price
+    assert "read_pitch(engine, doc, lead, back)" in inspect.getsource(E.at_make) and "read_pitch(engine, doc, lead, back)" in inspect.getsource(E.prepare)
+    assert "read_pitch(engine, new," in inspect.getsource(E.apply)   # (a list from before tracks gets them with its next edit)
+    src = inspect.getsource(A._edit)
+    assert 'answer["fit"] = edits.price(it, doc, answer["edit"])' in src and 'if what == "price":\n        return h._json(answer)' in src
+    from undercover.frontman import pipeline as PL
+    assert "bplan, gate, engine=self)" in inspect.getsource(PL.CoverEngine.make_cover)
+
+
 @check("a cover's edit list: every bad request refused at the gate, snapping, compile, undo, a stored list read as data, a whole edit and Keep")
 def u_edits():
     """A cover's edit list: the gate on every kind of bad request, snapping, compile, undo, a stored list read back as data, the
@@ -7511,7 +7581,9 @@ def u_edits():
             if voice == "boom":
                 raise RuntimeError("no")
             return np.full(int(len(x) / 16000 * 48000), 0.9, np.float32), 48000
-        engine = SimpleNamespace(converter=SimpleNamespace(convert=convert), separator=None)
+        pitched = []
+        rmvpe = SimpleNamespace(infer_from_audio=lambda au, thred, one_line=False: (pitched.append(one_line), np.full(len(au) // 160 + 1, 200.0, np.float32))[1])
+        engine = SimpleNamespace(converter=SimpleNamespace(convert=convert, rmvpe=rmvpe), separator=None)
         real_mix = E.mix
         mixes = []
         def stand_in(en, i, doc):
@@ -7596,6 +7668,7 @@ def u_edits():
             assert E.result_of(it["id"]) == r
             new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
+            assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, True]   # (read with an edit, kept with the list)
             try:
                 E.keep(H.get(it["id"]))   # a version is kept once: each Keep rolls a cover off the tray
                 raise AssertionError("kept twice")
@@ -13282,7 +13355,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()

@@ -49,6 +49,12 @@ STATE = re.compile(r"[0-9a-f]{16}")
 FIELDS = ("op", "part", "who", "octave", "t0", "t1", "words", "words_hash", "section", "by", "note")
 STORED = ("id", "op", "part", "who", "octave", "by", "note", "t0", "t1", "words", "at", "moved", "files", "from_s")
 SECTION_KINDS = ("verse", "chorus")
+PITCH = "pitch.npz"              # the lead's and the backing's pitch tracks (Hz, 100 a second), for pricing an octave edit
+MAX_PITCH = 8_000_000            # pitch.npz over this isn't one the app wrote
+POOR_COST = 0.25                 # an octave edit is a poor fit when the fit's cost (fit.pick_fit) rises this much over the singer's
+                                 # own octave there: a verse sung an octave up, which the ear called awful, rose 0.58;
+                                 # octaves that sat well rose under 0.06 or fell (the maintainers' notes, octprice)
+MIN_PRICED = 50                  # sung frames (half a second) under which a stretch isn't priced
 
 
 def folder(cover_id: str) -> Path:
@@ -655,6 +661,13 @@ def apply(engine, item: dict, req: dict, report) -> dict:
     save(new)
     _drop([d / snippet_name(e) for e in doc["edits"][doc["cursor"]:]])
     hstore.update(item["id"], edits=len(new["edits"]))
+    if not pitch_of(new):   # (a list from before pitch tracks: read now, so the next octave edit is priced)
+        try:
+            from ..core.engine.convert import load_16k
+            st = _stems(engine, item, new, _options(item))
+            read_pitch(engine, new, load_16k(st["vocals"]), load_16k(st["backing"]) if st.get("backing") else None)
+        except Exception as e:   # noqa: BLE001 - the edit stands; the next one is unpriced
+            print(f"Edit list: pitch not read ({type(e).__name__}: {e}).", flush=True)
     return new
 
 
@@ -715,6 +728,8 @@ def keep(item: dict) -> dict:
         for n, src in (("base-lead.flac", base["lead"]), ("base-backing.flac", base["backing"])):
             if src is not None:
                 shutil.copy2(src, tmp / n)
+        if (d / PITCH).is_file():   # (the same song: its octave edits priced from the start)
+            shutil.copy2(d / PITCH, tmp / PITCH)
     except OSError:
         _drop([out], path("output_dir"))
         _drop([p for p in (vocal, backing) if p])
@@ -796,6 +811,11 @@ def prepare(engine, item: dict, report) -> dict:
     gate = _gate_of(gate_plan(lead, back) if opts.lead_gate is not False else {}, opts)
     doc = new_doc(item["id"], words, rows, plan, bplan, dur, _octaves(opts), snap_points(lead, back, words), gate, bool(opts.duet_voice), conv_back)
     save(doc)
+    report(0.9, "Reading the pitch")
+    try:
+        read_pitch(engine, doc, lead, back)
+    except Exception as e:   # noqa: BLE001 - the list stands; its octave edits are priced once the next edit reads the tracks
+        print(f"Edit list: pitch not read ({type(e).__name__}: {e}).", flush=True)
     return doc
 
 
@@ -809,6 +829,91 @@ def _gate_of(g: dict, opts) -> dict:
             "mode": mode}
 
 
+def save_pitch(cover_id: str, tracks: dict):
+    """The list's pitch tracks: {"lead": Hz per 10 ms, "backing": the same, one line held (as the backing's take reads it)}."""
+    d = folder(cover_id)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / (PITCH + ".tmp")
+    with open(tmp, "wb") as f:
+        np.savez(f, **{k: np.nan_to_num(np.asarray(v, np.float32), nan=0.0).clip(0, 4000).astype(np.float16)
+                       for k, v in tracks.items() if k in PARTS and v is not None})
+    fsutil.retry(lambda: os.replace(tmp, d / PITCH))
+
+
+def pitch_of(doc: dict) -> dict:
+    """The list's pitch tracks, read back as data: only lead and backing, flat float16 arrays as long as the song, nothing else. {}
+    when there are none, or they aren't sound (an octave edit is then not priced, and the next edit reads them again)."""
+    f = folder(doc["cover"]) / PITCH
+    try:
+        if not f.is_file() or f.stat().st_size > MAX_PITCH:
+            return {}
+        out = {}
+        with np.load(f, allow_pickle=False) as z:
+            for k in z.files:
+                a = z[k]
+                if k not in PARTS or a.dtype != np.float16 or a.ndim != 1 or abs(len(a) - doc["duration"] * 100) > 200:
+                    return {}
+                a = a.astype(np.float32)
+                if not np.isfinite(a).all() or (a < 0).any():
+                    return {}
+                out[k] = a
+        return out
+    except (OSError, ValueError, KeyError, TypeError, EOFError):
+        return {}
+
+
+def read_pitch(engine, doc: dict, lead: np.ndarray, back: np.ndarray | None):
+    """The tracks from the stems (16 kHz), saved with the list: one RMVPE pass each, a second or two."""
+    rm = engine.converter.rmvpe
+    tracks = {"lead": rm.infer_from_audio(lead, thred=0.03)}
+    if doc["backing"] and back is not None:
+        tracks["backing"] = rm.infer_from_audio(back, thred=0.03, one_line=True)
+    save_pitch(doc["cover"], tracks)
+
+
+def price(item: dict, doc: dict, edit: dict) -> dict | None:
+    """What the fit says of an octave edit before it's sung: for each singer it moves, the share of the stretch's notes outside that
+    voice's range and how far their middle sits from where the voice is comfortable (fit.pick_fit at the cover's key), at the edit's
+    octave against the singer's own. -> {"poor": bool, "said": a sentence or None, "rise": the cost over the own octave's, "outside":
+    share, "own_outside": share}, the worst singer's; None when it can't be priced (not an octave edit, no pitch tracks yet, no measured range, too little singing)."""
+    if edit.get("op") != "octave":
+        return None
+    f0 = pitch_of(doc).get(edit["part"])
+    if f0 is None:
+        return None
+    from .fit import pick_fit
+    from .pipeline import _range_of, pitch_plan
+    opts = _options(item)
+    key, _ = pitch_plan(opts)
+    done = compile_list(doc, doc["edits"][:doc["cursor"]] + [edit])[edit["part"]]
+    worst = None
+    for who in sorted({p[2] for p in done if p[4] == edit["id"] and p[2] != ORIGINAL}):
+        try:
+            rng = _range_of(get_voice(_voice_of(who, opts)))
+        except ModelError:   # (a voice that's gone isn't priced; the edit's own job says so)
+            continue
+        f = np.concatenate([f0[int(p[0] * 100):int(p[1] * 100)] for p in done if p[4] == edit["id"] and p[2] == who] or [np.zeros(0)])
+        if rng is None or (f > 0).sum() < MIN_PRICED:
+            continue
+        here = pick_fit(rng[0], bool(rng[1]), f, fixed_key=key, fixed_octave=edit["octave"])
+        own = pick_fit(rng[0], bool(rng[1]), f, fixed_key=key, fixed_octave=doc["octaves"][who])
+        rise = here["cost"] - own["cost"]
+        said = None
+        if rise >= POOR_COST:
+            name, apart = label_of(_voice_of(who, opts)), edit["octave"] - doc["octaves"][who]
+            way = f"an octave {'up' if apart > 0 else 'down'}" if abs(apart) == 1 else f"{abs(apart)} octaves {'up' if apart > 0 else 'down'}"
+            if here["outside"] > own["outside"]:
+                where = "above" if here["above"] >= here["below"] else "below"
+                why = f"{round(100 * here['outside'])}% of these notes are {where} the voice's range"
+            else:
+                why = f"these notes sit {abs(round(here['register_st'] or 0))} semitones {'above' if (here['register_st'] or 0) > 0 else 'below'} where the voice is comfortable"
+            said = f"{name} {way} here is a poor fit: {why}, so it may sound strained."
+        row = {"poor": rise >= POOR_COST, "said": said, "rise": round(rise, 3), "outside": here["outside"], "own_outside": own["outside"]}
+        if worst is None or rise > worst["rise"]:
+            worst = row
+    return worst
+
+
 def _octaves(opts) -> dict:
     from .pipeline import pitch_plan
     key, pitch = pitch_plan(opts)
@@ -816,9 +921,13 @@ def _octaves(opts) -> dict:
     return {"A": a, "B": a if opts.duet_octave is None else int(opts.duet_octave)}
 
 
-def at_make(item_id: str, opts, words: list, rows: list, lead: np.ndarray, back: np.ndarray | None, bplan: list | None, gate: dict):
-    """A duet's list, written when the cover is recorded: the words it heard are kept, at no cost. bplan: the backing's plan when
-    its singers sing it. A failure here costs a cover nothing: the words are heard again when the editor opens."""
+def at_make(item_id: str, opts, words: list, rows: list, lead: np.ndarray, back: np.ndarray | None, bplan: list | None, gate: dict,
+            engine=None):
+    """A duet's list, written when the cover is recorded: the words it heard are kept, at no cost, and the pitch tracks read (a
+    second or two). bplan: the backing's plan when its singers sing it. A failure here costs a cover nothing: the words are heard
+    again when the editor opens."""
     doc = new_doc(item_id, words, rows, opts.duet_plan, bplan or [list(p) for p in opts.duet_plan], len(lead) / duets.SR16, _octaves(opts),
                   snap_points(lead, back, words), _gate_of(gate, opts), True, bplan is not None)
     save(doc)
+    if engine is not None:
+        read_pitch(engine, doc, lead, back)

@@ -356,7 +356,7 @@ class CoverEngine:
             if heard:
                 try:
                     from . import edits
-                    edits.at_make(res.id, opts, heard["words"], heard["rows"], lead16, back16 if dback else None, bplan, gate)
+                    edits.at_make(res.id, opts, heard["words"], heard["rows"], lead16, back16 if dback else None, bplan, gate, engine=self)
                 except Exception as e:   # noqa: BLE001 - the cover stands; its words are heard again if it's edited
                     print(f"Edit list: not written ({type(e).__name__}: {e}).", flush=True)
         return res
