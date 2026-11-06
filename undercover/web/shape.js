@@ -180,7 +180,7 @@ function shDraw() {
   if (!SH.id || !box) return;
   const it = SH.item, d = SH.doc;
   const chips = shChip("A", it.voice) + (it.duet_voice ? shChip("B", it.duet_voice) : "");
-  const head = `<div class="top"><div><h2>Shaping ${esc(coverTitle(it))}</h2><div class="who">${chips}</div></div><div class="acts">${d ? `
+  const head = `<div class="sh-head"><div><h2>Shaping ${esc(coverTitle(it))}</h2><div class="sh-who">${chips}</div></div><div class="sh-acts">${d ? `
     <button class="btn" type="button" data-sh="undo"${d.cursor && !SH.busy ? "" : " disabled"}>Undo</button>
     <button class="btn" type="button" data-sh="redo"${d.cursor < d.edits.length && !SH.busy ? "" : " disabled"}>Redo</button>
     <button class="btn primary" type="button" data-sh="keep"${d.cursor && !SH.busy ? "" : " disabled"}>Keep this version</button>` : ""}
@@ -196,7 +196,7 @@ function shDraw() {
   let h = `<div class="ed">${head}<p class="meta">Pick a stretch of the words and say what should change there. Each change is sung again in about 5 seconds. Nothing touches the cover until you keep it.</p>`;
   if (!d.duet) h += `<p class="meta">One singer here, so the changes are octaves. For a second singer, make it a duet first.</p>`;
   if (d.duet) h += `<div data-deep><div class="strip" aria-hidden="true">${d.compiled.lead.map(p => `<i class="${p[2].toLowerCase()}" style="flex-grow:${p[1] - p[0]}"></i>`).join("")}</div>
-    <div class="legend"><span><i class="dot a"></i>${esc(shName("A"))}</span><span><i class="dot b"></i>${esc(shName("B"))}</span></div></div>`;
+    <div class="sh-legend"><span><i class="sh-dot a"></i>${esc(shName("A"))}</span><span><i class="sh-dot b"></i>${esc(shName("B"))}</span></div></div>`;
   if (!d.words.length) h += `<p class="meta">No words were heard in this cover, so there's nothing to pick here.</p>`;
   else {
     h += `<div class="lyr" role="group" aria-label="The words: pick the first and the last word of a stretch">`;
@@ -208,7 +208,7 @@ function shDraw() {
       const w0 = d.words[ln.words[0]], lead0 = shPartAt("lead", (w0[1] + w0[2]) / 2);
       h += `<div class="ln ${d.duet ? lead0[2].toLowerCase() : "a"}">` + ln.words.map(i => {
         const w = d.words[i], mid = (w[1] + w[2]) / 2, lead = shPartAt("lead", mid), back = d.backing ? shPartAt("backing", mid) : null;
-        let cls = `w s${lead[2].toLowerCase()}`;
+        let cls = `sh-w s${lead[2].toLowerCase()}`;
         if (pick && i >= pick[0] && i <= pick[1]) cls += ` in${i === pick[0] ? " first" : ""}${i === pick[1] ? " last" : ""}`;
         if (lead[4]) cls += ` e${lead[2].toLowerCase()}`;
         else if (back?.[4]) cls += back[2] === "original" ? " eo" : ` e${back[2].toLowerCase()}`;
@@ -222,9 +222,9 @@ function shDraw() {
   if (d.edits.length) {
     h += `<div class="chg"><div class="hd"><b>Changes · ${live.length}</b></div>` + d.edits.map((e, k) => ({ e, k })).reverse().map(({ e, k }) => {
       const off = k >= d.cursor, at = String(e.at || "").slice(11, 16);
-      return `<div class="crow${off ? " off" : ""}"><span class="t">${shClock(e.t0)}–${shClock(e.t1)}</span><span class="what"><b>${esc(shChangeName(e))}</b>${e.moved ? `<span class="say">${esc(e.moved)}</span>` : ""}
+      return `<div class="sh-row${off ? " sh-off" : ""}"><span class="sh-t">${shClock(e.t0)}–${shClock(e.t1)}</span><span class="sh-what"><b>${esc(shChangeName(e))}</b>${e.moved ? `<span class="say">${esc(e.moved)}</span>` : ""}
         <span class="by" data-deep>by ${e.by === "ai" ? "your AI" : "you"}${at ? ` · ${esc(at)}` : ""} · ${esc(e.id)}${e.note ? ` · “${esc(e.note)}”` : ""}</span>${off ? `<span class="say">Undone. Redo brings it back.</span>` : ""}</span>
-        ${off || !d.result ? "<span></span>" : `<button class="play" type="button" data-hear="${e.t0},${e.t1}" aria-label="Hear this change">▶</button>`}</div>`;
+        ${off || !d.result ? "<span></span>" : `<button class="sh-play" type="button" data-hear="${e.t0},${e.t1}" aria-label="Hear this change">▶</button>`}</div>`;
     }).join("") + `</div>`;
     if (SH.keptAs) h += `<div class="kept" role="status">Kept as <b>${esc(SH.keptAs)}</b>. The changes went with it, and this cover is as it was. Undo still works here, and a new Keep makes another version.</div>`;
     else if (live.length) h += `<div class="unkept"><span>Not kept yet. These changes stay with this cover, and roll off with it when it leaves Recent covers.</span><button class="btn primary" type="button" data-sh="keep"${SH.busy ? " disabled" : ""}>Keep this version</button></div>`;
@@ -238,8 +238,8 @@ function shBar() {
   const d = SH.doc, pick = SH.pick;
   if (!pick) return SH.said ? `<p class="land-say ${SH.said.k}" role="status">${esc(SH.said.s)}</p>` : `<p class="meta pickhint">Pick a word, then the last word of the stretch.</p>`;
   const [a, b] = pick, quote = a === b ? shWord(a) : shWord(a) + (b - a > 1 ? " … " : " ") + shWord(b);   // (plain text: esc'd below)
-  let h = `<div class="bar"><div class="pick"><button class="play" type="button" data-hear="${d.words[a][1]},${d.words[b][2]}" aria-label="Hear this stretch">▶</button><q>${esc(quote)}</q>
-    <span class="t">${shClock(d.words[a][1])}–${shClock(d.words[b][2])}</span><button class="x" type="button" data-sh="unpick" aria-label="Drop the stretch">×</button></div>`;
+  let h = `<div class="sh-bar"><div class="pick"><button class="sh-play" type="button" data-hear="${d.words[a][1]},${d.words[b][2]}" aria-label="Hear this stretch">▶</button><q>${esc(quote)}</q>
+    <span class="sh-t">${shClock(d.words[a][1])}–${shClock(d.words[b][2])}</span><button class="x" type="button" data-sh="unpick" aria-label="Drop the stretch">×</button></div>`;
   if (SH.busy) return h + `<div class="busy" role="status"><i></i>${esc(SH.busy)}</div>${SH.said ? `<p class="land-say ${SH.said.k}">${esc(SH.said.s)}</p>` : ""}</div>`;
   if (SH.said) h += `<p class="land-say ${SH.said.k}" role="status">${esc(SH.said.s)}</p>`;
   if (!SH.probes) return h + `<p class="meta">Asking where it would land…</p></div>`;
@@ -250,13 +250,13 @@ function shBar() {
     const p = SH.probes.filter(x => x.c.part === part);
     if (!p.length) return "";
     const ok = p.filter(x => x.ok), bl = part === "backing" ? shLanding("backing") : null;
-    if (!ok.length) return part === "lead" ? "" : `<div class="choice"><span class="lab">${lab}</span><span class="land-say no">${esc(bl.s)}</span></div>`;
+    if (!ok.length) return part === "lead" ? "" : `<div class="sh-choice"><span class="lab">${lab}</span><span class="land-say no">${esc(bl.s)}</span></div>`;
     const poor = ok.map(x => x.ok.fit?.said).filter(Boolean);
-    return `<div class="choice"><span class="lab">${lab}</span>${ok.map(x => `<button class="pill" type="button" data-pick-c="${SH.probes.indexOf(x)}">${esc(x.c.label)}</button>`).join("")}</div>`
+    return `<div class="sh-choice"><span class="lab">${lab}</span>${ok.map(x => `<button class="pill" type="button" data-pick-c="${SH.probes.indexOf(x)}">${esc(x.c.label)}</button>`).join("")}</div>`
       + (bl && bl.s !== land?.s && bl.k !== "ok" ? `<p class="land-say ${bl.k}">${esc(bl.s)}</p>` : "")
       + poor.map(s => `<p class="land-say warn">${esc(s)}</p>`).join("");
   };
-  h += `<div class="choices">${row("lead", "The singing")}${row("backing", "The backing")}</div>`;
+  h += `<div class="sh-choices">${row("lead", "The singing")}${row("backing", "The backing")}</div>`;
   if (mixed.lead) h += `<p class="meta">The two singers sit at different octaves here, so pick one singer's stretch to change its octave.</p>`;
   return h + `</div>`;
 }
