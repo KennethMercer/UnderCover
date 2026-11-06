@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import fsutil
 from .config import CONFIG, path
-from .voices import ModelError
+from .voices import ModelError, sound_range
 
 FORMAT = "ucvoice"
 FORMAT_VERSION = 1
@@ -313,8 +313,8 @@ def stage(pack: Path, name: str | None = None):
                  "trained": False}
         if sub["kind"] != "synthetic" and (sub.get("name") or vi.get("person")):
             extra["person"] = sub.get("name") or vi.get("person")
-        if eng.get("f0_range"):
-            extra["f0_range"] = eng["f0_range"]
+        if sound_range(eng.get("f0_range")):   # (a stranger's numbers: three in a voice's band, ascending, or none kept)
+            extra["f0_range"] = sound_range(eng.get("f0_range"))
         v = Voice(name=final, dir=target, pth=target / "model.pth", index=index, version=info["version"],
                   sr=info["sr"] or eng.get("sr") or 40000, f0=info["f0"],
                   source=f"voice pack {m['pack_id'][:12]} ({Path(pack).name})", installed=time.strftime("%Y-%m-%d %H:%M"),

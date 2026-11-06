@@ -35,7 +35,7 @@ from ..core import fsutil, gpu, jobs, storage, worklist
 from ..core.cadence import render
 from ..core.config import CONFIG, path
 from ..core.jobs import Cancelled, Paused
-from ..core.voices import ModelError, get_voice, label_of, voice_person
+from ..core.voices import ModelError, get_voice, label_of, sound_range, voice_person
 from . import clipsound
 from . import project as P
 
@@ -616,7 +616,7 @@ def _held(v, hz: float) -> float:
     speaking_pitch reads it)."""
     from . import service
     ex = v.extra or {}
-    rng = ex.get("f0_range")
+    rng = sound_range(ex.get("f0_range"))   # (a pack's numbers, read as data)
     if rng:
         k = 1.0 if ex.get("from_speech") else service.SUNG_TO_SPEECH
         hz = min(max(hz, rng[0] * k), rng[-1] * k)

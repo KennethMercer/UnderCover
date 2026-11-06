@@ -99,15 +99,14 @@ class CoverEngine:
         from dataclasses import replace
         from .fit import pick_fit
         from ..core.engine.convert import load_16k
-        ex = voice.extra or {}
-        rng = ex.get("f0_range") or ex.get("person_range")   # trained here, or the checked person's range
+        got = _range_of(voice)   # trained here, or the checked person's range
+        rng = got[0] if got else None
         if not rng:
             notes.append(f"Fit to voice: {label_of(voice.name)} has no measured range yet (voices trained in UnderCover have one, "
                          "and voices a one-shot cover checked against a person), so your octave and key were used.")
             return opts
         f0 = self.converter.rmvpe.infer_from_audio(load_16k(stems["vocals"]), thred=0.03)
-        speech = ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")
-        fit = pick_fit(rng, bool(speech), f0)
+        fit = pick_fit(rng, bool(got[1]), f0)
         notes.append(f"Fit to voice: octave {fit['octave']:+d}, key {fit['key']:+d} "
                      f"({fit['outside']:.0%} of the melody outside {label_of(voice.name)}'s range {rng[0]:.0f}-{rng[2]:.0f} Hz).")
         same_backing = bvoice is not None and bvoice.name == voice.name
@@ -356,7 +355,7 @@ class CoverEngine:
             if heard:
                 try:
                     from . import edits
-                    edits.at_make(res.id, opts, heard["words"], heard["rows"], lead16, back16 if dback else None, bplan, gate)
+                    edits.at_make(res.id, opts, heard["words"], heard["rows"], lead16, back16 if dback else None, bplan, gate, engine=self)
                 except Exception as e:   # noqa: BLE001 - the cover stands; its words are heard again if it's edited
                     print(f"Edit list: not written ({type(e).__name__}: {e}).", flush=True)
         return res
@@ -509,9 +508,11 @@ def pitch_plan(opts: CoverOptions) -> tuple[float, float]:
 def _range_of(voice) -> tuple | None:
     """A voice's measured range for the fit: (f0_range, trained on speech?), trained here or the checked person's;
     None when it has none."""
+    from ..core.voices import sound_range
     ex = voice.extra or {}
-    r = ex.get("f0_range") or ex.get("person_range")
-    return (r, ex.get("from_speech") if ex.get("f0_range") else ex.get("person_range_speech")) if r else None
+    own = sound_range(ex.get("f0_range"))   # (a pack's or an older meta.json's numbers, read as data)
+    r = own or sound_range(ex.get("person_range"))
+    return (r, ex.get("from_speech") if own else ex.get("person_range_speech")) if r else None
 
 
 def _duet_pitches(opts: CoverOptions) -> dict:
