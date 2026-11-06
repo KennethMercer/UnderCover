@@ -492,7 +492,10 @@ stitched by the plan.
   hands with Turns), or the original. Each singer takes the backing at their own octave for the
   song, in either case, so `other` costs no third conversion. A backing voice isn't used in a duet. The one-shot keeps
   the original when the backing is stacked harmony (`oneshot.chordal_backing`); nothing is converted when there's
-  hardly any backing (`pipeline._duet_backing`). The
+  hardly any backing (`pipeline._duet_backing`, under `BACKING_QUIET_LUFS`). When the song's lead and backing are
+  already split in the cache, `/api/estimate` says so before Convert (`backing_quiet`, from `pipeline.backing_quiet`:
+  the same line on the raw split, which the lead gate only makes quieter), and the duet controls say it. A song
+  never split says nothing: nothing is separated just to know. The
   backing has its own plan (`duets.backing_plan`): its phrases are its singing between its own silences, each is sung
   whole by whoever sings most of the lead under it, and its voice changes only inside its own silence, at the point
   nearest the lead's change.
