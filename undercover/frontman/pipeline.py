@@ -304,7 +304,7 @@ class CoverEngine:
         if bvoice:
             from dataclasses import replace
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
-            bs = replace(s, pitch=key + 12 * boct)
+            bs = replace(s, pitch=key + 12 * boct, one_line=True)
             baudio, bsr = self.converter.convert(load_16k(cstems["backing"]), bvoice.name, bs,
                                                  progress=lambda f: report("converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
@@ -316,9 +316,9 @@ class CoverEngine:
             aoct = (s.pitch - key) / 12
             doct = opts.duet_octave if opts.duet_octave is not None else aoct
             with self.converter.shared_f0():
-                ba, bsr = self.converter.convert(back16, voice.name, s, progress=lambda f: report(
+                ba, bsr = self.converter.convert(back16, voice.name, _replace(s, one_line=True), progress=lambda f: report(
                     "converting", 1 - 2 * share + share * f, f"Converting the backing vocals to {label_of(voice.name)}"))
-                bb, dbsr = self.converter.convert(back16, dvoice.name, _replace(s, pitch=key + 12 * doct), progress=lambda f: report(
+                bb, dbsr = self.converter.convert(back16, dvoice.name, _replace(s, pitch=key + 12 * doct, one_line=True), progress=lambda f: report(
                     "converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(dvoice.name)} too"))
             if dbsr != bsr:
                 from math import gcd

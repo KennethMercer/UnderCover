@@ -353,8 +353,11 @@ then the closest measured speaking pitch among Readers graded good enough to pic
 
 Voices are RVC v2 pitch-guided models (`core/engine/convert.py`, a port of RVC's inference onto the vendored modules in
 `core/engine/rvc/`, MIT). HuBERT gives content features, RMVPE the pitch, the optional `.index` pulls features toward
-the voice's training set (`index_ratio` 0.75). Songs are converted in 60 s chunks cut near quiet points: 60 s halves VRAM
-against 120 s (3.8 vs 7.6 GB) at the same warm speed. Training (`doubleagent/trainer.py`) follows upstream RVC's recipe,
+the voice's training set (`index_ratio` 0.75). A backing stem can hold a stack of voices, and RMVPE's strongest line then
+changes every few frames: `f0fix.hold_line` keeps one line through every sung run that has a second one (a part that rests
+for a moment is a rest, not a hop to another part), holds its place through quiet, and leaves runs of one voice as they are
+(`Settings.one_line`, on every backing take, never on a lead). Inside one sung note, where two parts cross and the track would move from one to the other mid-word, `f0fix.hold_parts` keeps the part it was on until the note ends or that part stops singing; a step of the tune with no second part under it is left as sung. Songs are converted in 60 s chunks cut near quiet points:
+60 s halves VRAM against 120 s (3.8 vs 7.6 GB) at the same warm speed. Training (`doubleagent/trainer.py`) follows upstream RVC's recipe,
 fine-tuning the official v2 base models in bf16, with a few held-out phrases for a validation loss and previews. The
 budget scales with the data: 450 steps per kept minute, at least 8000, continued while the held-out loss falls, up to
 twice the plan. A fixed budget had given a 130-minute retrain 8 passes over its data and made the voice worse.
@@ -531,7 +534,7 @@ redo included, and a kept edit's `edited_from: <id>`.
 - **An octave edit is priced before it's sung** (`edits.price`): `fit.pick_fit` at the cover's key on the stretch's notes, at the
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
-  tracks are read once and kept with the list (`pitch.npz`: the lead's and the backing's; read back as data, no
+  tracks are read once and kept with the list (`pitch.npz`: the lead's, and the backing's one line held; read back as data, no
   pickles). They're read when the cover is recorded, when the list is first opened, or with the next edit of an older list, and
   Keep carries them. `POST .../edits` answers `{job, edit, fit}`; `POST .../edits/price` runs the gate and the price and sings
   nothing, for the page to say it before the edit is offered.
