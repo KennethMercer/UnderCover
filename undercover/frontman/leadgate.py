@@ -137,15 +137,41 @@ def split_top(backing: Path, separator, cache: Path) -> dict:
     return {"top": k["vocals"], "rest": k["instrumental"]}
 
 
-def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "convert", top: dict | None = None) -> dict:
+TOP_GONE_DB = 30.0   # the re-split's top voice this far under the backing in a stretch: it found no top voice there
+
+
+def top_missing(gate: dict, top: dict | None, backing) -> list:
+    """The chorus stretches where the backing's re-split (split_top) found no top voice: its "top" TOP_GONE_DB or more under the
+    backing there (Toxic's stacked choruses: -52 dB and down against -19 to -23). Under "top" those lines are kept as "keep"
+    keeps them, since there's nothing to move, and the lead's leftovers under them are silent."""
+    import soundfile as sf
+    if not top or not gate.get("chorus") or not backing:
+        return []
+    tv, sr_t = sf.read(str(top["top"]), dtype="float32", always_2d=True)
+    bk, sr_b = sf.read(str(backing), dtype="float32", always_2d=True)
+    rms = lambda x: 20 * np.log10(np.sqrt(np.mean(np.square(x, dtype=np.float64))) + 1e-9) if x.size else -200.0
+    out = []
+    for a, b in gate["chorus"]:
+        if rms(tv[int(a * sr_t):int(b * sr_t)]) < rms(bk[int(a * sr_b):int(b * sr_b)]) - TOP_GONE_DB:
+            out.append([a, b])
+    return out
+
+
+def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "convert", top: dict | None = None,
+          missing: list | None = None) -> dict:
     """New stem files for the conversion and the mix: the lead without the instrument parts and with the choruses
     from the backing (chorus "convert": all of it; "top": only `top["top"]`, the layers under it stay in the backing;
     "keep": none); the backing without what moved; the instrumental with the instrument parts back in. With "keep", the
     lead is silent in the chorus stretches (with fades): what's left of it there is the split's leftovers (the singing is
-    in the backing), and a voice converting them sings scraps at whatever pitch leaked (Toxic's duet choruses).
+    in the backing), and a voice converting them sings scraps at whatever pitch leaked (Toxic's duet choruses). With "top",
+    a stretch where the re-split found no top voice (`missing`, top_missing's by default) is treated so too.
     Returns a copy of `stems` with the changed paths (the originals stay as they were)."""
     import soundfile as sf
     quiet = [list(c) for c in gate["chorus"]] if chorus == "keep" else []
+    if chorus == "top" and top:
+        gone = [list(m) for m in (top_missing(gate, top, stems.get("backing")) if missing is None else missing)]
+        quiet = gone
+        gate = {**gate, "chorus": [c for c in gate["chorus"] if list(c) not in gone]}
     if chorus == "keep" or (chorus == "top" and not top):
         gate = {**gate, "chorus": [] if chorus == "keep" else gate["chorus"]}
         chorus = "convert" if chorus == "top" else chorus
@@ -197,10 +223,18 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "conver
     return out
 
 
-def note(gate: dict, chorus: str = "convert", backing_converted: bool = False) -> list[str]:
+def note(gate: dict, chorus: str = "convert", backing_converted: bool = False, missing: list | tuple = ()) -> list[str]:
     """Plain sentences for the cover's notes. backing_converted: the backing is sung by a voice in this cover (a backing voice,
-    or a duet's singers), so lines kept in it are sung by that voice, not left to the original singers."""
+    or a duet's singers), so lines kept in it are sung by that voice, not left to the original singers. missing: under "top",
+    the stretches with no top voice to move (top_missing), said as kept lines."""
     out = []
+    gone = [list(m) for m in missing] if chorus == "top" else []
+    if gone:
+        found = [c for c in gate["chorus"] if list(c) not in gone]
+        out += note({**gate, "chorus": found}, chorus, backing_converted)
+        kept = note({"instrument": [], "chorus": gone}, "keep", backing_converted)
+        return out + [s.replace("Some lines are in the backing track", "Some lines are in the backing track with no top voice to move")
+                      for s in kept]
     span = lambda rs: ", ".join(f"{int(a) // 60}:{int(a) % 60:02d}-{int(b) // 60}:{int(b) % 60:02d}" for a, b in rs[:4]) + (" ..." if len(rs) > 4 else "")
     if gate["instrument"]:
         out.append(f"Parts of the lead track were an instrument, not singing ({span(gate['instrument'])}): left as they are, "
