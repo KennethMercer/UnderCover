@@ -1,5 +1,362 @@
 /* Hidden classic-WinAmp skin, suite-wide (html[data-skin="winamp"]). Toggle: triple-click the UnderCover wordmark, or
    type "llama" anywhere outside a text box. Everything here is scoped to the skin; the normal look is untouched. */
+/* -- bones pins -- */
+/* bones wave 1 (the maintainers' design notes, bones-wave1): the skin stays as it was. The base rules' new type, spacing and hit
+   areas, pinned back here at their own specificity (:where), so every rule below still wins. Generated from the wave's diff. */
+:where(html[data-skin="winamp"]) .wrap { padding-block: 18px 60px; gap: 18px; }
+:where(html[data-skin="winamp"]) h2 { font: 600 13px var(--body); }
+:where(html[data-skin="winamp"]) .meta { font-size: 13px; }
+:where(html[data-skin="winamp"]) .chip { padding: 4px 9px; }
+:where(html[data-skin="winamp"]) .setup { gap: 18px; }
+:where(html[data-skin="winamp"]) .build { gap: 14px; }
+:where(html[data-skin="winamp"]) .drop { gap: 10px; }
+:where(html[data-skin="winamp"]) #drop-empty strong { font: 600 17px var(--display); }
+:where(html[data-skin="winamp"]) .song-row { gap: 10px; }
+:where(html[data-skin="winamp"]) .song-wave { gap: 10px; }
+:where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0; font-size: 13px; }
+:where(html[data-skin="winamp"]) .play.vline, :where(html[data-skin="winamp"]) .tplay, :where(html[data-skin="winamp"]) .fm-duet .vchip .x { position: static; }
+:where(html[data-skin="winamp"]) .top .lp-btn, :where(html[data-skin="winamp"]) .top .deep-btn, :where(html[data-skin="winamp"]) .top .lp-more { min-height: auto; }
+:where(html[data-skin="winamp"]) .drop-overlay div { font: 700 24px var(--display); }
+:where(html[data-skin="winamp"]) .facts { gap: 5px; }
+:where(html[data-skin="winamp"]) .fact { padding: 1px 9px; }
+:where(html[data-skin="winamp"]) .tour-card { padding: 16px 18px 14px; gap: 10px; }
+:where(html[data-skin="winamp"]) .tour-card .tour-k { gap: 10px; }
+:where(html[data-skin="winamp"]) .tour-card .tour-k b { font: 650 16.5px/1.25 var(--display); }
+:where(html[data-skin="winamp"]) .tour-card .tour-acts { gap: 10px; }
+:where(html[data-skin="winamp"]) .tour-card .tour-try { padding: 8px 14px; }
+:where(html[data-skin="winamp"]) .tour-card .tour-tip { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .tour-card .tour-tip-k { font: 600 11.5px var(--mono); }
+:where(html[data-skin="winamp"]) .tour-card #tour-tip-t { transition: opacity .25s; }
+:where(html[data-skin="winamp"]) .tour-nudge { padding: 14px 16px 12px; gap: 10px; }
+:where(html[data-skin="winamp"]) .tour-nudge b { font: 650 15.5px/1.25 var(--display); }
+:where(html[data-skin="winamp"]) .tour-nudge .tour-acts { gap: 10px; }
+:where(html[data-skin="winamp"]) .lp-chip .lp-half { font: 700 11.5px/1 var(--body); padding: 2px 5px; }
+:where(html[data-skin="winamp"]) .lp-chip .lp-more { font-size: 10px; }
+:where(html[data-skin="winamp"]) .lp-pop { padding: 16px 18px 18px; gap: 14px; }
+:where(html[data-skin="winamp"]) .lp-pop .lp-h { gap: 10px; }
+:where(html[data-skin="winamp"]) .lp-row .lp-k { gap: 10px; }
+:where(html[data-skin="winamp"]) .lp-row .lp-ends { font: 500 11.5px var(--mono); }
+:where(html[data-skin="winamp"]) .search input { padding: 9px 11px; }
+:where(html[data-skin="winamp"]) .voice { gap: 10px; padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .tag { font: 11px var(--mono); }
+:where(html[data-skin="winamp"]) .install { font-size: 13px; padding: 4px 10px; }
+:where(html[data-skin="winamp"]) .name-in { font: 13px var(--mono); }
+:where(html[data-skin="winamp"]) .go { gap: 14px; padding: 14px 16px; }
+:where(html[data-skin="winamp"]) .go-btns { gap: 10px; }
+:where(html[data-skin="winamp"]) .go-btns .btn { padding: 11px 18px; }
+:where(html[data-skin="winamp"]) .prev-grid { gap: 10px; }
+:where(html[data-skin="winamp"]) .confirm-dlg { padding: 20px 22px; }
+:where(html[data-skin="winamp"]) .dlg-btns { gap: 10px; }
+:where(html[data-skin="winamp"]) .pcard { gap: 10px; }
+:where(html[data-skin="winamp"]) .pcard .ptitle { gap: 10px; }
+:where(html[data-skin="winamp"]) .pcard .play { font-size: 13px; }
+:where(html[data-skin="winamp"]) .chiprow { margin-top: 3px; }
+:where(html[data-skin="winamp"]) .convert { padding: 12px 28px; }
+:where(html[data-skin="winamp"]) details.adv summary { padding: 13px 16px; gap: 10px; }
+:where(html[data-skin="winamp"]) details.adv summary span:last-child { font-size: 13px; }
+:where(html[data-skin="winamp"]) .adv-grid { gap: 18px 26px; padding: 16px 16px 18px; }
+:where(html[data-skin="winamp"]) .fm-duet .q { font-size: 14.5px; }
+:where(html[data-skin="winamp"]) .fm-duet .vchip .av { font: 700 11.5px var(--body); }
+:where(html[data-skin="winamp"]) .fm-duet .addvoice { padding: 5px 13px; }
+:where(html[data-skin="winamp"]) .fm-duet .ctl { gap: 7px; }
+:where(html[data-skin="winamp"]) .fm-duet .seg button { padding: 6px 14px; }
+:where(html[data-skin="winamp"]) .fm-duet .seg .deepmark { font-size: 11px; }
+:where(html[data-skin="winamp"]) .fm-duet .legend { gap: 4px 14px; }
+:where(html[data-skin="winamp"]) .shape .ed { gap: 14px; }
+:where(html[data-skin="winamp"]) .shape .sh-head { gap: 10px 16px; }
+:where(html[data-skin="winamp"]) .shape .vchip { padding: 4px 10px 4px 4px; }
+:where(html[data-skin="winamp"]) .shape .vchip .av { font: 700 11.5px var(--body); }
+:where(html[data-skin="winamp"]) .shape .sh-legend, :where(html[data-skin="winamp"]) .shape .deeplegend { gap: 4px 14px; }
+:where(html[data-skin="winamp"]) .shape .lyr .sec { margin: 10px 0 2px; font: 500 11px var(--mono); }
+:where(html[data-skin="winamp"]) .shape .ln { font-size: 15.5px; }
+:where(html[data-skin="winamp"]) .shape .land { margin: 0 3px; }
+:where(html[data-skin="winamp"]) .shape .sh-bar { gap: 10px; padding: 12px 14px; }
+:where(html[data-skin="winamp"]) .shape .sh-bar .pick { gap: 10px; }
+:where(html[data-skin="winamp"]) .shape .sh-bar .x { font-size: 18px; }
+:where(html[data-skin="winamp"]) .shape .sh-play { font-size: 11px; }
+:where(html[data-skin="winamp"]) .shape .pill { padding: 5px 13px; }
+:where(html[data-skin="winamp"]) .shape .busy { gap: 10px; }
+:where(html[data-skin="winamp"]) .shape .sh-row { gap: 10px; padding: 7px 0; }
+:where(html[data-skin="winamp"]) .shape .sh-row .sh-play { font-size: 10px; }
+:where(html[data-skin="winamp"]) .shape .unkept { gap: 10px 14px; padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .shape .kept { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .shape .sheet { gap: 10px; padding: 14px 16px; }
+:where(html[data-skin="winamp"]) .shape .state { padding: 18px 12px; }
+:where(html[data-skin="winamp"]) .field label output { font: 13px var(--mono); }
+:where(html[data-skin="winamp"]) .ticks { font: 11px var(--mono); }
+:where(html[data-skin="winamp"]) .seg button { padding: 7px 6px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .seg button small { font: 11px var(--mono); }
+:where(html[data-skin="winamp"]) .select { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .toggle { gap: 10px; }
+:where(html[data-skin="winamp"]) .toggle > input[type=checkbox] { margin-top: 3px; }
+:where(html[data-skin="winamp"]) .stage { gap: 10px; }
+:where(html[data-skin="winamp"]) .first-ready { margin-top: 10px; padding: 12px 14px; }
+:where(html[data-skin="winamp"]) .first-ready .bar i { transition: width .4s; }
+:where(html[data-skin="winamp"]) .bar { margin-top: 5px; }
+:where(html[data-skin="winamp"]) .bar i { transition: width .25s linear; }
+:where(html[data-skin="winamp"]) .progress-foot { gap: 10px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .player { gap: 14px; }
+:where(html[data-skin="winamp"]) .play.vline { width: 30px; height: 30px; font-size: 11px; }
+:where(html[data-skin="winamp"]) .player-ctrls { gap: 14px; }
+:where(html[data-skin="winamp"]) .ab button { padding: 6px 14px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .result-actions { gap: 10px; }
+:where(html[data-skin="winamp"]) .btn { padding: 8px 14px; }
+:where(html[data-skin="winamp"]) .hist-head { gap: 10px; }
+:where(html[data-skin="winamp"]) .hrow { gap: 14px; padding: 10px 0; }
+:where(html[data-skin="winamp"]) .icon-btn { padding: 5px 10px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .alert { padding: 12px 14px 12px 0; }
+:where(html[data-skin="winamp"]) .view { gap: 18px; }
+:where(html[data-skin="winamp"]) #view-train .row { gap: 10px; }
+:where(html[data-skin="winamp"]) #view-train input[type=text], :where(html[data-skin="winamp"]) #view-train input[type=search], :where(html[data-skin="winamp"]) #view-train select { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) #view-train .seg button { padding: 7px 12px; }
+:where(html[data-skin="winamp"]) #view-train .btn.big { padding: 11px 22px; }
+:where(html[data-skin="winamp"]) .tplay { width: 30px; height: 30px; font-size: 11px; }
+:where(html[data-skin="winamp"]) .tplay.main { font-size: 13px; }
+:where(html[data-skin="winamp"]) .step { padding: 9px 12px; }
+:where(html[data-skin="winamp"]) .src { gap: 10px; padding: 7px 8px; }
+:where(html[data-skin="winamp"]) .ref { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .spk { gap: 10px; }
+:where(html[data-skin="winamp"]) .meter i { transition: width .3s; }
+:where(html[data-skin="winamp"]) .tr-meter-row { gap: 14px; }
+:where(html[data-skin="winamp"]) .sample { gap: 10px; padding: 5px 8px; }
+:where(html[data-skin="winamp"]) .sample .score { gap: 3px; font: 11px var(--mono); }
+:where(html[data-skin="winamp"]) .sample .stoggle { padding: 3px 8px; }
+:where(html[data-skin="winamp"]) .sample .chosen { font: 10.5px var(--mono); }
+:where(html[data-skin="winamp"]) .tr-train { gap: 18px; }
+:where(html[data-skin="winamp"]) .fields .field { gap: 5px; }
+:where(html[data-skin="winamp"]) .stats { gap: 10px; }
+:where(html[data-skin="winamp"]) .stat { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .stat small { font-size: 11px; }
+:where(html[data-skin="winamp"]) .stat b { font: 500 17px var(--mono); }
+:where(html[data-skin="winamp"]) .legend { gap: 14px; }
+:where(html[data-skin="winamp"]) .legend i { margin-right: 5px; }
+:where(html[data-skin="winamp"]) .ckpt { padding: 10px; }
+:where(html[data-skin="winamp"]) #oneshot .row, :where(html[data-skin="winamp"]) .yt-row { gap: 10px; }
+:where(html[data-skin="winamp"]) #oneshot #os-idle { gap: 10px; }
+:where(html[data-skin="winamp"]) .oneshot .big { font: 17px var(--body); padding: 11px 14px; }
+:where(html[data-skin="winamp"]) .oneshot .go { padding: 11px 22px; }
+:where(html[data-skin="winamp"]) .ex button { padding: 3px 10px; }
+:where(html[data-skin="winamp"]) .pstep { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .pstep .k { font: 11px var(--mono); }
+:where(html[data-skin="winamp"]) .or { gap: 10px; }
+:where(html[data-skin="winamp"]) .ytr { gap: 10px; }
+:where(html[data-skin="winamp"]) .row-gap { gap: 14px; }
+:where(html[data-skin="winamp"]) #view-library .row { gap: 10px; }
+:where(html[data-skin="winamp"]) .lib-storage { gap: 14px 22px; }
+:where(html[data-skin="winamp"]) .lib-storage-main { gap: 10px; }
+:where(html[data-skin="winamp"]) #view-library .legend { font-size: 13px; }
+:where(html[data-skin="winamp"]) #view-library .legend b { font: 500 13px var(--mono); }
+:where(html[data-skin="winamp"]) .lib-total b { font: 700 24px var(--display); }
+:where(html[data-skin="winamp"]) .room { padding: 9px 14px; }
+:where(html[data-skin="winamp"]) .room small { font: 11.5px var(--mono); }
+:where(html[data-skin="winamp"]) .roomhead h3 { font: 600 17px var(--display); }
+:where(html[data-skin="winamp"]) .rn-now { gap: 10px; padding: 16px 18px; }
+:where(html[data-skin="winamp"]) .rn-now-box { gap: 10px; }
+:where(html[data-skin="winamp"]) .rn-sec { gap: 10px; }
+:where(html[data-skin="winamp"]) .rn-sec .rn-opts { padding: 12px 14px; }
+:where(html[data-skin="winamp"]) .rn-lbl .end { gap: 14px; }
+:where(html[data-skin="winamp"]) .at-ctl .btn { padding: 7px 10px 7px 12px; }
+:where(html[data-skin="winamp"]) .glance .g small { font-size: 13px; }
+:where(html[data-skin="winamp"]) .frow { gap: 6px 18px; padding: 13px 0; }
+:where(html[data-skin="winamp"]) .frow .num { font: 500 13px var(--mono); }
+:where(html[data-skin="winamp"]) .fopen { padding: 14px 16px; gap: 10px; margin: 2px 0 10px; }
+:where(html[data-skin="winamp"]) .fopen .vt-body { gap: 10px; }
+:where(html[data-skin="winamp"]) .rn-li, :where(html[data-skin="winamp"]) .sys, :where(html[data-skin="winamp"]) .setting { padding: 11px 0; }
+:where(html[data-skin="winamp"]) .sys, :where(html[data-skin="winamp"]) .setting { padding: 14px 0; }
+:where(html[data-skin="winamp"]) .rn-li small, :where(html[data-skin="winamp"]) .sys small, :where(html[data-skin="winamp"]) .setting small { font-size: 13px; }
+:where(html[data-skin="winamp"]) .rn-li .acts { gap: 14px; }
+:where(html[data-skin="winamp"]) .rn-opts { gap: 14px; }
+:where(html[data-skin="winamp"]) .rn-more { gap: 6px 18px; }
+:where(html[data-skin="winamp"]) .kv2 { margin-top: 3px; }
+:where(html[data-skin="winamp"]) .sys-btns { gap: 12px 18px; }
+:where(html[data-skin="winamp"]) .switch::before { content: none; position: static; inset: auto; }
+:where(html[data-skin="winamp"]) .switch::after { transition: transform .15s; }
+:where(html[data-skin="winamp"]) .tabs { gap: 26px; }
+:where(html[data-skin="winamp"]) .tab { gap: 7px; padding: 8px 0 10px; font-size: 14.5px; }
+:where(html[data-skin="winamp"]) .uc-updated { gap: 6px 10px; padding: 8px 14px; }
+:where(html[data-skin="winamp"]) .wn { gap: 10px; padding: 14px 18px; }
+:where(html[data-skin="winamp"]) .wn-head { gap: 10px; }
+:where(html[data-skin="winamp"]) .wn-body { gap: 10px; }
+:where(html[data-skin="winamp"]) .wn-entry ul { padding-left: 18px; }
+:where(html[data-skin="winamp"]) .wn .row { gap: 10px 16px; }
+:where(html[data-skin="winamp"]) .os-subject-ask { margin-top: 10px; }
+:where(html[data-skin="winamp"]) .os-quality { gap: 4px 10px; margin-top: 10px; padding: 9px 12px; }
+:where(html[data-skin="winamp"]) .sys .check { font-size: 13px; }
+:where(html[data-skin="winamp"]) #phone-checks .sys { padding: 10px 0; }
+:where(html[data-skin="winamp"]) .setting .set-theme-btns { gap: 8px 14px; }
+:where(html[data-skin="winamp"]) .theme-cards { gap: 10px; }
+:where(html[data-skin="winamp"]) .theme-card { padding: 10px; }
+:where(html[data-skin="winamp"]) .theme-on { font: 500 11px var(--mono); }
+:where(html[data-skin="winamp"]) .theme-maker { gap: 14px; padding: 16px 18px; }
+:where(html[data-skin="winamp"]) .maker-grid { gap: 22px; }
+:where(html[data-skin="winamp"]) .mk { gap: 7px; }
+:where(html[data-skin="winamp"]) .mk-h small { font-size: 13px; }
+:where(html[data-skin="winamp"]) .theme-maker input:not([type]), :where(html[data-skin="winamp"]) .theme-maker select { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .mk-well small { font-size: 11.5px; }
+:where(html[data-skin="winamp"]) .mk-range { font-size: 13px; }
+:where(html[data-skin="winamp"]) .mk-pv { padding: 12px 14px; }
+:where(html[data-skin="winamp"]) .mk-pv .btn { padding: 5px 12px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .mk-out { gap: 10px 14px; }
+:where(html[data-skin="winamp"]) #sys-doctor > [data-deep] .sys { padding: 9px 0; }
+:where(html[data-skin="winamp"]) .fix-ask { gap: 10px; padding: 14px 16px; }
+:where(html[data-skin="winamp"]) .fix-pkgs li { gap: 14px; }
+:where(html[data-skin="winamp"]) .fix-pkgs .mono { font-size: 13px; }
+:where(html[data-skin="winamp"]) .sys-bundle { gap: 10px; padding: 14px 16px; }
+:where(html[data-skin="winamp"]) .sys-bundle-list { padding-left: 18px; gap: 3px; }
+:where(html[data-skin="winamp"]) .vc-own { gap: 10px; padding-top: 10px; }
+:where(html[data-skin="winamp"]) .vc-own .row { gap: 10px; }
+:where(html[data-skin="winamp"]) .own-who input { padding: 9px 12px; }
+:where(html[data-skin="winamp"]) .vfilters { gap: 8px 18px; }
+:where(html[data-skin="winamp"]) .own-mode { gap: 8px 10px; }
+:where(html[data-skin="winamp"]) .fchip { padding: 4px 11px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .ab-sides { gap: 10px; }
+:where(html[data-skin="winamp"]) .ab-side { gap: 10px; padding: 14px; }
+:where(html[data-skin="winamp"]) .ab-head { gap: 10px; }
+:where(html[data-skin="winamp"]) #cad-ab-why { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .addons { gap: 10px; }
+:where(html[data-skin="winamp"]) .addon { padding: 14px 16px; }
+:where(html[data-skin="winamp"]) .astate { font-size: 13px; }
+:where(html[data-skin="winamp"]) .accept { gap: 10px; padding: 12px 14px; }
+:where(html[data-skin="winamp"]) .accept .summary { padding-left: 10px; }
+:where(html[data-skin="winamp"]) .check { gap: 10px; }
+:where(html[data-skin="winamp"]) .inprog .bar i { transition: width .3s; }
+:where(html[data-skin="winamp"]) .places { gap: 10px; }
+:where(html[data-skin="winamp"]) .place { gap: 6px 14px; padding: 12px 14px 12px 0; }
+:where(html[data-skin="winamp"]) .place .folder { font: 13px var(--mono); }
+:where(html[data-skin="winamp"]) .move { gap: 10px; }
+:where(html[data-skin="winamp"]) .drive { padding: 7px 12px; }
+:where(html[data-skin="winamp"]) .drive .dbar { margin-top: 5px; }
+:where(html[data-skin="winamp"]) .mfield input { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .lib-filters { gap: 10px 18px; }
+:where(html[data-skin="winamp"]) .cat { padding: 6px 13px; }
+:where(html[data-skin="winamp"]) .lib-tools input, :where(html[data-skin="winamp"]) .lib-tools select { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .litem { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .lside { gap: 10px; }
+:where(html[data-skin="winamp"]) .bulk { gap: 10px; padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .dhead { gap: 14px; }
+:where(html[data-skin="winamp"]) .lplayer { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .lplayer .play { font-size: 13px; }
+:where(html[data-skin="winamp"]) .stem { gap: 10px; }
+:where(html[data-skin="winamp"]) .lib-empty { padding: 26px 12px; }
+:where(html[data-skin="winamp"]) .crow { gap: 10px; padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .renamer input { padding: 7px 10px; }
+:where(html[data-skin="winamp"]) .os-plan-grid { gap: 6px 14px; }
+:where(html[data-skin="winamp"]) .empty { gap: 10px; }
+:where(html[data-skin="winamp"]) .os-opts summary { font-size: 13px; }
+:where(html[data-skin="winamp"]) .choice { padding: 9px 14px; }
+:where(html[data-skin="winamp"]) .adv-h { font-size: 13px; }
+:where(html[data-skin="winamp"]) .qtotal b { font-size: 20px; }
+:where(html[data-skin="winamp"]) .qadd input { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .qopts { gap: 10px; }
+:where(html[data-skin="winamp"]) .qres { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .qres-r .meta { font-size: 13px; }
+:where(html[data-skin="winamp"]) .qpick { gap: 10px; }
+:where(html[data-skin="winamp"]) .qpick > div:not(.seg) { gap: 10px; }
+:where(html[data-skin="winamp"]) .vcard { gap: 10px; padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .vcard input { margin-top: 3px; }
+:where(html[data-skin="winamp"]) .srow { gap: 10px; }
+:where(html[data-skin="winamp"]) .os-versions { margin-top: 10px; }
+:where(html[data-skin="winamp"]) .vname-edit input { padding: 7px 10px; }
+:where(html[data-skin="winamp"]) .packform input[type=text], :where(html[data-skin="winamp"]) .packform select, :where(html[data-skin="winamp"]) .packform textarea { padding: 7px 10px; }
+:where(html[data-skin="winamp"]) .packform .row { margin-top: 10px; }
+:where(html[data-skin="winamp"]) .vt-in { gap: 10px; }
+:where(html[data-skin="winamp"]) .vt-in select { font: 13px var(--mono); }
+:where(html[data-skin="winamp"]) .vt-kh { gap: 10px; }
+:where(html[data-skin="winamp"]) .vt-row .row { gap: 10px; }
+:where(html[data-skin="winamp"]) .vt-choice { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .os-oct { gap: 10px; padding: 12px 14px; }
+:where(html[data-skin="winamp"]) .os-oct-ab { gap: 10px; }
+:where(html[data-skin="winamp"]) .os-oct-ab .pcard { gap: 10px; }
+:where(html[data-skin="winamp"]) .os-oct-ab .pcard .ptitle { gap: 10px; }
+:where(html[data-skin="winamp"]) .top-in { padding: 10px 20px; gap: 18px; }
+:where(html[data-skin="winamp"]) .suite { font: 700 17px var(--display); }
+:where(html[data-skin="winamp"]) .mod { gap: 7px; padding: 7px 12px; }
+:where(html[data-skin="winamp"]) .mod .badge { font: 10.5px var(--mono); }
+:where(html[data-skin="winamp"]) .workbar-wrap { padding: 14px 20px 0; }
+:where(html[data-skin="winamp"]) .workbar { padding: 9px 12px; }
+:where(html[data-skin="winamp"]) .workbar .bar { margin-top: 5px; }
+:where(html[data-skin="winamp"]) .modhead { gap: 14px; }
+:where(html[data-skin="winamp"]) .soon { font: 10.5px var(--mono); padding: 0 5px; }
+:where(html[data-skin="winamp"]) .vcards { gap: 10px; }
+:where(html[data-skin="winamp"]) .vc-top { gap: 10px; }
+:where(html[data-skin="winamp"]) .mini { padding: 3px 9px; }
+:where(html[data-skin="winamp"]) .like.dot::after { font-size: 13px; }
+:where(html[data-skin="winamp"]) .da-start { gap: 10px; }
+:where(html[data-skin="winamp"]) .da-cmd { gap: 10px; padding: 10px 10px 10px 16px; }
+:where(html[data-skin="winamp"]) #view-train .da-cmd input { font: 500 18px var(--display); }
+:where(html[data-skin="winamp"]) #da-train { padding: 8px 18px; }
+:where(html[data-skin="winamp"]) .da-under { gap: 6px 10px; }
+:where(html[data-skin="winamp"]) .da-work { gap: 10px; padding: 16px 18px; }
+:where(html[data-skin="winamp"]) .da-prog { gap: 6px 14px; }
+:where(html[data-skin="winamp"]) .da-stages { gap: 6px 22px; }
+:where(html[data-skin="winamp"]) .da-stages i { gap: 7px; }
+:where(html[data-skin="winamp"]) .da-work .row, :where(html[data-skin="winamp"]) .da-outcome .row { gap: 10px 16px; }
+:where(html[data-skin="winamp"]) .da-outcome { padding: 16px 18px; }
+:where(html[data-skin="winamp"]) .da-outcome h3 { font: 600 17px var(--display); }
+:where(html[data-skin="winamp"]) .deepmark { margin-left: 10px; }
+:where(html[data-skin="winamp"]) .drawer .row { gap: 10px; }
+:where(html[data-skin="winamp"]) .qd-job { gap: 10px; padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .qd-job .kind { font: 11px var(--mono); }
+:where(html[data-skin="winamp"]) .qd-job .qside { font: 600 13px var(--mono); }
+:where(html[data-skin="winamp"]) .ear { gap: 10px; }
+:where(html[data-skin="winamp"]) .ear-chips > button:not(.linkbtn) { padding: 5px 12px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .ear-chips .linkbtn { font-size: 13px; }
+:where(html[data-skin="winamp"]) .ear-note input { padding: 5px 9px; font-size: 13px; }
+:where(html[data-skin="winamp"]) .ear-fix { gap: 8px 14px; padding: 12px 14px; }
+:where(html[data-skin="winamp"]) .ear-hint .ico { margin-right: 3px; }
+:where(html[data-skin="winamp"]) #set-ear-row .ear-deep { gap: 14px; }
+:where(html[data-skin="winamp"]) .ear-tbl { gap: 4px 18px; }
+:where(html[data-skin="winamp"]) .ear-tbl > b { font: 500 11.5px var(--mono); }
+:where(html[data-skin="winamp"]) #view-speakeasy .row { gap: 10px; }
+:where(html[data-skin="winamp"]) .se-text { padding: 12px 13px; }
+:where(html[data-skin="winamp"]) .se-hint { font-size: 13px; }
+:where(html[data-skin="winamp"]) .se-search { padding: 8px 11px; }
+:where(html[data-skin="winamp"]) .se-vgroup { font: 600 11.5px var(--body); }
+:where(html[data-skin="winamp"]) .se-cad { font: 11.5px var(--mono); }
+:where(html[data-skin="winamp"]) .se-newv .row input { padding: 8px 10px; }
+:where(html[data-skin="winamp"]) .se-opts { gap: 16px 26px; }
+:where(html[data-skin="winamp"]) .se-field label { gap: 10px; }
+:where(html[data-skin="winamp"]) .se-field output { font: 13px var(--mono); }
+:where(html[data-skin="winamp"]) .se-ticks { font: 11px var(--mono); }
+:where(html[data-skin="winamp"]) .se-toggle { gap: 10px; }
+:where(html[data-skin="winamp"]) .se-go { gap: 14px; padding: 14px 16px; }
+:where(html[data-skin="winamp"]) .se-ttime { gap: 10px; }
+:where(html[data-skin="winamp"]) .se-reading { padding: 10px 12px; }
+:where(html[data-skin="winamp"]) .se-rrow { padding: 8px 10px; }
+@container (max-width: 400px) {
+  :where(html[data-skin="winamp"]) .fm-duet .seg button { padding: 7px 8px; }
+}
+@media (max-width: 480px) {
+  :where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0; }
+  :where(html[data-skin="winamp"]) :is(.rn-more, .addon .side, .row-gap, .se-tags-hint) > .linkbtn { margin-block: 0; }
+  :where(html[data-skin="winamp"]) .play.vline::after, :where(html[data-skin="winamp"]) .tplay::after, :where(html[data-skin="winamp"]) .fm-duet .vchip .x::after { content: none; position: static; inset: auto; }
+  :where(html[data-skin="winamp"]) .btn, :where(html[data-skin="winamp"]) .icon-btn, :where(html[data-skin="winamp"]) .mini, :where(html[data-skin="winamp"]) .cat, :where(html[data-skin="winamp"]) .tab, :where(html[data-skin="winamp"]) .seg button, :where(html[data-skin="winamp"]) .thumb, :where(html[data-skin="winamp"]) .ab button, :where(html[data-skin="winamp"]) .install, :where(html[data-skin="winamp"]) .fchip, :where(html[data-skin="winamp"]) .stoggle, :where(html[data-skin="winamp"]) .chip-btn, :where(html[data-skin="winamp"]) .top .lp-btn, :where(html[data-skin="winamp"]) .top .deep-btn, :where(html[data-skin="winamp"]) .top .lp-more, :where(html[data-skin="winamp"]) input[type=text], :where(html[data-skin="winamp"]) input[type=search], :where(html[data-skin="winamp"]) input[type=time], :where(html[data-skin="winamp"]) input:not([type]), :where(html[data-skin="winamp"]) select { min-height: auto; }
+  :where(html[data-skin="winamp"]) .switch::before { inset: auto; }
+  :where(html[data-skin="winamp"]) .top .lp-btn, :where(html[data-skin="winamp"]) .top .deep-btn { min-width: auto; min-height: auto; }
+}
+@media (max-width: 680px) {
+  :where(html[data-skin="winamp"]) .rn-lbl .end { gap: 10px; }
+  :where(html[data-skin="winamp"]) .rn-lbl .end .seg button { padding: 7px 8px; }
+  :where(html[data-skin="winamp"]) #lib-list .detail { margin: 0 0 10px; padding: 12px 10px 14px; }
+  :where(html[data-skin="winamp"]) .addon .side { gap: 10px; }
+  :where(html[data-skin="winamp"]) .da-cmd { padding: 12px 14px; }
+  :where(html[data-skin="winamp"]) .top-in { gap: 10px; }
+  :where(html[data-skin="winamp"]) .mod { font-size: 11.5px; }
+  :where(html[data-skin="winamp"]) .workbar-wrap { padding: 10px 16px 0; }
+  :where(html[data-skin="winamp"]) .workbar { padding: 8px 10px; }
+  :where(html[data-skin="winamp"]) .wrap { padding-block: 14px 96px; }
+  :where(html[data-skin="winamp"]) .se-vlist .voice .fact { padding-inline: 7px; }
+}
+@media (max-width: 760px) {
+  :where(html[data-skin="winamp"]) .mk-pv { padding: 10px 12px; }
+}
+@media (max-width: 860px) {
+  :where(html[data-skin="winamp"]) .mod { padding: 7px 9px; }
+}
+@media (min-width: 761px) {
+  :where(html[data-skin="winamp"]) .lib-filters .cats { padding-left: 18px; }
+}
+/* -- end bones pins -- */
 #wa-main, #wa-toast { display: none; }
 
 /* :root[...] so the skin's colours win over :root[data-theme="light"] (same weight, this file loads later) */

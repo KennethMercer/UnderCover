@@ -432,7 +432,8 @@ def view(doc: dict) -> dict:
     done = compile_list(doc)
     return {k: doc[k] for k in ("cover", "duration", "words", "words_hash", "sections", "plan", "backing_plan", "octaves", "duet",
                                 "backing", "edits", "cursor")} | {"compiled": {k: [p[:5] for p in v] for k, v in done.items()},
-                                                                  "points": doc["points"]}
+                                                                  "points": doc["points"],
+                                                                  "kept_now": _state(doc) in doc.get("kept", [])}   # (this version is a cover already)
 
 
 # ------------------------------------------------------------ rendering

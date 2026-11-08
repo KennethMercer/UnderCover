@@ -1,6 +1,6 @@
 /* Gaslight: A lamp through fog: green-black air, brass and verdigris. A theme is tokens only (docs/THEMES.md). */
 :root[data-uc-theme="gaslight"] {
-  --base: #080a09; --panel-base: #101312; --panel-2-base: #171b19; --panel-3-base: #202522; --line-base: #232927;
+  --base: #080a09; --panel-base: #101312; --panel-2-base: #171b19; --panel-3-base: #202522; --line-base: #313835;
   --fg: #e8ebe6; --muted: #91998f; --accent-ink: #080a09;
   --c-frontman: #c4a65c; --c-doubleagent: #bf8f88; --c-speakeasy: #83b3a5; --c-safehouse: #a3a9a1;
   --c-frontman-deep: #6e5a1f; --c-doubleagent-deep: #683a31; --c-speakeasy-deep: #1f4a40; --c-safehouse-deep: #333b35;
@@ -12,7 +12,7 @@
 }
 :root[data-uc-theme="gaslight"][data-theme="light"] {
   --base: #e5e8e2; --panel-base: #f5f7f2; --panel-2-base: #e9ece6; --panel-3-base: #dce0d8; --line-base: #cfd4cb;
-  --fg: #121511; --muted: #5e665e; --accent-ink: #f8f9f4;
+  --fg: #121511; --muted: #5a615a; --accent-ink: #f8f9f4;
   --c-frontman: #6d5412; --c-doubleagent: #7a3a31; --c-speakeasy: #1f5a4b; --c-safehouse: #4b534c;
   --c-frontman-deep: #a9893c; --c-doubleagent-deep: #a9675e; --c-speakeasy-deep: #4d8a7a; --c-safehouse-deep: #7c857d;
   --ok: #2f7049; --warn: #76590f; --err: #a4402f;

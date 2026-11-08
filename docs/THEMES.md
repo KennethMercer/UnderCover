@@ -62,7 +62,7 @@ C, hue h); the rules were measured on Case File's and Midnight's hand-made tones
 | a module colour (dark) | its deep tone | same h; L 0.36 (0.46 for yellows and browns, h 50 to 115°); C × 1.3, at most C + 0.03 |
 | a module colour (dark) | its light-mode colour | same h; L 0.42; C × 1.25 + 0.002, at most 0.13 |
 | a module colour (dark) | its light-mode deep tone | same h; L 0.58; C × 1.3 + 0.002, at most 0.15 |
-| the air (dark `--base`) | the dark panels, line, wave | same h; L + 0.037 / 0.073 / 0.111, line + 0.125, wave + 0.17 |
+| the air (dark `--base`) | the dark panels, line, wave | same h; L + 0.037 / 0.073 / 0.111, line + 0.2 (1.5:1 on the panel), wave + 0.17 |
 | the air (dark `--base`) | the light air | same h, C × 2 + 0.003; L 0.926 base, 0.971 / 0.932 / 0.892 panels, 0.855 line, 0.83 wave |
 | the lamp (dark) | the light lamp | `--lit` × 0.55, `--tint` × 0.55, `--tint2` × 0.4, `--lamp` × 0.65 |
 
