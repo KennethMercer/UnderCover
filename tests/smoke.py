@@ -8968,10 +8968,14 @@ def u_ear():
 def u_golden():
     import os
     import tempfile
-    # the golden set lives in the dev repo since the repo went public (2026-10-24): it reads the maker's own voices
-    dev = Path(os.environ.get("UNDERCOVER_DEV_ROOT") or r"D:\UnderCover-work\dev") / "tools" / "research"
+    # the golden set lives in the maintainers' dev repo since the repo went public (2026-10-24): it reads their own
+    # voices. UNDERCOVER_DEV_ROOT names that repo; unset, this check is skipped
+    root = os.environ.get("UNDERCOVER_DEV_ROOT")
+    if not root:
+        return "skipped: UNDERCOVER_DEV_ROOT not set"
+    dev = Path(root) / "tools" / "research"
     if not (dev / "golden.py").is_file():
-        return "skipped: no dev repo with tools/research/golden.py here"
+        return "skipped: no tools/research/golden.py under UNDERCOVER_DEV_ROOT"
     sys.path.insert(0, str(dev))
     import golden as G
     # words kept: the share of the lead's words that come through in order; extra words (moved choruses) aren't errors

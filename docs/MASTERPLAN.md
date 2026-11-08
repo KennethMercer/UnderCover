@@ -53,9 +53,9 @@ These are the principles that have settled every argument so far. When the docs 
    likely never want to touch a Deep Cover setting, that's for true power users, a main feature of our app is that it's
    more than just voice/speech/cover synthesis, it's a smart engine that can understand what a user wants and create the
    optimal output on its own." So when the result is wrong, fix the engine's judgement (what it searches, picks,
-   keeps, tunes), never add a setting and call it solved. A Deep Cover control is an extra, not a fix. Example: the
-   Trump search picking 1980s interviews is fixed by a date-aware, speech-preferring search, not by asking the user to
-   untick sources.
+   keeps, tunes), never add a setting and call it solved. A Deep Cover control is an extra, not a fix. Example: a
+   search for a politician picking 1980s interviews is fixed by a date-aware, speech-preferring search, not by asking
+   the user to untick sources.
 
 ## How the work is done
 

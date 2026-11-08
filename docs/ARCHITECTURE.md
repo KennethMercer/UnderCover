@@ -128,6 +128,9 @@ Checked on the import graph by `tests/smoke.py`:
 4. `safehouse` may import any module (it manages their files); only `app` imports `safehouse`.
 5. `app` may import everything; nothing imports `app` except the `undercover/server.py` entry point.
 
+One exception by name, not by import: `core/gpu.py` reads `sys.modules` for `undercover.speakeasy.listenback` to drop
+listen-back's loaded ear before a training (nothing is imported; a listen-back that was never loaded is left alone).
+
 ### Stable things
 
 - The data locations and `[paths]` keys (next section). Always reach a folder through `config.path(key)`.
@@ -858,7 +861,8 @@ port of 7862-7869 (or `UNDERCOVER_SANDBOX_PORT`) with scratch folders, its own s
 `UNDERCOVER_TEST_ROOTS` set, and it compares every real folder before and after the run: any change fails it.
 `--port N` checks a running server read-only. Smoke also checks the dependency rules, the platform helper rule, the
 `EventSource` rule, that every tab and view exists, that every route is in the phone table, and the roll-off's
-properties. `tests/fake_tailscale.py` stands in for Tailscale; `tests/installer_e2e.ps1` runs the real installer end to
+properties. The golden-set bookkeeping check reads the maintainers' own notes and runs only when `UNDERCOVER_DEV_ROOT`
+names them; unset, it's skipped. `tests/fake_tailscale.py` stands in for Tailscale; `tests/installer_e2e.ps1` runs the real installer end to
 end, and with `-UpgradeCheck` (also after every `-CancelCheck`) the update in place: the released 1.0.0 installed and
 used (a kept cover and speech, a setting, a voice of its own name), this installer over it, and what survived checked. `scripts/check_env.py` verifies the torch build and the GPU; `scripts/make_demo_voice.py` builds Agent Smoke from
 a Kokoro Reader reading a public-domain text, inside smoke's sandbox; `scripts/reader_prints.py` builds
