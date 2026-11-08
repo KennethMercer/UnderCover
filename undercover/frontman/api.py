@@ -17,7 +17,7 @@ POST   /api/history/<id>/octaves            {variants: [{octave, key}, {octave, 
 POST   /api/history/<id>/again              {options} the cover made again: its song, voice and settings, with these
                                             changed (the ear's fix: {octave: -1}; the backing follows the lead's octave)
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
-GET    /api/history/<id>/edits              the cover's edit list (edits.view), or {none: true}
+GET    /api/history/<id>/edits              the cover's edit list (edits.view) and keep_as, or {none: true}
 POST   /api/history/<id>/edits              an edit (edits.check_edit): refused at once with a plain 400, else -> {job, edit, fit}
 POST   /api/history/<id>/edits/price        the same edit through the gate and priced (edits.price), nothing sung -> {edit, fit}
 POST   /api/history/<id>/edits/open         hear the words of a cover that has no list yet -> {job}
@@ -61,8 +61,12 @@ def handle(h, method: str, p: str) -> bool:
         elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/edits", p):
             from . import edits
             from .history import get
-            doc = edits.load(get(m.group(1))["id"])
-            h._json({**edits.view(doc), "result": file_url(edits.result_of(doc["cover"]))} if doc else {"none": True})
+            item = get(m.group(1))
+            doc = edits.load(item["id"])
+            if doc:   # keep_as: the name a Keep would give it now (edits.keep_name), so the page's sheet says the name it gets
+                res = edits.result_of(doc["cover"])
+                keep_as = edits.keep_name(item, (res or Path(item["output"])).suffix.lstrip(".") or "wav")[1]
+            h._json({**edits.view(doc), "result": file_url(res), "keep_as": keep_as} if doc else {"none": True})
         elif m := re.fullmatch(r"/api/songs/([0-9a-f]{16})/key", p):
             from .pipeline import song_key
             h._json(song_key(path("uploads_dir") / song_meta(m.group(1))["file"]))

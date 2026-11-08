@@ -8384,6 +8384,8 @@ def u_edits():
             assert E.result_of(it["id"]) == r
             new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
+            assert new["title"] == "T (edited)" and Path(new["output"]).stem == "T (edited)", new["title"]   # one name: the file's, numbered as it is
+            assert E.keep_name(H.get(it["id"]), "flac")[1] == E.keep_name(H.get(new["id"]), "flac")[1] == "T (edited) 2"   # a kept one counts on, not "(edited) (edited)"
             assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, True]   # (read with an edit, kept with the list)
             try:
                 E.keep(H.get(it["id"]))   # a version is kept once: each Keep rolls a cover off the tray
@@ -8395,6 +8397,7 @@ def u_edits():
             E.mix = stand_in
             E.step(engine, it, 1)
             second = E.keep(H.get(it["id"]))
+            assert second["title"] == "T (edited) 2", second["title"]
             for to in (2, 1, 2):
                 E.step(engine, it, to)
                 try:
@@ -12098,6 +12101,122 @@ def u_shape_page():
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:600] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
+@check("Shape it by keyboard in headless Chrome: a picked word keeps the focus through the probes and a job's messages, unpicked words say aria-pressed false, Keep's sheet, kept line and Recent row say one name, Done hands focus back to the row, no Try again on a refusal (skipped when there is no Chrome)")
+def u_shape_keys():
+    """IA pass 13's page tests. index.html on a static server with a test script after shape.js: the API and the job feed are stubbed,
+    the page's own handlers are pressed; the verdicts go in the title, read by --dump-dom once the page says it's done."""
+    import html, http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+    test = r"""
+(async () => {
+  const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  await wait(1200);
+  try {
+    const doc = { cover: "aaaaaaaaaa", duration: 10, words: [["Hold", 1, 1.3, 0.9], ["the", 1.4, 1.7, 0.9], ["night", 1.8, 2.1, 0.9]], words_hash: "h", sections: [],
+      plan: [[0, 10, "A"]], backing_plan: [[0, 10, "A"]], octaves: { A: 0, B: 0 }, points: { lead: [], backing: [], dips: [] }, duet: false, backing: false,
+      edits: [{ id: "e1", op: "octave", part: "lead", octave: 1, t0: 1, t1: 2.1 }], cursor: 1,
+      compiled: { lead: [[0, 1, "A", null, null], [1, 2.1, "A", 1, "e1"], [2.1, 10, "A", null, null]], backing: [] }, result: "/wav", keep_as: "T (edited) 2" };
+    const item = { id: "aaaaaaaaaa", title: "T", voice: "a-uc", output: "/wav", created: "2026-11-08 10:00:00" };
+    HIST.length = 0; HIST.push(item);
+    const held = [], release = () => held.splice(0).forEach(r => r());
+    window.api = async (u, o) => {
+      if (/edits\/price$/.test(u)) { await new Promise(r => held.push(r)); return { edit: { t0: 1, t1: 2.1, words: o.json.words }, fit: null }; }
+      if (/edits\/keep$/.test(u)) return { job: "jk" };
+      if (/\/edits$/.test(u) && !o) return doc;
+      throw new Error("stub");
+    };
+    const feed = {};
+    window.watchJob = (id, fn) => { feed[id] = fn; return () => {}; };
+    const row = document.createElement("button"); row.dataset.shape = "aaaaaaaaaa"; document.body.appendChild(row);
+    shapeOpen("aaaaaaaaaa"); await wait(100);
+    const box = $("#shape");
+    ok("the page opened", SH.state === "ready" && $$("[data-w]", box).length === 3);
+    ok("unpicked words say aria-pressed false", $$("[data-w]", box).every(w => w.getAttribute("aria-pressed") === "false"));
+    ok("the hint says a third word starts again", /A third word starts a new stretch\./.test(box.textContent));
+    ok("no fixed time in the copy", !/about 5 seconds|About 20 s/i.test(box.textContent));
+    const w0 = $('[data-w="0"]', box); w0.focus();
+    w0.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(50);
+    ok("a picked word keeps the focus while the probes are out", document.activeElement?.dataset.w === "0" && $('[data-w="0"]', box).getAttribute("aria-pressed") === "true");
+    release(); await wait(50);
+    ok("and when they arrive", document.activeElement?.dataset.w === "0" && SH.probes);
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(50); release(); await wait(50);
+    ok("the arrows and Enter pick the stretch, focus stays", document.activeElement?.dataset.w === "2" && SH.pick.join() === "0,2");
+    SH.busy = "Singing it again…"; shDraw(); SH.live = "Singing the stretch"; shDraw();
+    ok("a job's message keeps the focus", document.activeElement?.dataset.w === "2");
+    ok("the live region says it once", $("#shape-say").textContent === "Singing the stretch" && !$$("[role=status]", box).length);
+    SH.busy = SH.live = null; shDraw();
+    $('[data-sh="keep"]', box).click(); await wait(20);
+    ok("Keep's sheet says the name it gets", $(".sheet b", box)?.textContent === "T (edited) 2" && document.activeElement?.dataset.sh === "keep-yes");
+    $('[data-sh="keep-no"]', box).click();
+    ok("Not yet hands focus back to Keep", document.activeElement?.dataset.sh === "keep" && !$(".sheet", box));
+    $('[data-sh="keep"]', box).click(); $('[data-sh="keep-yes"]', box).click(); await wait(20);
+    const kept = { id: "bbbbbbbbbb", title: "T (edited) 2", voice: "a-uc", output: "/wav2", created: "2026-11-08 10:05:00", edited_from: "aaaaaaaaaa" };
+    HIST.push(kept); window.loadHistory = () => {};
+    feed.jk({ final: true, state: "done", result: kept }); await wait(20);
+    ok("the kept line says the same name", ($(".kept b", box)?.textContent || "") === "T (edited) 2");
+    ok("and so does the Recent row", coverTitle(kept) === "T (edited) 2");
+    $('[data-sh="done"]', box).focus(); $('[data-sh="done"]', box).click();
+    ok("Done hands focus back to the row's Shape it", document.activeElement === row && $("#shape").hidden);
+    window.api = async () => { throw Object.assign(new Error("That isn't a cover."), { status: 404 }); };
+    shapeOpen("aaaaaaaaaa"); await wait(50);
+    ok("a refusal offers no Try again", SH.state === "error" && !$('[data-sh="retry"]', box));
+    window.api = async () => { throw Object.assign(new Error("Lost contact with UnderCover."), {}); };
+    shapeOpen("aaaaaaaaaa"); await wait(50);
+    ok("no answer does", !!$('[data-sh="retry"]', box));
+    shapeClose();
+  } catch (e) { out.push("BAD threw " + e); }
+  document.title = out.join(" | ");
+  fetch("/said");
+})();
+"""
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(100)   # (the page says when it's done; this only ends the wait if it never does)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--window-size=1200,900",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = html.unescape(m.group(1)) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
+
 def _theme_tokens(web, theme: str, light: bool) -> dict:
     """A theme's tokens for one mode as the page has them: Case File's :root (and its light block), then the theme's own blocks."""
     def blocks(css):
@@ -14985,7 +15104,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_shape_keys, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
