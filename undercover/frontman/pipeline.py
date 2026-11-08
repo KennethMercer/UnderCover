@@ -241,7 +241,7 @@ class CoverEngine:
         cstems = stems
         gate, heard, gate_said = {}, {}, None
         if opts.lead_gate is not False:
-            from .leadgate import CHORUS_MODES, apply as gate_apply, note as gate_note, plan as gate_plan, split_top
+            from .leadgate import CHORUS_MODES, apply as gate_apply, note as gate_note, plan as gate_plan, split_top, top_missing
             g = gate = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
             if g["instrument"] or g["chorus"]:
                 gwork = path("cache_dir") / "converted"
@@ -250,8 +250,9 @@ class CoverEngine:
                 mode = mode if mode in CHORUS_MODES else "keep"
                 top = (split_top(stems["backing"], self.separator, Path(stems["backing"]).parent)
                        if mode == "top" and g["chorus"] and stems.get("backing") else None)
-                cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top)
-                gate_said = (len(notes), g, mode)   # (said once it's known who sings the backing)
+                missing = top_missing(g, top, stems.get("backing")) if mode == "top" and top else []   # (no top voice: kept)
+                cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top, missing=missing)
+                gate_said = (len(notes), g, mode, missing)   # (said once it's known who sings the backing)
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
         if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself; then the fit
@@ -274,8 +275,8 @@ class CoverEngine:
         if dback:
             bvoice = None   # (one backing voice gives way to the duet's two)
         if gate_said:
-            at, g, mode = gate_said
-            notes[at:at] = gate_note(g, mode, backing_converted=bool(bvoice or dback))
+            at, g, mode, missing = gate_said
+            notes[at:at] = gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing)
         passes = 1 + bool(dvoice) + bool(bvoice) + 2 * dback
         share = 1.0 / passes
         from ..core import lowprofile

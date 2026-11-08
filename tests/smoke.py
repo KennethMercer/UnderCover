@@ -9083,6 +9083,25 @@ def u_leadgate():
         l3, _ = sf.read(str(out["vocals"]), dtype="float32")
         assert rms(l3, c0, c1) < 0.01 * rms(left, c0, c1), "the leftovers under the backing's lines are still there to convert"
         assert abs(rms(l3, 1, 7) - rms(left, 1, 7)) < 1e-3 and out["backing"] == stems_k["backing"], "keep changed more than the leftovers"
+        # "top" where the backing's re-split found no top voice (Toxic's stacked choruses): nothing to move, so kept as "keep"
+        # keeps them, the leftovers silent; where it found one, its top voice still moves into the lead
+        none_t, rest_t, real_t = tmp / "top_none.wav", tmp / "top_rest.wav", tmp / "top_real.wav"
+        sf.write(str(none_t), np.full_like(back, 1e-6), sr)
+        sf.write(str(rest_t), back, sr)
+        sf.write(str(real_t), back, sr)
+        gone = G.top_missing(g, {"top": none_t, "rest": rest_t}, stems_k["backing"])
+        assert gone == [list(c) for c in g["chorus"]], gone
+        assert G.top_missing(g, {"top": real_t, "rest": rest_t}, stems_k["backing"]) == [] and G.top_missing(g, None, stems_k["backing"]) == []
+        out = G.apply(stems_k, g, tmp, "tn", chorus="top", top={"top": none_t, "rest": rest_t})
+        l4, _ = sf.read(str(out["vocals"]), dtype="float32")
+        assert rms(l4, c0, c1) < 0.01 * rms(left, c0, c1), "no top voice, yet the leftovers are still there to convert"
+        assert out["backing"] == stems_k["backing"] and abs(rms(l4, 1, 7) - rms(left, 1, 7)) < 1e-3, "no top voice, yet something moved"
+        out = G.apply(stems_k, g, tmp, "tr", chorus="top", top={"top": real_t, "rest": rest_t})
+        l5, _ = sf.read(str(out["vocals"]), dtype="float32")
+        assert rms(l5, c0, c1) > 0.9 * rms(back, c0, c1), "a real top voice wasn't moved into the lead"
+        said = G.note(g, "top", backing_converted=True, missing=gone)
+        assert said and not any("top voice was converted" in s for s in said) and any("no top voice to move" in s and "backing's voice" in s for s in said), said
+        assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
     said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)
@@ -9090,7 +9109,8 @@ def u_leadgate():
     import inspect
     from undercover.frontman import pipeline as _PLg
     src = inspect.getsource(_PLg.CoverEngine.make_cover)
-    assert "gate_note(g, mode, backing_converted=bool(bvoice or dback))" in src and src.index("gate_note(g, mode,") > src.index("dback = bool(dvoice)")
+    assert "gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing)" in src and src.index("gate_note(g, mode,") > src.index("dback = bool(dvoice)")
+    assert "gate_apply(stems, g, gwork, stamp, chorus=mode, top=top, missing=missing)" in src and "top_missing(g, top, stems.get(\"backing\"))" in src
     # a duet (phase 22): two voices in harmony all the way are "backing" to the karaoke model and its lead is silence;
     # then there's no lead to split off and the whole vocal is converted as one voice
     import tempfile
