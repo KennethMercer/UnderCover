@@ -4116,6 +4116,80 @@ def u_character_check():
     return "no songs for a character; its project speaks; songs unticked (user's kept), voices found again, scenes searched if none; plain when unchecked"
 
 
+@check("training: prepare() on a small project with stand-in feature models (four kept clips and a holdout): the clips are sliced and normalised, the holdout kept apart by id, data.pt written in format 2 with the sample set's key; the same set reuses the file at once, a changed one rebuilds it, under a minute is refused")
+def u_prepare():
+    """The sandbox's training check reuses the real project's prepared data (2026-11-08, two minutes saved), so
+    prepare() itself is covered here, with HuBERT and RMVPE stood in for by shapes (the models are the GPU checks')."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from undercover.doubleagent import project as P, trainer
+    from undercover.doubleagent.sources import Source
+    from undercover.core.voices import ModelError
+
+    class Hubert:   # (1, samples) at 16 kHz -> (1, T50, 768) features at 50 frames/s
+        def extract(self, w, version):
+            assert version == "v2" and w.ndim == 2, (version, w.shape)
+            return torch.full((1, w.shape[1] // 320, 768), 0.01, dtype=w.dtype, device=w.device)
+
+    class Rmvpe:    # samples at 16 kHz -> f0 at 100 frames/s
+        def infer_from_audio(self, wav16, thred):
+            return np.full(len(wav16) // 160, 120.0, dtype=np.float32)
+
+    def project(name, durs):
+        proj = P.Project.create("Prep Person", "speaking", name=name)
+        (proj.dir / "clips").mkdir(parents=True, exist_ok=True)
+        for k, dur in enumerate(durs):
+            t = np.arange(int(16000 * dur)) / 16000
+            sf.write(str(proj.dir / "clips" / f"c{k}.flac"), (0.2 * np.sin(2 * np.pi * (110 + 7 * k) * t)).astype("float32"), 16000)
+            proj.phrases.append(P.Phrase(id=f"c{k}", source="s0", start=30.0 * k, dur=float(dur), score=0.8, reason="", noise=0.1))
+        proj.sources = [Source(id="s0", url="u", title="Source", duration=600.0)]
+        proj.reference = {"cluster": 1, "clip": "c0", "confirmed": True}
+        proj.save()
+        return P.Project.load(name)
+
+    sr = 40000
+    with isolated_data():
+        try:
+            trainer.prepare(project("prep-short", [5.0]), Hubert(), Rmvpe(), sr, "cpu", False)
+            raise AssertionError("under a minute of kept samples was prepared")
+        except ModelError as e:
+            assert "1 minute" in str(e), e
+        proj = project("prep-smoke", [22.0, 22.0, 22.0, 22.0, 5.0])   # the 5 s clip is the only holdout candidate (3-8 s)
+        seen = []
+        out = trainer.prepare(proj, Hubert(), Rmvpe(), sr, "cpu", False, progress=seen.append)
+        assert out == proj.dir / "train" / "data.pt" and out.is_file() and seen and seen[-1] == 1.0, (out, seen[-3:])
+        data = torch.load(out, map_location="cpu", weights_only=True)
+        assert data["format"] == 2 and data["sr"] == sr, {k: data[k] for k in ("format", "sr")}
+        items, hold = data["items"], data["holdout"]
+        assert [h["id"] for h in hold] == ["c4"] and abs(len(hold[0]["wav"]) / sr - 5.0) < 0.1, "the holdout clip isn't kept whole, apart"
+        # four 22 s clips, sliced into 3.7 s pieces stepping 3.4 s, the tail kept when it's 0.5 s or more: 7 pieces each
+        assert 24 <= len(items) <= 32 and all("id" not in i for i in items), len(items)
+        hop = trainer.SR_CFG[sr]["hop"]
+        for i in items:
+            n = len(i["wav"])
+            assert 0.5 * sr <= n <= trainer.SLICE * sr + hop and n % hop == 0, n
+            assert i["wav"].dtype == torch.float16 and i["phone50"].shape[1] == 768 and i["phone50"].dtype == torch.float16, i["wav"].dtype
+            assert len(i["pitch"]) == len(i["pitchf"]) == n // hop <= 2 * i["phone50"].shape[0], (len(i["pitch"]), n // hop, i["phone50"].shape)
+            assert float(i["wav"].float().abs().max()) <= 1.0 and float(i["pitchf"].min()) > 100, "a piece isn't normalised, or lost its pitch"
+        st = P.Project.load("prep-smoke").train
+        assert st["data_key"].startswith(f"{sr}:") and st["holdout"] == ["c4"] and st["pieces"] == len(items), st
+        assert abs(st["train_minutes"] - sum(len(i["wav"]) for i in items) / sr / 60) < 0.01, st["train_minutes"]
+        # the same sample set: the file is reused as it is (the sandbox's training check relies on this)
+        before = out.stat().st_mtime_ns
+        assert trainer.prepare(P.Project.load("prep-smoke"), None, None, sr, "cpu", False) == out and out.stat().st_mtime_ns == before, "prepare() ran again for the same samples"
+        # one clip unticked: a new key, the data rebuilt without it
+        proj = P.Project.load("prep-smoke")
+        next(p for p in proj.phrases if p.id == "c3").choice = False
+        proj.save()
+        key1 = st["data_key"]
+        trainer.prepare(P.Project.load("prep-smoke"), Hubert(), Rmvpe(), sr, "cpu", False)
+        st2 = P.Project.load("prep-smoke").train
+        data2 = torch.load(out, map_location="cpu", weights_only=True)
+        assert st2["data_key"] != key1 and st2["pieces"] == len(data2["items"]) < len(items), (st2["data_key"], key1, st2["pieces"], len(items))
+    return f"{len(items)} pieces from 4 clips + 1 holdout; reused for the same set; {len(data2['items'])} after unticking one"
+
+
 @check("Do it all's preparation reads as progress (IA pass 11 B2: '(1/2) / (2/2)' six times in 19 min, the time left climbing 3598 -> 4354 s): 'source k of n' over the whole job, the bar never goes back, the time left comes from the work and counts down, said through the job's rule; a check's verdict is kept per clip set (A3); an auto training says its planned end, not the cap")
 def u_prep_progress():
     import inspect
@@ -13184,7 +13258,7 @@ def a_jobs_feed():
     assert html.index("/static/app.js") < html.index("/static/jobs.js") < html.index("/static/train.js"), "jobs.js must load after app.js, before the modules"
     voices = api("/api/speak/voices")
     v = next((x for x in voices if x["trained"] and x["kind"] == "speech" and not x["undertrained"]), voices[0] if voices else None)
-    r = api("/api/speak", {"text": "Smoke test for the job list. It has two sentences.", "voice": v["name"]})
+    r = api("/api/speak", {"text": "Smoke test for the job list. It has two sentences.", "voice": v["name"], "cadence": False})   # (the quick Reader: no cadence worker spawned for a job-list check)
     job = r["job"]
     try:
         snap = next((j for j in api("/api/jobs") if j["id"] == job), None)
@@ -13226,7 +13300,10 @@ def a_training():
     shutil.rmtree(pdir / scratch, ignore_errors=True)
     shutil.copytree(pdir / src, pdir / scratch, ignore=shutil.ignore_patterns("*.pth", "resume.pt", "previews", "raw"))
     pj = json.loads((pdir / scratch / "project.json").read_text(encoding="utf-8"))
-    pj["name"], pj["train"] = scratch, {}
+    # a fresh training state, keeping what names the prepared data (train/data.pt came along): with the key matching
+    # the same clips, prepare() is skipped and the run is about the training, pause and resume
+    pj["name"], pj["train"] = scratch, {k: v for k, v in pj["train"].items() if k in ("data_key", "holdout", "pieces", "train_minutes")}
+    prepared = (pdir / scratch / "train" / "data.pt").is_file() and bool(pj["train"].get("data_key"))
     (pdir / scratch / "project.json").write_text(json.dumps(pj), encoding="utf-8")
     try:
         api(f"/api/train/projects/{scratch}/train", {"voice_name": "zz-smoke-voice", "length": "quick", "fresh": True})
@@ -13241,7 +13318,7 @@ def a_training():
         if st.get("job"):
             api(f"/api/jobs/{st['job']['id']}/cancel", {})
         wait_for(lambda: not api(f"/api/train/projects/{scratch}").get("job"), 180, what="stopped")
-        return f"paused at {e1}, continued past it"
+        return f"paused at {e1}, continued past it" + ("; prepared data reused" if prepared else "; prepared from the clips")
     finally:
         time.sleep(2)
         shutil.rmtree(pdir / scratch, ignore_errors=True)
@@ -13647,6 +13724,11 @@ def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
     for f in ("project.json", "embeddings.npz"):
         shutil.copyfile(tr / src / f, pdst / f)
     shutil.copytree(tr / src / "clips", pdst / "clips")
+    # the prepared tensors too, when the project has them: with project.json's data_key matching, a training on this
+    # copy skips prepare() (2-3 minutes of HuBERT and RMVPE over every clip); u_prepare covers prepare itself
+    if (tr / src / "train" / "data.pt").is_file():
+        (pdst / "train").mkdir()
+        shutil.copyfile(tr / src / "train" / "data.pt", pdst / "train" / "data.pt")
     return src
 
 
@@ -13773,7 +13855,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
