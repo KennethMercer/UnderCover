@@ -18,8 +18,11 @@ built as a door the whole internet can see (the maintainers' notes, CounterIntel
   request. A token unused for TOKEN_IDLE_S (30 days) stops by itself (a lost phone); each use renews it.
 - **Phones paired on the home Wi-Fi before this** hold a LAN token (`lan_hash`, cookie LAN_COOKIE, good only from the home
   network). Their page offers the move: `move_code()` for a device that shows that token, redeemed at the link
-  (`redeem_move()`) for the one token. The LAN token is dropped the first time the new one is used (a phone that never
-  arrives isn't stranded), and the LAN listener is needed only while any device still holds one (`lan_needed()`).
+  (`redeem_move()`) for a nonce, and the move then waits for the PC's Allow like a new phone (the code crossed the home
+  Wi-Fi in clear: a sniffer who redeems it first gets no further than the PC's card, which names the phone). No cancels
+  the move alone: the phone keeps its LAN token and may ask again. The LAN token is dropped the first time the new one is
+  used (a phone that never arrives isn't stranded), and the LAN listener is needed only while any device still holds one
+  (`lan_needed()`).
 - **Where:** `phone.json` next to the config file (git-ignored): `{"enabled", "away_private", "lan", "devices": [{id, name,
   hash, lan_hash, pending, paired, seen, ip, used, lan_used}]}`. A file from before is read as it was: its away token becomes
   the token, its home token the LAN one. In test mode (storage.ALLOWED_ROOTS) it is only written inside the test's folders.
@@ -103,6 +106,8 @@ def _load() -> dict:
                      "version": 1}
             if d.get("pending") and time.time() - float(d.get("asked") or 0) > PENDING_S:
                 continue   # (a phone that claimed and was never allowed: forgotten)
+            if d.get("move_nonce") and time.time() - float(d.get("move_asked") or 0) > PENDING_S:
+                d = {k: v for k, v in d.items() if k not in ("move_nonce", "move_asked")}   # (a move never allowed: forgotten)
             devices.append(d)
         _STATE.clear()
         _STATE.update({"enabled": bool(data.get("enabled")), "away_private": bool(data.get("away_private")), "devices": devices})
@@ -184,20 +189,21 @@ away_code = move_code
 
 
 def redeem_move(code: str) -> tuple[str, dict]:
-    """A move code -> (the one token, the device). The code works once. The LAN token stays until the new one is used
-    once (device_for), so a phone that never arrives at the link isn't stranded."""
+    """A move code -> (a nonce, the device): the move waits for the PC's Allow, then the phone collects the one token
+    with the nonce (collect), as a new phone does. The code works once. The LAN token stays until the new one is used once
+    (device_for), so a phone that never arrives at the link isn't stranded."""
     with _LOCK:
         hit = _MOVE_CODES.pop(hash_token(code or ""), None)
         if hit is None or hit[1] < time.time():
             raise PhoneError("That link has expired or was used already.", 403, generic=True)
         st = _load()
         d = next((d for d in st["devices"] if d["id"] == hit[0]), None)
-        if d is None:
+        if d is None or not d.get("lan_hash"):
             raise PhoneError("That phone isn't paired any more.", 403, generic=True)
-        token = secrets.token_urlsafe(32)
-        d["hash"], d["used"] = hash_token(token), None   # (None: not used yet, so the LAN token stays for now)
+        nonce = secrets.token_urlsafe(16)
+        d["move_nonce"], d["move_asked"] = hash_token(nonce), time.time()   # (a second move replaces a first one waiting)
         _save()
-        return token, public(d)
+        return nonce, public(d)
 
 
 redeem_away = redeem_move
@@ -341,19 +347,25 @@ def claim(code: str, name: str, addr: str = "") -> tuple[str, dict]:
 
 
 def allow(device_id: str) -> dict:
-    """The PC lets a phone that claimed in: its token is minted now, for the phone to collect once on its nonce."""
+    """The PC lets a phone in: a new one that claimed, or one from before that asked to move to the link. Its token is
+    minted now, for the phone to collect once on its nonce."""
     with _LOCK:
         st = _load()
-        d = next((d for d in st["devices"] if d["id"] == device_id and d.get("pending")), None)
+        d = next((d for d in st["devices"] if d["id"] == device_id and (d.get("pending") or d.get("move_nonce"))), None)
         if d is None:
             raise PhoneError("That phone isn't waiting.", 404)
         token = secrets.token_urlsafe(32)
         now = time.time()
         for k in [k for k, (_, exp) in _HANDOVER.items() if exp < now]:
             _HANDOVER.pop(k)
-        _HANDOVER[d["nonce"]] = (token, now + PENDING_S)
-        d.update(hash=hash_token(token), pending=False, paired=time.strftime("%Y-%m-%d %H:%M"))
-        d.pop("nonce", None)
+        if d.get("pending"):
+            _HANDOVER[d["nonce"]] = (token, now + PENDING_S)
+            d.update(hash=hash_token(token), pending=False, paired=time.strftime("%Y-%m-%d %H:%M"))
+            d.pop("nonce", None)
+        else:
+            _HANDOVER[d["move_nonce"]] = (token, now + PENDING_S)
+            d.update(hash=hash_token(token), used=None)   # (None: not used yet, so the LAN token stays for now)
+            d.pop("move_nonce", None), d.pop("move_asked", None)
         _save()
         return public(d)
 
@@ -371,13 +383,22 @@ def collect(nonce: str) -> tuple[str, dict] | None:
 
 
 def refuse(device_id: str) -> dict:
-    """The PC says No: the phone that claimed is forgotten (it never had a token)."""
+    """The PC says No: a new phone that claimed is forgotten (it never had a token); a move is cancelled, and the phone
+    from before keeps its LAN token (it may ask again)."""
+    with _LOCK:
+        st = _load()
+        d = next((d for d in st["devices"] if d["id"] == device_id), None)
+        if d is not None and not d.get("pending") and d.get("move_nonce"):
+            d.pop("move_nonce", None), d.pop("move_asked", None)
+            _save()
+            return public(d)
     return revoke(device_id)
 
 
 def pending() -> list[dict]:
+    """The phones waiting for Allow / No: new ones (asks "new") and moves (asks "move")."""
     with _LOCK:
-        return [public(d) for d in _load()["devices"] if d.get("pending")]
+        return [public(d) for d in _load()["devices"] if d.get("pending") or d.get("move_nonce")]
 
 
 # ---------------------------------------------------------------- devices
@@ -391,6 +412,7 @@ def public(d: dict) -> dict:
     out["pending"] = bool(d.get("pending"))
     out["lan"] = bool(d.get("lan_hash")) and not d.get("hash")   # (paired on the home Wi-Fi, not moved to the link yet)
     out["moving"] = bool(d.get("lan_hash")) and bool(d.get("hash"))   # (moved, the new token not used yet)
+    out["asks"] = "new" if d.get("pending") else "move" if d.get("move_nonce") else None
     return out
 
 

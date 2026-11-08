@@ -232,9 +232,10 @@ class Handler(BaseHTTPRequestHandler):
             self._read = {}
             return {}
         try:
-            self._read = json.loads(self.rfile.read(n))
+            got = json.loads(self.rfile.read(n))
         except ValueError:
-            self._read = {}
+            got = {}
+        self._read = got if isinstance(got, dict) else {}   # (every route reads an object: a list or a number is nothing)
         return self._read
 
     def _length(self) -> int:
@@ -498,6 +499,8 @@ class Handler(BaseHTTPRequestHandler):
             self._error(str(e), e.status)
         except LookupError as e:
             self._error(str(e), 404)
+        except jobs.TooManyJobs as e:   # (one phone's cap on work: the page says it as it is)
+            self._error(str(e), 429)
         except Exception as e:
             self._error(friendly(e), 500)
         finally:
@@ -557,12 +560,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.remote and (_pc_only(job) or phone_api.policy("POST", p)[0] == "pc"):   # (the replay runs as the PC)
             return self._error(PC_ONLY_JOB, 403)
         r = _Replay(p, body)
+        r.remote, r.device = self.remote, self.device   # (a phone's retry counts against its cap)
         before = set(JOBS)
         jobs.ORIGIN.h = r
         try:
             r._route_post(p)
         except LookupError as e:
             return self._error(str(e), 404)
+        except jobs.TooManyJobs as e:
+            return self._error(str(e), 429)
         finally:
             jobs.ORIGIN.h = self
         new = [JOBS[j] for j in set(JOBS) - before if j in JOBS and JOBS[j].origin is r]

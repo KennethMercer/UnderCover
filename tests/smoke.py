@@ -2043,8 +2043,18 @@ def u_phone_away():
                     pass
             c = phone.move_code("aaaaaaaaaa")
             assert len(c) >= 20
-            main, d2 = phone.redeem_move(c)
+            nonce, d2 = phone.redeem_move(c)
+            assert d2["id"] == "aaaaaaaaaa" and d2["asks"] == "move" and not d2["moving"] and phone.collect(nonce) is None, d2   # waits for Allow
+            assert [d["asks"] for d in phone.pending()] == ["move"] and phone.device_for(lan, "192.168.1.77"), "a move that waits stopped the LAN token"
+            phone.refuse("aaaaaaaaaa")   # No: the move is cancelled, the phone from before keeps its LAN token and may ask again
+            assert phone.pending() == [] and phone.collect(nonce) is None and phone.device_for(lan, "192.168.1.77")["id"] == "aaaaaaaaaa"
+            assert phone.devices()[0]["id"] == "aaaaaaaaaa" and phone.devices()[0]["lan"]
+            c = phone.move_code("aaaaaaaaaa")
+            nonce, d2 = phone.redeem_move(c)
+            phone.allow("aaaaaaaaaa")
+            main, d2 = phone.collect(nonce)
             assert d2["id"] == "aaaaaaaaaa" and main != lan and d2["moving"] and phone.lan_needed(), "the LAN token went before the new one was used"
+            assert phone.collect(nonce) is None, "the moved phone's token was handed over twice"
             for bad in (c, "x" * 22, ""):   # used once already, made up, empty
                 try:
                     phone.redeem_move(bad)
@@ -2082,6 +2092,73 @@ def u_phone_away():
             phone._STATE.clear()
             phone._SEEN_AT.clear()
     return "a 1.1 file read as it was; LAN token -> move code -> the one token; the LAN token goes at the first use; once only; expiry; off; Remove"
+
+
+@check("one phone's work is capped (1.2.1, every phone is on the internet now): three jobs waiting or running at once, twelve started in an hour, said plainly (429); the PC has no cap; a phone's retry counts; the library's deletes are the PC's")
+def u_phone_jobs():
+    import inspect
+    from types import SimpleNamespace
+    from undercover.app import phone_api, server
+    from undercover.core import jobs
+    saved = dict(jobs.JOBS)
+    jobs.JOBS.clear()
+    try:
+        phone_h = SimpleNamespace(remote=True, device={"id": "d1", "name": "p"})
+        jobs.ORIGIN.h = phone_h
+        made = []
+        for _ in range(jobs.PHONE_JOBS):
+            j = jobs.Job("cover", title="t")
+            jobs.JOBS[j.id] = j
+            made.append(j)
+        assert all(j.device == "d1" for j in made)
+        try:
+            jobs.Job("cover", title="t")
+            raise AssertionError("a fourth job from one phone")
+        except jobs.TooManyJobs as e:
+            assert "3 jobs waiting or running" in str(e) and type(e) in jobs.USER_ERRORS, e
+        made[0].finish("done", message="Finished")
+        j = jobs.Job("speak", title="t")   # one finished: room for one more
+        jobs.JOBS[j.id] = j
+        jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "d2", "name": "other"})
+        jobs.JOBS.update({x.id: x for x in [jobs.Job("cover", title="t") for _ in range(2)]})   # another phone has its own
+        jobs.ORIGIN.h = None
+        for _ in range(10):   # the PC: no cap
+            x = jobs.Job("cover", title="t")
+            jobs.JOBS[x.id] = x
+            assert x.device is None
+        jobs.ORIGIN.h = SimpleNamespace(remote=False, device={"id": "d1"})   # (a device on a PC request means nothing)
+        assert jobs.Job("cover", title="t").device is None
+        jobs.JOBS.clear()
+        jobs.ORIGIN.h = phone_h
+        for _ in range(jobs.PHONE_JOBS_HOUR):   # the hour's cap counts finished ones too
+            x = jobs.Job("cover", title="t")
+            x.finish("done", message="Finished")
+            jobs.JOBS[x.id] = x
+        try:
+            jobs.Job("cover", title="t")
+            raise AssertionError("a thirteenth job in an hour")
+        except jobs.TooManyJobs as e:
+            assert "12 jobs in the last hour" in str(e)
+        for x in jobs.JOBS.values():
+            x.created -= 3601
+        assert jobs.Job("cover", title="t").device == "d1"
+    finally:
+        jobs.ORIGIN.h = None
+        jobs.JOBS.clear()
+        jobs.JOBS.update(saved)
+    src = inspect.getsource(server.Handler.do_POST) + inspect.getsource(server.Handler._retry)
+    assert src.count("except jobs.TooManyJobs as e:") == 2 and "r.remote, r.device = self.remote, self.device" in src
+    for m, p in (("DELETE", "/api/library/covers/0123456789"), ("DELETE", "/api/library/speech/0123456789"),
+                 ("DELETE", "/api/library/songs/0123456789abcdef"), ("DELETE", "/api/speak/0123456789"),
+                 ("DELETE", "/api/train/projects/someone")):
+        assert phone_api.policy(m, p)[0] == "pc", (m, p)
+    assert phone_api.policy("GET", "/api/train/projects/someone")[0] == "phone" and phone_api.policy("DELETE", "/api/voices/v")[0] == "phone"
+    web = ROOT / "undercover" / "web"   # and the pages don't offer a phone the deletes it can't make ([data-pc] hides on a phone)
+    lib, se = (web / "library.js").read_text(encoding="utf-8"), (web / "speakeasy.js").read_text(encoding="utf-8")
+    assert lib.count('id="lib-del" data-pc') == 4 and 'id="lib-bulk-del" data-pc' in lib and 'id="lib-del-stems" data-pc' in lib, "a delete the phone can't make is offered"
+    assert 'Remove…</b' in lib and 'id="lib-del">Remove' in lib, "a voice's Remove (set aside, recoverable) stopped being offered on a phone"
+    assert "data-pc data-rdel=" in se and 'body[data-client="phone"] [data-pc]' in (web / "app.css").read_text(encoding="utf-8")
+    return "3 at once, 12 an hour, per phone; the PC free; retries count; deletes the PC's, and not offered on a phone"
 
 
 @check("the home-network listener's state is stored (1.2.1): at start it opens only while a phone paired before the link still holds its LAN token, never because the link is on; it closes for good when the last such token goes")
@@ -11950,6 +12027,8 @@ def a_link():
         assert _away("POST", "/api/phone/claim", port, host, body={"code": "x"}, origin=f"http://{host}")[0] == 403
         for p_ in ("/api/phone/claim", "/api/phone/wait"):   # no window, no nonce: the same 401
             assert _away("POST", p_, port, host, body={})[:3:2] == (401, b"Unauthorized"), p_
+            assert _away("POST", p_, port, host, body=[])[:3:2] == (401, b"Unauthorized"), p_   # (CI-58: a list is no object, and no 500)
+        assert _away("POST", "/api/phone/move", port, host, body=[1])[:3:2] == (403, b"Forbidden")
         assert _away("POST", "/api/phone/move", port, host, body={})[:3:2] == (403, b"Forbidden")   # no code: generic too
         status, _, page = _away("GET", "/pair", port, host)
         assert status == 200 and b"Connect this phone" in page and b"Allow" in page, (status, page[:200])
@@ -12038,9 +12117,16 @@ def a_link():
         mcode = url.split("#", 1)[1]
         assert _lan("POST", "/api/phone/move/link", None, {})[0] == 401, "a move code without a token"
         status, hd, body = _away("POST", "/api/phone/move", port, host, body={"code": mcode})
+        assert status == 200 and "set-cookie" not in hd, (status, hd, body)   # (CI-59: a move waits for the PC, as a new phone does)
+        mnonce = json.loads(body)["nonce"]
+        assert _away("POST", "/api/phone/move", port, host, body={"code": mcode})[0] == 403, "a move code worked twice"
+        assert _away("POST", "/api/phone/wait", port, host, body={"nonce": mnonce})[2] == b'{"ok": false}'
+        asks = api("/api/phone")["pending"]
+        assert [(d["name"], d["asks"]) for d in asks] == [("Old phone", "move")], asks
+        api("/api/phone/allow", {"id": lid})
+        status, hd, body = _away("POST", "/api/phone/wait", port, host, body={"nonce": mnonce})
         assert status == 200 and hd.get("set-cookie", "").startswith("__Host-uc="), (status, hd, body)
         main = hd["set-cookie"].split("__Host-uc=", 1)[1].split(";", 1)[0]
-        assert _away("POST", "/api/phone/move", port, host, body={"code": mcode})[0] == 403, "a move code worked twice"
         assert _lan("GET", "/api/status", lan)[0] == 200, "the LAN token stopped before the phone arrived at the link"
         assert next(d for d in api("/api/phone")["devices"] if d["id"] == lid)["moving"]
         assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={main}")[2])["device"] == "Old phone"
@@ -12055,7 +12141,7 @@ def a_link():
         except ConnectionRefusedError:
             pass
         logs = "".join(f.read_text(encoding="utf-8", errors="replace") for f in sbx_path("logs_dir").glob("*.log") if f.is_file())
-        assert "Old phone moved to the link" in logs and "home-network listener closed" in logs and mcode not in logs and main not in logs, "the move isn't in the log, or a secret is"
+        assert "Old phone was allowed to move to the link" in logs and "home-network listener closed" in logs and mcode not in logs and main not in logs and mnonce not in logs, "the move isn't in the log, or a secret is"
         # Remove: the next request is 401 and clears the phone
         api("/api/phone/revoke", {"id": lid})
         status, hd, _ = _away("GET", "/api/status", port, host, cookie=f"__Host-uc={main}")
@@ -13738,7 +13824,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

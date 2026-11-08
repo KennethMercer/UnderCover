@@ -40,12 +40,16 @@ class Control:
 USER_ERRORS: list = []   # exception classes whose message is already meant for the user (modules add theirs)
 
 
-def _platform_errors():   # core/platform's "not on this OS" is written for the user (phase 18)
+def _platform_errors():   # core/platform's "not on this OS" is written for the user (phase 18); so is the phone's cap
     from .platform import NotOnThisOS
     USER_ERRORS.append(NotOnThisOS)
 
 
 _platform_errors()
+
+
+def _cap_error():
+    USER_ERRORS.append(TooManyJobs)
 
 
 def register_user_error(cls):
@@ -160,6 +164,25 @@ def jobs_using(voice: str) -> list:
             and (getattr(j, "voices", None) is None or voice in j.voices)]
 
 ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
+PHONE_JOBS, PHONE_JOBS_HOUR = 3, 12   # one phone's jobs: waiting or running at once, and started in an hour (1.2.1)
+
+
+class TooManyJobs(Exception):
+    """A phone asked for more work than one phone may have: its message says so plainly (the server answers 429)."""
+
+
+_cap_error()
+
+
+def _phone_cap(device_id: str):
+    """Every phone is on the internet now, so a stolen token is worth more: one phone may have PHONE_JOBS jobs waiting or
+    running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap."""
+    now = time.time()
+    mine = [j for j in list(JOBS.values()) if getattr(j, "device", None) == device_id]
+    if sum(not j.finished for j in mine) >= PHONE_JOBS:
+        raise TooManyJobs(f"This phone has {PHONE_JOBS} jobs waiting or running already. Wait for one to finish, or start it on the PC.")
+    if sum(now - j.created < 3600 for j in mine) >= PHONE_JOBS_HOUR:
+        raise TooManyJobs(f"This phone has started {PHONE_JOBS_HOUR} jobs in the last hour. Wait a while, or start it on the PC.")
 
 
 def eta_words(seconds: float) -> str:
@@ -187,6 +210,10 @@ class Job:
         self.id = uuid.uuid4().hex[:12]
         self.kind = kind
         self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
+        dev = getattr(self.origin, "device", None) if getattr(self.origin, "remote", False) else None
+        self.device = dev.get("id") if isinstance(dev, dict) else None   # the phone that asked for it (None: the PC)
+        if self.device:
+            _phone_cap(self.device)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
         self.state = "queued"
         self.events: list[dict] = []

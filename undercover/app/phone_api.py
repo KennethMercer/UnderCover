@@ -26,7 +26,7 @@ reach without a token says what exists: refusals are the generic 401 / 403.
     POST /api/phone/wait             {nonce} at the link -> {ok: false} until the PC allows; then the token, once
     GET  /pair                       the pairing page (static, generic)
     POST /api/phone/move/link        a phone from before, on the home Wi-Fi, asks for its move (a single-use code)
-    POST /api/phone/move             {code} at the link: the one token
+    POST /api/phone/move             {code} at the link -> {nonce}: the move waits for Allow, then /api/phone/wait
     GET  /move                       the page that redeems it
 The link's setup (core/tailnet.py) is still driven by /api/away until the card folds it in: GET its phase; POST {on} or
 {private}; /api/away/forget signs this PC out. PC only: the sign-in and approval URLs never leave the PC.
@@ -72,7 +72,8 @@ ROUTES = [
     # DoubleAgent
     ("GET", r"/api/work/candidates|/api/work/lookup", "phone", "voices to improve tonight"),
     ("GET|POST", r"/api/train/projects", "phone", "training projects"),
-    ("GET|DELETE", rf"/api/train/projects/{_ID}", "phone", "a project (delete: the page asks twice)"),
+    ("GET", rf"/api/train/projects/{_ID}", "phone", "a project"),
+    ("DELETE", rf"/api/train/projects/{_ID}", "pc", "delete a training project (the PC's: nothing brings it back)"),
     ("POST", rf"/api/train/projects/{_ID}/(search|sources|upload|prepare|reference|phrases|train|pause|stop|export|auto|transcribe)",
      "phone", "the training steps"),
     ("GET", rf"/api/train/voices/{_ID}/cadence(/sample/(current|pending))?", "phone", "Keep this one: the two readings"),
@@ -85,12 +86,12 @@ ROUTES = [
     ("POST", r"/api/speak/warm", "phone", "SpeakEasy opened: its speech engine warmed while idle"),
     ("POST", r"/api/speak|/api/speak/(cadence|newvoice)", "phone", "make speech"),
     ("POST", rf"/api/speak/{_ID}/(rename|keep|unkeep)", "phone", "rename / keep speech"),
-    ("DELETE", rf"/api/speak/{_ID}", "phone", "remove speech (the page asks twice)"),
+    ("DELETE", rf"/api/speak/{_ID}", "pc", "remove speech (the PC's: nothing brings it back)"),
     # SafeHouse
     ("GET", r"/api/library/(summary|covers|speech|songs|voices|training)", "phone", "the library"),
     ("GET", r"/api/library/covers/zip", "phone", "download covers"),
     ("POST", rf"/api/library/(covers|speech)/{_ID}/(rename|keep|unkeep)", "phone", "rename / keep"),
-    ("DELETE", rf"/api/library/(covers|speech|songs)/{_ID}", "phone", "delete (the page asks twice)"),
+    ("DELETE", rf"/api/library/(covers|speech|songs)/{_ID}", "pc", "delete a cover, a speech or a song (the PC's: nothing brings it back)"),
     ("POST", rf"/api/library/voices/{_ID}/display", "phone", "a voice's display name"),
     ("POST", rf"/api/library/voices/{_ID}/rename", "pc", "Rename folder (Deep Cover)"),
     ("GET", rf"/api/library/voices/{_ID}/export", "pc", "Export .zip (Deep Cover)"),
@@ -397,13 +398,12 @@ def _route(h, method, p):
             raise PhoneError("The PC hasn't finished setting up your phone's link yet.", 409)
         h._body()
         return h._json({"url": f"{snap['link']}/move#{phone.move_code(h.device['id'])}"})   # (the node's name, never this request's Host)
-    if p in ("/api/phone/move", "/api/phone/away") and method == "POST":   # at the link: the code -> the one token
+    if p in ("/api/phone/move", "/api/phone/away") and method == "POST":   # at the link: the code -> a nonce, then Allow
         if not getattr(h, "away", False):
             raise PhoneError("", 401, generic=True)
-        token, dev = phone.redeem_move(str(h._body().get("code") or ""))
-        h.set_cookie = main_cookie(token)
-        doctor_log(f"Your phone: {dev['name']} moved to the link.")
-        return h._json({"ok": True, "device": dev})
+        nonce, dev = phone.redeem_move(str(h._body().get("code") or ""))
+        doctor_log(f"Your phone: {dev['name']} asked to move to the link.")
+        return h._json({"ok": True, "nonce": nonce, "device": {"name": dev["name"]}})
     if h.remote:   # the gate refuses these for phones already; never let a phone change Your phone
         raise PhoneError("Your phone is managed on the PC.", 403)
     if p == "/api/phone" and method == "GET":
@@ -441,7 +441,7 @@ def _route(h, method, p):
         return h._json(state())
     if p == "/api/phone/allow":
         d = phone.allow(str(b.get("id") or ""))
-        doctor_log(f"Your phone: {d['name']} was allowed.")
+        doctor_log(f"Your phone: {d['name']} was allowed" + (" to move to the link." if d["moving"] else "."))
         return h._json(state())
     if p == "/api/phone/refuse":
         d = phone.refuse(str(b.get("id") or ""))
