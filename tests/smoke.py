@@ -9153,6 +9153,13 @@ def u_leadgate():
         gone = G.top_missing(g, {"top": none_t, "rest": rest_t}, stems_k["backing"])
         assert gone == [list(c) for c in g["chorus"]], gone
         assert G.top_missing(g, {"top": real_t, "rest": rest_t}, stems_k["backing"]) == [] and G.top_missing(g, None, stems_k["backing"]) == []
+        for down, gone_too in ((25.0, False), (35.0, True)):   # the 30 dB bar on a second case: a top voice this far under the backing
+            t2 = tmp / f"top_{int(down)}.wav"
+            sf.write(str(t2), back * 10 ** (-down / 20), sr)
+            got = G.top_missing(g, {"top": t2, "rest": rest_t}, stems_k["backing"])
+            assert (got == [list(c) for c in g["chorus"]]) is gone_too and (got == []) is not gone_too, (down, got)
+        src_tm = __import__("inspect").getsource(G.top_missing)
+        assert "sf.read(str(f), start=" in src_tm and "always_2d=True)\n    bk" not in src_tm   # (a stretch at a time, never the whole stem)
         out = G.apply(stems_k, g, tmp, "tn", chorus="top", top={"top": none_t, "rest": rest_t})
         l4, _ = sf.read(str(out["vocals"]), dtype="float32")
         assert rms(l4, c0, c1) < 0.01 * rms(left, c0, c1), "no top voice, yet the leftovers are still there to convert"
@@ -9161,7 +9168,7 @@ def u_leadgate():
         l5, _ = sf.read(str(out["vocals"]), dtype="float32")
         assert rms(l5, c0, c1) > 0.9 * rms(back, c0, c1), "a real top voice wasn't moved into the lead"
         said = G.note(g, "top", backing_converted=True, missing=gone)
-        assert said and not any("top voice was converted" in s for s in said) and any("no top voice to move" in s and "backing's voice" in s for s in said), said
+        assert said and not any("top voice was converted" in s for s in said) and any("and have no top voice to move" in s and "backing's voice" in s for s in said), said
         assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
