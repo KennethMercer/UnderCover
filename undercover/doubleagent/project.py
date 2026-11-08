@@ -444,8 +444,9 @@ def add_file(proj: Project, file: Path, title: str | None = None) -> Source:
         raise ModelError("That recording is already in this project.")
     dest = proj.dir / "raw" / f"{sid}.wav"
     import subprocess
-    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(file), "-t", str(MAX_AUDIO_S), "-ac", "1", "-ar", str(CLIP_SR), str(dest)],
-                       capture_output=True, text=True)
+    from ..core import manifest, platform
+    r = subprocess.run([manifest.ffmpeg(), "-v", "error", "-y", "-i", str(file), "-t", str(MAX_AUDIO_S), "-ac", "1", "-ar", str(CLIP_SR), str(dest)],
+                       capture_output=True, **platform.TEXT, creationflags=platform.NO_WINDOW)
     if r.returncode or not dest.exists():
         raise ModelError(f"Couldn't read '{title or Path(file).name}' as audio.")
     import soundfile as sf

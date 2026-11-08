@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from ..core import tray
+from ..core import manifest, platform, tray
 from ..core.config import CONFIG, path
 from ..core.voices import label_of
 from . import history as hstore
@@ -383,8 +383,8 @@ class CoverEngine:
 
         def cut(src: Path, name: str) -> Path:
             dst = work / f"{name}.wav"
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
-                            "-c:a", "pcm_f32le", str(dst)], check=True)
+            subprocess.run([manifest.ffmpeg(), "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
+                            "-c:a", "pcm_f32le", str(dst)], check=True, creationflags=platform.NO_WINDOW)
             return dst
         sliced = {k: cut(Path(v), k) for k, v in stems.items()}
         song_cut = cut(song, "song")
