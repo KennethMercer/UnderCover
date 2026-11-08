@@ -198,6 +198,26 @@ def process_path(pid: int) -> str:
         kernel32.CloseHandle(h)
 
 
+def process_started(pid: int) -> int | None:
+    """When a process started (its creation time, in 100 ns ticks), or None when it can't be read: with a pid, it tells
+    the same process from a later one Windows gave that pid again. Read only."""
+    if not WINDOWS:
+        raise _not("Reading when a program started")
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.windll.kernel32
+    h = kernel32.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    try:
+        t = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(h, *(ctypes.byref(x) for x in t)):
+            return None
+        return (t[0].dwHighDateTime << 32) | t[0].dwLowDateTime
+    finally:
+        kernel32.CloseHandle(h)
+
+
 def processes() -> dict:
     """{pid: program file} of the processes this user can read. Read only."""
     if not WINDOWS:

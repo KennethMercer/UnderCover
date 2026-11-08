@@ -1907,6 +1907,7 @@ def u_decode_bound():
 @check("two hidden Tailscales side by side (an install and a sandbox, two test runs): each daemon's pipe is named after its own state folder and that folder's random key (nothing to guess), so each CLI reaches its own daemon and never the other's; a daemon this state folder left running from before is ended before a new one starts, and nobody else's")
 def u_tailnet_pipe():
     import subprocess, tempfile
+    from types import SimpleNamespace
     from undercover.core import platform as P
     fake = ROOT / "tests" / "fake_tailscale.py"
     with tempfile.TemporaryDirectory(prefix="uc-ts-pipe-") as d:   # (two fakes' own state; nothing of the user's)
@@ -1946,24 +1947,34 @@ def u_tailnet_pipe():
         prog = tailnet.bin_dir() / P.tailscale_names()[0]   # (the isolated models folder: an empty stand-in file)
         prog.parent.mkdir(parents=True, exist_ok=True)
         prog.write_bytes(b"")
-        (tailnet.state_dir() / "uc-daemon").write_text("424242", encoding="utf-8")
-        killed, real_kill, real_path, saved_cmd = [], os.kill, P.process_path, dict(tailnet.CMD)
+        rec = tailnet.state_dir() / "uc-daemon"
+        rec.write_text("424242 1000", encoding="utf-8")
+        killed, real_kill, real_path, real_started, saved_cmd = [], os.kill, P.process_path, P.process_started, dict(tailnet.CMD)
         tailnet.CMD.clear()
         try:
             os.kill = lambda pid, sig: killed.append(pid)
-            P.process_path = lambda pid: str(prog.resolve()) if pid == 424242 else "C:\\other\\tailscaled.exe"
+            P.process_path = lambda pid: str(prog.resolve()) if pid in (424242, 616161) else "C:\\other\\tailscaled.exe"
+            P.process_started = lambda pid: {424242: 1000, 616161: 2000}.get(pid, 3000)
             tailnet._end_orphans()
             assert killed == [424242], killed
             killed.clear()
-            (tailnet.state_dir() / "uc-daemon").write_text("515151", encoding="utf-8")   # another program by now
+            rec.write_text("515151 3000", encoding="utf-8")   # another program by now
             tailnet._end_orphans()
             assert killed == [], "a process that isn't this copy's tailscaled was ended"
+            rec.write_text("616161 1000", encoding="utf-8")   # the pid given again (our program, a later start: the install's)
+            tailnet._end_orphans()
+            assert killed == [], "a later process Windows gave the same pid was ended"
             tailnet.CMD.update(saved_cmd or {"tailscaled": ["x"]})   # (tests' fakes: never)
-            (tailnet.state_dir() / "uc-daemon").write_text("424242", encoding="utf-8")
+            rec.write_text("424242 1000", encoding="utf-8")
             tailnet._end_orphans()
             assert killed == []
+            tailnet.CMD.clear()
+            tailnet._keep_pid(SimpleNamespace(pid=424242))
+            assert rec.read_text(encoding="utf-8") == "424242 1000"
+            tailnet._drop_pid()
+            assert not rec.exists(), "a clean end kept the record"
         finally:
-            os.kill, P.process_path = real_kill, real_path
+            os.kill, P.process_path, P.process_started = real_kill, real_path, real_started
             tailnet.CMD.clear()
             tailnet.CMD.update(saved_cmd)
     return "one pipe per state folder and key; each CLI reaches its own daemon only; only this folder's leftover ended"

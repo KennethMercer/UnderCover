@@ -134,18 +134,18 @@ def _end_orphans():
     own state folder and pid."""
     f = state_dir() / "uc-daemon"
     try:
-        pid = int(f.read_text(encoding="utf-8").strip())
+        pid, started = (int(x) for x in f.read_text(encoding="utf-8").split())
     except (OSError, ValueError):
         return
     prog_file = bin_dir() / platform.tailscale_names()[0]
     mine = _P["daemon"].pid if _P["daemon"] is not None and _P["daemon"].poll() is None else None
     if CMD or pid in (mine, os.getpid()) or not prog_file.is_file():
         return
-    try:
-        prog = platform.process_path(pid)
+    try:   # (the same process: its pid, its start time and our program, so never one Windows gave that pid since)
+        same = platform.process_started(pid) == started and platform.process_path(pid)
     except platform.NotOnThisOS:
         return
-    if prog and os.path.normcase(prog) == os.path.normcase(str(prog_file.resolve())):
+    if same and os.path.normcase(same) == os.path.normcase(str(prog_file.resolve())):
         try:
             os.kill(pid, 15)   # (SIGTERM; Windows ends the process)
             from .doctor import log
@@ -155,9 +155,23 @@ def _end_orphans():
 
 
 def _keep_pid(p):
+    """The daemon this state folder started: its pid and start time, so the next start can tell a leftover."""
     from . import fsutil
     try:
-        fsutil.write_text(state_dir() / "uc-daemon", str(p.pid))
+        started = platform.process_started(p.pid)
+    except platform.NotOnThisOS:
+        started = None
+    try:
+        if started is not None:
+            fsutil.write_text(state_dir() / "uc-daemon", f"{p.pid} {started}")
+    except OSError:
+        pass
+
+
+def _drop_pid():
+    """Our daemon ended cleanly: no record left for a later process Windows gives that pid."""
+    try:
+        (state_dir() / "uc-daemon").unlink()
     except OSError:
         pass
 
@@ -375,6 +389,7 @@ def stop():
             pass
     with _LOCK:
         _end_processes()
+    _drop_pid()
 
 
 def at_exit():
@@ -393,6 +408,7 @@ def at_exit():
         q = _P.get(key)
         if q is not None and q.poll() is None:
             q.terminate()   # no wait: this process is about to end, and a closing console has seconds
+    _drop_pid()
 
 
 def forget():
