@@ -88,6 +88,19 @@ def wait_for(fn, timeout, every=2.0, what="condition"):
     raise TimeoutError(f"{what} not reached in {timeout:.0f} s")
 
 
+def _job_final(job_id: str, timeout: float = 60) -> dict:
+    """A job's final event (state, message, and what the job returned as `result`), read from its own event stream:
+    the stream replays a finished job from its first event and ends at the final one. /api/jobs's snapshot only
+    carries the final state and message."""
+    with urllib.request.urlopen(BASE + f"/api/jobs/{job_id}/events", timeout=timeout) as resp:
+        for raw in resp:
+            if raw.startswith(b"data: "):
+                ev = json.loads(raw[6:])
+                if ev.get("final"):
+                    return ev
+    raise AssertionError(f"job {job_id}'s stream ended without a final event")
+
+
 # ---------------------------------------------------------------- unit checks (no server)
 
 @check("imports: every module loads")
@@ -13245,9 +13258,12 @@ def a_cadence():
     (pdir / CAD_PROJ / "project.json").write_text(json.dumps(pj), encoding="utf-8")
     shutil.copytree(vdir / voice, vdir / CAD_VOICE, ignore=shutil.ignore_patterns("tts"))
     meta = json.loads((vdir / CAD_VOICE / "meta.json").read_text(encoding="utf-8"))
-    meta["name"], meta["dir"] = CAD_VOICE, str(vdir / CAD_VOICE)
+    meta["name"], meta["dir"], meta["pth"] = CAD_VOICE, str(vdir / CAD_VOICE), str(vdir / CAD_VOICE / "model.pth")
+    if meta.get("index"):   # (left pointing at the source voice, the clone's readings failed with "model.pth missing", glitch2's log)
+        meta["index"] = str(vdir / CAD_VOICE / "model.index")
     meta["extra"]["project"] = CAD_PROJ
     meta["extra"].pop("tts", None)
+    assert not any(str(vdir / voice) in str(v or "") for v in (meta["dir"], meta["pth"], meta.get("index"))), "the clone's meta.json still points at the source voice"
     (vdir / CAD_VOICE / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     item = None
     try:
@@ -13257,8 +13273,11 @@ def a_cadence():
                  what="transcripts")
         done = next(x for x in api("/api/jobs") if x["id"] == j)
         assert done["state"] == "done", done.get("final")
-        tr = json.loads((pdir / CAD_PROJ / "transcripts.json").read_text(encoding="utf-8"))["clips"]
-        assert len(tr) >= 50, f"only {len(tr)} transcripts"
+        # the count from the job's own final event, never transcripts.json read from disk (the job writes it per batch:
+        # a partial file passed for a finished one when the job died under a shared GPU)
+        final = _job_final(j)
+        n_tr = (final.get("result") or {}).get("clips", 0)
+        assert n_tr >= 50, f"only {n_tr} transcripts ({final})"
         # 2. Train cadence, as SpeakEasy's button does (a queue item that runs now)
         w = api("/api/speak/cadence", {"voice": CAD_VOICE, "now": True})
         item = next(i for i in w["queue"] if i["kind"] == "cadence" and i["target"] == CAD_VOICE)
@@ -13307,7 +13326,7 @@ def a_cadence():
         assert r["kept"] == "pending" and (tts / "previous" / "ref.wav").exists(), r
         v = next(x for x in api("/api/speak/voices") if x["name"] == CAD_VOICE)
         assert v["cadence"]["has"] and not v["cadence"].get("pending"), v["cadence"]
-        return (f"{len(tr)} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}, "
+        return (f"{n_tr} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}, "
                 f"clip sound -{sc.get('sound')}, pace x{sc.get('pace_ratio')} ({sc.get('pace_heard')}), pitch {sc.get('pitch_raw_st'):+} st "
                 f"(nudge {meta.get('pitch_nudge')}); A/B readings {len(wav) // 1000} KB, new pack kept")
     finally:
