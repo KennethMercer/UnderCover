@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import fsutil
+from . import fsutil, platform
 from .config import CONSTRAINTS, ROOT, path
 from .voices import ModelError
 
@@ -164,11 +164,9 @@ def status() -> list[dict]:
 
 
 def _uv() -> Path | None:
-    """The installer's uv (tools/uv/uv.exe): its venvs have no pip."""
-    for p in (ROOT / "tools" / "uv" / "uv.exe", ROOT / "tools" / "uv" / "uv"):
-        if p.exists():
-            return p
-    return None
+    """The installer's uv (tools/uv): its venvs have no pip."""
+    p = ROOT / "tools" / "uv" / platform.exe_name("uv")
+    return p if p.exists() else None
 
 
 def _pip(*args, what="the add-on's Python packages") -> None:
@@ -180,8 +178,7 @@ def _pip(*args, what="the add-on's Python packages") -> None:
     if uv:   # like setup.ps1: uv's cache and config stay inside the app folder, never in the user's profile
         env = {**os.environ, "UV_CACHE_DIR": str(ROOT / "cache" / "uv"), "UV_NO_CONFIG": "1",
                "UV_PYTHON_INSTALL_DIR": str(ROOT / "tools" / "python")}
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, **platform.TEXT, env=env, creationflags=platform.NO_WINDOW)
     if r.returncode != 0:
         from .jobs import log_error
         log_error(f"add-on {' '.join(cmd)}\n{r.stdout}\n{r.stderr}")

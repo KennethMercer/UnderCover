@@ -35,8 +35,7 @@ NOT_GAMES = ("\\epic games\\launcher\\", "\\riot games\\riot client\\", "\\steam
              "\\steamapps\\common\\steamworks shared\\", "\\steamapps\\common\\steamvr\\")
 # a game's helpers (they outlive it, or start before it): never the game itself
 HELPERS = ("crash", "anticheat", "battleye", "beservice", "launcher", "updater", "redist", "setup", "unins", "helper")
-SYSTEM = {"dwm.exe", "explorer.exe", "csrss.exe", "searchhost.exe", "shellexperiencehost.exe", "startmenuexperiencehost.exe",
-          "textinputhost.exe", "applicationframehost.exe", "svchost.exe", "system", "idle"}
+SYSTEM = platform.SYSTEM_PROCESSES   # Windows' desktop processes (the game pause runs on Windows only: supports("fullscreen"))
 _HEAVY: dict = {}   # pid -> when it went past GPU_PCT
 _SEEN_LOCK = threading.Lock()
 STATE = {"game": None, "asking": None, "answer": None, "paused_for": None, "gone_since": None, "reason": "",

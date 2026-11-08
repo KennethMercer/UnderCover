@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from urllib.parse import unquote
 
-from . import fsutil
+from . import fsutil, platform
 from .config import CONFIG, ROOT, path
 
 REQ = ROOT / "installer" / "requirements"
@@ -145,14 +145,27 @@ def note_model(local: str, size: int, sha256: str | None):
 
 # ---------------------------------------------------------------- tools and model files
 
-def tool(name: str) -> Path | None:
-    """ffmpeg / deno / uv: the installer's copy in tools\\, else the one on PATH."""
-    exe = name + (".exe" if os.name == "nt" else "")
-    for p in (ROOT / "tools" / name / "bin" / exe, ROOT / "tools" / name / exe):
+def tool(name: str, folder: str | None = None) -> Path | None:
+    """ffmpeg / ffprobe / deno / uv: the installer's copy in tools/<folder> (bin/ first), else the one on PATH.
+    `folder` is the tool's own name unless it ships with another (ffprobe lives in tools/ffmpeg)."""
+    exe = platform.exe_name(name)
+    folder = folder or name
+    for p in (ROOT / "tools" / folder / "bin" / exe, ROOT / "tools" / folder / exe):
         if p.exists():
             return p
     w = shutil.which(name)
     return Path(w) if w else None
+
+
+def ffmpeg(name: str = "ffmpeg") -> str:
+    """The one way ffmpeg (or ffprobe) is found to run: the installer's copy in tools/ffmpeg/bin, else PATH. Raises
+    ModelError with the way to install it on this OS when neither has it."""
+    p = tool(name, folder="ffmpeg")
+    if p is None:
+        from .voices import ModelError
+        raise ModelError(f"{name} isn't installed or isn't on PATH. Install it ({platform.install_hint('ffmpeg')}) "
+                         "and restart UnderCover.")
+    return str(p)
 
 
 def model_files() -> list:

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import soundfile as sf
 
+from ..core import manifest, platform
 from ..core.config import path
 from ..core.files import MAX_AUDIO_S
 from ..core.fsutil import retry
@@ -230,8 +231,8 @@ def download(r: SongResult, register, progress=None) -> dict:
 
 def _bounded(src: Path, dst: Path, seconds: float) -> None:
     """src decoded by ffmpeg into a FLAC of at most `seconds` (its header then says what's really in it)."""
-    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-t", str(seconds), "-vn", "-c:a", "flac", str(dst)],
-                       capture_output=True, text=True)
+    r = subprocess.run([manifest.ffmpeg(), "-v", "error", "-y", "-i", str(src), "-t", str(seconds), "-vn", "-c:a", "flac", str(dst)],
+                       capture_output=True, **platform.TEXT, creationflags=platform.NO_WINDOW)
     if r.returncode or not dst.exists():
         raise ModelError("Downloaded the song but couldn't read it as audio.")
 
@@ -239,9 +240,9 @@ def _bounded(src: Path, dst: Path, seconds: float) -> None:
 # ---------------------------------------------------------------- songs in uploads/
 
 def _ffprobe(p: Path) -> dict:
-    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+    out = subprocess.run([manifest.ffmpeg("ffprobe"), "-v", "error", "-select_streams", "a:0", "-show_entries",
                           "format=duration:stream=sample_rate,channels", "-of", "json", str(p)],
-                         capture_output=True, text=True)
+                         capture_output=True, **platform.TEXT, creationflags=platform.NO_WINDOW)
     if out.returncode != 0:
         raise ValueError("not audio")
     d = json.loads(out.stdout)
@@ -256,8 +257,8 @@ def _peaks(p: Path, bins: int = 1200) -> tuple[list[float], float]:
     """Waveform overview (peak level per bin) and how long the audio really is (the seconds ffmpeg decoded, a second
     past MAX_AUDIO_S at most; a file's own header can say less than it holds), decoded via ffmpeg (any format)."""
     import numpy as np
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-t", str(MAX_AUDIO_S + 1), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
-                         capture_output=True).stdout
+    raw = subprocess.run([manifest.ffmpeg(), "-v", "error", "-i", str(p), "-t", str(MAX_AUDIO_S + 1), "-ac", "1", "-ar", "4000", "-f", "f32le", "-"],
+                         capture_output=True, creationflags=platform.NO_WINDOW).stdout
     a = np.abs(np.frombuffer(raw, dtype=np.float32))
     if not len(a):
         return [], 0.0

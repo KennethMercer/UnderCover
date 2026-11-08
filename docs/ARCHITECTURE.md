@@ -114,8 +114,15 @@ and `first_why` so the page says it. The import stand-ins AMD's Windows build of
   stream or, while it is quiet, from `/api/jobs` summaries (`ev.synthetic`). Smoke fails if any other script contains
   `new EventSource`.
 - Every OS-specific call goes through `core/platform.py`. Elsewhere it does the portable thing or raises `NotOnThisOS`
-  with a plain sentence, and `supports(feature)` lets a page hide what cannot work here. Smoke fails if another module
-  makes such a call.
+  with a plain sentence, and `supports(feature)` lets a page hide what cannot work here. A program's file name comes
+  from `platform.exe_name(name)`, a hidden child process from `platform.NO_WINDOW`, a program's text output through
+  `platform.TEXT` (UTF-8, a bad byte replaced, never a decode error; Windows' own console tools such as netsh are
+  read in the console's code page, `platform.CONSOLE`), a process that outlives the server through
+  `platform.start_detached` (its own session off Windows), and "how do I install it" from
+  `platform.install_hint(tool)` (winget, brew or apt). Smoke fails if another module makes such a call, tests
+  `os.name`/`sys.platform` itself or names a program with `.exe`.
+- ffmpeg and ffprobe are found one way, `core/manifest.ffmpeg(name)`: the installer's copy in `tools/ffmpeg/bin`,
+  else the one on PATH, else a `ModelError` that says how to install it on this OS. No module calls `"ffmpeg"` bare.
 - Expert-only elements carry `data-deep`; `[data-pc]` marks controls a paired phone does not get.
 
 ### Dependency rules
