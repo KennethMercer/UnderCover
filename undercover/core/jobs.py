@@ -196,15 +196,26 @@ def phone_of_request() -> str | None:
     return dev.get("id") if isinstance(dev, dict) else None
 
 
-def _phone_cap(device_id: str):
+_CAP_LOCK = threading.Lock()
+_MADE: dict = {}   # id -> a phone's job made but not in JOBS yet (counted from the moment it's made; see _Jobs)
+MADE_S = 60.0      # a job made and never put in JOBS (its route failed after) stops counting after this
+
+
+def _phone_cap(job: "Job"):
     """Every phone is on the internet now, so a stolen token is worth more: one phone may have PHONE_JOBS jobs waiting or
-    running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap."""
+    running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap. Counted and reserved under one lock, so
+    requests from one phone at the same moment can't all pass the count before their jobs reach JOBS."""
     now = time.time()
-    mine = [j for j in list(JOBS.values()) if getattr(j, "device", None) == device_id and j.kind not in UNCAPPED]
-    if sum(not j.finished for j in mine) >= PHONE_JOBS:
-        raise TooManyJobs(f"This phone has {PHONE_JOBS} jobs waiting or running already. Wait for one to finish, or start it on the PC.")
-    if sum(now - j.created < 3600 for j in mine) >= PHONE_JOBS_HOUR:
-        raise TooManyJobs(f"This phone has started {PHONE_JOBS_HOUR} jobs in the last hour. Wait a while, or start it on the PC.")
+    with _CAP_LOCK:
+        for k in [k for k, j in _MADE.items() if now - j.created > MADE_S]:
+            _MADE.pop(k)
+        every = {**_MADE, **dict(JOBS)}
+        mine = [j for j in every.values() if getattr(j, "device", None) == job.device and j.kind not in UNCAPPED]
+        if sum(not j.finished for j in mine) >= PHONE_JOBS:
+            raise TooManyJobs(f"This phone has {PHONE_JOBS} jobs waiting or running already. Wait for one to finish, or start it on the PC.")
+        if sum(now - j.created < 3600 for j in mine) >= PHONE_JOBS_HOUR:
+            raise TooManyJobs(f"This phone has started {PHONE_JOBS_HOUR} jobs in the last hour. Wait a while, or start it on the PC.")
+        _MADE[job.id] = job
 
 
 def eta_words(seconds: float) -> str:
@@ -233,8 +244,9 @@ class Job:
         self.kind = kind
         self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
         self.device = phone_of_request()   # the phone that asked for it (None: the PC)
+        self.created = time.time()
         if self.device and kind not in UNCAPPED:
-            _phone_cap(self.device)
+            _phone_cap(self)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
         self.state = "queued"
         self.events: list[dict] = []
@@ -245,7 +257,6 @@ class Job:
         self.resume_spec = None   # how to start this work again (worklist.resume)
         self.control = None       # trainer Control, for jobs that train
         self.retry_req = None     # (route, body) that started it: Retry on a failed one (app/server.py, phase 10)
-        self.created = time.time()
         self.ended = None
         self.started = None       # when it started running (time left is measured from here)
         self.stage_secs: dict = {}   # finished stages -> seconds (learned for the next estimate)
@@ -409,7 +420,19 @@ class Job:
         return snap
 
 
-JOBS: dict[str, Job] = {}
+class _Jobs(dict):
+    """JOBS: every job by id. A phone's job is counted from the moment it's made (_MADE) until it's here."""
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        _MADE.pop(k, None)
+
+    def update(self, *a, **kw):
+        for k, v in dict(*a, **kw).items():
+            self[k] = v
+
+
+JOBS: dict[str, Job] = _Jobs()
 GPU_QUEUE: "queue.Queue[tuple[Job, callable]]" = queue.Queue()
 START_GATES: list = []   # gate(job): called before a queued GPU job starts and may wait (the game pause asks first)
 CURRENT: list = [None]   # the job the GPU worker is running now (the game pause asks only about real GPU work)

@@ -728,7 +728,9 @@ At the link every request comes from outside (`Handler._gate_away`): the link's 
 on anything but GET, the token for everything but the open routes, and before a token only the generic
 `Unauthorized` / `Forbidden`, so nothing says what exists. `app/phone_api.ROUTES` is the one table of every route and
 its policy (open / phone / pc). Each phone may have three jobs waiting or running and start twelve in an hour
-(`jobs.PHONE_JOBS`, 429 past it), and keep three items in tonight's queue (`worklist.PHONE_ITEMS`); the PC has no cap, and UnderCover's own warm-up and preview jobs aren't counted. Forgetting every thumb at once is the PC's. Deletes that nothing brings back (covers, speech, songs, training
+(`jobs.PHONE_JOBS`, 429 past it), and keep three items in tonight's queue (`worklist.PHONE_ITEMS`); the PC has no cap, and UnderCover's own warm-up and preview jobs aren't counted. A job counts from the moment it's
+made (`jobs._MADE` until it's in `JOBS`), under one lock, and a voice's preview waits once (`voicepreview.queue_job`:
+asked again before it starts, the waiting one makes the newest line). Allow counts the phones already connected too. Forgetting every thumb at once is the PC's. Deletes that nothing brings back (covers, speech, songs, training
 projects) are the PC's, and the pages don't offer them on a phone.
 
 Phones paired on the home Wi-Fi before 1.2.1 hold a LAN token (`lan_hash`), good only from the PC's home network. For

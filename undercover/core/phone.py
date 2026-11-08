@@ -374,6 +374,8 @@ def allow(device_id: str) -> dict:
         d = next((d for d in st["devices"] if d["id"] == device_id and (d.get("pending") or d.get("move_nonce"))), None)
         if d is None:
             raise PhoneError("That phone isn't waiting.", 404)
+        if d.get("pending") and len([x for x in st["devices"] if not x.get("pending")]) >= MAX_DEVICES:   # (asks from
+            raise PhoneError(f"{MAX_DEVICES} phones are connected already. Remove one first.", 409)   # windows in a row)
         token = secrets.token_urlsafe(32)
         now = time.time()
         for k in [k for k, (_, exp) in _HANDOVER.items() if exp < now]:

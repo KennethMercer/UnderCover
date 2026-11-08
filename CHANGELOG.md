@@ -14,6 +14,7 @@ in brackets.
   from a phone.
 - A phone can have three jobs waiting or running at a time. Deleting covers, speech, songs and training projects is
   done on the PC.
+- Hardening of a phone's job count.
 
 **FrontMan** (nobacking, holdparts, residue, notop, firstopen)
 - Under Low profile, opening Shape it for the first time and a duet's verses and choruses hear the words again: the
