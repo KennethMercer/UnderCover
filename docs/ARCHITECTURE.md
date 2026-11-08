@@ -522,7 +522,8 @@ options take `duet_voice` (an installed voice that isn't the lead), `duet_way`, 
 One list per cover, `cache/converted/edits/<cover id>/edit.json`, its snippets beside it (`frontman/edits.py`). A duet's is written
 when the cover is recorded, keeping the words it heard. Any other cover's is made the first time it's opened (`POST
 /api/history/<id>/edits/open`, about 18 s to hear the words). The history line only carries `edits: n`, how many the list holds,
-redo included, and a kept edit's `edited_from: <id>`.
+redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passes on (an id or null) for the row's
+"from <cover>".
 
 - **An edit** asks for a `singer` or an `octave` on the `lead` or the `backing`, over a stretch given by times, by words or by a
   section. The page and an AI send the same request (`by`, and `note`, plain text, at most 200 characters). `key` is reserved and

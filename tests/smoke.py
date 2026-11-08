@@ -11334,6 +11334,10 @@ def u_page_rules():
     assert 'data-shape="${h.id}" data-pc>Shape it</button><span class="meta" data-phone>Shape it on the PC</span>' in app
     assert "SH.jobs.has(j.id)" in app and "!/^Editing /.test(j.title" in app   # (an edit's step isn't a cover's progress)
     assert "/edits/price" in shape and "fit?.said" in shape and "x.ok.fit?.said" in shape   # the fit said before and as it's sung
+    assert "x.id === h.edited_from" in app and "{ t: `from ${coverTitle(x)}` }" in app   # a kept version names its cover (facts esc()s t)
+    import inspect as _ins
+    from undercover.frontman import pipeline as _pl
+    assert 'hstore.ID.fullmatch(h["edited_from"])' in _ins.getsource(_pl.history_items)   # (an id, read from the history as data)
     return "tutorial reset, Replay briefing, Compare sets, display names, phone rows"
 
 

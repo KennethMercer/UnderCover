@@ -572,6 +572,7 @@ def history_items() -> list[dict]:
             "output": file_url(h["output"]), "output_name": Path(h["output"]).name,
             "original": file_url(h["song"]), "vocal": file_url(h.get("converted_vocal")),
             "backing": file_url(h.get("converted_backing")), "edits": h.get("edits") or 0,
+            "edited_from": h["edited_from"] if isinstance(h.get("edited_from"), str) and hstore.ID.fullmatch(h["edited_from"]) else None,   # (Keep's)
             "backing_voice": (o.get("backing_voice") if h.get("converted_backing") and o.get("backing_voice") != h["voice"]
                               and not o.get("duet_voice") else None),   # (a duet's backing is its singers')
             "duet_voice": o.get("duet_voice") or None,   # a duet's second singer (duets.py)
