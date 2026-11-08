@@ -64,7 +64,7 @@ undercover/
     (the Kokoro model), voices (install, search, staging, set aside, display names), voicepreview, engine/ (convert.py
     + the vendored rvc/), gpu (the shared separator and converter), jobs (Job, the GPU worker, SSE events, ETA),
     worklist (Pause / Resume, the overnight queue, registries), cadence/ (engines, client, worker, render), addons,
-    youtube, ytdlp (self-healing), doctor, manifest, about, diagnostics, phone, qr, tailnet (away from home), themes,
+    youtube, ytdlp (self-healing), doctor, manifest, about, diagnostics, phone, qr, tailnet (the phone's link), themes,
     ear (thumbs), tray (the recent tray), trayicon (the system tray), gamepause, vault, platform (OS-specific calls)
   doubleagent/             project, sources, subject, trainer, voicecheck, clipsound, cadence, night (queue items),
                            improved (a retrained voice waiting beside the current one), frozen (the Improve test),
@@ -77,7 +77,7 @@ undercover/
   app/                     server.py (the HTTP shell, shared routes, the request gate), doctor_api, ear_api, firstrun,
                            firstrun_api, gamepause_api, lowprofile_api, phone_api, themes_api, vault_api
   web/                     index.html (one page, one view per module), shell.js/.css, app.js/.css, look.css, jobs.js,
-                           one script per module and room, pair.html, away.html, manifest.webmanifest, fonts/ (OFL,
+                           one script per module and room, pair.html, move.html, manifest.webmanifest, fonts/ (OFL,
                            bundled), themes/ (the five shipped)
   assets/                  sample/ (the CC0 sample song "Hold On"), demo-voice/agent-smoke/ (its model files are built
                            by scripts/make_demo_voice.py and pinned by manifest.json), reader-prints.json, separator/
@@ -663,7 +663,7 @@ SafeHouse: a strip of rooms (`#safehouse/<room>`; on a phone all six show, three
 (Kept / Recent views, counting the kind that's chosen), Running (now, tonight with its start time once a job waits, recent,
 last night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the
 Vault), Add-ons, System (the Doctor, GPU and models, the YouTube downloader, What's new, Restart, Quit, the diagnostics
-file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause).
+file), Settings (Look, Deep Cover, themes, Your phone, the game pause).
 
 ### Deep Cover
 
@@ -681,40 +681,58 @@ ship in `web/themes` (casefile, carbon, dossier, gaslight, midnight); the person
 runs at import, at save and every time a library theme is served; import and export is one `.uctheme` zip of at most
 4 MB. Theming is Deep Cover.
 
-### Phone access and away from home
+### Your phone
 
-Off by default. On, the server also listens on the PC's private home-network address, and every request that does not
-come from this PC must carry a paired device's token (`Handler._gate`): our own Host, a same-origin Origin on anything
-but GET, an HttpOnly SameSite=Strict cookie stored on the PC as its SHA-256; else 401. Pairing is a QR code of
-`http://<address>:<port>/pair#<code>` (six characters, five minutes, once). `app/phone_api.ROUTES` is the one table of
-every route and its policy (open / home / phone / pc). Away from home (`core/tailnet.py`) runs a hidden userspace
-Tailscale (pinned MSI, hashes checked, no driver, no service) whose Funnel points only at a third, dedicated listener
-with its own away token (`away.html`). Never plain port forwarding. Windows-only for now (`platform.supports("away")`).
+Off until the person sets it up. Since 1.2.1 there is one way in for every phone, at home and away: an HTTPS link,
+`https://<name>.ts.net`, from a hidden userspace Tailscale (`core/tailnet.py`: pinned MSI, hashes checked, no driver,
+no service) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
+never the PC's own listener. Windows-only for now (`platform.supports("away")`). Set up, on the PC, is the switch: it
+fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
+which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a
+phone. Private (Deep Cover, `phone.away_private`): Serve instead of Funnel, to the same listener and name, so only
+devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together.
 
-Private (Deep Cover, 1.1.4: "Private: my phone runs Tailscale", `phone.away_private`): Serve instead of Funnel, to the
-same listener and name, so only devices on the user's tailnet reach it and nothing is public. Switching resets the
-serve config first, so the two are never on together; the driver checks the mode it wants (`tailnet._funnel_on`).
+Connecting a phone: the card shows a QR code of `https://<name>/pair#<code>`, a 128-bit code in the fragment (never
+sent to a server, taken out of the address bar at once), for five minutes. Wrong claims are counted for the card but
+can't end it. A six-character typed code exists only when the person asks for it: two minutes, five tries. A claim
+(`/api/phone/claim`) gets a nonce and a pending device; the PC shows it with Allow / No. Allow mints the token, which
+the phone collects once with its nonce (`/api/phone/wait`); wrong, used, expired and refused nonces all get the same
+answer as "not yet". No forgets the device; a pending one is forgotten after ten minutes. The token is one cookie,
+`__Host-uc`: Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, 30 days from its last use (`phone.TOKEN_IDLE_S`),
+stored on the PC as its SHA-256 and compared in constant time. Remove ends it at the phone's next request and closes
+its open job stream; that 401 carries `Clear-Site-Data: "cache", "storage"`. `/api/phone` and everything under it but
+the claim, the wait and the move are the PC's.
 
-The home-screen app (1.1.4) lives at the away address, the one of the two that is HTTPS, so it is the only place a
-service worker and notifications are allowed. `web/sw.js` (served there only, `/sw.js`, policy open) caches no page
-and nothing of the user's. It keeps the home-network address (`home_url` in `/api/status`, sent only to a paired phone
-at the away address, accepted only in private-address form), and when a navigation gets no answer in 20 s it serves a
-page of its own that says so and links to that address. The page itself (`/`, policy home) opens on the home Wi-Fi
-without a token: it holds no data, and the way back from the away app is a link from another site, on which a
-SameSite=Strict cookie doesn't ride (the page's own requests after it do). At the away address it needs the token.
+At the link every request comes from outside (`Handler._gate_away`): the link's own name in Host, a same-origin Origin
+on anything but GET, the token for everything but the open routes, and before a token only the generic
+`Unauthorized` / `Forbidden`, so nothing says what exists. `app/phone_api.ROUTES` is the one table of every route and
+its policy (open / phone / pc). Each phone may have three jobs waiting or running and start twelve in an hour
+(`jobs.PHONE_JOBS`, 429 past it); the PC has no cap. Deletes that nothing brings back (covers, speech, songs, training
+projects) are the PC's, and the pages don't offer them on a phone.
+
+Phones paired on the home Wi-Fi before 1.2.1 hold a LAN token (`lan_hash`), good only from the PC's home network. For
+them alone the home-network listener stays open (`phone.lan_needed`, stored as `lan` in `phone.json`, so a restart
+opens it only then). Their page shows one line with Switch: a one-use move code bound to that phone
+(`/api/phone/move/link`, which needs the LAN token), opened at the link (`/move#<code>`), waits for Allow like a new
+phone, then gets the one token. The LAN token is dropped at the new token's first use, and the listener closes for good
+when no LAN token is left. A 1.1 `phone.json` is read as this one: its away token becomes the one token. Link on and
+off, Allow, No, Remove, the moves and the listener closing are logged in `logs/doctor.log`, never a code or a token.
+
+The home-screen app lives at the link, the only HTTPS origin, so a service worker and notifications are allowed there.
+It starts at `/pair`, which sends a connected phone straight on and lets one that isn't (an iPhone's home-screen app may
+not share Safari's cookies) connect with a typed code. `web/sw.js` (served at the link only, policy open) caches and
+keeps nothing; a page load that gets no answer in 20 s gets a small page of its own that links only to its own origin.
 Job alerts are local only (`web/phonealerts.js`): while the page runs on a phone, a finished job gives a banner, a buzz
-on Android, the app badge and, at the away address with the phone's permission, a notification through the worker.
-No push service, so a locked phone or one that has stopped the page hears nothing. The words are generic ("Cover
-ready"), and the overnight queue's results are silent.
+on Android, the app badge and, with the phone's permission, a notification through the worker. No push service, so a
+locked phone or one that has stopped the page hears nothing. The words are generic ("Cover ready"), and the overnight
+queue's results are silent.
 
 Request rules on every listener (1.1): an Origin, when a request has one, is this server's own scheme, host and port;
 a request another site's page makes (`Sec-Fetch-Site: cross-site`) is refused, except following a link to a page;
 JSON bodies are capped per route (`JSON_MAX`, 1 MB; 413, never read) while uploads keep their own limits; every read of
 a request times out after 30 s; every response says `X-Content-Type-Options: nosniff` and `Referrer-Policy:
-no-referrer`. The phone and away listeners take `MAX_LIVE` (32) connections at once (503 past it). The away listener's
-`Server` header and its refusals before a token name nothing. A device token lasts 30 days from its last use
-(`phone.TOKEN_IDLE_S`; each use renews it and its cookie). Wrong pairing codes are counted per address (5) and in all
-(20). A phone may not cancel or retry work only the PC starts. Links the app fetches for someone (a voice install, a
+no-referrer`. The link's and the home-network listeners take `MAX_LIVE` (32) connections at once (503 past it). The link's
+`Server` header and its refusals before a token name nothing. A phone may not cancel or retry work only the PC starts. Links the app fetches for someone (a voice install, a
 training source, a song from a link) reach only the internet: `core/safeurl.py` refuses a host that is or resolves to
 this PC, the home network or a link-local address, and checks every redirect. Since 1.1.1 the check is also made at
 connect time: inside `safeurl.guarded()` (per thread) every socket connect and send-to is checked by the address it
@@ -741,7 +759,7 @@ cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerS
 
 `core/trayicon.py` (`pythonw -m undercover.tray`, pystray) is its own light process over the HTTP API, with no torch.
 The server starts it; one per user; it leaves with the server after a Quit. The icon shows idle, working (the module's
-bar), problem or stopped. Menu: Open, the running jobs with time left, Pause / Resume, Phone access, Restart, Quit,
+bar), problem or stopped. Menu: Open, the running jobs with time left, Pause / Resume, Phone link, Restart, Quit,
 Start with Windows (off by default; a Startup-folder shortcut made only on the person's click). It also asks the game
 pause's question (`core/gamepause.py`): when a game starts while UnderCover has GPU work, "Pause UnderCover
 while you play?" (Pause / Keep both running / Don't ask for this game), asked and never assumed. Not `core/tray.py`,
@@ -805,7 +823,7 @@ The installer and the app survive version mismatches and fix common problems the
 - The Doctor (`python -m undercover.doctor [--full] [--json]`, `/api/doctor`, the System room) checks Python and the
   venv, the PyTorch build against `[gpu] backend`, the card and its driver (full mode), every pinned package, ffmpeg and
   Deno, the model files (size fast; SHA-256 in full mode), free space, the `[paths]` folders, the port, leftovers,
-  interrupted work, and the firewall while Phone access is on. Fast mode runs under 2 s with no torch import; full mode
+  interrupted work, your phone's link, and the network type and firewall while a phone still uses the home Wi-Fi. Fast mode runs under 2 s with no torch import; full mode
   is a job. Each result has `id, group, state (ok | info | warn | bad), title, say, detail, fix {id, label, how}`. Fixes:
   `stale`, `model:<path>` / `models` (the new copy checks out before the old is replaced), `packages` (only the differing
   hashed pin lines, on the person's click, never PyTorch), `cpu`, `resume`, `manifest`; `setup.ps1 -Repair` is offered in
