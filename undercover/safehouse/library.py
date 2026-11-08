@@ -2,6 +2,7 @@
 renamed, exported and cleaned up without Explorer. Its HTTP routes are in safehouse/api.py.
 """
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -275,12 +276,36 @@ def speech() -> list[dict]:
 STEM_LABELS = {"vocals": "Vocals", "instrumental": "Instrumental", "other": "Instrumental", "noreverb": "Vocals (dry)", "reverb": "Reverb (removed)"}
 
 
-def _stems_for(song_id: str) -> list[dict]:
-    root = path("cache_dir") / "stems" / song_id
+def _audio_under(root: Path) -> list[tuple[Path, int]]:
+    """Every .wav / .flac under root with its size, sorted by path: one scandir per folder, and on Windows the size
+    comes with the listing (rglob + stat cost a stat per file)."""
+    found = []
+
+    def walk(d: str):
+        try:
+            with os.scandir(d) as it:
+                entries = list(it)
+        except OSError:
+            return
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    walk(e.path)
+                elif e.is_file() and e.name.lower().endswith((".wav", ".flac")):
+                    found.append((Path(e.path), e.stat().st_size))
+            except OSError:
+                continue
+    walk(str(root))
+    found.sort(key=lambda x: x[0])
+    return found
+
+
+def _stems_for(song_id: str, stems_root: Path | None = None) -> list[dict]:
+    root = (stems_root or path("cache_dir") / "stems") / song_id
     out = []
     if not root.exists():
         return out
-    for f in sorted(x for x in root.rglob("*") if x.suffix.lower() in (".wav", ".flac")):
+    for f, size in _audio_under(root):
         rel = f.relative_to(root).parts
         label = STEM_LABELS.get(f.stem, f.stem.capitalize())
         if any(p.startswith("karaoke_") for p in rel[:-1]):
@@ -290,22 +315,25 @@ def _stems_for(song_id: str) -> list[dict]:
         elif any(p.startswith("dereverb_") for p in rel[:-1]):
             label = {"noreverb": "Vocals (dry)", "reverb": "Reverb (removed)"}.get(f.stem, label)
         quality = "fast" if rel[0].endswith("_fast") else "max" if rel[0].endswith("_max") else "high"
-        out.append({"label": label, "size": _size(f), "url": file_url(f), "quality": quality, "model": rel[0]})
+        out.append({"label": label, "size": size, "url": file_url(f), "quality": quality, "model": rel[0]})
     return out
 
 
 def songs() -> list[dict]:
     from ..frontman.pipeline import history
-    hist = history()
     current = Path(CONFIG["separation"]["vocal_model"]).stem
+    by_song: dict = {}   # song id -> its covers, once (a pass over the history per song cost seconds at 300 x 2,000)
+    for h in history():
+        by_song.setdefault(Path(h["song"]).stem, []).append(h)
+    uploads, cache = path("uploads_dir"), path("cache_dir")
     out = []
     for sid, m in _song_metas().items():
-        f = path("uploads_dir") / m.get("file", "")
-        used = [h for h in hist if Path(h["song"]).stem == sid]
-        stems = _stems_for(sid)
+        f = uploads / m.get("file", "")
+        used = by_song.get(sid, [])
+        stems = _stems_for(sid, cache / "stems")
         last = max([_mtime(Path(h["output"])) for h in used] + [_mtime(f)])
         key = None
-        kf = path("cache_dir") / "keys" / f"{sid}.json"
+        kf = cache / "keys" / f"{sid}.json"
         if kf.exists():
             try:
                 key = json.loads(kf.read_text(encoding="utf-8")).get("name")

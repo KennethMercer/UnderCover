@@ -11678,6 +11678,77 @@ def u_perf_history():
     return "parse kept by (path, size, mtime_ns); rows copied; dropped on write; titles by sidecar mtime"
 
 
+@check("perf: the Library's summary is kept until something changes; songs and stems come out the same from one pass; file URLs")
+def u_perf_library():
+    from undercover.core import files, storage
+    from undercover.core.config import path
+    from undercover.safehouse import library
+    with isolated_data() as t:
+        app = t / "app"
+        up, out, cache = app / "uploads", app / "output", app / "cache"
+        for d in (up, out / "speech", cache / "stems", cache / "training" / "p1", cache / "keys", app / "models" / "voices" / "v1"):
+            d.mkdir(parents=True, exist_ok=True)
+        sids = ["ab" * 8, "cd" * 8]
+        for i, sid in enumerate(sids):
+            (up / f"{sid}.mp3").write_bytes(b"s" * 1000)
+            (up / f"{sid}.json").write_text(json.dumps({"id": sid, "file": f"{sid}.mp3", "title": f"Song {i}"}), encoding="utf-8")
+        for sub, names in (("m_high", ("vocals", "instrumental")), ("m_high/karaoke_x", ("vocals", "instrumental")),
+                           ("m_high/karaoke_x/dereverb_y", ("noreverb", "reverb")), ("other_fast", ("vocals",))):
+            d = cache / "stems" / sids[0] / sub
+            d.mkdir(parents=True, exist_ok=True)
+            for n in names:
+                (d / f"{n}.flac").write_bytes(b"x" * (100 + len(n)))
+            (d / "notes.txt").write_bytes(b"not a stem")
+        (cache / "training" / "p1" / "project.json").write_text("{}", encoding="utf-8")
+        (cache / "training" / "p1" / "clip.wav").write_bytes(b"t" * 700)
+        (app / "models" / "voices" / "v1" / "meta.json").write_text(json.dumps({"dir": str(app / "models/voices/v1")}), encoding="utf-8")
+        (app / "models" / "voices" / "v1" / "model.pth").write_bytes(b"v" * 900)
+        rows = []
+        for i in range(5):
+            o = out / f"c{i}.flac"
+            o.write_bytes(b"c" * 50)
+            rows.append({"id": f"{i:010x}", "output": str(o), "song": str(up / f"{sids[i % 2]}.mp3"), "voice": "v", "title": f"Cover {i}"})
+        (out / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        # file URLs: inside a root, a sibling folder that only shares the prefix, outside; roots follow the paths setting
+        assert files.roots()["output"] == path("output_dir").resolve()
+        assert files.file_url(out / "c1.flac") == "/files/output/c1.flac"
+        assert files.file_url(cache / "stems" / sids[0] / "m_high" / "karaoke_x" / "vocals.flac") == f"/files/stems/{sids[0]}/m_high/karaoke_x/vocals.flac"
+        assert files.file_url(up / "a b#c.mp3") == "/files/uploads/a%20b%23c.mp3"
+        (app / "output2").mkdir()
+        assert files.file_url(app / "output2" / "x.mp3") is None and files.file_url(t / "elsewhere.mp3") is None and files.file_url(None) is None
+        # the summary: kept while nothing changed, re-made when a folder's entries or the history change, dropped by invalidate
+        library.invalidate()
+        s1 = library.summary()
+        assert library.summary() is s1, "a summary with nothing changed was re-made"
+        assert s1["categories"]["stems"] == sum(f.stat().st_size for f in (cache / "stems").rglob("*") if f.is_file()), s1["categories"]
+        assert s1["categories"]["training"] == 702 and s1["categories"]["songs"] == 2000 + sum(f.stat().st_size for f in up.glob("*.json")), s1["categories"]
+        assert s1["categories"]["voices"] == 900 + (app / "models/voices/v1/meta.json").stat().st_size, s1["categories"]
+        assert s1["total"] == sum(g["size"] for g in storage.where().values()), (s1["total"], storage.where())
+        assert s1["total"] == sum(s1["categories"].values()) + (out / "history.jsonl").stat().st_size, (s1["total"], s1["categories"])   # (the history file is the one thing in no category)
+        assert s1["counts"] == {"covers": 5, "speech": 0, "songs": 2, "voices": 1, "training": 1}, s1["counts"]
+        assert "inside" not in json.dumps(s1)
+        time.sleep(0.02)
+        (out / "c5.flac").write_bytes(b"c" * 50)   # a new file in a counted folder: another key
+        s2 = library.summary()
+        assert s2 is not s1 and s2["categories"]["covers"] == 300, "a changed output folder didn't re-make the summary"
+        library._SUMMARY["at"] -= library.SUMMARY_TTL + 1   # past its time: re-made even with the same key
+        assert library.summary() is not s2
+        s3 = library.summary()
+        library.invalidate()
+        assert library.summary() is not s3
+        # songs: covers per song from one pass over the history, stems as the old per-file listing gave them
+        songs = {s["id"]: s for s in library.songs()}
+        assert songs[sids[0]]["covers"] == 3 and songs[sids[1]]["covers"] == 2, {k: v["covers"] for k, v in songs.items()}
+        assert songs[sids[0]]["cover_titles"] == ["c4", "c2", "c0"], songs[sids[0]]["cover_titles"]   # (newest first, as before)
+        st = songs[sids[0]]["stems"]
+        want = sorted(x for x in (cache / "stems" / sids[0]).rglob("*") if x.suffix.lower() in (".wav", ".flac"))
+        assert [files.file_url(x) for x in want] == [s["url"] for s in st] and [x.stat().st_size for x in want] == [s["size"] for s in st], st
+        assert [s["label"] for s in st] == ["Instrumental", "Lead vocal (dry)", "Lead reverb (removed)", "Backing vocals", "Lead vocal", "Vocals", "Vocals"], [s["label"] for s in st]
+        assert {s["quality"] for s in st} == {"high", "fast"} and songs[sids[1]]["stems"] == []
+        library.invalidate()
+    return "summary kept / re-made on a change, past its time, on invalidate; songs indexed; stems from scandir; URLs by prefix"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -13651,7 +13722,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray,
-               u_perf_load16k, u_perf_code_stamp, u_perf_history):
+               u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
