@@ -202,7 +202,7 @@ body.drawer-open { overflow: hidden; }
 .thumb.up[aria-pressed="true"] { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
 .thumb.down[aria-pressed="true"] { background: color-mix(in srgb, var(--err) 20%, transparent); color: var(--err); }
 .ear-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.ear-chips > button:not(.linkbtn) { padding: 4px 12px; border-radius: 99px; border: 0; background: var(--panel-2); color: var(--muted); font-size: 13.5px; font-weight: 500; cursor: pointer; }
+.ear-chips > button:not(.linkbtn) { padding: 6px 12px; border-radius: 99px; border: 0; background: var(--panel-2); color: var(--muted); font-size: 13.5px; font-weight: 500; cursor: pointer; }
 .ear-chips > button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
 .ear-chips .linkbtn { font-size: 13.5px; padding-inline: 4px; }
 .ear-note { display: inline-flex; gap: 8px; align-items: center; }

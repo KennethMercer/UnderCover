@@ -568,7 +568,7 @@ svg.chart { width: 100%; height: 150px; display: block; }
 .oneshot .toggle > input[type=checkbox] { margin-top: 0; }
 .os-sub { row-gap: 8px; }
 .ex { display: flex; gap: 6px; flex-wrap: wrap; }
-.ex button { font-size: 12.5px; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 2px 8px; color: var(--muted); }
+.ex button { font-size: 12.5px; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 6px 8px; color: var(--muted); }
 .ex button:hover { color: var(--fg); border-color: var(--muted); }
 #os-plan b { color: var(--fg); font-weight: 600; }
 #os-plan .warn { color: var(--warn); }
