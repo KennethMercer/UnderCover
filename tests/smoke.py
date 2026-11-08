@@ -2178,6 +2178,7 @@ def u_improved_keep():
 def _voice_dir(name, extra):
     """A minimal voice folder for unit checks (a fake model; nothing loads it)."""
     from undercover.core.voices import voices_dir
+    _isolated_only()
     d = voices_dir() / name
     d.mkdir(parents=True)
     (d / "model.pth").write_bytes(b"m-" + name.encode())
@@ -6139,6 +6140,7 @@ def _fake_project(name, person, n_phrases=30, other=6, n_sources=3):
     import numpy as np
     import soundfile as sf
     from undercover.doubleagent import project as P
+    _isolated_only()
     proj = P.Project.create(person, "speaking", name=name)
     rng = np.random.default_rng(3)
     (proj.dir / "clips").mkdir(parents=True, exist_ok=True)
@@ -6395,14 +6397,15 @@ def u_stop_download():
             assert time.time() - t0 < 3 and not (box / "big.bin").exists(), "Stop didn't end the download early"
         finally:
             srv.shutdown()
-        # test mode: a missing model under the real models folder is refused, nothing written there
-        real = real_dirs()["models_dir"] / "smoke-never-here.bin"   # the user's models folder, outside the test roots
-        try:
-            setup_models.ensure(files={str(real): "file:///nonexistent"})
-            raise AssertionError("a test downloaded into the real models folder")
-        except ModelError as e:
-            assert "Test mode" in str(e) or "outside" in str(e), e
-        assert not real.exists()
+        # test mode: a missing model under the app folder's models/ is refused, nothing written there (a stand-in app folder)
+        with fake_app() as fake:
+            real = fake / "models" / "smoke-never-here.bin"   # the app's models folder, outside the test roots
+            try:
+                setup_models.ensure(files={str(real): "file:///nonexistent"})
+                raise AssertionError("a test downloaded into the app folder's models")
+            except ModelError as e:
+                assert "Test mode" in str(e) or "outside" in str(e), e
+            assert not real.exists()
     # P2-5: no reset clears the project's exported voice; a stopped run is "stopped"
     for fn in (DA.start_train, night._improve, service.train_new_voice, service.run_project):
         src = inspect.getsource(fn)
@@ -6680,6 +6683,41 @@ def isolated_data():
             config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved[1], saved[2]
 
 
+def _isolated_only(*paths: Path):
+    """A helper that writes, moves or ages files runs only with the storage allow-list set (inside isolated_data() or
+    the sandbox) and with every [paths] folder, and the paths given, inside it. Called at the top of each such helper
+    (2026-11-08): until then they relied on every caller remembering."""
+    from undercover.core import config, storage
+    roots = storage.ALLOWED_ROOTS
+    assert roots, "a writing helper was called outside isolated_data() / the sandbox: it would reach the app's own folders"
+    folders = {k: Path(v) for k, v in config.CONFIG["paths"].items() if k != "models_dir"}   # (the sandbox reads the real models)
+    folders["voices_dir"] = config.path("voices_dir")
+    for k, v in folders.items():
+        assert any(storage._inside(v, r) for r in roots), f"[paths] {k} -> {v} is outside the test's folders {roots}"
+    for p in paths:
+        assert any(storage._inside(Path(p), r) for r in roots), f"{p} is outside the test's folders {roots}"
+
+
+@contextlib.contextmanager
+def fake_app():
+    """A stand-in for the app folder, for the checks that prove the guards refuse "the app's own folders": a temp
+    folder with uploads / output / models / cache / docs inside it, and core.storage's idea of the app folder (ROOT)
+    pointed at it for the duration. The negative tests then name this folder, never the user's real one (2026-11-08:
+    until then only refuse() and `within` stood between those tests and the user's data)."""
+    import tempfile
+    from undercover.core import storage
+    saved = storage.ROOT
+    with tempfile.TemporaryDirectory(prefix="uc-fakeapp-") as td:
+        app = Path(td).resolve()
+        for d in ("uploads", "output", "models", "cache", "docs"):
+            (app / d).mkdir()
+        storage.ROOT = app
+        try:
+            yield app
+        finally:
+            storage.ROOT = saved
+
+
 @check("add-ons: registry, CLI list, a fake add-on installs (checksum) and removes cleanly")
 def u_addons():
     import subprocess
@@ -6794,12 +6832,14 @@ def u_storage():
 
         def push(self, **ev):
             pass
-    # the guards, checked without touching anything: the app's real folders are out of reach
-    assert storage.refuse([ROOT / "uploads"]) and storage.refuse([ROOT / "output"], from_room=True)
-    assert storage.refuse([ROOT / "models"], from_room=True, confirmed=True) is None   # only the room, confirmed
+    # the guards, checked without touching anything, against a stand-in for the app folder (never the real one named)
+    with fake_app() as fake:
+        assert storage.refuse([fake / "uploads"]) and storage.refuse([fake / "output"], from_room=True)
+        assert storage.refuse([fake / "models"], from_room=True, confirmed=True) is None   # only the room, confirmed
     with isolated_data() as t:
         app, lib, mod = t / "app", t / "lib2", t / "models2"
-        assert storage.refuse([ROOT / "cache"], True, True), "test mode must refuse the app folder"
+        with fake_app() as fake:
+            assert storage.refuse([fake / "cache"], True, True), "test mode must refuse the app folder"
         assert storage.refuse([t.parent / "not-this-test"]), "test mode must refuse folders outside the test's own"
         # regression (2026-10-11): writing [paths] must not reload the file's other keys into the running config
         text = config.CONFIG_FILE.read_text(encoding="utf-8").replace(f"'{app / 'uploads'}'", '"uploads"')
@@ -6850,6 +6890,7 @@ def u_storage():
 def _fake_cover(i, tag="c"):
     """A finished cover's history record with real (tiny) files, in the isolated output / cache folders."""
     from undercover.core.config import path
+    _isolated_only()
     out, conv = path("output_dir"), path("cache_dir") / "converted"
     out.mkdir(parents=True, exist_ok=True)
     conv.mkdir(parents=True, exist_ok=True)
@@ -6954,12 +6995,12 @@ def u_rolloff_covers():
                     raise AssertionError(f"a real file inside {within} wasn't refused in test mode")
                 except storage.ModelError:
                     pass
-            try:
-                # (a folder that exists: a fresh checkout or worktree has no output/, and what isn't there isn't refused)
-                storage.remove_files([], within=[t], dirs=[ROOT / "output" if (ROOT / "output").is_dir() else ROOT / "docs"])
-                raise AssertionError("a real folder wasn't refused in test mode")
-            except storage.ModelError:
-                pass
+            with fake_app() as fake:   # the app folder's output/, on a stand-in (what isn't there isn't refused, so a real one)
+                try:
+                    storage.remove_files([], within=[t], dirs=[fake / "output"])
+                    raise AssertionError("the app folder's output wasn't refused in test mode")
+                except storage.ModelError:
+                    pass
             try:   # a folder where a file is expected, even inside the allowed place, is not removed as a file
                 storage.remove_files([path("output_dir")], [t])
                 raise AssertionError("a folder was accepted as a file")
@@ -9302,6 +9343,7 @@ def _fake_pack(d, clip: str, score: float, before: float | None = None, verdicts
     """A cadence pack on disk (ref.wav + cadence.json) and its extra.tts dict."""
     import numpy as np
     import soundfile as sf
+    _isolated_only(d)
     d.mkdir(parents=True, exist_ok=True)
     sf.write(str(d / "ref.wav"), (np.random.default_rng(len(clip)).standard_normal(16000) * 0.1).astype(np.float32), 16000)
     pack = {"engine": "chatterbox", "cfg_weight": 0.3, "exaggeration": 0.5, "v": 1, "ref": "ref.wav", "ref_text": "Hello.",
@@ -9745,6 +9787,7 @@ def u_ask_flow():
 
 def _old(p: Path, hours: float = 8):
     import os
+    _isolated_only(p)
     t = time.time() - hours * 3600
     os.utime(p, (t, t))
 
@@ -9857,17 +9900,18 @@ def u_doctor_models():
             # a missing file the record knew about is offered (and fetched at startup); one it never saw waits for first use
             dest.unlink()
             assert row(doctor.run(False))["fix"]["id"] == f"model:{local}"
-            # test mode: a re-download into the app's real model folder is refused, whatever the list says
+            # test mode: a re-download into the app folder's models/ is refused, whatever the list says (on a stand-in app folder)
             from undercover.core import config
             saved = dict(config.CONFIG["paths"])
-            config.CONFIG["paths"]["models_dir"] = str(ROOT / "models")
-            try:
-                setup_models.refetch(local)
-                raise AssertionError("a test re-downloaded into the real models folder")
-            except setup_models.ModelError as e:
-                assert "Test mode" in str(e), e
-            finally:
-                config.CONFIG["paths"] = saved
+            with fake_app() as fake:
+                config.CONFIG["paths"]["models_dir"] = str(fake / "models")
+                try:
+                    setup_models.refetch(local)
+                    raise AssertionError("a test re-downloaded into the app folder's models")
+                except setup_models.ModelError as e:
+                    assert "Test mode" in str(e), e
+                finally:
+                    config.CONFIG["paths"] = saved
         finally:
             setup_models.PINNED.pop(local, None)
     return "cut-off and same-size damage found; wrong source refused; good copy swapped in"
@@ -13370,14 +13414,17 @@ def u_sandbox_game():
         root = Path(t)
         for d in ("sb", "sb2"):   # (sandbox_server makes its root before the config)
             (root / d).mkdir()
-        user = "[gpu]\nbackend = 'rocm'\n\n[game_pause]\nask = true\nnever_ask = ['game.exe']\n"   # asking, a game on never_ask
+        user = ("[gpu]\nbackend = 'rocm'\n\n[game_pause]\nask = true\nnever_ask = ['game.exe']\n\n"   # asking, a game on never_ask
+                "[vault]\nfolder = 'E:\\\\Vault'\nsize = 'everything'\n")                              # and a vault drive
         cfg, mine = _sandbox_config(root / "sb", {"models_dir": root / "models"}, user=user)
         got = tomllib.loads(cfg.read_text(encoding="utf-8"))
         assert got["game_pause"] == {"ask": False}, got.get("game_pause")   # replaced, not merged
         assert got["gpu"] == {"backend": "rocm"} and {k: Path(v) for k, v in got["paths"].items()} == mine, got
+        assert got["vault"] == {"folder": ""}, got.get("vault")   # the user's vault drive never comes along (2026-11-08)
         cfg2, _ = _sandbox_config(root / "sb2", {"models_dir": root / "models"}, user="")   # no user config at all
-        assert tomllib.loads(cfg2.read_text(encoding="utf-8"))["game_pause"] == {"ask": False}
-    return "[game_pause] ask = false over the user's own, the rest kept; paths in the sandbox"
+        got2 = tomllib.loads(cfg2.read_text(encoding="utf-8"))
+        assert got2["game_pause"] == {"ask": False} and got2["vault"] == {"folder": ""}, got2
+    return "[game_pause] ask = false and [vault] off over the user's own, the rest kept; paths in the sandbox"
 
 
 def _sandbox_config(root: Path, real: dict, user: str | None = None) -> tuple[Path, dict]:
@@ -13397,6 +13444,9 @@ def _sandbox_config(root: Path, real: dict, user: str | None = None) -> tuple[Pa
     # a game the user is playing never holds the sandbox's jobs on the game question (2026-10-25: a light game held a
     # --full run's covers on "Keep both / Pause?" until they failed); u_gamepause tests the question itself
     text = config.replace_section(text, "game_pause", "[game_pause]\nask = false\n\n")
+    # the user's vault folder never comes along: vault.start() runs at server start and backs the library up when the
+    # GPU is idle, so a sandbox inheriting it would put its copied voices into the user's real vault (a_vault sets its own)
+    text = config.replace_section(text, "vault", "[vault]\nfolder = ''\n\n")
     cfg = root / "config.toml"
     cfg.write_text(text, encoding="utf-8")
     got = {k: Path(v) for k, v in tomllib.loads(text)["paths"].items()}
@@ -13496,6 +13546,8 @@ def sandbox_server(port: int):
             else:
                 assert storage._inside(p, root), f"the sandbox server's {k} is {p}, outside {root}: stopping before any check runs"
         assert api("/api/gamepause")["ask"] is False, "the sandbox would ask the game question: a game being played would hold its jobs"
+        vs = api("/api/vault")
+        assert not vs["on"] and not vs["folder"], f"the sandbox server has a vault folder ({vs['folder']}): it would back its copies up into the user's vault"
         config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = {k: str(v) for k, v in mine.items()}, cfg, [root]
         yield root
     finally:
