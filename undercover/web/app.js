@@ -898,6 +898,12 @@ const aCover = $("#a-cover"), aOrig = $("#a-orig");
 
 // Volume: one level for both players so Cover/Original comparisons stay fair; remembered per browser.
 const VOL = { level: store.get("uc-volume", 0.8), muted: store.get("uc-muted", false) };
+// One place owns every player on the page (Internal Affairs, pass 11): the <audio> elements and the loose Audio()s a module makes.
+// ownPlayer gives a loose one the page's volume and the one-at-a-time rule; stopOthers is that rule; applyVolume reaches them all.
+const PLAYERS = new Set();
+const volumeNow = () => { const v = VOL.muted ? 0 : VOL.level; return v * v; };   // squared: a slider position sounds closer to proportional loudness
+function stopOthers(keep) { for (const x of [...$$("audio"), ...PLAYERS]) if (x !== keep && !x.paused) x.pause(); }
+function ownPlayer(a) { PLAYERS.add(a); a.volume = volumeNow(); a.addEventListener("play", () => stopOthers(a)); return a; }
 // ------------------------------------------------------------ a voice's preview line (rc-preview)
 // Every voice says "Go undercover as <its name>." (core/voicepreview.py, made with the voice): a ▶ wherever a voice is
 // picked, only when its clip is there (S.voices[].preview). One player for the page: it stops anything else playing,
@@ -917,11 +923,8 @@ function bindVoiceLines(root) {
 }
 function playVoiceLine(b) {
   if (VLINE.btn === b && VLINE.a && !VLINE.a.paused) return VLINE.a.pause();
-  if (VLINE.a) VLINE.a.pause();
-  $$("audio").forEach(x => { if (!x.paused) x.pause(); });
-  const a = new Audio(`/api/voices/${encodeURIComponent(b.dataset.vline)}/preview`);
-  const lvl = VOL.muted ? 0 : VOL.level;
-  a.volume = lvl * lvl;
+  if (VLINE.a) { VLINE.a.pause(); PLAYERS.delete(VLINE.a); }
+  const a = ownPlayer(new Audio(`/api/voices/${encodeURIComponent(b.dataset.vline)}/preview`));   // (its play stops every other player)
   VLINE.a = a; VLINE.btn = b;
   const set = on => { b.textContent = on ? "❚❚" : "▶"; b.classList.toggle("playing", on); b.setAttribute("aria-label", `${on ? "Stop" : "Hear"} ${b.dataset.label}`); };
   a.addEventListener("play", () => set(true));
@@ -929,12 +932,12 @@ function playVoiceLine(b) {
   a.addEventListener("ended", () => set(false));
   a.play().catch(() => { set(false); b.title = "The browser couldn't play this voice's line."; });
 }
-document.addEventListener("play", e => { if (VLINE.a && e.target !== VLINE.a && !VLINE.a.paused) VLINE.a.pause(); }, true);   // another player started
+document.addEventListener("play", e => stopOthers(e.target), true);   // a player in the DOM started: every other player stops
 
 function applyVolume() {
-  const v = VOL.muted ? 0 : VOL.level;
-  aCover.volume = aOrig.volume = aSong.volume = v * v;  // squared: a slider position sounds closer to proportional loudness
-  $$("#preview-list audio").forEach(a => { a.volume = v * v; });
+  aCover.volume = aOrig.volume = aSong.volume = volumeNow();
+  $$("#preview-list audio").forEach(a => { a.volume = volumeNow(); });
+  PLAYERS.forEach(a => { a.volume = volumeNow(); });
   $("#volume").value = VOL.muted ? 0 : VOL.level;
   const silent = VOL.muted || VOL.level === 0;
   $("#vol-waves").toggleAttribute("hidden", silent); $("#vol-x").toggleAttribute("hidden", !silent);
@@ -996,7 +999,7 @@ function drawResultWave() {
   drawWave($("#wave-res"), wavePeaks[ab] || wavePeaks.cover, frac, ab === "cover" ? "--wave-on" : "--wave-alt");
   $("#pos").textContent = `${fmtTime(a.currentTime)} / ${fmtTime(a.duration || 0)}`;
 }
-function stopAll() { aCover.pause(); aOrig.pause(); aSong.pause(); $("#play").textContent = "▶"; $("#play").setAttribute("aria-label", "Play"); if (typeof SH === "object") SH.audio.pause(); }   // (and shape.js's Hear it)
+function stopAll() { aCover.pause(); aOrig.pause(); aSong.pause(); $("#play").textContent = "▶"; $("#play").setAttribute("aria-label", "Play"); PLAYERS.forEach(a => a.pause()); }
 function togglePlay() {
   const a = active();
   if (!a.src) return;

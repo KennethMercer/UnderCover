@@ -3,10 +3,12 @@
 // paired phone's, and its row says so.
 // Everything the cover heard or said (its words, the gate's sentences, a note, a title) is outside text: shown through esc() or
 // textContent, never as HTML (the maintainers' notes, editlist).
-// Uses app.js ($, $$, esc, api, showError, HIST, vname, voiceDisplay, vinitial, coverTitle, loadHistory, stopAll), jobs.js (watchJob).
+// Uses app.js ($, $$, esc, api, showError, HIST, vname, voiceDisplay, vinitial, coverTitle, loadHistory, stopAll, ownPlayer), jobs.js (watchJob).
 
-const SH = { id: null, item: null, doc: null, state: null, pick: null, probes: null, seq: 0, busy: null, said: null, error: null,
-             confirm: false, keptAs: null, jobs: new Set(), audio: new Audio(), stopAt: null, focus: 0 };
+const SH = { id: null, item: null, doc: null, state: null, pick: null, probes: null, seq: 0, busy: null, live: null, said: null, error: null,
+             retry: false, confirm: false, keptAs: null, jobs: new Set(), audio: ownPlayer(new Audio()), stopAt: null, focus: 0 };
+// a job that ended in one of these can go differently next time; a plain refusal (the gate's or prepare's sentence) can't
+const SH_RETRY = /ran out of memory|Something went wrong|blocked writing|try again/i;
 const SH_GAP_S = 0.6;   // a pause this long between two heard words starts a new line (duets.phrases joins under it)
 const SH_FADE_S = 0.04;   // duets.FADE_S: a pause shorter than the crossfade isn't a place to land
 const SH_OCT = 2;   // edits.OCTAVE_BOUND
@@ -24,7 +26,7 @@ const shOctOf = p => p[3] ?? SH.doc.octaves[p[2]] ?? 0;
 function shapeOpen(id) {
   const item = HIST.find(h => h.id === id);
   if (!item) return;
-  Object.assign(SH, { id, item, doc: null, state: "loading", pick: null, probes: null, busy: null, said: null, error: null, confirm: false, keptAs: null, focus: 0, heard: 0 });
+  Object.assign(SH, { id, item, doc: null, state: "loading", pick: null, probes: null, busy: null, live: null, said: null, error: null, retry: false, confirm: false, keptAs: null, focus: 0, heard: 0 });
   $("#shape").hidden = false;
   shDraw();
   $("#shape").scrollIntoView({ block: "start", behavior: "smooth" });
@@ -36,13 +38,13 @@ async function shLoad(first) {
   const id = SH.id;
   let v;
   try { v = await api(`/api/history/${id}/edits`); }
-  catch (e) { if (SH.id === id) { SH.state = "error"; SH.error = e.message; shDraw(); } return; }
+  catch (e) { if (SH.id === id) { SH.state = "error"; SH.error = e.message; SH.retry = true; shDraw(); } return; }   // (the server didn't answer: worth another try)
   if (SH.id !== id) return;
   if (v.none) {
-    if (!first) { SH.state = "error"; SH.error = "This cover's words couldn't be heard."; return shDraw(); }
-    SH.state = "listening"; shDraw();
+    if (!first) { SH.state = "error"; SH.error = "This cover's words couldn't be heard."; SH.retry = true; return shDraw(); }
+    SH.state = "listening"; SH.live = null; shDraw();
     try { const { job } = await api(`/api/history/${id}/edits/open`, { json: {} }); if (job) return shFollow(job, () => shLoad(false)); return shLoad(false); }
-    catch (e) { SH.state = "error"; SH.error = e.message; return shDraw(); }
+    catch (e) { SH.state = "error"; SH.error = e.message; SH.retry = false; return shDraw(); }   // (refused outright: trying again gives the same answer)
   }
   SH.doc = v; SH.state = "ready"; SH.heard++;
   if (SH.pick && !(SH.pick[1] < v.words.length)) SH.pick = null;
@@ -55,12 +57,12 @@ function shFollow(job, then) {
   SH.jobs.add(job);
   const id = SH.id;
   const stop = watchJob(job, ev => {
-    if (!ev.final) return;
-    stop();
     if (SH.id !== id) return;
-    SH.busy = null;
+    if (!ev.final) { if (ev.message && (SH.busy || SH.state === "listening")) { SH.live = ev.message; shDraw(); } return; }   // the job's own words
+    stop();
+    SH.busy = SH.live = null;
     if (ev.state === "done") return then(ev);
-    if (SH.state === "listening") { SH.state = "error"; SH.error = ev.message || "The words couldn't be heard."; }
+    if (SH.state === "listening") { SH.state = "error"; SH.error = ev.message || "The words couldn't be heard."; SH.retry = SH_RETRY.test(SH.error); }
     else if (ev.state !== "cancelled") SH.said = { k: "no", s: ev.message || "That didn't finish." };
     shDraw();
   });
@@ -119,7 +121,7 @@ function shLanding(part) {
 async function shSend(c) {
   try {
     const r = await api(`/api/history/${SH.id}/edits`, { json: shBody(c) });
-    SH.busy = "Singing it again · about 5 s"; SH.said = r.fit?.said ? { k: "warn", s: r.fit.said } : null; SH.keptAs = null; SH.probes = null;
+    SH.busy = "Singing it again…"; SH.live = null; SH.said = r.fit?.said ? { k: "warn", s: r.fit.said } : null; SH.keptAs = null; SH.probes = null;
     shDraw();
     shFollow(r.job, () => { shLoad(false); loadHistory(); });
   } catch (e) { SH.said = { k: "no", s: e.message }; shDraw(); }
@@ -127,7 +129,7 @@ async function shSend(c) {
 async function shStep(what) {
   try {
     const { job } = await api(`/api/history/${SH.id}/edits/${what}`, { json: {} });
-    SH.busy = "Mixing · about 4 s"; SH.said = null; SH.keptAs = null; SH.probes = null; shDraw();
+    SH.busy = "Mixing it again…"; SH.live = null; SH.said = null; SH.keptAs = null; SH.probes = null; shDraw();
     shFollow(job, () => shLoad(false));
   } catch (e) { SH.said = { k: "no", s: e.message }; shDraw(); }
 }
@@ -135,7 +137,7 @@ async function shKeep() {
   SH.confirm = false;
   try {
     const { job } = await api(`/api/history/${SH.id}/edits/keep`, { json: {} });
-    SH.busy = "Keeping it · a moment"; shDraw();
+    SH.busy = "Keeping it…"; SH.live = null; shDraw();
     shFollow(job, ev => { SH.keptAs = ev.result?.output_name ? ev.result.output_name.replace(/\.[^.]+$/, "") : SH.item.title + " (edited)"; shDraw(); loadHistory(); });
   } catch (e) { SH.said = { k: "no", s: e.message }; shDraw(); }
 }
@@ -186,8 +188,8 @@ function shDraw() {
     <button class="btn primary" type="button" data-sh="keep"${d.cursor && !SH.busy ? "" : " disabled"}>Keep this version</button>` : ""}
     <button class="linkbtn quiet" type="button" data-sh="done">Done</button></div></div>`;
   if (SH.state !== "ready") {
-    const st = SH.state === "listening" ? `<b>Listening for the words…</b><span>About 20 s, once. The app hears the song through, then keeps the words with this cover.</span>`
-      : SH.state === "error" ? `<b>${esc(SH.error || "This cover can't be shaped.")}</b><span><button class="btn" type="button" data-sh="retry">Try again</button></span>`
+    const st = SH.state === "listening" ? `<b>Listening for the words…</b><span>About 20 s, once. The app hears the song through, then keeps the words with this cover.</span>${SH.live ? `<span class="meta">${esc(SH.live)}</span>` : ""}`
+      : SH.state === "error" ? `<b>${esc(SH.error || "This cover can't be shaped.")}</b>${SH.retry ? `<span><button class="btn" type="button" data-sh="retry">Try again</button></span>` : ""}`
       : `<b>Opening…</b>`;
     box.innerHTML = `<div class="ed">${head}<div class="state" role="status">${st}</div></div>`;
     return shWire();
@@ -240,7 +242,7 @@ function shBar() {
   const [a, b] = pick, quote = a === b ? shWord(a) : shWord(a) + (b - a > 1 ? " … " : " ") + shWord(b);   // (plain text: esc'd below)
   let h = `<div class="sh-bar"><div class="pick"><button class="sh-play" type="button" data-hear="${d.words[a][1]},${d.words[b][2]}" aria-label="Hear this stretch">▶</button><q>${esc(quote)}</q>
     <span class="sh-t">${shClock(d.words[a][1])}–${shClock(d.words[b][2])}</span><button class="x" type="button" data-sh="unpick" aria-label="Drop the stretch">×</button></div>`;
-  if (SH.busy) return h + `<div class="busy" role="status"><i></i>${esc(SH.busy)}</div>${SH.said ? `<p class="land-say ${SH.said.k}">${esc(SH.said.s)}</p>` : ""}</div>`;
+  if (SH.busy) return h + `<div class="busy" role="status"><i></i>${esc(SH.live || SH.busy)}</div>${SH.said ? `<p class="land-say ${SH.said.k}">${esc(SH.said.s)}</p>` : ""}</div>`;
   if (SH.said) h += `<p class="land-say ${SH.said.k}" role="status">${esc(SH.said.s)}</p>`;
   if (!SH.probes) return h + `<p class="meta">Asking where it would land…</p></div>`;
   const land = shLanding("lead");
