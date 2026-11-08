@@ -35,7 +35,7 @@ function shapeOpen(id) {
 function shapeClose() {
   const id = SH.id;
   SH.audio.pause(); SH.id = null; $("#shape").hidden = true; $("#shape").innerHTML = ""; shSay("");
-  $$("[data-shape]").find(b => b.dataset.shape === id)?.focus();   // back where it was opened from
+  ($$("[data-shape]").find(b => b.dataset.shape === id) || $("#hist-library"))?.focus();   // back where it was opened from (or Recent covers, if it rolled off)
 }
 
 async function shLoad(first) {
@@ -215,7 +215,7 @@ function shPaint(box) {
       : SH.state === "error" ? `<b>${esc(SH.error || "This cover can't be shaped.")}</b>${SH.retry ? `<span><button class="btn" type="button" data-sh="retry">Try again</button></span>` : ""}`
       : `<b>Opening…</b>`;
     box.innerHTML = `<div class="ed">${head}<div class="state">${st}</div></div>`;
-    shSay($(".state", box).textContent.trim());
+    shSay($$(".state > b, .state > span:not(:has(button))", box).map(e => e.textContent.trim()).join(" "));   // (not the Try again button's label)
     return shWire();
   }
   const live = shLive(), pick = SH.pick;

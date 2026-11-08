@@ -12003,104 +12003,6 @@ def _bare_text(src: str) -> list:
     return [x for x in _tpl_exprs(src) if not _text_ok(x)]
 
 
-@check("the edit list's page in headless Chrome: Hear it takes the page's volume and mute, one player at a time with the voice line and the cover (both ways), the price probes drawn as the gate's sentences and a late answer dropped (skipped when there is no Chrome)")
-def u_shape_page():
-    """index.html on the static server with a test script after shape.js: it stubs the API, stages a list, presses the page's own
-    functions and writes its verdicts into the title, which --dump-dom reads once the page says it's done (an image held back until then)."""
-    import http.server, struct, subprocess, tempfile, threading
-    exe = _chrome()
-    if not exe:
-        return "no Chrome here: skipped"
-    web = ROOT / "undercover" / "web"
-    wav = b"RIFF" + struct.pack("<I", 36 + 800) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16) + b"data" + struct.pack("<I", 800) + bytes(800)
-    test = r"""
-(async () => {
-  const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
-  await new Promise(r => setTimeout(r, 1200));
-  try {
-    const players = () => [aCover, aOrig, aSong, SH.audio, VLINE.a].filter(a => a && !a.paused).length;
-    VOL.level = 0.5; VOL.muted = false; applyVolume();
-    ok("the slider reaches Hear it", Math.abs(SH.audio.volume - 0.25) < 1e-6);
-    VOL.muted = true; applyVolume(); ok("mute reaches Hear it", SH.audio.volume === 0);
-    VOL.muted = false; applyVolume();
-    const doc = { cover: "aaaaaaaaaa", duration: 10, words: [["Hold", 1, 1.3, 0.9], ["the", 1.4, 1.7, 0.9], ["night", 1.8, 2.1, 0.9]], words_hash: "h", sections: [],
-      plan: [[0, 10, "A"]], backing_plan: [[0, 10, "A"]], octaves: { A: 0, B: 0 }, points: { lead: [], backing: [], dips: [] }, duet: true, backing: true,
-      edits: [], cursor: 0, compiled: { lead: [[0, 10, "A", null, null]], backing: [[0, 10, "A", null, null]] }, result: "/wav" };
-    Object.assign(SH, { id: "aaaaaaaaaa", item: { id: "aaaaaaaaaa", title: "T", voice: "a-uc", duet_voice: "b-uc", output: "/wav" }, doc, state: "ready", heard: 0 });
-    const started = a => new Promise(r => { if (!a.paused && a.currentTime > 0) return r(); a.addEventListener("play", r, { once: true }); setTimeout(r, 3000); });
-    $("#shape").hidden = false; shDraw();
-    shHear(1, 2);
-    const b = document.createElement("button"); b.dataset.vline = "x"; b.dataset.label = "x"; document.body.appendChild(b);
-    await started(SH.audio);
-    playVoiceLine(b); await started(VLINE.a); await new Promise(r => setTimeout(r, 100));
-    ok("the voice line stops Hear it", players() === 1 && SH.audio.paused && !VLINE.a.paused);
-    shHear(1, 2); await started(SH.audio); await new Promise(r => setTimeout(r, 100));
-    ok("Hear it stops the voice line", players() === 1 && VLINE.a.paused && !SH.audio.paused);
-    aCover.src = "/wav"; aCover.play().catch(() => {}); await started(aCover); await new Promise(r => setTimeout(r, 100));
-    ok("a cover's play stops Hear it", SH.audio.paused && !aCover.paused);
-    shHear(1, 2); await started(SH.audio); await new Promise(r => setTimeout(r, 100));
-    ok("Hear it stops the cover", aCover.paused && players() === 1);
-    stopAll(); ok("stopAll stops Hear it", SH.audio.paused);
-    window.api = async (u, o) => {
-      if (/edits\/price$/.test(u)) {
-        if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
-        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
-      }
-      throw new Error("stub");
-    };
-    SH.pick = [0, 2]; await shProbe();
-    const bar = $("#shape .sh-bar").innerText;
-    ok("the bar says the gate's sentence", bar.includes("moved past \"Hold\"") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
-    ok("the choices are the gate's", $$("#shape .pill").map(p => p.textContent).join("|") === "b-uc takes it|An octave up|An octave down");
-    const late = shProbe(); SH.pick = null; SH.seq++; await late;
-    ok("a late answer is dropped", SH.probes === null);
-  } catch (e) { out.push("BAD threw " + e); }
-  document.title = out.join(" | ");
-  fetch("/said");
-})();
-"""
-    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
-                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
-    said = threading.Event()
-
-    class H(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            p = self.path.split("?")[0]
-            if p == "/hold":
-                said.wait(20)
-                body, ctype = b"", "image/gif"
-            elif p == "/said":
-                said.set(); body, ctype = b"ok", "text/plain"
-            elif p == "/selftest.js":
-                body, ctype = test.encode("utf-8"), "text/javascript"
-            elif p in ("/wav", "/api/voices/x/preview"):
-                body, ctype = wav, "audio/wav"
-            elif p == "/":
-                body, ctype = page.encode("utf-8"), "text/html"
-            elif p.startswith("/static/") and (web / p[8:]).is_file():
-                f = web / p[8:]
-                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
-            else:
-                self.send_response(404); self.end_headers(); return
-            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *a):
-            pass
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    try:
-        with tempfile.TemporaryDirectory() as prof:
-            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", "--autoplay-policy=no-user-gesture-required", f"--user-data-dir={prof}",
-                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],   # (real time: the held image keeps the dump until the page has said)
-                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
-    finally:
-        srv.shutdown()
-    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
-    got = m.group(1) if m else ""
-    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:600] or r.stdout[-300:]}"
-    return got.replace(" | ", "; ")
-
 @check("Shape it by keyboard in headless Chrome: a picked word keeps the focus through the probes and a job's messages, unpicked words say aria-pressed false, Keep's sheet, kept line and Recent row say one name, Done hands focus back to the row, no Try again on a refusal (skipped when there is no Chrome)")
 def u_shape_keys():
     """IA pass 13's page tests. index.html on a static server with a test script after shape.js: the API and the job feed are stubbed,
@@ -12215,6 +12117,105 @@ def u_shape_keys():
     m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
     got = html.unescape(m.group(1)) if m else ""
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
+
+
+@check("the edit list's page in headless Chrome: Hear it takes the page's volume and mute, one player at a time with the voice line and the cover (both ways), the price probes drawn as the gate's sentences and a late answer dropped (skipped when there is no Chrome)")
+def u_shape_page():
+    """index.html on the static server with a test script after shape.js: it stubs the API, stages a list, presses the page's own
+    functions and writes its verdicts into the title, which --dump-dom reads once the page says it's done (an image held back until then)."""
+    import http.server, struct, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+    wav = b"RIFF" + struct.pack("<I", 36 + 800) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16) + b"data" + struct.pack("<I", 800) + bytes(800)
+    test = r"""
+(async () => {
+  const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
+  await new Promise(r => setTimeout(r, 1200));
+  try {
+    const players = () => [aCover, aOrig, aSong, SH.audio, VLINE.a].filter(a => a && !a.paused).length;
+    VOL.level = 0.5; VOL.muted = false; applyVolume();
+    ok("the slider reaches Hear it", Math.abs(SH.audio.volume - 0.25) < 1e-6);
+    VOL.muted = true; applyVolume(); ok("mute reaches Hear it", SH.audio.volume === 0);
+    VOL.muted = false; applyVolume();
+    const doc = { cover: "aaaaaaaaaa", duration: 10, words: [["Hold", 1, 1.3, 0.9], ["the", 1.4, 1.7, 0.9], ["night", 1.8, 2.1, 0.9]], words_hash: "h", sections: [],
+      plan: [[0, 10, "A"]], backing_plan: [[0, 10, "A"]], octaves: { A: 0, B: 0 }, points: { lead: [], backing: [], dips: [] }, duet: true, backing: true,
+      edits: [], cursor: 0, compiled: { lead: [[0, 10, "A", null, null]], backing: [[0, 10, "A", null, null]] }, result: "/wav" };
+    Object.assign(SH, { id: "aaaaaaaaaa", item: { id: "aaaaaaaaaa", title: "T", voice: "a-uc", duet_voice: "b-uc", output: "/wav" }, doc, state: "ready", heard: 0 });
+    const started = a => new Promise(r => { if (!a.paused && a.currentTime > 0) return r(); a.addEventListener("play", r, { once: true }); setTimeout(r, 3000); });
+    $("#shape").hidden = false; shDraw();
+    shHear(1, 2);
+    const b = document.createElement("button"); b.dataset.vline = "x"; b.dataset.label = "x"; document.body.appendChild(b);
+    await started(SH.audio);
+    playVoiceLine(b); await started(VLINE.a); await new Promise(r => setTimeout(r, 100));
+    ok("the voice line stops Hear it", players() === 1 && SH.audio.paused && !VLINE.a.paused);
+    shHear(1, 2); await started(SH.audio); await new Promise(r => setTimeout(r, 100));
+    ok("Hear it stops the voice line", players() === 1 && VLINE.a.paused && !SH.audio.paused);
+    aCover.src = "/wav"; aCover.play().catch(() => {}); await started(aCover); await new Promise(r => setTimeout(r, 100));
+    ok("a cover's play stops Hear it", SH.audio.paused && !aCover.paused);
+    shHear(1, 2); await started(SH.audio); await new Promise(r => setTimeout(r, 100));
+    ok("Hear it stops the cover", aCover.paused && players() === 1);
+    stopAll(); ok("stopAll stops Hear it", SH.audio.paused);
+    window.api = async (u, o) => {
+      if (/edits\/price$/.test(u)) {
+        if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
+        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
+      }
+      throw new Error("stub");
+    };
+    SH.pick = [0, 2]; await shProbe();
+    const bar = $("#shape .sh-bar").innerText;
+    ok("the bar says the gate's sentence", bar.includes("moved past \"Hold\"") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
+    ok("the choices are the gate's", $$("#shape .pill").map(p => p.textContent).join("|") === "b-uc takes it|An octave up|An octave down");
+    const late = shProbe(); SH.pick = null; SH.seq++; await late;
+    ok("a late answer is dropped", SH.probes === null);
+  } catch (e) { out.push("BAD threw " + e); }
+  document.title = out.join(" | ");
+  fetch("/said");
+})();
+"""
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(20)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p in ("/wav", "/api/voices/x/preview"):
+                body, ctype = wav, "audio/wav"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", "--autoplay-policy=no-user-gesture-required", f"--user-data-dir={prof}",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],   # (real time: the held image keeps the dump until the page has said)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = m.group(1) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:600] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
 def _theme_tokens(web, theme: str, light: bool) -> dict:
@@ -15102,9 +15103,9 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_shape_keys, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_shape_keys, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
