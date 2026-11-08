@@ -1721,14 +1721,20 @@ def u_netguard():
                         "remote_components", "hls_prefer_native", '"proxy"'):
                 assert opt not in text or rel == "undercover/core/youtube.py", (rel, opt)
         # Deno: yt-dlp gives it no permission to reach the network
+        # (yt-dlp updates itself: if it moved the runner, every yt-dlp file named for Deno is read the same way instead;
+        # only a yt-dlp with no Deno file at all skips this, and says so with its version)
         deno_note = "Deno"
-        if deno is None:
-            deno_note = f"(the Deno check skipped: yt-dlp {yt_dlp.version.__version__} moved its JS runner module)"
-        else:
-            argv = list(deno.DenoJCP._DENO_BASE_OPTIONS)
-            dsrc = Path(deno.__file__).read_text(encoding="utf-8")
-            assert not any(a.startswith("--allow") or a == "-A" for a in argv), argv
-            assert "--allow" not in dsrc and "'-A'" not in dsrc and '"-A"' not in dsrc
+        argv = list(getattr(getattr(deno, "DenoJCP", None), "_DENO_BASE_OPTIONS", None) or [])
+        assert not any(a.startswith("--allow") or a == "-A" for a in argv), argv
+        dfiles = ([Path(deno.__file__)] if deno is not None
+                  else [p for p in Path(yt_dlp.__file__).parent.rglob("*.py") if "deno" in p.name.lower()])
+        for f in dfiles:
+            dsrc = f.read_text(encoding="utf-8")
+            assert "--allow" not in dsrc and "'-A'" not in dsrc and '"-A"' not in dsrc, f
+        if not dfiles:
+            deno_note = f"(the Deno check skipped: yt-dlp {yt_dlp.version.__version__} has no Deno runner file)"
+        elif deno is None or not argv:
+            deno_note = f"Deno (read from {len(dfiles)} file(s): yt-dlp {yt_dlp.version.__version__} moved its runner)"
 
         # a proxy: its own address reached, everything else at home refused, links behind it checked by name
         os.environ.pop("NO_PROXY", None)
@@ -6933,7 +6939,9 @@ def u_storage():
 
         def push(self, **ev):
             pass
-    # the guards, checked without touching anything, against a stand-in for the app folder (never the real one named)
+    # the guards, checked without touching anything, against a stand-in for the app folder (never the real one named);
+    # first that the guards' own idea of the app folder is the real one, which every stand-in below replaces
+    assert storage._same(storage.ROOT, ROOT), f"core.storage's app folder is {storage.ROOT}, not {ROOT}"
     with fake_app() as fake:
         assert storage.refuse([fake / "uploads"]) and storage.refuse([fake / "output"], from_room=True)
         assert storage.refuse([fake / "models"], from_room=True, confirmed=True) is None   # only the room, confirmed
@@ -7009,6 +7017,7 @@ def _fake_speech(i, speak, tag="s"):
     from undercover.core.config import path
     job = f"{tag}job{i:02d}"
     parts = speak.parts_dir(job)
+    _isolated_only(parts)
     parts.mkdir(parents=True, exist_ok=True)
     (parts / "s0000.wav").write_bytes(b"p" * 10)
     p = {"voice": "zz", "reader": "am_michael", "auto": True, "speed": 1.0, "pitch": 0.0}
@@ -7270,6 +7279,7 @@ def _fake_voice(name: str, source: str = "", extra: dict | None = None, display:
     """A voice folder with a meta.json (and an empty model.pth) in the isolated models/voices; no model is loaded."""
     from undercover.core.voices import Voice, voices_dir
     d = voices_dir() / name
+    _isolated_only(d)
     d.mkdir(parents=True, exist_ok=True)
     (d / "model.pth").write_bytes(b"x")
     v = Voice(name=name, dir=d, pth=d / "model.pth", index=None, source=source, installed="2026-10-11 00:00",
@@ -11178,6 +11188,7 @@ def config_path(key):
 # ---------------------------------------------------------------- the First assignment (phase 17)
 
 def _fake_demo_voice(d: Path):
+    _isolated_only(d)
     d.mkdir(parents=True)
     (d / "model.pth").write_bytes(b"not really a model")
     (d / "meta.json").write_text(json.dumps({"name": "agent-smoke", "version": "v2", "sr": 40000, "f0": True, "source": "demo",
@@ -13242,6 +13253,9 @@ def a_vault():
     assert storage._inside(out, root), out
     bad = api("/api/vault/check", {"folder": str(path("uploads_dir") / "vault")})   # inside the library: refused
     assert bad["ok"] is False, bad
+    # the app folder itself (the sandbox server's: this worktree; nothing is written, the check refuses first)
+    bad = api("/api/vault/check", {"folder": str(ROOT / "smoke-vault-here")})
+    assert bad["ok"] is False and "UnderCover's folder" in bad["why"], bad
     # a scratch cover of our own in the sandbox's output, so a restore meets a real conflict (2026-11-08: until then
     # only the unit check restored over a changed file; here it's the server's routes and the background Replace)
     mine, beside = out / "Smoke vault (zz).mp3", out / "Smoke vault (zz) (from vault).mp3"
@@ -13268,14 +13282,16 @@ def a_vault():
         assert r["restored"] == cover["keys"] and beside.read_bytes() == orig and mine.read_bytes() == b"changed since the run", r
         r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "skip"})
         assert r["skipped"] == cover["keys"] and not r["restored"] and mine.read_bytes() == b"changed since the run", r
-        snaps = api("/api/vault")["snapshots"]
+        st0 = api("/api/vault")
+        snaps = st0["snapshots"]
         r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "replace"})   # replace: in the background, vaulting first
         assert r["started"] is True, r
         rs = wait_for(lambda: (lambda s: s if s and not s["running"] else None)(api("/api/vault")["restore"]), 600, what="the Replace restore")
         assert not rs["error"] and rs["result"]["restored"] == cover["keys"], rs
         assert mine.read_bytes() == orig, "Replace didn't put the vaulted copy back"
         st = api("/api/vault")
-        assert st["snapshots"] == snaps + 1, f"Replace didn't vault what was there first ({snaps} -> {st['snapshots']})"
+        # (a new last run, not an exact count: the vault's own idle run or its keep policy may add or prune one meanwhile)
+        assert st["last"] != st0["last"] and st["snapshots"] >= 1, f"Replace didn't vault what was there first ({snaps} -> {st['snapshots']})"
         c2 = api("/api/vault/contents")
         assert any(i["item"] == mine.name for i in c2["kinds"]["cover"]), "the changed copy isn't in the fresh snapshot"
     finally:
@@ -13757,7 +13773,8 @@ class GpuLock:
     """One GPU-heavy smoke run at a time, across processes and worktrees (2026-11-05: two --full runs at once reset
     the GPU driver, both died and a game crashed with them). A byte lock on one file in the temp folder: the OS drops
     it when the holder dies, so a killed run never leaves it stuck. smoke-full.ps1 holds a lock of its own around the
-    whole script; this one is inside smoke.py, so a bare `tests\\smoke.py --full` waits for the other run too."""
+    whole script (another file, so the two never wait on each other); this one is inside smoke.py, so a bare
+    `tests\\smoke.py` or `--full` that starts a sandbox waits for the other run too."""
     FILE = "undercover-smoke-gpu.lock"
 
     def __init__(self, file: Path | None = None):
@@ -13975,7 +13992,7 @@ def _sandbox_config(root: Path, real: dict, user: str | None = None) -> tuple[Pa
     return cfg, mine
 
 
-def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
+def _sandbox_fixtures(root: Path, real: dict, mine: dict, full: bool = False) -> str:
     """Copies (read from the real folders, written only into the sandbox) of one trained voice and its training
     project, so the cover, speech, training and cadence checks have something to work with."""
     tr = real["cache_dir"] / "training"
@@ -14016,18 +14033,20 @@ def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
     shutil.copytree(tr / src / "clips", pdst / "clips")
     # the prepared tensors too, when the project has them: with project.json's data_key matching, a training on this
     # copy skips prepare() (2-3 minutes of HuBERT and RMVPE over every clip); u_prepare covers prepare itself
-    if (tr / src / "train" / "data.pt").is_file():
+    # (--full only: a_training is its one reader, and the file runs from 170 MB to over 1 GB)
+    if full and (tr / src / "train" / "data.pt").is_file():
         (pdst / "train").mkdir()
         shutil.copyfile(tr / src / "train" / "data.pt", pdst / "train" / "data.pt")
     return src
 
 
 @contextlib.contextmanager
-def sandbox_server(port: int, gpu_lock: bool = False):
+def sandbox_server(port: int, gpu_lock: bool = True, full: bool = False):
     """Start a sandbox server, point this process's own config and the app's guards at the same scratch folders (so
     checks that touch folders directly stay inside it too), and stop and remove everything afterwards. With gpu_lock
-    (a --full run: training and cadence on the GPU) the cross-process GPU lock is taken first, waiting for another
-    run to finish, and let go at the very end."""
+    (every sandbox run: covers, separation and speech load models; --full trains and transcribes too) the
+    cross-process GPU lock is taken first, waiting for another run to finish, and let go at the very end. smoke-full.ps1's
+    own lock is a different file (smoke-full.lock), so a run under it never waits on itself."""
     import os
     import subprocess
     import tempfile
@@ -14036,10 +14055,9 @@ def sandbox_server(port: int, gpu_lock: bool = False):
     lock = GpuLock() if gpu_lock else None
     if lock:
         lock.acquire()
-    if _port_taken(port):   # taken since it was picked (another run started in between)
-        if lock:
-            lock.release()
-        sys.exit(f"Something already answers on port {port}. The sandbox server must be smoke's own: try again.")
+    if _port_taken(port):   # taken while this run waited for the lock (another run started in between): pick again
+        was, port = port, sandbox_port()
+        print(f"  (port {was} was taken while this run waited: port {port} instead)", flush=True)
     real = real_dirs()
     root = Path(tempfile.mkdtemp(prefix="uc-sandbox-")).resolve()
     assert root.name.startswith("uc-sandbox-") and storage._inside(root, Path(tempfile.gettempdir()).resolve()) and not storage._inside(root, ROOT)
@@ -14047,7 +14065,7 @@ def sandbox_server(port: int, gpu_lock: bool = False):
     proc = log = None
     try:
         cfg, mine = _sandbox_config(root, real)
-        _sandbox_fixtures(root, real, mine)
+        _sandbox_fixtures(root, real, mine, full)
         env = {**os.environ, "UNDERCOVER_CONFIG": str(cfg), "UNDERCOVER_TEST_ROOTS": str(root), "UNDERCOVER_PHONE_ADDR": PHONE_ADDR,
                "UNDERCOVER_NO_BACKFILL": "1"}   # (rc-preview: the checks expect the queue as they left it)
         env.pop("UNDERCOVER_TEST_ADDON", None)
@@ -14110,28 +14128,34 @@ def sandbox_server(port: int, gpu_lock: bool = False):
             lock.release()
 
 
-def _users_server_training() -> set:
+def _users_server_training(since: float | None = None) -> set:
     """The training projects the user's own server (7860) is working on right now (its training writes under
-    cache/training/<project>, which this run never touches but does watch). No server, or no answer: nothing running."""
+    cache/training/<project>, which this run never touches but does watch), and with `since`, the ones whose job
+    started or ended after it (a training that came and went during the run; the job list keeps an hour of finished
+    jobs). A paused job writes nothing and isn't counted until it runs again. No server, or no answer: nothing."""
     try:
         with urllib.request.urlopen("http://127.0.0.1:7860/api/jobs", timeout=3) as r:
             jobs = json.loads(r.read())
     except (OSError, ValueError):
         return set()
+
+    def during(j):
+        return since is not None and any((j.get(k) or 0) >= since for k in ("created", "ended"))
     return {j["project"] for j in jobs if isinstance(j, dict) and j.get("project")
-            and j.get("state") in ("queued", "running", "pausing", "paused")}
+            and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
-def a_untouched(before: dict, dirs: dict, busy: set = frozenset()):
-    """busy: the projects the user's server was training when the run started; with the ones it trains now, their
-    folders' changes are the user's server's, said in the note, not this run's (2026-11-05: a run was blamed for them)."""
+def a_untouched(before: dict, dirs: dict, busy: set = frozenset(), since: float | None = None):
+    """busy: the projects the user's server was training when the run started; with the ones it trained during the
+    run (since) and trains now, their folders' changes are the user's server's, said in the note, not this run's
+    (2026-11-05: a run was blamed for them)."""
     import os
     after = snapshot_real(dirs)
     added = sorted(set(after) - set(before))
     gone = sorted(set(before) - set(after))
     changed = sorted(p for p in set(before) & set(after) if before[p] != after[p])
-    theirs = {str(dirs["cache_dir"] / "training" / name) for name in set(busy) | _users_server_training()}
+    theirs = {str(dirs["cache_dir"] / "training" / name) for name in set(busy) | _users_server_training(since)}
     from undercover.core import storage
     his = lambda p: any(storage._inside(Path(p), Path(t)) for t in theirs)
     users = [p for p in added + gone + changed if his(p)]
@@ -14190,7 +14214,7 @@ def main():
                 os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tests" / "fake_tailscale.py")
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
-                with sandbox_server(port, gpu_lock=a.full):   # (--full trains and transcribes: one GPU run at a time)
+                with sandbox_server(port, full=a.full):   # (one GPU-using run at a time)
                     for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
                         fn()
                     if not a.no_cover:
@@ -14210,7 +14234,7 @@ def main():
                 if fake_ts.name.startswith("uc-fake-ts-"):
                     import shutil
                     shutil.rmtree(fake_ts, ignore_errors=True)
-    a_untouched(before, dirs, busy)
+    a_untouched(before, dirs, busy, t0)
     failed = [n for ok, n in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed in {time.time() - t0:.0f} s" + (f"; FAILED: {', '.join(failed)}" if failed else ""))
     sys.exit(1 if failed else 0)
