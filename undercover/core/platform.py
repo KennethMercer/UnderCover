@@ -17,11 +17,53 @@ from pathlib import Path
 WINDOWS = os.name == "nt"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DETACHED = NO_WINDOW | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+# How a program's text output is read everywhere (subprocess text=True): UTF-8, a bad byte shown as U+FFFD, never a
+# UnicodeDecodeError in a reader thread. Python's own children print UTF-8 (PYTHONIOENCODING, -X utf8); ffmpeg and
+# yt-dlp do; PowerShell is told to below.
+TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
+# Windows' own processes, never a game: what the process list shows for the desktop itself
+SYSTEM_PROCESSES = {"dwm.exe", "explorer.exe", "csrss.exe", "searchhost.exe", "shellexperiencehost.exe",
+                    "startmenuexperiencehost.exe", "textinputhost.exe", "applicationframehost.exe", "svchost.exe",
+                    "system", "idle"}
+WINGET_IDS = {"ffmpeg": "Gyan.FFmpeg", "deno": "DenoLand.Deno"}   # the package names winget knows the tools by
+APT_NAMES = {"ffmpeg"}   # the tools Debian and Ubuntu package (deno isn't one)
+
+
+def exe_name(name: str) -> str:
+    """A program's file name on this OS: "ffmpeg.exe" on Windows, "ffmpeg" elsewhere."""
+    return name + ".exe" if WINDOWS else name
+
+
+def console_python() -> str:
+    """The interpreter to start the server with: on Windows python.exe, never pythonw.exe (with a hidden console, the
+    tools the server runs share it, so ffmpeg and the rest never pop a window up)."""
+    exe = Path(sys.executable)
+    if WINDOWS and exe.name.lower() == "pythonw.exe":
+        return str(exe.with_name("python.exe"))
+    return str(exe)
+
+
+def install_hint(tool: str) -> str:
+    """How to get a program on this OS, for a message: winget on Windows, brew on a Mac, apt elsewhere."""
+    if WINDOWS:
+        return f"winget install {WINGET_IDS.get(tool, tool)}"
+    if sys.platform == "darwin":
+        return f"brew install {tool}"
+    if tool in APT_NAMES:
+        return f"sudo apt install {tool} (or your distribution's package manager)"
+    return f"{tool} from its own site, or your distribution's package manager"
 
 
 def _powershell() -> str:
     """Windows PowerShell by its full path (1.1 hardening), never whichever powershell.exe comes first on the PATH."""
     return str(Path(os.environ.get("SystemRoot") or r"C:\Windows") / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+
+
+def _ps(command: str) -> list[str]:
+    """A PowerShell command line that never prompts and whose output comes back as UTF-8 (so TEXT reads it right; the
+    console's own code page would turn an accented network or adapter name into the wrong letters)."""
+    utf8 = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+    return [_powershell(), "-NoProfile", "-NonInteractive", "-Command", utf8 + command]
 
 
 class NotOnThisOS(Exception):
@@ -55,8 +97,8 @@ def extract_msi(msi, target) -> None:
     driver, nothing in the registry). Tailscale publishes Windows binaries only inside its installer."""
     if not WINDOWS:
         raise _not("Unpacking a Windows installer")
-    r = subprocess.run(["msiexec", "/a", str(msi), "/qn", f"TARGETDIR={target}"], capture_output=True, text=True,
-                       errors="replace", timeout=300, creationflags=NO_WINDOW)
+    r = subprocess.run(["msiexec", "/a", str(msi), "/qn", f"TARGETDIR={target}"], capture_output=True, **TEXT,
+                       timeout=300, creationflags=NO_WINDOW)
     if r.returncode != 0:
         raise OSError(f"msiexec /a ended with code {r.returncode}")
 
@@ -369,10 +411,11 @@ def on_console_close(fn):
 
 
 def start_detached(cmd: list, cwd=None, log=None) -> subprocess.Popen:
-    """A process that outlives this one, with no console window on Windows."""
+    """A process that outlives this one: no console window on Windows, its own session elsewhere (so closing the
+    terminal this one runs in doesn't take it down too)."""
     out = log if log is not None else subprocess.DEVNULL
     return subprocess.Popen(cmd, cwd=str(cwd) if cwd else None, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
-                            creationflags=DETACHED, close_fds=True)
+                            creationflags=DETACHED, close_fds=True, start_new_session=not WINDOWS)
 
 
 def windowless_python() -> str:
@@ -487,8 +530,7 @@ def startup_entry(on: bool, target, folder=None, icon=None) -> bool:
           + (f"$s.IconLocation = '{q(icon)}'; " if icon else "")
           + "$s.Description = 'UnderCover'; $s.Save()")
     folder.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
-                       timeout=30, creationflags=NO_WINDOW)
+    r = subprocess.run(_ps(ps), capture_output=True, **TEXT, timeout=30, creationflags=NO_WINDOW)
     if r.returncode or not link.exists():
         raise OSError(f"The startup shortcut couldn't be made: {(r.stderr or r.stdout).strip()[:200]}")
     return True
@@ -511,8 +553,7 @@ def repoint_shortcuts(old, new, folders=None) -> list[str]:
           "Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse:$w.r -ErrorAction SilentlyContinue | ForEach-Object { "
           "$l = $sh.CreateShortcut($_.FullName); if ($l.TargetPath -ieq $old) { $l.TargetPath = $new; $l.Save(); "
           "Write-Output $_.FullName } } }")
-    r = subprocess.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
-                       timeout=60, creationflags=NO_WINDOW)
+    r = subprocess.run(_ps(ps), capture_output=True, **TEXT, timeout=60, creationflags=NO_WINDOW)
     if r.returncode:
         raise OSError(f"The shortcuts couldn't be moved: {(r.stderr or r.stdout).strip()[:200]}")
     return [line.strip() for line in r.stdout.splitlines() if line.strip()]
@@ -520,9 +561,15 @@ def repoint_shortcuts(old, new, folders=None) -> list[str]:
 
 # ---------------------------------------------------------------- the system's own reports
 
-def run_text(cmd: list, timeout: float = 20) -> str:
-    """A system tool's output as text (no window on Windows)."""
-    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout, creationflags=NO_WINDOW)
+# Windows' own console tools (netstat, tasklist, netsh) print in the console's OEM code page, not UTF-8: an accented
+# user name in a firewall rule's program path reads right only in it
+CONSOLE = "oem" if WINDOWS else "utf-8"
+
+
+def run_text(cmd: list, timeout: float = 20, encoding: str = "utf-8") -> str:
+    """A system tool's output as text (no window on Windows). PowerShell commands come through _ps(), so their output is
+    UTF-8; Windows' console tools are read with encoding=CONSOLE."""
+    r = subprocess.run(cmd, capture_output=True, **{**TEXT, "encoding": encoding}, timeout=timeout, creationflags=NO_WINDOW)
     return r.stdout
 
 
@@ -532,7 +579,7 @@ def port_owner(port: int) -> str | None:
     if not WINDOWS:
         raise _not("Naming the program that holds a port")
     pid = None
-    for line in run_text(["netstat", "-ano", "-p", "TCP"]).splitlines() + run_text(["netstat", "-ano", "-p", "TCPv6"]).splitlines():
+    for line in run_text(["netstat", "-ano", "-p", "TCP"], encoding=CONSOLE).splitlines() + run_text(["netstat", "-ano", "-p", "TCPv6"], encoding=CONSOLE).splitlines():
         parts = line.split()
         if (len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].rsplit(":", 1)[-1] == str(port)
                 and parts[2] in ("0.0.0.0:0", "[::]:0") and parts[4].isdigit()):
@@ -540,7 +587,7 @@ def port_owner(port: int) -> str | None:
             break
     if not pid:
         return None
-    row = run_text(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]).strip()
+    row = run_text(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], encoding=CONSOLE).strip()
     return row.split('","')[0].strip('"') if row.startswith('"') else None
 
 
@@ -562,9 +609,9 @@ def network_and_firewall(addr: str) -> tuple[str, str, str]:
           "if ($i) { Get-NetConnectionProfile -InterfaceIndex $i | Select-Object Name,InterfaceAlias,NetworkCategory | "
           "ConvertTo-Json -Compress }")
     with concurrent.futures.ThreadPoolExecutor(3) as ex:
-        f_net = ex.submit(run_text, [_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps])
-        f_state = ex.submit(run_text, ["netsh", "advfirewall", "show", "allprofiles", "state"])
-        f_rules = ex.submit(run_text, ["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"])
+        f_net = ex.submit(run_text, _ps(ps))
+        f_state = ex.submit(run_text, ["netsh", "advfirewall", "show", "allprofiles", "state"], encoding=CONSOLE)
+        f_rules = ex.submit(run_text, ["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"], encoding=CONSOLE)
         return f_net.result().strip(), f_state.result(), f_rules.result()
 
 
@@ -575,8 +622,7 @@ def prefix_length(addr: str) -> int | None:
     addr = _ipv4(addr)
     try:
         if WINDOWS:
-            out = run_text([_powershell(), "-NoProfile", "-NonInteractive", "-Command",
-                            f"(Get-NetIPAddress -IPAddress '{addr}' -ErrorAction SilentlyContinue | Select-Object -First 1).PrefixLength"])
+            out = run_text(_ps(f"(Get-NetIPAddress -IPAddress '{addr}' -ErrorAction SilentlyContinue | Select-Object -First 1).PrefixLength"))
             m = re.search(r"\d+", out or "")
         else:
             out = run_text(["ip", "-o", "-f", "inet", "addr", "show"])
@@ -593,7 +639,6 @@ def video_controllers() -> list[dict]:
     if not WINDOWS:
         raise _not("Reading the graphics driver")
     import json
-    out = run_text([_powershell(), "-NoProfile", "-Command",
-                    "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate | ConvertTo-Json -Compress"])
+    out = run_text(_ps("Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate | ConvertTo-Json -Compress"))
     rows = json.loads(out or "null")
     return rows if isinstance(rows, list) else [rows] if rows else []

@@ -9,6 +9,41 @@ import sys
 LIMIT_ENV = "UNDERCOVER_GPU_LIMIT_GB"   # Low profile's cap for this process and the ones it starts (the cadence worker)
 
 
+def build(installed: str | None = None) -> str:
+    """Which PyTorch this is: "rocm", "cuda" or "cpu", from torch's own account of itself (torch.version.hip / .cuda:
+    a Linux ROCm wheel carries no "+rocm" in its version string). With no argument it's the torch loaded here (what
+    runs). `installed`, the version string from the package record, asks about the install on disk instead (the
+    Doctor: torch may have been replaced under a running server, and its fast checks never import it): torch's small
+    version file is read on its own, without the package, and the string is the last resort."""
+    v = None if installed is not None else getattr(sys.modules.get("torch"), "version", None)   # (None mid-import)
+    v = v or _torch_version_file()
+    if v is not None:
+        if getattr(v, "hip", None):
+            return "rocm"
+        if getattr(v, "cuda", None):
+            return "cuda"
+        version = getattr(v, "__version__", "") or installed or ""
+    else:
+        version = installed or ""
+    return "rocm" if "+rocm" in version else "cuda" if "+cu" in version else "cpu"
+
+
+def _torch_version_file():
+    """torch/version.py loaded by itself (it holds only strings: no torch, no GPU), or None when there's no torch."""
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("torch")
+        where = next(iter(spec.submodule_search_locations or []), None) if spec else None
+        if not where:
+            return None
+        f = importlib.util.spec_from_file_location("_torch_version", os.path.join(where, "version.py"))
+        mod = importlib.util.module_from_spec(f)
+        f.loader.exec_module(mod)
+        return mod
+    except Exception:   # noqa: BLE001 - an odd install: the version string decides, as before
+        return None
+
+
 def limit_gb() -> float | None:
     """The graphics-memory cap this process runs under (whole or fractional GB, binary), or None for none."""
     try:
