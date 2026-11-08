@@ -451,7 +451,6 @@ def main_cookie(token: str) -> str:
     return f"{phone.MAIN_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={phone.TOKEN_IDLE_S}"
 
 
-away_cookie = main_cookie
 
 
 def _claim(h):

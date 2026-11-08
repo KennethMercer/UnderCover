@@ -50,9 +50,7 @@ MAX_DEVICES = 10
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I: easy to type from the screen
 MAIN_COOKIE = "__Host-uc"  # the one token's cookie: the browser takes a __Host- name only Secure, Path=/, no Domain
 LAN_COOKIE = "uc_device"   # a token from before the move, on the home Wi-Fi only
-COOKIE, AWAY_COOKIE = LAN_COOKIE, MAIN_COOKIE   # (the names the listeners used before 1.2.1)
 MOVE_CODE_S = 600         # a move code (a LAN-paired phone -> the link) lasts 10 minutes, and works once
-AWAY_CODE_S = MOVE_CODE_S
 
 SEEN_EVERY = 300          # write "last seen" at most this often (s)
 
@@ -61,7 +59,7 @@ _STATE: dict = {}
 _FILE: list = [None]      # the file _STATE was read from (tests repoint the config)
 PAIRING: dict | None = None   # {"code": the QR's code (memory only), "until", "short": None | {"code", "until", "tries"}, "wrong"}
 _MOVE_CODES: dict = {}    # code hash -> (device id, expiry)
-_AWAY_CODES = _MOVE_CODES
+_UNREADABLE: list = [None]   # the version of phone.json on disk that couldn't be read: never saved over
 _HANDOVER: dict = {}      # nonce hash -> (the token, expiry): minted at Allow, collected once by the phone that claimed
 _SEEN_AT: dict = {}       # token hash -> when "last seen" was last written
 
@@ -94,8 +92,16 @@ def _load() -> dict:
     if _FILE[0] != key:
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = {}
+            if not isinstance(data, dict):
+                raise ValueError("not an object")
+            _UNREADABLE[0] = None
+        except FileNotFoundError:
+            data, _UNREADABLE[0] = {}, None
+        except (OSError, ValueError):   # (half-written, edited by hand): keep what's known, and never save over it
+            _UNREADABLE[0], _FILE[0] = key, key
+            if not _STATE:
+                _STATE.update({"enabled": False, "away_private": False, "devices": [], "lan": False})
+            return _expire(_STATE)
         devices = []
         for d in data.get("devices") or []:
             if not isinstance(d, dict) or not (d.get("hash") or d.get("lan_hash") or d.get("away_hash")):
@@ -104,16 +110,25 @@ def _load() -> dict:
                 d = {**{k: v for k, v in d.items() if k not in ("away_hash", "away_used")},
                      "lan_hash": d.get("hash"), "lan_used": d.get("used"), "hash": d.get("away_hash"), "used": d.get("away_used"),
                      "version": 1}
-            if d.get("pending") and time.time() - float(d.get("asked") or 0) > PENDING_S:
-                continue   # (a phone that claimed and was never allowed: forgotten)
-            if d.get("move_nonce") and time.time() - float(d.get("move_asked") or 0) > PENDING_S:
-                d = {k: v for k, v in d.items() if k not in ("move_nonce", "move_asked")}   # (a move never allowed: forgotten)
             devices.append(d)
         _STATE.clear()
         _STATE.update({"enabled": bool(data.get("enabled")), "away_private": bool(data.get("away_private")), "devices": devices})
         _relan(_STATE)
         _FILE[0] = key
-    return _STATE
+    return _expire(_STATE)
+
+
+def _expire(st: dict) -> dict:
+    """On every read: a phone that claimed and was never allowed is forgotten after PENDING_S, and so is a move never
+    allowed (the phone's page has stopped waiting by then; Allow on it would make a phone that never gets its token)."""
+    now = time.time()
+    keep = [d for d in st["devices"] if not (d.get("pending") and now - float(d.get("asked") or 0) > PENDING_S)]
+    if len(keep) != len(st["devices"]):
+        st["devices"][:] = keep
+    for d in keep:
+        if d.get("move_nonce") and now - float(d.get("move_asked") or 0) > PENDING_S:
+            d.pop("move_nonce", None), d.pop("move_asked", None)
+    return st
 
 
 def _save():
@@ -121,6 +136,8 @@ def _save():
     f = state_file()
     if storage.ALLOWED_ROOTS is not None and not any(storage._inside(f, r) for r in storage.ALLOWED_ROOTS):
         raise PhoneError(f"Test mode: {f} is outside the test's folders.", 500)
+    if _UNREADABLE[0] is not None and _file_key(f) == _UNREADABLE[0]:
+        raise PhoneError(f"Your phone's settings file can't be read ({f}). Fix it or delete it, then try again.", 500)
     fsutil.write_text(f, json.dumps(_STATE, indent=1))
     _FILE[0] = _file_key(f)   # (what's on disk is what's in memory: no read back)
 
@@ -141,7 +158,6 @@ def set_enabled(on: bool):
         _save()
 
 
-away_on, set_away = enabled, set_enabled   # (one switch since 1.2.1: the link is the phone's way in, at home and away)
 
 
 def away_private() -> bool:
@@ -185,9 +201,6 @@ def move_code(device_id: str) -> str:
         return code
 
 
-away_code = move_code
-
-
 def redeem_move(code: str) -> tuple[str, dict]:
     """A move code -> (a nonce, the device): the move waits for the PC's Allow, then the phone collects the one token
     with the nonce (collect), as a new phone does. The code works once. The LAN token stays until the new one is used once
@@ -204,9 +217,6 @@ def redeem_move(code: str) -> tuple[str, dict]:
         d["move_nonce"], d["move_asked"] = hash_token(nonce), time.time()   # (a second move replaces a first one waiting)
         _save()
         return nonce, public(d)
-
-
-redeem_away = redeem_move
 
 
 def lan_address() -> str | None:
@@ -332,10 +342,9 @@ def claim(code: str, name: str, addr: str = "") -> tuple[str, dict]:
         else:
             PAIRING["wrong"] += 1
             raise PhoneError("That isn't the code on the PC.", 403, generic=True)
+        if len([d for d in st["devices"] if not d.get("pending")]) >= MAX_DEVICES:   # (the code stays good: Remove one, claim again)
+            raise PhoneError(f"{MAX_DEVICES} phones are connected already. Remove one on the PC first.", 409, generic=True)
         PAIRING = None   # once
-        live = [d for d in st["devices"] if not d.get("pending")]
-        if len(live) >= MAX_DEVICES:
-            raise PhoneError(f"{MAX_DEVICES} phones are connected already. Remove one on the PC first.", 409)
         nonce = secrets.token_urlsafe(16)
         now = time.strftime("%Y-%m-%d %H:%M")
         dev = {"id": secrets.token_hex(5), "name": clean_name(name), "hash": None, "lan_hash": None, "pending": True,
@@ -384,15 +393,20 @@ def collect(nonce: str) -> tuple[str, dict] | None:
 
 def refuse(device_id: str) -> dict:
     """The PC says No: a new phone that claimed is forgotten (it never had a token); a move is cancelled, and the phone
-    from before keeps its LAN token (it may ask again)."""
+    from before keeps its LAN token (it may ask again). A phone that isn't waiting (allowed in the meantime, or its ask
+    ran out) is left as it is: No never removes a connected phone."""
     with _LOCK:
         st = _load()
         d = next((d for d in st["devices"] if d["id"] == device_id), None)
-        if d is not None and not d.get("pending") and d.get("move_nonce"):
+        if d is None or not (d.get("pending") or d.get("move_nonce")):
+            raise PhoneError("That phone isn't waiting any more.", 404)
+        if d.get("pending"):
+            st["devices"].remove(d)
+            _relan(st)
+        else:
             d.pop("move_nonce", None), d.pop("move_asked", None)
-            _save()
-            return public(d)
-    return revoke(device_id)
+        _save()
+        return public(d)
 
 
 def pending() -> list[dict]:

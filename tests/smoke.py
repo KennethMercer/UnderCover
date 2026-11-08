@@ -2298,6 +2298,104 @@ def u_phone_stream():
     return "Remove, Off and the move each end the phone's stream at once; another phone's and the PC's go on"
 
 
+@check("Your phone's records hold up (1.2.1, review): an ask never allowed runs out while the server runs; No on a phone that isn't waiting leaves it; a full list keeps the code; an unreadable phone.json is never saved over; UnderCover's own warm-up and preview jobs don't count against a phone; the card doesn't redraw what hasn't changed; the pages keep waiting through a blip")
+def u_phone_records():
+    from types import SimpleNamespace
+    from undercover.core import jobs, phone
+    from undercover.core.phone import PhoneError
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        try:
+            phone.set_enabled(True)
+            phone.new_pairing()
+            nonce, d = phone.claim(phone.PAIRING["code"], "Late phone")
+            assert [x["id"] for x in phone.pending()] == [d["id"]]
+            with phone._LOCK:   # ten minutes on, with phone.json untouched all that time
+                next(x for x in phone._STATE["devices"] if x["id"] == d["id"])["asked"] -= phone.PENDING_S + 1
+            assert phone.pending() == [] and phone.collect(nonce) is None, "an ask never allowed outlived its ten minutes"
+            try:
+                phone.allow(d["id"])
+                raise AssertionError("Allow on an ask that ran out")
+            except PhoneError as e:
+                assert e.status == 404
+            phone.new_pairing()
+            nonce, d = phone.claim(phone.PAIRING["code"], "Kept phone")
+            phone.allow(d["id"])
+            assert phone.collect(nonce)
+            for _ in range(2):   # No twice (two tabs, or after Allow): the connected phone stays
+                try:
+                    phone.refuse(d["id"])
+                    raise AssertionError("No on a phone that isn't waiting")
+                except PhoneError as e:
+                    assert e.status == 404
+            assert [x["id"] for x in phone.devices()] == [d["id"]], "No removed a connected phone"
+            phone.new_pairing()
+            n2, d2 = phone.claim(phone.PAIRING["code"], "Refused")
+            assert phone.refuse(d2["id"])["id"] == d2["id"] and [x["id"] for x in phone.devices()] == [d["id"]] and phone.pending() == []
+            # a full list: the claim is refused generically, and the code is still good after Remove
+            with phone._LOCK:
+                st = phone._load()
+                st["devices"] += [{"id": f"f{i:09d}", "name": "x", "hash": phone.hash_token(f"t{i}"), "lan_hash": None, "version": 1,
+                                   "paired": "p", "seen": "s", "ip": ""} for i in range(phone.MAX_DEVICES - 1)]
+                phone._save()
+            win = phone.new_pairing()
+            try:
+                phone.claim(win["code"], "Eleventh")
+                raise AssertionError("an eleventh phone")
+            except PhoneError as e:
+                assert e.status == 409 and e.generic, e
+            assert phone.pairing() and phone.pairing()["code"] == win["code"], "a full list used the code up"
+            phone.revoke("f000000000")
+            assert phone.claim(win["code"], "Eleventh")[1]["pending"]
+            # an unreadable phone.json: what's known stays, and it is never saved over
+            f = phone.state_file()
+            good = f.read_text(encoding="utf-8")
+            f.write_text(good[: len(good) // 2], encoding="utf-8")
+            assert len(phone.devices()) == phone.MAX_DEVICES - 1 and len(phone.pending()) == 1 and phone.enabled(), "a half-written file emptied the phones"
+            try:
+                phone.set_enabled(True)
+                raise AssertionError("saved over an unreadable phone.json")
+            except PhoneError as e:
+                assert "can't be read" in str(e)
+            assert f.read_text(encoding="utf-8") == good[: len(good) // 2]
+            f.write_text(good, encoding="utf-8")
+            phone.set_enabled(True)   # readable again: saves work
+            # the cap counts what the phone asked for, not UnderCover's own warm-up or preview line
+            saved = dict(jobs.JOBS)
+            jobs.JOBS.clear()
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "dz", "name": "p"})
+            try:
+                for _ in range(jobs.PHONE_JOBS + 2):
+                    x = jobs.Job("speakwarm", title="w")
+                    jobs.JOBS[x.id] = x
+                    x = jobs.Job("voicepreview", title="v")
+                    jobs.JOBS[x.id] = x
+                for _ in range(jobs.PHONE_JOBS):
+                    x = jobs.Job("speech", title="s")
+                    jobs.JOBS[x.id] = x
+                try:
+                    jobs.Job("speech", title="s")
+                    raise AssertionError("a fourth job")
+                except jobs.TooManyJobs:
+                    pass
+            finally:
+                jobs.ORIGIN.h = None
+                jobs.JOBS.clear()
+                jobs.JOBS.update(saved)
+        finally:
+            phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+            phone._STATE.clear()
+    web = ROOT / "undercover" / "web"
+    rooms = (web / "rooms.js").read_text(encoding="utf-8")
+    assert 'phoneDraw("phone-devices"' in rooms and "if (drew) $$(\"#phone-devices [data-revoke]\")" in rooms and 'phoneDraw("phone-asks"' in rooms
+    for page in ("pair.html", "move.html"):
+        src = (web / page).read_text(encoding="utf-8")
+        assert '.catch(() => null);   // (a blip on the way: ask again)' in src and "w.status === 401 || w.status === 403" in src, page
+    assert "409" in (web / "pair.html").read_text(encoding="utf-8")
+    return "asks run out; No leaves a connected phone; a full list keeps the code; an unreadable file isn't saved over; warm-ups uncounted"
+
+
 @check("the home-network listener's state is stored (1.2.1): at start it opens only while a phone paired before the link still holds its LAN token, never because the link is on; it closes for good when the last such token goes")
 def u_phone_listen():
     from types import SimpleNamespace
@@ -10620,7 +10718,7 @@ def u_phone_pairing():
             assert phone.device_for(token, away=True) and "used" in rec
             from undercover.app import phone_api as PA
             assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t")
-            assert PA.away_cookie("t").startswith("__Host-uc=t; Path=/;") and "Secure" in PA.away_cookie("t") and "Domain" not in PA.away_cookie("t")
+            assert PA.main_cookie("t").startswith("__Host-uc=t; Path=/;") and "Secure" in PA.main_cookie("t") and "Domain" not in PA.main_cookie("t")
             assert phone.TOKEN_IDLE_S == 30 * 86400
             phone.revoke(dev["id"])
             assert phone.device_for(token, away=True) is None and phone.devices() == []
@@ -14464,7 +14562,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

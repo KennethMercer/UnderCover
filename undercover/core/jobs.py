@@ -165,6 +165,7 @@ def jobs_using(voice: str) -> list:
 
 ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
 PHONE_JOBS, PHONE_JOBS_HOUR = 3, 12   # one phone's jobs: waiting or running at once, and started in an hour (1.2.1)
+UNCAPPED = {"speakwarm", "voicepreview"}   # what UnderCover queues for itself while a phone looks around: never counted
 
 
 class TooManyJobs(Exception):
@@ -178,7 +179,7 @@ def _phone_cap(device_id: str):
     """Every phone is on the internet now, so a stolen token is worth more: one phone may have PHONE_JOBS jobs waiting or
     running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap."""
     now = time.time()
-    mine = [j for j in list(JOBS.values()) if getattr(j, "device", None) == device_id]
+    mine = [j for j in list(JOBS.values()) if getattr(j, "device", None) == device_id and j.kind not in UNCAPPED]
     if sum(not j.finished for j in mine) >= PHONE_JOBS:
         raise TooManyJobs(f"This phone has {PHONE_JOBS} jobs waiting or running already. Wait for one to finish, or start it on the PC.")
     if sum(now - j.created < 3600 for j in mine) >= PHONE_JOBS_HOUR:
@@ -212,7 +213,7 @@ class Job:
         self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
         dev = getattr(self.origin, "device", None) if getattr(self.origin, "remote", False) else None
         self.device = dev.get("id") if isinstance(dev, dict) else None   # the phone that asked for it (None: the PC)
-        if self.device:
+        if self.device and kind not in UNCAPPED:
             _phone_cap(self.device)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
         self.state = "queued"

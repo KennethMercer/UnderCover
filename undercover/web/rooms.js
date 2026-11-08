@@ -454,7 +454,8 @@ setTimeout(loadDoctor, 4000);   // once after the page opens, so a problem shows
 // /api/phone (PC only; app/phone_api.state): Set up walks the link's steps (the secure-link piece, Tailscale's sign-in
 // and its one approval), then the card holds the phones asking in (Allow / No), the QR of the link's pair page (or a
 // typed code, on request) and the phones with Remove. It checks every few seconds while something can change on its own.
-const PH = { st: null, tick: null, poll: null, seen: null };
+const PH = { st: null, tick: null, poll: null, seen: null, drawn: {} };
+const phoneDraw = (id, html) => { if (PH.drawn[id] === html) return false; PH.drawn[id] = html; $(`#${id}`).innerHTML = html; return true; };
 const PHONE_STEP = { fetching: "Getting the secure-link piece (about 39 MB, once).", starting: "Starting the secure link…",
   "sign-in": "Sign in to give your phone a link that works anywhere. It's free, and a Google, Microsoft, Apple or GitHub account works.",
   approve: "One more click in the same tab: approve the link." };
@@ -482,9 +483,9 @@ function renderPhone() {
   $("#phone-ct").hidden = !s.approve_url;
   $("#set-away-private").setAttribute("aria-checked", !!s.private);
   // the phones asking in: a new one (it scanned the QR or typed the code) or one from before switching to the link
-  $("#phone-asks").innerHTML = s.pending.map(d => `
+  phoneDraw("phone-asks", s.pending.map(d => `
     <div class="sys" data-ask="${esc(d.id)}"><span><b>${esc(d.name)}</b> ${d.asks === "move" ? "wants to switch to the new link." : "wants to connect."}</span>
-      <span class="acts"><button class="btn" type="button" data-allow="${esc(d.id)}">Allow</button><button class="btn" type="button" data-refuse="${esc(d.id)}">No</button></span></div>`).join("");
+      <span class="acts"><button class="btn" type="button" data-allow="${esc(d.id)}">Allow</button><button class="btn" type="button" data-refuse="${esc(d.id)}">No</button></span></div>`).join(""));
   $$("#phone-asks [data-allow]").forEach(b => b.onclick = async () => {
     try { PH.st = await api("/api/phone/allow", { json: { id: b.dataset.allow } }); renderPhone(); } catch (e) { showError(e.message, "Couldn't allow it"); loadPhone(); }
   });
@@ -498,7 +499,7 @@ function renderPhone() {
   $("#phone-pairing").hidden = !p;
   clearInterval(PH.tick);
   if (p) {
-    $("#phone-qr").innerHTML = p.qr;   // an SVG made by the server (core/qr.py)
+    phoneDraw("phone-qr", p.qr);   // an SVG made by the server (core/qr.py)
     $("#phone-qr").hidden = !!p.short; $("#phone-point").hidden = !!p.short;
     $("#phone-typed").hidden = !p.short; $("#phone-short").hidden = !!p.short;
     $("#phone-url").textContent = p.url; $("#phone-code").textContent = p.code;
@@ -515,12 +516,12 @@ function renderPhone() {
   const was = PH.seen; PH.seen = new Set(known.map(d => d.id));
   const fresh = was ? known.find(d => !was.has(d.id) && !d.moving) : null;
   if (fresh) showError(`${fresh.name} is connected.`, "Phone connected", null, true);
-  $("#phone-devices").innerHTML = known.length ? known.map(d => `
+  const drew = phoneDraw("phone-devices", known.length ? known.map(d => `
     <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b>${facts([`Connected ${d.paired}`, { t: `Last seen ${d.seen}`, muted: true }])}
       ${d.lan ? `<small class="meta">On the old home Wi-Fi address until it switches.</small>` : ""}<span class="kv2" data-deep>${esc(d.ip || "")}</span></span>
       <span class="acts"><button class="btn" type="button" data-revoke="${esc(d.id)}">Remove</button></span></div>`).join("")
-    : ready ? `<p class="meta">No phones yet.</p>` : "";
-  $$("#phone-devices [data-revoke]").forEach(b => confirmClick(b, "Remove? Click again", async () => {
+    : ready ? `<p class="meta">No phones yet.</p>` : "");
+  if (drew) $$("#phone-devices [data-revoke]").forEach(b => confirmClick(b, "Remove? Click again", async () => {
     PH.st = await api("/api/phone/revoke", { json: { id: b.dataset.revoke } }); renderPhone();
   }));
   $("#phone-all-wrap").hidden = known.length < 2;

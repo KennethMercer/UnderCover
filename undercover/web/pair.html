@@ -65,14 +65,15 @@ document.getElementById("pair-form").addEventListener("submit", async e => {
     const r = await post("/api/phone/claim", { code: code.value, name: document.getElementById("pair-name").value });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(r.status === 401 ? "That code has run out. Make a new one on the PC."
-      : r.status === 403 ? "That isn't the code on the PC. Check it and try again, or scan the code." : `That didn't work (${r.status}).`);
+      : r.status === 403 ? "That isn't the code on the PC. Check it and try again, or scan the code."
+      : r.status === 409 ? "The PC has 10 phones connected already. Remove one there, then try this code again." : `That didn't work (${r.status}).`);
     show("pair-wait");
     const until = Date.now() + 10 * 60 * 1000;   // (the PC forgets a phone it hasn't allowed after this long)
     while (Date.now() < until) {
       await new Promise(ok => setTimeout(ok, 2000));
-      const w = await post("/api/phone/wait", { nonce: data.nonce });
-      if (!w.ok) throw new Error("That code has run out. Make a new one on the PC.");
-      if ((await w.json().catch(() => ({}))).ok) { show("pair-done"); return location.replace("/"); }
+      const w = await post("/api/phone/wait", { nonce: data.nonce }).catch(() => null);   // (a blip on the way: ask again)
+      if (w && (w.status === 401 || w.status === 403)) throw new Error("That code has run out. Make a new one on the PC.");
+      if (w && w.ok && (await w.json().catch(() => ({}))).ok) { show("pair-done"); return location.replace("/"); }
     }
     throw new Error("The PC didn't allow this phone in time. Make a new code on the PC and try again.");
   } catch (err) {
