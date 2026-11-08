@@ -12154,7 +12154,7 @@ def u_token_ratios():
     # the audit's plain items after bones1: the app's housekeeping out of basic (Deep shows it), one roll-off sentence, the ring on an accent fill
     jobs, work = (web / "jobs.js").read_text(encoding="utf-8"), (web / "work.js").read_text(encoding="utf-8")
     assert 'const HOUSEKEEPING = new Set(["presep", "speakwarm", "voicepreview"]);' in jobs and "!quietJob(j)" in jobs
-    assert "!(quietJob(j) && (j.final?.state || j.state) === \"done\")" in work   # a failed one still shows
+    assert 'j.kind !== "presep" && !(quietJob(j) && !failed(j))' in work   # a failed one still shows; a pre-separation never
     assert ix.count("The latest 15 stay here; older ones roll off unless sent to SafeHouse.") == 2
     assert ":focus-visible { outline-color: var(--fg); }" in (web / "look.css").read_text(encoding="utf-8")
     assert "/* -- bones pins -- */" in wa and ':where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0;' in wa
@@ -12210,7 +12210,7 @@ def u_page_rules():
     lib, jobsj, shellc, lookc, sec = [(web / n).read_text(encoding="utf-8") for n in ("library.js", "jobs.js", "shell.css", "look.css", "speakeasy.css")]
     assert 'tabCounts("kept")[L.cat]' in lib and 'd.hidden = none ||' in lib and ".lib.solo" in css, "the Library's counts or its one empty are gone"
     assert "repeat(3, minmax(0, 1fr))" in lookc and "overflow: visible" in lookc, "a phone's rooms went back to a row that hides four of the six"
-    assert '$("#rn-when").hidden = !left.length && !w?.armed' in work and '!(quietJob(j) && (j.final?.state || j.state) === "done")' in work and 'speakwarm: "speakeasy"' in jobsj and 'speakwarm: "warming up"' in jobsj, "Tonight's clock over an empty night, or the warm-up in Recent"
+    assert '$("#rn-when").hidden = !left.length && !w?.armed' in work and 'j.kind !== "presep" && !(quietJob(j) && !failed(j))' in work and 'speakwarm: "speakeasy"' in jobsj and 'speakwarm: "warming up"' in jobsj, "Tonight's clock over an empty night, or the warm-up in Recent"
     assert "fact.muted:not(.keep)" in sec and "vname(SE.voice)" not in se and ".top .lp-label, .top .deep-btn span" in shellc and "clip-path: inset(50%)" in shellc, "a phone's voice rows or top bar grew back, or a label left the screen reader"
     assert "data-fall" in da and 'store.set("uc-da-filters"' in da and 'store.get("uc-da-filters"' in da, "Your voices' filters lost All or the memory"
     from undercover.doubleagent import night as _nt
