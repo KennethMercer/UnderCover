@@ -116,9 +116,14 @@ def tailscale_names() -> tuple[str, str]:
 
 
 def tailscale_socket(state_dir) -> str:
-    """Where our tailscaled listens for its CLI: our own named pipe on Windows (never the system Tailscale's), a
-    socket in its state folder elsewhere."""
-    return r"\\.\pipe\undercover-tailscaled" if WINDOWS else str(Path(state_dir) / "tailscaled.sock")
+    """Where our tailscaled listens for its CLI: our own named pipe on Windows (never the system Tailscale's), named
+    after its state folder, so two copies of UnderCover on one PC (an install and a sandbox, two test runs) each reach
+    their own daemon and never the other's; a socket in its state folder elsewhere."""
+    if not WINDOWS:
+        return str(Path(state_dir) / "tailscaled.sock")
+    import hashlib
+    key = os.path.normcase(os.path.abspath(str(state_dir))).rstrip("\\/")
+    return r"\\.\pipe\undercover-tailscaled-" + hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
 def tailscaled_os_args() -> list:

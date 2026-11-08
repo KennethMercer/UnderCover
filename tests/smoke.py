@@ -1904,6 +1904,42 @@ def u_decode_bound():
     return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
 
 
+@check("two hidden Tailscales side by side (an install and a sandbox, two test runs): each daemon's pipe is named after its own state folder, so each CLI reaches its own daemon and never the other's")
+def u_tailnet_pipe():
+    import subprocess, tempfile
+    from undercover.core import platform as P
+    fake = ROOT / "tests" / "fake_tailscale.py"
+    with tempfile.TemporaryDirectory(prefix="uc-ts-pipe-") as d:   # (two fakes' own state; nothing of the user's)
+        a, b2 = Path(d) / "a" / "tailscale-state", Path(d) / "b" / "tailscale-state"
+        sa, sb = P.tailscale_socket(a), P.tailscale_socket(b2)
+        assert sa != sb and P.tailscale_socket(a) == sa, (sa, sb)
+        assert P.tailscale_socket(str(a) + os.sep) == sa, "a trailing separator named another pipe"
+        if P.WINDOWS:
+            assert sa.startswith("\\\\.\\pipe\\undercover-tailscaled-") and P.tailscale_socket(str(a).upper()) == sa, sa
+        else:
+            assert sa == str(a / "tailscaled.sock")
+        daemons = []
+        try:
+            for box, sock in ((a, sa), (b2, sb)):
+                box.mkdir(parents=True)
+                env = {**os.environ, "FAKE_TS_STATE": str(box / "fake.json")}
+                daemons.append(subprocess.Popen([sys.executable, str(fake), "daemon", f"--socket={sock}"], env=env,
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                creationflags=P.NO_WINDOW))
+            def cli(box, sock):
+                env = {**os.environ, "FAKE_TS_STATE": str(box / "fake.json")}
+                r = subprocess.run([sys.executable, str(fake), "cli", f"--socket={sock}", "status", "--json"], env=env,
+                                   capture_output=True, text=True, timeout=30, creationflags=P.NO_WINDOW)
+                return r.returncode
+            wait_for(lambda: cli(a, sa) == 0 and cli(b2, sb) == 0, 20, every=0.2, what="both fake daemons")
+            assert cli(a, sb) != 0 and cli(b2, sa) != 0, "a CLI reached the other copy's daemon"
+        finally:
+            for p in daemons:
+                p.kill()
+                p.wait(10)
+    return "one pipe per state folder; each CLI reaches its own daemon only"
+
+
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); Private (1.2) is Serve to the same listener with Funnel off, and back; exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
@@ -14985,7 +15021,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_tailnet_pipe, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
