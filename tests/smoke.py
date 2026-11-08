@@ -2339,6 +2339,8 @@ def u_phone_jobs_burst():
             t.join(30)
         assert len(got) == jobs.PHONE_JOBS and len(refused) == 10 - jobs.PHONE_JOBS, (len(got), refused)
         assert not jobs._MADE, "a queued job is still counted twice"
+        src = inspect.getsource(jobs.Job.__init__)
+        assert src.index('self.state = "queued"') < src.index("_phone_cap(self)"), "a job is counted before it has a state"
         for j in got:
             j.finish("done", message="Finished")
         jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "burst", "name": "p"})

@@ -245,10 +245,10 @@ class Job:
         self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
         self.device = phone_of_request()   # the phone that asked for it (None: the PC)
         self.created = time.time()
+        self.state = "queued"     # (before the count: another phone request's count reads this one from then on)
         if self.device and kind not in UNCAPPED:
             _phone_cap(self)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
-        self.state = "queued"
         self.events: list[dict] = []
         self.cond = threading.Condition()
         self.cancel = False
