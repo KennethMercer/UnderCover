@@ -4,6 +4,7 @@ renamed, exported and cleaned up without Explorer. Its HTTP routes are in safeho
 import json
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -171,7 +172,9 @@ def _duplicate_voices(hist: list) -> list[dict]:
 # ---------------------------------------------------------------- inventories
 
 SUMMARY_TTL = 15.0   # how long a summary is kept at most (what changes deep inside cache/stems shows within this)
-_SUMMARY: dict = {"key": None, "at": 0.0, "value": None}
+_SUMMARY: dict = {"key": None, "at": 0.0, "value": None, "gen": 0}   # replaced whole, never changed in place
+_SUMMARY_LOCK = threading.Lock()
+_SUMMARY_GEN = [0]   # moved on by invalidate(): a summary begun before it is never kept
 
 
 def _summary_key() -> tuple:
@@ -183,7 +186,7 @@ def _summary_key() -> tuple:
             return p.stat().st_mtime_ns
         except OSError:
             return None
-    out, up, cache, voices = path("output_dir"), path("uploads_dir"), path("cache_dir"), path("voices_dir")
+    out, up, cache, voices, models = (path(k) for k in ("output_dir", "uploads_dir", "cache_dir", "voices_dir", "models_dir"))
     hist = out / "history.jsonl"
     try:
         st = hist.stat()
@@ -191,12 +194,16 @@ def _summary_key() -> tuple:
     except OSError:
         h = None
     return (tuple(sorted(CONFIG["paths"].items())), h, mt(out), mt(out / "speech"), mt(up), mt(voices), mt(cache),
-            mt(cache / "stems"), mt(cache / "training"), mt(cache / "converted"))
+            mt(cache / "stems"), mt(cache / "training"), mt(cache / "converted"), mt(models))
 
 
 def invalidate():
-    """Drop the kept summary: SafeHouse's writing routes call this, so what the user just did shows at once."""
-    _SUMMARY["key"] = None
+    """Drop the kept summary: SafeHouse's writing routes call this, so what the user just did shows at once. A summary
+    being made while this runs (from before the change) is handed to its caller but not kept."""
+    global _SUMMARY
+    with _SUMMARY_LOCK:
+        _SUMMARY_GEN[0] += 1
+        _SUMMARY = {"key": None, "at": 0.0, "value": None, "gen": _SUMMARY_GEN[0]}
 
 
 def summary() -> dict:
@@ -205,11 +212,16 @@ def summary() -> dict:
     `total` is the Storage groups' own sum (storage.where), so the room's number and its tab's are one number; the
     categories split the same folders, so "temporary" is the working folder less stems and training, and "app" every
     model file (a hand-kept list of model folders left Whisper out)."""
+    global _SUMMARY
+    with _SUMMARY_LOCK:
+        gen, kept = _SUMMARY_GEN[0], _SUMMARY
     key, now = _summary_key(), time.monotonic()
-    if _SUMMARY["key"] == key and now - _SUMMARY["at"] < SUMMARY_TTL:
-        return _SUMMARY["value"]
+    if kept["gen"] == gen and kept["key"] == key and now - kept["at"] < SUMMARY_TTL:
+        return kept["value"]
     value = _summary()
-    _SUMMARY.update(key=key, at=now, value=value)
+    with _SUMMARY_LOCK:
+        if _SUMMARY_GEN[0] == gen:   # no invalidate() while it was made
+            _SUMMARY = {"key": key, "at": now, "value": value, "gen": gen}
     return value
 
 

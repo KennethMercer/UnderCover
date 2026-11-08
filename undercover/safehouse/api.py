@@ -61,6 +61,17 @@ from .library import COVER_WORK, SPEECH_WORK, _cleanup_groups, _guard, _update_y
 def handle(h, method: str, p: str) -> bool:
     if not p.startswith(("/api/library/", "/api/addons", "/api/storage")):
         return False
+    if method != "GET":
+        # whatever these routes change (a delete, a rename, a move, an add-on) shows in the next summary: dropped before
+        # the route runs and again just before its answer goes out, since the page asks for the summary the moment it
+        # has that answer (on another server thread)
+        library.invalidate()
+        send = h._json
+
+        def _json(obj, status=200):
+            library.invalidate()
+            send(obj, status)
+        h._json = _json
     try:
         if p.startswith("/api/addons"):
             _addons_route(h, method, p)
@@ -73,8 +84,9 @@ def handle(h, method: str, p: str) -> bool:
     except LookupError as e:
         h._error(str(e), 404)
     finally:
-        if method != "GET":   # whatever these routes changed (a delete, a rename, a move, an add-on) shows in the next summary
+        if method != "GET":   # (also when the route raised past the handlers above)
             library.invalidate()
+            h._json = send   # a kept-alive connection's next request starts from the handler's own
     return True
 
 

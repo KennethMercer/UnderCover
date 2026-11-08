@@ -11971,7 +11971,36 @@ def u_perf_library():
         assert library.summary() is not s2
         s3 = library.summary()
         library.invalidate()
-        assert library.summary() is not s3
+        s4 = library.summary()
+        assert s4 is not s3
+        make = library._summary   # a change while a summary is being made (another thread's route): that one isn't kept
+        library._summary = lambda: (library.invalidate(), make())[1]
+        try:
+            library.invalidate()
+            s5 = library.summary()
+        finally:
+            library._summary = make
+        assert library.summary() is not s5, "a summary begun before an invalidate() was kept"
+        from undercover.safehouse import api as lib_api   # a writing route: the summary is dropped just before its answer
+        seen = []
+
+        class _H:
+            path = "/api/library/x"
+
+            def _json(self, obj, status=200):
+                seen.append(library._SUMMARY["value"] is None)
+
+        def route(h, method, p):   # another thread's GET keeps a summary while this route is still writing
+            library.summary()
+            h._json({"ok": True})
+        real_route, lib_api._route = lib_api._route, route
+        try:
+            fake = _H()
+            lib_api.handle(fake, "POST", "/api/library/x")
+        finally:
+            lib_api._route = real_route
+        assert seen == [True], "the summary was still kept when a writing route answered"
+        assert vars(fake)["_json"].__func__ is _H._json, "the handler's own _json wasn't put back"
         # songs: covers per song from one pass over the history, stems as the old per-file listing gave them
         songs = {s["id"]: s for s in library.songs()}
         assert songs[sids[0]]["covers"] == 3 and songs[sids[1]]["covers"] == 2, {k: v["covers"] for k, v in songs.items()}
