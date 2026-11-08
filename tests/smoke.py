@@ -4836,6 +4836,13 @@ def u_installer_space():
     inst = ROOT / "installer"
     sizes = _json.loads((inst / "sizes.json").read_text(encoding="utf-8"))
     assert sizes["margin"] >= 1.2 and sizes["python"]["rocm"] >= 6.4 and sizes["models_gb"] >= 8.2, "below what was measured"
+    import undercover.addons   # noqa: F401  (the wizard's list, as build.ps1 reads it: the engines' add-ons registered too)
+    from undercover.core import addons as _addons
+    offered = [a for a in _addons.status() if a["optional"] and a["installable"]]
+    assert {"f5", "xtts", "chatterbox"} <= {a["id"] for a in offered}, [a["id"] for a in offered]
+    for a in offered:   # every add-on the wizard offers (build.ps1: optional and installable) has its size, at least its files'
+        got = sizes["addons"].get(a["id"])
+        assert got and got >= _addons.get(a["id"]).size_mb / 1000, f"installer/sizes.json has no size (or too small) for {a['id']}: {got}"
     if os.name == "nt":
         def ps(body):
             r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
