@@ -67,6 +67,20 @@ function Get-HaveGB([string]$Kind, [string]$Dir) {
     return $n / 1GB
 }
 
+# a TOML basic string's escapes: \\ \" \n \t, and \uXXXX / \UXXXXXXXX (Storage and config set write paths with
+# json.dumps, which writes every letter outside ASCII, an accent included, as \uXXXX)
+function Convert-TomlBasic([string]$s) {
+    [regex]::Replace($s, '\\(u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)', [Text.RegularExpressions.MatchEvaluator] {
+        param($m)
+        $e = $m.Groups[1].Value
+        if ($e.Length -eq 5 -and $e[0] -ceq 'u') { return [string][char][Convert]::ToInt32($e.Substring(1), 16) }
+        if ($e.Length -eq 9 -and $e[0] -ceq 'U') { return [char]::ConvertFromUtf32([Convert]::ToInt32($e.Substring(1), 16)) }
+        if ($e -ceq 'n') { return "`n" }
+        if ($e -ceq 't') { return "`t" }
+        return $e
+    })
+}
+
 # config.toml's [paths] in an install folder (setup and SafeHouse's Storage write them), as full paths: @{ key = path }.
 # Both TOML string forms: "basic" (escaped backslashes) and 'literal' (as written), as the uninstaller's KeptPath reads
 # them; a relative path ("models/voices") is under the install folder. No file, or nothing readable: empty.
@@ -82,7 +96,7 @@ function Read-KeptPaths([string]$InstallDir) {
         if ($section -ne 'paths') { continue }
         $m = [regex]::Match($s, '^([A-Za-z0-9_]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|''([^'']*)'')')
         if (-not $m.Success) { continue }
-        $v = if ($m.Groups[2].Success) { [regex]::Replace($m.Groups[2].Value, '\\(.)', '$1') } else { $m.Groups[3].Value }
+        $v = if ($m.Groups[2].Success) { Convert-TomlBasic $m.Groups[2].Value } else { $m.Groups[3].Value }
         if (-not $v) { continue }
         try {
             if (-not [IO.Path]::IsPathRooted($v)) { $v = Join-Path $InstallDir $v }

@@ -112,14 +112,20 @@ function tourCard() {
   c.querySelector("[data-tour].btn.primary, .tour-try")?.focus({ preventScroll: true });
 }
 // the sample button's time: the one-shot's own plan for this PC (its measured speeds: minutes on a processor install), the same
-// words the Make it button shows; never a number of the tour's own. Asked once (the plan downloads nothing); no answer, no time.
+// words the Make it button shows; never a number of the tour's own. Only while the sample song is in the library (the plan
+// then reads it from the desk: nothing searched or downloaded). No answer, no time, and the next card asks again.
 function tourTryTime() {
   if (TOUR.tryAsked) return;
   TOUR.tryAsked = true;
-  api(`/api/auto/plan?text=${encodeURIComponent(TOUR_SAMPLE)}&train=0`).then(p => {
-    const t = p && p.voice?.how === "installed" && p.eta_s && typeof planTime === "function" ? planTime(p) : "";
-    TOUR.tryT = t; const el = $("#tour-try-t"); if (el) el.textContent = t;
-  }).catch(() => {});
+  (async () => {
+    const songs = await api("/api/library/songs");
+    if (!(Array.isArray(songs) ? songs : songs?.songs || []).some(s => s.sample)) return "";
+    const p = await api(`/api/auto/plan?text=${encodeURIComponent(TOUR_SAMPLE)}&train=0`);
+    return p && p.voice?.how === "installed" && p.eta_s && typeof planTime === "function" ? planTime(p) : "";
+  })().then(t => {
+    TOUR.tryT = t; if (!t) TOUR.tryAsked = false;
+    const el = $("#tour-try-t"); if (el) el.textContent = t;
+  }).catch(() => { TOUR.tryAsked = false; });
 }
 // the waiting panel's line: the job's own words (the stage it's at), never a made-up timer; its bar and time stay the app's, lit
 function tourNow() {

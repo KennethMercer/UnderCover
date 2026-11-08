@@ -6731,6 +6731,7 @@ def u_uninstall_kept_paths():
 
 @check("installer pass 12 (Internal Affairs): the Doctor's repair offer names the Start menu item (the -Repair flag only in Deep Cover); the tour's sample time is the one-shot's own plan and a processor install's first guess is minutes; an NVIDIA card with no working driver is said so (detect_gpu, the wizard's Ready and finished pages) and Repair looks again; the space check counts moved models and library where config.toml keeps them; the public headers say what was tested")
 def u_installer_pass12():
+    import inspect
     import re
     import subprocess
     import tempfile
@@ -6750,6 +6751,8 @@ def u_installer_pass12():
     assert "about a minute" not in fr and '<small id="tour-try-t">${esc(TOUR.tryT || "")}</small>' in fr
     tt = fr[fr.index("function tourTryTime("):fr.index("// the waiting panel's line")]
     assert "/api/auto/plan?text=${encodeURIComponent(TOUR_SAMPLE)}&train=0" in tt and "planTime(p)" in tt and 'p.voice?.how === "installed"' in tt
+    assert tt.index('api("/api/library/songs")') < tt.index("/api/auto/plan") and "some(s => s.sample)" in tt, \
+        "the tour plans the sample with no sample song in the library (the plan would search online)"
     from undercover.core.config import CONFIG
     from undercover.frontman import pipeline as PL
     with isolated_data():
@@ -6758,17 +6761,36 @@ def u_installer_pass12():
             o = PL.CoverOptions(voice="v", quality="high", dereverb=True, karaoke=True, backing_voice="v", polish=True)
             CONFIG["gpu"]["backend"] = "rocm"
             card = PL.estimate_for(240.0, o)["total"]
+            card_sep = PL.estimate_for(240.0, o)["separating"]
             CONFIG["gpu"]["backend"] = "cpu"
             cpu = PL.estimate_for(240.0, o)["total"]
+            # a card's measured speed never prices the processor's work (a repair that found the card, the other way)
+            import json as _json
+            from undercover.core.config import path as _path
+            from undercover.core.separate import QUALITY, SEP
+            _path("logs_dir").mkdir(parents=True, exist_ok=True)
+            (_path("logs_dir") / "timings.jsonl").write_text(_json.dumps({"stage": "separate.run", "overlap": QUALITY["high"],
+                                                                          "model": SEP["vocal_model"], "realtime": 500.0}) + "\n", encoding="utf-8")
+            assert PL.estimate_for(240.0, o)["total"] == cpu, "a card's timing priced the processor"
+            CONFIG["gpu"]["backend"] = "rocm"
+            fast = PL.estimate_for(240.0, o)["separating"]
+            from undercover.core import timing as _timing
+            assert 'record["cpu"] = True' in inspect.getsource(_timing), "timings don't say they were the processor's"
         finally:
             CONFIG["gpu"]["backend"] = was
     assert cpu >= card * PL.CPU_FIRST_GUESS * 0.7 and cpu > 600, ("a processor install's first guess is a card's", card, cpu)
+    assert fast < card_sep, ("the card's own timing wasn't used", fast, card_sep)
     # 3. an NVIDIA card with no working driver: said truthfully, shown in the wizard, and Repair looks again
     setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
     rep = setup[setup.index("# A processor install looks again"):setup.index("# 1. GPU ---")]
-    assert "if ($Backend -eq 'cpu' -and -not $PSBoundParameters.ContainsKey('Backend'))" in rep and "$gpuSeen.backend -ne 'cpu'" in rep
+    assert "if ($Backend -eq 'cpu' -and -not $PSBoundParameters.ContainsKey('Backend') -and -not $choseCpu)" in rep and "$gpuSeen.backend -ne 'cpu'" in rep
+    assert "-eq 'by hand')" in rep and "$BackendChoiceFile = Join-Path $InstallDir 'logs\\setup-backend.txt'" in setup
+    assert "$how = if ($PSBoundParameters.ContainsKey('Backend') -and $Backend -ne 'auto' -and -not $Offline) { 'by hand' } else { 'detected' }" in setup, \
+        "a processor picked by hand isn't remembered (or the installer's own pick counts as one)"
+    assert "' -Backend ' + Backend + ' -Offline'" in (inst / "UnderCover.iss").read_text(encoding="utf-8-sig"), \
+        "the installer's setup run isn't -Offline: its detected backend would count as picked by hand"
     assert "if ($script:RedetectedGpu) { $Fix.torch = $true; $Fix.packages = $true; $Fix.config = $true }" in rep
-    assert "$gpu = if ($gpuSeen) { $gpuSeen } else {" in setup and "$gpuSeen = $null; $script:RedetectedGpu = $false" in setup
+    assert "$gpu = if ($gpuSeen) { $gpuSeen } else {" in setup and "$gpuSeen = $null; $gpuNote = $null; $script:RedetectedGpu = $false" in setup and "$g = if ($gpu) { $gpu } else { $gpuNote }" in setup
     from undercover.core import manifest as MF
     real_load = MF.load
     MF.load = lambda: {"torch_file": "torch-cpu.txt"}
@@ -6779,7 +6801,9 @@ def u_installer_pass12():
     finally:
         MF.load = real_load
     import inspect
-    assert 'torch_file(recorded=kind != "installed")' in inspect.getsource(MF.observe), "setup's new record keeps the old torch file"
+    obs = inspect.getsource(MF.observe)
+    assert 'tf = torch_file(recorded=kind != "installed")' in obs and "p = pins(torch=tf)" in obs and '"torch_file": tf,' in obs, \
+        "setup's new record keeps the old torch file (or lists the old one's packages)"
     iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
     assert "end else if Pos('nodriver|', Lines[I]) = 1 then begin" in iss and "GpuNote := Copy(Lines[I], 10, Length(Lines[I]));" in iss
     memo = iss[iss.index("function UpdateReadyMemo("):iss.index("procedure CheckKept(")]
@@ -6828,6 +6852,10 @@ def u_installer_pass12():
             assert none == "C:\\", none
             got = ps("space.ps1", f"[math]::Round((Get-HaveGB 'models-at' '{app / 'elsewhere'}') * 1GB)")
             assert got == str(2 * 1024 * 1024), got
+            # json.dumps's escapes, as Storage and config set write them (a folder name with an accent)
+            (app / "config.toml").write_text('[paths]\nmodels_dir = "E:\\\\M\\u00fcsik\\\\models"\n', encoding="utf-8")
+            acc = ps("space.ps1", f"$k = Read-KeptPaths '{app}'; [int][char]$k['models_dir'][4]; $k['models_dir'].Length")
+            assert acc.split() == ["252", str(len("E:\\M\u00fcsik\\models"))], acc
         said = "detect_gpu's choice on 5 faked PCs; the kept [paths] counted on their own drives"
     assert "-Kept (Read-KeptPaths $InstallDir)" in setup and "-Kept (Read-KeptPaths $SpInstallDir)" in sp
     # 4 and 6. the public text says what was tested and how Python arrives; constraints.txt says whose torch it pins

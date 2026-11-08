@@ -842,7 +842,7 @@ def fix_packages(dry_run: bool = False) -> dict:
     from . import addons
     lines, refused = package_fix_lines()
     if not lines:
-        return {"message": "Nothing to reinstall." + (f" {', '.join(refused)} need setup.ps1 -Repair." if refused else ""),
+        return {"message": "Nothing to reinstall." + (f" {', '.join(refused)} need Repair UnderCover, in the Start menu." if refused else ""),
                 "lines": [], "refused": refused}
     with tempfile.TemporaryDirectory() as d:
         req = Path(d) / "repair.txt"

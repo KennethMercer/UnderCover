@@ -666,6 +666,7 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
     ov = QUALITY[quality]
     from ..core import lowprofile
     low = lowprofile.on()
+    on_cpu = CONFIG["gpu"].get("backend") == "cpu"
     speeds = {"sep": [], "synth": [], "f0": []}
     log = path("logs_dir") / "timings.jsonl"
     if log.exists():
@@ -674,8 +675,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
                 r = json.loads(line)
             except ValueError:
                 continue
-            if bool(r.get("low_profile")) != low:   # (this mode's own measurements only)
-                continue
+            if bool(r.get("low_profile")) != low or bool(r.get("cpu")) != on_cpu:   # (this mode's and this device's own only:
+                continue                                                          # a repair that found the card starts afresh)
             if r.get("stage") == "separate.run" and r.get("overlap") == ov and r.get("model") == SEP["vocal_model"] and r.get("realtime"):
                 speeds["sep"].append(r["realtime"])
             elif r.get("stage") == "separate.run" and r.get("model") in (SEP["karaoke_model"], SEP["dereverb_model"]) and r.get("realtime"):
@@ -685,7 +686,7 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
             elif r.get("stage") == "convert.f0" and r.get("seconds_audio"):
                 speeds["f0"].append(r["seconds_audio"] / max(r["seconds"], 1e-3))
     slow = lowprofile.factor()   # (no measurement under Low profile yet: the burst's share of the time, as a first guess)
-    if CONFIG["gpu"].get("backend") == "cpu":   # (and on the processor, a graphics card's speeds would promise a minute)
+    if on_cpu:   # (and on the processor, a graphics card's speeds would promise a minute)
         slow *= CPU_FIRST_GUESS
     med = lambda xs, d: statistics.median(xs[-10:]) if xs else d / slow
     sep_rt = med(speeds["sep"], {2: 10.6, 4: 5.1, 8: 2.7}[ov])

@@ -46,9 +46,11 @@ $RocmSupported = @(
 
 function Get-NvidiaGpus {
     $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-    if (-not $smi) {
-        $fallback = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
-        if (Test-Path $fallback) { $smi = $fallback } else { return @() }
+    if (-not $smi) {   # (System32: today's drivers; NVSMI under Program Files: older, non-DCH ones)
+        $fallback = @((Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'),
+                      (Join-Path $(if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }) 'NVIDIA Corporation\NVSMI\nvidia-smi.exe')) |
+                    Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+        if ($fallback) { $smi = $fallback } else { return @() }
     } else { $smi = $smi.Source }
     try {
         $lines = & $smi --query-gpu=name,memory.total,compute_cap,driver_version --format=csv,noheader,nounits 2>$null
