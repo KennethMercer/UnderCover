@@ -21,7 +21,7 @@ html:not([data-skin="winamp"]) {
     background: radial-gradient(1100px 560px at 0 0, color-mix(in srgb, var(--deep) var(--lamp), transparent), transparent 80%) no-repeat, var(--bg);
     -webkit-font-smoothing: antialiased;
   }
-  & .wrap { max-width: 1080px; padding-inline: 24px; padding-block: 26px 64px; gap: 22px; }
+  & .wrap { max-width: 1080px; padding-inline: 24px; padding-block: 24px 64px; gap: 24px; }
   & h1 { font: 800 40px/1.05 var(--display); letter-spacing: -.035em; }
   & h2 { font: 600 16px/1.3 var(--body); letter-spacing: -.005em; text-transform: none; color: var(--fg); }
   & .meta { font-size: 13.5px; }
@@ -30,8 +30,8 @@ html:not([data-skin="winamp"]) {
 
   /* ------------------------------------------------------------------ top bar: wordmark + modules; the chips stay quiet */
   & .top { background: var(--bg); backdrop-filter: none; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
-  & .top-in { max-width: 1080px; padding: 12px 24px; gap: 26px; }
-  & .suite { font: 700 15px var(--body); letter-spacing: .01em; gap: 9px; }
+  & .top-in { max-width: 1080px; padding: 12px 24px; gap: 24px; }
+  & .suite { font: 700 15px var(--body); letter-spacing: .01em; gap: 8px; }
   & .logo { width: 24px; height: 24px; }
   & .mods { gap: 20px; }
   & .mod { padding: 6px 0; border-radius: 0; background: none; font-weight: 500; font-size: 14.5px; transition: color var(--t-fast); }
@@ -39,28 +39,28 @@ html:not([data-skin="winamp"]) {
   & .mod[aria-selected="true"] { background: none; color: var(--c); font-weight: 600; }
   & .mod[aria-selected="true"]::after { display: none; }
   & .mod .ico { width: 17px; height: 17px; color: inherit; }   /* only the open module's colour is loud */
-  & .mod .badge { font: 500 11px var(--mono); color: var(--accent-ink); }
-  & .top .chips { gap: 14px; }
+  & .mod .badge { font: 500 12px var(--mono); color: var(--accent-ink); }
+  & .top .chips { gap: 12px; }
   & .top .chip { background: none; padding: 4px 0; font: 500 13.5px var(--body); color: var(--muted); }
   & .top .chip-btn:hover, & .top .chip[aria-pressed="true"] { color: var(--fg); }
   & .top .chip .ico { width: 15px; height: 15px; }
   & .top .chip.deep-btn .ico { width: 18px; height: 18px; }
   & .top .chips { flex-wrap: nowrap; min-width: 0; }
-  @media (max-width: 1100px) { & .mods { gap: 14px; } }
+  @media (max-width: 1100px) { & .mods { gap: 12px; } }
 
   /* ------------------------------------------------------------------ the running strip (work.js fills it) */
   & .workbar-wrap { max-width: none; padding: 0; background: color-mix(in srgb, var(--panel) 60%, var(--bg)); }
-  & .workbar { max-width: 1080px; margin: 0 auto; background: none; border: 0; border-radius: 0; padding: 11px 24px 13px; gap: 16px; }
+  & .workbar { max-width: 1080px; margin: 0 auto; background: none; border: 0; border-radius: 0; padding: 12px 24px 12px; gap: 16px; }
   & .workbar[data-state="held"] { --jc: var(--warn); }
-  & .workbar .who { font: 600 13.5px var(--body); gap: 7px; }
+  & .workbar .who { font: 600 13.5px var(--body); gap: 8px; }
   & .workbar .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; margin: 0; border-radius: 0;
     background: color-mix(in srgb, var(--jc) 18%, transparent); }
   & .workbar .bar i { border-radius: 0; box-shadow: 0 0 10px color-mix(in srgb, var(--jc) 55%, transparent); }
-  & .workbar .btn { padding: 5px 12px; font-size: 13px; }
+  & .workbar .btn { padding: 4px 12px; font-size: 13.5px; }
   & .workbar .linkbtn { font-weight: 500; font-size: 13.5px; }
 
   /* ------------------------------------------------------------------ module heading: the glyph beside the name, the line under both */
-  & .modhead { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 14px; row-gap: 8px; align-items: center; }
+  & .modhead { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 8px; align-items: center; }
   & .modhead > div:last-child { display: contents; }
   & .modhead h1 { grid-column: 2; }
   & .modhead p { grid-column: 1 / -1; font-size: 16px; }
@@ -69,18 +69,18 @@ html:not([data-skin="winamp"]) {
 
   /* ------------------------------------------------------------------ surfaces: tone, no borders */
   & .panel, & details.adv, & .go, & .se-go, & .alert { border-color: transparent; }
-  & .panel { padding: 20px 22px; gap: 14px; }
+  & .panel { padding: 20px 24px; gap: 12px; }
   & .setup { gap: 16px; }
   & .oneshot, & .se-grid > .panel:first-child { background: var(--lit-bg); border-color: transparent; }
-  & .oneshot .big { background: color-mix(in srgb, var(--bg) 55%, var(--panel)); font: 500 19px/1.3 var(--body); padding: 13px 16px; letter-spacing: -.01em; }
+  & .oneshot .big { background: color-mix(in srgb, var(--bg) 55%, var(--panel)); font: 500 19px/1.3 var(--body); padding: 12px 16px; letter-spacing: -.01em; }
   & .oneshot .big::placeholder { color: var(--muted); }   /* plainly grey: an example, not something typed (the user, rc-page8) */
-  & .oneshot .go { padding: 12px 26px; }
-  & .ex { gap: 4px 18px; }
-  & .ex button { border: 0; padding: 0; background: none; color: var(--accent); font-size: 13.5px; font-weight: 500; }
+  & .oneshot .go { padding: 12px 24px; }
+  & .ex { gap: 4px 16px; }
+  & .ex button { border: 0; padding: 6px 0; margin: -6px 0; background: none; color: var(--accent); font-size: 13.5px; font-weight: 500; }
   & .ex button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   & .os-opts summary { color: var(--muted); }
   /* the choice card: the question in the lit card's air, each song a tone button; the picked one carries the accent edge */
-  & .choice-q { font-size: 14.5px; }
+  & .choice-q { font-size: 15px; }
   & .choice { border-color: transparent; background: color-mix(in srgb, var(--bg) 40%, var(--panel)); transition: background var(--t-fast); }
   & .choice:hover { background: var(--panel-2); }
   & .choice[aria-pressed="true"] { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
@@ -120,7 +120,7 @@ html:not([data-skin="winamp"]) {
   & input[type=text], & input[type=search], & input[type=time], & input:not([type]), & select, & textarea { border-color: transparent !important; }
   & :is(input[type=text], input[type=search], input[type=time], input:not([type]), select, textarea):focus-visible {
     outline: none; box-shadow: inset 0 0 0 1.5px var(--accent); }
-  & .seg { border-color: transparent; background: var(--panel-2); padding: 3px; gap: 2px; border-radius: 8px; overflow: visible; }
+  & .seg { border-color: transparent; background: var(--panel-2); padding: 2px; gap: 2px; border-radius: 8px; overflow: visible; }
   & .seg button { border-radius: 6px; color: var(--muted); transition: background var(--t-fast), color var(--t-fast); }
   & .seg button:hover { color: var(--fg); }
   & .seg button[aria-pressed="true"] { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .3); }
@@ -150,13 +150,13 @@ html:not([data-skin="winamp"]) {
   & .cat[aria-pressed="true"] small { color: inherit; }
   /* last night's report: a list, not a stack of cards */
   & .qreport { gap: 0; }
-  & .qres { background: none; border-radius: 0; border-top: 1px solid var(--line); padding: 10px 0; }
+  & .qres { background: none; border-radius: 0; border-top: 1px solid var(--line); padding: 8px 0; }
   & .qres:first-child { border-top: 0; padding-top: 2px; }
   & .bulk { background: color-mix(in srgb, var(--deep) 30%, var(--panel)); }
-  & .se-rrow { background: none; border-radius: 0; border-top: 1px solid var(--line); padding: 10px 0; }
+  & .se-rrow { background: none; border-radius: 0; border-top: 1px solid var(--line); padding: 8px 0; }
   & .se-rrow:first-child { border-top: 0; }
   & .st { padding: 2px 0; background: none; }
-  & .vc-status { gap: 4px 14px; }
+  & .vc-status { gap: 4px 12px; }
 
   /* ------------------------------------------------------------------ progress: a line of light */
   & .bar { height: 3px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
@@ -175,14 +175,14 @@ html:not([data-skin="winamp"]) {
   & body:not(.deep) .lib-tools input { flex: 1 1 100%; }
 
   /* ------------------------------------------------------------------ advanced settings, alerts */
-  & .adv-h { text-transform: none; letter-spacing: -.005em; font-size: 14.5px; color: var(--fg); }
-  & .adv-h span { color: var(--muted); font-size: 13px; }
+  & .adv-h { text-transform: none; letter-spacing: -.005em; font-size: 15px; color: var(--fg); }
+  & .adv-h span { color: var(--muted); font-size: 13.5px; }
   & .alert { background: var(--panel); }
 
   /* ------------------------------------------------------------------ SafeHouse rooms */
   /* the rooms read as separate tabs: each is a box on a shared rule; the open one joins the page below it and is lit along its top edge */
   & .rooms { gap: 6px; padding-top: 2px; }
-  & .room { padding: 10px 16px 11px; font-size: 15.5px; background: var(--panel); border: 1px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0;
+  & .room { padding: 12px 16px 12px; font-size: 15px; background: var(--panel); border: 1px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0;
             transition: color var(--t-fast), background var(--t-fast); }
   & .room:hover { background: var(--panel-2); }
   & .room .ico { width: 15px; height: 15px; stroke-width: 2; opacity: .8; }
@@ -191,10 +191,10 @@ html:not([data-skin="winamp"]) {
   /* too narrow for a row of tabs: every room stays on show, the icon over a short name; a row that scrolls hides four of the six */
   @media (max-width: 900px) {
     & .rooms { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; padding-top: 0; border-bottom: 0; overflow: visible; }
-    & .room { display: grid; grid-template-columns: repeat(3, auto); justify-content: center; align-items: baseline; gap: 3px 0; min-width: 0; padding: 8px 4px 7px;
+    & .room { display: grid; grid-template-columns: repeat(3, auto); justify-content: center; align-items: baseline; gap: 4px 0; min-width: 0; padding: 8px 4px 8px;
               font-size: 13.5px; white-space: nowrap; border-bottom: 1px solid var(--line); border-radius: 10px; }
     & .room .ico { grid-column: 1 / -1; justify-self: center; width: 18px; height: 18px; }
-    & .room small { margin-left: 4px; font-size: 11px; }
+    & .room small { margin-left: 4px; font-size: 12px; }
     & .room small:empty { display: none; }
     & .room .pip, & .room::after { margin-left: 4px; align-self: center; }
     & .room[aria-selected="true"] { border-bottom-color: var(--line); background: var(--panel-2); }
@@ -203,7 +203,7 @@ html:not([data-skin="winamp"]) {
   @media (max-width: 370px) { & .room small { grid-column: 1 / -1; justify-self: center; margin-left: 0; } }   /* "2 added" takes its own line in a narrow cell */
   & .roomhead h3 { font: 700 22px/1.15 var(--display); letter-spacing: -.02em; }
   /* the job running now is the room's one lit object; the rest are hairline rows */
-  & .rn-now { background: var(--lit-bg); border-left: 0; padding: 18px 20px; }
+  & .rn-now { background: var(--lit-bg); border-left: 0; padding: 16px 20px; }
   & .rn-now .bar { height: 3px; background: color-mix(in srgb, var(--jc) 18%, transparent); }
   & .rn-now .bar i { box-shadow: 0 0 10px color-mix(in srgb, var(--jc) 55%, transparent); }
   & .rn-li .linkbtn, & .rn-more .linkbtn { font-size: 13.5px; }
@@ -234,7 +234,7 @@ html:not([data-skin="winamp"]) {
   & .chip.mod { box-shadow: none; }
 
   /* ------------------------------------------------------------------ the queue drawer */
-  & .drawer { border-left: 0; box-shadow: -24px 0 60px -30px #000; padding: 20px 22px; }
+  & .drawer { border-left: 0; box-shadow: -24px 0 60px -30px #000; padding: 20px 24px; }
   & .qd-job { background: var(--panel-2); }
 
   /* ------------------------------------------------------------------ light: softer shadows */
@@ -246,16 +246,16 @@ html:not([data-skin="winamp"]) {
 
   /* ------------------------------------------------------------------ phone */
   @media (max-width: 680px) {
-    & .wrap { padding-inline: 16px; padding-block: 18px 100px; gap: 20px; }
-    & .top-in { padding: 10px 16px; }
+    & .wrap { padding-inline: 16px; padding-block: 16px 100px; gap: 20px; }
+    & .top-in { padding: 8px 16px; }
     & .mods { background: var(--panel); border-top: 0; gap: 0; }
-    & .mod { padding: 6px 2px; font-size: 11px; }
+    & .mod { padding: 6px 2px; font-size: 12px; }
     & .mod .ico { width: 22px; height: 22px; }
     & .top .chips { gap: 12px; }
-    & .workbar { padding: 9px 16px 11px; gap: 10px; }
+    & .workbar { padding: 8px 16px 12px; gap: 8px; }
     & .workbar .who { font-size: 0; gap: 0; }   /* the owner's icon only; the words are in the line */
     & .workbar .who .ico { width: 18px; height: 18px; }
-    & h1 { font-size: 32px; }
+    & h1 { font-size: 26px; }
     & .modmark .ico { width: 26px; height: 26px; }
     & .panel { padding: 16px; }
     & .oneshot .btn.go { flex: 1 1 100%; }
@@ -270,7 +270,7 @@ html:not([data-skin="winamp"]) {
     /* library rows: the name gets the width, the tags and size wrap under it */
     & .litem { grid-template-columns: 22px 42px minmax(0, 1fr); row-gap: 4px; }
     & .litem.nocheck { grid-template-columns: 42px minmax(0, 1fr); }
-    & .litem .lside { grid-column: 3 / -1; justify-content: flex-start; flex-wrap: wrap; gap: 6px 10px; }
+    & .litem .lside { grid-column: 3 / -1; justify-content: flex-start; flex-wrap: wrap; gap: 6px 8px; }
     & .litem.nocheck .lside { grid-column: 2 / -1; }
     & .litem .lside .mono { min-width: 0; text-align: left; }
     & .addon .side { grid-auto-flow: row; justify-items: start; align-items: start; gap: 8px; }

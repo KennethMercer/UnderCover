@@ -11380,6 +11380,56 @@ def u_shape_page():
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:600] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
+def _theme_tokens(web, theme: str, light: bool) -> dict:
+    """A theme's tokens for one mode as the page has them: Case File's :root (and its light block), then the theme's own blocks."""
+    def blocks(css):
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        return [(m.group(1).strip(), dict((k, v.strip()) for k, v in re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", m.group(2))))
+                for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css)]
+    toks = {}
+    for sel, t in blocks((web / "app.css").read_text(encoding="utf-8")):
+        if sel == ":root" or (light and sel == ':root[data-theme="light"]'):
+            toks.update(t)
+    if theme != "casefile":
+        own = blocks((web / "themes" / theme / "theme.css").read_text(encoding="utf-8"))
+        has_light = any('data-theme="light"' in s for s, _ in own)
+        for sel, t in own:
+            is_light = 'data-theme="light"' in sel
+            if (not is_light and (not light or not has_light)) or (is_light and light):
+                toks.update(t)
+    return toks
+
+
+@check("design tokens: on every theme, dark and light, and every module's air, the hairline is >= 1.5:1 on the panel, text >= 7, muted text >= 4.5 on the panel and the third tone, the module colour as text >= 4.5 (the maintainers' tokens sheet)")
+def u_token_ratios():
+    web = ROOT / "undercover" / "web"
+    rgb = lambda h: tuple(int(h.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    mix = lambda a, p, b: tuple(a[i] * p + b[i] * (1 - p) for i in range(3))   # color-mix(in srgb, a p, b)
+    def lum(c):
+        f = lambda v: (v / 255) / 12.92 if v / 255 <= 0.03928 else ((v / 255 + 0.055) / 1.055) ** 2.4
+        return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+    ratio = lambda a, b: (max(lum(a), lum(b)) + 0.05) / (min(lum(a), lum(b)) + 0.05)
+    floors = {"line/panel": 1.5, "fg/panel": 7.0, "muted/panel": 4.5, "muted/panel3": 4.5, "module/panel": 4.5}
+    bad, worst = [], {k: 99.0 for k in floors}
+    themes = ["casefile"] + sorted(p.name for p in (web / "themes").iterdir() if (p / "theme.css").is_file() and p.name != "casefile")
+    for theme in themes:
+        for light in (False, True):
+            t = _theme_tokens(web, theme, light)
+            pct = lambda k: float(t[k].rstrip("%")) / 100
+            for m in ("frontman", "doubleagent", "speakeasy", "safehouse"):
+                deep = rgb(t[f"--c-{m}-deep"])   # the page's air: look.css mixes the panels and the line from the module's deep tone
+                panel, panel3 = mix(deep, pct("--tint2"), rgb(t["--panel-base"])), mix(deep, pct("--tint2"), rgb(t["--panel-3-base"]))
+                got = {"line/panel": ratio(mix(deep, 0.16, rgb(t["--line-base"])), panel), "fg/panel": ratio(rgb(t["--fg"]), panel),
+                       "muted/panel": ratio(rgb(t["--muted"]), panel), "muted/panel3": ratio(rgb(t["--muted"]), panel3),
+                       "module/panel": ratio(rgb(t[f"--c-{m}"]), panel)}
+                for k, v in got.items():
+                    worst[k] = min(worst[k], v)
+                    if v < floors[k]:
+                        bad.append(f"{theme} {'light' if light else 'dark'} {m}: {k} {v:.2f} < {floors[k]}")
+    assert not bad, bad
+    return f"{len(themes)} themes x 2 modes x 4 modules; worst " + ", ".join(f"{k} {v:.2f}" for k, v in worst.items())
+
+
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
 def u_page_rules():
     web = ROOT / "undercover" / "web"
@@ -11575,6 +11625,9 @@ def u_page_rules():
     assert "/edits/price" in shape and "fit?.said" in shape and "x.ok.fit?.said" in shape   # the fit said before and as it's sung
     assert "audio: ownPlayer(new Audio())" in shape and "PLAYERS.forEach(a => { a.volume = volumeNow(); });" in app   # Hear it is the page's player too
     assert "SH.retry ? `<span><button" in shape and "SH.retry = false; return shDraw(); }" in shape   # no Try again on an outright refusal
+    import inspect as _ins_ed
+    from undercover.frontman import edits as _ed
+    assert '"kept_now": _state(doc) in doc.get("kept", [])' in _ins_ed.getsource(_ed.view) and "live.length && d.kept_now" in shape   # kept after a reload
     assert "x.id === h.edited_from" in app and "{ t: `from ${coverTitle(x)}` }" in app   # a kept version names its cover (facts esc()s t)
     import inspect as _ins
     from undercover.frontman import pipeline as _pl
@@ -13789,7 +13842,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_token_ratios, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

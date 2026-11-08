@@ -99,7 +99,7 @@ const deepOf = hex => { const c = toOklch(hex); return fromOklch({ L: yellowish(
 // the panels from the near-black the user picked
 function airFrom(base) {
   const c = toOklch(base), at = (dl, dc = 0.001) => fromOklch({ L: c.L + dl, C: c.C + dc, h: c.h });
-  return { "--base": base, "--panel-base": at(0.037), "--panel-2-base": at(0.073), "--panel-3-base": at(0.111), "--line-base": at(0.125), "--wave": at(0.17, 0.004) };
+  return { "--base": base, "--panel-base": at(0.037), "--panel-2-base": at(0.073), "--panel-3-base": at(0.111), "--line-base": at(0.2), "--wave": at(0.17, 0.004) };   // (the line: >= 1.5:1 on the panel)
 }
 // the light mode from the dark one: colours to reading lightness on a light panel, deep tones lifted, the air mirrored
 function deriveLight(dark, lightBase) {

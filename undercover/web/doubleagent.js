@@ -356,10 +356,11 @@ $$("#da-mode button").forEach(b => b.onclick = () => {
 });
 $("#da-person").addEventListener("keydown", e => { if (e.key === "Enter") $("#da-train").click(); });
 $("#da-train").onclick = () => daStart(false);
-// "Train the voice · about …": the estimator's own time for this kind (and the cadence a speaking voice gets), not a fixed hour
+// the time under the field ("About 4½ hours · Train tonight: ready in the morning"), the estimator's own for this kind (and the cadence a
+// speaking voice gets), not a fixed hour; the button says only the verb (consult 2, item 2)
 function daEta() {
   const p = $("#da-person").value.trim(), words = estWords("new", p, DA_MODE.v);
-  if (words) $("#da-train-eta").textContent = words;
+  if (words) $("#da-train-eta").textContent = `${upFirst(words)} · `;
   else if (!EST.asked.has(estKey("new", p, DA_MODE.v))) estimateFor("new", p, DA_MODE.v).then(daEta);
 }
 $("#da-person").addEventListener("input", () => { clearTimeout(DA.etaTimer); DA.etaTimer = setTimeout(daEta, 600); });

@@ -1,6 +1,6 @@
 /* Midnight: The city at 3 am: a blue-black air, the four colours cooled a step. A theme is tokens only (docs/THEMES.md). */
 :root[data-uc-theme="midnight"] {
-  --base: #07080c; --panel-base: #0f1116; --panel-2-base: #161a21; --panel-3-base: #1f242c; --line-base: #22272f;
+  --base: #07080c; --panel-base: #0f1116; --panel-2-base: #161a21; --panel-3-base: #1f242c; --line-base: #31373f;
   --fg: #e6e9ef; --muted: #8e96a3; --accent-ink: #07080c;
   --c-frontman: #c3a070; --c-doubleagent: #b48fab; --c-speakeasy: #8db3cb; --c-safehouse: #9ea7b1;
   --c-frontman-deep: #6b4f24; --c-doubleagent-deep: #552d4c; --c-speakeasy-deep: #1b3d5c; --c-safehouse-deep: #2c3744;
@@ -12,7 +12,7 @@
 }
 :root[data-uc-theme="midnight"][data-theme="light"] {
   --base: #e3e6ea; --panel-base: #f4f6f8; --panel-2-base: #e8ebef; --panel-3-base: #dadfe5; --line-base: #cdd3da;
-  --fg: #12151a; --muted: #5d6572; --accent-ink: #f6f8fb;
+  --fg: #12151a; --muted: #575f6c; --accent-ink: #f6f8fb;
   --c-frontman: #6a4a17; --c-doubleagent: #6b2f5c; --c-speakeasy: #1f4c6b; --c-safehouse: #46525f;
   --c-frontman-deep: #a67a3c; --c-doubleagent-deep: #9c5e8e; --c-speakeasy-deep: #4d7899; --c-safehouse-deep: #76838f;
   --ok: #2c6f4d; --warn: #765717; --err: #a43f3a;
