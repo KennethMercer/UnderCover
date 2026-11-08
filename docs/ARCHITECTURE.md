@@ -381,7 +381,8 @@ instrument the split called "vocal" back into the instrumental. Lines the karaok
 lead is silent are handled by `chorus`: `convert` moves them into the conversion, `top` moves only their top voice, and
 `keep` (the default) leaves them in the backing. With `keep`, what's left of the lead under those lines is silent (with
 fades), so no voice sings the split's leftovers, and the note says who sings the lines: the original singers, or the
-backing's voice when the backing is converted.
+backing's voice when the backing is converted. Under `top`, a stretch where the backing's re-split finds no top voice
+(`leadgate.top_missing`: its top 30 dB or more under the backing, as in Toxic's stacked choruses) is kept the same way.
 
 ### Listen-back: Whisper
 
