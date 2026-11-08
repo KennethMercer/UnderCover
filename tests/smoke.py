@@ -11861,6 +11861,27 @@ def _away(method, path, port, host, cookie=None, body=None, origin=True):
         c.close()
 
 
+# a_away's waits: the away driver ticks every 2 s and each step spawns fake CLI processes (Python start-ups), under a
+# --full run's GPU work on a busy PC; 60 s was tight enough to fail a run that then passed on its own (2026-11-08)
+AWAY_WAIT = 120
+
+
+def _fake_daemon_alive(st_file: Path) -> bool:
+    """Is the fake tailscaled still running? Its liveness is a byte lock on <state>.alive that the OS drops when the
+    process ends (fake_tailscale.daemon_alive, read the same way): a lock this process can take means nobody holds it."""
+    alive = st_file.with_name(st_file.name + ".alive")
+    if not alive.exists():
+        return False
+    fd = os.open(alive, os.O_RDWR)
+    try:
+        if GpuLock._lock(fd, True):
+            GpuLock._lock(fd, False)
+            return False
+        return True
+    finally:
+        os.close(fd)
+
+
 @check("api: away from home (phase 20) on a fake Tailscale: sign-in, approval, ready; Funnel only to the away listener; its gate (Host, Origin, no pairing, away tokens only); a home phone's link becomes its away pass; off closes it")
 def a_away():
     st_file = Path(os.environ["FAKE_TS_STATE"])
@@ -11876,12 +11897,12 @@ def a_away():
         st = api("/api/away", {"on": True})
         port = st["port"]
         assert st["on"] and st["listening"] and 7870 <= port < 7880, st
-        wait_for(lambda: api("/api/away")["auth_url"], 60, every=0.5, what="the Tailscale sign-in link")
+        wait_for(lambda: api("/api/away")["auth_url"], AWAY_WAIT, every=0.5, what="the Tailscale sign-in link")
         assert api("/api/away")["phase"] == "sign-in"
         write(backend="Running", signed_in=True, host="uc-fakeaway.tailfake.ts.net")
-        wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="the approval link")
+        wait_for(lambda: api("/api/away")["approve_url"], AWAY_WAIT, every=0.5, what="the approval link")
         write(funnel_approved=True)
-        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/away")), 60, every=0.5, what="ready")
+        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/away")), AWAY_WAIT, every=0.5, what="ready")
         host = st["host"]
         assert st["link"] == f"https://{host}", st
         sandbox_port = int(BASE.rsplit(":", 1)[1])
@@ -11930,19 +11951,19 @@ def a_away():
         # on again (the sign-in is kept: no new sign-in), then Phone access off takes away from home with it
         st = api("/api/away", {"on": True})
         port = st["port"]
-        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready again")
+        wait_for(lambda: api("/api/away")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready again")
         # Private (Deep Cover, 1.2): Serve on the tailnet only, kept across a restart; then back to Funnel
         st = api("/api/away", {"private": True})
         assert st["private"] and st["on"], st
-        wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="Serve's approval link")
+        wait_for(lambda: api("/api/away")["approve_url"], AWAY_WAIT, every=0.5, what="Serve's approval link")
         write(serve_approved=True)
-        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready on the tailnet only")
+        wait_for(lambda: api("/api/away")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready on the tailnet only")
         assert read()["serve_on"] and not read().get("funnel_on") and read()["funnel_target"] == f"http://127.0.0.1:{port}", read()
         from undercover.core import phone
         assert json.loads(phone.state_file().read_text(encoding="utf-8"))["away_private"], "the private switch wasn't kept"
         assert _lan("POST", "/api/away", home, {"private": False})[0] == 403, "a phone changed away from home"
         api("/api/away", {"private": False})
-        wait_for(lambda: api("/api/away")["phase"] == "ready" and read().get("funnel_on"), 60, every=0.5, what="back on Funnel")
+        wait_for(lambda: api("/api/away")["phase"] == "ready" and read().get("funnel_on"), AWAY_WAIT, every=0.5, what="back on Funnel")
         resets = read()["calls"].count(["funnel", "reset"])
         api("/api/phone", {"on": False})
         st = api("/api/away")
@@ -11952,12 +11973,20 @@ def a_away():
             raise AssertionError("the away listener still answers after Phone access was switched off")
         except ConnectionRefusedError:
             pass
-        # Forget with away off: the daemon comes up just for the logout, then goes, and the node's keys with it
-        daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+        # Forget with away off: the daemon comes up just for the logout, then goes, and the node's keys with it.
+        # Judged by state, not by counting daemon starts: forget() starts one only if none answers, and the fake's
+        # liveness is an OS lock Windows lets go a moment after the process ends, so first wait for the old daemon
+        # to be really gone, then watch the fake's own daemon flag go from off to on, and the logout land after it
+        wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Phone access off")
+        write(daemon=False)
+        n0 = len(read()["calls"])
         api("/api/phone", {"on": True})
         st = api("/api/away/forget", {})
         r = read()
-        assert r.get("logged_out") and sum(c[0] == "tailscaled" for c in r["calls"]) == daemons + 1 and not st["name"], (st, r["calls"][-4:])
+        later = r["calls"][n0:]
+        assert r.get("logged_out") and r.get("daemon") is True and r.get("backend") == "NeedsLogin" and not st["name"], (st, later)
+        assert ["logout"] in later and any(c[0] == "tailscaled" for c in later), later   # a daemon came up for it, then the logout
+        wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Forget")
     finally:
         api("/api/phone", {"on": True})
         api("/api/away", {"on": False})
