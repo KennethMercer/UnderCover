@@ -259,6 +259,7 @@ html:not([data-skin="winamp"]) {
     & .modmark .ico { width: 26px; height: 26px; }
     & .panel { padding: 16px; }
     & .oneshot .btn.go { flex: 1 1 100%; }
+    & .ex { gap: 0 16px; } & .ex button { padding: 12px 0; margin: 0; }   /* each example a thumb's height, stacked without overlap */
     & .go-btns { width: 100%; } & .go-btns .btn, & .go-btns .convert { flex: 1 1 100%; width: auto; }
     /* the kinds are one scrolling row; the search gets its own line */
     & .cats { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -16px; padding-inline: 16px; }
