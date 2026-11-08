@@ -71,6 +71,15 @@ def apply_cap(limit: float | None = None) -> float | None:
         return None
 
 
+def held_gb() -> float:
+    """What this process holds on the card right now (PyTorch's reserved, binary GB; 0 without a GPU)."""
+    torch = sys.modules.get("torch")
+    try:
+        return torch.cuda.memory_reserved() / 2**30 if torch is not None and torch.cuda.is_available() else 0.0
+    except Exception:   # noqa: BLE001
+        return 0.0
+
+
 def peak_gb() -> float | None:
     """The most graphics memory this process has held since the last reset_peak() (PyTorch's reserved, binary GB)."""
     torch = sys.modules.get("torch")
@@ -125,11 +134,13 @@ MODELS = Models()
 
 def release(step: str):
     """Drop what the next step doesn't need, so it doesn't count against Low profile's cap: before a conversion or a speech
-    the separator; before a training the separator, the converter and listen-back's ear (all re-loaded on first use)."""
-    if step in ("convert", "speak", "train") and MODELS._sep is not None:
+    the separator; before the worker hears a song's words ("hear") the separator and the converter; before a training
+    those and listen-back's ear (all re-loaded on first use)."""
+    if step in ("convert", "speak", "train", "hear") and MODELS._sep is not None:
         MODELS._sep = None
-    if step == "train":
+    if step in ("train", "hear"):
         MODELS._conv = None
+    if step == "train":
         lb = sys.modules.get("undercover.speakeasy.listenback")
         if lb is not None:
             try:

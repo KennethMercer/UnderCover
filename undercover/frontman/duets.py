@@ -607,8 +607,10 @@ def describe(plan: list, names: dict, said: dict | None = None) -> str:
 
 def heard_words(lead: Path, backing: Path | None, work: Path, cancel=None) -> list:
     """Whisper's words on the whole vocal (the lead and the backing mixed), through the speech worker; the
-    recogniser is let go after. -> [[word, start, end, confidence], ...]"""
+    recogniser is let go after. Under Low profile the worker gets Whisper's share for it (lowprofile.worker_step; NoRoom
+    when the limit can't hold it). -> [[word, start, end, confidence], ...]"""
     import soundfile as sf
+    from ..core import lowprofile
     from ..core.cadence import client
     from ..core.engine.convert import load_16k
     x = load_16k(lead)
@@ -621,11 +623,15 @@ def heard_words(lead: Path, backing: Path | None, work: Path, cancel=None) -> li
     f = work / "duet-vocal.wav"
     sf.write(str(f), x.astype(np.float32), SR16)
     try:
-        r = client.transcribe([f], words=True, cancel=cancel)
+        with lowprofile.worker_step("hear"):
+            try:
+                r = client.transcribe([f], words=True, cancel=cancel)
+            finally:
+                if not lowprofile.on():   # (under Low profile the worker itself goes after the step)
+                    try:
+                        client.WORKER.call("free", what="whisper", timeout=30)
+                    except Exception:   # noqa: BLE001 - nothing loaded to free
+                        pass
     finally:
         f.unlink(missing_ok=True)
-        try:
-            client.WORKER.call("free", what="whisper", timeout=30)
-        except Exception:   # noqa: BLE001 - nothing loaded to free
-            pass
     return [w for w in (r[0].get("words") or []) if len(w) >= 3] if r else []

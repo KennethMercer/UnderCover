@@ -176,17 +176,21 @@ class CoverEngine:
             plan = check_plan(opts.duet_plan, dur)
         else:
             report("converting", 0.0, "Listening for the verses and choruses")
+            no_room = False
             try:
                 words = heard_words(cstems["vocals"], cstems.get("backing"), work)
             except Exception as e:   # noqa: BLE001 - no recogniser here (or it failed): shared by phrases instead
+                from ..core.lowprofile import NoRoom
+                no_room = isinstance(e, NoRoom)
                 print(f"Duet: the words couldn't be heard ({type(e).__name__}: {e}); sharing it by phrases.", flush=True)
                 words = []
             plan, rows, fallback = find_plan(lead16, words, way, dur)
             if heard is not None:
                 heard.update(words=words, rows=rows)
             if fallback:
-                notes.append("UnderCover couldn't make out enough of the words, so the two voices take turns every "
-                             "two phrases.")
+                notes.append("Low profile's limit leaves no room to hear the words, so the two voices take turns every "
+                             "two phrases." if no_room else "UnderCover couldn't make out enough of the words, so the two "
+                             "voices take turns every two phrases.")
             if way == "turns" and not fallback:
                 ranges = {"A": _range_of(voice), "B": _range_of(dvoice)}
                 f0 = lead_f0() if lead_f0 is not None and ranges["A"] and ranges["B"] else None

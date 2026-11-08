@@ -40,9 +40,10 @@ class Control:
 USER_ERRORS: list = []   # exception classes whose message is already meant for the user (modules add theirs)
 
 
-def _platform_errors():   # core/platform's "not on this OS" is written for the user (phase 18); so is the phone's cap
+def _platform_errors():   # core/platform's "not on this OS" is written for the user (phase 18); so are the phone's cap and Low profile's NoRoom
     from .platform import NotOnThisOS
-    USER_ERRORS.append(NotOnThisOS)
+    from .lowprofile import NoRoom
+    USER_ERRORS.extend((NotOnThisOS, NoRoom))
 
 
 _platform_errors()

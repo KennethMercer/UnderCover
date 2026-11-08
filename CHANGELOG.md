@@ -15,7 +15,9 @@ in brackets.
 - A phone can have three jobs waiting or running at a time. Deleting covers, speech, songs and training projects is
   done on the PC.
 
-**FrontMan** (nobacking, holdparts, residue, notop)
+**FrontMan** (nobacking, holdparts, residue, notop, firstopen)
+- Under Low profile, opening Shape it for the first time and a duet's verses and choruses hear the words again: the
+  speech worker gets the room Whisper needs, then gives it back. A limit too small for it says so.
 - Before Convert, a duet says when a song already split has almost no backing, so you know the second singer has
   little to take there.
 - A backing stem with harmonies is sung as one part, held through a crossing: where two parts cross inside a note, the
