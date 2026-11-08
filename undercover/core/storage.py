@@ -73,19 +73,27 @@ def refuse(paths, from_room: bool = False, confirmed: bool = False) -> str | Non
     return None
 
 
-def size_of(p: Path, skip: tuple = ()) -> tuple[int, int]:
-    """(bytes, files) under p, leaving out the folders in skip."""
+def size_of(p: Path, skip: tuple = (), into: dict | None = None) -> tuple[int, int]:
+    """(bytes, files) under p, leaving out the folders in skip. `into` ({folder: bytes}, folders as given) is added
+    to for every folder in it that holds a file seen on the way: the Library's categories (stems, training) come out
+    of the same walk as the groups' totals (the maintainers' notes, efficiency)."""
     total = n = 0
     if p.is_file():
         return p.stat().st_size, 1
+    wanted = [(os.path.normcase(os.path.abspath(k)), k) for k in (into or {})]
     for dirpath, dirs, files in os.walk(p):
         dirs[:] = [d for d in dirs if not any(_same(Path(dirpath) / d, s) for s in skip)]
+        here = os.path.normcase(os.path.abspath(dirpath))
+        holders = [k for w, k in wanted if here == w or here.startswith(w.rstrip("\\/") + os.sep)]
         for f in files:
             try:
-                total += os.stat(os.path.join(dirpath, f)).st_size
-                n += 1
+                size = os.stat(os.path.join(dirpath, f)).st_size
             except OSError:
-                pass
+                continue
+            total += size
+            n += 1
+            for k in holders:
+                into[k] += size
     return total, n
 
 
@@ -105,16 +113,21 @@ def folder_of(group: str) -> Path:
     return parents[0]
 
 
-def where() -> dict:
-    """The three groups: folder, size, what's in them, the [paths] keys (Deep Cover)."""
+def where(folders: tuple = ()) -> dict:
+    """The three groups: folder, size, what's in them, the [paths] keys (Deep Cover). With `folders` (inside the
+    groups' folders), each group also says `"inside": {folder: bytes}` for the ones under it, from the same walk."""
     out = {}
+    into = {Path(f): 0 for f in folders}
     for g, keys in GROUPS.items():
         b = n = 0
+        before = dict(into)
         for key, _, _ in keys:
-            bb, nn = size_of(path(key), _skips(key))
+            bb, nn = size_of(path(key), _skips(key), into)
             b, n = b + bb, n + nn
         out[g] = {"label": LABELS[g], "about": ABOUT[g], "folder": str(folder_of(g)), "size": b, "files": n,
                   "keys": {k: str(path(k)) for k, _, _ in keys}}
+        if folders:
+            out[g]["inside"] = {f: into[f] - before[f] for f in into}
     return out
 
 
@@ -501,7 +514,7 @@ def start_move(group: str, folder: str, confirmed: bool = False):
         except ModelError as e:
             job.finish("error", message=str(e))
         except Exception as e:
-            job.finish("error", message=jobs.friendly(e, "moving files"))
+            jobs.fail(job, e, "moving files")
 
     threading.Thread(target=run, daemon=True).start()
     return job

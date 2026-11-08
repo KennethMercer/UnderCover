@@ -15,10 +15,11 @@ from pathlib import Path
 
 import numpy as np
 
-from ..core import jobs
+from ..core import jobs, manifest, platform
 from ..core.config import CONFIG, path
 from ..core.files import MAX_AUDIO_S
 from ..core.timing import timed
+from ..core.voices import ModelError
 
 RCFG = CONFIG["remix"]
 
@@ -39,15 +40,15 @@ class MixSettings:
 
 
 def _ffmpeg() -> str:
-    exe = shutil.which("ffmpeg")
-    if not exe:
-        raise RemixError("ffmpeg isn't installed or isn't on PATH. Install it (winget install Gyan.FFmpeg) and restart.")
-    return exe
+    try:
+        return manifest.ffmpeg()
+    except ModelError as e:   # (the same words, as the remix's own error: jobs shows it to the user as it is)
+        raise RemixError(str(e)) from None
 
 
 def _run(args: list[str]) -> str:
-    p = subprocess.run([_ffmpeg(), "-hide_banner", "-nostdin", *args], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+    p = subprocess.run([_ffmpeg(), "-hide_banner", "-nostdin", *args], capture_output=True, **platform.TEXT,
+                       creationflags=platform.NO_WINDOW)
     if p.returncode != 0:
         tail = "\n".join(p.stderr.strip().splitlines()[-5:])
         raise RemixError(f"ffmpeg failed while mixing:\n{tail}")

@@ -576,7 +576,7 @@ def _export(h, proj, b):
             job.finish("done", message=waiting_note(owner) if owner else f"{label_of(v.name)} is ready in your voices.",
                        voice=v.name, pending_for=owner)
         except Exception as e:
-            job.finish("error", message=jobs.friendly(e, "adding the voice"))
+            jobs.fail(job, e, "adding the voice")
 
     threading.Thread(target=run, daemon=True).start()
     h._json({"job": job.id})

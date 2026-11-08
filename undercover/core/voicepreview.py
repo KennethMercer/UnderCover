@@ -15,7 +15,6 @@
 """
 import hashlib
 import json
-import shutil
 import subprocess
 import threading
 import time
@@ -89,7 +88,7 @@ def make(v, job=None, force: bool = False) -> bool:
     if RENDER[0] is None:
         print(f"Preview line for {v.name}: nothing to render it with here (the app registers SpeakEasy at start).", flush=True)
         return False
-    from . import fsutil
+    from . import fsutil, manifest, platform
     d = Path(v.dir)
     try:
         y, sr = RENDER[0](_Quiet(job), v)
@@ -99,11 +98,8 @@ def make(v, job=None, force: bool = False) -> bool:
         sf.write(str(wav), y, sr, subtype="PCM_16")
         try:
             tmp = d / f"preview.{time.time_ns()}.mp3"
-            exe = shutil.which("ffmpeg")
-            if not exe:
-                raise RuntimeError("ffmpeg isn't here")
-            r = subprocess.run([exe, "-hide_banner", "-nostdin", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "96k", str(tmp)],
-                               capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            r = subprocess.run([manifest.ffmpeg(), "-hide_banner", "-nostdin", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "96k", str(tmp)],
+                               capture_output=True, **platform.TEXT, creationflags=platform.NO_WINDOW)
             if r.returncode != 0 or not tmp.is_file():
                 raise RuntimeError(f"ffmpeg couldn't write the clip ({(r.stderr or '').strip()[-200:]})")
             fsutil._replace(tmp, clip(v))

@@ -114,8 +114,15 @@ and `first_why` so the page says it. The import stand-ins AMD's Windows build of
   stream or, while it is quiet, from `/api/jobs` summaries (`ev.synthetic`). Smoke fails if any other script contains
   `new EventSource`.
 - Every OS-specific call goes through `core/platform.py`. Elsewhere it does the portable thing or raises `NotOnThisOS`
-  with a plain sentence, and `supports(feature)` lets a page hide what cannot work here. Smoke fails if another module
-  makes such a call.
+  with a plain sentence, and `supports(feature)` lets a page hide what cannot work here. A program's file name comes
+  from `platform.exe_name(name)`, a hidden child process from `platform.NO_WINDOW`, a program's text output through
+  `platform.TEXT` (UTF-8, a bad byte replaced, never a decode error; Windows' own console tools such as netsh are
+  read in the console's code page, `platform.CONSOLE`), a process that outlives the server through
+  `platform.start_detached` (its own session off Windows), and "how do I install it" from
+  `platform.install_hint(tool)` (winget, brew or apt). Smoke fails if another module makes such a call, tests
+  `os.name`/`sys.platform` itself or names a program with `.exe`.
+- ffmpeg and ffprobe are found one way, `core/manifest.ffmpeg(name)`: the installer's copy in `tools/ffmpeg/bin`,
+  else the one on PATH, else a `ModelError` that says how to install it on this OS. No module calls `"ffmpeg"` bare.
 - Expert-only elements carry `data-deep`; `[data-pc]` marks controls a paired phone does not get.
 
 ### Dependency rules
@@ -263,7 +270,9 @@ characters; every cover route uses it), `output`, `song`, `voice`, `title` (+ `t
 `converted_vocal`, `converted_backing`, `notes`, `seconds`, `options`, `created`, `kept`, `kept_at`. `history.record`
 is the one place a finished cover is added. A duet's `options` carry `duet_voice`, `duet_way`, `duet_octave`,
 `duet_backing` and `duet_plan` (`[[start_s, end_s, "A" | "B"], ...]` from 0 to the song's end), so Make again sings it
-the same way.
+the same way. The file is parsed once per change (kept by its size and mtime under the history lock, dropped by every
+write, so another process's write is seen too); readers get deep copies of the rows, and the per-cover "is its file there"
+check still runs on every read. A hash-named song's title (its sidecar JSON) is remembered by the sidecar's mtime.
 
 ### Recent tray
 
@@ -280,7 +289,9 @@ the tray only; the library lists everything. Each property is proved in `tests/s
 finished in the last hour as `Job.snapshot()`: `id, kind, state, title, project, created, ended, pausing, stage,
 message, events, progress`, and when known `epoch, epochs, eta, total_left, stage_left, index, of, elapsed`, `retry`
 (`POST /api/jobs/<id>/retry` replays a failed cover, speech, one-shot or install), a one-shot's `plan`, a finished job's
-`final`. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
+`final`. A failed job's last event and `final` say `plain`: true when its message is a refusal written for the user (a
+`ModelError`, a module's registered user error, or a sentence the job ends itself with; `jobs.fail`), false for an
+unexpected error whose `friendly()` message is a guess, so the page decides Try again on it, not on the words. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
 pause. Every progress event carries `total_left` in seconds (`jobs.STAGES`, `cache/eta.json`). A heartbeat
 (`logs/heartbeat*.jsonl`) records each running job's resume spec for the Doctor; `jobs.START_GATES` lets the game pause
 ask before a queued GPU job starts.
@@ -362,7 +373,7 @@ Voices are RVC v2 pitch-guided models (`core/engine/convert.py`, a port of RVC's
 the voice's training set (`index_ratio` 0.75). A backing stem can hold a stack of voices, and RMVPE's strongest line then
 changes every few frames: `f0fix.hold_line` keeps one line through every sung run that has a second one (a part that rests
 for a moment is a rest, not a hop to another part), holds its place through quiet, and leaves runs of one voice as they are
-(`Settings.one_line`, on every backing take, never on a lead). Inside one sung note, where two parts cross and the track would move from one to the other mid-word, `f0fix.hold_parts` keeps the part it was on until the note ends or that part stops singing; a step of the tune with no second part under it is left as sung. Songs are converted in 60 s chunks cut near quiet points:
+(`Settings.one_line`, on every backing take, never on a lead). Inside one sung note, where two parts cross and the track would move from one to the other mid-word, `f0fix.hold_parts` keeps the part it was on until the note ends or that part stops singing; a step of the tune with no second part under it is left as sung. A cover's stems are decoded once: `load_16k` keeps the last four vocals as 16 kHz arrays, keyed by resolved path, size and mtime (a rewritten stem is read again), and hands each caller its own copy. Songs are converted in 60 s chunks cut near quiet points:
 60 s halves VRAM against 120 s (3.8 vs 7.6 GB) at the same warm speed. Training (`doubleagent/trainer.py`) follows upstream RVC's recipe,
 fine-tuning the official v2 base models in bf16, with a few held-out phrases for a validation loss and previews. The
 budget scales with the data: 450 steps per kept minute, at least 8000, continued while the held-out loss falls, up to
@@ -543,7 +554,7 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
   tracks are read once and kept with the list (`pitch.npz`: the lead's, and the backing's one line held; read back as data, no
-  pickles). They're read when the cover is recorded, when the list is first opened, or with the next edit of an older list, and
+  pickles). They're read when a duet's cover is recorded, when the list is first opened, or with the next edit of an older list, and
   Keep carries them. `POST .../edits` answers `{job, edit, fit}`; `POST .../edits/price` runs the gate and the price and sings
   nothing, for the page to say it before the edit is offered.
 - **`compile_list`** is pure: plans and edits as far as the cursor -> parts `[start, end, who, octave, src, base]`. `plan_of` makes
@@ -669,7 +680,11 @@ SafeHouse: a strip of rooms (`#safehouse/<room>`; on a phone all six show, three
 (Kept / Recent views, counting the kind that's chosen), Running (now, tonight with its start time once a job waits, recent,
 last night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the
 Vault), Add-ons, System (the Doctor, GPU and models, the YouTube downloader, What's new, Restart, Quit, the diagnostics
-file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause).
+file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause). The Library's summary
+(`/api/library/summary`) is kept for up to 15 s while the paths setting, the history file and the counted folders'
+mtimes stay the same, and dropped by every SafeHouse route that writes, before it runs and again just before it
+answers (a summary begun before a drop is never kept); its sizes come from one walk of the storage groups
+(`storage.where(folders)`). `/api/status`'s stale-code stamp is re-walked at most every 5 s.
 
 ### Deep Cover
 

@@ -35,7 +35,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from . import fsutil, storage
+from . import fsutil, platform, storage
 from .config import ROOT, path
 from .voices import ModelError
 
@@ -573,9 +573,9 @@ print("SELFTEST " + json.dumps(out))
 def selftest(d: Path | None) -> dict:
     """Resolve KNOWN_GOOD with a pair in a separate Python (d None = the venv's pair). -> {"ok": n, "of", "errors", "version"}."""
     try:
-        r = subprocess.run([sys.executable, "-I", "-c", SELFTEST, str(d) if d else "", *KNOWN_GOOD], capture_output=True,
-                           text=True, errors="replace", timeout=SELFTEST_TIMEOUT,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # (-I ignores PYTHONIOENCODING, so -X utf8 says it: the child prints UTF-8, which platform.TEXT reads)
+        r = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", SELFTEST, str(d) if d else "", *KNOWN_GOOD], capture_output=True,
+                           **platform.TEXT, timeout=SELFTEST_TIMEOUT, creationflags=platform.NO_WINDOW)
         line = next((x for x in r.stdout.splitlines() if x.startswith("SELFTEST ")), None)
         if line is None:
             return {"ok": 0, "of": len(KNOWN_GOOD), "errors": [(r.stderr or "no answer").strip().splitlines()[-1][:200]]}
@@ -787,7 +787,7 @@ def start_heal(reason: str = "", dry_run: bool = False):
             job.finish("done", message=msg, result=r)
         except Exception as e:   # noqa: BLE001
             log(f"heal failed: {e}")
-            job.finish("error", message=jobs.friendly(e, "updating the YouTube downloader"))
+            jobs.fail(job, e, "updating the YouTube downloader")
 
     threading.Thread(target=go, daemon=True, name="ytdlp-heal").start()
     return job
