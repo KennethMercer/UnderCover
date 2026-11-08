@@ -5,8 +5,8 @@ make leaves the machine.
 
 It runs as a local web page and uses your graphics card. It is made of four parts.
 
-FrontMan sings a song in another voice. You can drop in a song file or type a request such as "Pink Pony Club as
-Plankton".
+FrontMan sings a song in another voice, or two voices taking turns. You can drop in a song file or type a request such
+as "Pink Pony Club as Plankton".
 
 DoubleAgent trains voices. It finds clean clips of a person, keeps only that person's voice, trains a model and can
 improve it overnight.

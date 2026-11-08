@@ -729,7 +729,9 @@ yt-dlp runs at `files.MAX_AUDIO_S` in one place (`bounded_args`: on the list yt-
 comes from, written under the key it reads first; a caller's tighter `-t` is kept). Every other decode
 of a file it was given (the waveform, the loudness, a dropped recording) stops at `files.MAX_AUDIO_S` (3 hours); a
 song is taken by the length its waveform pass decoded, not the one its header gives. It is refused past that bound,
-and refused when nothing decodes at all. A configured proxy is reached at its own address, and links behind it are checked by name. A voice zip unpacks under a running size
+and refused when nothing decodes at all. A stem's level (the backing measure, `separate._rms_db`) is measured over its
+first `files.MAX_AUDIO_S`, read in blocks, never the whole file in memory; a stem that can't be read is remembered
+(`pipeline.backing_quiet`), not read again on every estimate. A configured proxy is reached at its own address, and links behind it are checked by name. A voice zip unpacks under a running size
 cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerShell is started by its full path.
 
 ### System tray
