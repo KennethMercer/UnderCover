@@ -17,8 +17,7 @@ def file_url(p: Path | str | None) -> str | None:
         return None
     s = str(Path(p).resolve())
     folded = os.path.normcase(s)
-    roots()
-    for root_name, root in _ROOTS["folded"].items():   # (a string compare per root: Path.relative_to cost a listing seconds)
+    for root_name, root in _kept_roots()["folded"].items():   # (a string compare per root: Path.relative_to cost a listing seconds)
         if folded.startswith(root):
             return f"/files/{root_name}/{quote(s[len(root):].replace(os.sep, '/'))}"
     return None
@@ -31,13 +30,21 @@ def roots() -> dict[str, Path]:
     """The folders the page may read from, resolved. Kept until a [paths] value changes (a Storage move, a test's
     own folders): resolving seven folders per file_url cost the Library seconds at 2,000 covers (the maintainers'
     notes, efficiency)."""
+    return dict(_kept_roots()["roots"])
+
+
+def _kept_roots() -> dict:
+    global _ROOTS
+    kept = _ROOTS
     key = tuple(str(CONFIG["paths"].get(k)) for k in ("output_dir", "uploads_dir", "cache_dir"))
-    if _ROOTS["key"] != key:
+    if kept["key"] != key:
         cache = path("cache_dir")
         rs = {"output": path("output_dir").resolve(), "uploads": path("uploads_dir").resolve(),
               "converted": (cache / "converted").resolve(), "test": (ROOT / "test").resolve(),
               "previews": (cache / "previews").resolve(), "training": (cache / "training").resolve(),
               "stems": (cache / "stems").resolve()}
-        # each root as a case-folded prefix with its separator, so "D:\x\output2" is never inside "D:\x\output"
-        _ROOTS.update(key=key, roots=rs, folded={n: os.path.normcase(str(r)).rstrip("\\/") + os.sep for n, r in rs.items()})
-    return dict(_ROOTS["roots"])
+        # each root as a case-folded prefix with its separator, so "D:\x\output2" is never inside "D:\x\output";
+        # replaced whole, so another thread never pairs one setting's key with another's roots
+        kept = _ROOTS = {"key": key, "roots": rs,
+                         "folded": {n: os.path.normcase(str(r)).rstrip("\\/") + os.sep for n, r in rs.items()}}
+    return kept
