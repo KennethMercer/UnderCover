@@ -13316,7 +13316,7 @@ def _away(method, path, port, host, cookie=None, body=None, origin=True, extra=N
         c.close()
 
 
-# a_away's waits: the away driver ticks every 2 s and each step spawns fake CLI processes (Python start-ups), under a
+# a_link's waits: the link's driver ticks every 2 s and each step spawns fake CLI processes (Python start-ups), under a
 # --full run's GPU work on a busy PC; 60 s was tight enough to fail a run that then passed on its own (2026-11-08)
 AWAY_WAIT = 120
 
