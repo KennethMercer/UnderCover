@@ -2449,6 +2449,54 @@ def u_phone_listen():
     return "closed with no LAN token; opened for one; closed for good when it went"
 
 
+def _plain_error_cases(jobs, ModelError, Own):
+    with isolated_data():
+        for raised, want in ((ModelError("That voice isn't installed."), True), (Own("A plain sentence."), True),
+                             (RuntimeError("boom"), False), (KeyError("x"), False)):
+            j = jobs.Job("cover", title="t")
+            jobs.fail(j, raised, "converting")
+            ev = j.events[-1]
+            assert ev["final"] and ev["state"] == "error" and ev["plain"] is want, (raised, ev)
+            assert j.snapshot()["final"]["plain"] is want, j.snapshot()["final"]
+        j = jobs.Job("cover", title="t")
+        j.finish("error", message="Only 1.2 GB free on drive D:. Free some space and try again.")   # a job's own sentence
+        assert j.events[-1]["plain"] is True and j.snapshot()["final"]["plain"] is True
+        j = jobs.Job("cover", title="t")
+        j.finish("done", message="Finished")
+        assert "plain" not in j.events[-1] and "plain" not in j.snapshot()["final"]
+        j = jobs.Job("cover", title="t")
+        jobs.run_job(j, lambda job: (_ for _ in ()).throw(ModelError("Pick a voice first.")))
+        assert j.events[-1]["message"] == "Pick a voice first." and j.events[-1]["plain"] is True, j.events[-1]
+        j = jobs.Job("cover", title="t")
+        jobs.run_job(j, lambda job: 1 / 0)
+        assert j.events[-1]["plain"] is False and "Something went wrong" in j.events[-1]["message"], j.events[-1]
+
+
+@check("a job's final error says whether its message is a plain refusal (Q, 1.2.1): plain for a ModelError, a module's own user error, or a sentence the job ends itself with; not plain for an unexpected error (whose friendly message is a guess); the jobs list carries it; every site that turns an exception into a job's error goes through jobs.fail")
+def u_plain_error():
+    import inspect
+    import re as _re
+    from undercover.core import jobs
+    from undercover.core.voices import ModelError
+
+    class Own(Exception):
+        pass
+    jobs.register_user_error(Own)
+    try:
+        _plain_error_cases(jobs, ModelError, Own)
+    finally:
+        jobs.USER_ERRORS.remove(Own)
+    left = []
+    for f in (ROOT / "undercover").rglob("*.py"):
+        for m in _re.finditer(r'finish\("error", message=(jobs\.)?friendly\(', f.read_text(encoding="utf-8")):
+            line = f.read_text(encoding="utf-8")[m.start():].split("\n", 1)[0]
+            if "plain=" not in line:
+                left.append(f"{f.name}: {line[:80]}")
+    assert not left, f"an exception becomes a job's error without its plain flag: {left}"
+    assert 'plain=False' in inspect.getsource(jobs)   # (the GPU thread's last resort)
+    return "plain: ModelError, a module's own, a job's own sentence; not: unexpected; in the list; every site"
+
+
 @check("overnight improve never replaces or deletes the user's voice (Internal Affairs P2-1): the retrained one waits beside it as pending, whatever the numbers; no improve over a pending one")
 def u_improve_pending():
     import inspect
@@ -7767,7 +7815,7 @@ def u_edit_price():
             assert set(E.pitch_of(doc)) == {"lead"}   # (only the parts it knows)
             got = E.price(item, doc, up)
             assert got["poor"] and got["rise"] >= E.POOR_COST and got["outside"] == 1.0 and got["own_outside"] == 0.0, got
-            assert got["said"] == "Lead an octave up here is a poor fit: 100% of these notes are above the voice's range, so it may sound strained.", got
+            assert got["said"] == "Lead, an octave up, is a poor fit here: 100% of these notes are above the voice's range, so it may sound strained.", got
             down = E.check_edit({"op": "octave", "part": "lead", "octave": -2, "t0": 40.0, "t1": 50.0}, doc)
             got = E.price(item, doc, down)   # Second's own octave puts the high half over its range; two down brings it home
             assert not got["poor"] and got["said"] is None and got["rise"] < 0 and got["own_outside"] == 1.0, got
@@ -7837,6 +7885,12 @@ def u_edit_price():
         assert sound_range(bad) is None, bad
     assert _range_of(SimpleNamespace(extra={"f0_range": ["a", "b", "c"], "person_range": [90, 120, 200], "person_range_speech": True})) == ([90.0, 120.0, 200.0], True)
     assert _range_of(SimpleNamespace(extra={"f0_range": [1e9, 2e9, 3e9]})) is None
+    from undercover.frontman.pipeline import CoverEngine, CoverOptions
+    notes = []
+    junk_voice = SimpleNamespace(name="junk-uc", extra={"f0_range": ["a", "b", "c"], "person_range": {"x": 1}})
+    opts = CoverOptions(voice="junk-uc", octave=-1, key=2)
+    got = CoverEngine._fit(None, opts, junk_voice, {}, notes, None)   # (no converter is reached: the range is refused first)
+    assert got == opts and len(notes) == 1 and "no measured range yet" in notes[0] and "junk" in notes[0], notes
     # every other reader of a voice's range reads it through the same check: SpeakEasy's hold and the Reader's pitch, the one-shot's pick
     from undercover.doubleagent import cadence as CD, service as SV
     from undercover.frontman import oneshot as OS
@@ -8962,6 +9016,8 @@ def u_duets():
             assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [], tries   # (the failure above remembered)
             (kd / "instrumental.flac").write_bytes(b"not audio, still")   # a new version of the stem is measured again, once
             assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [1], tries
+            os.utime(kd / "instrumental.flac", (time.time() + 7, time.time() + 7))   # the same bytes with a new mtime: a new version too
+            assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [1, 1], tries
         finally:
             _PL2._measure_quiet = real_mq
     assert _PL2.estimate_for(100.0, _PL2.CoverOptions(voice="v", duet_voice="w"))["backing_quiet"] is None   # (the one-shot's plan: no song yet)
@@ -9493,6 +9549,13 @@ def u_leadgate():
         gone = G.top_missing(g, {"top": none_t, "rest": rest_t}, stems_k["backing"])
         assert gone == [list(c) for c in g["chorus"]], gone
         assert G.top_missing(g, {"top": real_t, "rest": rest_t}, stems_k["backing"]) == [] and G.top_missing(g, None, stems_k["backing"]) == []
+        for down, gone_too in ((25.0, False), (35.0, True)):   # the 30 dB bar on a second case: a top voice this far under the backing
+            t2 = tmp / f"top_{int(down)}.wav"
+            sf.write(str(t2), back * 10 ** (-down / 20), sr)
+            got = G.top_missing(g, {"top": t2, "rest": rest_t}, stems_k["backing"])
+            assert (got == [list(c) for c in g["chorus"]]) is gone_too and (got == []) is not gone_too, (down, got)
+        src_tm = __import__("inspect").getsource(G.top_missing)
+        assert "sf.read(str(f), start=" in src_tm and "always_2d=True)\n    bk" not in src_tm   # (a stretch at a time, never the whole stem)
         out = G.apply(stems_k, g, tmp, "tn", chorus="top", top={"top": none_t, "rest": rest_t})
         l4, _ = sf.read(str(out["vocals"]), dtype="float32")
         assert rms(l4, c0, c1) < 0.01 * rms(left, c0, c1), "no top voice, yet the leftovers are still there to convert"
@@ -9501,7 +9564,7 @@ def u_leadgate():
         l5, _ = sf.read(str(out["vocals"]), dtype="float32")
         assert rms(l5, c0, c1) > 0.9 * rms(back, c0, c1), "a real top voice wasn't moved into the lead"
         said = G.note(g, "top", backing_converted=True, missing=gone)
-        assert said and not any("top voice was converted" in s for s in said) and any("no top voice to move" in s and "backing's voice" in s for s in said), said
+        assert said and not any("top voice was converted" in s for s in said) and any("and have no top voice to move" in s and "backing's voice" in s for s in said), said
         assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
@@ -11753,7 +11816,7 @@ def u_shape_page():
     window.api = async (u, o) => {
       if (/edits\/price$/.test(u)) {
         if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
-        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead an octave up here is a poor fit: strained." } : null };
+        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
       }
       throw new Error("stub");
     };
@@ -14571,7 +14634,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

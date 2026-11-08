@@ -760,7 +760,7 @@ def _job(key: str, title: str, work) -> dict:
             job.finish("error", message=str(e))
         except Exception as e:   # noqa: BLE001
             log(f"{title}: {type(e).__name__}: {e}")
-            job.finish("error", message=jobs.friendly(e, title.lower()))
+            jobs.fail(job, e, title.lower())
 
     threading.Thread(target=go, daemon=True, name=f"doctor-{key}").start()
     return {"job": job.id}

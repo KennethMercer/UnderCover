@@ -289,7 +289,9 @@ the tray only; the library lists everything. Each property is proved in `tests/s
 finished in the last hour as `Job.snapshot()`: `id, kind, state, title, project, created, ended, pausing, stage,
 message, events, progress`, and when known `epoch, epochs, eta, total_left, stage_left, index, of, elapsed`, `retry`
 (`POST /api/jobs/<id>/retry` replays a failed cover, speech, one-shot or install), a one-shot's `plan`, a finished job's
-`final`. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
+`final`. A failed job's last event and `final` say `plain`: true when its message is a refusal written for the user (a
+`ModelError`, a module's registered user error, or a sentence the job ends itself with; `jobs.fail`), false for an
+unexpected error whose `friendly()` message is a guess, so the page decides Try again on it, not on the words. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
 pause. Every progress event carries `total_left` in seconds (`jobs.STAGES`, `cache/eta.json`). A heartbeat
 (`logs/heartbeat*.jsonl`) records each running job's resume spec for the Doctor; `jobs.START_GATES` lets the game pause
 ask before a queued GPU job starts.
@@ -552,7 +554,7 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
   tracks are read once and kept with the list (`pitch.npz`: the lead's, and the backing's one line held; read back as data, no
-  pickles). They're read when the cover is recorded, when the list is first opened, or with the next edit of an older list, and
+  pickles). They're read when a duet's cover is recorded, when the list is first opened, or with the next edit of an older list, and
   Keep carries them. `POST .../edits` answers `{job, edit, fit}`; `POST .../edits/price` runs the gate and the price and sings
   nothing, for the page to say it before the edit is offered.
 - **`compile_list`** is pure: plans and edits as far as the cursor -> parts `[start, end, who, octave, src, base]`. `plan_of` makes

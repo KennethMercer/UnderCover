@@ -108,7 +108,7 @@ def _start_full() -> Job:
         except InterruptedError:
             job.finish("cancelled", message="Cancelled.")
         except Exception as e:   # noqa: BLE001
-            job.finish("error", message=jobs.friendly(e, "checking everything"))
+            jobs.fail(job, e, "checking everything")
 
     threading.Thread(target=go, daemon=True, name="doctor-full").start()
     return job

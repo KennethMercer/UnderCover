@@ -806,7 +806,7 @@ class Handler(BaseHTTPRequestHandler):
             except ModelError as e:
                 job.finish("error", message=str(e))
             except Exception as e:
-                job.finish("error", message=friendly(e, "installing the voice"))
+                job.finish("error", message=friendly(e, "installing the voice"), plain=jobs.is_plain(e))
 
         threading.Thread(target=run, daemon=True).start()  # network-bound; doesn't need the GPU thread
         self._json({"job": job.id})

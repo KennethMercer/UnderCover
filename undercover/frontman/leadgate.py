@@ -147,12 +147,14 @@ def top_missing(gate: dict, top: dict | None, backing) -> list:
     import soundfile as sf
     if not top or not gate.get("chorus") or not backing:
         return []
-    tv, sr_t = sf.read(str(top["top"]), dtype="float32", always_2d=True)
-    bk, sr_b = sf.read(str(backing), dtype="float32", always_2d=True)
-    rms = lambda x: 20 * np.log10(np.sqrt(np.mean(np.square(x, dtype=np.float64))) + 1e-9) if x.size else -200.0
+    sr_t, sr_b = sf.info(str(top["top"])).samplerate, sf.info(str(backing)).samplerate
+
+    def rms_db(f, sr, a, b):   # one stretch at a time, never the whole stem in memory
+        x, _ = sf.read(str(f), start=int(a * sr), frames=max(0, int((b - a) * sr)), dtype="float32", always_2d=True)
+        return 20 * np.log10(np.sqrt(np.mean(np.square(x, dtype=np.float64))) + 1e-9) if x.size else -200.0
     out = []
     for a, b in gate["chorus"]:
-        if rms(tv[int(a * sr_t):int(b * sr_t)]) < rms(bk[int(a * sr_b):int(b * sr_b)]) - TOP_GONE_DB:
+        if rms_db(top["top"], sr_t, a, b) < rms_db(backing, sr_b, a, b) - TOP_GONE_DB:
             out.append([a, b])
     return out
 
@@ -233,7 +235,7 @@ def note(gate: dict, chorus: str = "convert", backing_converted: bool = False, m
         found = [c for c in gate["chorus"] if list(c) not in gone]
         out += note({**gate, "chorus": found}, chorus, backing_converted)
         kept = note({"instrument": [], "chorus": gone}, "keep", backing_converted)
-        return out + [s.replace("Some lines are in the backing track", "Some lines are in the backing track with no top voice to move")
+        return out + [s.replace("Some lines are in the backing track", "Some lines are in the backing track and have no top voice to move")
                       for s in kept]
     span = lambda rs: ", ".join(f"{int(a) // 60}:{int(a) % 60:02d}-{int(b) // 60}:{int(b) % 60:02d}" for a, b in rs[:4]) + (" ..." if len(rs) > 4 else "")
     if gate["instrument"]:
