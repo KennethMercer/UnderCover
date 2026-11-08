@@ -458,9 +458,11 @@ setTimeout(loadDoctor, 4000);   // once after the page opens, so a problem shows
 // typed code, on request) and the phones with Remove. It checks every few seconds while something can change on its own.
 const PH = { st: null, tick: null, poll: null, seen: null, drawn: {} };
 const phoneDraw = (id, html) => { if (PH.drawn[id] === html) return false; PH.drawn[id] = html; $(`#${id}`).innerHTML = html; return true; };
-const PHONE_STEP = { fetching: "Getting the secure-link piece (about 39 MB, once).", starting: "Starting the secure link…",
-  "sign-in": "Sign in to give your phone a link that works anywhere. It's free, and a Google, Microsoft, Apple or GitHub account works.",
-  approve: "One more click in the same tab: approve the link." };
+const PHONE_STEP = { fetching: "Getting the secure link (about 39 MB, once).", starting: "Starting the secure link…",
+  "sign-in": "Sign in to Tailscale, the free service that carries the link. A Google, Microsoft, Apple or GitHub account works.",
+  approve: "One more click in that tab: approve the link." };
+// a retried error in basic view: what it means, not the driver's words (those are Deep Cover's)
+const PHONE_NET = /dial tcp|no such host|getaddrinfo|connectex|connection (?:refused|reset)|network is unreachable|i\/o timeout|timed out|TLS handshake|\bEOF\b/i;
 async function loadPhone(after) {
   if (document.body.dataset.client === "phone") return;
   try { PH.st = after || await api("/api/phone"); } catch (e) { $("#phone-step").hidden = false; $("#phone-step").textContent = e.message; return; }
@@ -477,8 +479,11 @@ function renderPhone() {
   // the setup's step (none once ready); the error it's retrying past, or what stops the link's listener
   let say = PHONE_STEP[s.phase] || "";
   if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
-  say = s.problem || (s.error ? `${say} (${s.error})`.trim() : say);
-  $("#phone-step").hidden = !say; $("#phone-step").textContent = say;
+  const retry = !s.problem && s.error ? (PHONE_NET.test(s.error) ? "No internet right now; trying again." : "Trying again.") : "";
+  say = s.problem || [say, retry].filter(Boolean).join(" ");
+  const step = $("#phone-step"), deep = document.createElement("span");
+  deep.className = "kv2"; deep.dataset.deep = ""; deep.textContent = !s.problem && s.error ? ` (${s.error})` : "";
+  step.hidden = !say; step.replaceChildren(say, deep);
   const si = $("#phone-signin"), ap = $("#phone-approve");
   si.hidden = !s.auth_url; if (s.auth_url) si.href = s.auth_url;
   ap.hidden = !s.approve_url; if (s.approve_url) ap.href = s.approve_url;
@@ -519,10 +524,10 @@ function renderPhone() {
   const fresh = was ? known.find(d => !was.has(d.id) && !d.moving) : null;
   if (fresh) showError(`${fresh.name} is connected.`, "Phone connected", null, true);
   const drew = phoneDraw("phone-devices", known.length ? known.map(d => `
-    <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b>${facts([`Connected ${d.paired}`, { t: `Last seen ${d.seen}`, muted: true }])}
-      ${d.lan ? `<small class="meta">On the old home Wi-Fi address until it switches.</small>` : ""}<span class="kv2" data-deep>${esc(d.ip || "")}</span></span>
+    <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b>${facts([`Connected ${dayWord(d.paired)}${dateOf(d.paired) ? ", " + dateOf(d.paired).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : ""}`, { t: `Last seen ${d.seen}`, muted: true }])}
+      ${d.lan ? `<small class="meta">On its old address until it switches to the new link.</small>` : ""}<span class="kv2" data-deep>${esc(d.ip || "")}</span></span>
       <span class="acts"><button class="btn" type="button" data-revoke="${esc(d.id)}">Remove</button></span></div>`).join("")
-    : ready ? `<p class="meta">No phones yet.</p>` : "");
+    : ready ? `<p class="meta">No phones on file yet.</p>` : "");
   if (drew) $$("#phone-devices [data-revoke]").forEach(b => confirmClick(b, "Remove? Click again", async () => {
     PH.st = await api("/api/phone/revoke", { json: { id: b.dataset.revoke } }); renderPhone();
   }));
@@ -555,7 +560,7 @@ confirmClick($("#phone-off"), "Turn off? Click again", async () => { PH.st = awa
 confirmClick($("#phone-all"), "Remove all? Click again", async () => { PH.st = await api("/api/phone/revoke-all", { json: {} }); renderPhone(); });
 $("#set-away-private").onclick = async () => {   // Deep Cover: Serve on the tailnet instead of Funnel's public link
   const priv = $("#set-away-private").getAttribute("aria-checked") !== "true";
-  await phoneDo("/api/phone", { private: priv }, "Couldn't change it")();
+  await phoneDo("/api/phone", { private: priv }, "Couldn't change Private")();
 };
 confirmClick($("#away-forget"), "Forget? Click again", async () => { PH.st = await api("/api/phone/forget", { json: {} }); renderPhone(); });
 // a phone from before, on the home Wi-Fi: Switch asks for its one-use move code and opens the link with it (app.js

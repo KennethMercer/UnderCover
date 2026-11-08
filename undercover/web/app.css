@@ -1134,6 +1134,7 @@ body:not(.deep) [data-deep] { display: none !important; }
 body[data-client="phone"] [data-pc] { display: none !important; }
 body:not([data-client="phone"]) [data-phone] { display: none !important; }
 .phone-qr svg { width: 220px; height: 220px; display: block; }
+#phone-asks .sys b.mono { display: inline; }   /* the two-digit match sits in its sentence (.sys b is a block for the name) */
 
 /* ---------- Vaulting (vault.js): a section of the Storage room ---------- */
 .vt-body { display: grid; gap: 12px; }
