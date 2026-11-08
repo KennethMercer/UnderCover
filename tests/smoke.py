@@ -11473,7 +11473,7 @@ WINDOWS_ONLY = ("ctypes.windll", "WinDLL(", "os.startfile", '"netsh"', '"powersh
                 "CREATE_NO_WINDOW", "CREATE_NEW_PROCESS_GROUP", "msvcrt", "winreg")
 # Windows told apart by hand, or a program named with its Windows extension: platform.WINDOWS and platform.exe_name()
 # say it once, for every OS (the maintainers' notes, portability)
-WINDOWS_ONLY_RX = (r"os\.name\s*[=!]=", r"sys\.platform\s*[=!]=", r"platform\.system\(\)", r"\.exe['\"]")
+WINDOWS_ONLY_RX = (r"\bos\.name\b", r"\bsys\.platform\b", r"platform\.system\(\)", r"\.exe['\"]")
 
 
 @check("platform helper: every Windows-only call lives in core/platform.py; the helper works here and says 'not on this OS' elsewhere")
@@ -11568,13 +11568,14 @@ def u_ffmpeg_resolver():
             for n, ln in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
             if re.search(r"""(\[|which\()\s*["'](ffmpeg|ffprobe)["']""", ln)]
     assert not bare, f"ffmpeg run bare, not through manifest.ffmpeg(): {bare}"
-    real_root, real_which = manifest.ROOT, _sh.which
+    from types import SimpleNamespace
+    real_root, real_shutil = manifest.ROOT, manifest.shutil
     with tempfile.TemporaryDirectory(prefix="uc-ffm-") as t:
         root = Path(t)
         try:
             manifest.ROOT = root
             found = {}
-            manifest.shutil.which = lambda name: found.get(name)
+            manifest.shutil = SimpleNamespace(which=lambda name: found.get(name))   # (the module's own name only, never the real shutil)
             # nothing anywhere: a plain error that says how to get it here
             try:
                 manifest.ffmpeg()
@@ -11597,7 +11598,8 @@ def u_ffmpeg_resolver():
             (root / "tools" / "uv" / platform.exe_name("uv")).write_bytes(b"MZ")
             assert manifest.tool("uv") == root / "tools" / "uv" / platform.exe_name("uv")
         finally:
-            manifest.ROOT, manifest.shutil.which = real_root, real_which
+            manifest.ROOT, manifest.shutil = real_root, real_shutil
+    assert _sh.which is real_shutil.which
     return "tools/ffmpeg/bin first, PATH second, a per-OS hint third; ffprobe beside ffmpeg; nothing runs bare"
 
 

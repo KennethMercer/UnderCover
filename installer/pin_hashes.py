@@ -111,7 +111,9 @@ def main():
         print(f"add-ons: {', '.join(addon_lists())}")
         return
     # the dev venv's interpreter, wherever this OS keeps it (Scripts\ on Windows, bin/ elsewhere)
-    venv_py = next(p for p in (ROOT / ".venv" / "Scripts" / "python.exe", ROOT / ".venv" / "bin" / "python") if p.is_file())
+    venv_py = next((p for p in (ROOT / ".venv" / "Scripts" / "python.exe", ROOT / ".venv" / "bin" / "python") if p.is_file()), None)
+    if venv_py is None:
+        sys.exit(f"No dev venv at {ROOT / '.venv'}: the pins are read from the venv the app runs in. Run setup first.")
     frz = subprocess.run([str(venv_py), "-m", "pip", "freeze"], capture_output=True,
                          text=True, encoding="utf-8", errors="replace", check=True).stdout
     pins = {}

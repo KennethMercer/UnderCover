@@ -220,7 +220,10 @@ def c_tools(ctx) -> list:
     for name, need, why in (("ffmpeg", "bad", "reads and writes audio: covers and speech need it"),
                             ("deno", "warn", "lets the YouTube downloader read YouTube")):
         p = manifest.tool(name)
-        if p:
+        if p and name == "ffmpeg" and not manifest.tool("ffprobe", folder="ffmpeg"):   # (songs are measured with ffprobe)
+            out.append(_r(name, "install", need, "ffmpeg", "Found, but ffprobe isn't with it, and songs are read with both. "
+                          "Install the whole ffmpeg package.", str(p), REPAIR))
+        elif p:
             out.append(_r(name, "install", "ok", name.capitalize() if name == "deno" else "ffmpeg", f"Found ({why.split(':')[0]}).", str(p)))
         else:
             out.append(_r(name, "install", need, name.capitalize() if name == "deno" else "ffmpeg",

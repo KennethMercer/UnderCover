@@ -11,21 +11,36 @@ LIMIT_ENV = "UNDERCOVER_GPU_LIMIT_GB"   # Low profile's cap for this process and
 
 def build(installed: str | None = None) -> str:
     """Which PyTorch this is: "rocm", "cuda" or "cpu", from torch's own account of itself (torch.version.hip / .cuda:
-    a Linux ROCm wheel carries no "+rocm" in its version string). `installed`, a version string from the package
-    record, is read instead when torch isn't loaded here: the Doctor's fast checks never import it (they answer in
-    under two seconds, with no GPU), and a broken install may have none to import."""
-    torch = sys.modules.get("torch")
-    if torch is None and installed is None:
-        import torch
-    if torch is not None:
-        if getattr(torch.version, "hip", None):
+    a Linux ROCm wheel carries no "+rocm" in its version string). When torch isn't loaded here (the Doctor's fast
+    checks never import it: they answer in under two seconds, with no GPU) its small version file is read on its own,
+    without the package; `installed`, the version string from the package record, is the last resort."""
+    v = sys.modules.get("torch")
+    v = v.version if v is not None else _torch_version_file()
+    if v is not None:
+        if getattr(v, "hip", None):
             return "rocm"
-        if getattr(torch.version, "cuda", None):
+        if getattr(v, "cuda", None):
             return "cuda"
-        version = torch.__version__
+        version = v.__version__
     else:
-        version = installed
+        version = installed or ""
     return "rocm" if "+rocm" in version else "cuda" if "+cu" in version else "cpu"
+
+
+def _torch_version_file():
+    """torch/version.py loaded by itself (it holds only strings: no torch, no GPU), or None when there's no torch."""
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("torch")
+        where = next(iter(spec.submodule_search_locations or []), None) if spec else None
+        if not where:
+            return None
+        f = importlib.util.spec_from_file_location("_torch_version", os.path.join(where, "version.py"))
+        mod = importlib.util.module_from_spec(f)
+        f.loader.exec_module(mod)
+        return mod
+    except Exception:   # noqa: BLE001 - an odd install: the version string decides, as before
+        return None
 
 
 def limit_gb() -> float | None:

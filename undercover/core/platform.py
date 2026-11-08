@@ -56,11 +56,11 @@ def _powershell() -> str:
     return str(Path(os.environ.get("SystemRoot") or r"C:\Windows") / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
 
 
-def _ps(command: str, interactive: bool = False) -> list[str]:
-    """A PowerShell command line whose output comes back as UTF-8 (so TEXT reads it right; the console's own code page
-    would turn an accented network or adapter name into the wrong letters)."""
+def _ps(command: str) -> list[str]:
+    """A PowerShell command line that never prompts and whose output comes back as UTF-8 (so TEXT reads it right; the
+    console's own code page would turn an accented network or adapter name into the wrong letters)."""
     utf8 = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-    return [_powershell(), "-NoProfile", *([] if interactive else ["-NonInteractive"]), "-Command", utf8 + command]
+    return [_powershell(), "-NoProfile", "-NonInteractive", "-Command", utf8 + command]
 
 
 class NotOnThisOS(Exception):
@@ -408,10 +408,11 @@ def on_console_close(fn):
 
 
 def start_detached(cmd: list, cwd=None, log=None) -> subprocess.Popen:
-    """A process that outlives this one, with no console window on Windows."""
+    """A process that outlives this one: no console window on Windows, its own session elsewhere (so closing the
+    terminal this one runs in doesn't take it down too)."""
     out = log if log is not None else subprocess.DEVNULL
     return subprocess.Popen(cmd, cwd=str(cwd) if cwd else None, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
-                            creationflags=DETACHED, close_fds=True)
+                            creationflags=DETACHED, close_fds=True, start_new_session=not WINDOWS)
 
 
 def windowless_python() -> str:
@@ -631,7 +632,6 @@ def video_controllers() -> list[dict]:
     if not WINDOWS:
         raise _not("Reading the graphics driver")
     import json
-    out = run_text(_ps("Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate | ConvertTo-Json -Compress",
-                       interactive=True))
+    out = run_text(_ps("Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate | ConvertTo-Json -Compress"))
     rows = json.loads(out or "null")
     return rows if isinstance(rows, list) else [rows] if rows else []

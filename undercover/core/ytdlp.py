@@ -573,7 +573,8 @@ print("SELFTEST " + json.dumps(out))
 def selftest(d: Path | None) -> dict:
     """Resolve KNOWN_GOOD with a pair in a separate Python (d None = the venv's pair). -> {"ok": n, "of", "errors", "version"}."""
     try:
-        r = subprocess.run([sys.executable, "-I", "-c", SELFTEST, str(d) if d else "", *KNOWN_GOOD], capture_output=True,
+        # (-I ignores PYTHONIOENCODING, so -X utf8 says it: the child prints UTF-8, which platform.TEXT reads)
+        r = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", SELFTEST, str(d) if d else "", *KNOWN_GOOD], capture_output=True,
                            **platform.TEXT, timeout=SELFTEST_TIMEOUT, creationflags=platform.NO_WINDOW)
         line = next((x for x in r.stdout.splitlines() if x.startswith("SELFTEST ")), None)
         if line is None:
