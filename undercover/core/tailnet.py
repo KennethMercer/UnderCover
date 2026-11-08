@@ -31,10 +31,11 @@ from .voices import ModelError
 VERSION = "1.104.1"
 MSI = {"url": f"https://pkgs.tailscale.com/stable/tailscale-setup-{VERSION}-amd64.msi", "size": 38_718_976,
        "sha256": "6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4"}
-# the daemon's and the command line's checksums, in the order platform.tailscale_names() gives their file names
-# (the Windows MSI's: another OS gets its own package, and its own pair, when the away feature comes there)
+# the daemon's and the command line's checksums, in the order platform.tailscale_names() gives their file names.
+# Only the Windows MSI's pair exists: another OS has none (never these hashes under its names) until it gets its own
+# package, and its own pair, when the away feature comes there
 BINS = dict(zip(platform.tailscale_names(), ("ae0195119cc8efbd88d11bff56394ff9f1c08dc9d51957a400d4cb35c74e4bb1",
-                                             "72a499c653da6c16a50908d6ceb244d12b5f4834ab8ac19a87f2ca3117e8c20a")))
+                                             "72a499c653da6c16a50908d6ceb244d12b5f4834ab8ac19a87f2ca3117e8c20a"))) if platform.WINDOWS else {}
 CMD: dict = {}   # tests: {"tailscale": [...], "tailscaled": [...]} instead of the downloaded binaries
 URL_RX = re.compile(r"https://login\.tailscale\.com/\S+")
 STATE = {"want": False, "phase": "off", "auth_url": None, "approve_url": None, "host": None, "error": "",
