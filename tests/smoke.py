@@ -1365,7 +1365,8 @@ def u_harden1():
         assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile" in f.read_text(encoding="utf-8"), f
     from undercover.core import platform as PF
     ps_src = inspect.getsource(PF)
-    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 5
+    # (every PowerShell command line is built by _ps(), the one place that names the interpreter and asks for UTF-8)
+    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 1 and ps_src.count("_ps(") >= 6
     assert PF._powershell().lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
     # every listener drops a stalled client; the phone and away listeners take so many connections at once, then 503
     # and close (live, on 127.0.0.1, with a handler that holds its connections)
@@ -11444,11 +11445,16 @@ def u_firstrun():
 # ---------------------------------------------------------------- the platform helper and the tray (phase 18)
 
 WINDOWS_ONLY = ("ctypes.windll", "WinDLL(", "os.startfile", '"netsh"', '"powershell"', '"explorer"',
-                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(")
+                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(",
+                "CREATE_NO_WINDOW", "CREATE_NEW_PROCESS_GROUP", "msvcrt", "winreg")
+# Windows told apart by hand, or a program named with its Windows extension: platform.WINDOWS and platform.exe_name()
+# say it once, for every OS (the maintainers' notes, portability)
+WINDOWS_ONLY_RX = (r"os\.name\s*[=!]=", r"sys\.platform\s*[=!]=", r"platform\.system\(\)", r"\.exe['\"]")
 
 
 @check("platform helper: every Windows-only call lives in core/platform.py; the helper works here and says 'not on this OS' elsewhere")
 def u_platform():
+    import re
     import subprocess as sp
     import tempfile
     from undercover.core import platform
@@ -11457,8 +11463,20 @@ def u_platform():
         if f.name == "platform.py" and f.parent.name == "core":
             continue
         text = f.read_text(encoding="utf-8")
-        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in text]
+        code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in code]
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {m.group(0)!r}" for rx in WINDOWS_ONLY_RX for m in re.finditer(rx, code)]
     assert not bad, f"Windows-only calls outside core/platform.py: {bad}"
+    # a program's name and the way to get it, said once for this OS
+    assert platform.exe_name("ffmpeg") == ("ffmpeg.exe" if platform.WINDOWS else "ffmpeg")
+    assert platform.exe_name("uv") == ("uv.exe" if platform.WINDOWS else "uv")
+    hint = platform.install_hint("ffmpeg")
+    assert hint == "winget install Gyan.FFmpeg" if platform.WINDOWS else ("ffmpeg" in hint and "winget" not in hint), hint
+    assert not platform.console_python().lower().endswith("pythonw.exe") and Path(platform.console_python()).is_file()
+    assert platform.TEXT == {"text": True, "encoding": "utf-8", "errors": "replace"}
+    # a program's text comes through TEXT without ever raising: a byte that isn't UTF-8 becomes U+FFFD
+    out = sp.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok \\xff\\xfe end')"], capture_output=True, **platform.TEXT).stdout
+    assert out == "ok �� end", repr(out)
     if platform.WINDOWS:
         assert platform.supports("startup") == (True, "") and platform.drives() and platform.own_executable().endswith(".exe")
         assert platform.keep_awake(False) is True
@@ -11512,6 +11530,51 @@ def u_platform():
     finally:
         platform.WINDOWS = saved
     return "no Windows-only calls elsewhere; one instance; the startup shortcut in a temp folder; the other-OS answers"
+
+
+@check("ffmpeg resolver: the installer's copy in tools/ffmpeg/bin first (ffprobe beside it), then PATH, else a ModelError with this OS's install hint; no module runs a bare 'ffmpeg'")
+def u_ffmpeg_resolver():
+    import re
+    import shutil as _sh
+    import tempfile
+    from undercover.core import manifest, platform
+    from undercover.core.voices import ModelError
+    # every call site goes through the resolver: a bare "ffmpeg"/"ffprobe" command would only find the PATH's copy
+    bare = [f"{f.relative_to(ROOT).as_posix()}:{n}" for f in (ROOT / "undercover").rglob("*.py")
+            for n, ln in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+            if re.search(r"""(\[|which\()\s*["'](ffmpeg|ffprobe)["']""", ln)]
+    assert not bare, f"ffmpeg run bare, not through manifest.ffmpeg(): {bare}"
+    real_root, real_which = manifest.ROOT, _sh.which
+    with tempfile.TemporaryDirectory(prefix="uc-ffm-") as t:
+        root = Path(t)
+        try:
+            manifest.ROOT = root
+            found = {}
+            manifest.shutil.which = lambda name: found.get(name)
+            # nothing anywhere: a plain error that says how to get it here
+            try:
+                manifest.ffmpeg()
+                raise AssertionError("no ffmpeg, no error")
+            except ModelError as e:
+                assert "ffmpeg isn't installed" in str(e) and platform.install_hint("ffmpeg") in str(e), str(e)
+            assert manifest.tool("ffprobe", folder="ffmpeg") is None
+            # on PATH only
+            found["ffmpeg"] = str(root / "elsewhere" / platform.exe_name("ffmpeg"))
+            assert manifest.ffmpeg() == found["ffmpeg"]
+            # the installer's copy wins over PATH; ffprobe is looked for beside it, never in tools/ffprobe
+            bin_ = root / "tools" / "ffmpeg" / "bin"
+            bin_.mkdir(parents=True)
+            for n in ("ffmpeg", "ffprobe"):
+                (bin_ / platform.exe_name(n)).write_bytes(b"MZ")
+            assert manifest.ffmpeg() == str(bin_ / platform.exe_name("ffmpeg"))
+            assert manifest.ffmpeg("ffprobe") == str(bin_ / platform.exe_name("ffprobe"))
+            assert manifest.tool("uv") is None and manifest.tool("deno") is None
+            (root / "tools" / "uv").mkdir()
+            (root / "tools" / "uv" / platform.exe_name("uv")).write_bytes(b"MZ")
+            assert manifest.tool("uv") == root / "tools" / "uv" / platform.exe_name("uv")
+        finally:
+            manifest.ROOT, manifest.shutil.which = real_root, real_which
+    return "tools/ffmpeg/bin first, PATH second, a per-OS hint third; ffprobe beside ffmpeg; nothing runs bare"
 
 
 @check("tray: the menu and the icon from what the server says (stopped, idle, working, paused, a problem); no torch")
@@ -13532,7 +13595,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
