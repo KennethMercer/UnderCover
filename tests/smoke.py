@@ -11877,7 +11877,8 @@ def u_perf_history():
         out.mkdir(parents=True, exist_ok=True)
         up.mkdir(parents=True, exist_ok=True)
         sid = "ab" * 8
-        rows = [{"id": f"{i:010x}", "output": str(out / f"c{i}.flac"), "song": str(up / f"{sid}.mp3"), "voice": "v", "title": sid} for i in range(3)]
+        rows = [{"id": f"{i:010x}", "output": str(out / f"c{i}.flac"), "song": str(up / f"{sid}.mp3"), "voice": "v", "title": sid,
+                 "options": {"fit": True}, "notes": []} for i in range(3)]
         for r in rows:
             Path(r["output"]).write_bytes(b"x")
         (out / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "{broken\n", encoding="utf-8")
@@ -11886,8 +11887,11 @@ def u_perf_history():
         key = hstore._PARSED["key"]
         assert len(a) == 3 and key is not None, (len(a), key)
         a[0]["title"] = "changed by the caller"
+        a[1]["options"]["fit"] = False   # nested values are the caller's own too
+        a[2]["notes"].append("y")
         b = hstore._lines()
         assert hstore._PARSED["key"] == key and b[0]["title"] == sid, "a caller's change reached the cache, or the parse was redone"
+        assert b[1]["options"] == {"fit": True} and b[2]["notes"] == [], "a caller's change to a nested value reached the cache"
         assert b[0] is not hstore._PARSED["items"][0], "the cache handed out its own rows"
         hstore.update(rows[1]["id"], notes=["x"])   # a write drops the parse; the next read sees the new line
         c = hstore._lines()

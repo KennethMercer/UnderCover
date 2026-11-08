@@ -264,7 +264,7 @@ characters; every cover route uses it), `output`, `song`, `voice`, `title` (+ `t
 is the one place a finished cover is added. A duet's `options` carry `duet_voice`, `duet_way`, `duet_octave`,
 `duet_backing` and `duet_plan` (`[[start_s, end_s, "A" | "B"], ...]` from 0 to the song's end), so Make again sings it
 the same way. The file is parsed once per change (kept by its size and mtime under the history lock, dropped by every
-write, so another process's write is seen too); readers get copies of the rows, and the per-cover "is its file there"
+write, so another process's write is seen too); readers get deep copies of the rows, and the per-cover "is its file there"
 check still runs on every read. A hash-named song's title (its sidecar JSON) is remembered by the sidecar's mtime.
 
 ### Recent tray
@@ -673,8 +673,9 @@ last night), Storage (usage in three groups, Clean up, where your files live and
 Vault), Add-ons, System (the Doctor, GPU and models, the YouTube downloader, What's new, Restart, Quit, the diagnostics
 file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause). The Library's summary
 (`/api/library/summary`) is kept for up to 15 s while the paths setting, the history file and the counted folders'
-mtimes stay the same, and dropped by every SafeHouse route that writes; its sizes come from one walk of the storage
-groups (`storage.where(folders)`). `/api/status`'s stale-code stamp is re-walked at most every 5 s.
+mtimes stay the same, and dropped by every SafeHouse route that writes, before it runs and again just before it
+answers (a summary begun before a drop is never kept); its sizes come from one walk of the storage groups
+(`storage.where(folders)`). `/api/status`'s stale-code stamp is re-walked at most every 5 s.
 
 ### Deep Cover
 
