@@ -189,12 +189,12 @@ def u_fit():
     hold_on = 200.0 * 2 ** (rng.uniform(-5, 5, 800) / 12)
     smoke = pick_fit([85.7, 110.3, 159.6], True, hold_on)      # Agent Smoke: the user wanted 4-6 st down
     assert 12 * smoke["octave"] + smoke["key"] in range(-7, -3) and abs(smoke["register_st"]) < 1.5, smoke
-    deep = pick_fit([72.0, 104.6, 174.7], True, hold_on)       # Freeman: well under the original
+    deep = pick_fit([72.0, 104.6, 174.7], True, hold_on)       # a deep voice: well under the original
     assert 12 * deep["octave"] + deep["key"] <= -6 and abs(deep["register_st"]) < 1.5, deep
     sung = pick_fit([140.0, 200.0, 300.0], False, hold_on)     # a singer at that pitch keeps the song as it is
-    sb = pick_fit([115.4, 229.7, 420.3], True, hold_on)       # SpongeBob: not raised to his register (by ear: 0 beat +6)
+    sb = pick_fit([115.4, 229.7, 420.3], True, hold_on)       # a high cartoon voice: not raised to its register (by ear: 0 beat +6)
     toxic = 387.0 * 2 ** (rng.uniform(-10, 4, 800) / 12)      # a wide, high melody (Toxic: low notes ~216 Hz)
-    fr = pick_fit([72.0, 104.6, 174.7], True, toxic)           # Freeman: not so deep the low notes growl (by ear: -15 beat -18)
+    fr = pick_fit([72.0, 104.6, 174.7], True, toxic)           # a deep voice: not so deep the low notes growl (by ear: -15 beat -18)
     assert -17 <= 12 * fr["octave"] + fr["key"] <= -13, fr
     assert 12 * sb["octave"] + sb["key"] == 0, sb
     assert sung["octave"] == 0 and sung["key"] == 0, sung
@@ -3444,17 +3444,17 @@ def u_frozen_bar():
 @check("Improve's recipe and budget (phase 26, R4 / R5): refine for a well-fed voice with a modest data jump, scratch for a thin one or a big jump; 450 steps a kept minute (floor 8000, cap 2x); refine steps scale 1000-4000; the gate rows (R6) on the research's examples")
 def u_frozen_recipe():
     from undercover.doubleagent.frozen import budget_steps, gate_rows, recipe, refine_steps
-    assert recipe(13, 0.78, 18)[0] == "refine"                      # Freeman: x1.4
-    assert recipe(59, 0.75, 130)[0] == "scratch"                    # Obama: x2.2
-    assert recipe(7, 0.77, 13)[0] == "scratch"                      # SpongeBob: thin
-    assert recipe(3.5, 0.50, 18)[0] == "scratch"                    # Griffin: thin and x5
+    assert recipe(13, 0.78, 18)[0] == "refine"                      # voice A: x1.4
+    assert recipe(59, 0.75, 130)[0] == "scratch"                    # voice B: x2.2
+    assert recipe(7, 0.77, 13)[0] == "scratch"                      # a thin cartoon voice
+    assert recipe(3.5, 0.50, 18)[0] == "scratch"                    # another cartoon voice: thin and x5
     assert recipe(20, None, 25)[0] == "refine"                      # likeness unknown: the path that can't wander off
     assert recipe(20, 0.55, 25)[0] == "scratch"                     # a weak voice: fresh
     assert recipe(0, None, 10)[0] == "scratch"
     assert budget_steps(13) == (8000, 16000) and budget_steps(36) == (16200, 32400) and budget_steps(0) == (8000, 16000)
     assert refine_steps(15) == 2000 and refine_steps(3) == 1000 and refine_steps(60) == 4000
     from undercover.doubleagent.frozen import nothing_new
-    assert nothing_new(13.3, 13.3, [], False) and nothing_new(13.6, 13.3, [], False)       # the real Freeman run: 0 new, nothing out
+    assert nothing_new(13.3, 13.3, [], False) and nothing_new(13.6, 13.3, [], False)       # a real run on voice A: 0 new, nothing out
     assert not nothing_new(11.9, 13.3, [{"id": "x"}], False), "sources left out: the set changed, it trains"
     assert not nothing_new(13.3, 13.3, [], True), "a source newly prepared trains"
     assert not nothing_new(14.0, 13.3, [], False) and not nothing_new(13.3, 0, [], False) and not nothing_new(5.0, None, [], False)
@@ -4833,7 +4833,7 @@ def u_rcfix7():
         assert not (V.staging_dir() / "a").exists() and (V.staging_dir() / "b").exists()
         V.discard_staged()   # (what a stopped check left)
         assert not any(V.staging_dir().iterdir()) and (V.voices_dir() / "obama").is_dir() and (V.voices_dir() / "obama-2").is_dir()
-        # two candidates of one name (BananaBus223/Obama and 0x3e9/obama.zip): each keeps its own folder
+        # two candidates of one name (from two uploaders): each keeps its own folder
         ds = inspect.getsource(V.download_staged)
         assert "staged_name(name)" in ds and "while (staging_dir() / final).exists():" in inspect.getsource(V.staged_name) and "discard_staged" not in ds, "a same-name candidate discards the first"
         rv = inspect.getsource(service.resolve_voice)
@@ -6524,7 +6524,7 @@ def u_cadence():
             calls.append(r)
             return target_at_1 * r ** 0.5
         return read
-    r, tried = DK.choose_rate(fake(5.4), 3.6)   # 1.5x too fast (Freeman's case): about 0.44 wanted, the range stops at 0.5
+    r, tried = DK.choose_rate(fake(5.4), 3.6)   # 1.5x too fast (a slow narrator's case): about 0.44 wanted, the range stops at 0.5
     assert r == 0.5 and len(tried) <= DK.PACE_READS and abs(tried[r] / 3.6 - 1) < 0.30, (r, tried)
     r, tried = DK.choose_rate(fake(4.2), 3.6)   # 17% fast: one jump lands it
     assert 0.6 < r < 0.85 and abs(tried[r] / 3.6 - 1) <= DK.PACE_TOL, (r, tried)
@@ -7178,7 +7178,7 @@ def u_pace_pitch():
     assert prof["by_source"]["speech1"] == {"n": 8, "pace": 4.0, "f0_hz": 180.0} and prof["f0_hz"] == 180.0, prof
     assert K.pace_target(prof) == 4.4, K.pace_target(prof)   # the median of 4.0, 4.2, 4.6, 5.0; "clip" (n 1) left out
     assert len(prof["sents"]) == 29 and prof["sents"][0] == ["speech1", 40, 10.0, 180.0]
-    # readings: fast and high (Obama's live pack in phase 12: x1.14, +4.5 st), slow, on pitch
+    # readings: fast and high (one politician's live pack in phase 12: x1.14, +4.5 st), slow, on pitch
     fast = K.pace_pitch(5.0, 233.0, prof)
     assert fast["pace_heard"] == "fast" and abs(fast["pitch_st"] - 4.47) < 0.01, fast
     assert K.pace_pitch(4.0, 180.0, prof)["pace_heard"] == "slow" and K.pace_pitch(4.5, 181.0, prof)["pace_heard"] == "ok"
@@ -7201,7 +7201,7 @@ def u_pace_pitch():
     m3 = dict(m)
     K.as_heard(m3, -3.5)
     assert m3["pitch_off_st"] == 0.03 and m3["pitch_raw_st"] == 4.47 and m3["pitch_st"] == 0.97, m3
-    # the user's ear on Obama (phase 12b): his live pack at 235 Hz is "a fire speech", within his registers (137 .. 233 Hz)
+    # the user's ear on one politician (phase 12b): his live pack at 235 Hz is "a fire speech", within his registers (137 .. 233 Hz)
     obama = {"f0_hz": 181.1, "by_source": {"debate": {"n": 18, "f0_hz": 137.0}, "rally": {"n": 24, "f0_hz": 232.9},
                                            "speech": {"n": 46, "f0_hz": 161.5}, "few": {"n": 2, "f0_hz": 300.0}}}
     a = K.pace_pitch(None, 234.8, obama)

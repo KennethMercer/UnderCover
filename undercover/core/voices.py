@@ -1085,11 +1085,11 @@ def is_demo(v: Voice) -> bool:
 
 
 # How alike a voice sounds, in a word for the pages (phase 19). Two scales: a voice trained here has its likeness at
-# export (its own clips; on the user's voices: Peter Griffin 0.50 "weak" by the gate, Obama 0.70 and SpongeBob 0.77
-# approved by ear, Freeman 0.80); a downloaded voice has the voice check's score against the person (good from 0.45,
+# export (its own clips; on the maintainers' voices: a 3.5-minute cartoon voice 0.50 "weak" by the gate, a politician 0.70 and a cartoon voice 0.77
+# approved by ear, a deep narrator 0.80); a downloaded voice has the voice check's score against the person (good from 0.45,
 # weak from 0.30; the ones it called bad or broken sit near 0, so they're "poor", not unmeasured).
-# One scale for every voice, trained or downloaded (Internal Affairs P8-11: a downloaded Plankton at 0.757 read "great"
-# beside Morgan Freeman's 0.795 "good"). Both numbers are the same kind: speaker-embedding likeness to the person. The
+# One scale for every voice, trained or downloaded (Internal Affairs P8-11: a downloaded cartoon voice at 0.757 read "great"
+# beside a trained narrator's 0.795 "good"). Both numbers are the same kind: speaker-embedding likeness to the person. The
 # voice lab's frozen test (the maintainers' notes, phase26-improve, branch phase26-improve) finds a person's voices saturate
 # at 0.75-0.85 with about +-0.01-0.015 scoring noise, so "great" starts at 0.80, "good" covers the usual 0.70-0.80
 # band, "fair" is a voice that's like them but clearly short, and "poor" is unlike them.

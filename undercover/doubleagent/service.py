@@ -43,7 +43,7 @@ def undertrained(v, min_steps: int = 900) -> bool:
 
 
 def installed_for(person: str) -> list:
-    """Installed voices for this person: exact name, or a name built from it (morgan-freeman-uc, ...).
+    """Installed voices for this person: exact name, or a name built from it (firstname-lastname-uc, ...).
     Voices trained in UnderCover first, then the newest."""
     from ..core.voices import listed_voices
     key = slug(person)
@@ -321,7 +321,7 @@ def apply_mode(proj, person: str, mode: str | None):
 def reference_clips(job, person: str, control, push, subject: dict | None = None, left=None):
     """Make sure the person's project has the real voice identified and some phrases by other people (the
     test material): prepares one source at a time, at most three. These are training clips too. For a character
-    the reference must be the voice heard in its scenes (phase 15: community SpongeBob voices were judged against
+    the reference must be the voice heard in its scenes (phase 15: community voices of a cartoon character were judged against
     a podcast host), so scenes are prepared first and a reference without scene minutes isn't trusted.
     left(seconds): told the clip work still to do as it goes (IA pass 13: the countdown sat at 27 s for 1½ min), from
     the sources still needed at this PC's measured rate, and how far the current one is."""
@@ -530,7 +530,7 @@ def _prefetch_voice_sources(person: str, subject: dict | None = None):
 
 
 CHECK_SEARCH_S = 15.0       # finding sources of the person when the project has none yet
-CHECK_PER_SOURCE_S = 120.0  # one source fetched and prepared for the check (measured 125 s, Obama's speeches, a free GPU)
+CHECK_PER_SOURCE_S = 120.0  # one source fetched and prepared for the check (measured 125 s, a politician's speeches, a free GPU)
 CHECK_PER_VOICE_S = 40.0    # one voice downloaded and checked against the clips (the same run: 32 s each)
 
 
@@ -632,7 +632,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
                              "checked": "trained in UnderCover", "quality": tq}
             push("voice", 1.0, f"Using your voice “{display_name(trained[0])}” (trained in UnderCover)")
             return trained[0]
-        # a voice trained here that the gate calls weak (phase 15: the old SpongeBob voice learned a podcast host)
+        # a voice trained here that the gate calls weak (phase 15: an old cartoon voice learned a podcast host)
         # doesn't end the search: a community voice that checks better is used instead; it's the fallback
         weak_trained = trained[0]
         push("voice", 0.05, f"Your voice “{display_name(weak_trained)}” is weak ({tq['problems'][0]}); checking others first")
@@ -703,7 +703,7 @@ def resolve_voice(job, person: str, prefer_train: bool, control, push, plan: dic
             return q
         # rc-fix7: a community voice downloaded for this check waits in the staging folder and joins the voices only if
         # it's the one chosen (promote); every other one, and all of them when the check fails or stops, is discarded.
-        # (A failed check once left BananaBus223/Obama installed, unchecked, offered next time: two Obamas.)
+        # (A failed check once left a community voice installed, unchecked, offered next time: the same person twice.)
         V.discard_staged()   # what a check that stopped before (the app closed mid-check) left there
         downloaded = []
 
@@ -885,8 +885,8 @@ def voice_f0(v) -> tuple[float | None, bool]:
     return None, False
 
 
-SUNG_TO_SPEECH = 0.5   # singers speak about an octave below their singing median: Elliott Smith sings at 212 Hz (the
-                       # voice's training data) and speaks at 104 Hz (2 min of an MTV interview, measured 2026-10-10)
+SUNG_TO_SPEECH = 0.5   # singers speak about an octave below their singing median: one singer sings at 212 Hz (the
+                       # voice's training data) and speaks at 104 Hz (2 min of a TV interview, measured 2026-10-10)
 
 
 def person_print(v) -> list | None:
@@ -979,14 +979,14 @@ def _remember_person(v, person: str):
 
 # ---------------------------------------------------------------- how far to trust a voice (phase 15)
 
-WEAK_LIKENESS = 0.65   # below: it doesn't sound like them yet (Obama's approved voice 0.70; Peter Griffin's 3.5-min 0.50)
+WEAK_LIKENESS = 0.65   # below: it doesn't sound like them yet (an approved speaking voice 0.70; a 3.5-minute cartoon voice 0.50)
 WEAK_MINUTES = 5.0     # below: too little clean audio to learn the voice from
 SCENE_SHARE = 0.5      # a character's voice: at least half of what it learned from should be the character in scenes
 
 
 def voice_quality(v) -> dict:
-    """How far to trust a voice trained here before a cover is made with it (the one-shot's gate, phase 15: "Toxic as
-    SpongeBob" came from a voice trained on a podcast about SpongeBob, and nothing said so). Measures only what's on
+    """How far to trust a voice trained here before a cover is made with it (the one-shot's gate, phase 15: a cover as a
+    cartoon character came from a voice trained on a podcast about the character, and nothing said so). Measures only what's on
     disk: the likeness at export, the minutes it learned from, and for a fictional character the share of those
     minutes that came from scenes (not from talk about the character). Voices from elsewhere aren't judged here
     (the one-shot checks them against the person already).
@@ -1161,7 +1161,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         sung_first = (lambda s: not srcmod.is_sung(s)) if singer else (lambda s: False)
         searched_more = False
         searched_again = False
-        # a character's scenes yield little clean voice (SpongeBob: about 0.3 min per upload, music, SFX and the
+        # a character's scenes yield little clean voice (one cartoon character: about 0.3 min per upload, music, SFX and the
         # other characters), so it gets as many rounds as a singer
         rounds = 12 if singer or srcmod.is_character_project(proj) else 8
 
@@ -1347,7 +1347,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
 
 
 def run_project(job, name: str, control, push) -> str:
-    """A project queued from DoubleAgent's Deep path (the user's "queue Trump with specific videos selected"): its own
+    """A project queued from DoubleAgent's Deep path (the user's "queue a voice with specific videos selected"): its own
     steps with its own choices, overnight. The sources ticked there (no new search, no source changes), its mode,
     length, sample rate and voice name (another person's voice name is refused: train_api.check_voice_name). Prepare
     what isn't prepared, confirm the main voice only if nobody did, train (a paused training continues), add the

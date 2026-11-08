@@ -39,18 +39,18 @@ from ..core.voices import ModelError, label_of
 # ---------------------------------------------------------------- the numbers (module constants: principle 10, no settings)
 
 LIKENESS_BAND = 0.015    # the seed-to-seed band of a scratch retrain on identical data (own lines 0.010, donors 0.014)
-HNR_MIN = 0.05           # harmonicity gain the two kept voices showed (+0.058, +0.096); the rejected Obama refine +0.020
-CONTRAST_MIN = 0.35      # spectral-contrast gain (+0.40, +0.59 kept; the rejected Obama candidate +0.34)
+HNR_MIN = 0.05           # harmonicity gain the two kept voices showed (+0.058, +0.096); the rejected refine of voice B +0.020
+CONTRAST_MIN = 0.35      # spectral-contrast gain (+0.40, +0.59 kept; the rejected candidate of voice B +0.34)
 BOOT = 2000              # bootstrap resamples; 90 % interval (5 / 95)
 
-WELL_FED_MIN = 8.0       # minutes: a voice with less learns too little from a refine (SpongeBob 7 min, Griffin 3.5)
+WELL_FED_MIN = 8.0       # minutes: a voice with less learns too little from a refine (two cartoon voices: 7 min, 3.5 min)
 WELL_FED_LIKENESS = 0.6
-REFINE_MAX_RATIO = 1.5   # new kept minutes over the old: above this, scratch (SpongeBob x1.8, Griffin x5, Obama x2.2)
+REFINE_MAX_RATIO = 1.5   # new kept minutes over the old: above this, scratch (the cartoon voices x1.8 and x5, voice B x2.2)
 REFINE_LR = 2e-5
 REFINE_STEPS_PER_MIN = 2000 / 15   # about 2000 steps for 10-20 min of data, scaled; clipped below
 REFINE_STEPS = (1000, 4000)
 
-STEPS_PER_MIN = 450      # the fifth cause: 8000 fixed steps gave Obama's 130 min 8 passes; Freeman's 18 min 49
+STEPS_PER_MIN = 450      # the fifth cause: 8000 fixed steps gave voice B's 130 min 8 passes; voice A's 18 min 49
 STEPS_MIN = 8000
 BUDGET_CAP = 2.0         # keep going while the held-out loss falls, up to this many times the planned budget
 
@@ -103,8 +103,8 @@ def nothing_new(kept_minutes: float, old_minutes: float | None, left_out: list, 
 
 
 def recipe(old_minutes: float | None, old_likeness: float | None, kept_minutes: float) -> tuple[str, str]:
-    """("refine" | "scratch", why). Refine keeps the approved identity (Freeman, Obama: weights 2 % away, drift 0.10);
-    a thin voice or a big data jump learns too little from it (SpongeBob, Griffin: the user kept scratch retrains).
+    """("refine" | "scratch", why). Refine keeps the approved identity (voices A and B: weights 2 % away, drift 0.10);
+    a thin voice or a big data jump learns too little from it (the two cartoon voices: the user kept scratch retrains).
     An unknown likeness counts as fine: refine is the path that can't wander off."""
     old = float(old_minutes or 0.0)
     if old < WELL_FED_MIN:
@@ -791,7 +791,7 @@ def score_voice(test_voice, voice, engine, push=None) -> dict:
     return s
 
 
-# The compare's cost by the test's own size (smallfix7; the real Freeman run: 6 lines + 8 donors, freeze and both
+# The compare's cost by the test's own size (smallfix7; a real run on voice A: 6 lines + 8 donors, freeze and both
 # scorings in 70 s, against a flat 9 min said, so its time left jumped 46 -> 8 -> 20 s).
 SCORE_S = 1.2        # s per test input scored (one conversion + its measures)
 READ_S = 5.0         # s per own line read through the pack, once, at freeze time

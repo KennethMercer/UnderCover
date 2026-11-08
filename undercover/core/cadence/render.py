@@ -139,7 +139,7 @@ def stretch(x: np.ndarray, tempo: float) -> np.ndarray:
 
 def octave_shift(x16: np.ndarray, rmvpe, target_hz: float | None, fine: bool = False, history: list | None = None) -> float:
     """The engine already speaks at the person's pitch: only a whole-octave correction (normally 0). fine (an engine that
-    reads lower or higher than the person, Turbo: Obama 9 semitones under his 235 Hz): the median onto the person's, to half
+    reads lower or higher than the person, Turbo: one voice 9 semitones under its 235 Hz): the median onto the person's, to half
     a semitone, at most an octave either way. history: the offsets of the sentences read so far (this one is added): the
     median of them is used, so a question's higher pitch isn't flattened onto the person's median sentence by sentence."""
     if not target_hz:

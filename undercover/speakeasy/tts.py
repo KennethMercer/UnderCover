@@ -54,7 +54,7 @@ READERS = {
 }
 AUTO = ("af_heart", "af_bella", "af_nicole", "bf_emma", "am_michael", "am_fenrir", "bm_george", "bm_fable")
 # Male or female, from the voice's speaking pitch: median under 165 Hz, or a low end (p5) under 115 Hz. Pitch alone
-# misreads men who speak high in public: Obama's speeches sit at 180 Hz (p5 109), and a male Reader shifted up
+# misreads men who speak high in public: one politician's speeches sit at 180 Hz (p5 109), and a male Reader shifted up
 # matched him better than the closest female one (likeness 0.77 vs 0.72, measured 2026-10-10).
 MALE_BELOW, MALE_LOW_BELOW = 165.0, 115.0
 DEFAULT = "am_michael"  # a voice whose pitch is unknown
@@ -66,7 +66,7 @@ PRINT_CLEAR = 3   # a voice-print vote this clear (4 of the 5 nearest Readers, o
 def is_male(target_hz: float | None, low_hz: float | None = None, vote: int | None = None) -> bool | None:
     """The person's sex for the Reader pick: their voice print's vote when it's clear (core.speaker.sex_vote), else
     their speaking pitch (median, or a low end under MALE_LOW_BELOW); None when neither is known. Pitch alone read
-    Trump as a woman (167 Hz, raised by rallies; vote +3) and Kristen Schaal as a man (low end 110 Hz; vote -5)."""
+    one man as a woman (167 Hz, raised by rallies; vote +3) and a low-voiced woman as a man (low end 110 Hz; vote -5)."""
     if vote is not None and abs(vote) >= PRINT_CLEAR:
         return vote > 0
     if not target_hz:
@@ -78,8 +78,8 @@ def pick_reader(target_hz: float | None, low_hz: float | None = None, vote: int 
                 accent: str | None = None) -> str:
     """The automatic Reader for a voice that speaks around target_hz (low_hz: its p5): same sex (is_male), same accent,
     closest pitch. The accent is American unless the voice is known to be British (extra.accent): nothing measures an
-    accent yet, and the British Readers were picked by pitch alone (Trump read by bf_emma, a British woman, smallfix7).
-    Measured 2026-10-10: Morgan Freeman (105 Hz) 0.84 with am_michael, the best of six Readers for him."""
+    accent yet, and the British Readers were picked by pitch alone (an American man read by bf_emma, a British woman, smallfix7).
+    Measured 2026-10-10: a deep narrator (105 Hz) 0.84 with am_michael, the best of six Readers for him."""
     male = is_male(target_hz, low_hz, vote)
     if male is None:
         return DEFAULT

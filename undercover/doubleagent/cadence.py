@@ -64,37 +64,37 @@ MIN_MINUTES = 2.0       # transcribed speech needed for a cadence
 # score = likeness - W_GAP * cadence gap - W_WER * WER: likeness decides between similar deliveries, a clearly
 # closer cadence or a mumbled word outweighs a small likeness difference (phase 3: likeness 0.73-0.83, gap 0.3-0.55)
 W_GAP, W_WER = 0.25, 1.0
-# No time-stretching of the engine's reading: the user heard it (2026-10-11, Freeman slowed 20% toward his measured
+# No time-stretching of the engine's reading: the user heard it (2026-10-11, a deep male voice slowed 20% toward his measured
 # rate) as "terrible, he sounds drunk". A pack's tempo stays 1.0; SpeakEasy's speed slider still works by hand. This
 # selection (W_GAP 0.25, cfg 0.3 only, three clips) made the pack the user approved; later tuning (cadence weighed more,
 # a cfg 0.2 try, a clip-sound score) measured better but sounded worse, so it was reverted (PLAN Phase 18).
 # Phase 9: how the reference clip *sounds* (clipsound.py: muffled, bandlimited, noisy, roomy, clipped) costs its
-# penalty in full, in the clips tried first and in the score (calibrated in the maintainers' notes, clip-sound: the muffled
-# Freeman v2 clip loses to the approved one by it). Only new picks see it, and a new pick waits for the user's ear
+# penalty in full, in the clips tried first and in the score (calibrated in the maintainers' notes, clip-sound: a voice's muffled
+# second clip loses to its approved one by it). Only new picks see it, and a new pick waits for the user's ear
 # (tts/pending/) whenever the voice already has a cadence.
 W_SOUND = 1.0
 # A new pack is offered only when it beats the live one by more than the test's own noise: the same clip scores 0.02-0.03
 # apart between runs (phase 9b: 0.668 and 0.694), and the best of five noisy scores is biased upward (was 0.005 with three)
 KEEP_MARGIN = 0.02
 # Phase 12: pace and pitch of a pack's readings against the person (the maintainers' notes, pace-pitch). Pitch is a property
-# of the pack (steady across readings) and a register: the user heard Obama at 235 Hz as "a fire speech" and at 182 Hz
+# of the pack (steady across readings) and a register: the user heard one politician at 235 Hz as "a fire speech" and at 182 Hz
 # as "a calmer interview", both like him (phase 12b). So a pitch inside the range of the person's own sources (his
 # debate 137 Hz .. his rallies 233 Hz) is on pitch; only a pitch past it gets the nudge back to the nearest edge of it,
 # and a pack heard past it (no nudge) loses W_PITCH per semitone past the dead zone when packs are compared. Pace is
 # measured and kept, not scored: one pack's pace moves +-10% between readings (the engine samples), and as a penalty it
-# would have overturned the user's blind verdict on Freeman.
+# would have overturned the user's blind verdict on a deep male voice.
 PACE_MIN_N = 3       # a source counts toward the target pace once this many of its sentences were measured
 PACE_DEAD = 0.06     # within 6% of their pace: "ok" (about the smallest tempo change people notice in speech)
 PITCH_DEAD = 0.5     # semitones past the person's range of registers: no nudge, no penalty within it
 PITCH_MIN_N = 8      # a source sets an edge of that range once this many of its sentences were measured
 W_PITCH = 0.05       # score units per semitone heard off the person's pitch, past the dead zone
 CAP_PITCH = 0.15
-# 1.1: the pace of a fast-reading voice (Freeman's packs read 1.5-1.8x his measured pace). Turbo and Chatterbox copy the
+# 1.1: the pace of a fast-reading voice (a slow narrator's packs read 1.5-1.8x his measured pace). Turbo and Chatterbox copy the
 # pace of their reference clip, and stretching the clip was heard as slurred (the maintainers' notes, phase23-outcome),
 # so the lever is the choice of clip: each candidate's own pace is measured from its transcript, and SLOW_SLOTS of the
 # CANDIDATES go to the person's slowest clean clips (within SLOW_MARGIN of the best clip's quality). In the pick, pace is
 # a tie-break, not a penalty: past the readings' own noise (PACE_NOISE, +-10% between seeds) a pack loses W_PACE per unit
-# of log-ratio, at most CAP_PACE, less than the 0.1 the approved Freeman pack wins its blind pair by (phase 12), so it
+# of log-ratio, at most CAP_PACE, less than the 0.1 that narrator's approved pack wins its blind pair by (phase 12), so it
 # can't overturn the ear's verdict; and a new pick still waits for the ear (tts/pending/).
 SLOW_SLOTS = 2
 SLOW_MARGIN = 0.08
@@ -315,7 +315,7 @@ def pace_pitch(pace: float | None, f0_hz: float | None, person: dict) -> dict:
 
 def pitch_range(person: dict) -> tuple[float, float]:
     """The person's own registers, lowest and highest: the median pitch of each source with PITCH_MIN_N+ measured
-    sentences (Obama: a debate 137 Hz .. a rally 233 Hz). Without such sources, just their median."""
+    sentences (a politician: a debate 137 Hz .. a rally 233 Hz). Without such sources, just their median."""
     f = [b["f0_hz"] for b in (person.get("by_source") or {}).values() if b.get("f0_hz") and b.get("n", 0) >= PITCH_MIN_N]
     return (min(f), max(f)) if f else (person["f0_hz"], person["f0_hz"])
 
@@ -496,7 +496,7 @@ def ref_candidates(proj, tr: dict, n: int = CANDIDATES, sound: bool = True, slow
     picked_slow = []
     if slow:
         q0 = quality(cands[0])
-        # (a wider window of lengths for these: a slow speaker's 7-11 s clips are few, Freeman 7 of his 23 at 6-12 s)
+        # (a wider window of lengths for these: a slow speaker's 7-11 s clips are few, one narrator 7 of his 23 at 6-12 s)
         pool = [p for p in speech_clips(proj) if SLOW_DUR[0] <= p.dur <= SLOW_DUR[1] and _plain(tr.get(p.id, ""))]
         near = sorted((p for p in pool if quality(p) >= q0 - SLOW_MARGIN and clip_pace(p, tr)), key=lambda p: clip_pace(p, tr))
         if near:   # the slowest of them, whatever their source; only clips slower than their median (a slot never takes a fast one)
@@ -853,7 +853,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
 
 # ---------------------------------------------------------------- pace calibration (phase 23)
 # Turbo ignores cfg_weight / exaggeration and copies the pace of its reference clip, so its natural pace differs from
-# Chatterbox's per voice (Freeman: about 1.5x his measured pace on Chatterbox, 1.7x on Turbo). Each pack is calibrated once
+# Chatterbox's per voice (a slow narrator: about 1.5x his measured pace on Chatterbox, 1.7x on Turbo). Each pack is calibrated once
 # per engine: the everyday lines are read with the reference clip played at a few speeds (made once, pitch kept, never
 # the finished reading stretched) until the natural pace is within PACE_TOL of the person's own (phase 12's target).
 PACE_TOL = 0.10
@@ -867,7 +867,7 @@ def choose_rate(read, target: float, tol: float = PACE_TOL) -> tuple[float, dict
     """The reference speed whose pace lands within tol of target: read(rate) -> pace (syllables per second). Starts at
     1.0, then jumps by the pace-follows-rate-to-the-k model (k refitted from two readings), aiming PACE_AIM inside the
     target on the side it started (a pace within the tolerance already is left alone, and one just outside isn't pushed
-    past the person's: Obama at +12% went to -7% when aimed at the target itself). -> (rate, {rate: pace})."""
+    past the person's: one voice at +12% went to -7% when aimed at the target itself). -> (rate, {rate: pace})."""
     err = lambda r: abs(tried[r] / target - 1)   # noqa: E731
     tried = {1.0: read(1.0)}
     goal = target * (1 + PACE_AIM * (1 if tried[1.0] > target else -1))
@@ -1263,7 +1263,7 @@ CADENCE_MIN = 9   # minutes a cadence adds after its voice (transcribe 3 + measu
 
 def cadence_after(v, asked: bool = False) -> tuple[bool, str]:
     """Does a voice just made get its cadence pack now? (yes?, why). Principle 10, the engine is smart: a voice made
-    from speech reads in its own manner, not a stand-in Reader's (Trump's Do it all left SpeakEasy reading him with
+    from speech reads in its own manner, not a stand-in Reader's (one man's Do it all left SpeakEasy reading him with
     bf_emma, a British woman). A singing voice keeps the Reader. A retrained one waiting beside its voice ("-next")
     gets none: on Keep it takes that voice's cadence, or a cadence is queued for it then (improved.keep).
     asked: the cadence was asked for with the voice ("newcad"): made whatever the clips were."""
