@@ -250,7 +250,8 @@ def start(port: int, private: bool = False):
         raise ModelError(why)
     if STATE["want"]:
         set_private(private)
-    STATE.update(want=True, port=port, error="", private=bool(private))
+    STATE.update(want=True, port=port, error="", private=bool(private),
+                 phase="starting" if STATE["phase"] == "off" else STATE["phase"])   # (never "off" while it's on: the first step is up to 2 s away)
     _P["fetch_failed"] = 0.0   # switched on by hand: try a failed download again now
     if _P["driver"] is not None and _P["driver"].is_alive():
         return

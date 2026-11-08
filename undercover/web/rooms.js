@@ -507,7 +507,7 @@ async function phoneChecks() {
   } catch (e) { $("#phone-checks").innerHTML = ""; }
 }
 // ------------------------------------------------------------ Settings: Away from home (phase 20; core/tailnet.py)
-// /api/away (PC only): the switch, then one line for where it's got to (fetching the pieces, starting, Tailscale's
+// /api/phone (PC only; /api/away until 1.2.1): the switch, then one line for where it's got to (fetching the pieces, starting, Tailscale's
 // sign-in, the one approval, ready with the link). The room checks every few seconds until it's ready.
 const AW = { st: null, poll: null };
 const AWAY_SAY = { off: "", fetching: "Fetching the away-from-home pieces (about 39 MB, once)…", starting: "Starting…",
@@ -515,14 +515,14 @@ const AWAY_SAY = { off: "", fetching: "Fetching the away-from-home pieces (about
   approve: "One approval: Tailscale asks once to let this PC's private link through.", ready: "Ready." };
 async function loadAway() {
   if (document.body.dataset.client === "phone") return;
-  try { AW.st = await api("/api/away"); } catch (e) { $("#away-step").textContent = e.message; return; }
+  try { AW.st = await api("/api/phone"); } catch (e) { $("#away-step").textContent = e.message; return; }
   renderAway();
 }
 function renderAway() {
   const s = AW.st;
-  $("#set-away-row").hidden = !s.supported || !s.phone_on;
-  $("#set-away").setAttribute("aria-checked", s.on);
-  $("#away-box").hidden = !s.on;
+  $("#set-away-row").hidden = !s.supported || !s.enabled;
+  $("#set-away").setAttribute("aria-checked", s.enabled);
+  $("#away-box").hidden = !s.enabled;
   $("#set-away-private").setAttribute("aria-checked", !!s.private);
   let say = AWAY_SAY[s.phase] || "";
   if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
@@ -535,17 +535,17 @@ function renderAway() {
   if (s.link) $("#away-link").innerHTML = `Your away link: <b class="mono">${esc(s.link)}</b>. On a paired phone, at home on the Wi-Fi: Settings, <b>Use this phone away from home</b>.`
     + (s.private ? " The phone needs the Tailscale app, signed in to the same account." : "");
   clearInterval(AW.poll);
-  if (s.on && s.phase !== "ready") AW.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadAway(); }, 3000);
+  if (s.enabled && s.phase !== "ready") AW.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadAway(); }, 3000);
 }
 $("#set-away").onclick = async () => {
   const on = $("#set-away").getAttribute("aria-checked") !== "true";
-  try { AW.st = await api("/api/away", { json: { on } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
+  try { AW.st = await api("/api/phone", { json: { on } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
 };
 $("#set-away-private").onclick = async () => {   // Deep Cover: Serve on the tailnet instead of Funnel's public link
   const priv = $("#set-away-private").getAttribute("aria-checked") !== "true";
-  try { AW.st = await api("/api/away", { json: { private: priv } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
+  try { AW.st = await api("/api/phone", { json: { private: priv } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
 };
-confirmClick($("#away-forget"), "Forget? Click again", async () => { AW.st = await api("/api/away/forget", { json: {} }); renderAway(); });
+confirmClick($("#away-forget"), "Forget? Click again", async () => { AW.st = await api("/api/phone/forget", { json: {} }); renderAway(); });
 // the phone: on the home Wi-Fi it asks for its single-use away link and opens it (app.js shows it only while the PC has
 // it ready, and never on the away address itself: it's there already)
 $("#away-me").onclick = async () => {

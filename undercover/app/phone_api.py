@@ -15,8 +15,11 @@ in Private mode), where every request comes from outside and passes server._gate
 the home Wi-Fi before the link still holds its LAN token, the home-network one (server._gate). Nothing the network can
 reach without a token says what exists: refusals are the generic 401 / 403.
 
-    GET  /api/phone                  the link's phase and address, the phones (pending ones for Allow / No), the code shown (PC)
-    POST /api/phone                  {on}: the link on (setup) or off ("Turn off the phone link": nothing reaches this PC) (PC)
+    GET  /api/phone                  the setup's step (fetching, starting, sign-in, approve, ready) and its sign-in and approval
+                                     links, the link, the phones (pending ones for Allow / No), the code shown (PC)
+    POST /api/phone                  {on}: setup, or "Turn off the phone link" (nothing reaches this PC from a phone);
+                                     {private} (Deep Cover): the link on the tailnet only (PC)
+    POST /api/phone/forget           sign this PC out of Tailscale (Deep Cover) (PC)
     POST /api/phone/pair             a pairing window: the QR of https://<name>/pair#<128-bit code> (PC)
     POST /api/phone/pair/short       "Type a code instead": a 6-character code for 2 minutes (PC)
     POST /api/phone/pair/cancel
@@ -28,8 +31,7 @@ reach without a token says what exists: refusals are the generic 401 / 403.
     POST /api/phone/move/link        a phone from before, on the home Wi-Fi, asks for its move (a single-use code)
     POST /api/phone/move             {code} at the link -> {nonce}: the move waits for Allow, then /api/phone/wait
     GET  /move                       the page that redeems it
-The link's setup (core/tailnet.py) is still driven by /api/away until the card folds it in: GET its phase; POST {on} or
-{private}; /api/away/forget signs this PC out. PC only: the sign-in and approval URLs never leave the PC.
+The setup (core/tailnet.py) is PC only, like the rest of Your phone: the sign-in and approval links never reach a phone.
 """
 import re
 import threading
@@ -130,11 +132,10 @@ ROUTES = [
     ("POST", r"/api/themes|/api/themes/import", "pc", "saving or importing a theme"),
     ("DELETE", rf"/api/themes/{_ID}", "pc", "deleting a theme"),
     # Your phone itself
-    ("GET|POST", r"/api/phone", "pc", "Your phone: its state; the link on or off"),
+    ("GET|POST", r"/api/phone", "pc", "Your phone: its state, the setup's step and sign-in links; the link on or off; Private"),
     ("POST", r"/api/phone/(pair|pair/cancel|pair/short|allow|refuse|revoke|revoke-all)", "pc", "pairing, Allow / No, Remove"),
+    ("POST", r"/api/phone/forget", "pc", "sign this PC out of Tailscale"),
     ("POST", r"/api/phone/wait", "open", "the phone that claimed asks for its token with its nonce (at the link only)"),
-    ("GET|POST", r"/api/away", "pc", "the link's setup: its phase, sign-in and approval (the sign-in URL never leaves the PC)"),
-    ("POST", r"/api/away/forget", "pc", "sign this PC out of Tailscale"),
     ("POST", r"/api/phone/(move|away)/link", "phone", "a phone paired on the home Wi-Fi before asks for its move to the link"),
     ("POST", r"/api/phone/(move|away)", "open", "redeem the move code at the link (the code is the credential)"),
     ("GET", r"/move|/away", "open", "the page that redeems the move code"),
@@ -243,7 +244,7 @@ def url() -> str | None:
     return f"http://{_L['addr']}:{_L['port']}" if _L["srv"] is not None else None
 
 
-# ---------------------------------------------------------------- away from home (phase 20)
+# ---------------------------------------------------------------- the link's listener (phase 20; the one link since 1.2.1)
 
 _A = {"srv": None, "port": None, "make": None, "problem": None}
 AWAY_PORTS = range(7870, 7880)
@@ -264,7 +265,7 @@ def away_open():
                 except OSError:
                     continue
             if _A["srv"] is None:
-                raise PhoneError("No free port for away from home (7870-7879).", 409)
+                raise PhoneError("No free port for your phone's link (7870-7879). Restart UnderCover, or the PC.", 409)
             threading.Thread(target=_A["srv"].serve_forever, daemon=True, name="away-listener").start()
     tailnet.start(_A["port"], private=phone.away_private())
 
@@ -279,17 +280,15 @@ def away_close():
             srv.server_close()
 
 
-def away_state() -> dict:
-    from ..core import tailnet
-    return {**tailnet.snapshot(), "listening": _A["srv"] is not None, "port": _A["port"], "problem": _A["problem"],
-            "phone_on": phone.enabled(), "private": phone.away_private()}
-
-
 def state() -> dict:
-    """Your phone's state for the PC's card: the link (its phase and address, core/tailnet.py), the phones (the pending
-    ones apart, for Allow / No), the pairing window (the QR of the link's pair page with the 128-bit code; the typed code
-    only when asked for; how many wrong claims it has had), and the home-network listener while a phone from before
-    still needs it. The keys the card read before 1.2.1 (listening, url, problem) are kept for it."""
+    """Your phone's state for the PC's card, one answer for every step:
+    - the setup (core/tailnet.py): "phase" is off, fetching (with "progress"), starting, sign-in (with "auth_url"),
+      approve (with "approve_url") or ready (with "link"); "error" is the last thing that went wrong while it retries,
+      "problem" what stops the link's listener; "supported"/"why" say whether this OS can have the link at all;
+    - "private" (Deep Cover: the tailnet only), "name" (this PC's name on Tailscale, once signed in);
+    - the phones (the pending ones apart, for Allow / No), the pairing window (the QR of the link's pair page with the
+      128-bit code; the typed code only when asked for; how many wrong claims it has had), and the home-network listener
+      while a phone from before still needs it."""
     from ..core import tailnet
     on = phone.enabled()
     snap = tailnet.snapshot()
@@ -301,9 +300,13 @@ def state() -> dict:
         tidy_lan()
     link = snap["link"] if on else None
     p = phone.pairing()
-    out = {"enabled": on, "link": link, "phase": snap["phase"] if on else "off", "lan": lan, "devices": phone.devices(),
-           "pending": phone.pending(), "pairing": None,
-           "listening": bool(link) or bool(lan and lan["listening"]), "url": link or (lan and lan["url"]), "problem": lan and lan["problem"]}
+    out = {"enabled": on, "supported": snap["supported"], "why": snap["why"], "phase": snap["phase"] if on else "off",
+           "progress": snap["progress"] if on else None, "error": snap["error"] if on else "",
+           "auth_url": snap["auth_url"] if on and snap["phase"] == "sign-in" else None,
+           "approve_url": snap["approve_url"] if on and snap["phase"] == "approve" else None,
+           "link": link, "private": phone.away_private(), "name": snap["name"],
+           "listening": _A["srv"] is not None, "port": _A["port"], "problem": _A["problem"] if on else None,
+           "lan": lan, "devices": phone.devices(), "pending": phone.pending(), "pairing": None}
     if p and link:
         plink = f"{link}/pair#{p['code']}"
         if _QR.get("link") != plink:   # the card asks every few seconds while a code is shown
@@ -317,12 +320,6 @@ def state() -> dict:
 # ---------------------------------------------------------------- routes
 
 def handle(h, method: str, p: str) -> bool:
-    if p in ("/api/away", "/api/away/forget"):
-        try:
-            _away_route(h, method, p)
-        except PhoneError as e:
-            _refuse(h, e)
-        return True
     if p != "/api/phone" and not p.startswith("/api/phone/"):
         return False
     try:
@@ -340,38 +337,6 @@ def _refuse(h, e: PhoneError):
         h._deny(e.status, (AWAY_401 if e.status == 401 else AWAY_403) if getattr(h, "away", False) else None)
     else:
         h._error(str(e), e.status)
-
-
-def _away_route(h, method, p):
-    if h.remote:
-        raise PhoneError("Away from home is managed on the PC.", 403)
-    from ..core import tailnet
-    if p == "/api/away" and method == "GET":
-        return h._json(away_state())
-    if method != "POST":
-        raise LookupError("Not found")
-    b = h._body()
-    if p == "/api/away" and "private" in b and "on" not in b:   # Deep Cover: "Private: my phone runs Tailscale"
-        phone.set_away_private(bool(b["private"]))
-        if tailnet.STATE["want"]:
-            tailnet.set_private(bool(b["private"]))
-        return h._json(away_state())
-    if p == "/api/away":
-        if b.get("on"):
-            if not phone.enabled():
-                raise PhoneError("Switch Phone access on first: away from home carries a phone you've paired at home.", 409)
-            phone.set_away(True)
-            away_open()
-        else:
-            phone.set_away(False)
-            away_close()
-        return h._json(away_state())
-    if p == "/api/away/forget":
-        phone.set_away(False)
-        tailnet.forget()   # first: the logout needs the daemon running
-        away_close()
-        return h._json(away_state())
-    raise LookupError("Not found")
 
 
 def _route(h, method, p):
@@ -411,10 +376,26 @@ def _route(h, method, p):
     if method != "POST":
         raise LookupError("Not found")
     b = h._body()
+    if p == "/api/phone" and "private" in b and "on" not in b:   # Deep Cover: "Private: my phone runs Tailscale"
+        from ..core import tailnet
+        phone.set_away_private(bool(b["private"]))
+        if tailnet.STATE["want"]:
+            tailnet.set_private(bool(b["private"]))
+        doctor_log("Your phone: the link is " + ("on the tailnet only (Private)." if b["private"] else "public (Funnel)."))
+        return h._json(state())
+    if p == "/api/phone/forget":   # sign this PC out of Tailscale: the link off, and setup starts from the sign-in again
+        from ..core import tailnet
+        phone.set_enabled(False)
+        tailnet.forget()   # first: the logout needs the daemon running
+        close()
+        away_close()
+        doctor_log("Your phone: this PC was signed out of Tailscale; the link is off.")
+        return h._json(state())
     if p == "/api/phone":
         on = bool(b.get("on"))
         phone.set_enabled(on)
         if on:
+            _A["problem"] = None
             try:
                 away_open()
             except Exception as e:   # noqa: BLE001 - the card shows the problem

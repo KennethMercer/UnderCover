@@ -78,6 +78,15 @@ def api(path, body=None, method=None, timeout=120):
     return json.loads(raw) if raw[:1] in (b"{", b"[") else raw
 
 
+def _api_status(path, body=None) -> int:
+    """The HTTP status of an /api request (200, or the refusal's code)."""
+    try:
+        api(path, body)
+        return 200
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def wait_for(fn, timeout, every=2.0, what="condition"):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -11814,7 +11823,7 @@ PHONE_SAMPLES = [
     ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"), ("POST", "/api/lowprofile"), ("POST", "/api/firstrun"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
-    ("POST", "/api/phone/revoke"), ("GET", "/api/away"), ("POST", "/api/away"), ("POST", "/api/away/forget"),
+    ("POST", "/api/phone/revoke"), ("POST", "/api/phone/forget"),
     ("POST", "/api/phone/away/link"), ("POST", "/api/phone/away"), ("GET", "/away"),
     ("POST", "/api/phone/wait"), ("POST", "/api/phone/pair/short"), ("POST", "/api/phone/allow"), ("POST", "/api/phone/refuse"),
     ("POST", "/api/phone/revoke-all"), ("POST", "/api/phone/move/link"), ("POST", "/api/phone/move"), ("GET", "/move"),
@@ -12008,17 +12017,17 @@ def a_link():
     try:
         st = api("/api/phone", {"on": True})   # setup: the link comes up on the fake
         assert st["enabled"] and st["link"] is None and st["phase"] in ("fetching", "starting", "sign-in"), st
-        aw = api("/api/away")
-        port = aw["port"]
-        assert aw["on"] and aw["listening"] and 7870 <= port < 7880, aw
-        wait_for(lambda: api("/api/away")["auth_url"], 60, every=0.5, what="the Tailscale sign-in link")
-        assert api("/api/phone")["phase"] == "sign-in"
+        port = st["port"]
+        assert st["listening"] and 7870 <= port < 7880 and st["supported"] and st["auth_url"] is None, st
+        st = wait_for(lambda: (lambda x: x if x["auth_url"] else None)(api("/api/phone")), 60, every=0.5, what="the Tailscale sign-in link")
+        assert st["phase"] == "sign-in" and st["approve_url"] is None and st["link"] is None, st
         write(backend="Running", signed_in=True, host="uc-fakelink.tailfake.ts.net")
-        wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="the approval link")
+        st = wait_for(lambda: (lambda x: x if x["approve_url"] else None)(api("/api/phone")), 60, every=0.5, what="the approval link")
+        assert st["phase"] == "approve" and st["auth_url"] is None, st
         write(funnel_approved=True)
         st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/phone")), 60, every=0.5, what="ready")
         host = st["link"].removeprefix("https://")
-        assert st["link"] == f"https://{host}" and st["url"] == st["link"] and st["lan"] is None, st
+        assert st["link"] == f"https://{host}" and st["lan"] is None and st["auth_url"] is st["approve_url"] is None and st["name"], st
         sandbox_port = int(BASE.rsplit(":", 1)[1])
         assert read()["funnel_target"] == f"http://127.0.0.1:{port}" and port != sandbox_port, read()   # never 7860, never the home listener
         # the gate: generic refusals, nothing before a token says what exists
@@ -12081,7 +12090,7 @@ def a_link():
                 status, _, body = _away("GET", p_, port, host, cookie=f"__Host-uc={token}")
                 assert b"login.tailscale.com" not in body and b"auth_url" not in body and b"approve_url" not in body, (p_, body[:200])
                 seen += 1
-        assert seen > 20 and read().get("auth_url", "login.tailscale.com") and api("/api/away")["auth_url"] is None
+        assert seen > 20 and read().get("auth_url", "login.tailscale.com") and api("/api/phone")["auth_url"] is None
         assert _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token[:-2]}xx")[:3:2] == (401, b"Unauthorized")
         # the typed code: only when asked for, five wrong tries end it, the QR's code lives on; No forgets the phone
         api("/api/phone/pair", {})
@@ -12148,16 +12157,16 @@ def a_link():
         status, hd, _ = _away("GET", "/api/status", port, host, cookie=f"__Host-uc={main}")
         assert status == 401 and hd.get("clear-site-data") == '"cache", "storage"', (status, hd)
         # Private (Deep Cover): Serve on the tailnet only, the same gate and token; then back to Funnel
-        st = api("/api/away", {"private": True})
-        assert st["private"] and st["on"], st
-        wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="Serve's approval link")
+        st = api("/api/phone", {"private": True})
+        assert st["private"] and st["enabled"], st
+        wait_for(lambda: api("/api/phone")["approve_url"], 60, every=0.5, what="Serve's approval link")
         write(serve_approved=True)
-        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready on the tailnet only")
+        wait_for(lambda: api("/api/phone")["phase"] == "ready", 60, every=0.5, what="ready on the tailnet only")
         assert read()["serve_on"] and not read().get("funnel_on") and read()["funnel_target"] == f"http://127.0.0.1:{port}", read()
         assert _away("GET", "/api/status", port, host)[:3:2] == (401, b"Unauthorized"), "the tailnet alone let a request in"
         assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
-        api("/api/away", {"private": False})
-        wait_for(lambda: api("/api/away")["phase"] == "ready" and read().get("funnel_on"), 60, every=0.5, what="back on Funnel")
+        api("/api/phone", {"private": False})
+        wait_for(lambda: api("/api/phone")["phase"] == "ready" and read().get("funnel_on"), 60, every=0.5, what="back on Funnel")
         # off: nothing reaches this PC from a phone any more (funnel reset, down, the listener closed); on again keeps the sign-in
         resets = read()["calls"].count(["funnel", "reset"])
         st = api("/api/phone", {"on": False})
@@ -12171,15 +12180,17 @@ def a_link():
             pass
         api("/api/phone", {"on": True})
         wait_for(lambda: api("/api/phone")["phase"] == "ready", 60, every=0.5, what="ready again")
-        port = api("/api/away")["port"]
+        port = api("/api/phone")["port"]
         assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
         assert api("/api/phone/revoke-all", {})["devices"] == [] and _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[0] == 401
         # Forget with the link off: the daemon comes up just for the logout, then goes, and the node's keys with it
         api("/api/phone", {"on": False})
         daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
-        st = api("/api/away/forget", {})
+        st = api("/api/phone/forget", {})
         r = read()
         assert r.get("logged_out") and sum(c[0] == "tailscaled" for c in r["calls"]) == daemons + 1 and not st["name"], (st, r["calls"][-4:])
+        assert not st["enabled"] and st["phase"] == "off" and not st["listening"], st
+        assert _api_status("/api/away") == 404 and _api_status("/api/away/forget", {}) == 404, "the old setup routes still answer"
     finally:
         api("/api/phone/revoke-all", {})
         api("/api/phone", {"on": False})
