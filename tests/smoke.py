@@ -12111,7 +12111,10 @@ def u_shape_page():
     if not exe:
         return "no Chrome here: skipped"
     web = ROOT / "undercover" / "web"
-    wav = b"RIFF" + struct.pack("<I", 36 + 800) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16) + b"data" + struct.pack("<I", 800) + bytes(800)
+    # 20 s of silence: every player in the test is still playing when it's checked. It was 0.05 s, so a player could reach its end and pause
+    # itself before the check read it, and "one player at a time" passed or failed on how busy the machine was (CounterIntelligence saw it once)
+    n = 8000 * 2 * 20
+    wav = b"RIFF" + struct.pack("<I", 36 + n) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16) + b"data" + struct.pack("<I", n) + bytes(n)
     test = r"""
 (async () => {
   const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
@@ -12126,12 +12129,13 @@ def u_shape_page():
       plan: [[0, 10, "A"]], backing_plan: [[0, 10, "A"]], octaves: { A: 0, B: 0 }, points: { lead: [], backing: [], dips: [] }, duet: true, backing: true,
       edits: [], cursor: 0, compiled: { lead: [[0, 10, "A", null, null]], backing: [[0, 10, "A", null, null]] }, result: "/wav" };
     Object.assign(SH, { id: "aaaaaaaaaa", item: { id: "aaaaaaaaaa", title: "T", voice: "a-uc", duet_voice: "b-uc", output: "/wav" }, doc, state: "ready", heard: 0 });
-    const started = a => new Promise(r => { if (!a.paused && a.currentTime > 0) return r(); a.addEventListener("play", r, { once: true }); setTimeout(r, 3000); });
+    // a player has started once its "play" event has run (the page's stopOthers runs in the listener ownPlayer added first); a timeout says so
+    const started = a => new Promise(r => { if (!a.paused && a.currentTime > 0) return r(true); a.addEventListener("play", () => r(true), { once: true }); setTimeout(() => r(false), 5000); });
     $("#shape").hidden = false; shDraw();
     shHear(1, 2);
     const b = document.createElement("button"); b.dataset.vline = "x"; b.dataset.label = "x"; document.body.appendChild(b);
-    await started(SH.audio);
-    playVoiceLine(b); await started(VLINE.a); await new Promise(r => setTimeout(r, 100));
+    ok("Hear it starts", await started(SH.audio));
+    playVoiceLine(b); ok("the voice line starts", await started(VLINE.a)); await new Promise(r => setTimeout(r, 100));
     ok("the voice line stops Hear it", players() === 1 && SH.audio.paused && !VLINE.a.paused);
     shHear(1, 2); await started(SH.audio); await new Promise(r => setTimeout(r, 100));
     ok("Hear it stops the voice line", players() === 1 && VLINE.a.paused && !SH.audio.paused);
@@ -12166,7 +12170,7 @@ def u_shape_page():
         def do_GET(self):
             p = self.path.split("?")[0]
             if p == "/hold":
-                said.wait(20)
+                said.wait(100)   # (the page says when it's done; the hold only ends the wait if it never does: on a loaded machine the checks took over 20 s)
                 body, ctype = b"", "image/gif"
             elif p == "/said":
                 said.set(); body, ctype = b"ok", "text/plain"
@@ -12192,7 +12196,7 @@ def u_shape_page():
         with tempfile.TemporaryDirectory() as prof:
             r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", "--autoplay-policy=no-user-gesture-required", f"--user-data-dir={prof}",
                                 "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],   # (real time: the held image keeps the dump until the page has said)
-                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
     finally:
         srv.shutdown()
     m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
