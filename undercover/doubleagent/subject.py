@@ -1,6 +1,6 @@
 """Who or what a voice request names, read from what a search for it actually finds (phase 15).
 
-"Toxic as SpongeBob" trained a voice on a podcast host, because the search treated every name as a person who gives
+A cover as a cartoon character trained a voice on a podcast host, because the search treated every name as a person who gives
 interviews. Now one quick search (titles and channels only, nothing downloaded) decides what kind of subject it is,
 and that decides how its voice is found:
 

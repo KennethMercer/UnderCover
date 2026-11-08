@@ -16,6 +16,8 @@ anywhere.
 
 1. Run `UnderCover-Setup-1.1.4.exe`. Windows may say "Windows protected your PC", because the installer isn't signed.
    Click More info, then Run anyway. It installs for you only and never asks for admin rights.
+   To check the download first, run `Get-FileHash` on it in PowerShell and compare the SHA-256 with the one on the
+   release page.
 2. On "Where should UnderCover keep your files?" the defaults are fine. Pick another drive if your C: drive is short on
    space.
 3. You can skip the optional add-ons. Each one shows its licence and installs only if you tick it.
@@ -38,7 +40,7 @@ The Start menu's Repair UnderCover checks the install against its record and put
 covers and settings stay.
 
 SafeHouse's System room has the Doctor, with the same checks from inside the app, and a diagnostics file you can send
-me. It holds no personal files. If songs from YouTube stop downloading, press Check for a fix in the same room.
+to the maintainers. It holds no personal files. If songs from YouTube stop downloading, press Check for a fix in the same room.
 
 ## Optional extras
 

@@ -33,8 +33,8 @@ SEED = 1234          # a reading's first seed (sentence k: SEED + k): the same t
 SPEEDS = (0.7, 1.4)
 # Pace is made, not stretched (phase 4c): time-stretching the finished audio sounded slurred ("drunk"). A cadence voice
 # reads slower or faster through the engine's own settings plus the person's own pauses scaled; Kokoro reads at that
-# speed itself. Measured 2026-10-11 on a 5-sentence passage (tools/research/pace4c.py): slower -15% / -11% (Obama /
-# Freeman), faster +23% / +7%, nothing stretched. The user picks by ear (samples in D:\UnderCoverResearch\samples\phase4c).
+# speed itself. Measured 2026-10-11 on a 5-sentence passage (tools/research/pace4c.py): slower -15% / -11% (two
+# speaking voices), faster +23% / +7%, nothing stretched. The user picks by ear (samples in the maintainers' notes, phase4c).
 PACES = {
     "slower": {"label": "Slower", "cfg_weight": 0.15, "exaggeration": 0.4, "gap": 1.35, "kokoro": 0.85},
     "natural": {"label": "Natural", "cfg_weight": None, "exaggeration": None, "gap": 1.0, "kokoro": 1.0},

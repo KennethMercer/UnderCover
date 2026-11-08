@@ -1,6 +1,6 @@
 """Is the lead stem actually singing? (phase 15, before the conversion)
 
-"Toxic as SpongeBob": in 6 of the 13 windows where the lead stem was active the "vocal" was a pitched instrument (the
+Toxic as a cartoon character: in 6 of the 13 windows where the lead stem was active the "vocal" was a pitched instrument (the
 song's string hook: spectral flatness 0.001-0.03 against 0.09-0.42 for singing, nearly always pitched, no words), and
 RVC turned it into singing that isn't there. And from 56 s on the karaoke split put the choruses in the backing stem
 (at the lead's level, flatness 0.2-0.4) while the lead stem stayed silent, so those lines were never converted: the
@@ -127,7 +127,7 @@ CHORUS_MODES = ("convert", "top", "keep")
 # all of it into the conversion (phase 15; on Toxic's stacked choruses the user heard it as "atrocious": RVC follows
 # one pitch), "top" splits the backing again with the karaoke model and converts only its top voice, the harmonies
 # under it staying as they were, "keep" leaves the choruses to the original singers. The default is keep: blind, on
-# Toxic, the user put keep first for SpongeBob (convert and top about equal) and for Freeman (keep > convert > top).
+# Toxic, the user put keep first for a cartoon voice (convert and top about equal) and for a deep voice (keep > convert > top).
 
 
 def split_top(backing: Path, separator, cache: Path) -> dict:

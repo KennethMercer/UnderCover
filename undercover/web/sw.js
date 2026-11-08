@@ -1,5 +1,5 @@
 "use strict";
-// UnderCover's service worker (1.2): registered by a paired phone at the away address only (a service worker needs
+// UnderCover's service worker (1.1.4): registered by a paired phone at the away address only (a service worker needs
 // HTTPS, so the home Wi-Fi address can't have one). It caches nothing of the user's and no page: every request goes to
 // the PC as it would without it. It keeps one thing, the PC's home-network address (the page hands it over, checked
 // against the private-address forms below), so that when the PC doesn't answer here, the phone gets a small page of
