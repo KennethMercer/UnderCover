@@ -11,17 +11,18 @@ LIMIT_ENV = "UNDERCOVER_GPU_LIMIT_GB"   # Low profile's cap for this process and
 
 def build(installed: str | None = None) -> str:
     """Which PyTorch this is: "rocm", "cuda" or "cpu", from torch's own account of itself (torch.version.hip / .cuda:
-    a Linux ROCm wheel carries no "+rocm" in its version string). When torch isn't loaded here (the Doctor's fast
-    checks never import it: they answer in under two seconds, with no GPU) its small version file is read on its own,
-    without the package; `installed`, the version string from the package record, is the last resort."""
-    v = sys.modules.get("torch")
-    v = v.version if v is not None else _torch_version_file()
+    a Linux ROCm wheel carries no "+rocm" in its version string). With no argument it's the torch loaded here (what
+    runs). `installed`, the version string from the package record, asks about the install on disk instead (the
+    Doctor: torch may have been replaced under a running server, and its fast checks never import it): torch's small
+    version file is read on its own, without the package, and the string is the last resort."""
+    v = None if installed is not None else getattr(sys.modules.get("torch"), "version", None)   # (None mid-import)
+    v = v or _torch_version_file()
     if v is not None:
         if getattr(v, "hip", None):
             return "rocm"
         if getattr(v, "cuda", None):
             return "cuda"
-        version = v.__version__
+        version = getattr(v, "__version__", "") or installed or ""
     else:
         version = installed or ""
     return "rocm" if "+rocm" in version else "cuda" if "+cu" in version else "cpu"
