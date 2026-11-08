@@ -12319,7 +12319,9 @@ def a_away():
         st = api("/api/away/forget", {})
         r = read()
         later = r["calls"][n0:]
-        assert r.get("logged_out") and r.get("daemon") is True and r.get("backend") == "NeedsLogin" and not st["name"], (st, later)
+        # (not the backend's state: forget() ends with stop(), whose `down` leaves it Stopped or, if the daemon has
+        # already gone, NeedsLogin from the logout; logged_out is the forget itself)
+        assert r.get("logged_out") and r.get("daemon") is True and not st["name"], (st, later)
         assert ["logout"] in later and any(c[0] == "tailscaled" for c in later), later   # a daemon came up for it, then the logout
         wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Forget")
     finally:
