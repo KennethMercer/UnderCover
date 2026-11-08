@@ -2433,9 +2433,31 @@ def u_phone_ci64():
             q[0]["state"] = "done"   # one finished: room for one more
             jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p1", "name": "p"})
             worklist.add("smoke-ci64", "Someone later")
+            # many adds from one phone at the same moment (a burst on the link): still three at most
+            import threading as _th
+            worklist.register_kind("smoke-ci64-slow", run=lambda *a: None, estimate=lambda item: time.sleep(0.2) or {"total": 60})
+            got, refused = [], []
+
+            def one(n):
+                jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p3", "name": "burst"})
+                try:
+                    worklist.add("smoke-ci64-slow", f"Burst {n}")
+                    got.append(n)
+                except jobs.TooManyJobs:
+                    refused.append(n)
+                finally:
+                    jobs.ORIGIN.h = None
+            ts = [_th.Thread(target=one, args=(n,)) for n in range(10)]
+            for x in ts:
+                x.start()
+            for x in ts:
+                x.join(30)
+            burst = [i for i in worklist._state()["queue"] if i.get("device") == "p3"]
+            assert len(got) == len(burst) == worklist.PHONE_ITEMS and len(refused) == 10 - worklist.PHONE_ITEMS, (got, refused, len(burst))
         finally:
             jobs.ORIGIN.h = None
             worklist.KINDS.pop("smoke-ci64", None)
+            worklist.KINDS.pop("smoke-ci64-slow", None)
         # CI-65: every thumb at once is the PC's
         said = {}
         h = SimpleNamespace(remote=True, _body=lambda: {"all": True}, _json=lambda o, status=200: said.update(json=o),

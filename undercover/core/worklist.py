@@ -301,6 +301,14 @@ def hold() -> dict:
 
 # ---------------------------------------------------------------- the overnight queue
 
+def _phone_room(phone: str):
+    """Under _LOCK: a phone may have PHONE_ITEMS items in the queue (waiting, paused or running) at once."""
+    mine = [i for i in _state()["queue"] if i.get("device") == phone and i["state"] in ("queued", "paused", "running")]
+    if len(mine) >= PHONE_ITEMS:
+        raise jobs.TooManyJobs(f"This phone has {PHONE_ITEMS} things in the queue already. Wait for one to finish, "
+                               "or add it on the PC.")
+
+
 def add(kind: str, target: str, now: bool = False, mode: str | None = None, options: dict | None = None) -> dict:
     """Add a queue item. now=True: run it as soon as the GPU is free, without starting the rest of the queue
     ("Start now" in SpeakEasy / DoubleAgent; it still waits for a training that's running). mode: kept on the item
@@ -341,12 +349,9 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None, opti
                 raise ModelError(f"That's already in the queue "
                                  f"({KINDS[i['kind']]['label']({'kind': i['kind'], 'target': i['target'], **i})}).")
     phone = jobs.phone_of_request()   # (a phone's items count against it: a stolen token can't fill the night)
-    if phone:
+    if phone:   # (said early, before the options are checked; counted again where the item goes in)
         with _LOCK:
-            mine = [i for i in _state()["queue"] if i.get("device") == phone and i["state"] in ("queued", "paused", "running")]
-        if len(mine) >= PHONE_ITEMS:
-            raise jobs.TooManyJobs(f"This phone has {PHONE_ITEMS} things in the queue already. Wait for one to finish, "
-                                   "or add it on the PC.")
+            _phone_room(phone)
     if KINDS[kind].get("options"):
         KINDS[kind]["options"](target, options or {})   # checked and kept before the item exists
     item = {"id": uuid.uuid4().hex[:8], "kind": kind, "target": target, "state": "queued",
@@ -361,6 +366,8 @@ def add(kind: str, target: str, now: bool = False, mode: str | None = None, opti
         item["device"] = phone
     item["estimate"] = estimate(item)
     with _LOCK:
+        if phone:   # (under the lock that appends: adds from one phone at the same moment can't all pass the count)
+            _phone_room(phone)
         q = _state()["queue"]
         active = [k for k, i in enumerate(q) if i["state"] in ("queued", "paused", "running")]
         follows = KINDS[kind].get("follows")
