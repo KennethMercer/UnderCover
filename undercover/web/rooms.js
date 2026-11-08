@@ -1,6 +1,6 @@
 "use strict";
 // SafeHouse rooms (phase 4b, rooms build): the room strip (Library · Running · Storage · Add-ons · System · Settings, deep links
-// #safehouse/<room>), Phone access in Settings (phase 11, at the end), the Add-ons room (every part UnderCover is built from; optional add-ons are accepted and installed here)
+// #safehouse/<room>), Your phone in Settings (phase 11, at the end), the Add-ons room (every part UnderCover is built from; optional add-ons are accepted and installed here)
 // and the Storage room (where the three groups of files live, and moving them). The Library room is library.js, Running is
 // work.js (renderRunRoom), System's rows come from app.js (sysStatus) and library.js (yt-dlp, Quit), Settings from app.js.
 // Uses helpers from app.js ($, $$, esc, api, showError, store, leftText), jobs.js (watchJob, runningJobs, onJobs) and

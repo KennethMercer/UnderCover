@@ -2197,6 +2197,104 @@ def u_phone_card():
     return "Set up, the steps, Allow / No, the QR or a typed code, Remove, Turn off; Switch on a phone from before; the app starts at /pair"
 
 
+@check("a phone's open job stream ends (1.2.1, R5 and R10): when the phone is removed, when the link is turned off, and a LAN token's stream once the moved phone has used its new token; the PC's own stream doesn't care")
+def u_phone_stream():
+    import io, threading
+    from types import SimpleNamespace
+    from undercover.app import server
+    from undercover.core import jobs, phone
+    from undercover.core import platform as P
+
+    def stream(dev, job):
+        """Handler._sse on a fake request, in a thread: (the thread, the fake) to see whether it ends."""
+        h = SimpleNamespace(remote=dev is not None, device=dev, wfile=io.BytesIO(), close_connection=False)
+        h.send_response = h.send_header = lambda *a: None
+        h.end_headers = lambda: None
+        h._error = lambda *a: None
+        t = threading.Thread(target=server.Handler._sse, args=(h, job.id), daemon=True)
+        t.start()
+        return t, h
+
+    def ends(t, h, job, what):
+        with job.cond:
+            job.cond.notify_all()   # (the stream checks between events; a change wakes it as an event would)
+        t.join(5)
+        assert not t.is_alive() and h.close_connection, f"the stream went on after {what}"
+        assert b"data:" not in h.wfile.getvalue().split(b"\n\n", 1)[1], what
+
+    def pair(name):
+        phone.new_pairing()
+        nonce, d = phone.claim(phone.PAIRING["code"], name)
+        phone.allow(d["id"])
+        token, d = phone.collect(nonce)
+        return token, phone.device_for(token, away=True)
+
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        saved_nets, real_prefix, was = dict(phone._NETS), P.prefix_length, os.environ.get("UNDERCOVER_PHONE_ADDR")
+        phone._NETS.clear()
+        P.prefix_length = lambda a: None
+        os.environ["UNDERCOVER_PHONE_ADDR"] = "192.168.1.20"
+        job = jobs.Job("cover", title="a long one")
+        jobs.JOBS[job.id] = job
+        threads = []
+        try:
+            phone.set_enabled(True)
+            _, a = pair("Removed phone")
+            _, b_ = pair("Off phone")
+            t1, h1 = stream(a, job)
+            t2, h2 = stream(b_, job)
+            t0, h0 = stream(None, job)   # this PC's own page
+            threads += [t0, t1, t2]
+            time.sleep(0.3)
+            assert t1.is_alive() and t2.is_alive() and t0.is_alive()
+            phone.revoke(a["id"])
+            ends(t1, h1, job, "Remove")
+            assert t2.is_alive(), "another phone's stream ended with the removed one"
+            phone.set_enabled(False)
+            ends(t2, h2, job, "the link was turned off")
+            phone.set_enabled(True)
+            # a phone from before: its stream on the LAN token goes on while it moves, and ends once it has arrived
+            lan = "L" * 43
+            with phone._LOCK:
+                st = phone._load()
+                st["devices"].append({"id": "cccccccccc", "name": "Old phone", "lan_hash": phone.hash_token(lan), "hash": None,
+                                      "paired": "p", "seen": "s", "ip": "192.168.1.9", "lan_used": time.time()})
+                phone._relan(st)
+                phone._save()
+            old = phone.device_for(lan, "192.168.1.77")
+            assert old and old["hash"] == phone.hash_token(lan), old
+            t3, h3 = stream(old, job)
+            threads.append(t3)
+            nonce, _ = phone.redeem_move(phone.move_code("cccccccccc"))
+            phone.allow("cccccccccc")
+            main, _ = phone.collect(nonce)
+            with job.cond:
+                job.cond.notify_all()
+            time.sleep(0.3)
+            assert t3.is_alive(), "the LAN token's stream ended before the phone had used its new token"
+            assert phone.device_for(main, away=True)["id"] == "cccccccccc"
+            ends(t3, h3, job, "the move (the LAN token is finished)")
+            assert t0.is_alive(), "the PC's own stream ended with a phone's"
+        finally:
+            job.finish("done", message="Finished")
+            with job.cond:
+                job.cond.notify_all()
+            for t in threads:
+                t.join(5)
+            jobs.JOBS.pop(job.id, None)
+            phone._NETS.clear(), phone._NETS.update(saved_nets)
+            P.prefix_length = real_prefix
+            if was is None:
+                os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
+            else:
+                os.environ["UNDERCOVER_PHONE_ADDR"] = was
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+    return "Remove, Off and the move each end the phone's stream at once; another phone's and the PC's go on"
+
+
 @check("the home-network listener's state is stored (1.2.1): at start it opens only while a phone paired before the link still holds its LAN token, never because the link is on; it closes for good when the last such token goes")
 def u_phone_listen():
     from types import SimpleNamespace
@@ -10598,8 +10696,11 @@ def u_phone_doctor():
         saved = (phone._FILE[0], phone.windows_check, phone.lan_address)
         phone._FILE[0] = None
         try:
-            assert doctor.c_phone({}) == [], "the check ran with Phone access off"
+            assert doctor.c_phone({}) == [], "the check ran with the phone link off"
             phone.set_enabled(True)
+            assert doctor.c_phone({}) == [], "the home Wi-Fi check ran with no phone using it (1.2.1: phones come in by the link)"
+            with phone._LOCK:
+                phone._load()["lan"] = True   # (a phone paired on the home Wi-Fi before the link)
             fake = {"network": {"name": "Home", "alias": "Wi-Fi", "category": "Private"}, "firewall": ("ok", "fine"), "error": None}
             phone.lan_address = lambda: "192.168.1.5"
             calls = []
@@ -13863,7 +13964,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

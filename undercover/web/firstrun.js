@@ -23,7 +23,7 @@ const TOUR_TIPS = [
   "Low profile, beside Deep Cover, keeps UnderCover to half the graphics card, so you can play a game while it works.",
   "The last fifteen covers stay in Recent. Send to SafeHouse keeps one for good.",
   "Thumbs up or down under a cover teach UnderCover your ear: the voices you like come first.",
-  "Phone access, in SafeHouse's Settings, lets you use UnderCover from your phone on your home Wi-Fi.",
+  "Your phone, in SafeHouse's Settings, lets you use UnderCover from your phone, at home or anywhere.",
   "Themes, in Settings, change the look. Five come with UnderCover, and you can make your own.",
   "\"Or set it up yourself\", under the one-shot line, takes your own file and the exact voice.",
 ];

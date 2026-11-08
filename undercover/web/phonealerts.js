@@ -4,7 +4,7 @@
 // background for a while, hears nothing (the browser has stopped the page by then; Android allows a few minutes, iOS
 // seconds). What it does, on a phone only:
 //   - page shown: a banner (#ph-alert) and, on Android, a short buzz;
-//   - page hidden but still running: the app icon's badge counts the jobs, and at the away address (HTTPS) a system
+//   - page hidden but still running: the app icon's badge counts the jobs, and at the link (HTTPS) a system
 //     notification through the service worker (sw.js), once the phone has said yes (#ph-alerts);
 //   - the overnight queue's results never buzz or ring (silent), whatever the hour;
 //   - at the link: the service worker (sw.js) is registered, and #ph-install says how to keep the app on the home screen.

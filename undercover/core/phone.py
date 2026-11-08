@@ -507,7 +507,7 @@ def name_from_agent(ua: str) -> str:
 
 
 # ---------------------------------------------------------------- Windows: the network type and the firewall (phase 11b)
-# Read-only. The Doctor shows the result while Phone access is on; nothing here changes a Windows setting.
+# Read-only. The Doctor shows the result while a phone uses the home Wi-Fi; nothing here changes a Windows setting.
 
 CATEGORY = {0: "Public", 1: "Private", 2: "Domain"}
 _WIN: dict = {}   # (address, port) -> (when, result): the queries take ~1 s, so they're kept a while

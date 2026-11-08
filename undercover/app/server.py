@@ -280,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
         """The Server header: the away-from-home listener (what the internet reaches) names nothing."""
         return "web" if getattr(self.server, "away", False) else super().version_string()
 
-    # Phone access (phase 11)
+    # Your phone (phase 11; one link since 1.2.1)
     remote = False   # the request came from the network (a paired phone), not from this PC
     device = None    # that phone ({id, name, hash, ...})
 
@@ -299,8 +299,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._guard_host() and (method == "GET" or self._guard_origin())
         if self.away:
             return self._gate_away(method)
-        if not phone.enabled():
-            return self._deny(401, b"Phone access is off on the PC. Switch it on there: SafeHouse, Settings, Phone access.")
+        if not phone.enabled():   # (the listener closes when the link is turned off; this is the moment between)
+            return self._deny(401)
         own, port = self.server.server_address[:2]
         if own in ("0.0.0.0", ""):   # [ui] host set to every address by hand: the home-network one is ours
             own = phone.lan_address()
@@ -693,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         i = 0
         while True:
-            if self.remote and not phone.still_valid(self.device["hash"]):   # revoked, or Phone access switched off
+            if self.remote and not phone.still_valid(self.device["hash"]):   # removed, or the phone link turned off
                 self.close_connection = True
                 return
             with job.cond:
@@ -954,7 +954,8 @@ class ExclusiveServer(ThreadingHTTPServer):
 
 
 class PhoneServer(ExclusiveServer):
-    """The second listener, on the home-network address, only while Phone access is on (app/phone_api.py)."""
+    """The second listener, on the home-network address, only while a phone paired there before the link still holds
+    its LAN token (app/phone_api.py)."""
     phone = True   # every request it answers comes from the network
     daemon_threads = True
     MAX_LIVE = 32  # (1.1 hardening) connections open at once: past it, 503 and closed, nothing read
@@ -986,7 +987,7 @@ class PhoneServer(ExclusiveServer):
 
     def server_bind(self):
         """As ExclusiveServer, without HTTPServer's reverse DNS lookup of the address (getfqdn: ~5 s for an address
-        with no name, so switching Phone access on hung that long)."""
+        with no name, so switching the phone's listener on hung that long)."""
         import socketserver
         self._exclusive()
         socketserver.TCPServer.server_bind(self)
@@ -1185,15 +1186,15 @@ def main():
     from ..core import gamepause
     gamepause.start()   # the game pause: asks before UnderCover's GPU work competes with a game
     threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()
-    try:   # Phone access (phase 11): the second listener, if it's switched on
+    try:   # Your phone (phase 11; one link since 1.2.1): the link's listener, and the home-network one while it's needed
         phone_api.setup(lambda a, p: PhoneServer((a, p), Handler), port, lambda a, p: AwayServer((a, p), Handler))
     except Exception as e:   # noqa: BLE001 - never block startup
-        print(f"Phone access couldn't start: {e}", flush=True)
+        print(f"Your phone's link couldn't start: {e}", flush=True)
     _start_tray(port)
     url = f"http://{host}:{port}/"
     print(f"UnderCover is running at {url}\nKeep this window open while you use it. Press Ctrl+C to stop.")
-    if phone_api.url():
-        print(f"Phone access is on: {phone_api.url()}/ (paired phones only)", flush=True)
+    if phone.enabled():
+        print("Your phone's link is on: phones you've connected can use UnderCover.", flush=True)
     if UCFG["open_browser"] and "--no-browser" not in sys.argv:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
@@ -1237,7 +1238,7 @@ def _install_console_handler():
 
 def _hard_exit():
     """End this process immediately (core/platform.hard_exit: a normal exit can hang in the GPU runtime's teardown).
-    Away from home's Tailscale daemon is ours: it goes too (a restart starts it again)."""
+    The phone link's Tailscale daemon is ours: it goes too (a restart starts it again)."""
     try:
         from ..core import tailnet
         tailnet.at_exit()

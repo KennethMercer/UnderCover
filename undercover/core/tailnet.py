@@ -123,7 +123,7 @@ def funnel_target(port: int) -> str:
     home-network phone listener)."""
     from .config import CONFIG
     if not STATE["port"] or port != STATE["port"] or port == CONFIG["ui"]["port"]:
-        raise ModelError("Away from home only ever points at its own listener.")
+        raise ModelError("Your phone's link only ever points at its own listener.")
     return f"http://127.0.0.1:{port}"
 
 
@@ -341,7 +341,7 @@ def at_exit():
 
 def forget():
     """Switch off and sign this PC out of Tailscale (the node leaves the tailnet); its keys (the state folder) are
-    deleted. With away from home off the daemon isn't running: it's started for the logout."""
+    deleted. With the phone link off the daemon isn't running: it's started for the logout."""
     if state_dir().exists() and have_binaries() and not _daemon_alive():
         with _LOCK:
             if _P["daemon"] is None or _P["daemon"].poll() is not None:
