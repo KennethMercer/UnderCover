@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from ..core import tray
+from ..core import manifest, platform, tray
 from ..core.config import CONFIG, path
 from ..core.voices import label_of
 from . import history as hstore
@@ -384,8 +384,8 @@ class CoverEngine:
 
         def cut(src: Path, name: str) -> Path:
             dst = work / f"{name}.wav"
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
-                            "-c:a", "pcm_f32le", str(dst)], check=True)
+            subprocess.run([manifest.ffmpeg(), "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
+                            "-c:a", "pcm_f32le", str(dst)], check=True, creationflags=platform.NO_WINDOW)
             return dst
         sliced = {k: cut(Path(v), k) for k, v in stems.items()}
         song_cut = cut(song, "song")
@@ -459,15 +459,29 @@ def song_key(song: Path) -> dict:
     return k
 
 
+_TITLES: dict = {}   # sidecar path -> (mtime_ns, title): history() asks for every hash-named cover's title on each listing
+
+
 def upload_title(song: Path) -> str | None:
-    """Songs added through the web UI are stored by hash; their real name is in the sidecar JSON."""
-    meta = Path(song).with_suffix(".json")
-    if re.fullmatch(r"[0-9a-f]{16}", Path(song).stem) and meta.exists():
-        try:
-            return json.loads(meta.read_text(encoding="utf-8")).get("title")
-        except ValueError:
-            return None
-    return None
+    """Songs added through the web UI are stored by hash; their real name is in the sidecar JSON. Remembered per
+    sidecar until its mtime_ns changes (a rename rewrites it), so a listing of a thousand covers reads none."""
+    song = Path(song)
+    if not re.fullmatch(r"[0-9a-f]{16}", song.stem):
+        return None
+    meta = song.with_suffix(".json")
+    try:
+        mt = meta.stat().st_mtime_ns
+    except OSError:
+        return None
+    hit = _TITLES.get(str(meta))
+    if hit is not None and hit[0] == mt:
+        return hit[1]
+    try:
+        title = json.loads(meta.read_text(encoding="utf-8")).get("title")
+    except (OSError, ValueError):
+        return None
+    _TITLES[str(meta)] = (mt, title)
+    return title
 
 
 def _conv_cfg() -> dict:

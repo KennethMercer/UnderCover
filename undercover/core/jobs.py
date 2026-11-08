@@ -395,7 +395,8 @@ def gpu_worker():
         # Which torch build this install expects ([gpu].backend; the installer writes it). Never fall back to the
         # CPU silently when a GPU build was expected (a cover would take ages, training hours): say what's wrong instead.
         want = CONFIG["gpu"].get("backend", "rocm")
-        have = "rocm" if "+rocm" in torch.__version__ else "cuda" if "+cu" in torch.__version__ else "cpu"
+        from . import gpu
+        have = gpu.build()
         STATUS["backend"] = have
         if have != want:
             names = {"rocm": "AMD's ROCm build", "cuda": "the NVIDIA CUDA build", "cpu": "the CPU-only build"}

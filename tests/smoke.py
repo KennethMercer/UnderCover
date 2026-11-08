@@ -1366,7 +1366,8 @@ def u_harden1():
         assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile" in f.read_text(encoding="utf-8"), f
     from undercover.core import platform as PF
     ps_src = inspect.getsource(PF)
-    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 5
+    # (every PowerShell command line is built by _ps(), the one place that names the interpreter and asks for UTF-8)
+    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 1 and ps_src.count("_ps(") >= 6
     assert PF._powershell().lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
     # every listener drops a stalled client; the phone and away listeners take so many connections at once, then 503
     # and close (live, on 127.0.0.1, with a handler that holds its connections)
@@ -10295,7 +10296,7 @@ def u_phone_pairing():
             assert "Only if this phone is on your own home Wi-Fi" in (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
             # an address only ever goes into a command line as plain IPv4: an IPv6 zone part can hold anything
             ran, real_run = [], P.run_text
-            P.run_text = lambda cmd, timeout=20: ran.append(cmd) or ""
+            P.run_text = lambda cmd, timeout=20, **kw: ran.append(cmd) or ""
             try:
                 for hostile in ("fe80::1%x'; Start-Process calc; '", "fe80::1%eth0", "::1", "192.168.1.5'", "192.168.1.5 "):
                     for call in (lambda a: P.prefix_length(a), lambda a: P.network_and_firewall(a),
@@ -11749,11 +11750,16 @@ def u_firstrun():
 # ---------------------------------------------------------------- the platform helper and the tray (phase 18)
 
 WINDOWS_ONLY = ("ctypes.windll", "WinDLL(", "os.startfile", '"netsh"', '"powershell"', '"explorer"',
-                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(")
+                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(",
+                "CREATE_NO_WINDOW", "CREATE_NEW_PROCESS_GROUP", "msvcrt", "winreg")
+# Windows told apart by hand, or a program named with its Windows extension: platform.WINDOWS and platform.exe_name()
+# say it once, for every OS (the maintainers' notes, portability)
+WINDOWS_ONLY_RX = (r"\bos\.name\b", r"\bsys\.platform\b", r"platform\.system\(\)", r"\.exe['\"]")
 
 
 @check("platform helper: every Windows-only call lives in core/platform.py; the helper works here and says 'not on this OS' elsewhere")
 def u_platform():
+    import re
     import subprocess as sp
     import tempfile
     from undercover.core import platform
@@ -11762,8 +11768,20 @@ def u_platform():
         if f.name == "platform.py" and f.parent.name == "core":
             continue
         text = f.read_text(encoding="utf-8")
-        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in text]
+        code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in code]
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {m.group(0)!r}" for rx in WINDOWS_ONLY_RX for m in re.finditer(rx, code)]
     assert not bad, f"Windows-only calls outside core/platform.py: {bad}"
+    # a program's name and the way to get it, said once for this OS
+    assert platform.exe_name("ffmpeg") == ("ffmpeg.exe" if platform.WINDOWS else "ffmpeg")
+    assert platform.exe_name("uv") == ("uv.exe" if platform.WINDOWS else "uv")
+    hint = platform.install_hint("ffmpeg")
+    assert hint == "winget install Gyan.FFmpeg" if platform.WINDOWS else ("ffmpeg" in hint and "winget" not in hint), hint
+    assert not platform.console_python().lower().endswith("pythonw.exe") and Path(platform.console_python()).is_file()
+    assert platform.TEXT == {"text": True, "encoding": "utf-8", "errors": "replace"}
+    # a program's text comes through TEXT without ever raising: a byte that isn't UTF-8 becomes U+FFFD
+    out = sp.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok \\xff\\xfe end')"], capture_output=True, **platform.TEXT).stdout
+    assert out == "ok �� end", repr(out)
     if platform.WINDOWS:
         assert platform.supports("startup") == (True, "") and platform.drives() and platform.own_executable().endswith(".exe")
         assert platform.keep_awake(False) is True
@@ -11819,6 +11837,53 @@ def u_platform():
     return "no Windows-only calls elsewhere; one instance; the startup shortcut in a temp folder; the other-OS answers"
 
 
+@check("ffmpeg resolver: the installer's copy in tools/ffmpeg/bin first (ffprobe beside it), then PATH, else a ModelError with this OS's install hint; no module runs a bare 'ffmpeg'")
+def u_ffmpeg_resolver():
+    import re
+    import shutil as _sh
+    import tempfile
+    from undercover.core import manifest, platform
+    from undercover.core.voices import ModelError
+    # every call site goes through the resolver: a bare "ffmpeg"/"ffprobe" command would only find the PATH's copy
+    bare = [f"{f.relative_to(ROOT).as_posix()}:{n}" for f in (ROOT / "undercover").rglob("*.py")
+            for n, ln in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+            if re.search(r"""(\[|which\()\s*["'](ffmpeg|ffprobe)["']""", ln)]
+    assert not bare, f"ffmpeg run bare, not through manifest.ffmpeg(): {bare}"
+    from types import SimpleNamespace
+    real_root, real_shutil = manifest.ROOT, manifest.shutil
+    with tempfile.TemporaryDirectory(prefix="uc-ffm-") as t:
+        root = Path(t)
+        try:
+            manifest.ROOT = root
+            found = {}
+            manifest.shutil = SimpleNamespace(which=lambda name: found.get(name))   # (the module's own name only, never the real shutil)
+            # nothing anywhere: a plain error that says how to get it here
+            try:
+                manifest.ffmpeg()
+                raise AssertionError("no ffmpeg, no error")
+            except ModelError as e:
+                assert "ffmpeg isn't installed" in str(e) and platform.install_hint("ffmpeg") in str(e), str(e)
+            assert manifest.tool("ffprobe", folder="ffmpeg") is None
+            # on PATH only
+            found["ffmpeg"] = str(root / "elsewhere" / platform.exe_name("ffmpeg"))
+            assert manifest.ffmpeg() == found["ffmpeg"]
+            # the installer's copy wins over PATH; ffprobe is looked for beside it, never in tools/ffprobe
+            bin_ = root / "tools" / "ffmpeg" / "bin"
+            bin_.mkdir(parents=True)
+            for n in ("ffmpeg", "ffprobe"):
+                (bin_ / platform.exe_name(n)).write_bytes(b"MZ")
+            assert manifest.ffmpeg() == str(bin_ / platform.exe_name("ffmpeg"))
+            assert manifest.ffmpeg("ffprobe") == str(bin_ / platform.exe_name("ffprobe"))
+            assert manifest.tool("uv") is None and manifest.tool("deno") is None
+            (root / "tools" / "uv").mkdir()
+            (root / "tools" / "uv" / platform.exe_name("uv")).write_bytes(b"MZ")
+            assert manifest.tool("uv") == root / "tools" / "uv" / platform.exe_name("uv")
+        finally:
+            manifest.ROOT, manifest.shutil = real_root, real_shutil
+    assert _sh.which is real_shutil.which
+    return "tools/ffmpeg/bin first, PATH second, a per-OS hint third; ffprobe beside ffmpeg; nothing runs bare"
+
+
 @check("tray: the menu and the icon from what the server says (stopped, idle, working, paused, a problem); no torch")
 def u_tray():
     import subprocess as sp
@@ -11863,6 +11928,207 @@ def u_tray():
                  capture_output=True, text=True, timeout=120).stdout.strip()
     assert out == "False False", f"the tray loads heavy modules: {out}"
     return "stopped / idle / working (the module's bar) / paused / problem; job lines; icons differ; light import"
+
+
+@check("perf: load_16k remembers the last few vocals (a hit, a changed file misses, callers get copies)")
+def u_perf_load16k():
+    import tempfile
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.engine import convert
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        f = Path(td) / "lead.flac"
+        x = (0.2 * np.sin(np.arange(16000 * 2) / 16000 * 2 * np.pi * 220)).astype(np.float32)
+        sf.write(str(f), x, 16000, subtype="PCM_16")
+        convert._LOAD16K.clear()
+        a = convert.load_16k(f)
+        assert a.flags.writeable and a.dtype == np.float32 and len(a) == len(x), (a.flags, a.dtype, len(a))
+        kept = next(iter(convert._LOAD16K.values()))
+        assert not kept.flags.writeable and a is not kept, "the memo's own array was handed out, or is writable"
+        a[0] = 1.0   # the caller's copy: its change never reaches the memo
+        b = convert.load_16k(Path(td) / "." / "lead.flac")   # the same file by another spelling: one entry, not decoded again
+        assert len(convert._LOAD16K) == 1 and next(iter(convert._LOAD16K.values())) is kept, "a repeat call didn't come from the memo"
+        assert b is not a and b[0] == kept[0] != 1.0, "a caller's change reached the memo"
+        time.sleep(0.02)
+        sf.write(str(f), x[:16000], 16000, subtype="PCM_16")   # rewritten (another size and mtime): decoded afresh
+        c = convert.load_16k(f)
+        assert c is not a and len(c) == 16000, "a changed file came from the memo"
+        for i in range(convert._LOAD16K_KEEP + 1):   # the memo stays small: the oldest entry leaves
+            g = Path(td) / f"v{i}.flac"
+            sf.write(str(g), x[:4000], 16000, subtype="PCM_16")
+            convert.load_16k(g)
+        assert len(convert._LOAD16K) == convert._LOAD16K_KEEP, len(convert._LOAD16K)
+        convert._LOAD16K.clear()
+    return f"hit, miss on rewrite, callers get copies of a read-only memo, at most {convert._LOAD16K_KEEP} kept"
+
+
+@check("perf: /api/status's code stamp is kept a few seconds, then walked again")
+def u_perf_code_stamp():
+    from undercover.app import server
+    saved = dict(server._CODE_STAMP)
+    try:
+        real = server.code_stamp()
+        assert real > 0 and real == server.STARTUP_STAMP, (real, server.STARTUP_STAMP)
+        server._CODE_STAMP.update(at=time.monotonic(), value=123.0)
+        assert server.code_stamp() == 123.0, "a fresh stamp wasn't served from the cache"
+        server._CODE_STAMP.update(at=time.monotonic() - server.CODE_STAMP_TTL - 1)
+        assert server.code_stamp() == real, "a stamp past its time wasn't walked again"
+        t0 = time.perf_counter()
+        for _ in range(50):
+            server.code_stamp()
+        assert time.perf_counter() - t0 < 0.05, "50 cached calls took over 50 ms"
+    finally:
+        server._CODE_STAMP.update(saved)
+    return f"kept {server.CODE_STAMP_TTL:.0f} s"
+
+
+@check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
+def u_perf_history():
+    from undercover.frontman import history as hstore, pipeline
+    with isolated_data() as t:
+        out, up = t / "app" / "output", t / "app" / "uploads"
+        out.mkdir(parents=True, exist_ok=True)
+        up.mkdir(parents=True, exist_ok=True)
+        sid = "ab" * 8
+        rows = [{"id": f"{i:010x}", "output": str(out / f"c{i}.flac"), "song": str(up / f"{sid}.mp3"), "voice": "v", "title": sid,
+                 "options": {"fit": True}, "notes": []} for i in range(3)]
+        for r in rows:
+            Path(r["output"]).write_bytes(b"x")
+        (out / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "{broken\n", encoding="utf-8")
+        hstore._PARSED["key"] = None
+        a = hstore._lines()
+        key = hstore._PARSED["key"]
+        assert len(a) == 3 and key is not None, (len(a), key)
+        a[0]["title"] = "changed by the caller"
+        a[1]["options"]["fit"] = False   # nested values are the caller's own too
+        a[2]["notes"].append("y")
+        b = hstore._lines()
+        assert hstore._PARSED["key"] == key and b[0]["title"] == sid, "a caller's change reached the cache, or the parse was redone"
+        assert b[1]["options"] == {"fit": True} and b[2]["notes"] == [], "a caller's change to a nested value reached the cache"
+        assert b[0] is not hstore._PARSED["items"][0], "the cache handed out its own rows"
+        hstore.update(rows[1]["id"], notes=["x"])   # a write drops the parse; the next read sees the new line
+        c = hstore._lines()
+        assert hstore._PARSED["key"] != key and c[1].get("notes") == ["x"], "a write wasn't seen"
+        key = hstore._PARSED["key"]
+        time.sleep(0.02)
+        (out / "history.jsonl").write_text(json.dumps(rows[0]) + "\n", encoding="utf-8")   # another writer (size and mtime change)
+        assert len(hstore._lines()) == 1 and hstore._PARSED["key"] != key, "a rewritten file came from the cache"
+        # titles: the sidecar is read once, and again after a rename rewrites it
+        side = up / f"{sid}.json"
+        side.write_text(json.dumps({"id": sid, "title": "Hold On"}), encoding="utf-8")
+        pipeline._TITLES.clear()
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On"
+        mt = pipeline._TITLES[str(side)][0]
+        side.write_bytes(b"{not json")
+        os.utime(side, ns=(mt, mt))   # the same mtime: served from memory, not read
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On", "a sidecar with the same mtime was read again"
+        time.sleep(0.02)
+        side.write_text(json.dumps({"id": sid, "title": "Hold On (edit)"}), encoding="utf-8")
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On (edit)", "a rewritten sidecar came from memory"
+        assert pipeline.upload_title(up / "not-a-hash.mp3") is None
+        pipeline._TITLES.clear()
+        hstore._PARSED["key"] = None
+    return "parse kept by (path, size, mtime_ns); rows copied; dropped on write; titles by sidecar mtime"
+
+
+@check("perf: the Library's summary is kept until something changes; songs and stems come out the same from one pass; file URLs")
+def u_perf_library():
+    from undercover.core import files, storage
+    from undercover.core.config import path
+    from undercover.safehouse import library
+    with isolated_data() as t:
+        app = t / "app"
+        up, out, cache = app / "uploads", app / "output", app / "cache"
+        for d in (up, out / "speech", cache / "stems", cache / "training" / "p1", cache / "keys", app / "models" / "voices" / "v1"):
+            d.mkdir(parents=True, exist_ok=True)
+        sids = ["ab" * 8, "cd" * 8]
+        for i, sid in enumerate(sids):
+            (up / f"{sid}.mp3").write_bytes(b"s" * 1000)
+            (up / f"{sid}.json").write_text(json.dumps({"id": sid, "file": f"{sid}.mp3", "title": f"Song {i}"}), encoding="utf-8")
+        for sub, names in (("m_high", ("vocals", "instrumental")), ("m_high/karaoke_x", ("vocals", "instrumental")),
+                           ("m_high/karaoke_x/dereverb_y", ("noreverb", "reverb")), ("other_fast", ("vocals",))):
+            d = cache / "stems" / sids[0] / sub
+            d.mkdir(parents=True, exist_ok=True)
+            for n in names:
+                (d / f"{n}.flac").write_bytes(b"x" * (100 + len(n)))
+            (d / "notes.txt").write_bytes(b"not a stem")
+        (cache / "training" / "p1" / "project.json").write_text("{}", encoding="utf-8")
+        (cache / "training" / "p1" / "clip.wav").write_bytes(b"t" * 700)
+        (app / "models" / "voices" / "v1" / "meta.json").write_text(json.dumps({"dir": str(app / "models/voices/v1")}), encoding="utf-8")
+        (app / "models" / "voices" / "v1" / "model.pth").write_bytes(b"v" * 900)
+        rows = []
+        for i in range(5):
+            o = out / f"c{i}.flac"
+            o.write_bytes(b"c" * 50)
+            rows.append({"id": f"{i:010x}", "output": str(o), "song": str(up / f"{sids[i % 2]}.mp3"), "voice": "v", "title": f"Cover {i}"})
+        (out / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        # file URLs: inside a root, a sibling folder that only shares the prefix, outside; roots follow the paths setting
+        assert files.roots()["output"] == path("output_dir").resolve()
+        assert files.file_url(out / "c1.flac") == "/files/output/c1.flac"
+        assert files.file_url(cache / "stems" / sids[0] / "m_high" / "karaoke_x" / "vocals.flac") == f"/files/stems/{sids[0]}/m_high/karaoke_x/vocals.flac"
+        assert files.file_url(up / "a b#c.mp3") == "/files/uploads/a%20b%23c.mp3"
+        (app / "output2").mkdir()
+        assert files.file_url(app / "output2" / "x.mp3") is None and files.file_url(t / "elsewhere.mp3") is None and files.file_url(None) is None
+        # the summary: kept while nothing changed, re-made when a folder's entries or the history change, dropped by invalidate
+        library.invalidate()
+        s1 = library.summary()
+        assert library.summary() is s1, "a summary with nothing changed was re-made"
+        assert s1["categories"]["stems"] == sum(f.stat().st_size for f in (cache / "stems").rglob("*") if f.is_file()), s1["categories"]
+        assert s1["categories"]["training"] == 702 and s1["categories"]["songs"] == 2000 + sum(f.stat().st_size for f in up.glob("*.json")), s1["categories"]
+        assert s1["categories"]["voices"] == 900 + (app / "models/voices/v1/meta.json").stat().st_size, s1["categories"]
+        assert s1["total"] == sum(g["size"] for g in storage.where().values()), (s1["total"], storage.where())
+        assert s1["total"] == sum(s1["categories"].values()) + (out / "history.jsonl").stat().st_size, (s1["total"], s1["categories"])   # (the history file is the one thing in no category)
+        assert s1["counts"] == {"covers": 5, "speech": 0, "songs": 2, "voices": 1, "training": 1}, s1["counts"]
+        assert "inside" not in json.dumps(s1)
+        time.sleep(0.02)
+        (out / "c5.flac").write_bytes(b"c" * 50)   # a new file in a counted folder: another key
+        s2 = library.summary()
+        assert s2 is not s1 and s2["categories"]["covers"] == 300, "a changed output folder didn't re-make the summary"
+        library._SUMMARY["at"] -= library.SUMMARY_TTL + 1   # past its time: re-made even with the same key
+        assert library.summary() is not s2
+        s3 = library.summary()
+        library.invalidate()
+        s4 = library.summary()
+        assert s4 is not s3
+        make = library._summary   # a change while a summary is being made (another thread's route): that one isn't kept
+        library._summary = lambda: (library.invalidate(), make())[1]
+        try:
+            library.invalidate()
+            s5 = library.summary()
+        finally:
+            library._summary = make
+        assert library.summary() is not s5, "a summary begun before an invalidate() was kept"
+        from undercover.safehouse import api as lib_api   # a writing route: the summary is dropped just before its answer
+        seen = []
+
+        class _H:
+            path = "/api/library/x"
+
+            def _json(self, obj, status=200):
+                seen.append(library._SUMMARY["value"] is None)
+
+        def route(h, method, p):   # another thread's GET keeps a summary while this route is still writing
+            library.summary()
+            h._json({"ok": True})
+        real_route, lib_api._route = lib_api._route, route
+        try:
+            fake = _H()
+            lib_api.handle(fake, "POST", "/api/library/x")
+        finally:
+            lib_api._route = real_route
+        assert seen == [True], "the summary was still kept when a writing route answered"
+        assert vars(fake)["_json"].__func__ is _H._json, "the handler's own _json wasn't put back"
+        # songs: covers per song from one pass over the history, stems as the old per-file listing gave them
+        songs = {s["id"]: s for s in library.songs()}
+        assert songs[sids[0]]["covers"] == 3 and songs[sids[1]]["covers"] == 2, {k: v["covers"] for k, v in songs.items()}
+        assert songs[sids[0]]["cover_titles"] == ["c4", "c2", "c0"], songs[sids[0]]["cover_titles"]   # (newest first, as before)
+        st = songs[sids[0]]["stems"]
+        want = sorted(x for x in (cache / "stems" / sids[0]).rglob("*") if x.suffix.lower() in (".wav", ".flac"))
+        assert [files.file_url(x) for x in want] == [s["url"] for s in st] and [x.stat().st_size for x in want] == [s["size"] for s in st], st
+        assert [s["label"] for s in st] == ["Instrumental", "Lead vocal (dry)", "Lead reverb (removed)", "Backing vocals", "Lead vocal", "Vocals", "Vocals"], [s["label"] for s in st]
+        assert {s["quality"] for s in st} == {"high", "fast"} and songs[sids[1]]["stems"] == []
+        library.invalidate()
+    return "summary kept / re-made on a change, past its time, on invalidate; songs indexed; stems from scandir; URLs by prefix"
 
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
@@ -13837,7 +14103,8 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
