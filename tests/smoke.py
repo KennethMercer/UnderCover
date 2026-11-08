@@ -11633,6 +11633,51 @@ def u_perf_code_stamp():
     return f"kept {server.CODE_STAMP_TTL:.0f} s"
 
 
+@check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
+def u_perf_history():
+    from undercover.frontman import history as hstore, pipeline
+    with isolated_data() as t:
+        out, up = t / "app" / "output", t / "app" / "uploads"
+        out.mkdir(parents=True, exist_ok=True)
+        up.mkdir(parents=True, exist_ok=True)
+        sid = "ab" * 8
+        rows = [{"id": f"{i:010x}", "output": str(out / f"c{i}.flac"), "song": str(up / f"{sid}.mp3"), "voice": "v", "title": sid} for i in range(3)]
+        for r in rows:
+            Path(r["output"]).write_bytes(b"x")
+        (out / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "{broken\n", encoding="utf-8")
+        hstore._PARSED["key"] = None
+        a = hstore._lines()
+        key = hstore._PARSED["key"]
+        assert len(a) == 3 and key is not None, (len(a), key)
+        a[0]["title"] = "changed by the caller"
+        b = hstore._lines()
+        assert hstore._PARSED["key"] == key and b[0]["title"] == sid, "a caller's change reached the cache, or the parse was redone"
+        assert b[0] is not hstore._PARSED["items"][0], "the cache handed out its own rows"
+        hstore.update(rows[1]["id"], notes=["x"])   # a write drops the parse; the next read sees the new line
+        c = hstore._lines()
+        assert hstore._PARSED["key"] != key and c[1].get("notes") == ["x"], "a write wasn't seen"
+        key = hstore._PARSED["key"]
+        time.sleep(0.02)
+        (out / "history.jsonl").write_text(json.dumps(rows[0]) + "\n", encoding="utf-8")   # another writer (size and mtime change)
+        assert len(hstore._lines()) == 1 and hstore._PARSED["key"] != key, "a rewritten file came from the cache"
+        # titles: the sidecar is read once, and again after a rename rewrites it
+        side = up / f"{sid}.json"
+        side.write_text(json.dumps({"id": sid, "title": "Hold On"}), encoding="utf-8")
+        pipeline._TITLES.clear()
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On"
+        mt = pipeline._TITLES[str(side)][0]
+        side.write_bytes(b"{not json")
+        os.utime(side, ns=(mt, mt))   # the same mtime: served from memory, not read
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On", "a sidecar with the same mtime was read again"
+        time.sleep(0.02)
+        side.write_text(json.dumps({"id": sid, "title": "Hold On (edit)"}), encoding="utf-8")
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On (edit)", "a rewritten sidecar came from memory"
+        assert pipeline.upload_title(up / "not-a-hash.mp3") is None
+        pipeline._TITLES.clear()
+        hstore._PARSED["key"] = None
+    return "parse kept by (path, size, mtime_ns); rows copied; dropped on write; titles by sidecar mtime"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -13606,7 +13651,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray,
-               u_perf_load16k, u_perf_code_stamp):
+               u_perf_load16k, u_perf_code_stamp, u_perf_history):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
