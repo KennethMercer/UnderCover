@@ -471,7 +471,7 @@ def start(kind: str, name: str) -> dict:
                 r = shrink_project(name, lambda f, m: job.push(stage="smaller", fraction=round(f, 3), label=m))
                 job.finish("done", message="Smaller. The originals wait aside until you keep the smaller copy.", result=r)
             except Exception as e:   # noqa: BLE001 - shown on the job
-                job.finish("error", message=jobs.friendly(e, "making the project smaller"))
+                jobs.fail(job, e, "making the project smaller")
         import threading
         threading.Thread(target=run, daemon=True, name="smaller").start()   # disk work only: no GPU
         return {"job": job.id}

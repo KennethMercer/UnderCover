@@ -2053,6 +2053,54 @@ def u_phone_away():
     return "code -> away token; home and away kept apart; once only; expiry; away off; Revoke ends both"
 
 
+def _plain_error_cases(jobs, ModelError, Own):
+    with isolated_data():
+        for raised, want in ((ModelError("That voice isn't installed."), True), (Own("A plain sentence."), True),
+                             (RuntimeError("boom"), False), (KeyError("x"), False)):
+            j = jobs.Job("cover", title="t")
+            jobs.fail(j, raised, "converting")
+            ev = j.events[-1]
+            assert ev["final"] and ev["state"] == "error" and ev["plain"] is want, (raised, ev)
+            assert j.snapshot()["final"]["plain"] is want, j.snapshot()["final"]
+        j = jobs.Job("cover", title="t")
+        j.finish("error", message="Only 1.2 GB free on drive D:. Free some space and try again.")   # a job's own sentence
+        assert j.events[-1]["plain"] is True and j.snapshot()["final"]["plain"] is True
+        j = jobs.Job("cover", title="t")
+        j.finish("done", message="Finished")
+        assert "plain" not in j.events[-1] and "plain" not in j.snapshot()["final"]
+        j = jobs.Job("cover", title="t")
+        jobs.run_job(j, lambda job: (_ for _ in ()).throw(ModelError("Pick a voice first.")))
+        assert j.events[-1]["message"] == "Pick a voice first." and j.events[-1]["plain"] is True, j.events[-1]
+        j = jobs.Job("cover", title="t")
+        jobs.run_job(j, lambda job: 1 / 0)
+        assert j.events[-1]["plain"] is False and "Something went wrong" in j.events[-1]["message"], j.events[-1]
+
+
+@check("a job's final error says whether its message is a plain refusal (Q, 1.2.1): plain for a ModelError, a module's own user error, or a sentence the job ends itself with; not plain for an unexpected error (whose friendly message is a guess); the jobs list carries it; every site that turns an exception into a job's error goes through jobs.fail")
+def u_plain_error():
+    import inspect
+    import re as _re
+    from undercover.core import jobs
+    from undercover.core.voices import ModelError
+
+    class Own(Exception):
+        pass
+    jobs.register_user_error(Own)
+    try:
+        _plain_error_cases(jobs, ModelError, Own)
+    finally:
+        jobs.USER_ERRORS.remove(Own)
+    left = []
+    for f in (ROOT / "undercover").rglob("*.py"):
+        for m in _re.finditer(r'finish\("error", message=(jobs\.)?friendly\(', f.read_text(encoding="utf-8")):
+            line = f.read_text(encoding="utf-8")[m.start():].split("\n", 1)[0]
+            if "plain=" not in line:
+                left.append(f"{f.name}: {line[:80]}")
+    assert not left, f"an exception becomes a job's error without its plain flag: {left}"
+    assert 'plain=False' in inspect.getsource(jobs)   # (the GPU thread's last resort)
+    return "plain: ModelError, a module's own, a job's own sentence; not: unexpected; in the list; every site"
+
+
 @check("overnight improve never replaces or deletes the user's voice (Internal Affairs P2-1): the retrained one waits beside it as pending, whatever the numbers; no improve over a pending one")
 def u_improve_pending():
     import inspect
@@ -14055,7 +14103,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

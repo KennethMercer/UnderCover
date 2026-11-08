@@ -289,7 +289,9 @@ the tray only; the library lists everything. Each property is proved in `tests/s
 finished in the last hour as `Job.snapshot()`: `id, kind, state, title, project, created, ended, pausing, stage,
 message, events, progress`, and when known `epoch, epochs, eta, total_left, stage_left, index, of, elapsed`, `retry`
 (`POST /api/jobs/<id>/retry` replays a failed cover, speech, one-shot or install), a one-shot's `plan`, a finished job's
-`final`. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
+`final`. A failed job's last event and `final` say `plain`: true when its message is a refusal written for the user (a
+`ModelError`, a module's registered user error, or a sentence the job ends itself with; `jobs.fail`), false for an
+unexpected error whose `friendly()` message is a guess, so the page decides Try again on it, not on the words. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
 pause. Every progress event carries `total_left` in seconds (`jobs.STAGES`, `cache/eta.json`). A heartbeat
 (`logs/heartbeat*.jsonl`) records each running job's resume spec for the Doctor; `jobs.START_GATES` lets the game pause
 ask before a queued GPU job starts.
