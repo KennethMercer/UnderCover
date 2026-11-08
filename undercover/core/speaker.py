@@ -15,7 +15,7 @@ from . import setup_models
 
 SR = 16000
 # Voice prints of voices whose sex is known: SpeakEasy's Readers, rendered once (scripts/reader_prints.py). Prints carry sex
-# only weakly across recording conditions (a centroid split of the Readers got Freeman and Obama wrong on their real
+# only weakly across recording conditions (a centroid split of the Readers got two deep male voices wrong on their real
 # interviews, 2026-10-17), so the vote of the nearest few is a hint that decides only when it's clear (tts.pick_reader).
 PRINTS = Path(__file__).resolve().parents[1] / "assets" / "reader-prints.json"
 NEAREST = 5
@@ -36,7 +36,7 @@ def labelled_prints() -> list[tuple[str, str, np.ndarray]]:
 
 def sex_vote(vec, k: int = NEAREST) -> int | None:
     """+k (the k nearest labelled voices all male) .. -k (all female), or None without prints or a vector. Measured on
-    the user's people (2026-10-17): Trump +3, Kristen Schaal -5, Peter Griffin +5, Obama -1, Freeman +1."""
+    the maintainers' voices (2026-10-17): two men who speak high +3 and -1, a deep man +1, a cartoon man +5, a low-voiced woman -5."""
     prints = labelled_prints()
     if vec is None or not prints:
         return None

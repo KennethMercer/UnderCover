@@ -41,8 +41,8 @@ GOOD, WEAK = 0.45, 0.30   # same scale as the training match threshold (same spe
 LOW_OK = 0.40             # ...and the bootstrap lower bound must clear this (a lucky mean of 3 phrases isn't a pass)
 MAX_CENTS = 50.0          # a voice that can't hold pitch (cracks, wrong notes) fails regardless of likeness
 # Singers are tested on singing: other singers' vocals (songs in the library) converted, compared with the person's
-# SUNG voice. Measured 2026-10-10 on Elliott Smith, 12 phrases from 6 songs: his voices 0.59-0.64, another singer
-# (Michael Jackson model) 0.39, speech-trained voices 0.10-0.21, unconverted singers 0.36. Singing shares a lot
+# SUNG voice. Measured 2026-10-10 on one singer, 12 phrases from 6 songs: his voices 0.59-0.64, another singer's
+# model 0.39, speech-trained voices 0.10-0.21, unconverted singers 0.36. Singing shares a lot
 # (the baseline is high), so a pass also needs a clear margin over it.
 SUNG_GOOD, SUNG_LOW_OK, SUNG_WEAK, SUNG_MARGIN = 0.50, 0.45, 0.40, 0.15
 
