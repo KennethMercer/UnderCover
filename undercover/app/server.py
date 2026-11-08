@@ -294,6 +294,18 @@ class Handler(BaseHTTPRequestHandler):
     remote = False   # the request came from the network (a paired phone), not from this PC
     device = None    # that phone ({id, name, hash, ...})
 
+    def _relayed(self) -> bool:
+        """Is this loopback connection held by a relay (the link's daemon) rather than a program of the PC's own? Asked
+        once per connection."""
+        got = getattr(self, "_relay", None)
+        if got is None:
+            try:
+                got = _relay_peer(self.connection.getpeername(), self.connection.getsockname())
+            except OSError:
+                got = _link_running()
+            self._relay = got
+        return got
+
     def _gate(self, method: str) -> bool:
         """Who's asking, and may they? From this PC (the loopback listener, a loopback address): exactly the checks from
         before phase 11. From the home network (a phone paired before the link, until it moves): the link on, this
@@ -306,6 +318,8 @@ class Handler(BaseHTTPRequestHandler):
         if _cross_site(method, self.path, self.headers):
             return self._deny(403, AWAY_403 if self.away else None)
         if not self.remote:
+            if self._relayed():   # (hardening)
+                return self._deny(403)
             return self._guard_host() and (method == "GET" or self._guard_origin())
         if self.away:
             return self._gate_away(method)
@@ -1018,6 +1032,46 @@ class AwayServer(PhoneServer):
     """The third listener (phase 20): loopback only, the one target of Tailscale Funnel; every request comes from the
     internet and passes _gate_away."""
     away = True
+
+
+RELAYS = {platform.exe_name("tailscaled").lower()}   # programs that are never the PC's own client
+_UNTOLD = [0.0]   # when the Doctor last said a connection's program couldn't be told
+
+
+def _link_running() -> bool:
+    from ..core import tailnet
+    d = tailnet._P["daemon"]
+    return bool(tailnet.STATE["want"]) or (d is not None and d.poll() is None)
+
+
+def _relay_peer(client: tuple, local: tuple) -> bool:
+    """Does a relay hold the client end of this local connection? When its program can't be told (the table or the
+    program unreadable) while the link's daemon runs: yes (refused, said once in a while). Not on this OS: no."""
+    try:
+        pid = platform.tcp_client_pid(client, local)
+    except platform.NotOnThisOS:
+        return False
+    if pid == os.getpid():
+        return False
+    if pid:
+        from ..core import tailnet
+        d = tailnet._P["daemon"]
+        if d is not None and pid == d.pid:
+            return True
+        try:
+            name = Path(platform.process_path(pid) or "").name.lower()
+        except platform.NotOnThisOS:
+            name = ""
+        if name:
+            return name in RELAYS
+    if not _link_running():
+        return False
+    if time.time() - _UNTOLD[0] > 600:
+        _UNTOLD[0] = time.time()
+        from ..core.doctor import log
+        log("Your phone: a connection to UnderCover on this PC couldn't be traced to a program while the phone link is on, "
+            "so it was refused. If UnderCover's page on this PC won't load, turn the phone link off.")
+    return True
 
 
 def _loopback(addr: str) -> bool:

@@ -2405,6 +2405,88 @@ def u_phone_records():
     return "asks run out; No leaves a connected phone; a full list keeps the code; an unreadable file isn't saved over; warm-ups uncounted"
 
 
+@check("hardening of the PC's own listener: a loopback connection a relay program holds is refused before Host is read (and one whose program can't be told, while the link runs); the PC's own connections are let in")
+def u_pc_listener():
+    """A loopback connection a relay program holds isn't the PC's own: the gate refuses it before Host or Origin is read."""
+    import inspect, socket, subprocess
+    from types import SimpleNamespace
+    from undercover.app import server
+    from undercover.core import platform as P
+    src = inspect.getsource(server.Handler._gate)
+    assert src.index("self._relayed()") < src.index("self._guard_host()"), "the relay check comes first"
+    if not P.WINDOWS:
+        try:
+            P.tcp_client_pid(("127.0.0.1", 1), ("127.0.0.1", 2))
+            raise AssertionError("tcp_client_pid answered off Windows")
+        except P.NotOnThisOS:
+            pass
+        assert server._relay_peer(("127.0.0.1", 1), ("127.0.0.1", 2)) is False
+        return
+    for fam, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):   # this process's own connection
+        s = socket.socket(fam)
+        try:
+            s.bind((host, 0))
+            s.listen(1)
+            c = socket.create_connection(s.getsockname()[:2], timeout=5)
+            a, _ = s.accept()
+            assert P.tcp_client_pid(a.getpeername()[:2], a.getsockname()[:2]) == os.getpid(), host
+            assert P.tcp_client_pid(a.getpeername()[:2], ("127.0.0.1", 1)) is None   # (no such row)
+            a.close(), c.close()
+        finally:
+            s.close()
+    s = socket.socket()   # another process's connection: the one a relay's would be
+    s.bind(("127.0.0.1", 0))
+    s.listen(1)
+    s.settimeout(20)
+    child = subprocess.Popen([sys.executable, "-c", "import os, socket, sys; c = socket.create_connection(('127.0.0.1', "
+                              f"{s.getsockname()[1]})); print(os.getpid(), flush=True); sys.stdin.read()"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=P.NO_WINDOW)
+    saved, real_running = set(server.RELAYS), server._link_running
+    try:
+        a, _ = s.accept()
+        pid = int(child.stdout.readline())   # (a venv's python.exe is a launcher: the connection is its child's)
+        assert P.tcp_client_pid(a.getpeername()[:2], a.getsockname()[:2]) == pid
+        server._link_running = lambda: True
+        assert server._relay_peer(a.getpeername(), a.getsockname()) is False   # (python isn't a relay)
+        real_pid, real_path = P.tcp_client_pid, P.process_path
+        try:   # its program can't be told: refused while the link runs, let in while it doesn't
+            server._UNTOLD[0] = time.time()   # (the Doctor's line said already: nothing written by this check)
+            P.tcp_client_pid = lambda c, l: None
+            assert server._relay_peer(a.getpeername(), a.getsockname()) is True
+            P.tcp_client_pid, P.process_path = real_pid, lambda p: ""
+            assert server._relay_peer(a.getpeername(), a.getsockname()) is True
+            server._link_running = lambda: False
+            assert server._relay_peer(a.getpeername(), a.getsockname()) is False
+        finally:
+            P.tcp_client_pid, P.process_path = real_pid, real_path
+        server.RELAYS.add(Path(P.process_path(pid)).name.lower())   # this child stands in for a relay
+        assert server._relay_peer(a.getpeername(), a.getsockname()) is True
+        denied = []
+        h = SimpleNamespace(server=SimpleNamespace(), client_address=a.getpeername(), connection=a, path="/api/phone",
+                            headers={"Host": f"127.0.0.1:{a.getsockname()[1]}"})
+        h._relayed = lambda: server.Handler._relayed(h)
+        h._deny = lambda status, *x, **k: denied.append(status) or False
+        h._guard_host = lambda: (_ for _ in ()).throw(AssertionError("Host was read for a relayed connection"))
+        assert server.Handler._gate(h, "GET") is False and denied == [403] and h.remote is False
+        assert h._relay is True   # (kept for the connection's next requests)
+        mine = socket.create_connection(s.getsockname()[:2], timeout=5)   # the PC's own connection, same names: let in
+        b2, _ = s.accept()
+        h2 = SimpleNamespace(server=SimpleNamespace(), client_address=b2.getpeername(), connection=b2, path="/api/status",
+                             headers={"Host": f"127.0.0.1:{b2.getsockname()[1]}"})
+        h2._relayed = lambda: server.Handler._relayed(h2)
+        h2._deny = lambda *x, **k: (_ for _ in ()).throw(AssertionError("the PC was refused"))
+        h2._guard_host = lambda: True
+        assert server.Handler._gate(h2, "GET") is True
+        a.close(), b2.close(), mine.close()
+    finally:
+        server.RELAYS.clear()
+        server.RELAYS.update(saved)
+        server._link_running = real_running
+        child.kill()
+        child.wait(10)
+        s.close()
+
+
 @check("CounterIntelligence on onephone (CI-64, CI-65, CI-66): a phone's night-queue items count against it (three at once, said plainly) while the PC's don't; forgetting every thumb is the PC's (one thumb stays a phone's); an ask carries a two-digit match number from its nonce, the same on the phone's answer and beside Allow; a name loses its bidi controls")
 def u_phone_ci64():
     from types import SimpleNamespace
@@ -14985,7 +15067,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
