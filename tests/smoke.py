@@ -13357,6 +13357,105 @@ def a_cadence():
 SANDBOX_PORTS = range(7862, 7870)   # chats in other worktrees run smoke too: each run takes the first free one
 
 
+class GpuLock:
+    """One GPU-heavy smoke run at a time, across processes and worktrees (2026-11-05: two --full runs at once reset
+    the GPU driver, both died and a game crashed with them). A byte lock on one file in the temp folder: the OS drops
+    it when the holder dies, so a killed run never leaves it stuck. smoke-full.ps1 holds a lock of its own around the
+    whole script; this one is inside smoke.py, so a bare `tests\\smoke.py --full` waits for the other run too."""
+    FILE = "undercover-smoke-gpu.lock"
+
+    def __init__(self, file: Path | None = None):
+        import tempfile
+        self.file = Path(file) if file else Path(tempfile.gettempdir()) / self.FILE
+        self.fd = None
+
+    @staticmethod
+    def _lock(fd, on: bool) -> bool:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(fd, 0, 0)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK if on else msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, (fcntl.LOCK_EX | fcntl.LOCK_NB) if on else fcntl.LOCK_UN)
+            return True
+        except OSError:
+            return False
+
+    def try_acquire(self) -> bool:
+        if self.fd is not None:
+            return True
+        fd = os.open(self.file, os.O_RDWR | os.O_CREAT)
+        if not self._lock(fd, True):
+            os.close(fd)
+            return False
+        self.fd = fd
+        try:   # who holds it, for the one waiting (past the locked byte, so another process may read it)
+            os.lseek(fd, 16, 0)
+            os.write(fd, f"pid {os.getpid()} from {ROOT}".encode("utf-8", "replace").ljust(240)[:240])
+        except OSError:
+            pass
+        return True
+
+    def holder(self) -> str:
+        try:
+            with open(self.file, "rb") as f:
+                f.seek(16)
+                return f.read(240).decode("utf-8", "replace").strip("\0 ")
+        except OSError:
+            return ""
+
+    def acquire(self, timeout: float = 3600, every: float = 15, say=print):
+        """Wait for the lock (saying so once, with the holder), up to `timeout` seconds."""
+        t0 = time.time()
+        waited = False
+        while not self.try_acquire():
+            if not waited:
+                say(f"  (another smoke run holds the GPU lock, {self.holder() or self.file}: waiting up to {timeout / 60:.0f} min)", flush=True)
+                waited = True
+            if time.time() - t0 > timeout:
+                raise TimeoutError(f"the GPU lock ({self.file}) was held for {timeout / 60:.0f} min by {self.holder() or 'another run'}")
+            time.sleep(every)
+        if waited:
+            say(f"  (the GPU lock is ours after {time.time() - t0:.0f} s)", flush=True)
+
+    def release(self):
+        if self.fd is None:
+            return
+        self._lock(self.fd, False)
+        os.close(self.fd)
+        self.fd = None
+
+
+@check("one GPU-heavy smoke run at a time: the GPU lock file can't be held by two runners at once (a second process gets no, and yes again once the first lets go)")
+def u_gpu_lock():
+    import subprocess
+    import tempfile
+    probe = ("import sys; sys.path.insert(0, sys.argv[1]); import smoke; "
+             "print('held' if smoke.GpuLock(sys.argv[2]).try_acquire() else 'busy')")
+    with tempfile.TemporaryDirectory(prefix="uc-gpulock-") as td:
+        f = Path(td) / "gpu.lock"
+        other = lambda: subprocess.run([sys.executable, "-c", probe, str(ROOT / "tests"), str(f)], capture_output=True, text=True,
+                                       timeout=60, cwd=td).stdout.strip()
+        mine = GpuLock(f)
+        assert mine.try_acquire() and mine.try_acquire(), "the lock wasn't taken"   # (taking it again is fine for the holder)
+        assert other() == "busy", "a second runner took the GPU lock while this one held it"
+        assert f"pid {os.getpid()}" in mine.holder(), mine.holder()
+        said = []
+        try:
+            GpuLock(f).acquire(timeout=0.5, every=0.2, say=lambda m, **k: said.append(m))
+            raise AssertionError("a second runner in this process took the held lock")
+        except TimeoutError:
+            pass
+        assert said and "waiting" in said[0] and f"pid {os.getpid()}" in said[0], said
+        mine.release()
+        assert other() == "held", "the lock stayed taken after release"   # (the probe's process ended: the OS dropped its lock)
+        assert mine.try_acquire(), "the lock couldn't be taken again"
+        mine.release()
+    return "held once, a second runner refused, free again after release and after the holder ends"
+
+
 def _port_taken(port: int) -> bool:
     """Anything on 127.0.0.1:<port>: an UnderCover answering /api/status (as smoke always checked), or anything bound."""
     import socket
@@ -13523,15 +13622,22 @@ def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
 
 
 @contextlib.contextmanager
-def sandbox_server(port: int):
+def sandbox_server(port: int, gpu_lock: bool = False):
     """Start a sandbox server, point this process's own config and the app's guards at the same scratch folders (so
-    checks that touch folders directly stay inside it too), and stop and remove everything afterwards."""
+    checks that touch folders directly stay inside it too), and stop and remove everything afterwards. With gpu_lock
+    (a --full run: training and cadence on the GPU) the cross-process GPU lock is taken first, waiting for another
+    run to finish, and let go at the very end."""
     import os
     import subprocess
     import tempfile
     from undercover.core import config, storage
     global BASE
+    lock = GpuLock() if gpu_lock else None
+    if lock:
+        lock.acquire()
     if _port_taken(port):   # taken since it was picked (another run started in between)
+        if lock:
+            lock.release()
         sys.exit(f"Something already answers on port {port}. The sandbox server must be smoke's own: try again.")
     real = real_dirs()
     root = Path(tempfile.mkdtemp(prefix="uc-sandbox-")).resolve()
@@ -13599,6 +13705,8 @@ def sandbox_server(port: int):
                 print(f"  (the sandbox's scratch folder couldn't be removed: {root})")
         else:
             print(f"  (the sandbox server is still running or its folder was left: {root})")
+        if lock:   # (a failure before the try above ends the run within seconds, and the OS drops the lock with the process)
+            lock.release()
 
 
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
@@ -13636,7 +13744,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
@@ -13657,7 +13765,7 @@ def main():
                 os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tests" / "fake_tailscale.py")
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
-                with sandbox_server(port):
+                with sandbox_server(port, gpu_lock=a.full):   # (--full trains and transcribes: one GPU run at a time)
                     for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
                         fn()
                     if not a.no_cover:
