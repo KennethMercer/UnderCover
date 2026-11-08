@@ -12075,6 +12075,36 @@ def u_perf_history():
     return "parse kept by (path, size, mtime_ns); rows copied; dropped on write; titles by sidecar mtime"
 
 
+@check("hardening: the kept /files/ roots follow a root folder re-pointed while the server runs (a junction), within a few seconds, with [paths] unchanged; a file under the old target stops being served")
+def u_roots_follow():
+    import subprocess
+    from undercover.core import config, files
+    with isolated_data() as t:
+        a, bb, link = Path(t) / "target-a", Path(t) / "target-b", Path(t) / "out-link"
+        a.mkdir(), bb.mkdir()
+        (a / "x.wav").write_bytes(b"A"), (bb / "x.wav").write_bytes(b"B")
+
+        def point(to):
+            if link.exists() or link.is_symlink():
+                os.rmdir(link) if os.name == "nt" else link.unlink()
+            if os.name == "nt":   # a junction, as a hand-made move would make (no admin needed)
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(to)], capture_output=True, check=True)
+            else:
+                link.symlink_to(to, target_is_directory=True)
+        point(a)
+        config.CONFIG["paths"]["output_dir"] = str(link)
+        files._ROOTS["key"] = None
+        assert files.roots()["output"] == a.resolve() and files.file_url(link / "x.wav") == "/files/output/x.wav"
+        point(bb)
+        assert files.roots()["output"] == a.resolve(), "(within the few seconds, the kept root is used)"
+        files._ROOTS["at"] -= files.ROOTS_S + 1   # a few seconds on
+        assert files.roots()["output"] == bb.resolve(), "a re-pointed root kept serving its old target"
+        assert files.file_url(a / "x.wav") is None and files.file_url(link / "x.wav") == "/files/output/x.wav"
+        os.rmdir(link) if os.name == "nt" else link.unlink()
+    files._ROOTS["key"] = None
+    return "followed after the kept few seconds; the old target no longer served"
+
+
 @check("perf: the Library's summary is kept until something changes; songs and stems come out the same from one pass; file URLs")
 def u_perf_library():
     from undercover.core import files, storage
@@ -14148,7 +14178,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
+               u_roots_follow, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
