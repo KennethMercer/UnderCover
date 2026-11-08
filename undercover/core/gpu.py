@@ -9,6 +9,25 @@ import sys
 LIMIT_ENV = "UNDERCOVER_GPU_LIMIT_GB"   # Low profile's cap for this process and the ones it starts (the cadence worker)
 
 
+def build(installed: str | None = None) -> str:
+    """Which PyTorch this is: "rocm", "cuda" or "cpu", from torch's own account of itself (torch.version.hip / .cuda:
+    a Linux ROCm wheel carries no "+rocm" in its version string). `installed`, a version string from the package
+    record, is read instead when torch isn't loaded here: the Doctor's fast checks never import it (they answer in
+    under two seconds, with no GPU), and a broken install may have none to import."""
+    torch = sys.modules.get("torch")
+    if torch is None and installed is None:
+        import torch
+    if torch is not None:
+        if getattr(torch.version, "hip", None):
+            return "rocm"
+        if getattr(torch.version, "cuda", None):
+            return "cuda"
+        version = torch.__version__
+    else:
+        version = installed
+    return "rocm" if "+rocm" in version else "cuda" if "+cu" in version else "cpu"
+
+
 def limit_gb() -> float | None:
     """The graphics-memory cap this process runs under (whole or fractional GB, binary), or None for none."""
     try:

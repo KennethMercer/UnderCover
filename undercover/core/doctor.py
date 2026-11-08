@@ -109,7 +109,8 @@ def c_torch(ctx) -> list:
     want_backend = CONFIG["gpu"].get("backend", "rocm")
     if not have:
         return [_r("torch", "install", "bad", "PyTorch", "PyTorch isn't installed, so nothing can run.", "", REPAIR)]
-    build = "rocm" if "+rocm" in have else "cuda" if "+cu" in have else "cpu"
+    from . import gpu
+    build = gpu.build(have)
     pin = (ctx["pins"].get("torch") or {}).get("version")
     names = {"rocm": "AMD's ROCm build", "cuda": "the NVIDIA CUDA build", "cpu": "the processor-only build"}
     if build != want_backend:
