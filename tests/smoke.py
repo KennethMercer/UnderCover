@@ -11277,25 +11277,27 @@ def u_page_syntax():
     return "every page script parses and loads"
 
 
-@check("the away app's service worker (1.2) in headless Chrome: registered, keeps a private home address and refuses any other, answers a navigation the PC doesn't with its own page and that link; caches nothing else (skipped when there is no Chrome)")
+@check("the phone app's service worker (1.2; one link since 1.2.1) in headless Chrome: registered; keeps nothing (no cache, and what 1.2 kept is cleared); answers a navigation the PC doesn't with its own page, linking only to its own origin; the source holds no cache rule, no /api/ and no other origin; the alerts' rules")
 def u_away_sw():
-    """http://127.0.0.1 is a secure context, so Chrome registers the worker there as it would at the away address. Two
-    runs with one profile: the first registers it and hands it a good home address, then a foreign one; in the second the
-    "PC" closes every connection, and the worker's own page must name the good address alone. (--dump-dom dumps at the
+    """http://127.0.0.1 is a secure context, so Chrome registers the worker there as it would at the link. Two runs with one
+    profile: the first leaves a cache as 1.2's worker did and registers this one, which must clear it; in the second the
+    "PC" closes every connection, and the worker's own page must link to its own origin alone. (--dump-dom dumps at the
     load event, so the first page holds it open with an image the server sends only once the page has said it's done.)"""
-    import http.server, subprocess, tempfile, threading
+    import http.server, re as _re, subprocess, tempfile, threading
     exe = _chrome()
-    if not exe:
-        return "no Chrome here: skipped"
     sw = (ROOT / "undercover" / "web" / "sw.js").read_bytes()
+    src = sw.decode("utf-8")
+    assert "caches.open(" not in src and "cache.put" not in src and ".put(" not in src, "the worker keeps something"
+    assert "/api/" not in src and not _re.search(r"https?://", src), "the worker names a route or another origin"
+    assert 'r.mode !== "navigate"' in src and "caches.delete(" in src and 'href="/"' in src
+    if not exe:
+        return "no Chrome here: the source checks only"
     reg = b"""<!doctype html><html><body><p id="out">waiting</p><img src="/hold" alt=""><script>
 (async () => { try {
-  await navigator.serviceWorker.register("/sw.js"); const r = await navigator.serviceWorker.ready;
-  r.active.postMessage({ home: "http://192.168.1.20:7860" });
-  await new Promise(ok => setTimeout(ok, 500));
-  r.active.postMessage({ home: "http://evil.example:7860" }); r.active.postMessage({ home: "https://192.168.1.21:7860" });
-  await new Promise(ok => setTimeout(ok, 500));
-  document.getElementById("out").textContent = "registered " + (await caches.keys()).join(",");
+  await (await caches.open("uc-home-v1")).put("/__uc/home", new Response("http://192.168.1.20:7860"));   // as 1.2 left it
+  await navigator.serviceWorker.register("/sw.js"); await navigator.serviceWorker.ready;
+  await new Promise(ok => setTimeout(ok, 800));
+  document.getElementById("out").textContent = "registered [" + (await caches.keys()).join(",") + "]";
 } catch (e) { document.getElementById("out").textContent = "failed " + e; }
   fetch("/said"); })();
 </script></body></html>"""
@@ -11329,17 +11331,16 @@ def u_away_sw():
     try:
         with tempfile.TemporaryDirectory() as prof:
             first = run(prof, "/reg")
-            assert "registered uc-home-v1" in first, first[-400:]
+            assert "registered []" in first, first[-400:]
             down["on"] = True
             second = run(prof, "/")
     finally:
         srv.shutdown()
-    assert "Your PC isn't answering" in second and 'href="http://192.168.1.20:7860/"' in second, second[-600:]
-    assert "evil.example" not in second and "192.168.1.21" not in second, "the worker kept an address that isn't a private home one"
-    src = sw.decode("utf-8")
-    assert src.count("caches.open(") == 2 and "c.put(HOME" in src and 'r.mode !== "navigate"' in src, "the worker keeps more than the home address"
+    assert "Your PC isn't answering" in second and 'href="/"' in second, second[-600:]
+    assert "192.168" not in second and "http://" not in second.split("<body", 1)[-1], "the offline page links somewhere else"
     # the alerts (phonealerts.js): phones only, the permission asked only from a tap, generic words, night results silent
     pa = (ROOT / "undercover" / "web" / "phonealerts.js").read_text(encoding="utf-8")
+    assert "home_url" not in pa and "postMessage" not in pa, "the page still hands the worker an address"
     ask = pa.index("Notification.requestPermission(")
     assert pa.count("Notification.requestPermission(") == 1 and pa.rfind('$("#ph-alerts-yes").onclick', 0, ask) > pa.rfind("\n}", 0, ask), "the permission is asked without a tap"
     assert 'dataset.client !== "phone"' in pa and "DONE_WORDS[j.kind]" in pa and 'j.kind === "night"' in pa and "silent: quiet" in pa
@@ -11347,7 +11348,7 @@ def u_away_sw():
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert all(f'id="{i}"' in page for i in ("ph-alert", "ph-alerts", "ph-alerts-yes", "ph-alerts-no", "ph-install", "ph-install-ok",
                                               "ph-install-ios", "ph-install-android", "set-away-private"))
-    return "registered; its own page with the private home address when the PC is silent; a foreign one refused; the alerts' rules"
+    return "registered, keeping nothing (1.2's cache cleared); its own page, its own origin only; the alerts' rules"
 
 
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")

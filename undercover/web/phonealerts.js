@@ -7,8 +7,7 @@
 //   - page hidden but still running: the app icon's badge counts the jobs, and at the away address (HTTPS) a system
 //     notification through the service worker (sw.js), once the phone has said yes (#ph-alerts);
 //   - the overnight queue's results never buzz or ring (silent), whatever the hour;
-//   - at the away address: the service worker (sw.js) is registered and told the home address, and #ph-install says how
-//     to keep the app on the home screen.
+//   - at the link: the service worker (sw.js) is registered, and #ph-install says how to keep the app on the home screen.
 // Words are generic on purpose (a lock screen shows them): "Cover ready", never a song's or a voice's name. The look
 // chat designs #ph-alert, #ph-alerts and #ph-install; the copy and the hooks are here. Uses DONE_WORDS (jobs.js), $ and
 // store (app.js).
@@ -55,7 +54,7 @@ document.addEventListener("visibilitychange", () => {
   try { navigator.clearAppBadge?.(); } catch { /* not an installed app */ }
 });
 
-// app.js hands every /api/status here (s.client, s.home_url)
+// app.js hands every /api/status here (s.client)
 async function phoneApp(s) {
   if (s.client !== "phone" || !paSecure() || !("serviceWorker" in navigator) || PA.refused) return;
   if (!PA.sw) {
@@ -63,7 +62,6 @@ async function phoneApp(s) {
     catch { PA.refused = true; return; }   // (a private tab, storage blocked: once is enough to ask)
     paCards();
   }
-  if (s.home_url) PA.sw.active?.postMessage({ home: s.home_url });   // (the active one: on a first visit nothing controls the page yet)
 }
 
 function paCards() {
