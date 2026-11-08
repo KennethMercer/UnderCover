@@ -2,7 +2,9 @@
 renamed, exported and cleaned up without Explorer. Its HTTP routes are in safehouse/api.py.
 """
 import json
+import os
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -169,24 +171,79 @@ def _duplicate_voices(hist: list) -> list[dict]:
 
 # ---------------------------------------------------------------- inventories
 
+SUMMARY_TTL = 15.0   # how long a summary is kept at most (what changes deep inside cache/stems shows within this)
+_SUMMARY: dict = {"key": None, "at": 0.0, "value": None, "gen": 0}   # replaced whole, never changed in place
+_SUMMARY_LOCK = threading.Lock()
+_SUMMARY_GEN = [0]   # moved on by invalidate(): a summary begun before it is never kept
+
+
+def _summary_key() -> tuple:
+    """What a summary depends on that is cheap to look at: the [paths] settings, the history file's size and mtime,
+    and the mtime of each folder whose entries it counts (a folder's mtime moves when a file is added, removed or
+    renamed in it). Anything deeper (a new stem under cache/stems/<song>/<model>) is caught by SUMMARY_TTL."""
+    def mt(p: Path):
+        try:
+            return p.stat().st_mtime_ns
+        except OSError:
+            return None
+    out, up, cache, voices, models = (path(k) for k in ("output_dir", "uploads_dir", "cache_dir", "voices_dir", "models_dir"))
+    hist = out / "history.jsonl"
+    try:
+        st = hist.stat()
+        h = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        h = None
+    return (tuple(sorted(CONFIG["paths"].items())), h, mt(out), mt(out / "speech"), mt(up), mt(voices), mt(cache),
+            mt(cache / "stems"), mt(cache / "training"), mt(cache / "converted"), mt(models))
+
+
+def invalidate():
+    """Drop the kept summary: SafeHouse's writing routes call this, so what the user just did shows at once. A summary
+    being made while this runs (from before the change) is handed to its caller but not kept."""
+    global _SUMMARY
+    with _SUMMARY_LOCK:
+        _SUMMARY_GEN[0] += 1
+        _SUMMARY = {"key": None, "at": 0.0, "value": None, "gen": _SUMMARY_GEN[0]}
+
+
 def summary() -> dict:
-    """What the Library and Storage say UnderCover holds. `total` is the Storage groups' own sum (storage.where), so the
-    room's number and its tab's are one number; the categories split the same folders, so "temporary" is the working
-    folder less stems and training, and "app" every model file (a hand-kept list of model folders left Whisper out)."""
+    """What the Library and Storage say UnderCover holds, kept for SUMMARY_TTL seconds while _summary_key() stays the
+    same (the maintainers' notes, efficiency: every Library open and every change walked the folders twice).
+    `total` is the Storage groups' own sum (storage.where), so the room's number and its tab's are one number; the
+    categories split the same folders, so "temporary" is the working folder less stems and training, and "app" every
+    model file (a hand-kept list of model folders left Whisper out)."""
+    global _SUMMARY
+    with _SUMMARY_LOCK:
+        gen, kept = _SUMMARY_GEN[0], _SUMMARY
+    key, now = _summary_key(), time.monotonic()
+    if kept["gen"] == gen and kept["key"] == key and now - kept["at"] < SUMMARY_TTL:
+        return kept["value"]
+    value = _summary()
+    with _SUMMARY_LOCK:
+        if _SUMMARY_GEN[0] == gen:   # no invalidate() while it was made
+            _SUMMARY = {"key": key, "at": now, "value": value, "gen": gen}
+    return value
+
+
+def _summary() -> dict:
     cache = path("cache_dir")
     out_files = [p for p in path("output_dir").iterdir() if p.is_file() and p.name != "history.jsonl"]
-    groups = storage.where()
-    stems, training = _size(cache / "stems"), _size(cache / "training")
+    parts = (cache / "stems", cache / "training", path("uploads_dir"), path("voices_dir"))
+    groups = storage.where(parts)   # one walk: the groups' totals and the categories inside them
+    inside = {p: sum(g["inside"][p] for g in groups.values()) for p in parts}
+    stems, training = inside[parts[0]], inside[parts[1]]
     cats = {
         "covers": sum(_size(p) for p in out_files),
         "speech": speak.storage(),
-        "songs": _size(path("uploads_dir")),
+        "songs": inside[parts[2]],
         "stems": stems,
-        "voices": _size(path("voices_dir")),
+        "voices": inside[parts[3]],
         "training": training,
         "temporary": max(0, groups["working"]["size"] - stems - training),
         "app": groups["models"]["size"],
     }
+    for g in groups.values():
+        g.pop("inside", None)
     du = shutil.disk_usage(ROOT)
     cv, sp = covers(), speak.list_speech()
     counts = {"covers": len(cv), "speech": len(sp), "songs": len(_song_metas()),
@@ -231,12 +288,36 @@ def speech() -> list[dict]:
 STEM_LABELS = {"vocals": "Vocals", "instrumental": "Instrumental", "other": "Instrumental", "noreverb": "Vocals (dry)", "reverb": "Reverb (removed)"}
 
 
-def _stems_for(song_id: str) -> list[dict]:
-    root = path("cache_dir") / "stems" / song_id
+def _audio_under(root: Path) -> list[tuple[Path, int]]:
+    """Every .wav / .flac under root with its size, sorted by path: one scandir per folder, and on Windows the size
+    comes with the listing (rglob + stat cost a stat per file)."""
+    found = []
+
+    def walk(d: str):
+        try:
+            with os.scandir(d) as it:
+                entries = list(it)
+        except OSError:
+            return
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    walk(e.path)
+                elif e.is_file() and e.name.lower().endswith((".wav", ".flac")):
+                    found.append((Path(e.path), e.stat().st_size))
+            except OSError:
+                continue
+    walk(str(root))
+    found.sort(key=lambda x: x[0])
+    return found
+
+
+def _stems_for(song_id: str, stems_root: Path | None = None) -> list[dict]:
+    root = (stems_root or path("cache_dir") / "stems") / song_id
     out = []
     if not root.exists():
         return out
-    for f in sorted(x for x in root.rglob("*") if x.suffix.lower() in (".wav", ".flac")):
+    for f, size in _audio_under(root):
         rel = f.relative_to(root).parts
         label = STEM_LABELS.get(f.stem, f.stem.capitalize())
         if any(p.startswith("karaoke_") for p in rel[:-1]):
@@ -246,22 +327,25 @@ def _stems_for(song_id: str) -> list[dict]:
         elif any(p.startswith("dereverb_") for p in rel[:-1]):
             label = {"noreverb": "Vocals (dry)", "reverb": "Reverb (removed)"}.get(f.stem, label)
         quality = "fast" if rel[0].endswith("_fast") else "max" if rel[0].endswith("_max") else "high"
-        out.append({"label": label, "size": _size(f), "url": file_url(f), "quality": quality, "model": rel[0]})
+        out.append({"label": label, "size": size, "url": file_url(f), "quality": quality, "model": rel[0]})
     return out
 
 
 def songs() -> list[dict]:
     from ..frontman.pipeline import history
-    hist = history()
     current = Path(CONFIG["separation"]["vocal_model"]).stem
+    by_song: dict = {}   # song id -> its covers, once (a pass over the history per song cost seconds at 300 x 2,000)
+    for h in history():
+        by_song.setdefault(Path(h["song"]).stem, []).append(h)
+    uploads, cache = path("uploads_dir"), path("cache_dir")
     out = []
     for sid, m in _song_metas().items():
-        f = path("uploads_dir") / m.get("file", "")
-        used = [h for h in hist if Path(h["song"]).stem == sid]
-        stems = _stems_for(sid)
+        f = uploads / m.get("file", "")
+        used = by_song.get(sid, [])
+        stems = _stems_for(sid, cache / "stems")
         last = max([_mtime(Path(h["output"])) for h in used] + [_mtime(f)])
         key = None
-        kf = path("cache_dir") / "keys" / f"{sid}.json"
+        kf = cache / "keys" / f"{sid}.json"
         if kf.exists():
             try:
                 key = json.loads(kf.read_text(encoding="utf-8")).get("name")

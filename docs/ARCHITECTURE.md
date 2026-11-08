@@ -270,7 +270,9 @@ characters; every cover route uses it), `output`, `song`, `voice`, `title` (+ `t
 `converted_vocal`, `converted_backing`, `notes`, `seconds`, `options`, `created`, `kept`, `kept_at`. `history.record`
 is the one place a finished cover is added. A duet's `options` carry `duet_voice`, `duet_way`, `duet_octave`,
 `duet_backing` and `duet_plan` (`[[start_s, end_s, "A" | "B"], ...]` from 0 to the song's end), so Make again sings it
-the same way.
+the same way. The file is parsed once per change (kept by its size and mtime under the history lock, dropped by every
+write, so another process's write is seen too); readers get deep copies of the rows, and the per-cover "is its file there"
+check still runs on every read. A hash-named song's title (its sidecar JSON) is remembered by the sidecar's mtime.
 
 ### Recent tray
 
@@ -369,7 +371,7 @@ Voices are RVC v2 pitch-guided models (`core/engine/convert.py`, a port of RVC's
 the voice's training set (`index_ratio` 0.75). A backing stem can hold a stack of voices, and RMVPE's strongest line then
 changes every few frames: `f0fix.hold_line` keeps one line through every sung run that has a second one (a part that rests
 for a moment is a rest, not a hop to another part), holds its place through quiet, and leaves runs of one voice as they are
-(`Settings.one_line`, on every backing take, never on a lead). Inside one sung note, where two parts cross and the track would move from one to the other mid-word, `f0fix.hold_parts` keeps the part it was on until the note ends or that part stops singing; a step of the tune with no second part under it is left as sung. Songs are converted in 60 s chunks cut near quiet points:
+(`Settings.one_line`, on every backing take, never on a lead). Inside one sung note, where two parts cross and the track would move from one to the other mid-word, `f0fix.hold_parts` keeps the part it was on until the note ends or that part stops singing; a step of the tune with no second part under it is left as sung. A cover's stems are decoded once: `load_16k` keeps the last four vocals as 16 kHz arrays, keyed by resolved path, size and mtime (a rewritten stem is read again), and hands each caller its own copy. Songs are converted in 60 s chunks cut near quiet points:
 60 s halves VRAM against 120 s (3.8 vs 7.6 GB) at the same warm speed. Training (`doubleagent/trainer.py`) follows upstream RVC's recipe,
 fine-tuning the official v2 base models in bf16, with a few held-out phrases for a validation loss and previews. The
 budget scales with the data: 450 steps per kept minute, at least 8000, continued while the held-out loss falls, up to
@@ -676,7 +678,11 @@ SafeHouse: a strip of rooms (`#safehouse/<room>`; on a phone all six show, three
 (Kept / Recent views, counting the kind that's chosen), Running (now, tonight with its start time once a job waits, recent,
 last night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the
 Vault), Add-ons, System (the Doctor, GPU and models, the YouTube downloader, What's new, Restart, Quit, the diagnostics
-file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause).
+file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause). The Library's summary
+(`/api/library/summary`) is kept for up to 15 s while the paths setting, the history file and the counted folders'
+mtimes stay the same, and dropped by every SafeHouse route that writes, before it runs and again just before it
+answers (a summary begun before a drop is never kept); its sizes come from one walk of the storage groups
+(`storage.where(folders)`). `/api/status`'s stale-code stamp is re-walked at most every 5 s.
 
 ### Deep Cover
 
