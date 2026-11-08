@@ -285,9 +285,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _gate(self, method: str) -> bool:
         """Who's asking, and may they? From this PC (the loopback listener, a loopback address): exactly the checks from
-        before phase 11. From the network: Phone access on, this server's own address in Host (DNS rebinding), a
-        same-origin Origin on anything but GET, then app/phone_api.ROUTES: "open" routes (pairing) need nothing more,
-        the rest a paired device's token, and "pc" routes are refused for phones."""
+        before phase 11. From the home network (a phone paired before the link, until it moves): the link on, this
+        server's own address in Host (DNS rebinding), a same-origin Origin on anything but GET, then its LAN token for
+        everything but the home-screen manifest and icons (app/phone_api.ROUTES), and "pc" routes refused for phones.
+        From the link: _gate_away."""
         self._read, self.set_cookie, self.device = None, None, None
         self.remote = getattr(self.server, "phone", False) or not _loopback(self.client_address[0])
         self.away = getattr(self.server, "away", False)
@@ -309,13 +310,14 @@ class Handler(BaseHTTPRequestHandler):
             o = urlparse(self.headers.get("Origin") or "")
             if o.scheme != "http" or o.netloc.lower() != host:
                 return self._deny(403)
-        pol, what = phone_api.policy(method, urlparse(self.path).path)
-        if pol in ("open", "home"):   # (home: the page alone, no data; see phone_api)
+        p = urlparse(self.path).path
+        pol, what = phone_api.policy(method, p)
+        if pol == "open" and p.startswith("/static/"):   # (the home-screen manifest and icons; pairing is the link's)
             return True
-        tok = self._cookie(phone.COOKIE)
-        self.device = phone.device_for(tok, self.client_address[0])
+        tok = self._cookie(phone.LAN_COOKIE)
+        self.device = phone.device_for(tok, self.client_address[0])   # (a token from before the move, on the home network)
         if self.device is None:
-            return self._deny(401)
+            return self._deny(401, clear=bool(tok))
         self.set_cookie = phone_api.home_cookie(tok)   # (its life runs from this use)
         if pol == "pc":
             return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
@@ -323,13 +325,13 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _gate_away(self, method: str) -> bool:
-        """The away-from-home listener (phase 20): what Tailscale Funnel brings in from the whole internet. Its own
-        ts.net name in Host, https:// that name as Origin on anything but GET, never the pairing page or its claim
-        (pairing stays on the home Wi-Fi), the redeem route and the page around it open, everything else an away token
-        (cookie uc_away, a token of its own) and the phone policy (PC-only routes refused)."""
+        """The link's listener: what Tailscale Funnel (or Serve, in Private mode) brings in from outside. Its own ts.net
+        name in Host, https:// that name as Origin on anything but GET; open before a token: the pairing page, its claim
+        and its wait, the move page and its redeem, the service worker, the home-screen manifest and icons (none with
+        data); everything else the one token (cookie MAIN_COOKIE) and the phone policy (PC-only routes refused). Every
+        refusal is the generic one (nothing says what exists), and a refused token's 401 clears the phone's caches."""
         from ..core import tailnet
-        # (1.1 hardening: what the internet can reach without a token says nothing about the app or its settings)
-        if not phone.enabled() or not phone.away_on() or not tailnet.STATE["host"]:
+        if not phone.enabled() or not tailnet.STATE["host"]:
             return self._deny(401, AWAY_401)
         host = (self.headers.get("Host") or "").lower()
         if host != tailnet.STATE["host"].lower():
@@ -338,32 +340,30 @@ class Handler(BaseHTTPRequestHandler):
             o = urlparse(self.headers.get("Origin") or "")
             if o.scheme != "https" or o.netloc.lower() != host:
                 return self._deny(403, AWAY_403)
-        p = urlparse(self.path).path
-        if p in ("/pair", "/api/phone/claim"):
-            return self._deny(403, AWAY_403)
-        if (method, p) in (("GET", "/away"), ("POST", "/api/phone/away")):
-            return True
-        pol, what = phone_api.policy(method, p)
+        pol, what = phone_api.policy(method, urlparse(self.path).path)
         if pol == "open":
             return True
-        tok = self._cookie(phone.AWAY_COOKIE)
-        self.device = phone.device_for(tok, "", away=True)   # Funnel's loopback: no address to keep
+        tok = self._cookie(phone.MAIN_COOKIE)
+        self.device = phone.device_for(tok, "", away=True)   # Funnel's loopback: no address to keep, no header read
         if self.device is None:
-            return self._deny(401, AWAY_401)
-        self.set_cookie = phone_api.away_cookie(tok)   # (its life runs from this use)
+            return self._deny(401, AWAY_401, clear=bool(tok))
+        self.set_cookie = phone_api.main_cookie(tok)   # (its life runs from this use)
         if pol == "pc":
             return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
                               "application/json")
         return True
 
-    def _deny(self, status: int, body: bytes | None = None, ctype: str = "text/plain; charset=utf-8") -> bool:
-        """401 / 403 and nothing else: no page, no data, the connection closed (the body is never read)."""
+    def _deny(self, status: int, body: bytes | None = None, ctype: str = "text/plain; charset=utf-8", clear: bool = False) -> bool:
+        """401 / 403 and nothing else: no page, no data, the connection closed (the body is never read). clear: a token
+        was shown and refused (removed, or the link off), so the phone clears its caches and storage with this answer."""
         if body is None:
-            body = (b"This phone isn't paired with UnderCover. On the PC: SafeHouse, Settings, Phone access."
+            body = (b"This phone isn't connected to UnderCover. On the PC: SafeHouse, Settings, Your phone."
                     if status == 401 else b"Forbidden")
         self.close_connection = True
         self.send_response(status)
         self.send_header("Content-Type", ctype)
+        if clear:
+            self.send_header("Clear-Site-Data", '"cache", "storage"')
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
@@ -403,9 +403,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if p in ("/", "/index.html"):
                 return self._static(WEB / "index.html")
-            if p == "/away":
-                return self._static(WEB / "away.html")
-            if p == "/sw.js":   # the away app's service worker (1.2): only where a phone can register one
+            if p in ("/move", "/away"):   # the page that moves a phone paired before the link onto it
+                return self._static(WEB / "move.html")
+            if p == "/sw.js":   # the phone app's service worker (1.2): only where a phone can register one
                 return self._static(WEB / "sw.js") if self.away else self._error("Not found", 404)
             if p == "/pair":
                 return self._static(WEB / "pair.html")
@@ -438,8 +438,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "tour": firstrun.tour_status(),   # the First assignment's spotlight tour (web/firstrun.js)
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
                                    "away_ready": self.remote and _away_ready(),
-                                   # the away app's way home when the PC doesn't answer there (sw.js keeps it)
-                                   "home_url": phone_api.url() if self.away and self.device else None,
+                                   "home_url": None,   # (gone with the one link: a phone's way in is the link, at home too)
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
                                    "app_folder": None if self.remote else str(ROOT)})
             if p == "/api/voices":

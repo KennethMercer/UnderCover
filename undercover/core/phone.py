@@ -75,9 +75,20 @@ def state_file() -> Path:
     return Path(config.CONFIG_FILE).with_name("phone.json")
 
 
+def _file_key(f: Path):
+    """The file and its version on disk: read again when either changes (the config repointed, or the file written by
+    another process, restored from the vault, or edited by hand while UnderCover runs)."""
+    try:
+        st = f.stat()
+        return (f, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (f, None, None)
+
+
 def _load() -> dict:
     f = state_file()
-    if _FILE[0] != f:
+    key = _file_key(f)
+    if _FILE[0] != key:
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -96,7 +107,7 @@ def _load() -> dict:
         _STATE.clear()
         _STATE.update({"enabled": bool(data.get("enabled")), "away_private": bool(data.get("away_private")), "devices": devices})
         _relan(_STATE)
-        _FILE[0] = f
+        _FILE[0] = key
     return _STATE
 
 
@@ -106,6 +117,7 @@ def _save():
     if storage.ALLOWED_ROOTS is not None and not any(storage._inside(f, r) for r in storage.ALLOWED_ROOTS):
         raise PhoneError(f"Test mode: {f} is outside the test's folders.", 500)
     fsutil.write_text(f, json.dumps(_STATE, indent=1))
+    _FILE[0] = _file_key(f)   # (what's on disk is what's in memory: no read back)
 
 
 def enabled() -> bool:
@@ -177,11 +189,11 @@ def redeem_move(code: str) -> tuple[str, dict]:
     with _LOCK:
         hit = _MOVE_CODES.pop(hash_token(code or ""), None)
         if hit is None or hit[1] < time.time():
-            raise PhoneError("That link has expired or was used already. Ask for a new one.", 403)
+            raise PhoneError("That link has expired or was used already.", 403, generic=True)
         st = _load()
         d = next((d for d in st["devices"] if d["id"] == hit[0]), None)
         if d is None:
-            raise PhoneError("That phone isn't paired any more.", 403)
+            raise PhoneError("That phone isn't paired any more.", 403, generic=True)
         token = secrets.token_urlsafe(32)
         d["hash"], d["used"] = hash_token(token), None   # (None: not used yet, so the LAN token stays for now)
         _save()
@@ -305,15 +317,15 @@ def claim(code: str, name: str, addr: str = "") -> tuple[str, dict]:
             pass
         elif short and hmac.compare_digest(re.sub(r"[^A-Z0-9]", "", raw.upper()).encode(), short["code"].encode()):
             pass
-        elif short:
+        elif short:   # (the refusals are generic on the wire: the phone's page says "that isn't the code" by the status)
             short["tries"] += 1
             if short["tries"] >= SHORT_TRIES:
                 PAIRING["short"] = None
-                raise PhoneError("Too many wrong codes: that typed code is finished. Scan the QR, or ask for a new code on the PC.", 403)
-            raise PhoneError("That isn't the code on the PC. Check it and try again.", 403)
+                raise PhoneError("Too many wrong codes: that typed code is finished.", 403, generic=True)
+            raise PhoneError("That isn't the code on the PC.", 403, generic=True)
         else:
             PAIRING["wrong"] += 1
-            raise PhoneError("That isn't the code on the PC. Scan it again.", 403)
+            raise PhoneError("That isn't the code on the PC.", 403, generic=True)
         PAIRING = None   # once
         live = [d for d in st["devices"] if not d.get("pending")]
         if len(live) >= MAX_DEVICES:

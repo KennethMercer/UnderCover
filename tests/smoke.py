@@ -2084,6 +2084,50 @@ def u_phone_away():
     return "a 1.1 file read as it was; LAN token -> move code -> the one token; the LAN token goes at the first use; once only; expiry; off; Remove"
 
 
+@check("the home-network listener's state is stored (1.2.1): at start it opens only while a phone paired before the link still holds its LAN token, never because the link is on; it closes for good when the last such token goes")
+def u_phone_listen():
+    from types import SimpleNamespace
+    from undercover.app import phone_api as PA
+    from undercover.core import phone
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._STATE.clear()
+        made, closed = [], []
+        fake_srv = lambda a, p: (made.append((a, p)), SimpleNamespace(serve_forever=lambda: None, shutdown=lambda: closed.append(1), server_close=lambda: None))[1]
+        saved = (PA.away_open, PA.warm, dict(PA._L), dict(PA._A), os.environ.get("UNDERCOVER_PHONE_ADDR"))
+        PA.away_open, PA.warm = (lambda: None), (lambda: None)   # (no Tailscale, no netsh here)
+        os.environ["UNDERCOVER_PHONE_ADDR"] = "192.168.1.20"
+        try:
+            phone.set_enabled(True)
+            PA._L.update(srv=None, addr=None, problem=None, make=None, port=None)
+            PA.setup(fake_srv, 7862, lambda a, p: None)
+            assert made == [] and PA._L["srv"] is None, "the link on opened the home-network listener"
+            assert not phone.lan_needed() and PA.state()["lan"] is None
+            phone.state_file().write_text(json.dumps({"enabled": True, "devices": [
+                {"id": "aaaaaaaaaa", "name": "Old", "hash": phone.hash_token("L" * 43), "paired": "p", "seen": "s", "ip": "192.168.1.9", "used": time.time()}]}), encoding="utf-8")
+            phone._FILE[0] = None
+            assert phone.lan_needed()
+            PA.tidy_lan()
+            assert made == [("192.168.1.20", 7862)] and PA._L["srv"] is not None, made
+            assert PA.state()["lan"]["listening"]
+            phone.revoke("aaaaaaaaaa")
+            assert not phone.lan_needed() and not json.loads(phone.state_file().read_text(encoding="utf-8"))["lan"]
+            PA.tidy_lan()
+            assert closed == [1] and PA._L["srv"] is None, "the listener didn't close when the last LAN token went"
+            PA.tidy_lan()
+            assert made == [("192.168.1.20", 7862)] and closed == [1], "closed or opened again with nothing to do"
+        finally:
+            PA.away_open, PA.warm = saved[0], saved[1]
+            PA._L.clear(), PA._L.update(saved[2]), PA._A.clear(), PA._A.update(saved[3])
+            if saved[4] is None:
+                os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
+            else:
+                os.environ["UNDERCOVER_PHONE_ADDR"] = saved[4]
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+    return "closed with no LAN token; opened for one; closed for good when it went"
+
+
 @check("overnight improve never replaces or deletes the user's voice (Internal Affairs P2-1): the retrained one waits beside it as pending, whatever the numbers; no improve over a pending one")
 def u_improve_pending():
     import inspect
@@ -10234,7 +10278,7 @@ def u_phone_pairing():
             except phone.PhoneError:
                 pass
 
-            def refused(code, want=403, generic=False):
+            def refused(code, want=403, generic=True):
                 try:
                     phone.claim(code, "x", "10.0.0.9")
                 except phone.PhoneError as e:
@@ -11694,6 +11738,8 @@ PHONE_SAMPLES = [
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
     ("POST", "/api/phone/revoke"), ("GET", "/api/away"), ("POST", "/api/away"), ("POST", "/api/away/forget"),
     ("POST", "/api/phone/away/link"), ("POST", "/api/phone/away"), ("GET", "/away"),
+    ("POST", "/api/phone/wait"), ("POST", "/api/phone/pair/short"), ("POST", "/api/phone/allow"), ("POST", "/api/phone/refuse"),
+    ("POST", "/api/phone/revoke-all"), ("POST", "/api/phone/move/link"), ("POST", "/api/phone/move"), ("GET", "/move"),
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
@@ -11811,8 +11857,26 @@ def a_retry():
 PHONE_ADDR = "127.0.0.2"   # the sandbox's "home network" address: loopback, so nothing reaches the network and Windows asks nothing
 
 
-def _lan(method, path, token=None, body=None, origin=True, host=None):
-    """A request as a phone would send it, to the sandbox's phone listener: -> (status, headers, body)."""
+def _plant_lan(name: str) -> tuple:
+    """A phone paired on the home Wi-Fi before the link, as 1.1 wrote it into the sandbox's phone.json (the server reads
+    the file again when it changes on disk) -> (its LAN token, its id)."""
+    from undercover.core import phone
+    f = phone.state_file()
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {"enabled": True, "devices": []}
+    token, did = "L" + os.urandom(21).hex(), os.urandom(5).hex()
+    data.setdefault("devices", []).append({"id": did, "name": name, "hash": phone.hash_token(token), "paired": "2026-10-01 10:00",
+                                           "seen": "2026-10-01 10:00", "ip": PHONE_ADDR, "used": time.time()})
+    data["enabled"] = True
+    time.sleep(0.02)   # (a new mtime)
+    f.write_text(json.dumps(data), encoding="utf-8")
+    return token, did
+
+
+def _lan(method, path, token=None, body=None, origin=True, host=None, extra=None):
+    """A request as a phone would send it, to the sandbox's home-network listener: -> (status, headers, body)."""
     import http.client
     port = int(BASE.rsplit(":", 1)[1])
     c = http.client.HTTPConnection(PHONE_ADDR, port, timeout=30)
@@ -11822,6 +11886,8 @@ def _lan(method, path, token=None, body=None, origin=True, host=None):
     if token:
         h["Cookie"] = f"other=1; uc_device={token}"
     data = None if body is None else json.dumps(body).encode()
+    if extra:
+        h.update(extra)
     if data is not None:
         h["Content-Type"] = "application/json"
     try:
@@ -11832,11 +11898,11 @@ def _lan(method, path, token=None, body=None, origin=True, host=None):
         c.close()
 
 
-def _away(method, path, port, host, cookie=None, body=None, origin=True):
-    """A request as Tailscale Funnel would bring it to the away listener: -> (status, headers, body)."""
+def _away(method, path, port, host, cookie=None, body=None, origin=True, extra=None):
+    """A request as Tailscale Funnel would bring it to the link's listener: -> (status, headers, body)."""
     import http.client
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
-    h = {"Host": host}
+    h = {"Host": host, **(extra or {})}
     if origin and method != "GET":
         h["Origin"] = origin if isinstance(origin, str) else f"https://{host}"
     if cookie:
@@ -11852,111 +11918,190 @@ def _away(method, path, port, host, cookie=None, body=None, origin=True):
         c.close()
 
 
-@check("api: away from home (phase 20) on a fake Tailscale: sign-in, approval, ready; Funnel only to the away listener; its gate (Host, Origin, no pairing, away tokens only); a home phone's link becomes its away pass; off closes it")
-def a_away():
+@check("api: the one link (1.2.1) on a fake Tailscale: setup walks sign-in, approval, ready, and Funnel only to the link's listener; its gate (Host, Origin, generic refusals, forwarded headers ignored); pairing at the link: the QR's code once, a nonce, the token once on Allow (never before, never twice), No; the typed code only when asked, five tries; the sign-in URL reaches no phone; Remove clears the phone; a phone from before moves over, its LAN token good until the new one is used; off closes everything; Private is the same gate")
+def a_link():
+    from undercover.app import phone_api
+    from undercover.core.config import path as sbx_path
     st_file = Path(os.environ["FAKE_TS_STATE"])
     st_file.write_text("{}", encoding="utf-8")
     read = lambda: json.loads(st_file.read_text(encoding="utf-8") or "{}")
     write = lambda **kw: _fake_ts_set(st_file, **kw)
-    api("/api/phone", {"on": True})
-    pr = api("/api/phone/pair", {})["pairing"]
-    status, hd, _ = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Away phone"})
-    assert status == 200
-    home = hd["set-cookie"].split("uc_device=", 1)[1].split(";", 1)[0]
+    port = host = None
     try:
-        st = api("/api/away", {"on": True})
-        port = st["port"]
-        assert st["on"] and st["listening"] and 7870 <= port < 7880, st
+        st = api("/api/phone", {"on": True})   # setup: the link comes up on the fake
+        assert st["enabled"] and st["link"] is None and st["phase"] in ("fetching", "starting", "sign-in"), st
+        aw = api("/api/away")
+        port = aw["port"]
+        assert aw["on"] and aw["listening"] and 7870 <= port < 7880, aw
         wait_for(lambda: api("/api/away")["auth_url"], 60, every=0.5, what="the Tailscale sign-in link")
-        assert api("/api/away")["phase"] == "sign-in"
-        write(backend="Running", signed_in=True, host="uc-fakeaway.tailfake.ts.net")
+        assert api("/api/phone")["phase"] == "sign-in"
+        write(backend="Running", signed_in=True, host="uc-fakelink.tailfake.ts.net")
         wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="the approval link")
         write(funnel_approved=True)
-        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/away")), 60, every=0.5, what="ready")
-        host = st["host"]
-        assert st["link"] == f"https://{host}", st
+        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/phone")), 60, every=0.5, what="ready")
+        host = st["link"].removeprefix("https://")
+        assert st["link"] == f"https://{host}" and st["url"] == st["link"] and st["lan"] is None, st
         sandbox_port = int(BASE.rsplit(":", 1)[1])
         assert read()["funnel_target"] == f"http://127.0.0.1:{port}" and port != sandbox_port, read()   # never 7860, never the home listener
-        # the gate
-        assert _away("GET", "/", port, host)[0] == 401, "the away address answered without a pass"
-        assert _away("GET", "/", port, f"127.0.0.1:{port}")[0] == 403, "the away address took a Host that isn't its name"
-        assert _away("GET", "/pair", port, host)[0] == 403 and _away("POST", "/api/phone/claim", port, host, body={"code": "X"})[0] == 403
-        status, _, page = _away("GET", "/away", port, host)
-        assert status == 200 and b"Away from home" in page
-        status, hd, sw = _away("GET", "/sw.js", port, host)   # the away app's service worker (1.2): no pass needed, no data
-        assert status == 200 and "javascript" in hd.get("content-type", "") and b"HOME_RX" in sw, (status, hd)
-        # a paired phone, at home, asks for its link (its button shows only now); at the away address the code becomes its pass
-        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is True
-        assert api("/api/status").get("away_ready") is False, "the PC's own page offers the phone's away button"
-        status, _, body = _lan("POST", "/api/phone/away/link", home, {})
+        # the gate: generic refusals, nothing before a token says what exists
+        s0, h0, b0 = _away("GET", "/", port, host)
+        assert (s0, b0) == (401, b"Unauthorized") and "clear-site-data" not in h0, (s0, h0, b0)
+        assert _away("GET", "/", port, f"127.0.0.1:{port}")[0] == 403, "the link took a Host that isn't its name"
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": "x"}, origin=f"http://{host}")[0] == 403
+        for p_ in ("/api/phone/claim", "/api/phone/wait"):   # no window, no nonce: the same 401
+            assert _away("POST", p_, port, host, body={})[:3:2] == (401, b"Unauthorized"), p_
+        assert _away("POST", "/api/phone/move", port, host, body={})[:3:2] == (403, b"Forbidden")   # no code: generic too
+        status, _, page = _away("GET", "/pair", port, host)
+        assert status == 200 and b"Connect this phone" in page and b"Allow" in page, (status, page[:200])
+        status, _, page = _away("GET", "/move", port, host)
+        assert status == 200 and b"Your phone" in page
+        status, hd, sw = _away("GET", "/sw.js", port, host)
+        assert status == 200 and "javascript" in hd.get("content-type", ""), (status, hd)
+        # pairing at the link: the QR's code, once; the claim is a nonce; wrong and used nonces are "not yet"
+        pr = api("/api/phone/pair", {})["pairing"]
+        assert pr["link"].startswith(f"https://{host}/pair#") and len(pr["link"].split("#", 1)[1]) >= 20 and pr["short"] is None, pr
+        assert pr["qr"].startswith("<svg") and pr["code"] == "" and pr["wrong"] == 0, pr
+        code = pr["link"].split("#", 1)[1]
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": code[:-1] + "!", "name": "x"})[:3:2] == (403, b"Forbidden")
+        assert api("/api/phone")["pairing"]["wrong"] == 1, "a wrong claim isn't counted"
+        status, hd, body = _away("POST", "/api/phone/claim", port, host, body={"code": code, "name": "Link phone"})
+        assert status == 200 and "set-cookie" not in hd, (status, hd, body)
+        nonce = json.loads(body)["nonce"]
+        assert len(nonce) >= 20 and "token" not in body.decode() and "hash" not in body.decode(), body
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": code, "name": "Again"})[:3:2] == (401, b"Unauthorized"), "a code worked twice"
+        st = api("/api/phone")
+        assert [d["name"] for d in st["pending"]] == ["Link phone"] and st["devices"] == [] and st["pairing"] is None, st
+        not_yet = _away("POST", "/api/phone/wait", port, host, body={"nonce": nonce})
+        wrong = _away("POST", "/api/phone/wait", port, host, body={"nonce": "n" * 22})
+        assert not_yet[0] == 200 and not_yet[2] == b'{"ok": false}' and wrong[0] == 200 and wrong[2] == not_yet[2], (not_yet, wrong)
+        assert "set-cookie" not in not_yet[1] and "set-cookie" not in wrong[1]
+        api("/api/phone/allow", {"id": st["pending"][0]["id"]})
+        assert _away("POST", "/api/phone/wait", port, host, body={"nonce": "n" * 22})[2] == b'{"ok": false}'
+        status, hd, body = _away("POST", "/api/phone/wait", port, host, body={"nonce": nonce})
+        assert status == 200 and json.loads(body)["ok"] is True, (status, body)
+        cookie = hd.get("set-cookie", "")
+        assert cookie.startswith("__Host-uc=") and all(x in cookie for x in ("; Path=/", "HttpOnly", "Secure", "SameSite=Strict", "Max-Age=")) and "Domain" not in cookie, cookie
+        token = cookie.split("__Host-uc=", 1)[1].split(";", 1)[0]
+        assert token not in body.decode()
+        assert _away("POST", "/api/phone/wait", port, host, body={"nonce": nonce})[2] == b'{"ok": false}', "the token was handed over twice"
+        logs = "".join(f.read_text(encoding="utf-8", errors="replace") for f in sbx_path("logs_dir").glob("*.log") if f.is_file())
+        assert code not in logs and token not in logs and nonce not in logs, "a code, a nonce or a token in a log"
+        assert "Link phone was allowed" in logs, "the Allow isn't in the Doctor's log"
+        # with the token: a phone, the PC-only routes refused, no forwarded header decides anything, no sign-in URL reaches it
+        s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])
+        assert s_["client"] == "phone" and s_["device"] == "Link phone" and s_["home_url"] is None and s_.get("app_folder") is None, s_
+        fwd = {"X-Forwarded-For": "127.0.0.1", "Tailscale-User-Login": "x@example.com", "Tailscale-Funnel-Request": "?1"}
+        assert _away("GET", "/api/status", port, host, extra=fwd)[:3:2] == (401, b"Unauthorized"), "a forwarded header let something in"
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}", extra=fwd)[2])["device"] == "Link phone"
+        status, _, body = _away("POST", "/api/restart", port, host, cookie=f"__Host-uc={token}", body={})
+        assert status == 403 and b"needs the PC" in body, (status, body)
+        seen = 0
+        for m, p_ in PHONE_SAMPLES:
+            if m == "GET" and phone_api.policy(m, p_)[0] in ("phone", "open"):
+                status, _, body = _away("GET", p_, port, host, cookie=f"__Host-uc={token}")
+                assert b"login.tailscale.com" not in body and b"auth_url" not in body and b"approve_url" not in body, (p_, body[:200])
+                seen += 1
+        assert seen > 20 and read().get("auth_url", "login.tailscale.com") and api("/api/away")["auth_url"] is None
+        assert _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token[:-2]}xx")[:3:2] == (401, b"Unauthorized")
+        # the typed code: only when asked for, five wrong tries end it, the QR's code lives on; No forgets the phone
+        api("/api/phone/pair", {})
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": "ABCDEF", "name": "x"})[0] == 403
+        pr = api("/api/phone/pair/short", {})["pairing"]
+        short = pr["short"]["code"]
+        assert len(short) == 6 and pr["code"] == short and 100 < pr["short"]["until"] - time.time() <= 120, pr
+        bad = "".join(c for c in "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" if c not in short)[:6]
+        for k in range(5):   # (generic on the wire; the PC's card sees the typed code go at the fifth)
+            assert _away("POST", "/api/phone/claim", port, host, body={"code": bad, "name": "x"})[:3:2] == (403, b"Forbidden"), k
+            assert (api("/api/phone")["pairing"]["short"] is None) == (k == 4), k
+        pr = api("/api/phone")["pairing"]
+        assert pr is not None and pr["short"] is None, "the QR's code didn't survive the typed code's tries"
+        status, _, body = _away("POST", "/api/phone/claim", port, host, body={"code": short.lower(), "name": "Second"})
+        assert status == 403, "the finished typed code still worked"
+        status, _, body = _away("POST", "/api/phone/claim", port, host, body={"code": pr["link"].split("#", 1)[1], "name": "Second"})
+        assert status == 200, (status, body)
+        n2 = json.loads(body)["nonce"]
+        pend = api("/api/phone")["pending"]
+        assert [d["name"] for d in pend] == ["Second"]
+        api("/api/phone/refuse", {"id": pend[0]["id"]})
+        assert api("/api/phone")["pending"] == [] and _away("POST", "/api/phone/wait", port, host, body={"nonce": n2})[2] == b'{"ok": false}'
+        # a phone paired on the home Wi-Fi before moves over: its LAN token good until the new one is used once
+        lan, lid = _plant_lan("Old phone")
+        st = api("/api/phone")   # (reads the file again, and opens the home-network listener for that phone)
+        assert any(d["id"] == lid and d["lan"] for d in st["devices"]) and st["lan"] and st["lan"]["listening"], st
+        assert _lan("GET", "/", None)[0] == 401, "the home-network page opens without a token"
+        assert _lan("GET", "/api/status", lan)[0] == 200
+        assert "snap['link']}/move#" in inspect_src(phone_api._route), "the move's link isn't built from the node's own name"
+        status, _, body = _lan("POST", "/api/phone/move/link", lan, {})
         assert status == 200, body
         url = json.loads(body)["url"]
-        assert url.startswith(f"https://{host}/away#"), url
-        code = url.split("#", 1)[1]
-        assert _away("POST", "/api/phone/away", port, host, body={"code": code}, origin=f"http://{host}")[0] == 403
-        status, hd, body = _away("POST", "/api/phone/away", port, host, body={"code": code})
-        assert status == 200, body
-        cookie = hd.get("set-cookie", "")
-        assert all(x in cookie for x in ("uc_away=", "Secure", "HttpOnly", "SameSite=Strict")), cookie
-        away = cookie.split("uc_away=", 1)[1].split(";", 1)[0]
-        assert _away("POST", "/api/phone/away", port, host, body={"code": code})[0] == 403, "a code worked twice"
-        s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"uc_away={away}")[2])
-        assert s_["client"] == "phone" and s_["device"] == "Away phone", s_
-        assert s_["home_url"] == f"http://{PHONE_ADDR}:{sandbox_port}", s_   # the away app's way home (sw.js keeps it)
-        assert json.loads(_lan("GET", "/api/status", home)[2])["home_url"] is None and api("/api/status")["home_url"] is None
-        assert _away("GET", "/api/status", port, host, cookie=f"uc_away={home}")[0] == 401, "the home token works away"
-        assert _lan("GET", "/api/status", away)[0] == 401, "the away pass works at home"
-        status, _, body = _away("POST", "/api/restart", port, host, cookie=f"uc_away={away}", body={})
-        assert status == 403 and b"needs the PC" in body, (status, body)
-        # off: nothing reaches this PC from outside any more
-        api("/api/away", {"on": False})
-        calls = read()["calls"]
-        assert ["funnel", "reset"] in calls and ["down"] in calls and not read().get("funnel_on")
-        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is False
+        assert url.startswith(f"https://{host}/move#"), url
+        mcode = url.split("#", 1)[1]
+        assert _lan("POST", "/api/phone/move/link", None, {})[0] == 401, "a move code without a token"
+        status, hd, body = _away("POST", "/api/phone/move", port, host, body={"code": mcode})
+        assert status == 200 and hd.get("set-cookie", "").startswith("__Host-uc="), (status, hd, body)
+        main = hd["set-cookie"].split("__Host-uc=", 1)[1].split(";", 1)[0]
+        assert _away("POST", "/api/phone/move", port, host, body={"code": mcode})[0] == 403, "a move code worked twice"
+        assert _lan("GET", "/api/status", lan)[0] == 200, "the LAN token stopped before the phone arrived at the link"
+        assert next(d for d in api("/api/phone")["devices"] if d["id"] == lid)["moving"]
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={main}")[2])["device"] == "Old phone"
+        status, hd, _ = _lan("GET", "/api/status", lan)
+        assert status == 401 and hd.get("clear-site-data") == '"cache", "storage"', (status, hd)   # arrived: the LAN token is finished
+        st = api("/api/phone")
+        d = next(d for d in st["devices"] if d["id"] == lid)
+        assert not d["lan"] and not d["moving"] and st["lan"] is None, st
         try:
-            _away("GET", "/", port, host)
-            raise AssertionError("the away listener still answers after Off")
+            _lan("GET", "/", None)
+            raise AssertionError("the home-network listener still answers with no LAN token left")
         except ConnectionRefusedError:
             pass
-        # on again (the sign-in is kept: no new sign-in), then Phone access off takes away from home with it
-        st = api("/api/away", {"on": True})
-        port = st["port"]
-        wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready again")
-        # Private (Deep Cover, 1.2): Serve on the tailnet only, kept across a restart; then back to Funnel
+        logs = "".join(f.read_text(encoding="utf-8", errors="replace") for f in sbx_path("logs_dir").glob("*.log") if f.is_file())
+        assert "Old phone moved to the link" in logs and "home-network listener closed" in logs and mcode not in logs and main not in logs, "the move isn't in the log, or a secret is"
+        # Remove: the next request is 401 and clears the phone
+        api("/api/phone/revoke", {"id": lid})
+        status, hd, _ = _away("GET", "/api/status", port, host, cookie=f"__Host-uc={main}")
+        assert status == 401 and hd.get("clear-site-data") == '"cache", "storage"', (status, hd)
+        # Private (Deep Cover): Serve on the tailnet only, the same gate and token; then back to Funnel
         st = api("/api/away", {"private": True})
         assert st["private"] and st["on"], st
         wait_for(lambda: api("/api/away")["approve_url"], 60, every=0.5, what="Serve's approval link")
         write(serve_approved=True)
         wait_for(lambda: api("/api/away")["phase"] == "ready", 60, every=0.5, what="ready on the tailnet only")
         assert read()["serve_on"] and not read().get("funnel_on") and read()["funnel_target"] == f"http://127.0.0.1:{port}", read()
-        from undercover.core import phone
-        assert json.loads(phone.state_file().read_text(encoding="utf-8"))["away_private"], "the private switch wasn't kept"
-        assert _lan("POST", "/api/away", home, {"private": False})[0] == 403, "a phone changed away from home"
+        assert _away("GET", "/api/status", port, host)[:3:2] == (401, b"Unauthorized"), "the tailnet alone let a request in"
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
         api("/api/away", {"private": False})
         wait_for(lambda: api("/api/away")["phase"] == "ready" and read().get("funnel_on"), 60, every=0.5, what="back on Funnel")
+        # off: nothing reaches this PC from a phone any more (funnel reset, down, the listener closed); on again keeps the sign-in
         resets = read()["calls"].count(["funnel", "reset"])
-        api("/api/phone", {"on": False})
-        st = api("/api/away")
-        assert not st["on"] and not st["listening"] and read()["calls"].count(["funnel", "reset"]) == resets + 1, st
+        st = api("/api/phone", {"on": False})
+        assert not st["enabled"] and not st["listening"] and st["link"] is None, st
+        calls = read()["calls"]
+        assert calls.count(["funnel", "reset"]) == resets + 1 and ["down"] in calls and not read().get("funnel_on"), calls[-5:]
         try:
             _away("GET", "/", port, host)
-            raise AssertionError("the away listener still answers after Phone access was switched off")
+            raise AssertionError("the link's listener still answers after Off")
         except ConnectionRefusedError:
             pass
-        # Forget with away off: the daemon comes up just for the logout, then goes, and the node's keys with it
-        daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
         api("/api/phone", {"on": True})
+        wait_for(lambda: api("/api/phone")["phase"] == "ready", 60, every=0.5, what="ready again")
+        port = api("/api/away")["port"]
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
+        assert api("/api/phone/revoke-all", {})["devices"] == [] and _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[0] == 401
+        # Forget with the link off: the daemon comes up just for the logout, then goes, and the node's keys with it
+        api("/api/phone", {"on": False})
+        daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
         st = api("/api/away/forget", {})
         r = read()
         assert r.get("logged_out") and sum(c[0] == "tailscaled" for c in r["calls"]) == daemons + 1 and not st["name"], (st, r["calls"][-4:])
     finally:
-        api("/api/phone", {"on": True})
-        api("/api/away", {"on": False})
-        dev = next((d for d in api("/api/phone")["devices"] if d["name"] == "Away phone"), None)
-        if dev:
-            api("/api/phone/revoke", {"id": dev["id"]})
+        api("/api/phone/revoke-all", {})
         api("/api/phone", {"on": False})
-    return f"sign-in -> approve -> ready; funnel to {port} only; the gate holds; a home link became an away pass; off and Phone access off close it"
+    return f"setup -> ready; funnel to {port} only; the gate holds; a nonce became a token on Allow; the typed code; a phone moved over; Remove clears; off closes it"
+
+
+def inspect_src(fn) -> str:
+    import inspect
+    return inspect.getsource(fn)
 
 
 @check("api: Stop is a stop: a long separation (as in a training's clip preparation) ends within 2 s of Stop, nothing cached")
@@ -12039,77 +12184,61 @@ def a_presep_progress():
     return f"presep: {p['message']} (step {p['step_n']} of {p['steps']}); the preview: {q['message']}"
 
 
-@check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
-       "phone; Revoke; switching off closes it; this PC's own requests unchanged)")
+@check("api: the home-network listener (1.2.1): closed until a phone paired before the link needs it, then every route 401 without that phone's LAN token (the page too), the home-screen manifest and icons open; with it the basic pages work and the PC-only routes are refused; this PC's own requests unchanged; Remove closes it for good")
 def a_phone():
     from undercover.app import phone_api
-    from undercover.core import phone
-    unpaired = b"This phone isn't paired with UnderCover. On the PC: SafeHouse, Settings, Phone access."
+    unpaired = b"This phone isn't connected to UnderCover. On the PC: SafeHouse, Settings, Your phone."
+    api("/api/phone", {"on": True})
     try:
         _lan("GET", "/")
-        raise AssertionError("something answers on the phone address while Phone access is off")
+        raise AssertionError("something answers on the home-network address with no phone from before")
     except ConnectionRefusedError:
         pass
-    st = api("/api/phone", {"on": True})
+    lan, lid = _plant_lan("Smoke phone")
+    st = api("/api/phone")
     port = int(BASE.rsplit(":", 1)[1])
-    assert st["enabled"] and st["listening"] and st["url"] == f"http://{PHONE_ADDR}:{port}", st
-    # 1. the walk: every route, no token
+    assert st["enabled"] and st["lan"] and st["lan"]["listening"] and st["lan"]["url"] == f"http://{PHONE_ADDR}:{port}", st
+    # 1. the walk: every route, no token: the generic 401, the manifest and icons apart
     opened = 0
     for m, p in PHONE_SAMPLES + [("GET", "/nope"), ("POST", "/api/nope"), ("DELETE", "/api/nope")]:
         status, hd, body = _lan(m, p, body={} if m == "POST" else None)
-        pol = phone_api.policy(m, p)[0]
-        if pol in ("open", "home"):   # (home: the page alone, no data; 1.2)
+        if phone_api.policy(m, p)[0] == "open" and p.startswith("/static/"):
             opened += 1
-            want = 403 if p == "/api/phone/claim" else 404 if p == "/sw.js" else 200   # (sw.js: the away address only)
-            assert status == want, (m, p, status, body[:200])
+            assert status == 200, (m, p, status, body[:200])
         else:
             assert status == 401 and body == unpaired and hd.get("connection") == "close", (m, p, status, body[:200])
     # 2. the guards before the token: another Host (DNS rebinding), a missing or foreign Origin
     assert _lan("GET", "/", host="evil.example:7862")[0] == 403
     for m in ("HEAD", "PUT", "OPTIONS"):   # any other method: the same 401
-        status, _, body = _lan(m, "/api/status")
-        assert status == 401, (m, status)
-    assert _lan("POST", "/api/phone/claim", body={}, origin=False)[0] == 403
-    assert _lan("POST", "/api/phone/claim", body={}, origin="http://evil.example")[0] == 403
-    # 3. pairing: the code from the PC, wrong then right, then never again
-    pr = api("/api/phone/pair", {})["pairing"]
-    assert pr["link"] == f"http://{PHONE_ADDR}:{port}/pair#{pr['code']}" and pr["qr"].startswith("<svg"), pr
-    wrong = "".join(c for c in phone.ALPHABET if c not in pr["code"])[:6]
-    assert _lan("POST", "/api/phone/claim", body={"code": wrong, "name": "Smoke phone"})[0] == 403
-    status, hd, body = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Smoke phone"})
-    assert status == 200, (status, body)
-    cookie = hd.get("set-cookie", "")
-    assert all(x in cookie for x in ("uc_device=", "HttpOnly", "SameSite=Strict", "Path=/")), cookie
-    token = cookie.split("uc_device=", 1)[1].split(";", 1)[0]
-    assert _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Again"})[0] == 403, "a code worked twice"
-    devs = api("/api/phone")["devices"]
-    assert [d["name"] for d in devs] == ["Smoke phone"] and "hash" not in devs[0], devs
-    # 4. with the token: the basic pages work, the PC-only routes are refused with a plain message
-    s = json.loads(_lan("GET", "/api/status", token)[2])
-    assert s["client"] == "phone" and s["device"] == "Smoke phone", s
+        assert _lan(m, "/api/status")[0] == 401, m
+    assert _lan("POST", "/api/work/settings", lan, {}, origin=False)[0] == 403
+    assert _lan("POST", "/api/work/settings", lan, {}, origin="http://evil.example")[0] == 403
+    # 3. with the token: the basic pages work, the PC-only routes are refused with a plain message
+    s = json.loads(_lan("GET", "/api/status", lan)[2])
+    assert s["client"] == "phone" and s["device"] == "Smoke phone" and s["home_url"] is None, s
     assert s.get("app_folder") is None, "a phone was told the PC's app folder"
     assert Path(api("/api/status")["app_folder"]).resolve() == ROOT.resolve(), "this PC's status doesn't name its app folder"
     for p in ("/", "/static/app.js", "/api/jobs", "/api/work", "/api/voices", "/api/library/covers", "/api/speak/voices",
               "/api/doctor", "/api/addons", "/api/storage", "/api/history", "/api/config", "/api/train/projects"):
-        status = _lan("GET", p, token)[0]
+        status = _lan("GET", p, lan)[0]
         assert status == 200, (p, status)
-    assert _lan("POST", "/api/work/settings", token, {})[0] == 200
+    assert _lan("POST", "/api/work/settings", lan, {})[0] == 200
     from undercover.core.config import path   # the sandbox's own folders (sandbox_server points this process at them)
     proj = next(p for p in (path("cache_dir") / "training").iterdir() if (p / "project.json").exists())
     clip = next(f for f in (proj / "clips").iterdir() if f.suffix in (".flac", ".wav"))
-    assert _lan("GET", f"/files/training/{proj.name}/clips/{clip.name}", token)[0] == 200, "a phone can't play a clip"
-    assert _lan("GET", f"/files/training/{proj.name}/project.json", token)[0] == 404, "a phone read a project file"
+    assert _lan("GET", f"/files/training/{proj.name}/clips/{clip.name}", lan)[0] == 200, "a phone can't play a clip"
+    assert _lan("GET", f"/files/training/{proj.name}/project.json", lan)[0] == 404, "a phone read a project file"
     assert api(f"/files/training/{proj.name}/project.json"), "this PC can't read the project file any more"
-    assert _lan("DELETE", "/api/voices/no-such-voice", token)[0] not in (401, 403)   # reaches the route (the page asks twice)
+    assert _lan("DELETE", "/api/voices/no-such-voice", lan)[0] not in (401, 403)   # reaches the route (the page asks twice)
     refused = 0
     for m, p in PHONE_SAMPLES:
         if phone_api.policy(m, p)[0] == "pc":
-            status, hd, body = _lan(m, p, token, {} if m == "POST" else None)
+            status, hd, body = _lan(m, p, lan, {} if m == "POST" else None)
             assert status == 403 and b"needs the PC" in body and hd.get("connection") == "close", (m, p, status, body[:200])
             refused += 1
     assert api("/api/status")["client"] == "pc", "the sandbox server stopped (Quit or Restart went through from the phone?)"
-    # 5. this PC's own requests: exactly as before (a phone's cookie means nothing here; Host and Origin checks as they were)
-    req = urllib.request.Request(BASE + "/api/status", headers={"Cookie": f"uc_device={token}"})
+    # 4. this PC's own requests: exactly as before (a phone's cookie means nothing here; Host and Origin checks as they were)
+    req = urllib.request.Request(BASE + "/api/status", headers={"Cookie": f"uc_device={lan}"})
     with urllib.request.urlopen(req, timeout=30) as r:
         assert json.loads(r.read())["client"] == "pc"
     for hdrs, method in (({"Host": "evil.example"}, "GET"), ({"Origin": "http://evil.example"}, "POST")):
@@ -12120,25 +12249,16 @@ def a_phone():
             raise AssertionError(f"this PC's {method} with {hdrs} went through")
         except urllib.error.HTTPError as e:
             assert e.code == 403 and json.loads(e.read()) == {"error": "Forbidden"}, e.code
-    # 6. Revoke: the token stops working at its next request
-    api("/api/phone/revoke", {"id": devs[0]["id"]})
-    assert _lan("GET", "/api/status", token)[0] == 401
-    # 7. switching off closes the listener at once; a paired phone works again when it's switched back on
-    pr = api("/api/phone/pair", {})["pairing"]
-    hd = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Second"})[1]
-    token2 = hd["set-cookie"].split("uc_device=", 1)[1].split(";", 1)[0]
-    assert _lan("GET", "/api/status", token2)[0] == 200
-    st = api("/api/phone", {"on": False})
-    assert not st["enabled"] and not st["listening"], st
+    # 5. Remove: the last phone from before is gone, so the listener closes for good at once (a refused token's 401 with
+    # Clear-Site-Data is the link's, in a_link)
+    assert api("/api/phone/revoke", {"id": lid})["lan"] is None
     try:
-        _lan("GET", "/api/status", token2)
-        raise AssertionError("the phone listener still answers after switching off")
+        _lan("GET", "/api/status", lan)
+        raise AssertionError("the home-network listener still answers after the last phone from before was removed")
     except ConnectionRefusedError:
         pass
-    api("/api/phone", {"on": True})
-    assert _lan("GET", "/api/status", token2)[0] == 200
     api("/api/phone", {"on": False})
-    return f"{len(PHONE_SAMPLES)} routes walked ({opened} open), {refused} PC-only refused, revoke, switch off"
+    return f"{len(PHONE_SAMPLES)} routes walked ({opened} open), {refused} PC-only refused, Remove closed it"
 
 
 @check("api: themes (list, import, css at load, export, delete) and the pages' Content-Security-Policy")
@@ -13618,7 +13738,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -13636,7 +13756,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port):
-                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
+                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_link, a_themes, a_firstrun, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()
