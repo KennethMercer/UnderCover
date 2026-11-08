@@ -169,24 +169,68 @@ def _duplicate_voices(hist: list) -> list[dict]:
 
 # ---------------------------------------------------------------- inventories
 
+SUMMARY_TTL = 15.0   # how long a summary is kept at most (what changes deep inside cache/stems shows within this)
+_SUMMARY: dict = {"key": None, "at": 0.0, "value": None}
+
+
+def _summary_key() -> tuple:
+    """What a summary depends on that is cheap to look at: the [paths] settings, the history file's size and mtime,
+    and the mtime of each folder whose entries it counts (a folder's mtime moves when a file is added, removed or
+    renamed in it). Anything deeper (a new stem under cache/stems/<song>/<model>) is caught by SUMMARY_TTL."""
+    def mt(p: Path):
+        try:
+            return p.stat().st_mtime_ns
+        except OSError:
+            return None
+    out, up, cache, voices = path("output_dir"), path("uploads_dir"), path("cache_dir"), path("voices_dir")
+    hist = out / "history.jsonl"
+    try:
+        st = hist.stat()
+        h = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        h = None
+    return (tuple(sorted(CONFIG["paths"].items())), h, mt(out), mt(out / "speech"), mt(up), mt(voices), mt(cache),
+            mt(cache / "stems"), mt(cache / "training"), mt(cache / "converted"))
+
+
+def invalidate():
+    """Drop the kept summary: SafeHouse's writing routes call this, so what the user just did shows at once."""
+    _SUMMARY["key"] = None
+
+
 def summary() -> dict:
-    """What the Library and Storage say UnderCover holds. `total` is the Storage groups' own sum (storage.where), so the
-    room's number and its tab's are one number; the categories split the same folders, so "temporary" is the working
-    folder less stems and training, and "app" every model file (a hand-kept list of model folders left Whisper out)."""
+    """What the Library and Storage say UnderCover holds, kept for SUMMARY_TTL seconds while _summary_key() stays the
+    same (the maintainers' notes, efficiency: every Library open and every change walked the folders twice).
+    `total` is the Storage groups' own sum (storage.where), so the room's number and its tab's are one number; the
+    categories split the same folders, so "temporary" is the working folder less stems and training, and "app" every
+    model file (a hand-kept list of model folders left Whisper out)."""
+    key, now = _summary_key(), time.monotonic()
+    if _SUMMARY["key"] == key and now - _SUMMARY["at"] < SUMMARY_TTL:
+        return _SUMMARY["value"]
+    value = _summary()
+    _SUMMARY.update(key=key, at=now, value=value)
+    return value
+
+
+def _summary() -> dict:
     cache = path("cache_dir")
     out_files = [p for p in path("output_dir").iterdir() if p.is_file() and p.name != "history.jsonl"]
-    groups = storage.where()
-    stems, training = _size(cache / "stems"), _size(cache / "training")
+    parts = (cache / "stems", cache / "training", path("uploads_dir"), path("voices_dir"))
+    groups = storage.where(parts)   # one walk: the groups' totals and the categories inside them
+    inside = {p: sum(g["inside"][p] for g in groups.values()) for p in parts}
+    stems, training = inside[parts[0]], inside[parts[1]]
     cats = {
         "covers": sum(_size(p) for p in out_files),
         "speech": speak.storage(),
-        "songs": _size(path("uploads_dir")),
+        "songs": inside[parts[2]],
         "stems": stems,
-        "voices": _size(path("voices_dir")),
+        "voices": inside[parts[3]],
         "training": training,
         "temporary": max(0, groups["working"]["size"] - stems - training),
         "app": groups["models"]["size"],
     }
+    for g in groups.values():
+        g.pop("inside", None)
     du = shutil.disk_usage(ROOT)
     cv, sp = covers(), speak.list_speech()
     counts = {"covers": len(cv), "speech": len(sp), "songs": len(_song_metas()),

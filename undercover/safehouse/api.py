@@ -72,6 +72,9 @@ def handle(h, method: str, p: str) -> bool:
         h._error(str(e))
     except LookupError as e:
         h._error(str(e), 404)
+    finally:
+        if method != "GET":   # whatever these routes changed (a delete, a rename, a move, an add-on) shows in the next summary
+            library.invalidate()
     return True
 
 
