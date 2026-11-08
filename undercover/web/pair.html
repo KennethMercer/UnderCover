@@ -9,7 +9,9 @@
 <!-- Your phone (phase 11; at the link since 1.2.1): the one page a phone can open before it's connected. Self-contained
      (no /static/: everything else needs the token), and generic (it names nothing before the PC has allowed the phone).
      The QR's code comes in the #fragment and is taken out of the address bar first; the claim gives a nonce, and the page
-     waits for the PC's Allow, then gets its token once. Hooks for the look chat: #pair-form, #pair-code, #pair-name,
+     waits for the PC's Allow, then gets its token once. It's also where the home-screen app starts (manifest.webmanifest):
+     a phone that's connected goes straight on to UnderCover, and an iPhone's home-screen app, which may not share
+     Safari's cookies, can connect itself with a typed code. Hooks for the look chat: #pair-form, #pair-code, #pair-name,
      #pair-go, #pair-msg, #pair-wait, #pair-done. -->
 <style>
   :root { color-scheme: dark; --bg: #0a0908; --ink: #ece7de; --dim: #a39d93; --line: #2b2723; --gold: #c9a45c; --bad: #d8735f; }
@@ -52,6 +54,8 @@ const code = document.getElementById("pair-code"), msg = document.getElementById
 // the QR code carries the code after # (never sent to the server, never in a log); take it out of the address bar
 if (location.hash.length > 1) { code.value = decodeURIComponent(location.hash.slice(1)); history.replaceState(null, "", "/pair"); }
 (code.value ? document.getElementById("pair-name") : code).focus();
+// no code: is this phone connected already (the home-screen app starts here)? Then straight on to UnderCover
+if (!code.value) fetch("/api/status", { cache: "no-store" }).then(r => { if (r.ok) location.replace("/"); }).catch(() => {});
 const show = id => { for (const x of ["pair-form", "pair-wait", "pair-done"]) document.getElementById(x).hidden = x !== id; };
 const post = (path, body) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 document.getElementById("pair-form").addEventListener("submit", async e => {

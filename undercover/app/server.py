@@ -438,8 +438,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "low_profile": lowprofile.status(),   # (absent = None: no card to share, the control hides)
                                    "tour": firstrun.tour_status(),   # the First assignment's spotlight tour (web/firstrun.js)
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
-                                   "away_ready": self.remote and _away_ready(),
-                                   "home_url": None,   # (gone with the one link: a phone's way in is the link, at home too)
+                                   "move": _move_state() if self.remote and not self.away else None,
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
                                    "app_folder": None if self.remote else str(ROOT)})
             if p == "/api/voices":
@@ -994,10 +993,11 @@ class PhoneServer(ExclusiveServer):
         self.server_name, self.server_port = self.server_address[:2]
 
 
-def _away_ready() -> bool:
-    """For a phone: is away from home on and ready on the PC (its 'Use this phone away from home' shows only then)."""
+def _move_state() -> str:
+    """For a phone paired on the home Wi-Fi before the one link (it answers on that listener, so it holds a LAN token):
+    "ready" when the link is, so its Switch shows; "waiting" while the PC still has a setup step to do."""
     from ..core import tailnet
-    return phone.away_on() and tailnet.STATE["phase"] == "ready"
+    return "ready" if phone.enabled() and tailnet.STATE["phase"] == "ready" else "waiting"
 
 
 class AwayServer(PhoneServer):

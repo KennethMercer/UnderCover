@@ -2170,6 +2170,33 @@ def u_phone_jobs():
     return "3 at once, 12 an hour, per phone; the PC free; retries count; deletes the PC's, and not offered on a phone"
 
 
+@check("Your phone's card (1.2.1): one Set up; the setup's steps with the sign-in and approval links; Allow / No for a phone asking in (new or switching); the QR, or a typed code on request; Remove, Remove all and Turn off; a phone from before gets Switch; the home-screen app starts at /pair, which sends a connected phone on")
+def u_phone_card():
+    web = ROOT / "undercover" / "web"
+    page, rooms, app = ((web / n).read_text(encoding="utf-8") for n in ("index.html", "rooms.js", "app.js"))
+    for i in ("phone-setup", "phone-box", "phone-step", "phone-signin", "phone-approve", "phone-asks", "phone-pair", "phone-pairing",
+              "phone-qr", "phone-short", "phone-typed", "phone-code", "phone-wrong", "phone-devices", "phone-link", "phone-off",
+              "phone-all", "away-forget", "set-away-private", "set-phone-me", "ph-move", "ph-move-say", "ph-move-go"):
+        assert page.count(f'id="{i}"') == 1, i
+    for gone in ("set-phone\"", "set-away\"", "away-box", "away-me", "set-away-me-row", "Phone access", "Away from home", "away from home", "paired"):
+        assert gone not in page.split('id="room-settings"', 1)[1].split('id="room-addons"', 1)[0], f"the card still has {gone!r}"
+    for route in ("/api/phone/allow", "/api/phone/refuse", "/api/phone/pair/short", "/api/phone/revoke-all", "/api/phone/forget",
+                  "/api/phone/move/link", "{ on: true }", "{ on: false }"):
+        assert route in rooms, route
+    assert "/api/away" not in rooms + app and "away_ready" not in app and "s.move" in app
+    card = rooms.split("Settings: Your phone", 1)[1].split("$(\"#ph-move-go\")", 1)[0]
+    assert "esc(d.name)" in card and "${d.name}" not in card, "a phone's name reaches the page unescaped"
+    assert 'd.asks === "move"' in card and "data-allow" in card and "data-refuse" in card and "p.short" in card
+    man = json.loads((web / "manifest.webmanifest").read_text(encoding="utf-8"))
+    assert man["start_url"] == "/pair" and man["scope"] == "/", man
+    pair = (web / "pair.html").read_text(encoding="utf-8")
+    assert 'if (!code.value) fetch("/api/status"' in pair and 'location.replace("/")' in pair
+    from undercover.app import server
+    src = inspect_src(server._move_state)
+    assert '"ready"' in src and '"waiting"' in src and '"move": _move_state() if self.remote and not self.away else None' in inspect_src(server.Handler.do_GET)
+    return "Set up, the steps, Allow / No, the QR or a typed code, Remove, Turn off; Switch on a phone from before; the app starts at /pair"
+
+
 @check("the home-network listener's state is stored (1.2.1): at start it opens only while a phone paired before the link still holds its LAN token, never because the link is on; it closes for good when the last such token goes")
 def u_phone_listen():
     from types import SimpleNamespace
@@ -11356,7 +11383,7 @@ def u_away_sw():
     assert "j.title" not in pa.split("function paWords", 1)[1].split("return null", 1)[0].replace('/^Preview/.test(j.title || "")', ""), "a notification names the job"
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert all(f'id="{i}"' in page for i in ("ph-alert", "ph-alerts", "ph-alerts-yes", "ph-alerts-no", "ph-install", "ph-install-ok",
-                                              "ph-install-ios", "ph-install-android", "set-away-private"))
+                                              "ph-install-ios", "ph-install-android", "set-away-private", "ph-move", "ph-move-go"))
     return "registered, keeping nothing (1.2's cache cleared); its own page, its own origin only; the alerts' rules"
 
 
@@ -12078,7 +12105,7 @@ def a_link():
         assert "Link phone was allowed" in logs, "the Allow isn't in the Doctor's log"
         # with the token: a phone, the PC-only routes refused, no forwarded header decides anything, no sign-in URL reaches it
         s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])
-        assert s_["client"] == "phone" and s_["device"] == "Link phone" and s_["home_url"] is None and s_.get("app_folder") is None, s_
+        assert s_["client"] == "phone" and s_["device"] == "Link phone" and s_["move"] is None and s_.get("app_folder") is None, s_
         fwd = {"X-Forwarded-For": "127.0.0.1", "Tailscale-User-Login": "x@example.com", "Tailscale-Funnel-Request": "?1"}
         assert _away("GET", "/api/status", port, host, extra=fwd)[:3:2] == (401, b"Unauthorized"), "a forwarded header let something in"
         assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}", extra=fwd)[2])["device"] == "Link phone"
@@ -12313,7 +12340,7 @@ def a_phone():
     assert _lan("POST", "/api/work/settings", lan, {}, origin="http://evil.example")[0] == 403
     # 3. with the token: the basic pages work, the PC-only routes are refused with a plain message
     s = json.loads(_lan("GET", "/api/status", lan)[2])
-    assert s["client"] == "phone" and s["device"] == "Smoke phone" and s["home_url"] is None, s
+    assert s["client"] == "phone" and s["device"] == "Smoke phone" and s["move"] == "waiting", s
     assert s.get("app_folder") is None, "a phone was told the PC's app folder"
     assert Path(api("/api/status")["app_folder"]).resolve() == ROOT.resolve(), "this PC's status doesn't name its app folder"
     for p in ("/", "/static/app.js", "/api/jobs", "/api/work", "/api/voices", "/api/library/covers", "/api/speak/voices",
@@ -13836,7 +13863,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
