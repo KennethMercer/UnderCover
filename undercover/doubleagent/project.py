@@ -459,7 +459,7 @@ def add_file(proj: Project, file: Path, title: str | None = None) -> Source:
 
 def _music_limits(proj: Project) -> dict:
     """Leftover-music limit per source (dB vs the voice). Speech: -12 (music under talking = messy separation).
-    Songs always have music under the singing; their separated vocals stay clean up to about +6 dB (Elliott Smith's
+    Songs always have music under the singing; their separated vocals stay clean up to about +6 dB (a singer's
     album tracks: hiss the same at -2 and +6 dB; median phrase +3 dB, so -12 threw out 630 of 754 phrases)."""
     from .sources import is_sung
     singer = proj.mode != "speaking"
@@ -474,8 +474,8 @@ def name_words(person: str) -> list[str]:
 
 def names_said(proj: Project, words: list[str], clusters: list[dict], per: int = 24) -> dict:
     """Whisper on each voice's closest phrases: {cluster: {phrases, words, said}}, where `said` counts the target's
-    name. Phase 19: a character rarely calls out its own name; the others call it all the time (in the SpongeBob
-    rebuild his voice said "SpongeBob" 0 times in 40 phrases, Squidward 3, Patrick 2)."""
+    name. Phase 19: a character rarely calls out its own name; the others call it all the time (in one cartoon
+    rebuild the character's voice said its own name 0 times in 40 phrases, two other characters 3 and 2)."""
     import re
     from ..core.cadence import transcribe
     emb = proj.load_embeddings()
@@ -504,16 +504,16 @@ def names_said(proj: Project, words: list[str], clusters: list[dict], per: int =
 def find_speakers(proj: Project):
     """Cluster all phrase embeddings into speakers; the reference is the voice heard most, weighted toward
     voices present in several sources. For a fictional character (phase 15) it's the voice heard most in the scenes:
-    a podcast about SpongeBob is mostly its host, and the cast interviews are the actors' own voices. Fills
+    a podcast about a cartoon character is mostly its host, and the cast interviews are the actors' own voices. Fills
     proj.speakers and (unless confirmed) proj.reference."""
     from sklearn.cluster import AgglomerativeClustering
     from .sources import kinds
     scene = {sid for sid, k in kinds(proj).items() if k == "scene"}
     emb = proj.load_embeddings()
     # Cluster numbers are re-assigned on every run, so a confirmed reference is followed by its voice (centroid),
-    # not its number: adding sources once switched Elliott Smith's project to another Elliot's speech.
-    # An automatic pick is re-made (Barack Obama: after the first round only a debate was in, Mitt Romney was the
-    # main voice there, and following that pick trained a "barack-obama" voice on Romney).
+    # not its number: adding sources once switched a singer's project to a namesake's speech.
+    # An automatic pick is re-made (a politician: after the first round only a debate was in, his opponent was the
+    # main voice there, and following that pick trained the politician's voice on the opponent).
     old_ref = (emb.get(f"speaker:{proj.reference.get('cluster')}")
                if proj.reference.get("confirmed") and not proj.reference.get("auto") else None)
     lim = _music_limits(proj)
@@ -602,7 +602,7 @@ def set_reference(proj: Project, cluster: int | None = None, clip: str | None = 
 def noisiness(x: np.ndarray, sr: int) -> float:
     """Median spectral flatness of a phrase's loud frames: ~0.14-0.19 for a clean voice, 0.35+ for hissy or
     processed audio (badly separated fan acapellas). A voice trained on that sings with the hiss (measured on
-    Elliott Smith: the Clementine upload's 0.38 made the trained voice twice as hissy as the source song)."""
+    a singer: one fan upload's 0.38 made the trained voice twice as hissy as the source song)."""
     x = _resample16(x, sr)   # measured at 16 kHz (the threshold was calibrated there)
     fr = x[: len(x) // 512 * 512].reshape(-1, 512)
     if not len(fr):
@@ -615,7 +615,7 @@ def noisiness(x: np.ndarray, sr: int) -> float:
 
 def noise_floor(x: np.ndarray, sr: int) -> float:
     """dB of a phrase's quietest 10% of 32 ms frames against its loudest 10%. Hiss fills the gaps between words; a
-    raspy voice doesn't (phase 19: SpongeBob's "hissy" phrases -45 dB, like his clean ones; white noise at 20 dB SNR
+    raspy voice doesn't (phase 19: a raspy cartoon voice's "hissy" phrases -45 dB, like its clean ones; white noise at 20 dB SNR
     -29 dB)."""
     x = _resample16(x, sr)
     fr = x[: len(x) // 512 * 512].reshape(-1, 512)
@@ -626,11 +626,11 @@ def noise_floor(x: np.ndarray, sr: int) -> float:
     return round(float(10 * np.log10(e[:n].mean() / e[-n:].mean())), 1)
 
 
-# The hiss rule per voice (phase 19). A raspy or cartoon voice is "flat" itself: SpongeBob's own phrases have a median
-# noise of 0.29, so the fixed 0.30 left out 45% of him (10 min). A voice's own level is the median noise of its phrases
+# The hiss rule per voice (phase 19). A raspy or cartoon voice is "flat" itself: one cartoon voice's own phrases have a median
+# noise of 0.29, so the fixed 0.30 left out 45% of it (10 min). A voice's own level is the median noise of its phrases
 # whose quiet gaps are clean; its limit is that + HISS_MARGIN, between noise_max and HISS_CAP. Over noise_max a phrase
-# still needs clean gaps. Measured on the user's projects with white noise added to their cleaner phrases: at 25 dB SNR
-# or worse no more gets through than before; Obama, Freeman (own levels 0.20, 0.15) keep 0.30 exactly.
+# still needs clean gaps. Measured on the maintainers' projects with white noise added to their cleaner phrases: at 25 dB SNR
+# or worse no more gets through than before; two speaking voices (own levels 0.20, 0.15) keep 0.30 exactly.
 HISS_FLOOR_DB = -38.0
 HISS_MARGIN, HISS_CAP = 0.08, 0.40
 
@@ -645,11 +645,11 @@ def hiss_limit(proj: Project, music_limits: dict) -> float:
     return round(min(HISS_CAP, max(base, float(np.median(own)) + HISS_MARGIN)), 3)
 
 
-# Music under speech (phase 19): the -12 dB rule assumed loud music meant a messy separation. On SpongeBob's scenes
+# Music under speech (phase 19): the -12 dB rule assumed loud music meant a messy separation. On one cartoon character's scenes
 # the separated phrases with music at -12..0 dB under them came out as clean as those under -12 (quiet gaps ~-53 dB,
-# the same flatness), yet the rule left out 39 of his 63 minutes. Speech with music up to MUSIC_CLEAN_DB is kept
+# the same flatness), yet the rule left out 39 of its 63 minutes. Speech with music up to MUSIC_CLEAN_DB is kept
 # when its clip shows it: clean gaps and under the voice's hiss limit. Singing keeps its own limit.
-# OFF by default until the ear rules: the one end-to-end test (SpongeBob, 25 min with it) voice-checked slightly below
+# OFF by default until the ear rules: the one end-to-end test (that character, 25 min with it) voice-checked slightly below
 # the installed voice (-0.027 per clip). [training] music_db_clean = -3 turns it on.
 MUSIC_CLEAN_DB = -12.0
 
@@ -734,8 +734,8 @@ def score(proj: Project):
 
 
 def _sung_reference(proj: Project, emb: dict, speech_ref: np.ndarray) -> np.ndarray | None:
-    """The person's singing voice. Speaker embeddings of singing sit far from the same person's speech (Elliott
-    Smith: his acapellas scored 0.22-0.32 against his interview voice, so every sung phrase was thrown out as
+    """The person's singing voice. Speaker embeddings of singing sit far from the same person's speech (one
+    singer: his acapellas scored 0.22-0.32 against his interview voice, so every sung phrase was thrown out as
     "other speaker"), so singing needs its own reference: the main voice across the sung sources, accepted only if
     it's recognisably the same person as the speaking reference (his: 0.40; other people: about 0.1)."""
     from sklearn.cluster import AgglomerativeClustering
@@ -784,8 +784,8 @@ def _speech_as_backup(proj: Project):
 
 
 def _mark_duplicates(proj: Project, emb: dict, sim: float = 0.95, dur_tol: float = 0.05):
-    """The same moment often appears in several videos (compilations re-use interviews): 30 of 151 kept Elliott
-    Smith phrases were copies. Keep the best-scoring copy; mark the rest "duplicate" so training doesn't over-weight
+    """The same moment often appears in several videos (compilations re-use interviews): 30 of 151 kept phrases
+    of one singer were copies. Keep the best-scoring copy; mark the rest "duplicate" so training doesn't over-weight
     them and a copy can't end up in the held-out set."""
     kept = sorted([p for p in proj.phrases if not p.reason and p.id in emb], key=lambda p: -p.score)
     if len(kept) < 2:
