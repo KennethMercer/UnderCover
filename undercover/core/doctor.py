@@ -55,7 +55,7 @@ def log(msg: str):
     with _LOG_LOCK:
         for i in range(10):   # Windows can refuse the file for a moment (a scanner, a reader): a line is worth a retry
             try:
-                with open(path("logs_dir") / "doctor.log", "a", encoding="utf-8") as f:
+                with open(path("logs_dir") / "doctor.log", "a", encoding="utf-8", errors="backslashreplace") as f:
                     f.write(line + "\n")
                 break
             except OSError:

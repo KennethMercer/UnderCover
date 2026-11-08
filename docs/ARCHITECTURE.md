@@ -720,20 +720,22 @@ can't end it. A six-character typed code exists only when the person asks for it
 the phone collects once with its nonce (`/api/phone/wait`); wrong, used, expired and refused nonces all get the same
 answer as "not yet". No forgets the device; a pending one is forgotten after ten minutes. The token is one cookie,
 `__Host-uc`: Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, 30 days from its last use (`phone.TOKEN_IDLE_S`),
-stored on the PC as its SHA-256 and compared in constant time. Remove ends it at the phone's next request and closes
+stored on the PC as its SHA-256 and compared in constant time. A phone none of whose tokens has been used for 30
+days is let go (`phone._quiet`, on every read: off the card, out of the count, logged), and pairs again. Remove ends it at the phone's next request and closes
 its open job stream; that 401 carries `Clear-Site-Data: "cache", "storage"`. `/api/phone` and everything under it but
 the claim, the wait and the move are the PC's.
 
 At the link every request comes from outside (`Handler._gate_away`): the link's own name in Host, a same-origin Origin
 on anything but GET, the token for everything but the open routes, and before a token only the generic
-`Unauthorized` / `Forbidden`, so nothing says what exists. `app/phone_api.ROUTES` is the one table of every route and
+`Unauthorized` / `Forbidden`, so nothing says what exists. Before a token a request has `Handler.OPEN_S` (60 s) from its
+first byte, and the open routes take 4 KB (`JSON_MAX_FOR`). `app/phone_api.ROUTES` is the one table of every route and
 its policy (open / phone / pc). Each phone may have three jobs waiting or running and start twelve in an hour
 (`jobs.PHONE_JOBS`, 429 past it), and keep three items in tonight's queue (`worklist.PHONE_ITEMS`); the PC has no cap, and UnderCover's own warm-up and preview jobs aren't counted. Forgetting every thumb at once is the PC's. Deletes that nothing brings back (covers, speech, songs, training
 projects) are the PC's, and the pages don't offer them on a phone.
 
 Phones paired on the home Wi-Fi before 1.2.1 hold a LAN token (`lan_hash`), good only from the PC's home network. For
 them alone the home-network listener stays open (`phone.lan_needed`, stored as `lan` in `phone.json`, so a restart
-opens it only then). Their page shows one line with Switch: a one-use move code bound to that phone
+opens it only then). Their page shows one line with Switch: a one-use move code bound to that phone (one live at a time)
 (`/api/phone/move/link`, which needs the LAN token), opened at the link (`/move#<code>`), waits for Allow like a new
 phone, then gets the one token. The LAN token is dropped at the new token's first use, and the listener closes for good
 when no LAN token is left. A 1.1 `phone.json` is read as this one: its away token becomes the one token, and a phone that still sends it in the 1.2 cookie (`uc_away`) at the link gets it back as `__Host-uc`, the old one cleared. Link on and

@@ -2307,6 +2307,83 @@ def u_phone_stream():
     return "Remove, Off and the move each end the phone's stream at once; another phone's and the PC's go on"
 
 
+@check("The link before a token holds up: its open routes take a few KB; a request that trickles in is closed at the deadline; half a character in a code, a nonce or a name gets the plain answer; a phone unused for 30 days is let go (off the card, out of the count); one live move code a phone; the service worker leaves downloads alone")
+def u_phone_open():
+    import inspect, socket, threading
+    import http.server
+    from undercover.app import server
+    from undercover.core import doctor, phone
+    from undercover.core.phone import PhoneError
+    for p in ("/api/phone/claim", "/api/phone/wait", "/api/phone/move", "/api/phone/away"):
+        assert server.JSON_MAX_FOR[p] == 4 << 10, p
+    assert "self._slow.cancel()" in inspect.getsource(server.Handler._gate_away)
+    was = server.Handler.OPEN_S
+    server.Handler.OPEN_S = 0.5
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    srv.away = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = socket.create_connection(srv.server_address, timeout=10)
+        t0 = time.time()
+        c.sendall(b"POST /api/phone/claim HTTP/1.1\r\nHost: x\r\n")   # a byte now and then, never the whole request
+        got = c.recv(100)
+        assert got == b"" and time.time() - t0 < 5, (got, time.time() - t0)
+        c.close()
+    finally:
+        server.Handler.OPEN_S = was
+        srv.shutdown()
+        srv.server_close()
+    assert phone.clean_name("Ann\udcff's\ud800 phone") == "Ann's phone"
+    assert phone.hash_token("\ud800") == phone.hash_token("\ud800")   # (any string the wire brings: no UnicodeEncodeError)
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        try:
+            doctor.log("a name with half a character \udcff")   # (written escaped, never raised)
+            phone.set_enabled(True)
+            phone.new_pairing()
+            try:
+                phone.claim("\ud800", "x")
+                raise AssertionError("a code with half a character was taken")
+            except PhoneError as e:
+                assert e.status == 403 and e.generic
+            nonce, d = phone.claim(phone.PAIRING["code"], "Old phone")
+            phone.allow(d["id"])
+            token, _ = phone.collect(nonce)
+            assert phone.device_for(token, away=True)
+            with phone._LOCK:
+                phone._STATE["devices"].append({"id": "lan1", "name": "Home phone", "hash": None, "lan_hash": "h" * 64,
+                                                "lan_used": None, "pending": False, "paired": "p", "seen": "s", "ip": "",
+                                                "version": 1})
+                phone._relan(phone._STATE)
+                phone._save()
+            first, second = phone.move_code("lan1"), phone.move_code("lan1")
+            assert len(phone._MOVE_CODES) == 1, "a phone kept two live move codes"
+            try:
+                phone.redeem_move(first)
+                raise AssertionError("an older move code still worked")
+            except PhoneError:
+                pass
+            phone._MOVE_CODES.clear()
+            with phone._LOCK:   # thirty days on, unused
+                x = next(x for x in phone._STATE["devices"] if x["id"] == d["id"])
+                x["used"] = time.time() - phone.TOKEN_IDLE_S - 1
+            assert [x["id"] for x in phone.devices()] == ["lan1"], "a phone unused for 30 days stayed on the card"
+            h = phone.hash_token(token)
+            assert not phone.still_valid(h) and phone.device_for(token, away=True) is None
+            saved = json.loads(phone.state_file().read_text(encoding="utf-8"))
+            assert [x["id"] for x in saved["devices"]] == ["lan1"], "forgotten in memory but not in the file"
+            log = (Path(doctor.path("logs_dir")) / "doctor.log").read_text(encoding="utf-8")
+            assert "Old phone wasn't used for 30 days" in log and "\\udcff" in log, log[-400:]
+        finally:
+            phone.set_enabled(False)
+            phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+            phone._FILE[0], phone.PAIRING = None, None
+    sw = (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
+    assert 'p.startsWith("/files/") || p.startsWith("/api/")) return;' in sw
+    return "4 KB before a token; trickles closed; half characters answered plainly; quiet phones let go; one move code"
+
+
 @check("Your phone's records hold up (1.2.1, review): an ask never allowed runs out while the server runs; No on a phone that isn't waiting leaves it; a full list keeps the code; an unreadable phone.json is never saved over; UnderCover's own warm-up and preview jobs don't count against a phone; the card doesn't redraw what hasn't changed; the pages keep waiting through a blip")
 def u_phone_records():
     from types import SimpleNamespace
@@ -10995,9 +11072,7 @@ def u_phone_pairing():
             rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
             rec["used"] = time.time() - phone.TOKEN_IDLE_S + 60
             assert phone.device_for(token, away=True) and time.time() - rec["used"] < 5, "a use didn't renew the token"
-            rec["used"] = time.time() - phone.TOKEN_IDLE_S - 1
-            assert phone.device_for(token, away=True) is None, "a token unused for 30 days still worked"
-            rec.pop("used")
+            rec.pop("used")   # (unused for 30 days, the phone is let go: u_phone_open)
             assert phone.device_for(token, away=True) and "used" in rec
             from undercover.app import phone_api as PA
             assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t")
@@ -11823,7 +11898,8 @@ def u_away_sw():
     sw = (ROOT / "undercover" / "web" / "sw.js").read_bytes()
     src = sw.decode("utf-8")
     assert "caches.open(" not in src and "cache.put" not in src and ".put(" not in src, "the worker keeps something"
-    assert "/api/" not in src and not _re.search(r"https?://", src), "the worker names a route or another origin"
+    routes = src.replace('p.startsWith("/files/") || p.startsWith("/api/")', "")   # (the one line that leaves downloads alone)
+    assert "/api/" not in routes and not _re.search(r"https?://", src), "the worker names a route or another origin"
     assert 'r.mode !== "navigate"' in src and "caches.delete(" in src and 'href="/"' in src
     if not exe:
         return "no Chrome here: the source checks only"
@@ -14985,7 +15061,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_open, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
