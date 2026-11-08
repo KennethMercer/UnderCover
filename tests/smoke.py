@@ -7419,7 +7419,7 @@ def u_edit_price():
             assert set(E.pitch_of(doc)) == {"lead"}   # (only the parts it knows)
             got = E.price(item, doc, up)
             assert got["poor"] and got["rise"] >= E.POOR_COST and got["outside"] == 1.0 and got["own_outside"] == 0.0, got
-            assert got["said"] == "Lead an octave up here is a poor fit: 100% of these notes are above the voice's range, so it may sound strained.", got
+            assert got["said"] == "Lead, an octave up, is a poor fit here: 100% of these notes are above the voice's range, so it may sound strained.", got
             down = E.check_edit({"op": "octave", "part": "lead", "octave": -2, "t0": 40.0, "t1": 50.0}, doc)
             got = E.price(item, doc, down)   # Second's own octave puts the high half over its range; two down brings it home
             assert not got["poor"] and got["said"] is None and got["rise"] < 0 and got["own_outside"] == 1.0, got
@@ -7489,6 +7489,12 @@ def u_edit_price():
         assert sound_range(bad) is None, bad
     assert _range_of(SimpleNamespace(extra={"f0_range": ["a", "b", "c"], "person_range": [90, 120, 200], "person_range_speech": True})) == ([90.0, 120.0, 200.0], True)
     assert _range_of(SimpleNamespace(extra={"f0_range": [1e9, 2e9, 3e9]})) is None
+    from undercover.frontman.pipeline import CoverEngine, CoverOptions
+    notes = []
+    junk_voice = SimpleNamespace(name="junk-uc", extra={"f0_range": ["a", "b", "c"], "person_range": {"x": 1}})
+    opts = CoverOptions(voice="junk-uc", octave=-1, key=2)
+    got = CoverEngine._fit(None, opts, junk_voice, {}, notes, None)   # (no converter is reached: the range is refused first)
+    assert got == opts and len(notes) == 1 and "no measured range yet" in notes[0] and "junk" in notes[0], notes
     # every other reader of a voice's range reads it through the same check: SpeakEasy's hold and the Reader's pitch, the one-shot's pick
     from undercover.doubleagent import cadence as CD, service as SV
     from undercover.frontman import oneshot as OS
@@ -8614,6 +8620,8 @@ def u_duets():
             assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [], tries   # (the failure above remembered)
             (kd / "instrumental.flac").write_bytes(b"not audio, still")   # a new version of the stem is measured again, once
             assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [1], tries
+            os.utime(kd / "instrumental.flac", (time.time() + 7, time.time() + 7))   # the same bytes with a new mtime: a new version too
+            assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [1, 1], tries
         finally:
             _PL2._measure_quiet = real_mq
     assert _PL2.estimate_for(100.0, _PL2.CoverOptions(voice="v", duet_voice="w"))["backing_quiet"] is None   # (the one-shot's plan: no song yet)
@@ -11372,7 +11380,7 @@ def u_shape_page():
     window.api = async (u, o) => {
       if (/edits\/price$/.test(u)) {
         if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
-        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead an octave up here is a poor fit: strained." } : null };
+        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
       }
       throw new Error("stub");
     };
