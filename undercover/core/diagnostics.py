@@ -151,7 +151,7 @@ def _items(report: dict | None) -> list:
     full = logs / "doctor-report.json"
     if full.exists():
         items.append(("doctor-full-report.json", lambda: full.read_text(encoding="utf-8"), "The last full check"))
-    items.append(("about.json", lambda: json.dumps(about.about(), indent=1), "Version, Python, PyTorch, Windows"))
+    items.append(("about.json", lambda: json.dumps(about.about(), indent=1), "Version, Python, PyTorch, the operating system"))
     return items
 
 
