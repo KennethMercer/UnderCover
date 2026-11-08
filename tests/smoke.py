@@ -11817,7 +11817,7 @@ def u_tray():
     return "stopped / idle / working (the module's bar) / paused / problem; job lines; icons differ; light import"
 
 
-@check("perf: load_16k remembers the last few vocals (a hit, a changed file misses, read-only arrays)")
+@check("perf: load_16k remembers the last few vocals (a hit, a changed file misses, callers get copies)")
 def u_perf_load16k():
     import tempfile
     import numpy as np
@@ -11829,14 +11829,13 @@ def u_perf_load16k():
         sf.write(str(f), x, 16000, subtype="PCM_16")
         convert._LOAD16K.clear()
         a = convert.load_16k(f)
-        assert not a.flags.writeable and a.dtype == np.float32 and len(a) == len(x), (a.flags, a.dtype, len(a))
-        b = convert.load_16k(Path(td) / "." / "lead.flac")   # the same file by another spelling: one entry, the same array
-        assert b is a and len(convert._LOAD16K) == 1, "a repeat call didn't come from the memo"
-        try:
-            a[0] = 1.0
-            raise AssertionError("the memo's array could be written")
-        except ValueError:
-            pass
+        assert a.flags.writeable and a.dtype == np.float32 and len(a) == len(x), (a.flags, a.dtype, len(a))
+        kept = next(iter(convert._LOAD16K.values()))
+        assert not kept.flags.writeable and a is not kept, "the memo's own array was handed out, or is writable"
+        a[0] = 1.0   # the caller's copy: its change never reaches the memo
+        b = convert.load_16k(Path(td) / "." / "lead.flac")   # the same file by another spelling: one entry, not decoded again
+        assert len(convert._LOAD16K) == 1 and next(iter(convert._LOAD16K.values())) is kept, "a repeat call didn't come from the memo"
+        assert b is not a and b[0] == kept[0] != 1.0, "a caller's change reached the memo"
         time.sleep(0.02)
         sf.write(str(f), x[:16000], 16000, subtype="PCM_16")   # rewritten (another size and mtime): decoded afresh
         c = convert.load_16k(f)
@@ -11847,7 +11846,7 @@ def u_perf_load16k():
             convert.load_16k(g)
         assert len(convert._LOAD16K) == convert._LOAD16K_KEEP, len(convert._LOAD16K)
         convert._LOAD16K.clear()
-    return f"hit, miss on rewrite, read-only, at most {convert._LOAD16K_KEEP} kept"
+    return f"hit, miss on rewrite, callers get copies of a read-only memo, at most {convert._LOAD16K_KEEP} kept"
 
 
 @check("perf: /api/status's code stamp is kept a few seconds, then walked again")
