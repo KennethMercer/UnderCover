@@ -83,6 +83,7 @@ function findFold(node, shown) {
     let keep;
     if (c.matches(".roomhead, .sf, .sf-more, .alert")) keep = true;
     else if (shown.has(c)) keep = true;
+    else if (c.dataset.findWith && shown.has(document.getElementById(c.dataset.findWith))) keep = true;   // a row's box that sits beside it
     else if (c.matches("[data-find], .addon")) keep = false;
     else keep = !!c.querySelector("[data-find], .addon") && findFold(c, shown);
     if (!keep) c.classList.add("sf-out");
@@ -105,6 +106,8 @@ function findRun() {
   const deep = document.body.classList.contains("deep");
   const hits = findIndex().map(e => ({ ...e, s: findScore(e, qs) })).filter(e => e.s);
   const seen = hits.filter(e => deep || !e.deep), later = hits.filter(e => e.deep && !deep);
+  // the Add-ons room draws only its filter's cards: a match outside it shows them all, so it's found where it is
+  if (room === "addons" && R.filter !== "all" && seen.some(e => e.room === "addons" && !e.el)) { R.filter = "all"; renderAddons(); return; }
   const here = seen.filter(e => e.room === room && e.el), away = seen.filter(e => e.room !== room).sort((a, b) => b.s - a.s);
   findFold(box, new Set(here.map(e => e.el)));
   for (const e of here) for (const t of e.el.querySelectorAll(":scope > span > b, :scope > span > small, :scope > .rn-lbl > b, :scope > .rn-lbl > small, h4, .what")) findMark(t, qs);
@@ -140,7 +143,7 @@ function findRun() {
 
 // Go there: the room opens with the search still in it, and the row lights for a moment; a top bar chip lights where it is
 function findGo(e) {
-  if (e.room === "top") { findFlash(e.el); e.el.focus(); return; }
+  if (e.room === "top") { findFlash(e.el); (e.el.querySelector("button") || e.el).focus(); return; }
   FIND.go = e.room === "addons" ? { room: "addons", key: e.key } : { room: e.room, el: e.el };
   if (e.room === "addons" && R.filter !== "all") R.filter = "all";
   location.hash = `safehouse/${e.room}`;
@@ -153,6 +156,8 @@ function findLight() {
   FIND.go = null;
   el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   findFlash(el);
+  // Go there's own button went with the old room's list: focus moves to the row's first control (or back to the box)
+  (el.querySelector("button:not([disabled]), a[href], input:not([type=hidden]), select") || $("#sh-find")).focus({ preventScroll: true });
 }
 function findFlash(el) { el.classList.add("sf-lit"); setTimeout(() => el.classList.remove("sf-lit"), 1600); }
 

@@ -753,7 +753,7 @@
            #phone-link and the footer's link buttons; app/phone_api.state() is what it shows -->
       <div class="setting" id="set-phone-row" data-pc data-find="away from home, away, remote, outside, mobile, android, iphone, tailscale, phone link, qr, pair, connect, link"><span><b>Your phone</b><small id="set-phone-say">Use UnderCover from your phone, at home or away. One link works for both.</small></span>
         <button class="btn" id="phone-setup" type="button">Set up</button></div>
-      <div class="phone-box" id="phone-box" hidden data-pc>
+      <div class="phone-box" id="phone-box" hidden data-pc data-find-with="set-phone-row">
         <p class="meta" id="phone-step" hidden></p>
         <div class="row"><a class="btn" id="phone-signin" target="_blank" rel="noopener noreferrer" hidden>Sign in</a><a class="btn" id="phone-approve" target="_blank" rel="noopener noreferrer" hidden>Approve</a></div>
         <p class="meta" id="phone-ct" data-deep hidden>Approving lists this PC's link name (a random uc-… name, nothing about you) in the public certificate logs every HTTPS site appears in.</p>

@@ -12135,6 +12135,9 @@ def u_find_setting():
     ok("Your phone stays, the rest folds", !gone($("#set-phone-row")) && gone($("#set-tour-row")));
     ok("its words are marked", $$("#set-phone-row mark.sf-mark").map(m => m.textContent.toLowerCase()).includes("away"));
     ok("the count says 1 match", $("#sh-find-n").textContent === "1 match" && !$("#sh-find-n").hidden);
+    $("#phone-box").hidden = false; type("phone link");
+    ok("the phone's open box stays with its row", !gone($("#phone-box")) && !gone($("#set-phone-row")));
+    $("#phone-box").hidden = true;
 
     type("theme");
     ok("basic: Theme isn't shown, the hint is", gone($("#set-theme-row")) && ($(".sf-deep")?.textContent || "") === "Theme is in Deep Cover. Turn on Deep Cover to see it." && !$(".sf-none"));
@@ -12156,6 +12159,7 @@ def u_find_setting():
     await wait(400);
     const gpu = $("#sys-gpu").closest(".sys");
     ok("Go there opens System with the search in it", R.room === "system" && $("#room-system #sh-find") === box && box.value === "gpu" && !gone(gpu) && gpu.classList.contains("sf-lit"));
+    ok("focus lands in the room", document.activeElement === box || $("#room-system").contains(document.activeElement));
     ok("the room is folded", gone($("#sys-news")));
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     ok("Esc clears", box.value === "" && !$$(".sf-out").length && !$$("mark.sf-mark").length && $("#sh-find-x").hidden && $("#sh-find-more").children.length === 0);
