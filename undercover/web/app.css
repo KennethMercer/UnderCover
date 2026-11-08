@@ -736,7 +736,7 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .sys .check { margin-top: 8px; font-size: 13px; color: var(--muted); }
 .sys .check input { width: 15px; height: 15px; margin-top: 2px; }
 #lib-ytdlp-go { min-width: 9.5em; }   /* "Check for a fix" and its progress text keep the button's width */
-/* Settings: the Doctor's network rows under Phone access */
+/* Settings: the Doctor's network rows under Your phone (while a phone uses the home Wi-Fi) */
 #phone-checks:empty { display: none; }
 #phone-checks .sys { padding: 10px 0; }
 
@@ -1086,8 +1086,8 @@ body.deep .nodeep { display: none !important; }   /* basic-only words: in Deep C
 
 /* Deep Cover: expert-only details (scores, data minutes, engine) are marked data-deep and shown only in Deep Cover mode */
 body:not(.deep) [data-deep] { display: none !important; }
-/* Phone access (phase 11): on a paired phone (body[data-client="phone"], from /api/status) the PC-only controls (data-pc:
-   Restart, Quit, installs, storage moves, the Doctor's Fixes, Phone access itself) are hidden; data-phone shows only there */
+/* Your phone (phase 11): on a connected phone (body[data-client="phone"], from /api/status) the PC-only controls (data-pc:
+   Restart, Quit, installs, storage moves, the Doctor's Fixes, Your phone itself) are hidden; data-phone shows only there */
 body[data-client="phone"] [data-pc] { display: none !important; }
 body:not([data-client="phone"]) [data-phone] { display: none !important; }
 .phone-qr svg { width: 220px; height: 220px; display: block; }

@@ -6,8 +6,13 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0a0908">
 <title>Pair this phone · UnderCover</title>
-<!-- Phone access (phase 11): the one page a phone can open before it's paired. Self-contained (no /static/: everything
-     else needs the token). Hooks for the look chat: #pair-form, #pair-code, #pair-name, #pair-go, #pair-msg, #pair-done. -->
+<!-- Your phone (phase 11; at the link since 1.2.1): the one page a phone can open before it's connected. Self-contained
+     (no /static/: everything else needs the token), and generic (it names nothing before the PC has allowed the phone).
+     The QR's code comes in the #fragment and is taken out of the address bar first; the claim gives a nonce, and the page
+     waits for the PC's Allow, then gets its token once. It's also where the home-screen app starts (manifest.webmanifest):
+     a phone that's connected goes straight on to UnderCover, and an iPhone's home-screen app, which may not share
+     Safari's cookies, can connect itself with a typed code. Hooks for the look chat: #pair-form, #pair-code, #pair-name,
+     #pair-go, #pair-msg, #pair-wait, #pair-match, #pair-done. -->
 <style>
   :root { color-scheme: dark; --bg: #0a0908; --ink: #ece7de; --dim: #a39d93; --line: #2b2723; --gold: #c9a45c; --bad: #d8735f; }
   * { box-sizing: border-box; }
@@ -30,17 +35,18 @@
 <body>
 <main>
   <div class="mark">UnderCover</div>
-  <h1>Pair this phone</h1>
-  <p>Type the code the PC shows (SafeHouse, Settings, Phone access) and give this phone a name. It works once, for a few minutes.</p>
+  <h1>Connect this phone</h1>
+  <p>Give this phone a name. If you didn't scan the code, type the one the PC shows. It works once, for a few minutes.</p>
   <form id="pair-form" autocomplete="off">
     <label for="pair-code">Code</label>
-    <input id="pair-code" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="9" required>
+    <input id="pair-code" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="64" required>
     <label for="pair-name">This phone's name</label>
     <input id="pair-name" maxlength="40" placeholder="Pixel 8">
-    <button id="pair-go" type="submit">Pair this phone</button>
+    <button id="pair-go" type="submit">Connect this phone</button>
     <div id="pair-msg" role="status"></div>
   </form>
-  <p id="pair-done" hidden>Paired. Opening UnderCover…</p>
+  <p id="pair-wait" hidden>Waiting for the PC. On the PC, press <b>Allow</b> next to <b id="pair-match"></b>.</p>
+  <p id="pair-done" hidden>Connected. Opening UnderCover…</p>
 </main>
 <script>
 "use strict";
@@ -48,19 +54,32 @@ const code = document.getElementById("pair-code"), msg = document.getElementById
 // the QR code carries the code after # (never sent to the server, never in a log); take it out of the address bar
 if (location.hash.length > 1) { code.value = decodeURIComponent(location.hash.slice(1)); history.replaceState(null, "", "/pair"); }
 (code.value ? document.getElementById("pair-name") : code).focus();
+// no code: is this phone connected already (the home-screen app starts here)? Then straight on to UnderCover
+if (!code.value) fetch("/api/status", { cache: "no-store" }).then(r => { if (r.ok) location.replace("/"); }).catch(() => {});
+const show = id => { for (const x of ["pair-form", "pair-wait", "pair-done"]) document.getElementById(x).hidden = x !== id; };
+const post = (path, body) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 document.getElementById("pair-form").addEventListener("submit", async e => {
   e.preventDefault();
   go.disabled = true; msg.textContent = "";
   try {
-    const r = await fetch("/api/phone/claim", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: code.value, name: document.getElementById("pair-name").value }) });
+    const r = await post("/api/phone/claim", { code: code.value, name: document.getElementById("pair-name").value });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || (r.status === 401 ? "Phone access is off on the PC." : `That didn't work (${r.status}).`));
-    document.getElementById("pair-form").hidden = true;
-    document.getElementById("pair-done").hidden = false;
-    location.replace("/");
+    if (!r.ok) throw new Error(r.status === 401 ? "That code has run out. Make a new one on the PC."
+      : r.status === 403 ? "That isn't the code on the PC. Check it and try again, or scan the code."
+      : r.status === 409 ? "The PC has 10 phones connected already. Remove one there, then try this code again." : `That didn't work (${r.status}).`);
+    document.getElementById("pair-match").textContent = data.match || "";
+    show("pair-wait");
+    const until = Date.now() + 10 * 60 * 1000;   // (the PC forgets a phone it hasn't allowed after this long)
+    while (Date.now() < until) {
+      await new Promise(ok => setTimeout(ok, 2000));
+      const w = await post("/api/phone/wait", { nonce: data.nonce }).catch(() => null);   // (a blip on the way: ask again)
+      if (w && (w.status === 401 || w.status === 403)) throw new Error("That code has run out. Make a new one on the PC.");
+      if (w && w.ok && (await w.json().catch(() => ({}))).ok) { show("pair-done"); return location.replace("/"); }
+    }
+    throw new Error("The PC didn't allow this phone in time. Make a new code on the PC and try again.");
   } catch (err) {
-    msg.textContent = err.message === "Failed to fetch" ? "Can't reach the PC. Is it on, with UnderCover running and Phone access on?" : err.message;
+    show("pair-form");
+    msg.textContent = err.message === "Failed to fetch" ? "Can't reach the PC. Is it on, with UnderCover running?" : err.message;
     go.disabled = false;
   }
 });

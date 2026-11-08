@@ -204,8 +204,9 @@ async function pollStatus() {
     else if (s.build && s.build !== pageBuild) $("#uc-updated").hidden = false;
     document.body.dataset.client = s.client || "pc";   // "phone": a paired phone (phase 11); [data-pc] controls hide
     if (typeof phoneApp === "function") phoneApp(s);   // 1.2: the away app's service worker and its alerts (phonealerts.js)
-    $("#set-away-me-row").hidden = !s.away_ready || location.protocol === "https:";   // phase 20: ready on the PC
-    if (s.device) $("#set-phone-me").textContent = `This phone is paired as ${s.device}. Phone access is managed on the PC.`;
+    $("#ph-move").hidden = !s.move;   // 1.2.1: a phone from before, on the home Wi-Fi ("ready": Switch; "waiting": the PC's step)
+    if (s.move) { $("#ph-move-say").textContent = s.move === "ready" ? "UnderCover has a new link for this phone." : "Your PC needs one step to keep this phone connected."; $("#ph-move-go").hidden = s.move !== "ready"; }
+    if (s.device) $("#set-phone-me").textContent = `This phone is connected as ${s.device}. Your phone is managed on the PC.`;
     sysStatus(s);
     if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);
     if (typeof tourStatus === "function") tourStatus(s.tour);   // the First assignment's tour: a fresh install's first visit to FrontMan (firstrun.js)   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)

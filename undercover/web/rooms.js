@@ -1,6 +1,6 @@
 "use strict";
 // SafeHouse rooms (phase 4b, rooms build): the room strip (Library · Running · Storage · Add-ons · System · Settings, deep links
-// #safehouse/<room>), Phone access in Settings (phase 11, at the end), the Add-ons room (every part UnderCover is built from; optional add-ons are accepted and installed here)
+// #safehouse/<room>), Your phone in Settings (phase 11, at the end), the Add-ons room (every part UnderCover is built from; optional add-ons are accepted and installed here)
 // and the Storage room (where the three groups of files live, and moving them). The Library room is library.js, Running is
 // work.js (renderRunRoom), System's rows come from app.js (sysStatus) and library.js (yt-dlp, Quit), Settings from app.js.
 // Uses helpers from app.js ($, $$, esc, api, showError, store, leftText), jobs.js (watchJob, runningJobs, onJobs) and
@@ -450,53 +450,89 @@ $("#sys-bundle-cancel").onclick = () => { $("#sys-bundle-box").hidden = true; };
 $("#sys-bundle-save").addEventListener("click", () => setTimeout(() => { $("#sys-bundle-box").hidden = true; }, 500));
 setTimeout(loadDoctor, 4000);   // once after the page opens, so a problem shows on the tab before the room is opened
 
-// ------------------------------------------------------------ Settings: Phone access (phase 11)
-// /api/phone (PC only): the switch, where it listens, the code being shown (a QR code of <url>/pair#<code>), the paired
-// phones with Revoke. While a code is shown the room checks every few seconds for the phone that used it.
-const PH = { st: null, tick: null, poll: null, seen: null };
+// ------------------------------------------------------------ Settings: Your phone (phase 11; one link since 1.2.1)
+// /api/phone (PC only; app/phone_api.state): Set up walks the link's steps (the secure-link piece, Tailscale's sign-in
+// and its one approval), then the card holds the phones asking in (Allow / No), the QR of the link's pair page (or a
+// typed code, on request) and the phones with Remove. It checks every few seconds while something can change on its own.
+const PH = { st: null, tick: null, poll: null, seen: null, drawn: {} };
+const phoneDraw = (id, html) => { if (PH.drawn[id] === html) return false; PH.drawn[id] = html; $(`#${id}`).innerHTML = html; return true; };
+const PHONE_STEP = { fetching: "Getting the secure-link piece (about 39 MB, once).", starting: "Starting the secure link…",
+  "sign-in": "Sign in to give your phone a link that works anywhere. It's free, and a Google, Microsoft, Apple or GitHub account works.",
+  approve: "One more click in the same tab: approve the link." };
 async function loadPhone(after) {
   if (document.body.dataset.client === "phone") return;
-  try { PH.st = after || await api("/api/phone"); } catch (e) { $("#phone-where").textContent = e.message; return; }
+  try { PH.st = after || await api("/api/phone"); } catch (e) { $("#phone-step").hidden = false; $("#phone-step").textContent = e.message; return; }
   renderPhone();
 }
+const mmss = t => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 function renderPhone() {
-  const s = PH.st, p = s.pairing;
-  $("#set-phone").setAttribute("aria-checked", s.enabled);
+  const s = PH.st, p = s.pairing, ready = s.enabled && s.phase === "ready";
+  $("#set-phone-say").textContent = !s.supported ? s.why : "Use UnderCover on your phone, at home or anywhere.";
+  $("#phone-setup").hidden = s.enabled;
+  $("#phone-setup").disabled = !s.supported;
   $("#phone-box").hidden = !s.enabled;
-  $("#phone-where").textContent = !s.enabled ? "" : s.problem ? s.problem
-    : `Listening at ${s.url} on your home network. Only paired phones get in. The first time, Windows may ask whether Python may use the network: allow it on private networks only.`;
-  $("#phone-pair").disabled = !s.listening;
-  if (s.enabled) phoneChecks(); else { $("#phone-checks").innerHTML = ""; phoneChecksAt = 0; }   // switched on again: read at once
-  if (s.enabled) loadAway(); else $("#set-away-row").hidden = true;
+  if (!s.enabled) { clearInterval(PH.tick); clearInterval(PH.poll); return; }
+  // the setup's step (none once ready); the error it's retrying past, or what stops the link's listener
+  let say = PHONE_STEP[s.phase] || "";
+  if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
+  say = s.problem || (s.error ? `${say} (${s.error})`.trim() : say);
+  $("#phone-step").hidden = !say; $("#phone-step").textContent = say;
+  const si = $("#phone-signin"), ap = $("#phone-approve");
+  si.hidden = !s.auth_url; if (s.auth_url) si.href = s.auth_url;
+  ap.hidden = !s.approve_url; if (s.approve_url) ap.href = s.approve_url;
+  $("#phone-ct").hidden = !s.approve_url;
+  $("#set-away-private").setAttribute("aria-checked", !!s.private);
+  // the phones asking in: a new one (it scanned the QR or typed the code) or one from before switching to the link
+  phoneDraw("phone-asks", s.pending.map(d => `
+    <div class="sys" data-ask="${esc(d.id)}"><span><b>${esc(d.name)}</b> ${d.asks === "move" ? "wants to switch to the new link." : "wants to connect."} Allow only if your phone shows <b class="mono">${esc(d.match || "")}</b>.</span>
+      <span class="acts"><button class="btn" type="button" data-allow="${esc(d.id)}">Allow</button><button class="btn" type="button" data-refuse="${esc(d.id)}">No</button></span></div>`).join(""));
+  $$("#phone-asks [data-allow]").forEach(b => b.onclick = async () => {
+    try { PH.st = await api("/api/phone/allow", { json: { id: b.dataset.allow } }); renderPhone(); } catch (e) { showError(e.message, "Couldn't allow it"); loadPhone(); }
+  });
+  $$("#phone-asks [data-refuse]").forEach(b => b.onclick = async () => {
+    try { PH.st = await api("/api/phone/refuse", { json: { id: b.dataset.refuse } }); renderPhone(); } catch (e) { showError(e.message); loadPhone(); }
+  });
+  // the QR (the link's pair page, its code after #), or the typed code when asked for
+  const known = s.devices.filter(d => !d.pending);
+  $("#phone-ready").hidden = !ready || !!p;
+  $("#phone-pair").textContent = known.length ? "Connect another phone" : "Connect a phone";
   $("#phone-pairing").hidden = !p;
+  clearInterval(PH.tick);
   if (p) {
-    $("#phone-qr").innerHTML = p.qr;   // an SVG made by the server (core/qr.py)
-    $("#phone-url").textContent = p.url;
-    $("#phone-code").textContent = p.code;
-  }
-  clearInterval(PH.tick); clearInterval(PH.poll);
-  if (p) {
+    phoneDraw("phone-qr", p.qr);   // an SVG made by the server (core/qr.py)
+    $("#phone-qr").hidden = !!p.short; $("#phone-point").hidden = !!p.short;
+    $("#phone-typed").hidden = !p.short; $("#phone-short").hidden = !!p.short;
+    $("#phone-url").textContent = p.url; $("#phone-code").textContent = p.code;
+    $("#phone-wrong").hidden = !p.wrong;
+    $("#phone-wrong").textContent = `${p.wrong} wrong ${p.wrong === 1 ? "try" : "tries"} on this code so far.`;
     const left = () => {
-      const t = Math.round(p.until - Date.now() / 1000);
+      const t = Math.round((p.short ? p.short.until : p.until) - Date.now() / 1000);
       if (t <= 0) { $("#phone-left").textContent = "That code has run out."; clearInterval(PH.tick); return loadPhone(); }
-      $("#phone-left").textContent = `Works once, for another ${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+      $("#phone-left").textContent = `Works once, for another ${mmss(t)}`;
     };
     left(); PH.tick = setInterval(left, 1000);
-    PH.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadPhone(); }, 3000);
   }
-  const was = PH.seen; PH.seen = new Set(s.devices.map(d => d.id));
-  const fresh = was ? s.devices.find(d => !was.has(d.id)) : null;
-  if (fresh) showError(`${fresh.name} is paired. It can use UnderCover while this PC is on and Phone access stays on.`, "Phone paired", null, true);
-  $("#phone-devices").innerHTML = s.devices.length ? s.devices.map(d => `
-    <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b>${facts([`Paired ${d.paired}`, { t: `Last seen ${d.seen}`, muted: true }])}
-      <span class="kv2" data-deep>${esc(d.ip || "")}</span></span>
-      <span class="acts"><button class="btn" type="button" data-revoke="${esc(d.id)}">Revoke</button></span></div>`).join("")
-    : `<p class="meta">No phones paired yet.</p>`;
-  $$("#phone-devices [data-revoke]").forEach(b => confirmClick(b, "Revoke? Click again", async () => {
+  // the phones: Remove ends a phone's way in at once (the next thing it asks for is refused, and it forgets the page)
+  const was = PH.seen; PH.seen = new Set(known.map(d => d.id));
+  const fresh = was ? known.find(d => !was.has(d.id) && !d.moving) : null;
+  if (fresh) showError(`${fresh.name} is connected.`, "Phone connected", null, true);
+  const drew = phoneDraw("phone-devices", known.length ? known.map(d => `
+    <div class="sys" data-device="${esc(d.id)}"><span><b>${esc(d.name)}</b>${facts([`Connected ${d.paired}`, { t: `Last seen ${d.seen}`, muted: true }])}
+      ${d.lan ? `<small class="meta">On the old home Wi-Fi address until it switches.</small>` : ""}<span class="kv2" data-deep>${esc(d.ip || "")}</span></span>
+      <span class="acts"><button class="btn" type="button" data-revoke="${esc(d.id)}">Remove</button></span></div>`).join("")
+    : ready ? `<p class="meta">No phones yet.</p>` : "");
+  if (drew) $$("#phone-devices [data-revoke]").forEach(b => confirmClick(b, "Remove? Click again", async () => {
     PH.st = await api("/api/phone/revoke", { json: { id: b.dataset.revoke } }); renderPhone();
   }));
+  $("#phone-all-wrap").hidden = known.length < 2;
+  $("#phone-link").hidden = !s.link;
+  if (s.link) $("#phone-link").innerHTML = `Your phone's link: <b class="mono">${esc(s.link)}</b>`;
+  if (s.lan) phoneChecks(); else { $("#phone-checks").innerHTML = ""; phoneChecksAt = 0; }   // (the home Wi-Fi's checks: only while a phone from before uses it)
+  clearInterval(PH.poll);
+  if (!ready || p || s.pending.length || s.lan) PH.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadPhone(); }, 3000);
 }
-// the Doctor's two network rows (home network type, Windows Firewall) where Phone access is switched on; at most every 10 s
+// the Doctor's two network rows (home network type, Windows Firewall) while a phone from before still uses the home
+// Wi-Fi; at most every 10 s
 let phoneChecksAt = 0;
 async function phoneChecks() {
   if (Date.now() - phoneChecksAt < 10000) return;
@@ -506,59 +542,23 @@ async function phoneChecks() {
     $("#phone-checks").innerHTML = rows.map(doctorRow).join("");
   } catch (e) { $("#phone-checks").innerHTML = ""; }
 }
-// ------------------------------------------------------------ Settings: Away from home (phase 20; core/tailnet.py)
-// /api/away (PC only): the switch, then one line for where it's got to (fetching the pieces, starting, Tailscale's
-// sign-in, the one approval, ready with the link). The room checks every few seconds until it's ready.
-const AW = { st: null, poll: null };
-const AWAY_SAY = { off: "", fetching: "Fetching the away-from-home pieces (about 39 MB, once)…", starting: "Starting…",
-  "sign-in": "Sign in to Tailscale (a free account; Google, Microsoft, GitHub or Apple works). This page carries on by itself after.",
-  approve: "One approval: Tailscale asks once to let this PC's private link through.", ready: "Ready." };
-async function loadAway() {
-  if (document.body.dataset.client === "phone") return;
-  try { AW.st = await api("/api/away"); } catch (e) { $("#away-step").textContent = e.message; return; }
-  renderAway();
-}
-function renderAway() {
-  const s = AW.st;
-  $("#set-away-row").hidden = !s.supported || !s.phone_on;
-  $("#set-away").setAttribute("aria-checked", s.on);
-  $("#away-box").hidden = !s.on;
-  $("#set-away-private").setAttribute("aria-checked", !!s.private);
-  let say = AWAY_SAY[s.phase] || "";
-  if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
-  $("#away-step").textContent = s.problem || (s.error ? `${say} (${s.error})` : say);
-  const si = $("#away-signin"), ap = $("#away-approve");
-  si.hidden = !(s.phase === "sign-in" && s.auth_url); if (s.auth_url) si.href = s.auth_url;
-  ap.hidden = !(s.phase === "approve" && s.approve_url); if (s.approve_url) ap.href = s.approve_url;
-  $("#away-ct").hidden = s.phase !== "approve";
-  $("#away-link").hidden = !s.link;
-  if (s.link) $("#away-link").innerHTML = `Your away link: <b class="mono">${esc(s.link)}</b>. On a paired phone, at home on the Wi-Fi: Settings, <b>Use this phone away from home</b>.`
-    + (s.private ? " The phone needs the Tailscale app, signed in to the same account." : "");
-  clearInterval(AW.poll);
-  if (s.on && s.phase !== "ready") AW.poll = setInterval(() => { if (R.room === "settings" && !document.hidden) loadAway(); }, 3000);
-}
-$("#set-away").onclick = async () => {
-  const on = $("#set-away").getAttribute("aria-checked") !== "true";
-  try { AW.st = await api("/api/away", { json: { on } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
+const phoneDo = (path, body, title) => async () => {
+  try { PH.st = await api(path, { json: body }); renderPhone(); } catch (e) { showError(e.message, title); }
 };
+$("#phone-setup").onclick = phoneDo("/api/phone", { on: true }, "Couldn't set up your phone");
+$("#phone-pair").onclick = phoneDo("/api/phone/pair", {}, "Couldn't make a code");
+$("#phone-short").onclick = phoneDo("/api/phone/pair/short", {}, "Couldn't make a code");
+$("#phone-pair-x").onclick = phoneDo("/api/phone/pair/cancel", {});
+confirmClick($("#phone-off"), "Turn off? Click again", async () => { PH.st = await api("/api/phone", { json: { on: false } }); renderPhone(); });
+confirmClick($("#phone-all"), "Remove all? Click again", async () => { PH.st = await api("/api/phone/revoke-all", { json: {} }); renderPhone(); });
 $("#set-away-private").onclick = async () => {   // Deep Cover: Serve on the tailnet instead of Funnel's public link
   const priv = $("#set-away-private").getAttribute("aria-checked") !== "true";
-  try { AW.st = await api("/api/away", { json: { private: priv } }); renderAway(); } catch (e) { showError(e.message, "Couldn't change away from home"); }
+  await phoneDo("/api/phone", { private: priv }, "Couldn't change it")();
 };
-confirmClick($("#away-forget"), "Forget? Click again", async () => { AW.st = await api("/api/away/forget", { json: {} }); renderAway(); });
-// the phone: on the home Wi-Fi it asks for its single-use away link and opens it (app.js shows it only while the PC has
-// it ready, and never on the away address itself: it's there already)
-$("#away-me").onclick = async () => {
-  try { location.href = (await api("/api/phone/away/link", { json: {} })).url; }
-  catch (e) { showError(e.message, "Couldn't get the away link"); }
-};
-$("#set-phone").onclick = async () => {
-  const on = $("#set-phone").getAttribute("aria-checked") !== "true";
-  try { PH.st = await api("/api/phone", { json: { on } }); renderPhone(); } catch (e) { showError(e.message, "Couldn't change Phone access"); }
-};
-$("#phone-pair").onclick = async () => {
-  try { PH.st = await api("/api/phone/pair", { json: {} }); renderPhone(); } catch (e) { showError(e.message, "Couldn't make a code"); }
-};
-$("#phone-pair-x").onclick = async () => {
-  try { PH.st = await api("/api/phone/pair/cancel", { json: {} }); renderPhone(); } catch (e) { showError(e.message); }
+confirmClick($("#away-forget"), "Forget? Click again", async () => { PH.st = await api("/api/phone/forget", { json: {} }); renderPhone(); });
+// a phone from before, on the home Wi-Fi: Switch asks for its one-use move code and opens the link with it (app.js
+// shows #ph-move only on such a phone)
+$("#ph-move-go").onclick = async () => {
+  try { location.href = (await api("/api/phone/move/link", { json: {} })).url; }
+  catch (e) { showError(e.message, "Couldn't switch"); }
 };

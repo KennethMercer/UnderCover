@@ -5,6 +5,16 @@ in brackets.
 
 ## Not released yet
 
+**Your phone** (onephone)
+- One setup and one link for your phone, at home and anywhere else. Set up on the PC gets the secure-link piece and
+  asks you to sign in to Tailscale once; then your phone scans a code and you press Allow on the PC. Away from home is
+  no longer a separate switch.
+- A phone paired on the home Wi-Fi before keeps working there and gets one Switch button to move to the new link.
+- Removing a phone ends its way in at once and clears what it kept. Turn off the phone link and nothing reaches the PC
+  from a phone.
+- A phone can have three jobs waiting or running at a time. Deleting covers, speech, songs and training projects is
+  done on the PC.
+
 **FrontMan** (nobacking, holdparts, residue, notop)
 - Before Convert, a duet says when a song already split has almost no backing, so you know the second singer has
   little to take there.

@@ -2,7 +2,7 @@
   "name": "UnderCover",
   "short_name": "UnderCover",
   "description": "Covers, voices and speech, made on your PC.",
-  "start_url": "/",
+  "start_url": "/pair",
   "scope": "/",
   "display": "standalone",
   "background_color": "#0a0908",

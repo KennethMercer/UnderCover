@@ -193,7 +193,7 @@ function renderList() {
     return;
   }
   const bulk = L.cat === "covers" && L.checked.size ? `<div class="bulk"><span><b>${L.checked.size} selected</b> · ${gb(all.filter(c => L.checked.has(String(c.id))).reduce((a, c) => a + c.size, 0))}</span>
-    <span class="lactions"><a class="btn" href="/api/library/covers/zip?ids=${[...L.checked].join(",")}">Download as .zip</a><button class="btn danger" id="lib-bulk-del">Delete ${L.checked.size}…</button><button class="linkbtn" id="lib-bulk-clear">Clear</button></span></div>` : "";
+    <span class="lactions"><a class="btn" href="/api/library/covers/zip?ids=${[...L.checked].join(",")}">Download as .zip</a><button class="btn danger" id="lib-bulk-del" data-pc>Delete ${L.checked.size}…</button><button class="linkbtn" id="lib-bulk-clear">Clear</button></span></div>` : "";
   box.innerHTML = bulk + (list.length ? list.map(x => {
     const id = idOf(x), check = L.cat === "covers";
     let title, sub, side;
@@ -330,7 +330,7 @@ function coverDetail(d, c) {
     <p class="meta" id="lib-keepline">${esc(keepLine(c))}</p>
     <div id="lib-rename-box"></div>
     <div class="lactions">${c.song_id ? `<button class="btn primary" id="lib-reuse">Use these settings</button>` : ""}<button class="btn" id="lib-keep" type="button" data-kept="${!!c.kept}">${c.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${c.url}?download">Download</a>
-      <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
+      <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del" data-pc>Delete…</button></div>`;
   wirePlayer(c.url);
   if (typeof earShow === "function") earShow($("#lib-ear"), "cover", c);
   $$("#lib-src button").forEach(b => b.onclick = () => { $$("#lib-src button").forEach(x => x.setAttribute("aria-pressed", x === b)); switchSource(c[b.dataset.src]); });
@@ -363,7 +363,7 @@ function speechDetail(d, x) {
     <div id="lib-rename-box"></div>
     <div class="lactions"><button class="btn primary" id="lib-again">Open in SpeakEasy</button><button class="btn" id="lib-keep" type="button" data-kept="${!!x.kept}">${x.kept ? "Unkeep" : "Send to SafeHouse"}</button><a class="btn" href="${x.url}?download">Download ${esc((x.file || "").split(".").pop().toUpperCase() || "FLAC")}</a>
       ${x.mp3_url ? `<a class="btn" href="${x.mp3_url}?download">Download MP3</a>` : ""}
-      <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del">Delete…</button></div>`;
+      <button class="btn" id="lib-rename">Rename…</button><button class="btn danger" id="lib-del" data-pc>Delete…</button></div>`;
   wirePlayer(x.url);
   if (typeof earShow === "function") earShow($("#lib-ear"), "speech", x);
   $("#lib-again").onclick = () => {   // the same text and voice, ready to make again (or change)
@@ -388,7 +388,7 @@ function songDetail(d, s) {
       <dt>Size</dt><dd>${gb(s.size)} song${s.stems_size ? ` + ${gb(s.stems_size)} stems` : ""}</dd>
       ${s.source_url ? `<dt>From</dt><dd><a class="linkbtn" href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_url)}</a></dd>` : ""}</dl>
     <div class="lactions"><button class="btn primary" id="lib-make">Make a cover</button>
-      ${s.stems.length ? `<button class="btn" id="lib-del-stems">Delete stems only…</button>` : ""}<button class="btn danger" id="lib-del">Delete song…</button></div>`;
+      ${s.stems.length ? `<button class="btn" id="lib-del-stems" data-pc>Delete stems only…</button>` : ""}<button class="btn danger" id="lib-del" data-pc>Delete song…</button></div>`;
   if (s.url) wirePlayer(s.url);
   $$("#lib-detail .stem .tplay").forEach(b => b.onclick = () => {
     const t = s.stems[+b.dataset.i];
@@ -514,7 +514,7 @@ function trainingDetail(d, p) {
     <dl class="kv"><dt>Status</dt><dd>${st.state === "exported" ? `finished: voice <b>${esc(st.exported)}</b>` : st.state === "paused" ? `paused at epoch ${st.epoch}` : st.state === "trained" ? "trained, not added to voices yet" : st.state || "not trained yet"}</dd>
       <dt>On disk</dt><dd>${Object.entries(p.parts).filter(([, b]) => b).map(([k, b]) => `${esc(k)} ${gb(b)}`).join(" · ") || "—"}</dd></dl>
     <p class="meta">${st.state === "exported" ? "Deleting the project keeps the voice; you'd only need these files to train it again." : "Deleting the project removes its clips and any unfinished training."}</p>
-    <div class="lactions"><button class="btn primary" id="lib-open">Open in DoubleAgent</button><button class="btn danger" id="lib-del">Delete project…</button></div>`;
+    <div class="lactions"><button class="btn primary" id="lib-open">Open in DoubleAgent</button><button class="btn danger" id="lib-del" data-pc>Delete project…</button></div>`;
   $("#lib-open").onclick = async () => { store.set("uc-train-proj", p.name); showTab("doubleagent"); try { await openProject(p.name); } catch (e) {} };
   confirmClick($("#lib-del"), `Delete ${gb(p.size)}?`, async () => { await api(`/api/train/projects/${p.name}`, { method: "DELETE" }); afterChange(); });
 }

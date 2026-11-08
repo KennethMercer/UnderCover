@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0a0908">
+<title>Your phone · UnderCover</title>
+<!-- The move to the link (1.2.1): the one page the link serves a phone that was paired on the home Wi-Fi before, to give
+     it the one token. Self-contained (no /static/: everything else needs the token). The single-use code comes in the
+     link's #fragment (never sent to a server in a URL), from the phone's own UnderCover on the home Wi-Fi. Hooks for the
+     look chat: #away-msg, #away-done. -->
+<style>
+  :root { color-scheme: dark; --bg: #0a0908; --ink: #ece7de; --dim: #a39d93; --gold: #c9a45c; --bad: #d8735f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         display: grid; place-items: center; padding: 24px 16px; }
+  main { width: 100%; max-width: 380px; }
+  .mark { font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+  h1 { font-size: 26px; margin: 6px 0 4px; font-weight: 600; }
+  p { color: var(--dim); margin: 0 0 16px; }
+  #away-msg { color: var(--bad); }
+  #away-done { color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">UnderCover</div>
+  <h1>Your phone</h1>
+  <p id="away-wait">Moving this phone to its link…</p>
+  <p id="away-msg" role="status" hidden></p>
+  <p id="away-allow" hidden>Waiting for the PC. On the PC, press <b>Allow</b> next to <b id="away-match"></b>.</p>
+  <p id="away-done" hidden>Done. This phone now opens UnderCover at this link, at home and anywhere else. Opening it… Add it to your home screen to keep it.</p>
+</main>
+<script>
+(async () => {
+  const code = decodeURIComponent((location.hash || "").slice(1));
+  history.replaceState(null, "", "/move");   // the code doesn't stay in the address bar or the history
+  const say = (el, text) => { document.getElementById("away-wait").hidden = true; const e = document.getElementById(el); if (text) e.textContent = text; e.hidden = false; };
+  if (!code) return say("away-msg", "This link is missing its code. On the home Wi-Fi, open UnderCover on this phone and tap Switch.");
+  try {
+    const post = (path, body) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await post("/api/phone/move", { code });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return say("away-msg", "That code didn't work. On the home Wi-Fi, open UnderCover on this phone and tap Switch again.");
+    document.getElementById("away-match").textContent = j.match || "";
+    say("away-allow");
+    const until = Date.now() + 10 * 60 * 1000;   // (the PC forgets a move it hasn't allowed after this long)
+    while (Date.now() < until) {
+      await new Promise(ok => setTimeout(ok, 2000));
+      const w = await post("/api/phone/wait", { nonce: j.nonce }).catch(() => null);   // (a blip on the way: ask again)
+      if (w && (w.status === 401 || w.status === 403)) return say("away-msg", "That didn't work. On the home Wi-Fi, open UnderCover on this phone and tap Switch again.");
+      if (w && w.ok && (await w.json().catch(() => ({}))).ok) {
+        document.getElementById("away-allow").hidden = true;
+        say("away-done");
+        return setTimeout(() => location.replace("/"), 1200);
+      }
+    }
+    document.getElementById("away-allow").hidden = true;
+    say("away-msg", "The PC didn't allow this phone in time. On the home Wi-Fi, open UnderCover on this phone and tap Switch again.");
+  } catch (e) {
+    say("away-msg", "UnderCover didn't answer. Is the PC on, with UnderCover running?");
+  }
+})();
+</script>
+</body>
+</html>
