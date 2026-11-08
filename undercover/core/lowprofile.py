@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from .config import CONFIG, path, set_values
@@ -228,7 +229,7 @@ def worker_need(kind: str) -> float:
     pinned one) for speech; Whisper for transcripts; both at once for a cadence training (it reads, then hears each
     reading back: 3.6 + 5 GB, the engine and Whisper loaded together ran out of 5 GB, 2026-10-24)."""
     eng = max(worker_share(engine=e) for e in worker_engines())
-    if kind == "train-transcribe":
+    if kind in ("train-transcribe", "hear"):
         return WHISPER_GB
     if kind in ("cadence", "newcad"):
         return eng + WHISPER_GB
@@ -288,6 +289,46 @@ def apply(reserve_worker: bool = False):
     jobs.STATUS["gpu_limit_gb"] = lim
     _log(f"cap: server {lim if lim is not None else 'whole card'} GB, worker {STATE['worker_gb'] or 'none'} GB"
          + ("" if got is not None or lim is None else " (couldn't be applied)"))
+
+
+class NoRoom(Exception):
+    """A step can't fit under the Low profile limit at all (its message says so plainly)."""
+
+
+@contextmanager
+def worker_step(kind: str):
+    """A step that reads with the worker inside a job of another kind (a cover hearing its words: Whisper, "hear"). Without
+    it the worker starts with speech's share (3.6 GB), and Whisper needs 5 (Shape it's first open ran out of memory under
+    every limit; a duet quietly shared by phrases). For the step the worker gets the kind's share (one started with less is
+    ended first: its cap can't grow), the server drops what it holds on the card (the separator and the converter, loaded
+    again on first use) and its cap makes room, so the two together keep to the limit. After the step the worker goes,
+    and its share comes back to the job. NoRoom when the limit can't hold the step at all."""
+    if not on():
+        yield
+        return
+    from . import gpu
+    from .cadence import client
+    lim = float(settings()["limit_gb"])
+    need = round(worker_need(kind), 2)
+    if lim - 1.0 < need:
+        raise NoRoom(f"Low profile keeps UnderCover to {lim:g} GB of the graphics card, and hearing the words needs about "
+                     f"{need + 1:g}. Raise its limit, or turn it off, and try again.")
+    was = STATE.get("worker_next")
+    STATE["worker_next"] = need
+    if worker_running() and (STATE.get("worker_cap") or 0) < need:
+        client.WORKER.stop(f"Low profile: hearing the words needs a bigger share ({need} GB)")
+    gpu.release("hear")
+    apply(reserve_worker=True)
+    try:
+        yield
+    finally:
+        STATE["worker_next"] = was
+        if worker_running():
+            try:
+                client.WORKER.stop("Low profile: the words are heard; the share goes back to the job")
+            except Exception:   # noqa: BLE001 - it ends by itself when idle
+                pass
+        apply()
 
 
 TRAIN_KINDS = ("train", "train-auto", "train-prepare", "new", "improve", "newcad", "night")   # (newcad: a training, then its cadence)

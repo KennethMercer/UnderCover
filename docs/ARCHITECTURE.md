@@ -849,7 +849,10 @@ The installer and the app survive version mismatches and fix common problems the
   engine it may read with, `engines.py` vram_gb, a voice's pinned one included; transcripts: Whisper's 5 GB; a cadence
   training: both), through its environment (`UNDERCOVER_GPU_LIMIT_GB`); its cap can't move, so a worker with less than
   the next job needs is ended first, and one holding more than a job that doesn't fit needs gives its share back and that share comes out of the server's cap while the worker is loaded; a
-  training stops the worker first and gets the whole limit. Under the cap, what the next step doesn't need is freed
+  training stops the worker first and gets the whole limit. A step inside a job of another kind that hears a song's
+  words (a duet, Shape it's first open: `lowprofile.worker_step("hear")`) gets Whisper's share the same way, with the
+  server's separator and converter let go for it; the worker goes after, and a limit that can't hold it says so.
+  Under the cap, what the next step doesn't need is freed
   (`gpu.release`: the separator before a conversion or a speech; the separator, the converter and listen-back's ear
   before a training). Every GPU job records its peak (`gpu_peak_gb`, `gpu_alloc_gb`, `gpu_start_gb` on its snapshot);
   `cache/gpu_need.json` keeps each kind's allocated peaks, and a kind that needs more than the cap allows waits and says

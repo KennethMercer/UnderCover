@@ -125,11 +125,13 @@ MODELS = Models()
 
 def release(step: str):
     """Drop what the next step doesn't need, so it doesn't count against Low profile's cap: before a conversion or a speech
-    the separator; before a training the separator, the converter and listen-back's ear (all re-loaded on first use)."""
-    if step in ("convert", "speak", "train") and MODELS._sep is not None:
+    the separator; before the worker hears a song's words ("hear") the separator and the converter; before a training
+    those and listen-back's ear (all re-loaded on first use)."""
+    if step in ("convert", "speak", "train", "hear") and MODELS._sep is not None:
         MODELS._sep = None
-    if step == "train":
+    if step in ("train", "hear"):
         MODELS._conv = None
+    if step == "train":
         lb = sys.modules.get("undercover.speakeasy.listenback")
         if lb is not None:
             try:

@@ -5747,6 +5747,84 @@ def u_v101():
     return f"installer files, kept-file check, warm-up, report line, import rounds, release files; {browsed}"
 
 
+@check("Low profile (firstopen): hearing a song's words inside a cover's job (Shape it's first open, a duet) gives the worker Whisper's share, not speech's, with the server's cap making room and its separator and converter let go; the share comes back after; a limit too small says so plainly; off changes nothing")
+def u_lowprofile_hear():
+    import inspect, os
+    import numpy as np
+    import soundfile as sf
+    from undercover.core import gpu, jobs, lowprofile as L
+    from undercover.core.cadence import client
+    from undercover.frontman import duets
+    saved = (dict(L.STATE), dict(jobs.STATUS), os.environ.get("UNDERCOVER_TEST_ROOTS"), os.environ.get("UNDERCOVER_LOW_PROFILE"))
+    real = (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines)
+    seen, caps, freed, alive = {}, [], [], [False]
+    try:
+        with isolated_data() as t:
+            jobs.STATUS["vram_gb"] = 24
+            os.environ["UNDERCOVER_TEST_ROOTS"] = "x"
+            L.worker_engines = lambda: {"chatterbox-turbo"}
+            client.WORKER.running = lambda: alive[0]
+            client.WORKER.stop = lambda why="": alive.__setitem__(0, False) or seen.setdefault("stops", []).append(why)
+            client.WORKER.call = lambda op, **kw: {}
+            gpu.apply_cap = lambda lim=None: caps.append(lim) or lim
+            gpu.release = lambda step: freed.append(step)
+
+            def transcribe(files, words=False, cancel=None):   # as the worker starting now would: its share, the server's cap
+                seen["worker"] = L.worker_limit_gb()
+                alive[0] = True   # (the worker starts for it)
+                L.apply()
+                seen["server"] = L.STATE["server_gb"]
+                return [{"text": "x", "words": [["hold", 0.1, 0.4, 0.9], ["on", 0.5, 0.7, 0.9]]}]
+            client.transcribe = transcribe
+            vox = Path(t) / "vocals.wav"
+            sf.write(str(vox), np.zeros(16000, dtype=np.float32), 16000)
+            # on at 12 GB (smoke's own default), a speech worker already loaded with speech's share
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "12"
+            L.STATE.update(applied=None, worker_next=None, worker_cap=3.6)
+            alive[0] = True
+            words = duets.heard_words(vox, None, Path(t) / "work")
+            assert words and words[0][0] == "hold", words
+            assert seen["stops"][0].startswith("Low profile: hearing the words needs a bigger share"), seen
+            assert seen["worker"] == L.WHISPER_GB and seen["server"] == round(12 - L.WHISPER_GB, 2), seen
+            assert freed == ["hear"], freed
+            assert not alive[0] and L.STATE["server_gb"] == 12.0 and L.STATE["worker_next"] is None, (alive, L.STATE)
+            assert not (Path(t) / "work" / "duet-vocal.wav").exists()
+            # what release("hear") lets go: the separator and the converter, not listen-back's ear
+            gpu.release = real[5]
+            gpu.MODELS._sep, gpu.MODELS._conv = object(), object()
+            gpu.release("hear")
+            assert gpu.MODELS._sep is None and gpu.MODELS._conv is None
+            # a limit that can't hold Whisper: said plainly, and nothing is stopped or capped for it
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "5"
+            seen.clear(), caps.clear()
+            try:
+                duets.heard_words(vox, None, Path(t) / "work")
+                raise AssertionError("heard the words under a 5 GB limit")
+            except L.NoRoom as e:
+                assert "5 GB" in str(e) and "Raise its limit, or turn it off" in str(e) and jobs.friendly(e) == str(e), e
+            assert "worker" not in seen and caps == [], (seen, caps)
+            # off: nothing of this runs
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "0"
+            seen.clear(), caps.clear()
+            freed.clear()
+            gpu.release = lambda step: freed.append(step)
+            alive[0] = True   # (a speech worker loaded: off, it's left as it is)
+            assert duets.heard_words(vox, None, Path(t) / "work") and freed == [] and seen["worker"] is None and "stops" not in seen and alive[0], (freed, seen)
+    finally:
+        (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines) = real
+        gpu.MODELS._sep = gpu.MODELS._conv = None
+        L.STATE.clear(), L.STATE.update(saved[0])
+        jobs.STATUS.clear(), jobs.STATUS.update(saved[1])
+        for k, v in (("UNDERCOVER_TEST_ROOTS", saved[2]), ("UNDERCOVER_LOW_PROFILE", saved[3])):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    src = inspect.getsource(__import__("undercover.frontman.pipeline", fromlist=["x"]).CoverEngine._duet_plan)
+    assert "no_room = isinstance(e, NoRoom)" in src and "Low profile's limit leaves no room to hear the words" in src
+    return "Whisper's 5 GB for the worker, the server at 7 GB meanwhile, its models let go; back to 12 after; 5 GB said plainly; off untouched"
+
+
 @check("Low profile (1.0.2): the settings and their defaults (off, half the card; a test server on at 12 GB); set() validates and persists; the limit is split (the worker's share while it's loaded); a kind that needs more than the cap waits and says so, an out-of-memory teaches it; a smaller training batch under a tight cap; speeds keyed apart; the burst's pause is bounded; the game pause's 'low' answer turns it on for that game and its closing turns it off; the route is in the phone table")
 def u_lowprofile():
     import os
@@ -14114,7 +14192,7 @@ def main():
     dirs = real_dirs()
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
