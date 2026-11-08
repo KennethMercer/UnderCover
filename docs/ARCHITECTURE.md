@@ -706,8 +706,8 @@ runs at import, at save and every time a library theme is served; import and exp
 
 Off until the person sets it up. Since 1.2.1 there is one way in for every phone, at home and away: an HTTPS link,
 `https://<name>.ts.net`, from a hidden userspace Tailscale (`core/tailnet.py`: pinned MSI, hashes checked, no driver,
-no service; its CLI pipe is named after its state folder, `platform.tailscale_socket`, so two copies on one PC never
-share a daemon) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
+no service; its CLI pipe is named after its state folder and a random key kept there, `platform.tailscale_socket`, so
+two copies on one PC never share a daemon; one this folder left running is ended at the next start) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
 never the PC's own listener. Windows-only for now (`platform.supports("away")`). Set up, on the PC, is the switch: it
 fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
 which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a

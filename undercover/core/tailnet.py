@@ -106,8 +106,60 @@ def node_name() -> str:
     return n
 
 
+def _pipe_key() -> str:
+    """The state folder's own random key in its pipe's name: made once, kept beside the node's keys (it goes with
+    Forget), read back so a daemon left running is found again."""
+    f = state_dir() / "uc-pipe"
+    try:
+        k = f.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-f]{32}", k):
+            return k
+    except OSError:
+        pass
+    k = secrets.token_hex(16)
+    state_dir().mkdir(parents=True, exist_ok=True)
+    from . import fsutil
+    fsutil.write_text(f, k)
+    return k
+
+
 def _socket() -> str:
-    return platform.tailscale_socket(state_dir())
+    return platform.tailscale_socket(state_dir(), _pipe_key())
+
+
+def _end_orphans():
+    """Before a daemon starts: the daemon this state folder last started (its pid kept beside it), if it's still
+    running and is our own tailscaled program, is a leftover (a crash, an update under it). It's ended, so two never
+    share the state folder and none keeps the PC on the tailnet unwatched. Only that one: another copy's daemon has its
+    own state folder and pid."""
+    f = state_dir() / "uc-daemon"
+    try:
+        pid = int(f.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    prog_file = bin_dir() / platform.tailscale_names()[0]
+    mine = _P["daemon"].pid if _P["daemon"] is not None and _P["daemon"].poll() is None else None
+    if CMD or pid in (mine, os.getpid()) or not prog_file.is_file():
+        return
+    try:
+        prog = platform.process_path(pid)
+    except platform.NotOnThisOS:
+        return
+    if prog and os.path.normcase(prog) == os.path.normcase(str(prog_file.resolve())):
+        try:
+            os.kill(pid, 15)   # (SIGTERM; Windows ends the process)
+            from .doctor import log
+            log("Your phone: a secure-link piece left running from before was stopped.")
+        except OSError:
+            pass
+
+
+def _keep_pid(p):
+    from . import fsutil
+    try:
+        fsutil.write_text(state_dir() / "uc-daemon", str(p.pid))
+    except OSError:
+        pass
 
 
 def _cli(*args, timeout: float = 20) -> str:
@@ -136,11 +188,13 @@ def _daemon_alive() -> bool:
 
 def _start_daemon():
     state_dir().mkdir(parents=True, exist_ok=True)
+    _end_orphans()
     cmd = _cmd("tailscaled") + ["--tun=userspace-networking", f"--statedir={state_dir()}", f"--socket={_socket()}",
                                 "--port=0", "--no-logs-no-support", *platform.tailscaled_os_args()]
     with open(path("logs_dir") / "tailscaled.log", "a", encoding="utf-8") as log:   # the daemon keeps its own copy
         _P["daemon"] = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                         creationflags=platform.NO_WINDOW)
+    _keep_pid(_P["daemon"])
 
 
 def _run_bg(key: str, args: list):

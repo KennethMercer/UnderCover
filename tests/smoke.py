@@ -1904,7 +1904,7 @@ def u_decode_bound():
     return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
 
 
-@check("two hidden Tailscales side by side (an install and a sandbox, two test runs): each daemon's pipe is named after its own state folder, so each CLI reaches its own daemon and never the other's")
+@check("two hidden Tailscales side by side (an install and a sandbox, two test runs): each daemon's pipe is named after its own state folder and that folder's random key (nothing to guess), so each CLI reaches its own daemon and never the other's; a daemon this state folder left running from before is ended before a new one starts, and nobody else's")
 def u_tailnet_pipe():
     import subprocess, tempfile
     from undercover.core import platform as P
@@ -1937,7 +1937,36 @@ def u_tailnet_pipe():
             for p in daemons:
                 p.kill()
                 p.wait(10)
-    return "one pipe per state folder; each CLI reaches its own daemon only"
+    assert P.tailscale_socket(a, "k1") != P.tailscale_socket(a, "k2"), "the key isn't in the name"
+    from undercover.core import tailnet
+    with isolated_data():
+        k = tailnet._pipe_key()
+        assert re.fullmatch(r"[0-9a-f]{32}", k) and tailnet._pipe_key() == k and (tailnet.state_dir() / "uc-pipe").is_file()
+        assert tailnet._socket() == P.tailscale_socket(tailnet.state_dir(), k)
+        prog = tailnet.bin_dir() / P.tailscale_names()[0]   # (the isolated models folder: an empty stand-in file)
+        prog.parent.mkdir(parents=True, exist_ok=True)
+        prog.write_bytes(b"")
+        (tailnet.state_dir() / "uc-daemon").write_text("424242", encoding="utf-8")
+        killed, real_kill, real_path, saved_cmd = [], os.kill, P.process_path, dict(tailnet.CMD)
+        tailnet.CMD.clear()
+        try:
+            os.kill = lambda pid, sig: killed.append(pid)
+            P.process_path = lambda pid: str(prog.resolve()) if pid == 424242 else "C:\\other\\tailscaled.exe"
+            tailnet._end_orphans()
+            assert killed == [424242], killed
+            killed.clear()
+            (tailnet.state_dir() / "uc-daemon").write_text("515151", encoding="utf-8")   # another program by now
+            tailnet._end_orphans()
+            assert killed == [], "a process that isn't this copy's tailscaled was ended"
+            tailnet.CMD.update(saved_cmd or {"tailscaled": ["x"]})   # (tests' fakes: never)
+            (tailnet.state_dir() / "uc-daemon").write_text("424242", encoding="utf-8")
+            tailnet._end_orphans()
+            assert killed == []
+        finally:
+            os.kill, P.process_path = real_kill, real_path
+            tailnet.CMD.clear()
+            tailnet.CMD.update(saved_cmd)
+    return "one pipe per state folder and key; each CLI reaches its own daemon only; only this folder's leftover ended"
 
 
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); Private (1.2) is Serve to the same listener with Funnel off, and back; exit, off and forget clean up; a wrong download is refused")
