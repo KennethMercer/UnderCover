@@ -15,7 +15,7 @@
 // Uses app.js ($, $$, api, esc, S, HIST, showResult), shell.js (showTab), jobs.js (runningJobs), work.js (jobName, jobLine, glyph).
 
 const TOUR = { known: null, step: 0, sub: 0, on: false, wait: false, job: null, failed: null, confirm: false, tip: 0, tipAt: 0, timer: 0, began: false,
-               left: null, long: false, away: false, ready: null };
+               left: null, long: false, away: false, ready: null, tryT: "", tryAsked: false };
 const TOUR_LONG = 180;   // seconds left above which the waiting panel offers to let them look around
 const TOUR_TIPS = [
   "The glasses in the top bar are Deep Cover: every number and setting. You never need them to make a cover.",
@@ -90,7 +90,8 @@ function tourCard() {
   } else if (n === 1) {
     c.innerHTML = `<div class="tour-k"><b id="tour-h">Your first assignment: a cover</b>${k}</div>
       <p>Type a song and a voice and press Make it. Or press the sample below: our own song, sung by Agent Smoke, the demo voice.</p>
-      <div class="tour-acts"><button class="tour-try" type="button" data-tour="sample">${glyph("play")}${TOUR_SAMPLE}<small id="tour-try-t">about a minute</small></button>${tourSkip}</div>`;
+      <div class="tour-acts"><button class="tour-try" type="button" data-tour="sample">${glyph("play")}${TOUR_SAMPLE}<small id="tour-try-t">${esc(TOUR.tryT || "")}</small></button>${tourSkip}</div>`;
+    tourTryTime();
   } else if (n === 2) {
     c.innerHTML = `<div class="tour-k"><b id="tour-h">Listen, then keep it</b>${k}</div>
       <p>Press play. Switch between Cover and Original to hear what changed. Then press Send to SafeHouse: it keeps the cover for good, and the rest roll off after fifteen.</p>
@@ -109,6 +110,16 @@ function tourCard() {
       <div class="tour-acts"><button class="btn primary" type="button" data-tour="end">Done</button></div>`;
   }
   c.querySelector("[data-tour].btn.primary, .tour-try")?.focus({ preventScroll: true });
+}
+// the sample button's time: the one-shot's own plan for this PC (its measured speeds: minutes on a processor install), the same
+// words the Make it button shows; never a number of the tour's own. Asked once (the plan downloads nothing); no answer, no time.
+function tourTryTime() {
+  if (TOUR.tryAsked) return;
+  TOUR.tryAsked = true;
+  api(`/api/auto/plan?text=${encodeURIComponent(TOUR_SAMPLE)}&train=0`).then(p => {
+    const t = p && p.voice?.how === "installed" && p.eta_s && typeof planTime === "function" ? planTime(p) : "";
+    TOUR.tryT = t; const el = $("#tour-try-t"); if (el) el.textContent = t;
+  }).catch(() => {});
 }
 // the waiting panel's line: the job's own words (the stage it's at), never a made-up timer; its bar and time stay the app's, lit
 function tourNow() {

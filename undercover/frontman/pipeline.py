@@ -18,6 +18,9 @@ from . import history as hstore
 
 DUET_NOTE = "Two singers in harmony: UnderCover can't separate them yet, so they're sung as one voice."   # phase 22: said plainly (the user: both ways were bad)
 BACKING_QUIET_LUFS = -45.0   # a backing stem under this has nothing worth converting (a backing voice's or a duet's)
+# A processor install with nothing measured yet: the speeds below are a graphics card's, so the first guess is this many
+# times slower (unmeasured, deliberately on the slow side: "minutes, not a minute"). The first real cover's timings replace it.
+CPU_FIRST_GUESS = 15.0
 
 
 @dataclass
@@ -682,6 +685,8 @@ def estimate_for(dur: float, opts: CoverOptions, song: Path | None = None) -> di
             elif r.get("stage") == "convert.f0" and r.get("seconds_audio"):
                 speeds["f0"].append(r["seconds_audio"] / max(r["seconds"], 1e-3))
     slow = lowprofile.factor()   # (no measurement under Low profile yet: the burst's share of the time, as a first guess)
+    if CONFIG["gpu"].get("backend") == "cpu":   # (and on the processor, a graphics card's speeds would promise a minute)
+        slow *= CPU_FIRST_GUESS
     med = lambda xs, d: statistics.median(xs[-10:]) if xs else d / slow
     sep_rt = med(speeds["sep"], {2: 10.6, 4: 5.1, 8: 2.7}[ov])
     stem_dir = (path("cache_dir") / "stems" / (file_hash(song) if song is not None else "none-yet")

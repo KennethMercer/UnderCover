@@ -353,6 +353,7 @@ if ((Test-Path $Venv) -and -not (Test-Path $Marker)) {
 
 # Repair: what's wrong, from the Doctor (fast checks, read-only) -------------------------------
 $Fix = @{ torch = $true; packages = $true; models = $false; config = $true; launcher = $true; ffmpeg = $true; deno = $true }
+$gpuSeen = $null; $script:RedetectedGpu = $false   # (a repair of a processor install that finds a working card now)
 if ($Repair) {
     Step "Checking this install against its record (repair)"
     $Fix = @{ torch = $false; packages = $false; models = $false; config = $false; launcher = $false; ffmpeg = $false; deno = $false }
@@ -370,6 +371,16 @@ if ($Repair) {
             Push-Location $InstallDir; try { (& $Py -m undercover.core.config get gpu backend 2>$null | Out-String).Trim() } finally { Pop-Location }
         } else { '' }
         if ($was) { $Backend = if ($was -eq 'cuda') { 'cuda128' } else { $was } }
+    }
+    # A processor install looks again (pass 12): the card may have had no working driver then, and has one now. Only a
+    # card that works now changes it (nvidia-smi answers, or AMD's list has it); -Backend on the command line is kept.
+    if ($Backend -eq 'cpu' -and -not $PSBoundParameters.ContainsKey('Backend')) {
+        try { $gpuSeen = & (Join-Path $PSScriptRoot 'detect_gpu.ps1') | Out-String | ConvertFrom-Json } catch { $gpuSeen = $null }
+        if ($gpuSeen -and $gpuSeen.backend -and $gpuSeen.backend -ne 'cpu') {
+            Info "recorded for the processor, but $($gpuSeen.gpu) works now: PyTorch for it is installed instead"
+            $Backend = 'auto'   # (step 1 uses what was just seen, and writes the GPU settings)
+            $script:RedetectedGpu = $true
+        } else { $gpuSeen = $null }
     }
     if (Test-Path $Py) {
         Push-Location $InstallDir
@@ -401,22 +412,26 @@ if ($Repair) {
         $Fix.deno = -not (Test-Path (Join-Path $Tools 'deno\deno.exe'))
     }
     if (-not (Test-Path (Join-Path $InstallDir 'UnderCover.cmd'))) { $Fix.launcher = $true }
+    if ($script:RedetectedGpu) { $Fix.torch = $true; $Fix.packages = $true; $Fix.config = $true }
 }
 
 # 1. GPU ----------------------------------------------------------------------------------------
 Step "Checking your graphics card"
 $gpu = $null
 if ($Backend -eq 'auto') {
-    $gpu = & (Join-Path $PSScriptRoot 'detect_gpu.ps1') | Out-String | ConvertFrom-Json
+    $gpu = if ($gpuSeen) { $gpuSeen } else { & (Join-Path $PSScriptRoot 'detect_gpu.ps1') | Out-String | ConvertFrom-Json }
     $Backend = $gpu.backend
     Info "Found: $($gpu.gpu)$(if ($gpu.vram_gb) { " ($($gpu.vram_gb) GB)" })"
     Info "Using: $Backend  ($($gpu.reason))"
 } else {
-    Info "Using: $Backend (chosen on the command line)"
+    Info "Using: $Backend ($(if ($Repair -and -not $PSBoundParameters.ContainsKey('Backend')) { 'as recorded' } else { 'chosen on the command line' }))"
 }
 if ($Backend -eq 'cpu') {
-    Write-Host "    No supported GPU, so UnderCover will run on the processor. Covers will take minutes" -ForegroundColor Yellow
-    Write-Host "    instead of seconds, and training voices isn't practical." -ForegroundColor Yellow
+    # (the wizard says this on its Ready and finished pages; here it's for a run by hand, and the log)
+    $first = if ($gpu -and $gpu.nodriver) { "    $($gpu.reason -replace '^an', 'An')." } else { "    No supported GPU, so UnderCover will run on the processor." }
+    Write-Host $first -ForegroundColor Yellow
+    Write-Host "    Covers will take minutes instead of seconds, and training voices isn't practical." -ForegroundColor Yellow
+    Log ($first.Trim() + " Covers will take minutes instead of seconds, and training voices isn't practical.")
 }
 
 # Space: what setup itself writes in the install folder now (the app, Python, PyTorch with uv's cache), with the
@@ -427,7 +442,8 @@ $StepGb = $Sizes.steps
 # What an earlier run left (the venv, tools, uv's cache: a cancelled setup, a repair, a reinstall) is taken off, so a
 # re-run is checked for what it still has to download, and isn't refused for room it already uses.
 if (-not $DryRun) {
-    $needs = Get-SpaceNeeds $InstallDir '' '' $ModelsDir $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d }
+    $needs = Get-SpaceNeeds $InstallDir '' '' $ModelsDir $Backend $Sizes @() -SetupOnly -Have { param($k, $d) Get-HaveGB $k $d } `
+                            -Kept (Read-KeptPaths $InstallDir)
     $short = @(Find-Shortfalls $needs { param($r) Get-FreeGB $r })
     if ($short.Count) { Fail ("there isn't enough space. " + (Format-Shortfall $short[0]) + " Free some space, or install to another drive, then try again.") }
 }

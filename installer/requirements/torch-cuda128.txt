@@ -1,6 +1,6 @@
 # NVIDIA RTX 20 series and newer (compute capability 7.5+), including RTX 50 (Blackwell needs CUDA 12.8+).
 # Installed from https://download.pytorch.org/whl/cu128 (setup.ps1 passes it as the only index).
-# Same torch version as the ROCm build so the app code sees the same API. UNTESTED on real hardware.
+# Same torch version as the ROCm build so the app code sees the same API. Tested on real hardware: an RTX 2080.
 torch==2.9.1+cu128 \
     --hash=sha256:3a01f0b64c10a82d444d9fd06b3e8c567b1158b76b2764b8f51bfd8f535064b0
 torchaudio==2.9.1+cu128 \

@@ -129,6 +129,31 @@ Type: filesandordirs; Name: "{app}\cache\converted"
 Type: filesandordirs; Name: "{app}\cache\keyshift"
 Type: filesandordirs; Name: "{app}\cache\previews"
 Type: filesandordirs; Name: "{app}\cache\stems"
+; (pass 12) more the app makes and makes again: yt-dlp's staged updates, scratch readings, the voice check's readers,
+; voice packs on their way out, Hugging Face listings, matplotlib's font cache, separation scratch, songs' musical keys,
+; and the measured speeds and timings. Kept in cache\ with the training projects: voice_quality.json and
+; voice_check_failed.json (the voice checks' verdicts), subjects.json (the user's picks of who a name means),
+; youtube_songs.json (where the kept songs came from), worklist*.json (tonight's queue) and root.txt (where the kept
+; files' stored paths point). tests\smoke.py (u_uninstall_kept_paths) holds this list against the app's own.
+Type: filesandordirs; Name: "{app}\cache\ytdlp"
+Type: filesandordirs; Name: "{app}\cache\cadence"
+Type: filesandordirs; Name: "{app}\cache\voicecheck"
+Type: filesandordirs; Name: "{app}\cache\packs"
+Type: filesandordirs; Name: "{app}\cache\hf_lists"
+Type: filesandordirs; Name: "{app}\cache\matplotlib"
+Type: filesandordirs; Name: "{app}\cache\_work"
+Type: filesandordirs; Name: "{app}\cache\keys"
+Type: files; Name: "{app}\cache\eta.json"
+Type: files; Name: "{app}\cache\gpu_need.json"
+Type: files; Name: "{app}\cache\train_speed.json"
+Type: files; Name: "{app}\cache\speak_speed.json"
+Type: files; Name: "{app}\cache\check_speed.json"
+Type: files; Name: "{app}\cache\train_shape.json"
+Type: files; Name: "{app}\cache\last_search.json"
+Type: files; Name: "{app}\cache\voicepreview.json"
+Type: files; Name: "{app}\cache\launcher-moved.json"
+Type: files; Name: "{app}\cache\offline-requirements.txt"
+Type: files; Name: "{app}\cache\reverb_ir_*.wav"
 Type: filesandordirs; Name: "{app}\logs"
 ; Away from home (phase 20): Tailscale's binaries (fetched on first use, fetched again if needed) and this PC's node keys
 ; (uninstalling ends the private link; the node then shows as offline in the user's Tailscale admin page)
@@ -163,6 +188,7 @@ var
   DownloadDone, DownloadTotal: Int64;
   Progress: Integer;     // the bar's furthest position (0-1000): it never goes back
   Backend: String;       // the graphics card's PyTorch build, detected once by space.ps1
+  GpuNote: String;       // detect_gpu's reason when an NVIDIA card is there but its driver isn't working (else '')
   DetailsLink, FailDetailsLink: TNewStaticText;
   LinkNote: String;      // the last page's word on a shortcut that had to take another name (CreateLaunchers)
   StepGauge: TNewProgressBar;   // under the main bar: the current step's own progress (bytes), or a marquee
@@ -210,6 +236,8 @@ begin
   for I := 0 to GetArrayLength(Lines) - 1 do begin
     if Pos('backend|', Lines[I]) = 1 then begin
       if Copy(Lines[I], 9, Length(Lines[I])) <> '' then Backend := Copy(Lines[I], 9, Length(Lines[I]));
+    end else if Pos('nodriver|', Lines[I]) = 1 then begin
+      GpuNote := Copy(Lines[I], 10, Length(Lines[I]));
     end else if Pos('need|', Lines[I]) = 1 then begin
       if Need <> '' then Need := Need + #13#10;
       Need := Need + Copy(Lines[I], 6, Length(Lines[I]));
@@ -1012,7 +1040,18 @@ function BackendWords: String;
 begin
   if Pos('cuda', Backend) = 1 then Result := 'an NVIDIA graphics card'
   else if Backend = 'rocm' then Result := 'an AMD graphics card'
+  else if GpuNote <> '' then Result := 'the processor (an NVIDIA card is there, but its driver isn''t working)'
   else Result := 'the processor (no supported graphics card)';
+end;
+
+// a processor install, said where the person sees it (setup's own warning goes only to its log: it runs hidden), with
+// what to do when the card is there but its driver isn't (pass 12)
+function ProcessorNote: String;
+begin
+  Result := '';
+  if Backend <> 'cpu' then Exit;
+  Result := 'UnderCover will run on the processor: covers take minutes instead of seconds, and training voices isn''t practical.';
+  if GpuNote <> '' then Result := Result + ' ' + Uppercase(Copy(GpuNote, 1, 1)) + Copy(GpuNote, 2, Length(GpuNote)) + '.';
 end;
 
 // the Ready page, just before Install: the download for THIS PC (its graphics card's PyTorch, the add-ons ticked, less
@@ -1039,6 +1078,7 @@ begin
     Result := Result + 'about ' + GBText(Total) + ' GB: Python, PyTorch for ' + BackendWords + ', the tools and the AI models';
     if GetAddons('') <> '' then Result := Result + ', with the add-ons you ticked';
   end;
+  if ProcessorNote <> '' then Result := Result + NewLine + NewLine + ProcessorNote;
 end;
 
 // The files an earlier run left, there at their size, checked by their SHA-256 before they're trusted (1.0.1: a kept
@@ -1390,6 +1430,8 @@ begin
   if SetupOK then begin
     WizardForm.FinishedHeadingLabel.Caption := 'UnderCover is installed';
     WizardForm.FinishedLabel.Caption := SetupMessage(msgFinishedLabel) + LinkNote;
+    if ProcessorNote <> '' then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + ProcessorNote;
     RetryButton.Visible := False;
   end else begin
     WizardForm.FinishedHeadingLabel.Caption := 'UnderCover isn''t ready yet';

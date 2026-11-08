@@ -1,7 +1,12 @@
-# Pin AMD's ROCm torch builds. Use on EVERY install:
+# The app's own package pins. The three torch lines just below are AMD's ROCm builds: they match only an install set
+# up for an AMD card (requirements\torch-rocm.txt). An NVIDIA or processor install has its own torch, from
+# requirements\torch-cuda128.txt, torch-cuda126.txt or torch-cpu.txt, and these three lines don't apply to it.
+# UnderCover's own installs (add-ons, the Doctor's package Fix, the YouTube downloader's pin) all run --no-deps on
+# pinned lists, so torch is never resolved and this file holds every other package to its pin on any install.
+# By hand on an AMD install:
 #   .venv\Scripts\python.exe -m pip install -c installer\constraints.txt <pkg>
-# If a package demands a different torch, pip fails instead of silently
-# replacing ROCm torch with the CUDA/CPU build from PyPI.
+# (if a package then demands a different torch, pip fails instead of quietly replacing ROCm torch with PyPI's).
+# On an NVIDIA or processor install, use a copy without the three torch lines, or pip reports a conflict.
 torch==2.9.1+rocm7.2.1
 torchaudio==2.9.1+rocm7.2.1
 torchvision==0.24.1+rocm7.2.1

@@ -920,7 +920,7 @@ An update downloads only what changed (1.0.3): `installer/installed.ps1` lists w
 has (a package at its exact pin in its own setup-made `.venv`, read from the venv itself; uv, Python, ffmpeg and Deno
 where setup reuses them), the download page skips those, and setup installs only the pins that differ (still
 `--require-hashes`, offline). A venv setup didn't make, one on the wrong Python, or one that won't start counts as
-having nothing; a repair reinstalls the packages as before. `setup.ps1` installs a private Python (`python.ps1`, via uv), the packages for the detected backend
+having nothing; a repair reinstalls the packages as before. `setup.ps1` unpacks a private Python itself (`python.ps1`: the pinned python-build-standalone archive, with Windows' tar; uv installs only the packages), the packages for the detected backend
 (`detect_gpu.ps1`: rocm, cuda128, cuda126 or cpu; `requirements/*.txt`, hashed by `pin_hashes.py` and constrained by
 `constraints.txt`), ffmpeg and Deno, puts the models in place (`python -m undercover.models install --offline`), writes
 the GPU settings, runs `selftest.py`, writes the manifest and makes a launcher. `space.ps1` and `sizes.json` give the

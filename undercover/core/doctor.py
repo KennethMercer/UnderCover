@@ -75,7 +75,9 @@ def _fix(id, label, how="now") -> dict:
     return {"id": id, "label": label, "how": how}
 
 
-REPAIR = _fix("repair", "Run UnderCover's setup again with -Repair", "offer")
+# What a basic user sees is the Start menu item (GUIDE and README name it so); the command line is Deep Cover's detail.
+REPAIR = dict(_fix("repair", "Repair UnderCover, in the Start menu (your files and settings stay)", "offer"),
+              detail="The same as: installer\\setup.ps1 -Repair, run from the install folder")
 
 
 # ---------------------------------------------------------------- the checks

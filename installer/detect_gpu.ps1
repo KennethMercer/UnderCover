@@ -12,6 +12,13 @@
     rocm     AMD on AMD's Windows ROCm support list (RX 7000 / RX 9000, see $RocmSupported)
     cpu      anything else (older AMD, Intel, no GPU) -- works, but slowly
 
+  nodriver is true when an NVIDIA card is in the PC but nvidia-smi doesn't answer (no driver, or a broken one): the
+  install is the processor's for now, and the reason says to install the driver and then run Repair UnderCover, which
+  detects the card again.
+
+  Dot-sourced (. .\detect_gpu.ps1), it only defines its functions: Select-Gpu takes the two probes' results, so a test
+  can hand it a PC that isn't this one.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File detect_gpu.ps1 -Human
 #>
@@ -67,43 +74,65 @@ function Get-RegistryVramGB([string]$name) {
     return $null
 }
 
-$nvidia = @(Get-NvidiaGpus)
-$all = @(Get-CimInstance Win32_VideoController | ForEach-Object {
-    $vendor = switch -Regex ($_.PNPDeviceID) {
-        'VEN_10DE' { 'NVIDIA' } 'VEN_1002' { 'AMD' } 'VEN_8086' { 'Intel' } default { 'Other' }
-    }
-    [pscustomobject]@{ Vendor = $vendor; Name = $_.Name.Trim(); VramGB = (Get-RegistryVramGB $_.Name); Driver = $_.DriverVersion }
-})
-
-$choice = $null
-# 1) NVIDIA wins when nvidia-smi works (it means the driver is installed and healthy). Pick the most VRAM.
-if ($nvidia.Count) {
-    $g = $nvidia | Sort-Object VramGB -Descending | Select-Object -First 1
-    $cc = [double]$g.ComputeCap
-    $backend = if ($cc -ge 7.5) { 'cuda128' } elseif ($cc -ge 5.0) { 'cuda126' } else { 'cpu' }
-    $why = if ($backend -eq 'cpu') { "compute capability $($g.ComputeCap) is too old for current PyTorch" } else { "NVIDIA, compute capability $($g.ComputeCap)" }
-    $choice = [pscustomobject]@{ Backend = $backend; Gpu = $g.Name; VramGB = $g.VramGB; Gfx = $null; Reason = $why }
+function Get-Adapters {
+    @(Get-CimInstance Win32_VideoController | ForEach-Object {
+        $vendor = switch -Regex ($_.PNPDeviceID) {
+            'VEN_10DE' { 'NVIDIA' } 'VEN_1002' { 'AMD' } 'VEN_8086' { 'Intel' } default { 'Other' }
+        }
+        [pscustomobject]@{ Vendor = $vendor; Name = $_.Name.Trim(); VramGB = (Get-RegistryVramGB $_.Name); Driver = $_.DriverVersion }
+    })
 }
-# 2) AMD on the ROCm list. The name substring goes into config [gpu].device_name so the iGPU is never picked.
-if (-not $choice) {
-    foreach ($g in ($all | Where-Object Vendor -eq 'AMD' | Sort-Object VramGB -Descending)) {
-        $hit = $RocmSupported | Where-Object { $g.Name -like "*$($_.Pattern)*" } | Select-Object -First 1
-        if ($hit) {
-            $choice = [pscustomobject]@{ Backend = 'rocm'; Gpu = $g.Name; VramGB = $g.VramGB; Gfx = $hit.Gfx; Reason = "AMD $($hit.Gfx), on AMD's Windows ROCm list" }
-            break
+
+# the choice, from what Windows lists ($all: Vendor, Name, VramGB, Driver) and what nvidia-smi said ($nvidia: Name,
+# VramGB, ComputeCap, Driver; empty when it's missing or failed) -> Backend, Gpu, VramGB, Gfx, Reason, NoDriver
+function Select-Gpu($all, $nvidia) {
+    $all = @($all); $nvidia = @($nvidia)
+    $choice = $null
+    # 1) NVIDIA wins when nvidia-smi works (it means the driver is installed and healthy). Pick the most VRAM.
+    if ($nvidia.Count) {
+        $g = $nvidia | Sort-Object VramGB -Descending | Select-Object -First 1
+        $cc = [double]$g.ComputeCap
+        $backend = if ($cc -ge 7.5) { 'cuda128' } elseif ($cc -ge 5.0) { 'cuda126' } else { 'cpu' }
+        $why = if ($backend -eq 'cpu') { "compute capability $($g.ComputeCap) is too old for current PyTorch" } else { "NVIDIA, compute capability $($g.ComputeCap)" }
+        $choice = [pscustomobject]@{ Backend = $backend; Gpu = $g.Name; VramGB = $g.VramGB; Gfx = $null; Reason = $why; NoDriver = $false }
+    }
+    # 2) AMD on the ROCm list. The name substring goes into config [gpu].device_name so the iGPU is never picked.
+    if (-not $choice) {
+        foreach ($g in ($all | Where-Object Vendor -eq 'AMD' | Sort-Object VramGB -Descending)) {
+            $hit = $RocmSupported | Where-Object { $g.Name -like "*$($_.Pattern)*" } | Select-Object -First 1
+            if ($hit) {
+                $choice = [pscustomobject]@{ Backend = 'rocm'; Gpu = $g.Name; VramGB = $g.VramGB; Gfx = $hit.Gfx; Reason = "AMD $($hit.Gfx), on AMD's Windows ROCm list"; NoDriver = $false }
+                break
+            }
         }
     }
+    # 3) An NVIDIA card Windows lists, but nvidia-smi doesn't answer: PyTorch has a build for it, the driver is what's
+    #    missing (Windows' basic display driver names it "Microsoft Basic Display Adapter"; the vendor id still says NVIDIA)
+    if (-not $choice) {
+        $nv = $all | Where-Object Vendor -eq 'NVIDIA' | Sort-Object VramGB -Descending | Select-Object -First 1
+        if ($nv) {
+            $choice = [pscustomobject]@{ Backend = 'cpu'; Gpu = $nv.Name; VramGB = $nv.VramGB; Gfx = $null; NoDriver = $true
+                Reason = "an NVIDIA card was found but its driver isn't working: install the driver from nvidia.com, then run Repair UnderCover from the Start menu" }
+        }
+    }
+    # 4) Everything else runs on the CPU.
+    if (-not $choice) {
+        $best = $all | Where-Object { $_.Vendor -in 'AMD', 'Intel' } | Sort-Object VramGB -Descending | Select-Object -First 1
+        $why = if ($best) { "$($best.Name) has no supported PyTorch GPU build on Windows" } else { 'no GPU found' }
+        $choice = [pscustomobject]@{ Backend = 'cpu'; Gpu = $best.Name; VramGB = $best.VramGB; Gfx = $null; Reason = $why; NoDriver = $false }
+    }
+    return $choice
 }
-# 3) Everything else runs on the CPU.
-if (-not $choice) {
-    $best = $all | Where-Object { $_.Vendor -in 'AMD', 'Intel', 'NVIDIA' } | Sort-Object VramGB -Descending | Select-Object -First 1
-    $why = if ($best) { "$($best.Name) has no supported PyTorch GPU build on Windows" } else { 'no GPU found' }
-    $choice = [pscustomobject]@{ Backend = 'cpu'; Gpu = $best.Name; VramGB = $best.VramGB; Gfx = $null; Reason = $why }
-}
+
+if ($MyInvocation.InvocationName -eq '.') { return }   # dot-sourced: the functions only
+
+$nvidia = @(Get-NvidiaGpus)
+$all = @(Get-Adapters)
+$choice = Select-Gpu $all $nvidia
 
 $result = [pscustomobject]@{
     backend = $choice.Backend; gpu = $choice.Gpu; vram_gb = $choice.VramGB; gfx = $choice.Gfx; reason = $choice.Reason
-    adapters = $all; nvidia_smi = $nvidia
+    nodriver = [bool]$choice.NoDriver; adapters = $all; nvidia_smi = $nvidia
 }
 
 if ($Human) {
