@@ -222,11 +222,11 @@ class Handler(BaseHTTPRequestHandler):
             t = threading.Timer(self.OPEN_S, self._too_slow)
             t.daemon = True
             t.start()
-        self._slow = t
+        self._slow, self._shut = t, False
         try:
             super().handle_one_request()
         except OSError:
-            if t is None or t.is_alive():   # (not the deadline's own doing)
+            if not self._shut:   # (not the deadline's own doing)
                 raise
             self.close_connection = True   # (past the deadline: the connection was shut, quietly)
         finally:
@@ -235,6 +235,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _too_slow(self):
         import socket
+        self._shut = True
         try:
             self.connection.shutdown(socket.SHUT_RDWR)   # (the read waiting on it ends; the connection goes)
         except OSError:
