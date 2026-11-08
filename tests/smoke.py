@@ -2043,6 +2043,15 @@ def u_phone_away():
         try:
             st = phone._load()
             assert "away" not in st and st["lan"] and [d["id"] for d in st["devices"]] == ["aaaaaaaaaa", "bbbbbbbbbb"]
+            on_disk = json.loads(phone.state_file().read_text(encoding="utf-8"))   # (R22: saved once as this version, and said)
+            assert all(d.get("version") == 1 for d in on_disk["devices"]) and "away" not in on_disk, on_disk
+            from undercover.core.config import path as _p
+            said = (_p("logs_dir") / "doctor.log").read_text(encoding="utf-8")
+            assert "2 phones from before the one link carried over; 1 still uses the home Wi-Fi until it switches." in said, said[-300:]
+            assert lan not in said and away not in said and phone.hash_token(lan) not in said
+            phone._FILE[0] = None
+            phone._load()
+            assert (_p("logs_dir") / "doctor.log").read_text(encoding="utf-8").count("from before the one link") == 1, "said twice"
             assert phone.device_for(lan, "192.168.1.77")["id"] == "aaaaaaaaaa" and phone.device_for(lan, away=True) is None
             assert phone.device_for(away, away=True)["id"] == "bbbbbbbbbb", "the away token of 1.1 isn't the one token"
             assert phone.lan_needed() and phone.devices()[0]["lan"] and not phone.devices()[1]["lan"]

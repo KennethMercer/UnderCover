@@ -102,7 +102,7 @@ def _load() -> dict:
             if not _STATE:
                 _STATE.update({"enabled": False, "away_private": False, "devices": [], "lan": False})
             return _expire(_STATE)
-        devices = []
+        devices, moved = [], 0
         for d in data.get("devices") or []:
             if not isinstance(d, dict) or not (d.get("hash") or d.get("lan_hash") or d.get("away_hash")):
                 continue
@@ -110,11 +110,21 @@ def _load() -> dict:
                 d = {**{k: v for k, v in d.items() if k not in ("away_hash", "away_used")},
                      "lan_hash": d.get("hash"), "lan_used": d.get("used"), "hash": d.get("away_hash"), "used": d.get("away_used"),
                      "version": 1}
+                moved += 1
             devices.append(d)
         _STATE.clear()
         _STATE.update({"enabled": bool(data.get("enabled")), "away_private": bool(data.get("away_private")), "devices": devices})
         _relan(_STATE)
         _FILE[0] = key
+        if moved:   # once: saved as this version, and said in plain words (no token, code or address)
+            try:
+                _save()
+            except (OSError, PhoneError):
+                pass
+            from .doctor import log
+            log(f"Your phone: {moved} phone{'s' if moved != 1 else ''} from before the one link carried over; "
+                + ((lambda n: f"{n} still use{'s' if n == 1 else ''} the home Wi-Fi until {'it switches' if n == 1 else 'they switch'}.")(
+                    sum(1 for d in devices if d.get('lan_hash') and not d.get('hash'))) if _STATE["lan"] else "every one uses the link."))
     return _expire(_STATE)
 
 
