@@ -13,6 +13,9 @@ in brackets.
 - In a chorus kept as it is, what's left of the lead under those lines is silent, and the cover's note says who sings
   them. With the top voice moved to the lead, a line with no top voice to move stays where it was.
 
+**Installer** (xttssize)
+- Ticking the XTTS-v2 add-on counts its 2 GB in the space setup checks for.
+
 ## 1.1.4 (2026-11-05)
 
 **SpeakEasy** (hangfix, hangtune)

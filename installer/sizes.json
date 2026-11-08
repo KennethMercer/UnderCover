@@ -1,5 +1,5 @@
 {
-  "about": "UnderCover's real disk use and download in GB, measured and rounded up. Disk: a real install with tests/installer_e2e.ps1 on 2026-10-18 (ROCm: .venv and uv's cache 6.4, tools 0.5, app 0.1) and the AI models setup installs, 8.75 (every file's size in core/setup_models.KNOWN_SIZES: separation 2.74, voice models 1.00, speaker 0.03, Kokoro 0.35, Chatterbox Turbo 2.99, Whisper 1.62). What setup downloads isn't here: it is the sum of downloads.tsv's rows for the graphics card (build.ps1's SizeDownload* in sizes.isi, the wizard's Ready page). The python sizes for CUDA haven't been measured: they are given ROCm's. installer/space.ps1 adds the margin to the disk sizes. steps: what each long setup step adds to uv's cache, for its progress bar.",
+  "about": "UnderCover's real disk use and download in GB, measured and rounded up. Disk: a real install with tests/installer_e2e.ps1 on 2026-10-18 (ROCm: .venv and uv's cache 6.4, tools 0.5, app 0.1) and the AI models setup installs, 8.75 (every file's size in core/setup_models.KNOWN_SIZES: separation 2.74, voice models 1.00, speaker 0.03, Kokoro 0.35, Chatterbox Turbo 2.99, Whisper 1.62). What setup downloads isn't here: it is the sum of downloads.tsv's rows for the graphics card (build.ps1's SizeDownload* in sizes.isi, the wizard's Ready page). The python sizes for CUDA haven't been measured: they are given ROCm's. installer/space.ps1 adds the margin to the disk sizes. steps: what each long setup step adds to uv's cache, for its progress bar. addons.xtts: its three pinned files (1.87 GB in Hugging Face's listing at the pinned revision) and its packages' wheels (15 MB on PyPI, about three times that unpacked), rounded up; not yet measured on an install.",
   "app_gb": 0.1,
   "tools_gb": 0.5,
   "python": {
@@ -11,7 +11,8 @@
   "models_gb": 8.8,
   "addons": {
     "f5": 1.5,
-    "chatterbox": 3.2
+    "chatterbox": 3.2,
+    "xtts": 2.0
   },
   "library_gb": 0.5,
   "work_gb": 1.0,
