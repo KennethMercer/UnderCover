@@ -3,6 +3,16 @@
 What changed in UnderCover, by release. The headings summarise; the detail is in the git history, under the names
 in brackets.
 
+## Not released yet
+
+**FrontMan** (nobacking, holdparts, residue, notop)
+- Before Convert, a duet says when a song already split has almost no backing, so you know the second singer has
+  little to take there.
+- A backing stem with harmonies is sung as one part, held through a crossing: where two parts cross inside a note, the
+  voice stays on the part it was on instead of hopping to the other.
+- In a chorus kept as it is, what's left of the lead under those lines is silent, and the cover's note says who sings
+  them. With the top voice moved to the lead, a line with no top voice to move stays where it was.
+
 ## 1.1.4 (2026-11-05)
 
 **SpeakEasy** (hangfix, hangtune)

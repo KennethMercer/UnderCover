@@ -4,7 +4,7 @@ ROUTES is the one list of every route and what a paired phone may do with it (th
 it; tests/smoke.py checks that every route the code answers is in it):
     "open"   no token needed from the network: the pairing page and its claim, the home-screen manifest and its icons,
              the away app's service worker (no data)
-    "home"   the page itself (no data in it: everything comes from /api), open on the home Wi-Fi only (1.2): the away
+    "home"   the page itself (no data in it: everything comes from /api), open on the home Wi-Fi only (1.1.4): the away
              app's way home is a link from another site, and a SameSite=Strict cookie doesn't ride on that first load
              (the page's own requests after it are same-site, so they carry it). At the away address: the token.
     "phone"  a paired phone may use it (everything on the basic pages)

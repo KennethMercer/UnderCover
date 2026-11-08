@@ -14,7 +14,7 @@ from ..core.voices import ModelError, label_of, person_guessed, slug, voice_pers
 from ..core import gpu, jobs, worklist
 
 PREP_RT = 3.5          # minutes of source audio prepared per minute (separation + lead split + de-reverb ran 4.3x
-                       # realtime on Elliott Smith's album tracks; downloads and phrase cutting take the rest)
+                       # realtime on a singer's album tracks; downloads and phrase cutting take the rest)
 SAME_PERSON = 0.35     # the current voice scoring under this against the new clips = they're probably someone else
 IMPROVE_SINGING_MIN = 30   # minutes of clean singing an "improve" aims for (more than ~30 rarely helps)
 
@@ -47,7 +47,7 @@ def _sec_per_step() -> float:
 # planned, 2 h 22 min taken; 2b the other way): the kept minutes it ended with against the target, the kept minutes
 # prepared per minute, and how far past its planned epochs it ran before the stall rule stopped it. Defaults: 2d's.
 TRAIN_SHAPE = {"kept_over_target": 1.4, "kept_per_prep_min": 3.2, "past_plan": 1.1}   # (2d ran 1.2x its plan, rc-eta's proof 1.0x)
-# a character's scenes and a singer's songs yield less clean voice a minute than a person's speeches (SpongeBob: about
+# a character's scenes and a singer's songs yield less clean voice a minute than a person's speeches (one cartoon character: about
 # 0.3 min an upload, music and the other characters cut out): their own preparation rate until one is measured
 KIND_PREP = {"character": 0.8, "singer": 2.0}
 
@@ -201,8 +201,8 @@ def _estimate_improve(proj, item: dict) -> dict:
 def _improve_steps(target: str, proj, new_min: float) -> int | None:
     """The steps an Improve of this voice would most likely plan (R4), for the estimate: a refine's when the voice's own
     numbers say refine (well fed, a fair likeness, the same sample rate), else None (scratch's budget). Whether the
-    clips grow enough for scratch depends on what the search finds, so the estimate doesn't guess that: the real
-    Freeman Improve said 99 min on scratch's budget and took 12 (refine, nothing new found)."""
+    clips grow enough for scratch depends on what the search finds, so the estimate doesn't guess that: a real
+    Improve of voice A said 99 min on scratch's budget and took 12 (refine, nothing new found)."""
     from ..core.voices import get_voice, trained_likeness
     from .frozen import recipe, refine_steps
     try:
@@ -269,7 +269,7 @@ def _project_for_item(item: dict, create: bool):
 
 
 def _project_named(person: str):
-    """The training project for a person, allowing small spelling differences (Elliot / Elliott Smith)."""
+    """The training project for a person, allowing small spelling differences (Jon / John Smith)."""
     import difflib
     from . import project as P
     key = slug(person)

@@ -77,7 +77,7 @@ ENGINES = {
                          # only moves the gaps between sentences. Its natural pace follows its reference clip's; calibrating that
                          # (doubleagent/cadence.py: calibrate_pack, switched on by "pace_by_ref": True) read slurred by the user's ear
                          # (2026-10-14), so it is off
-                         # Turbo's reading sits lower than the person's (Obama's 9 semitones under, golden run 2026-10-13): finish moves
+                         # Turbo's reading sits lower than the person's (one voice's 9 semitones under, golden run 2026-10-13): finish moves
                          # its median onto the voice's own, not just by octaves
                          "pitch_to_target": True,
                          "about": "Resemble AI's open model (MIT code and weights), the faster successor: about twice as fast as "

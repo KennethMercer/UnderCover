@@ -1,5 +1,5 @@
 """How a reference clip *sounds* (phase 9): the clip's own sound (room, mic, hiss, a muffled band) carries into the
-cloning engine, and likeness can't hear it (phase 4: Freeman's v2 clip scored higher and sounded worse: muffled).
+cloning engine, and likeness can't hear it (phase 4: one voice's second clip scored higher and sounded worse: muffled).
 
 Plain numpy / scipy, a few milliseconds per clip. Four measures, each from the clip's frames where the person talks:
   hf_db      energy above 4 kHz relative to 0.3-4 kHz (dB): low = muffled (a dull mic, a lowpassed upload)
@@ -18,13 +18,13 @@ import numpy as np
 
 # Calibration (the maintainers' notes, clip-sound): where a clean clip of a person talking sits, as UnderCover's clips come
 # (the speaking projects' 103 reference candidates: hf_db median -16.5, floor_db -34.6, decay_db_s -304)
-HF_OK = -22.0        # hf_db at or above this is not muffled (Freeman's approved clip -14.9, the rejected v2 -26.5)
-EDGE_OK = 9000.0     # Hz: a full-band clip reaches well past this (one Obama source stops at 5.4 kHz)
+HF_OK = -22.0        # hf_db at or above this is not muffled (one voice's approved clip -14.9, its rejected second clip -26.5)
+EDGE_OK = 9000.0     # Hz: a full-band clip reaches well past this (one politician's source stops at 5.4 kHz)
 FLOOR_OK = -30.0     # dB: a band's quiet moments this far under its average = no steady noise under the voice
 DECAY_OK = -240.0    # dB/s: dry speech decays at least this steeply (95% of the candidates do)
 CLIP_OK = 2e-4       # share of samples at the peak that natural speech can have (seen: at most 1.4e-5)
 # penalty per unit past the threshold, in score units (likeness differences between candidates are 0.01-0.08):
-# Freeman's v2 clip (4.5 dB under HF_OK) costs 0.054, noise at 25 dB SNR ~0.03, a 0.4 s room ~0.03
+# that rejected clip (4.5 dB under HF_OK) costs 0.054, noise at 25 dB SNR ~0.03, a 0.4 s room ~0.03
 W = {"hf_db": 0.012, "edge_hz": 0.010 / 1000, "floor_db": 0.006, "decay_db_s": 0.0004, "clip_frac": 20.0}
 CAP = 0.15           # one bad measure can't outweigh everything else
 
