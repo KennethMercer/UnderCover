@@ -26,6 +26,7 @@ SYSTEM_PROCESSES = {"dwm.exe", "explorer.exe", "csrss.exe", "searchhost.exe", "s
                     "startmenuexperiencehost.exe", "textinputhost.exe", "applicationframehost.exe", "svchost.exe",
                     "system", "idle"}
 WINGET_IDS = {"ffmpeg": "Gyan.FFmpeg", "deno": "DenoLand.Deno"}   # the package names winget knows the tools by
+APT_NAMES = {"ffmpeg"}   # the tools Debian and Ubuntu package (deno isn't one)
 
 
 def exe_name(name: str) -> str:
@@ -48,7 +49,9 @@ def install_hint(tool: str) -> str:
         return f"winget install {WINGET_IDS.get(tool, tool)}"
     if sys.platform == "darwin":
         return f"brew install {tool}"
-    return f"sudo apt install {tool} (or your distribution's package manager)"
+    if tool in APT_NAMES:
+        return f"sudo apt install {tool} (or your distribution's package manager)"
+    return f"{tool} from its own site, or your distribution's package manager"
 
 
 def _powershell() -> str:
@@ -558,11 +561,15 @@ def repoint_shortcuts(old, new, folders=None) -> list[str]:
 
 # ---------------------------------------------------------------- the system's own reports
 
-def run_text(cmd: list, timeout: float = 20) -> str:
+# Windows' own console tools (netstat, tasklist, netsh) print in the console's OEM code page, not UTF-8: an accented
+# user name in a firewall rule's program path reads right only in it
+CONSOLE = "oem" if WINDOWS else "utf-8"
+
+
+def run_text(cmd: list, timeout: float = 20, encoding: str = "utf-8") -> str:
     """A system tool's output as text (no window on Windows). PowerShell commands come through _ps(), so their output is
-    UTF-8; netstat, tasklist and netsh print their columns and numbers in plain ASCII, and a translated word or an
-    accented name is never what's read from them."""
-    r = subprocess.run(cmd, capture_output=True, **TEXT, timeout=timeout, creationflags=NO_WINDOW)
+    UTF-8; Windows' console tools are read with encoding=CONSOLE."""
+    r = subprocess.run(cmd, capture_output=True, **{**TEXT, "encoding": encoding}, timeout=timeout, creationflags=NO_WINDOW)
     return r.stdout
 
 
@@ -572,7 +579,7 @@ def port_owner(port: int) -> str | None:
     if not WINDOWS:
         raise _not("Naming the program that holds a port")
     pid = None
-    for line in run_text(["netstat", "-ano", "-p", "TCP"]).splitlines() + run_text(["netstat", "-ano", "-p", "TCPv6"]).splitlines():
+    for line in run_text(["netstat", "-ano", "-p", "TCP"], encoding=CONSOLE).splitlines() + run_text(["netstat", "-ano", "-p", "TCPv6"], encoding=CONSOLE).splitlines():
         parts = line.split()
         if (len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].rsplit(":", 1)[-1] == str(port)
                 and parts[2] in ("0.0.0.0:0", "[::]:0") and parts[4].isdigit()):
@@ -580,7 +587,7 @@ def port_owner(port: int) -> str | None:
             break
     if not pid:
         return None
-    row = run_text(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]).strip()
+    row = run_text(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], encoding=CONSOLE).strip()
     return row.split('","')[0].strip('"') if row.startswith('"') else None
 
 
@@ -603,8 +610,8 @@ def network_and_firewall(addr: str) -> tuple[str, str, str]:
           "ConvertTo-Json -Compress }")
     with concurrent.futures.ThreadPoolExecutor(3) as ex:
         f_net = ex.submit(run_text, _ps(ps))
-        f_state = ex.submit(run_text, ["netsh", "advfirewall", "show", "allprofiles", "state"])
-        f_rules = ex.submit(run_text, ["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"])
+        f_state = ex.submit(run_text, ["netsh", "advfirewall", "show", "allprofiles", "state"], encoding=CONSOLE)
+        f_rules = ex.submit(run_text, ["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"], encoding=CONSOLE)
         return f_net.result().strip(), f_state.result(), f_rules.result()
 
 

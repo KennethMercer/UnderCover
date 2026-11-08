@@ -10247,7 +10247,7 @@ def u_phone_pairing():
             assert "Only if this phone is on your own home Wi-Fi" in (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
             # an address only ever goes into a command line as plain IPv4: an IPv6 zone part can hold anything
             ran, real_run = [], P.run_text
-            P.run_text = lambda cmd, timeout=20: ran.append(cmd) or ""
+            P.run_text = lambda cmd, timeout=20, **kw: ran.append(cmd) or ""
             try:
                 for hostile in ("fe80::1%x'; Start-Process calc; '", "fe80::1%eth0", "::1", "192.168.1.5'", "192.168.1.5 "):
                     for call in (lambda a: P.prefix_length(a), lambda a: P.network_and_firewall(a),
