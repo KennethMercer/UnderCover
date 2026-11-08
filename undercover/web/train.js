@@ -233,7 +233,7 @@ $("#tr-prepare").onclick = async () => {
   catch (e) { showError(e.message, "Can't prepare yet"); }
 };
 // the voice name only when the field is this project's (it keeps the last project's name while this one has no clips:
-// a new Donald Trump project once sent "barack-obama-uc"; the server refuses another person's voice name too)
+// a new project for one person once sent another person's voice name; the server refuses that too)
 const ownName = () => ($("#tr-name").dataset.proj === T.proj?.name && $("#tr-name").value) || undefined;
 $("#tr-auto").onclick = async () => {
   try { const r = await P("auto", { voice_name: ownName() }); follow(r.job, "auto"); }
