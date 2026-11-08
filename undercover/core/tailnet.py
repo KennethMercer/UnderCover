@@ -42,6 +42,8 @@ STATE = {"want": False, "phase": "off", "auth_url": None, "approve_url": None, "
          "progress": None, "port": None, "private": False}
 _P = {"daemon": None, "up": None, "funnel": None, "serve": None, "driver": None, "out": [], "fetch_failed": 0.0,
       "public": False}
+OUT_LINES = 200          # the CLI's output kept for its sign-in and approval links (the newest lines)
+LOG_MAX = 5 << 20        # tailscaled.log past this at a start: set aside as tailscaled.old.log
 EXPOSE = ("funnel", "serve")   # the CLI commands that publish the away listener: public, or the tailnet only
 _LOCK = threading.RLock()   # "still wanted?" and starting a process happen together, so Off can't be overtaken by a tick
 FETCH_RETRY_S = 600         # a failed download waits this long before the next try (39 MB each: never in a loop)
@@ -136,9 +138,15 @@ def _daemon_alive() -> bool:
 
 def _start_daemon():
     state_dir().mkdir(parents=True, exist_ok=True)
+    log_file = path("logs_dir") / "tailscaled.log"
+    try:   # (the daemon's own log: the last run's kept beside it once it's past LOG_MAX)
+        if log_file.stat().st_size > LOG_MAX:
+            log_file.replace(log_file.with_name("tailscaled.old.log"))
+    except OSError:
+        pass
     cmd = _cmd("tailscaled") + ["--tun=userspace-networking", f"--statedir={state_dir()}", f"--socket={_socket()}",
                                 "--port=0", "--no-logs-no-support", *platform.tailscaled_os_args()]
-    with open(path("logs_dir") / "tailscaled.log", "a", encoding="utf-8") as log:   # the daemon keeps its own copy
+    with open(log_file, "a", encoding="utf-8") as log:   # the daemon keeps its own copy
         _P["daemon"] = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                         creationflags=platform.NO_WINDOW)
 
@@ -148,13 +156,14 @@ def _run_bg(key: str, args: list):
     def go():
         try:
             with _LOCK:
-                if not STATE["want"]:
-                    return
+                if not STATE["want"] or (key in EXPOSE and key != _mode()):   # (Private switched on or off since the
+                    return                                                    # step chose it: the next step chooses again)
                 p = subprocess.Popen(_cmd("tailscale") + [f"--socket={_socket()}", *args], stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, **platform.TEXT, creationflags=platform.NO_WINDOW)
                 _P[key] = p
             for line in p.stdout:
                 _P["out"].append(line)
+                del _P["out"][:-OUT_LINES]
                 m = URL_RX.search(line)
                 if m:
                     STATE["approve_url" if key in EXPOSE else "auth_url"] = m.group(0)
@@ -186,6 +195,8 @@ def _funnel_on(st: dict) -> bool:
     except (ValueError, OSError, subprocess.TimeoutExpired):
         return False
     host = (st.get("Self") or {}).get("DNSName", "").rstrip(".")
+    if not host:   # (no name yet: nothing is published, nothing is ready)
+        return False
     allowed = any(k.startswith(host) and v for k, v in (f.get("AllowFunnel") or {}).items())
     _P["public"] = allowed
     targets = _proxies(f.get("Web") or {})

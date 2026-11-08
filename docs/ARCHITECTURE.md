@@ -711,7 +711,9 @@ never the PC's own listener. Windows-only for now (`platform.supports("away")`).
 fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
 which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a
 phone. Private (Deep Cover, `phone.away_private`): Serve instead of Funnel, to the same listener and name, so only
-devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together.
+devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together, and a publish
+chosen before the switch doesn't run (`_run_bg` checks the mode again). The daemon's log is set aside past 5 MB at a
+start (`tailscaled.old.log`).
 
 Connecting a phone: the card shows a QR code of `https://<name>/pair#<code>`, a 128-bit code in the fragment (never
 sent to a server, taken out of the address bar at once), for five minutes. Wrong claims are counted for the card but
