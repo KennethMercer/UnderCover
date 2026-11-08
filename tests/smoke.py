@@ -11882,7 +11882,7 @@ def u_tray():
     return "stopped / idle / working (the module's bar) / paused / problem; job lines; icons differ; light import"
 
 
-@check("perf: load_16k remembers the last few vocals (a hit, a changed file misses, callers get copies)")
+@check("perf: load_16k remembers the last few vocals (a hit, a changed file misses, callers get copies, a byte budget)")
 def u_perf_load16k():
     import tempfile
     import numpy as np
@@ -11910,8 +11910,32 @@ def u_perf_load16k():
             sf.write(str(g), x[:4000], 16000, subtype="PCM_16")
             convert.load_16k(g)
         assert len(convert._LOAD16K) == convert._LOAD16K_KEEP, len(convert._LOAD16K)
-        convert._LOAD16K.clear()
-    return f"hit, miss on rewrite, callers get copies of a read-only memo, at most {convert._LOAD16K_KEEP} kept"
+        assert convert._LOAD16K_BUDGET == 256 * 1024 * 1024, convert._LOAD16K_BUDGET
+        saved = convert._LOAD16K_BUDGET
+        try:   # a small budget stands in for long stems: 4000 samples are 16000 bytes, the 2 s file 128000
+            convert._LOAD16K.clear()
+            convert._LOAD16K_BUDGET = 40000
+            bf = Path(td) / "big.flac"
+            sf.write(str(bf), x, 16000, subtype="PCM_16")
+            big = convert.load_16k(bf)
+            assert len(big) == len(x) and big.flags.writeable, "an array over the budget wasn't returned as a copy"
+            assert not convert._LOAD16K, "an array over the budget was kept"
+            for i in range(convert._LOAD16K_KEEP + 1):
+                g = Path(td) / f"v{i}.flac"
+                convert.load_16k(g)
+                total = sum(v.nbytes for v in convert._LOAD16K.values())
+                assert total <= convert._LOAD16K_BUDGET, (i, total)
+            names = [Path(k[0]).name for k in convert._LOAD16K]
+            assert names == [f"v{convert._LOAD16K_KEEP - 1}.flac", f"v{convert._LOAD16K_KEEP}.flac"], names   # oldest left first
+            kept = convert._LOAD16K[next(reversed(convert._LOAD16K))]
+            d = convert.load_16k(Path(td) / f"v{convert._LOAD16K_KEEP}.flac")   # a small file still hits
+            assert d is not kept and len(convert._LOAD16K) == 2 and convert._LOAD16K[next(reversed(convert._LOAD16K))] is kept, \
+                "a small file under the budget missed the memo"
+        finally:
+            convert._LOAD16K_BUDGET = saved
+            convert._LOAD16K.clear()
+    return (f"hit, miss on rewrite, callers get copies of a read-only memo, at most {convert._LOAD16K_KEEP} kept "
+            f"and {convert._LOAD16K_BUDGET // 2**20} MB; an array over the budget isn't kept")
 
 
 @check("perf: /api/status's code stamp is kept a few seconds, then walked again")
