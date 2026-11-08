@@ -8,6 +8,7 @@ with HuBERT, RMVPE and recently used voices kept loaded on the GPU.
 import argparse
 import contextlib
 import sys
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -327,9 +328,38 @@ def _match_envelope(src16: np.ndarray, out: np.ndarray, out_sr: int, rate: float
     return out * (np.power(r1, 1 - rate) * np.power(r2, rate - 1))
 
 
+_LOAD16K: OrderedDict = OrderedDict()   # (resolved path, size, mtime_ns) -> the decoded 16 kHz mono vocal, read-only
+_LOAD16K_KEEP = 4                        # about 15 MB per 4-min stem: one cover's lead and backing, plus an edit's
+_LOAD16K_LOCK = threading.Lock()
+
+
 def load_16k(p: Path) -> np.ndarray:
+    """A vocal decoded and resampled to 16 kHz mono, remembered for the last few files (the maintainers' notes,
+    efficiency: one cover decoded its lead stem three times and its backing twice, each edit the whole stem again).
+    The key is the file's resolved path, size and mtime_ns, so a rewritten stem is decoded afresh; the array is
+    read-only (every caller reads it or makes its own copy), and a caller that needs to write takes `.copy()`."""
     import librosa
+    key = None
+    try:
+        st = Path(p).resolve().stat()
+        key = (str(Path(p).resolve()), st.st_size, st.st_mtime_ns)
+    except OSError:
+        pass   # a path that can't be read: librosa raises its own error below
+    if key is not None:
+        with _LOAD16K_LOCK:
+            hit = _LOAD16K.get(key)
+            if hit is not None:
+                _LOAD16K.move_to_end(key)
+                return hit
     audio, _ = librosa.load(str(p), sr=SR16, mono=True)
+    audio = np.ascontiguousarray(audio, dtype=np.float32)
+    audio.flags.writeable = False
+    if key is not None:
+        with _LOAD16K_LOCK:
+            _LOAD16K[key] = audio
+            _LOAD16K.move_to_end(key)
+            while len(_LOAD16K) > _LOAD16K_KEEP:
+                _LOAD16K.popitem(last=False)
     return audio
 
 

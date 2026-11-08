@@ -11580,6 +11580,39 @@ def u_tray():
     return "stopped / idle / working (the module's bar) / paused / problem; job lines; icons differ; light import"
 
 
+@check("perf: load_16k remembers the last few vocals (a hit, a changed file misses, read-only arrays)")
+def u_perf_load16k():
+    import tempfile
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.engine import convert
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        f = Path(td) / "lead.flac"
+        x = (0.2 * np.sin(np.arange(16000 * 2) / 16000 * 2 * np.pi * 220)).astype(np.float32)
+        sf.write(str(f), x, 16000, subtype="PCM_16")
+        convert._LOAD16K.clear()
+        a = convert.load_16k(f)
+        assert not a.flags.writeable and a.dtype == np.float32 and len(a) == len(x), (a.flags, a.dtype, len(a))
+        b = convert.load_16k(Path(td) / "." / "lead.flac")   # the same file by another spelling: one entry, the same array
+        assert b is a and len(convert._LOAD16K) == 1, "a repeat call didn't come from the memo"
+        try:
+            a[0] = 1.0
+            raise AssertionError("the memo's array could be written")
+        except ValueError:
+            pass
+        time.sleep(0.02)
+        sf.write(str(f), x[:16000], 16000, subtype="PCM_16")   # rewritten (another size and mtime): decoded afresh
+        c = convert.load_16k(f)
+        assert c is not a and len(c) == 16000, "a changed file came from the memo"
+        for i in range(convert._LOAD16K_KEEP + 1):   # the memo stays small: the oldest entry leaves
+            g = Path(td) / f"v{i}.flac"
+            sf.write(str(g), x[:4000], 16000, subtype="PCM_16")
+            convert.load_16k(g)
+        assert len(convert._LOAD16K) == convert._LOAD16K_KEEP, len(convert._LOAD16K)
+        convert._LOAD16K.clear()
+    return f"hit, miss on rewrite, read-only, at most {convert._LOAD16K_KEEP} kept"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -13552,7 +13585,8 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray,
+               u_perf_load16k):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
