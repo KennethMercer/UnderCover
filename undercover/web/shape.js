@@ -229,6 +229,7 @@ function shDraw() {
         ${off || !d.result ? "<span></span>" : `<button class="sh-play" type="button" data-hear="${e.t0},${e.t1}" aria-label="Hear this change">▶</button>`}</div>`;
     }).join("") + `</div>`;
     if (SH.keptAs) h += `<div class="kept" role="status">Kept as <b>${esc(SH.keptAs)}</b>. The changes went with it, and this cover is as it was. Undo still works here, and a new Keep makes another version.</div>`;
+    else if (live.length && d.kept_now) h += `<div class="kept" role="status">This version is kept: it's a cover of its own in Recent covers.</div>`;
     else if (live.length) h += `<div class="unkept"><span>Not kept yet. These changes stay with this cover, and roll off with it when it leaves Recent covers.</span><button class="btn primary" type="button" data-sh="keep"${SH.busy ? " disabled" : ""}>Keep this version</button></div>`;
   }
   if (SH.confirm) h += `<div class="sheet" role="dialog" aria-label="Keep this version?"><h3>Keep this version?</h3><p>It becomes a new cover, <b>${esc(it.title + " (edited)")}</b>, next to the one it came from, with its changes. Recent covers holds 15, so the oldest one there rolls off to make room. Covers sent to SafeHouse stay.</p>

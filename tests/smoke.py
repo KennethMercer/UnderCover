@@ -79,6 +79,15 @@ def api(path, body=None, method=None, timeout=120):
     return json.loads(raw) if raw[:1] in (b"{", b"[") else raw
 
 
+def _api_status(path, body=None) -> int:
+    """The HTTP status of an /api request (200, or the refusal's code)."""
+    try:
+        api(path, body)
+        return 200
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def wait_for(fn, timeout, every=2.0, what="condition"):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -1053,7 +1062,7 @@ def u_listenback_extra():
     return "a stray ending cut with no re-read; repeats inside a line counted per word; a garbled take never kept over one missing a word"
 
 
-@check("hardening (1.1): a web page's Origin must be this server's own scheme, host and port; JSON bodies are capped per route (413, the body never read); a voice zip unpacks under a running size cap, few members, no links; links fetched for someone reach only the internet (after DNS, on every redirect); a phone can't cancel or retry PC-only work; the away listener names nothing; the Phone access copy says the home connection isn't encrypted")
+@check("hardening (1.1): a web page's Origin must be this server's own scheme, host and port; JSON bodies are capped per route (413, the body never read); a voice zip unpacks under a running size cap, few members, no links; links fetched for someone reach only the internet (after DNS, on every redirect); a phone can't cancel or retry PC-only work; the away listener names nothing; no phone is offered a connection that isn't encrypted (1.2.1: the one link is HTTPS)")
 def u_harden1():
     import inspect
     import numpy as np
@@ -1275,7 +1284,8 @@ def u_harden1():
     assert all(w not in (S.AWAY_401 + S.AWAY_403).decode().lower() for w in ("undercover", "away", "phone", "pair", "pc"))
     assert "AWAY_401" in ga and "AWAY_403" in ga and "Away from home is off" not in ga and "self._deny(403)" not in ga, ga
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
-    assert "the connection isn't encrypted" in page
+    assert "the connection isn't encrypted" not in page and "home Wi-Fi only" not in page.lower() and "home-only" not in page.lower()
+    assert "Use UnderCover on your phone, at home or anywhere." in page
     # another site's page: refused on every method and listener; following a link to a page is let through
     cs = lambda m, p, **h: S._cross_site(m, p, {k.replace("_", "-").title(): v for k, v in h.items()})
     assert cs("POST", "/api/voices/install", sec_fetch_site="cross-site", sec_fetch_mode="cors")
@@ -1397,7 +1407,8 @@ def u_harden1():
         assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile" in f.read_text(encoding="utf-8"), f
     from undercover.core import platform as PF
     ps_src = inspect.getsource(PF)
-    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 5
+    # (every PowerShell command line is built by _ps(), the one place that names the interpreter and asks for UTF-8)
+    assert '["powershell",' not in ps_src and ps_src.count("[_powershell(),") == 1 and ps_src.count("_ps(") >= 6
     assert PF._powershell().lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
     # every listener drops a stalled client; the phone and away listeners take so many connections at once, then 503
     # and close (live, on 127.0.0.1, with a handler that holds its connections)
@@ -2056,44 +2067,564 @@ def u_tailnet():
     return "starting -> sign-in -> approve -> ready; funnel only to the away port; off, forget; wrong download refused"
 
 
-@check("away tokens (phase 20): a paired phone's single-use transfer code becomes an away token; never the home one; codes expire and work once; Revoke ends both")
+@check("the move to the link (1.2.1): a phone paired on the home Wi-Fi asks for a single-use move code with its LAN token; redeemed at the link it gives the one token; the LAN token stays until the new one is used once, then goes, and the LAN listener's need with it; codes expire and work once; a file from before is read as it was; Remove ends both")
 def u_phone_away():
     from undercover.core import phone
     from undercover.core.phone import PhoneError
+    from undercover.core import platform as P
     with isolated_data():
-        phone._FILE[0] = None
-        phone.set_enabled(True)
-        code = phone.new_pairing()["code"]
-        home, dev = phone.claim(code, "Test phone", "192.168.1.50")
-        assert phone.device_for(home) and phone.device_for(home, away=True) is None
-        phone.set_away(True)
-        c = phone.away_code(dev["id"])
-        assert len(c) >= 20
-        away, d2 = phone.redeem_away(c)
-        assert d2["id"] == dev["id"] and away != home
-        assert phone.device_for(away, away=True)["id"] == dev["id"]
-        assert phone.device_for(away) is None and phone.device_for(home, away=True) is None, "home and away tokens mixed"
-        for bad in (c, "x" * 22, ""):   # used once already, made up, empty
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        lan, away = "L" * 43, "A" * 43
+        phone.state_file().write_text(json.dumps({"enabled": True, "away": True, "devices": [   # as 1.1 wrote it
+            {"id": "aaaaaaaaaa", "name": "Old phone", "hash": phone.hash_token(lan), "paired": "p", "seen": "s", "ip": "192.168.1.9", "used": time.time()},
+            {"id": "bbbbbbbbbb", "name": "Both", "hash": phone.hash_token("H" * 43), "away_hash": phone.hash_token(away), "paired": "p", "seen": "s",
+             "ip": "192.168.1.8", "used": time.time(), "away_used": time.time()}]}), encoding="utf-8")
+        saved_nets, real_prefix, was = dict(phone._NETS), P.prefix_length, os.environ.get("UNDERCOVER_PHONE_ADDR")
+        phone._NETS.clear()
+        P.prefix_length = lambda a: None
+        os.environ["UNDERCOVER_PHONE_ADDR"] = "192.168.1.20"
+        try:
+            st = phone._load()
+            assert "away" not in st and st["lan"] and [d["id"] for d in st["devices"]] == ["aaaaaaaaaa", "bbbbbbbbbb"]
+            on_disk = json.loads(phone.state_file().read_text(encoding="utf-8"))   # (R22: saved once as this version, and said)
+            assert all(d.get("version") == 1 for d in on_disk["devices"]) and "away" not in on_disk, on_disk
+            from undercover.core.config import path as _p
+            said = (_p("logs_dir") / "doctor.log").read_text(encoding="utf-8")
+            assert "2 phones from before the one link carried over; 1 still uses the home Wi-Fi until it switches." in said, said[-300:]
+            assert lan not in said and away not in said and phone.hash_token(lan) not in said
+            phone._FILE[0] = None
+            phone._load()
+            assert (_p("logs_dir") / "doctor.log").read_text(encoding="utf-8").count("from before the one link") == 1, "said twice"
+            assert phone.device_for(lan, "192.168.1.77")["id"] == "aaaaaaaaaa" and phone.device_for(lan, away=True) is None
+            assert phone.device_for(away, away=True)["id"] == "bbbbbbbbbb", "the away token of 1.1 isn't the one token"
+            assert phone.lan_needed() and phone.devices()[0]["lan"] and not phone.devices()[1]["lan"]
+            assert phone.device_for("H" * 43, "192.168.1.77") is None, "a moved phone's LAN token still works after its new one was used"
+            for bad in ("nope", "bbbbbbbbbb"):   # unknown, and a phone with no LAN token left
+                try:
+                    phone.move_code(bad)
+                    raise AssertionError(f"a move code for {bad}")
+                except PhoneError:
+                    pass
+            c = phone.move_code("aaaaaaaaaa")
+            assert len(c) >= 20
+            nonce, d2 = phone.redeem_move(c)
+            assert d2["id"] == "aaaaaaaaaa" and d2["asks"] == "move" and not d2["moving"] and phone.collect(nonce) is None, d2   # waits for Allow
+            assert [d["asks"] for d in phone.pending()] == ["move"] and phone.device_for(lan, "192.168.1.77"), "a move that waits stopped the LAN token"
+            phone.refuse("aaaaaaaaaa")   # No: the move is cancelled, the phone from before keeps its LAN token and may ask again
+            assert phone.pending() == [] and phone.collect(nonce) is None and phone.device_for(lan, "192.168.1.77")["id"] == "aaaaaaaaaa"
+            assert phone.devices()[0]["id"] == "aaaaaaaaaa" and phone.devices()[0]["lan"]
+            c = phone.move_code("aaaaaaaaaa")
+            nonce, d2 = phone.redeem_move(c)
+            phone.allow("aaaaaaaaaa")
+            main, d2 = phone.collect(nonce)
+            assert d2["id"] == "aaaaaaaaaa" and main != lan and d2["moving"] and phone.lan_needed(), "the LAN token went before the new one was used"
+            assert phone.collect(nonce) is None, "the moved phone's token was handed over twice"
+            for bad in (c, "x" * 22, ""):   # used once already, made up, empty
+                try:
+                    phone.redeem_move(bad)
+                    raise AssertionError(f"redeemed {bad!r}")
+                except PhoneError:
+                    pass
+            assert phone.device_for(lan, "192.168.1.77")["id"] == "aaaaaaaaaa", "the LAN token stopped before the phone arrived"
+            assert phone.device_for(main, away=True)["id"] == "aaaaaaaaaa"   # arrived: the LAN token is finished
+            assert not phone.lan_needed() and phone.device_for(lan, "192.168.1.77") is None and not phone.devices()[0]["moving"]
+            assert not json.loads(phone.state_file().read_text(encoding="utf-8"))["lan"], "the file still says the LAN listener is needed"
+            phone._MOVE_CODES[phone.hash_token("expired")] = ("aaaaaaaaaa", time.time() - 1)
             try:
-                phone.redeem_away(bad)
-                raise AssertionError(f"redeemed {bad!r}")
+                phone.redeem_move("expired")
+                raise AssertionError("an expired code worked")
             except PhoneError:
                 pass
-        old = phone.away_code(dev["id"])
-        phone._AWAY_CODES[phone.hash_token(old)] = (dev["id"], time.time() - 1)
+            assert phone.still_valid(phone.hash_token(main)) and not phone.still_valid(phone.hash_token(lan))
+            phone.set_enabled(False)
+            assert phone.device_for(main, away=True) is None, "the link off, yet the token works"
+            phone.set_enabled(True)
+            text = json.dumps(phone.devices())
+            assert "hash" not in text and main not in text and lan not in text, "a hash or a token in the public list"
+            phone.revoke("aaaaaaaaaa")
+            assert phone.device_for(main, away=True) is None and [d["id"] for d in phone.devices()] == ["bbbbbbbbbb"]
+            assert phone.revoke_all() == 1 and phone.devices() == [] and phone.device_for(away, away=True) is None
+        finally:
+            P.prefix_length = real_prefix
+            phone._NETS.clear()
+            phone._NETS.update(saved_nets)
+            if was is None:
+                os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
+            else:
+                os.environ["UNDERCOVER_PHONE_ADDR"] = was
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+            phone._SEEN_AT.clear()
+    return "a 1.1 file read as it was; LAN token -> move code -> the one token; the LAN token goes at the first use; once only; expiry; off; Remove"
+
+
+@check("one phone's work is capped (1.2.1, every phone is on the internet now): three jobs waiting or running at once, twelve started in an hour, said plainly (429); the PC has no cap; a phone's retry counts; the library's deletes are the PC's")
+def u_phone_jobs():
+    import inspect
+    from types import SimpleNamespace
+    from undercover.app import phone_api, server
+    from undercover.core import jobs
+    saved = dict(jobs.JOBS)
+    jobs.JOBS.clear()
+    try:
+        phone_h = SimpleNamespace(remote=True, device={"id": "d1", "name": "p"})
+        jobs.ORIGIN.h = phone_h
+        made = []
+        for _ in range(jobs.PHONE_JOBS):
+            j = jobs.Job("cover", title="t")
+            jobs.JOBS[j.id] = j
+            made.append(j)
+        assert all(j.device == "d1" for j in made)
         try:
-            phone.redeem_away(old)
-            raise AssertionError("an expired code worked")
-        except PhoneError:
-            pass
-        phone.set_away(False)
-        assert phone.device_for(away, away=True) is None, "away off, yet the away token works"
-        phone.set_away(True)
-        assert "away_hash" not in json.dumps(phone.devices()), "a hash in the public list"
-        phone.revoke(dev["id"])
-        assert phone.device_for(home) is None and phone.device_for(away, away=True) is None
-        phone._FILE[0] = None
-    return "code -> away token; home and away kept apart; once only; expiry; away off; Revoke ends both"
+            jobs.Job("cover", title="t")
+            raise AssertionError("a fourth job from one phone")
+        except jobs.TooManyJobs as e:
+            assert "3 jobs waiting or running" in str(e) and type(e) in jobs.USER_ERRORS, e
+        made[0].finish("done", message="Finished")
+        j = jobs.Job("speak", title="t")   # one finished: room for one more
+        jobs.JOBS[j.id] = j
+        jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "d2", "name": "other"})
+        jobs.JOBS.update({x.id: x for x in [jobs.Job("cover", title="t") for _ in range(2)]})   # another phone has its own
+        jobs.ORIGIN.h = None
+        for _ in range(10):   # the PC: no cap
+            x = jobs.Job("cover", title="t")
+            jobs.JOBS[x.id] = x
+            assert x.device is None
+        jobs.ORIGIN.h = SimpleNamespace(remote=False, device={"id": "d1"})   # (a device on a PC request means nothing)
+        assert jobs.Job("cover", title="t").device is None
+        jobs.JOBS.clear()
+        jobs.ORIGIN.h = phone_h
+        for _ in range(jobs.PHONE_JOBS_HOUR):   # the hour's cap counts finished ones too
+            x = jobs.Job("cover", title="t")
+            x.finish("done", message="Finished")
+            jobs.JOBS[x.id] = x
+        try:
+            jobs.Job("cover", title="t")
+            raise AssertionError("a thirteenth job in an hour")
+        except jobs.TooManyJobs as e:
+            assert "12 jobs in the last hour" in str(e)
+        for x in jobs.JOBS.values():
+            x.created -= 3601
+        assert jobs.Job("cover", title="t").device == "d1"
+    finally:
+        jobs.ORIGIN.h = None
+        jobs.JOBS.clear()
+        jobs.JOBS.update(saved)
+    src = inspect.getsource(server.Handler.do_POST) + inspect.getsource(server.Handler._retry)
+    assert src.count("except jobs.TooManyJobs as e:") == 2 and "r.remote, r.device = self.remote, self.device" in src
+    for m, p in (("DELETE", "/api/library/covers/0123456789"), ("DELETE", "/api/library/speech/0123456789"),
+                 ("DELETE", "/api/library/songs/0123456789abcdef"), ("DELETE", "/api/speak/0123456789"),
+                 ("DELETE", "/api/train/projects/someone")):
+        assert phone_api.policy(m, p)[0] == "pc", (m, p)
+    assert phone_api.policy("GET", "/api/train/projects/someone")[0] == "phone" and phone_api.policy("DELETE", "/api/voices/v")[0] == "phone"
+    web = ROOT / "undercover" / "web"   # and the pages don't offer a phone the deletes it can't make ([data-pc] hides on a phone)
+    lib, se = (web / "library.js").read_text(encoding="utf-8"), (web / "speakeasy.js").read_text(encoding="utf-8")
+    assert lib.count('id="lib-del" data-pc') == 4 and 'id="lib-bulk-del" data-pc' in lib and 'id="lib-del-stems" data-pc' in lib, "a delete the phone can't make is offered"
+    assert 'Remove…</b' in lib and 'id="lib-del">Remove' in lib, "a voice's Remove (set aside, recoverable) stopped being offered on a phone"
+    assert "data-pc data-rdel=" in se and 'body[data-client="phone"] [data-pc]' in (web / "app.css").read_text(encoding="utf-8")
+    return "3 at once, 12 an hour, per phone; the PC free; retries count; deletes the PC's, and not offered on a phone"
+
+
+@check("Your phone's card (1.2.1): one Set up; the setup's steps with the sign-in and approval links; Allow / No for a phone asking in (new or switching); the QR, or a typed code on request; Remove, Remove all and Turn off; a phone from before gets Switch; the home-screen app starts at /pair, which sends a connected phone on")
+def u_phone_card():
+    web = ROOT / "undercover" / "web"
+    page, rooms, app = ((web / n).read_text(encoding="utf-8") for n in ("index.html", "rooms.js", "app.js"))
+    for i in ("phone-setup", "phone-box", "phone-step", "phone-signin", "phone-approve", "phone-asks", "phone-pair", "phone-pairing",
+              "phone-qr", "phone-short", "phone-typed", "phone-code", "phone-wrong", "phone-devices", "phone-link", "phone-off",
+              "phone-all", "away-forget", "set-away-private", "set-phone-me", "ph-move", "ph-move-say", "ph-move-go"):
+        assert page.count(f'id="{i}"') == 1, i
+    for gone in ("set-phone\"", "set-away\"", "away-box", "away-me", "set-away-me-row", "Phone access", "Away from home", "away from home", "paired"):
+        assert gone not in page.split('id="room-settings"', 1)[1].split('id="room-addons"', 1)[0], f"the card still has {gone!r}"
+    for route in ("/api/phone/allow", "/api/phone/refuse", "/api/phone/pair/short", "/api/phone/revoke-all", "/api/phone/forget",
+                  "/api/phone/move/link", "{ on: true }", "{ on: false }"):
+        assert route in rooms, route
+    assert "/api/away" not in rooms + app and "away_ready" not in app and "s.move" in app
+    card = rooms.split("Settings: Your phone", 1)[1].split("$(\"#ph-move-go\")", 1)[0]
+    assert "esc(d.name)" in card and "${d.name}" not in card, "a phone's name reaches the page unescaped"
+    assert 'd.asks === "move"' in card and "data-allow" in card and "data-refuse" in card and "p.short" in card
+    man = json.loads((web / "manifest.webmanifest").read_text(encoding="utf-8"))
+    assert man["start_url"] == "/pair" and man["scope"] == "/", man
+    pair = (web / "pair.html").read_text(encoding="utf-8")
+    assert 'if (!code.value) fetch("/api/status"' in pair and 'location.replace("/")' in pair
+    from undercover.app import server
+    src = inspect_src(server._move_state)
+    assert '"ready"' in src and '"waiting"' in src and '"move": _move_state() if self.remote and not self.away else None' in inspect_src(server.Handler.do_GET)
+    return "Set up, the steps, Allow / No, the QR or a typed code, Remove, Turn off; Switch on a phone from before; the app starts at /pair"
+
+
+@check("a phone's open job stream ends (1.2.1, R5 and R10): when the phone is removed, when the link is turned off, and a LAN token's stream once the moved phone has used its new token; the PC's own stream doesn't care")
+def u_phone_stream():
+    import io, threading
+    from types import SimpleNamespace
+    from undercover.app import server
+    from undercover.core import jobs, phone
+    from undercover.core import platform as P
+
+    def stream(dev, job):
+        """Handler._sse on a fake request, in a thread: (the thread, the fake) to see whether it ends."""
+        h = SimpleNamespace(remote=dev is not None, device=dev, wfile=io.BytesIO(), close_connection=False)
+        h.send_response = h.send_header = lambda *a: None
+        h.end_headers = lambda: None
+        h._error = lambda *a: None
+        t = threading.Thread(target=server.Handler._sse, args=(h, job.id), daemon=True)
+        t.start()
+        return t, h
+
+    def ends(t, h, job, what):
+        with job.cond:
+            job.cond.notify_all()   # (the stream checks between events; a change wakes it as an event would)
+        t.join(5)
+        assert not t.is_alive() and h.close_connection, f"the stream went on after {what}"
+        assert b"data:" not in h.wfile.getvalue().split(b"\n\n", 1)[1], what
+
+    def pair(name):
+        phone.new_pairing()
+        nonce, d = phone.claim(phone.PAIRING["code"], name)
+        phone.allow(d["id"])
+        token, d = phone.collect(nonce)
+        return token, phone.device_for(token, away=True)
+
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        saved_nets, real_prefix, was = dict(phone._NETS), P.prefix_length, os.environ.get("UNDERCOVER_PHONE_ADDR")
+        phone._NETS.clear()
+        P.prefix_length = lambda a: None
+        os.environ["UNDERCOVER_PHONE_ADDR"] = "192.168.1.20"
+        job = jobs.Job("cover", title="a long one")
+        jobs.JOBS[job.id] = job
+        threads = []
+        try:
+            phone.set_enabled(True)
+            _, a = pair("Removed phone")
+            _, b_ = pair("Off phone")
+            t1, h1 = stream(a, job)
+            t2, h2 = stream(b_, job)
+            t0, h0 = stream(None, job)   # this PC's own page
+            threads += [t0, t1, t2]
+            time.sleep(0.3)
+            assert t1.is_alive() and t2.is_alive() and t0.is_alive()
+            phone.revoke(a["id"])
+            ends(t1, h1, job, "Remove")
+            assert t2.is_alive(), "another phone's stream ended with the removed one"
+            phone.set_enabled(False)
+            ends(t2, h2, job, "the link was turned off")
+            phone.set_enabled(True)
+            # a phone from before: its stream on the LAN token goes on while it moves, and ends once it has arrived
+            lan = "L" * 43
+            with phone._LOCK:
+                st = phone._load()
+                st["devices"].append({"id": "cccccccccc", "name": "Old phone", "lan_hash": phone.hash_token(lan), "hash": None,
+                                      "paired": "p", "seen": "s", "ip": "192.168.1.9", "lan_used": time.time()})
+                phone._relan(st)
+                phone._save()
+            old = phone.device_for(lan, "192.168.1.77")
+            assert old and old["hash"] == phone.hash_token(lan), old
+            t3, h3 = stream(old, job)
+            threads.append(t3)
+            nonce, _ = phone.redeem_move(phone.move_code("cccccccccc"))
+            phone.allow("cccccccccc")
+            main, _ = phone.collect(nonce)
+            with job.cond:
+                job.cond.notify_all()
+            time.sleep(0.3)
+            assert t3.is_alive(), "the LAN token's stream ended before the phone had used its new token"
+            assert phone.device_for(main, away=True)["id"] == "cccccccccc"
+            ends(t3, h3, job, "the move (the LAN token is finished)")
+            assert t0.is_alive(), "the PC's own stream ended with a phone's"
+        finally:
+            job.finish("done", message="Finished")
+            with job.cond:
+                job.cond.notify_all()
+            for t in threads:
+                t.join(5)
+            jobs.JOBS.pop(job.id, None)
+            phone._NETS.clear(), phone._NETS.update(saved_nets)
+            P.prefix_length = real_prefix
+            if was is None:
+                os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
+            else:
+                os.environ["UNDERCOVER_PHONE_ADDR"] = was
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+    return "Remove, Off and the move each end the phone's stream at once; another phone's and the PC's go on"
+
+
+@check("Your phone's records hold up (1.2.1, review): an ask never allowed runs out while the server runs; No on a phone that isn't waiting leaves it; a full list keeps the code; an unreadable phone.json is never saved over; UnderCover's own warm-up and preview jobs don't count against a phone; the card doesn't redraw what hasn't changed; the pages keep waiting through a blip")
+def u_phone_records():
+    from types import SimpleNamespace
+    from undercover.core import jobs, phone
+    from undercover.core.phone import PhoneError
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        try:
+            phone.set_enabled(True)
+            phone.new_pairing()
+            nonce, d = phone.claim(phone.PAIRING["code"], "Late phone")
+            assert [x["id"] for x in phone.pending()] == [d["id"]]
+            with phone._LOCK:   # ten minutes on, with phone.json untouched all that time
+                next(x for x in phone._STATE["devices"] if x["id"] == d["id"])["asked"] -= phone.PENDING_S + 1
+            assert phone.pending() == [] and phone.collect(nonce) is None, "an ask never allowed outlived its ten minutes"
+            try:
+                phone.allow(d["id"])
+                raise AssertionError("Allow on an ask that ran out")
+            except PhoneError as e:
+                assert e.status == 404
+            phone.new_pairing()
+            nonce, d = phone.claim(phone.PAIRING["code"], "Kept phone")
+            phone.allow(d["id"])
+            assert phone.collect(nonce)
+            for _ in range(2):   # No twice (two tabs, or after Allow): the connected phone stays
+                try:
+                    phone.refuse(d["id"])
+                    raise AssertionError("No on a phone that isn't waiting")
+                except PhoneError as e:
+                    assert e.status == 404
+            assert [x["id"] for x in phone.devices()] == [d["id"]], "No removed a connected phone"
+            phone.new_pairing()
+            n2, d2 = phone.claim(phone.PAIRING["code"], "Refused")
+            assert phone.refuse(d2["id"])["id"] == d2["id"] and [x["id"] for x in phone.devices()] == [d["id"]] and phone.pending() == []
+            # a full list: the claim is refused generically, and the code is still good after Remove
+            with phone._LOCK:
+                st = phone._load()
+                st["devices"] += [{"id": f"f{i:09d}", "name": "x", "hash": phone.hash_token(f"t{i}"), "lan_hash": None, "version": 1,
+                                   "paired": "p", "seen": "s", "ip": ""} for i in range(phone.MAX_DEVICES - 1)]
+                phone._save()
+            win = phone.new_pairing()
+            try:
+                phone.claim(win["code"], "Eleventh")
+                raise AssertionError("an eleventh phone")
+            except PhoneError as e:
+                assert e.status == 409 and e.generic, e
+            assert phone.pairing() and phone.pairing()["code"] == win["code"], "a full list used the code up"
+            phone.revoke("f000000000")
+            assert phone.claim(win["code"], "Eleventh")[1]["pending"]
+            # an unreadable phone.json: what's known stays, and it is never saved over
+            f = phone.state_file()
+            good = f.read_text(encoding="utf-8")
+            f.write_text(good[: len(good) // 2], encoding="utf-8")
+            assert len(phone.devices()) == phone.MAX_DEVICES - 1 and len(phone.pending()) == 1 and phone.enabled(), "a half-written file emptied the phones"
+            try:
+                phone.set_enabled(True)
+                raise AssertionError("saved over an unreadable phone.json")
+            except PhoneError as e:
+                assert "can't be read" in str(e)
+            assert f.read_text(encoding="utf-8") == good[: len(good) // 2]
+            f.write_text(good, encoding="utf-8")
+            phone.set_enabled(True)   # readable again: saves work
+            # the cap counts what the phone asked for, not UnderCover's own warm-up or preview line
+            saved = dict(jobs.JOBS)
+            jobs.JOBS.clear()
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "dz", "name": "p"})
+            try:
+                for _ in range(jobs.PHONE_JOBS + 2):
+                    x = jobs.Job("speakwarm", title="w")
+                    jobs.JOBS[x.id] = x
+                    x = jobs.Job("voicepreview", title="v")
+                    jobs.JOBS[x.id] = x
+                for _ in range(jobs.PHONE_JOBS):
+                    x = jobs.Job("speech", title="s")
+                    jobs.JOBS[x.id] = x
+                try:
+                    jobs.Job("speech", title="s")
+                    raise AssertionError("a fourth job")
+                except jobs.TooManyJobs:
+                    pass
+            finally:
+                jobs.ORIGIN.h = None
+                jobs.JOBS.clear()
+                jobs.JOBS.update(saved)
+        finally:
+            phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+            phone._STATE.clear()
+    web = ROOT / "undercover" / "web"
+    rooms = (web / "rooms.js").read_text(encoding="utf-8")
+    assert 'phoneDraw("phone-devices"' in rooms and "if (drew) $$(\"#phone-devices [data-revoke]\")" in rooms and 'phoneDraw("phone-asks"' in rooms
+    for page in ("pair.html", "move.html"):
+        src = (web / page).read_text(encoding="utf-8")
+        assert '.catch(() => null);   // (a blip on the way: ask again)' in src and "w.status === 401 || w.status === 403" in src, page
+    assert "409" in (web / "pair.html").read_text(encoding="utf-8")
+    return "asks run out; No leaves a connected phone; a full list keeps the code; an unreadable file isn't saved over; warm-ups uncounted"
+
+
+@check("CounterIntelligence on onephone (CI-64, CI-65, CI-66): a phone's night-queue items count against it (three at once, said plainly) while the PC's don't; forgetting every thumb is the PC's (one thumb stays a phone's); an ask carries a two-digit match number from its nonce, the same on the phone's answer and beside Allow; a name loses its bidi controls")
+def u_phone_ci64():
+    from types import SimpleNamespace
+    from undercover.app import ear_api
+    from undercover.core import jobs, phone, worklist
+    from undercover.core.ear import EarError
+    with isolated_data():
+        worklist.register_kind("smoke-ci64", run=lambda *a: None, estimate=lambda item: {"total": 60})
+        try:
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p1", "name": "p"})
+            for n in range(worklist.PHONE_ITEMS):
+                worklist.add("smoke-ci64", f"Someone {n}")
+            try:
+                worklist.add("smoke-ci64", "Someone more")
+                raise AssertionError("a fourth item from one phone")
+            except jobs.TooManyJobs as e:
+                assert "3 things in the queue" in str(e)
+            q = worklist._state()["queue"]
+            assert [i.get("device") for i in q] == ["p1"] * 3, q
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p2", "name": "other"})
+            worklist.add("smoke-ci64", "Another phone's")   # (another phone has its own three)
+            jobs.ORIGIN.h = None
+            for n in range(4):   # the PC: no cap, and no device on its items
+                worklist.add("smoke-ci64", f"PC {n}")
+            assert not any(i.get("device") for i in worklist._state()["queue"][-4:])
+            q[0]["state"] = "done"   # one finished: room for one more
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p1", "name": "p"})
+            worklist.add("smoke-ci64", "Someone later")
+            # many adds from one phone at the same moment (a burst on the link): still three at most
+            import threading as _th
+            worklist.register_kind("smoke-ci64-slow", run=lambda *a: None, estimate=lambda item: time.sleep(0.2) or {"total": 60})
+            got, refused = [], []
+
+            def one(n):
+                jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p3", "name": "burst"})
+                try:
+                    worklist.add("smoke-ci64-slow", f"Burst {n}")
+                    got.append(n)
+                except jobs.TooManyJobs:
+                    refused.append(n)
+                finally:
+                    jobs.ORIGIN.h = None
+            ts = [_th.Thread(target=one, args=(n,)) for n in range(10)]
+            for x in ts:
+                x.start()
+            for x in ts:
+                x.join(30)
+            burst = [i for i in worklist._state()["queue"] if i.get("device") == "p3"]
+            assert len(got) == len(burst) == worklist.PHONE_ITEMS and len(refused) == 10 - worklist.PHONE_ITEMS, (got, refused, len(burst))
+        finally:
+            jobs.ORIGIN.h = None
+            worklist.KINDS.pop("smoke-ci64", None)
+            worklist.KINDS.pop("smoke-ci64-slow", None)
+        # CI-65: every thumb at once is the PC's
+        said = {}
+        h = SimpleNamespace(remote=True, _body=lambda: {"all": True}, _json=lambda o, status=200: said.update(json=o),
+                            _error=lambda m, s=400: said.update(err=(m, s)))
+        ear_api.handle(h, "POST", "/api/ear/forget")
+        assert said.get("err") and said["err"][1] == 422 and "done on the PC" in said["err"][0] and "json" not in said, said
+        said.clear()
+        h.remote = False
+        ear_api.handle(h, "POST", "/api/ear/forget")
+        assert said.get("json") == {"forgot": 0}, said
+        page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+        assert 'id="set-ear-forget" type="button" data-pc' in page
+        # CI-66: the match number, and a name with no bidi controls
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        try:
+            phone.set_enabled(True)
+            phone.new_pairing()
+            nonce, d = phone.claim(phone.PAIRING["code"], "\u202eenohp\u202c Pixel\u2066")
+            assert d["name"] == "enohp Pixel", repr(d["name"])
+            m = phone.match_of(phone.hash_token(nonce))
+            assert m and len(m) == 2 and m.isdigit() and d["match"] == m and phone.pending()[0]["match"] == m, (m, d)
+            phone.allow(d["id"])
+            assert phone.devices()[0]["match"] is None, "a connected phone still shows a match number"
+        finally:
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+    web = ROOT / "undercover" / "web"
+    assert "Allow only if your phone shows" in (web / "rooms.js").read_text(encoding="utf-8")
+    assert 'data.match' in (web / "pair.html").read_text(encoding="utf-8") and 'j.match' in (web / "move.html").read_text(encoding="utf-8")
+    return "three items a phone, the PC free; all thumbs the PC's; one match number on both sides; bidi controls gone"
+
+
+@check("the home-network listener's state is stored (1.2.1): at start it opens only while a phone paired before the link still holds its LAN token, never because the link is on; it closes for good when the last such token goes")
+def u_phone_listen():
+    from types import SimpleNamespace
+    from undercover.app import phone_api as PA
+    from undercover.core import phone
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._STATE.clear()
+        made, closed = [], []
+        fake_srv = lambda a, p: (made.append((a, p)), SimpleNamespace(serve_forever=lambda: None, shutdown=lambda: closed.append(1), server_close=lambda: None))[1]
+        saved = (PA.away_open, PA.warm, dict(PA._L), dict(PA._A), os.environ.get("UNDERCOVER_PHONE_ADDR"))
+        PA.away_open, PA.warm = (lambda: None), (lambda: None)   # (no Tailscale, no netsh here)
+        os.environ["UNDERCOVER_PHONE_ADDR"] = "192.168.1.20"
+        try:
+            phone.set_enabled(True)
+            PA._L.update(srv=None, addr=None, problem=None, make=None, port=None)
+            PA.setup(fake_srv, 7862, lambda a, p: None)
+            assert made == [] and PA._L["srv"] is None, "the link on opened the home-network listener"
+            assert not phone.lan_needed() and PA.state()["lan"] is None
+            phone.state_file().write_text(json.dumps({"enabled": True, "devices": [
+                {"id": "aaaaaaaaaa", "name": "Old", "hash": phone.hash_token("L" * 43), "paired": "p", "seen": "s", "ip": "192.168.1.9", "used": time.time()}]}), encoding="utf-8")
+            phone._FILE[0] = None
+            assert phone.lan_needed()
+            PA.tidy_lan()
+            assert made == [("192.168.1.20", 7862)] and PA._L["srv"] is not None, made
+            assert PA.state()["lan"]["listening"]
+            phone.revoke("aaaaaaaaaa")
+            assert not phone.lan_needed() and not json.loads(phone.state_file().read_text(encoding="utf-8"))["lan"]
+            PA.tidy_lan()
+            assert closed == [1] and PA._L["srv"] is None, "the listener didn't close when the last LAN token went"
+            PA.tidy_lan()
+            assert made == [("192.168.1.20", 7862)] and closed == [1], "closed or opened again with nothing to do"
+        finally:
+            PA.away_open, PA.warm = saved[0], saved[1]
+            PA._L.clear(), PA._L.update(saved[2]), PA._A.clear(), PA._A.update(saved[3])
+            if saved[4] is None:
+                os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
+            else:
+                os.environ["UNDERCOVER_PHONE_ADDR"] = saved[4]
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+    return "closed with no LAN token; opened for one; closed for good when it went"
+
+
+def _plain_error_cases(jobs, ModelError, Own):
+    with isolated_data():
+        for raised, want in ((ModelError("That voice isn't installed."), True), (Own("A plain sentence."), True),
+                             (RuntimeError("boom"), False), (KeyError("x"), False)):
+            j = jobs.Job("cover", title="t")
+            jobs.fail(j, raised, "converting")
+            ev = j.events[-1]
+            assert ev["final"] and ev["state"] == "error" and ev["plain"] is want, (raised, ev)
+            assert j.snapshot()["final"]["plain"] is want, j.snapshot()["final"]
+        j = jobs.Job("cover", title="t")
+        j.finish("error", message="Only 1.2 GB free on drive D:. Free some space and try again.")   # a job's own sentence
+        assert j.events[-1]["plain"] is True and j.snapshot()["final"]["plain"] is True
+        j = jobs.Job("cover", title="t")
+        j.finish("done", message="Finished")
+        assert "plain" not in j.events[-1] and "plain" not in j.snapshot()["final"]
+        j = jobs.Job("cover", title="t")
+        jobs.run_job(j, lambda job: (_ for _ in ()).throw(ModelError("Pick a voice first.")))
+        assert j.events[-1]["message"] == "Pick a voice first." and j.events[-1]["plain"] is True, j.events[-1]
+        j = jobs.Job("cover", title="t")
+        jobs.run_job(j, lambda job: 1 / 0)
+        assert j.events[-1]["plain"] is False and "Something went wrong" in j.events[-1]["message"], j.events[-1]
+
+
+@check("a job's final error says whether its message is a plain refusal (Q, 1.2.1): plain for a ModelError, a module's own user error, or a sentence the job ends itself with; not plain for an unexpected error (whose friendly message is a guess); the jobs list carries it; every site that turns an exception into a job's error goes through jobs.fail")
+def u_plain_error():
+    import inspect
+    import re as _re
+    from undercover.core import jobs
+    from undercover.core.voices import ModelError
+
+    class Own(Exception):
+        pass
+    jobs.register_user_error(Own)
+    try:
+        _plain_error_cases(jobs, ModelError, Own)
+    finally:
+        jobs.USER_ERRORS.remove(Own)
+    left = []
+    for f in (ROOT / "undercover").rglob("*.py"):
+        for m in _re.finditer(r'finish\("error", message=(jobs\.)?friendly\(', f.read_text(encoding="utf-8")):
+            line = f.read_text(encoding="utf-8")[m.start():].split("\n", 1)[0]
+            if "plain=" not in line:
+                left.append(f"{f.name}: {line[:80]}")
+    assert not left, f"an exception becomes a job's error without its plain flag: {left}"
+    assert 'plain=False' in inspect.getsource(jobs)   # (the GPU thread's last resort)
+    return "plain: ModelError, a module's own, a job's own sentence; not: unexpected; in the list; every site"
 
 
 @check("overnight improve never replaces or deletes the user's voice (Internal Affairs P2-1): the retrained one waits beside it as pending, whatever the numbers; no improve over a pending one")
@@ -4025,12 +4556,27 @@ def u_launcher_moved():
 
         def target(link):
             r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                                f"(New-Object -ComObject WScript.Shell).CreateShortcut('{link}').TargetPath"],
-                               capture_output=True, text=True, timeout=30)
+                                "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+                                "(New-Object -ComObject WScript.Shell).CreateShortcut($env:UC_LINK).TargetPath"],
+                               capture_output=True, text=True, encoding="utf-8", timeout=30, env={**os.environ, "UC_LINK": str(link)})
             return Path(r.stdout.strip())
         assert target(d / "UnderCover.lnk") == new and target(sub / "UnderCover.lnk") == new
         assert target(d / "keep" / "UnderCover.lnk") == other, "a shortcut to another file moved"
         assert platform.repoint_shortcuts(old, new, folders=[d]) == []
+        # (hardening) a folder name with quotes in it, the curly ones too, is a name: nothing of it runs
+        odd = d / "a\u2019+(New-Item -ItemType File -Force -Path ran)+\u2019b ' \u2018x\u201a"   # (no colon: not in a name; WScript.Shell saves only ANSI-page names, so not U+201B)
+        odd.mkdir()
+        here = os.getcwd()
+        os.chdir(d)   # (where a "ran" would be made: PowerShell starts in this process's folder)
+        try:
+            platform.startup_entry(True, odd / "UnderCover.bat", folder=odd, icon=odd / "i.ico")
+            assert target(odd / "UnderCover.lnk") == odd / "UnderCover.bat", target(odd / "UnderCover.lnk")
+            assert platform.repoint_shortcuts(odd / "UnderCover.bat", odd / "scripts" / "UnderCover.bat", folders=[odd]) == [str(odd / "UnderCover.lnk")]
+            assert target(odd / "UnderCover.lnk") == odd / "scripts" / "UnderCover.bat"
+        finally:
+            os.chdir(here)
+        assert not (d / "ran").exists(), "a quote in a folder name ended PowerShell's string and ran what followed"
+        assert "q = lambda" not in inspect.getsource(platform), "a path is quoted into a PowerShell command again"
     return "repointed once (the old .bat's shortcuts, deep too; others kept); never in tests / sandboxes / installed copies; retried after a failure"
 
 
@@ -4424,6 +4970,13 @@ def u_installer_space():
     inst = ROOT / "installer"
     sizes = _json.loads((inst / "sizes.json").read_text(encoding="utf-8"))
     assert sizes["margin"] >= 1.2 and sizes["python"]["rocm"] >= 6.4 and sizes["models_gb"] >= 8.2, "below what was measured"
+    import undercover.addons   # noqa: F401  (the wizard's list, as build.ps1 reads it: the engines' add-ons registered too)
+    from undercover.core import addons as _addons
+    offered = [a for a in _addons.status() if a["optional"] and a["installable"]]
+    assert {"f5", "xtts", "chatterbox"} <= {a["id"] for a in offered}, [a["id"] for a in offered]
+    for a in offered:   # every add-on the wizard offers (build.ps1: optional and installable) has its size, at least its files'
+        got = sizes["addons"].get(a["id"])
+        assert got and got >= _addons.get(a["id"]).size_mb / 1000, f"installer/sizes.json has no size (or too small) for {a['id']}: {got}"
     if os.name == "nt":
         def ps(body):
             r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
@@ -5818,6 +6371,109 @@ def u_v101():
     top = next(e for e in json.loads((ROOT / "undercover" / "web" / "whatsnew.json").read_text(encoding="utf-8"))["entries"] if e["id"] == "2026-10-24-v101")
     assert top["title"] == "UnderCover 1.0.1" and 1 <= len(top["lines"]) <= 4, top
     return f"installer files, kept-file check, warm-up, report line, import rounds, release files; {browsed}"
+
+
+@check("Low profile (firstopen): hearing a song's words inside a cover's job (Shape it's first open, a duet) gives the worker Whisper's share, not speech's, with the server's cap making room and its separator and converter let go; the share comes back after; a limit too small says so plainly; off changes nothing")
+def u_lowprofile_hear():
+    import inspect, os
+    import numpy as np
+    import soundfile as sf
+    from undercover.core import gpu, jobs, lowprofile as L
+    from undercover.core.cadence import client
+    from undercover.frontman import duets
+    saved = (dict(L.STATE), dict(jobs.STATUS), os.environ.get("UNDERCOVER_TEST_ROOTS"), os.environ.get("UNDERCOVER_LOW_PROFILE"))
+    real = (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines, gpu.held_gb)
+    seen, caps, freed, alive = {}, [], [], [False]
+    try:
+        with isolated_data() as t:
+            jobs.STATUS["vram_gb"] = 24
+            os.environ["UNDERCOVER_TEST_ROOTS"] = "x"
+            L.worker_engines = lambda: {"chatterbox-turbo"}
+            client.WORKER.running = lambda: alive[0]
+            client.WORKER.stop = lambda why="": alive.__setitem__(0, False) or seen.setdefault("stops", []).append(why)
+            client.WORKER.call = lambda op, **kw: {}
+            gpu.apply_cap = lambda lim=None: caps.append(lim) or lim
+            gpu.release = lambda step: freed.append(step)
+            held = [9.0]   # the server holds 9 GB (a converter and a separator): both must go for Whisper's 5 beside it
+            gpu.held_gb = lambda: held[0]
+            calls = []
+            client.WORKER.call = lambda op, **kw: calls.append(op) or {}
+
+            def transcribe(files, words=False, cancel=None):   # as the worker starting now would: its share, the server's cap
+                seen["worker"] = L.worker_limit_gb()
+                alive[0] = True   # (the worker starts for it)
+                L.apply()
+                seen["server"] = L.STATE["server_gb"]
+                return [{"text": "x", "words": [["hold", 0.1, 0.4, 0.9], ["on", 0.5, 0.7, 0.9]]}]
+            client.transcribe = transcribe
+            vox = Path(t) / "vocals.wav"
+            sf.write(str(vox), np.zeros(16000, dtype=np.float32), 16000)
+            # on at 12 GB (smoke's own default), a speech worker already loaded with speech's share
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "12"
+            L.STATE.update(applied=None, worker_next=None, worker_cap=3.6)
+            alive[0] = True
+            words = duets.heard_words(vox, None, Path(t) / "work")
+            assert words and words[0][0] == "hold", words
+            assert seen["stops"][0].startswith("Low profile: hearing the words needs a bigger share"), seen
+            assert seen["worker"] == L.WHISPER_GB and seen["server"] == round(12 - L.WHISPER_GB, 2), seen
+            assert freed == ["speak", "hear"] and "free" not in calls, (freed, calls)   # (the worker goes: no separate free)
+            held[0], freed[:] = 2.0, []   # holding little: the separator goes, the converter stays
+            L.STATE.update(applied=None)
+            duets.heard_words(vox, None, Path(t) / "work")
+            assert freed == ["speak"], freed
+            assert not alive[0] and L.STATE["server_gb"] == 12.0 and L.STATE["worker_next"] is None, (alive, L.STATE)
+            assert not (Path(t) / "work" / "duet-vocal.wav").exists()
+            # what release("hear") lets go: the separator and the converter, not listen-back's ear
+            # a job that will hear words waits at the queue when the limit can't hold Whisper, and runs when it can
+            class HJ:
+                kind, cancel, lp_hears = "cover", False, True
+                said = []
+                def push(self, **ev):
+                    self.said.append(ev)
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "5"
+            hj = HJ()
+            assert L.before_job(hj) is None and "hears the song's words" in hj.said[-1]["message"] and hj.said[-1]["waits_for"] == "Low profile", hj.said
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "12"
+            assert L.before_job(HJ()) is True
+            HJ.lp_hears = False
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "5"
+            assert L.before_job(HJ()) is True, "a cover that hears nothing waited for Whisper's room"
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "12"
+            gpu.release = real[5]
+            gpu.MODELS._sep, gpu.MODELS._conv = object(), object()
+            gpu.release("hear")
+            assert gpu.MODELS._sep is None and gpu.MODELS._conv is None
+            # a limit that can't hold Whisper: said plainly, and nothing is stopped or capped for it
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "5"
+            seen.clear(), caps.clear()
+            try:
+                duets.heard_words(vox, None, Path(t) / "work")
+                raise AssertionError("heard the words under a 5 GB limit")
+            except L.NoRoom as e:
+                assert "5 GB" in str(e) and "Raise its limit, or turn it off" in str(e) and jobs.friendly(e) == str(e), e
+            assert "worker" not in seen and caps == [], (seen, caps)
+            # off: nothing of this runs
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "0"
+            seen.clear(), caps.clear()
+            freed.clear()
+            gpu.release = lambda step: freed.append(step)
+            alive[0] = True   # (a speech worker loaded: off, it's left as it is)
+            assert duets.heard_words(vox, None, Path(t) / "work") and freed == [] and seen["worker"] is None and "stops" not in seen and alive[0], (freed, seen)
+    finally:
+        (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines, gpu.held_gb) = real
+        gpu.MODELS._sep = gpu.MODELS._conv = None
+        L.STATE.clear(), L.STATE.update(saved[0])
+        jobs.STATUS.clear(), jobs.STATUS.update(saved[1])
+        for k, v in (("UNDERCOVER_TEST_ROOTS", saved[2]), ("UNDERCOVER_LOW_PROFILE", saved[3])):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    src = inspect.getsource(__import__("undercover.frontman.pipeline", fromlist=["x"]).CoverEngine._duet_plan)
+    assert "no_room = isinstance(e, NoRoom)" in src and "Low profile's limit leaves no room to hear the words" in src
+    api_src = (ROOT / "undercover" / "frontman" / "api.py").read_text(encoding="utf-8")   # the jobs that hear are tagged
+    assert 'job.lp_hears = what == "open" and doc is None' in api_src and "job.lp_hears = bool(opts.duet_voice and not opts.duet_plan)" in api_src
+    return "Whisper's 5 GB for the worker, the server at 7 GB meanwhile, its models let go; back to 12 after; 5 GB said plainly; off untouched"
 
 
 @check("Low profile (1.0.2): the settings and their defaults (off, half the card; a test server on at 12 GB); set() validates and persists; the limit is split (the worker's share while it's loaded); a kind that needs more than the cap waits and says so, an out-of-memory teaches it; a smaller training batch under a tight cap; speeds keyed apart; the burst's pause is bounded; the game pause's 'low' answer turns it on for that game and its closing turns it off; the route is in the phone table")
@@ -7539,7 +8195,7 @@ def u_edit_price():
             assert set(E.pitch_of(doc)) == {"lead"}   # (only the parts it knows)
             got = E.price(item, doc, up)
             assert got["poor"] and got["rise"] >= E.POOR_COST and got["outside"] == 1.0 and got["own_outside"] == 0.0, got
-            assert got["said"] == "Lead an octave up here is a poor fit: 100% of these notes are above the voice's range, so it may sound strained.", got
+            assert got["said"] == "Lead, an octave up, is a poor fit here: 100% of these notes are above the voice's range, so it may sound strained.", got
             down = E.check_edit({"op": "octave", "part": "lead", "octave": -2, "t0": 40.0, "t1": 50.0}, doc)
             got = E.price(item, doc, down)   # Second's own octave puts the high half over its range; two down brings it home
             assert not got["poor"] and got["said"] is None and got["rise"] < 0 and got["own_outside"] == 1.0, got
@@ -7609,6 +8265,12 @@ def u_edit_price():
         assert sound_range(bad) is None, bad
     assert _range_of(SimpleNamespace(extra={"f0_range": ["a", "b", "c"], "person_range": [90, 120, 200], "person_range_speech": True})) == ([90.0, 120.0, 200.0], True)
     assert _range_of(SimpleNamespace(extra={"f0_range": [1e9, 2e9, 3e9]})) is None
+    from undercover.frontman.pipeline import CoverEngine, CoverOptions
+    notes = []
+    junk_voice = SimpleNamespace(name="junk-uc", extra={"f0_range": ["a", "b", "c"], "person_range": {"x": 1}})
+    opts = CoverOptions(voice="junk-uc", octave=-1, key=2)
+    got = CoverEngine._fit(None, opts, junk_voice, {}, notes, None)   # (no converter is reached: the range is refused first)
+    assert got == opts and len(notes) == 1 and "no measured range yet" in notes[0] and "junk" in notes[0], notes
     # every other reader of a voice's range reads it through the same check: SpeakEasy's hold and the Reader's pitch, the one-shot's pick
     from undercover.doubleagent import cadence as CD, service as SV
     from undercover.frontman import oneshot as OS
@@ -8734,6 +9396,8 @@ def u_duets():
             assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [], tries   # (the failure above remembered)
             (kd / "instrumental.flac").write_bytes(b"not audio, still")   # a new version of the stem is measured again, once
             assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [1], tries
+            os.utime(kd / "instrumental.flac", (time.time() + 7, time.time() + 7))   # the same bytes with a new mtime: a new version too
+            assert _PL2.backing_quiet(kd) is None and _PL2.backing_quiet(kd) is None and tries == [1, 1], tries
         finally:
             _PL2._measure_quiet = real_mq
     assert _PL2.estimate_for(100.0, _PL2.CoverOptions(voice="v", duet_voice="w"))["backing_quiet"] is None   # (the one-shot's plan: no song yet)
@@ -9265,6 +9929,13 @@ def u_leadgate():
         gone = G.top_missing(g, {"top": none_t, "rest": rest_t}, stems_k["backing"])
         assert gone == [list(c) for c in g["chorus"]], gone
         assert G.top_missing(g, {"top": real_t, "rest": rest_t}, stems_k["backing"]) == [] and G.top_missing(g, None, stems_k["backing"]) == []
+        for down, gone_too in ((25.0, False), (35.0, True)):   # the 30 dB bar on a second case: a top voice this far under the backing
+            t2 = tmp / f"top_{int(down)}.wav"
+            sf.write(str(t2), back * 10 ** (-down / 20), sr)
+            got = G.top_missing(g, {"top": t2, "rest": rest_t}, stems_k["backing"])
+            assert (got == [list(c) for c in g["chorus"]]) is gone_too and (got == []) is not gone_too, (down, got)
+        src_tm = __import__("inspect").getsource(G.top_missing)
+        assert "sf.read(str(f), start=" in src_tm and "always_2d=True)\n    bk" not in src_tm   # (a stretch at a time, never the whole stem)
         out = G.apply(stems_k, g, tmp, "tn", chorus="top", top={"top": none_t, "rest": rest_t})
         l4, _ = sf.read(str(out["vocals"]), dtype="float32")
         assert rms(l4, c0, c1) < 0.01 * rms(left, c0, c1), "no top voice, yet the leftovers are still there to convert"
@@ -9273,7 +9944,7 @@ def u_leadgate():
         l5, _ = sf.read(str(out["vocals"]), dtype="float32")
         assert rms(l5, c0, c1) > 0.9 * rms(back, c0, c1), "a real top voice wasn't moved into the lead"
         said = G.note(g, "top", backing_converted=True, missing=gone)
-        assert said and not any("top voice was converted" in s for s in said) and any("no top voice to move" in s and "backing's voice" in s for s in said), said
+        assert said and not any("top voice was converted" in s for s in said) and any("and have no top voice to move" in s and "backing's voice" in s for s in said), said
         assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
@@ -10358,40 +11029,90 @@ def u_qr():
     return "Reed-Solomon, format, version bits; versions 3 and 10"
 
 
-@check("phone: pairing (single use, expiry, wrong codes, rate limit), tokens stored hashed, Revoke, the switch")
+@check("phone: pairing at the link (1.2.1): the QR's 128-bit code, once; wrong claims can't end it; the typed code only when asked for, 2 minutes and 5 tries; no window means the generic refusal; a claim is a nonce, and the token comes once, on Allow; No forgets the phone; tokens stored hashed; a token's life; LAN tokens good only from the home network")
 def u_phone_pairing():
     from undercover.core import phone
     with isolated_data() as t:
-        saved = (None, phone.PAIRING, list(phone._TRIES))
-        phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, None, []
+        saved = phone.PAIRING
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._HANDOVER.clear(), phone._MOVE_CODES.clear(), phone._STATE.clear()
         try:
             assert phone.state_file().parent == t, phone.state_file()
-            assert not phone.enabled() and phone.device_for("anything") is None
+            assert not phone.enabled() and phone.device_for("anything", away=True) is None
             try:
                 phone.new_pairing()
-                raise AssertionError("a code was made with Phone access off")
+                raise AssertionError("a code was made with the link off")
             except phone.PhoneError:
                 pass
-            phone.set_enabled(True)
-            p = phone.new_pairing()
-            assert len(p["code"]) == 6 and set(p["code"]) <= set(phone.ALPHABET) and 290 < p["until"] - time.time() <= 300
 
-            def refused(code, addr="10.0.0.9", want=403):
+            def refused(code, want=403, generic=True):
                 try:
-                    phone.claim(code, "x", addr)
+                    phone.claim(code, "x", "10.0.0.9")
                 except phone.PhoneError as e:
-                    assert e.status == want, (e.status, str(e))
+                    assert (e.status, e.generic) == (want, generic), (e.status, e.generic, str(e))
                     return str(e)
                 raise AssertionError(f"{code!r} was accepted")
-            wrong = "".join(c for c in phone.ALPHABET if c not in p["code"])[:6]
-            refused(wrong)
-            token, dev = phone.claim(" " + p["code"].lower()[:3] + "-" + p["code"][3:], "Pixel 8", "10.0.0.9")   # typed loosely
-            assert dev["name"] == "Pixel 8" and len(token) >= 40
-            refused(p["code"])   # once only
+            phone.set_enabled(True)
+            refused("anything", 401, True)   # no window open: the generic refusal, with no hint that pairing exists
+            p = phone.new_pairing()
+            assert len(p["code"]) >= 20 and 290 < p["until"] - time.time() <= 300 and p["short"] is None, p
+            for _ in range(20):   # wrong claims against the QR's code are counted and change nothing
+                refused(p["code"][:-1] + "x")
+            assert phone.pairing() is not None and phone.PAIRING["wrong"] == 20
+            refused("ABCDEF")   # no typed code exists until it's asked for
+            s = phone.short_code()
+            assert len(s["code"]) == 6 and set(s["code"]) <= set(phone.ALPHABET) and 110 < s["until"] - time.time() <= 120, s
+            wrong = "".join(c for c in phone.ALPHABET if c not in s["code"])[:6]
+            for _ in range(phone.SHORT_TRIES - 1):
+                assert "isn't the code" in refused(wrong)
+            assert "finished" in refused(wrong)
+            assert phone.pairing()["short"] is None and phone.pairing() is not None   # the typed code is gone, the QR's lives
+            refused(s["code"])
+            phone.short_code()
+            phone.PAIRING["short"]["until"] = time.time() - 1   # the typed code runs out on its own
+            assert phone.pairing()["short"] is None
+            s3 = phone.short_code()
+            nonce, dev = phone.claim(" " + s3["code"].lower()[:3] + "-" + s3["code"][3:], "Pixel 8", "10.0.0.9")   # typed loosely
+            assert dev["name"] == "Pixel 8" and dev["pending"] and len(nonce) >= 20, dev
+            assert phone.pairing() is None   # once
+            refused(s3["code"], 401, True)
+            assert phone.devices() == [] and [d["id"] for d in phone.pending()] == [dev["id"]]
+            assert phone.collect(nonce) is None and phone.collect("wrong") is None   # not yet, and a wrong nonce the same
             text = phone.state_file().read_text(encoding="utf-8")
-            assert token not in text and phone.hash_token(token) in text, "the token isn't stored as its hash"
-            assert phone.device_for(token)["id"] == dev["id"] and phone.device_for(token + "x") is None
-            # a home token is good only from the PC's own home network (its interface's prefix; /24 when the OS can't say)
+            assert nonce not in text and phone.hash_token(nonce) in text and '"hash": null' in text, "a token exists before Allow"
+            phone.allow(dev["id"])
+            assert phone.collect("wrong") is None
+            got = phone.collect(nonce)
+            assert got and got[1]["id"] == dev["id"] and len(got[0]) >= 40, got
+            token = got[0]
+            assert phone.collect(nonce) is None, "the token was handed over twice"
+            text = phone.state_file().read_text(encoding="utf-8")
+            assert token not in text and phone.hash_token(token) in text and "nonce" not in json.loads(text)["devices"][0]
+            assert phone.device_for(token, away=True)["id"] == dev["id"] and phone.device_for(token + "x", away=True) is None
+            assert phone.device_for(token, "192.168.1.5") is None, "the one token worked as a LAN token"
+            assert phone.devices()[0]["id"] == dev["id"] and not phone.devices()[0]["pending"] and phone.pending() == []
+            p2 = phone.new_pairing()   # No: the phone that claimed is forgotten, and its nonce is "not yet" forever
+            n2, d2 = phone.claim(p2["code"], "Tablet", "10.0.0.7")   # the QR's code, once
+            refused(p2["code"], 401, True)
+            phone.refuse(d2["id"])
+            assert phone.pending() == [] and phone.collect(n2) is None
+            try:
+                phone.allow(d2["id"])
+                raise AssertionError("allowed a phone that was refused")
+            except phone.PhoneError:
+                pass
+            p3 = phone.new_pairing()   # a phone never allowed is forgotten after PENDING_S
+            n3, d3 = phone.claim(p3["code"], "Old", "10.0.0.6")
+            next(d for d in phone._load()["devices"] if d["id"] == d3["id"])["asked"] = time.time() - phone.PENDING_S - 1
+            phone._save()
+            phone._FILE[0] = None
+            assert phone.pending() == [] and phone.collect(n3) is None and len(phone.devices()) == 1
+            # a LAN token (a phone paired on the home Wi-Fi before the link) is good only from the PC's own home network
+            # (its interface's prefix; /24 when the OS can't say)
+            lan = "L" * 43
+            rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
+            rec["lan_hash"] = phone.hash_token(lan)
+            phone._relan(phone._load())
             saved_nets = dict(phone._NETS)
             from undercover.core import platform as P
             real_prefix = P.prefix_length
@@ -10404,9 +11125,10 @@ def u_phone_pairing():
                 assert phone.home_net("192.168.1.20").with_prefixlen == "192.168.1.0/24"
                 os.environ["UNDERCOVER_PHONE_ADDR"], was = "192.168.1.20", os.environ.get("UNDERCOVER_PHONE_ADDR")
                 try:
-                    assert phone.device_for(token, "192.168.1.77")["id"] == dev["id"], "refused on the home network"
-                    for elsewhere in ("192.168.2.77", "10.0.0.9", "8.8.8.8", "not-an-address"):
-                        assert phone.device_for(token, elsewhere) is None, f"a home token worked from {elsewhere}"
+                    assert phone.device_for(lan, "192.168.1.77")["id"] == dev["id"], "refused on the home network"
+                    for elsewhere in ("192.168.2.77", "10.0.0.9", "8.8.8.8", "not-an-address", ""):
+                        assert phone.device_for(lan, elsewhere) is None, f"a LAN token worked from {elsewhere!r}"
+                    assert phone.device_for(lan, away=True) is None, "a LAN token worked at the link"
                 finally:
                     if was is None:
                         os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
@@ -10416,10 +11138,11 @@ def u_phone_pairing():
                 P.prefix_length = real_prefix
                 phone._NETS.clear()
                 phone._NETS.update(saved_nets)
-            assert "Only if this phone is on your own home Wi-Fi" in (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
+            rec["lan_hash"] = None
+            phone._relan(phone._load())
             # an address only ever goes into a command line as plain IPv4: an IPv6 zone part can hold anything
             ran, real_run = [], P.run_text
-            P.run_text = lambda cmd, timeout=20: ran.append(cmd) or ""
+            P.run_text = lambda cmd, timeout=20, **kw: ran.append(cmd) or ""
             try:
                 for hostile in ("fe80::1%x'; Start-Process calc; '", "fe80::1%eth0", "::1", "192.168.1.5'", "192.168.1.5 "):
                     for call in (lambda a: P.prefix_length(a), lambda a: P.network_and_firewall(a),
@@ -10434,68 +11157,45 @@ def u_phone_pairing():
                 assert ran and any("'192.168.1.20'" in " ".join(c) or "192.168.1.20" in " ".join(c) for c in ran), ran
             finally:
                 P.run_text = real_run
-            p2 = phone.new_pairing()   # expiry
+            p4 = phone.new_pairing()   # expiry
             phone.PAIRING["until"] = time.time() - 1
-            assert "run out" in refused(p2["code"])
-            # five wrong codes from one address: that address is out of tries, even with the right code; the code lives
-            # on for the phone that's really pairing (1.1: a stranger's guesses can't cancel it)
-            p3 = phone.new_pairing()
-            for _ in range(phone.MAX_TRIES):
-                refused(wrong, addr="10.0.0.8")
-            assert phone.pairing() is not None and "from this phone" in refused(p3["code"], addr="10.0.0.8")
-            t3, d3 = phone.claim(p3["code"], "Tablet", "10.0.0.7")
-            assert d3["name"] == "Tablet" and phone.pairing() is None
-            phone.revoke(d3["id"])
-            phone._TRIES[:] = []
-            p3b = phone.new_pairing()   # MAX_WRONG in all, from any addresses, cancels it
-            for i in range(phone.MAX_WRONG):
-                if i % phone.RATE[1] == 0:
-                    phone._TRIES[:] = []
-                refused(wrong, addr=f"10.0.1.{i // (phone.MAX_TRIES - 1)}")
-            assert phone.pairing() is None and "run out" in refused(p3b["code"], addr="10.0.0.5")
-            phone._TRIES[:] = []
-            phone._TRIES[:] = []   # the rate limit: 10 tries per address in 10 minutes, then 429 even with the right code
-            p4 = phone.new_pairing()
-            for _ in range(phone.RATE[1]):
-                try:
-                    phone.claim(wrong, "x", "10.0.0.6")
-                except phone.PhoneError:
-                    pass
-                phone.PAIRING = p4 if phone.PAIRING is None else phone.PAIRING
-            refused(p4["code"], addr="10.0.0.6", want=429)
-            phone._TRIES[:] = []
+            refused(p4["code"], 401, True)
             phone._FILE[0] = None   # read back from the file
-            assert phone.device_for(token)["name"] == "Pixel 8"
+            assert phone.device_for(token, away=True)["name"] == "Pixel 8"
             # a token's life (1.1): 30 days from its last use, renewed by every use; a record from before starts at its
             # first use; the cookie lives as long and is sent again with each answer
             rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
             rec["used"] = time.time() - phone.TOKEN_IDLE_S + 60
-            assert phone.device_for(token) and time.time() - rec["used"] < 5, "a use didn't renew the token"
+            assert phone.device_for(token, away=True) and time.time() - rec["used"] < 5, "a use didn't renew the token"
             rec["used"] = time.time() - phone.TOKEN_IDLE_S - 1
-            assert phone.device_for(token) is None, "a token unused for 30 days still worked"
+            assert phone.device_for(token, away=True) is None, "a token unused for 30 days still worked"
             rec.pop("used")
-            assert phone.device_for(token) and "used" in rec
+            assert phone.device_for(token, away=True) and "used" in rec
             from undercover.app import phone_api as PA
-            assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t") and "Secure" in PA.away_cookie("t")
+            assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t")
+            assert PA.main_cookie("t").startswith("__Host-uc=t; Path=/;") and "Secure" in PA.main_cookie("t") and "Domain" not in PA.main_cookie("t")
             assert phone.TOKEN_IDLE_S == 30 * 86400
             phone.revoke(dev["id"])
-            assert phone.device_for(token) is None and phone.devices() == []
-            token2, dev2 = phone.claim(phone.new_pairing()["code"], "<b>Tab</b>\n", "10.0.0.5")
+            assert phone.device_for(token, away=True) is None and phone.devices() == []
+            n5, dev2 = phone.claim(phone.new_pairing()["code"], "<b>Tab</b>\n", "10.0.0.5")
             assert dev2["name"] == "bTab/b", dev2["name"]
+            phone.allow(dev2["id"])
+            token2 = phone.collect(n5)[0]
             phone.set_enabled(False)
-            assert phone.device_for(token2) is None and phone.pairing() is None
+            assert phone.device_for(token2, away=True) is None and phone.pairing() is None
             phone.set_enabled(True)
-            assert phone.device_for(token2)["id"] == dev2["id"]
+            assert phone.device_for(token2, away=True)["id"] == dev2["id"]
             assert phone.name_from_agent("Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A) AppleWebKit") == "Pixel 8"
             assert phone.name_from_agent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit") == "Android phone"
             assert phone.name_from_agent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)") == "iPhone"
             assert phone.usable("192.168.1.5") and phone.usable("10.1.2.3") and not phone.usable("8.8.8.8")
             assert not phone.usable("127.0.0.1") and not phone.usable("169.254.1.1")
         finally:   # forget the test's state: the next use reads its own file again
-            phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, saved[1], saved[2]
+            phone._FILE[0], phone.PAIRING = None, saved
             phone._STATE.clear()
             phone._SEEN_AT.clear()
-    return "6-character codes, hashed tokens, 5 wrong codes, 10 tries per address"
+            phone._HANDOVER.clear()
+    return "a 128-bit QR code; a typed code only when asked, 5 tries; generic refusals; nonce -> Allow -> the token once; No; hashed tokens; LAN tokens on the home network only"
 
 
 NETSH_RULE = """Rule Name:                            {name}
@@ -10552,8 +11252,11 @@ def u_phone_doctor():
         saved = (phone._FILE[0], phone.windows_check, phone.lan_address)
         phone._FILE[0] = None
         try:
-            assert doctor.c_phone({}) == [], "the check ran with Phone access off"
+            assert doctor.c_phone({}) == [], "the check ran with the phone link off"
             phone.set_enabled(True)
+            assert doctor.c_phone({}) == [], "the home Wi-Fi check ran with no phone using it (1.2.1: phones come in by the link)"
+            with phone._LOCK:
+                phone._load()["lan"] = True   # (a phone paired on the home Wi-Fi before the link)
             fake = {"network": {"name": "Home", "alias": "Wi-Fi", "category": "Private"}, "firewall": ("ok", "fine"), "error": None}
             phone.lan_address = lambda: "192.168.1.5"
             calls = []
@@ -11081,6 +11784,20 @@ def u_ytdlp_heal():
                 raise AssertionError("a wheel with a climbing path was unpacked")
             except ytdlp.HealError:
                 pass
+            # 8b. a wheel of the pair holds its own package and dist-info only: yt-dlp-ejs's can't overwrite yt-dlp's
+            #     proved files, nor put a module at the top of the folder (and nothing of such a wheel is unpacked)
+            ok_ejs = _fake_wheel(pypi, "yt-dlp-ejs", "yt_dlp_ejs", "0.9.1")
+            ytdlp.unpack(Path(ok_ejs["url"].replace("file:///", "")), t / "ok-ejs", "yt_dlp_ejs")
+            assert sorted(p.name for p in (t / "ok-ejs").iterdir()) == ["yt_dlp_ejs", "yt_dlp_ejs-0.9.1.dist-info"]
+            for extra in ({"yt_dlp/YoutubeDL.py": "x = 'replaced'"}, {"sitecustomize.py": "x = 1"}, {"yt_dlp_ejs_x/a.py": "x"}):
+                bad = _fake_wheel(pypi, "yt-dlp-ejs", "yt_dlp_ejs", "0.9.2", extra_files=extra)
+                try:
+                    ytdlp.unpack(Path(bad["url"].replace("file:///", "")), t / "bad-ejs", "yt_dlp_ejs")
+                    raise AssertionError(f"an ejs wheel holding {extra} was unpacked")
+                except ytdlp.NotVouched:
+                    pass
+                assert not (t / "bad-ejs").exists(), f"part of a refused wheel was unpacked ({extra})"
+            assert "unpack(got[name], d, MODULE[name])" in __import__("inspect").getsource(ytdlp.stage)
             # 9. detection: three different videos breaking the same way; the bot check and one bad link don't count
             ytdlp._EVENTS.clear()
             st = ytdlp.load()
@@ -11268,25 +11985,27 @@ def u_page_syntax():
     return "every page script parses and loads"
 
 
-@check("the away app's service worker (1.2) in headless Chrome: registered, keeps a private home address and refuses any other, answers a navigation the PC doesn't with its own page and that link; caches nothing else (skipped when there is no Chrome)")
+@check("the phone app's service worker (1.2; one link since 1.2.1) in headless Chrome: registered; keeps nothing (no cache, and what 1.2 kept is cleared); answers a navigation the PC doesn't with its own page, linking only to its own origin; the source holds no cache rule, no /api/ and no other origin; the alerts' rules")
 def u_away_sw():
-    """http://127.0.0.1 is a secure context, so Chrome registers the worker there as it would at the away address. Two
-    runs with one profile: the first registers it and hands it a good home address, then a foreign one; in the second the
-    "PC" closes every connection, and the worker's own page must name the good address alone. (--dump-dom dumps at the
+    """http://127.0.0.1 is a secure context, so Chrome registers the worker there as it would at the link. Two runs with one
+    profile: the first leaves a cache as 1.2's worker did and registers this one, which must clear it; in the second the
+    "PC" closes every connection, and the worker's own page must link to its own origin alone. (--dump-dom dumps at the
     load event, so the first page holds it open with an image the server sends only once the page has said it's done.)"""
-    import http.server, subprocess, tempfile, threading
+    import http.server, re as _re, subprocess, tempfile, threading
     exe = _chrome()
-    if not exe:
-        return "no Chrome here: skipped"
     sw = (ROOT / "undercover" / "web" / "sw.js").read_bytes()
+    src = sw.decode("utf-8")
+    assert "caches.open(" not in src and "cache.put" not in src and ".put(" not in src, "the worker keeps something"
+    assert "/api/" not in src and not _re.search(r"https?://", src), "the worker names a route or another origin"
+    assert 'r.mode !== "navigate"' in src and "caches.delete(" in src and 'href="/"' in src
+    if not exe:
+        return "no Chrome here: the source checks only"
     reg = b"""<!doctype html><html><body><p id="out">waiting</p><img src="/hold" alt=""><script>
 (async () => { try {
-  await navigator.serviceWorker.register("/sw.js"); const r = await navigator.serviceWorker.ready;
-  r.active.postMessage({ home: "http://192.168.1.20:7860" });
-  await new Promise(ok => setTimeout(ok, 500));
-  r.active.postMessage({ home: "http://evil.example:7860" }); r.active.postMessage({ home: "https://192.168.1.21:7860" });
-  await new Promise(ok => setTimeout(ok, 500));
-  document.getElementById("out").textContent = "registered " + (await caches.keys()).join(",");
+  await (await caches.open("uc-home-v1")).put("/__uc/home", new Response("http://192.168.1.20:7860"));   // as 1.2 left it
+  await navigator.serviceWorker.register("/sw.js"); await navigator.serviceWorker.ready;
+  await new Promise(ok => setTimeout(ok, 800));
+  document.getElementById("out").textContent = "registered [" + (await caches.keys()).join(",") + "]";
 } catch (e) { document.getElementById("out").textContent = "failed " + e; }
   fetch("/said"); })();
 </script></body></html>"""
@@ -11320,25 +12039,24 @@ def u_away_sw():
     try:
         with tempfile.TemporaryDirectory() as prof:
             first = run(prof, "/reg")
-            assert "registered uc-home-v1" in first, first[-400:]
+            assert "registered []" in first, first[-400:]
             down["on"] = True
             second = run(prof, "/")
     finally:
         srv.shutdown()
-    assert "Your PC isn't answering" in second and 'href="http://192.168.1.20:7860/"' in second, second[-600:]
-    assert "evil.example" not in second and "192.168.1.21" not in second, "the worker kept an address that isn't a private home one"
-    src = sw.decode("utf-8")
-    assert src.count("caches.open(") == 2 and "c.put(HOME" in src and 'r.mode !== "navigate"' in src, "the worker keeps more than the home address"
+    assert "Your PC isn't answering" in second and 'href="/"' in second, second[-600:]
+    assert "192.168" not in second and "http://" not in second.split("<body", 1)[-1], "the offline page links somewhere else"
     # the alerts (phonealerts.js): phones only, the permission asked only from a tap, generic words, night results silent
     pa = (ROOT / "undercover" / "web" / "phonealerts.js").read_text(encoding="utf-8")
+    assert "home_url" not in pa and "postMessage" not in pa, "the page still hands the worker an address"
     ask = pa.index("Notification.requestPermission(")
     assert pa.count("Notification.requestPermission(") == 1 and pa.rfind('$("#ph-alerts-yes").onclick', 0, ask) > pa.rfind("\n}", 0, ask), "the permission is asked without a tap"
     assert 'dataset.client !== "phone"' in pa and "DONE_WORDS[j.kind]" in pa and 'j.kind === "night"' in pa and "silent: quiet" in pa
     assert "j.title" not in pa.split("function paWords", 1)[1].split("return null", 1)[0].replace('/^Preview/.test(j.title || "")', ""), "a notification names the job"
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert all(f'id="{i}"' in page for i in ("ph-alert", "ph-alerts", "ph-alerts-yes", "ph-alerts-no", "ph-install", "ph-install-ok",
-                                              "ph-install-ios", "ph-install-android", "set-away-private"))
-    return "registered; its own page with the private home address when the PC is silent; a foreign one refused; the alerts' rules"
+                                              "ph-install-ios", "ph-install-android", "set-away-private", "ph-move", "ph-move-go"))
+    return "registered, keeping nothing (1.2's cache cleared); its own page, its own origin only; the alerts' rules"
 
 
 def _tpl_exprs(src: str) -> list:
@@ -11496,7 +12214,7 @@ def u_shape_page():
     window.api = async (u, o) => {
       if (/edits\/price$/.test(u)) {
         if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
-        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead an octave up here is a poor fit: strained." } : null };
+        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
       }
       throw new Error("stub");
     };
@@ -11552,6 +12270,64 @@ def u_shape_page():
     got = m.group(1) if m else ""
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:600] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
+
+def _theme_tokens(web, theme: str, light: bool) -> dict:
+    """A theme's tokens for one mode as the page has them: Case File's :root (and its light block), then the theme's own blocks."""
+    def blocks(css):
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        return [(m.group(1).strip(), dict((k, v.strip()) for k, v in re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", m.group(2))))
+                for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css)]
+    toks = {}
+    for sel, t in blocks((web / "app.css").read_text(encoding="utf-8")):
+        if sel == ":root" or (light and sel == ':root[data-theme="light"]'):
+            toks.update(t)
+    if theme != "casefile":
+        own = blocks((web / "themes" / theme / "theme.css").read_text(encoding="utf-8"))
+        has_light = any('data-theme="light"' in s for s, _ in own)
+        for sel, t in own:
+            is_light = 'data-theme="light"' in sel
+            if (not is_light and (not light or not has_light)) or (is_light and light):
+                toks.update(t)
+    return toks
+
+
+@check("design tokens: on every theme, dark and light, and every module's air, the hairline is >= 1.5:1 on the panel, text >= 7, muted text >= 4.5 on the panel and the third tone, the module colour as text >= 4.5 (the maintainers' tokens sheet)")
+def u_token_ratios():
+    web = ROOT / "undercover" / "web"
+    rgb = lambda h: tuple(int(h.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    mix = lambda a, p, b: tuple(a[i] * p + b[i] * (1 - p) for i in range(3))   # color-mix(in srgb, a p, b)
+    def lum(c):
+        f = lambda v: (v / 255) / 12.92 if v / 255 <= 0.03928 else ((v / 255 + 0.055) / 1.055) ** 2.4
+        return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+    ratio = lambda a, b: (max(lum(a), lum(b)) + 0.05) / (min(lum(a), lum(b)) + 0.05)
+    floors = {"line/panel": 1.5, "fg/panel": 7.0, "muted/panel": 4.5, "muted/panel3": 4.5, "module/panel": 4.5}
+    bad, worst = [], {k: 99.0 for k in floors}
+    themes = ["casefile"] + sorted(p.name for p in (web / "themes").iterdir() if (p / "theme.css").is_file() and p.name != "casefile")
+    for theme in themes:
+        own = "" if theme == "casefile" else (web / "themes" / theme / "theme.css").read_text(encoding="utf-8")
+        for light in ((False, True) if theme == "casefile" or 'data-theme="light"' in own else (False,)):   # (a dark-only theme's light is derived by the page)
+            t = _theme_tokens(web, theme, light)
+            pct = lambda k: float(t[k].rstrip("%")) / 100
+            for m in ("frontman", "doubleagent", "speakeasy", "safehouse"):
+                deep = rgb(t[f"--c-{m}-deep"])   # the page's air: look.css mixes the panels and the line from the module's deep tone
+                panel, panel3 = mix(deep, pct("--tint2"), rgb(t["--panel-base"])), mix(deep, pct("--tint2"), rgb(t["--panel-3-base"]))
+                got = {"line/panel": ratio(mix(deep, 0.16, rgb(t["--line-base"])), panel), "fg/panel": ratio(rgb(t["--fg"]), panel),
+                       "muted/panel": ratio(rgb(t["--muted"]), panel), "muted/panel3": ratio(rgb(t["--muted"]), panel3),
+                       "module/panel": ratio(rgb(t[f"--c-{m}"]), panel)}
+                for k, v in got.items():
+                    worst[k] = min(worst[k], v)
+                    if v < floors[k]:
+                        bad.append(f"{theme} {'light' if light else 'dark'} {m}: {k} {v:.2f} < {floors[k]}")
+    assert not bad, bad
+    # the WinAmp skin stays as it was (look.md): the bones wave's base-rule changes are pinned back for it, at the base rules' own
+    # specificity (:where), so the skin's own rules still win; a later base change needs the same (the designer's review of bones1)
+    wa = (web / "winamp.css").read_text(encoding="utf-8")
+    ix = (web / "index.html").read_text(encoding="utf-8")
+    assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
+    assert "/* -- bones pins -- */" in wa and ':where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0;' in wa
+    assert wa.index("/* -- end bones pins -- */") < wa.index('html[data-skin="winamp"] .mod'), "the pins come before the skin's own rules"
+    return f"{len(themes)} themes x 2 modes x 4 modules; worst " + ", ".join(f"{k} {v:.2f}" for k, v in worst.items())
+
 
 @check("page rules from Internal Affairs pass 1 and the Compare fix (source guards: outcomes were tested in a browser)")
 def u_page_rules():
@@ -11748,6 +12524,9 @@ def u_page_rules():
     assert "/edits/price" in shape and "fit?.said" in shape and "x.ok.fit?.said" in shape   # the fit said before and as it's sung
     assert "audio: ownPlayer(new Audio())" in shape and "PLAYERS.forEach(a => { a.volume = volumeNow(); });" in app   # Hear it is the page's player too
     assert "SH.retry ? `<span><button" in shape and "SH.retry = false; return shDraw(); }" in shape   # no Try again on an outright refusal
+    import inspect as _ins_ed
+    from undercover.frontman import edits as _ed
+    assert '"kept_now": _state(doc) in doc.get("kept", [])' in _ins_ed.getsource(_ed.view) and "live.length && d.kept_now" in shape   # kept after a reload
     assert "x.id === h.edited_from" in app and "{ t: `from ${coverTitle(x)}` }" in app   # a kept version names its cover (facts esc()s t)
     import inspect as _ins
     from undercover.frontman import pipeline as _pl
@@ -11874,11 +12653,16 @@ def u_firstrun():
 # ---------------------------------------------------------------- the platform helper and the tray (phase 18)
 
 WINDOWS_ONLY = ("ctypes.windll", "WinDLL(", "os.startfile", '"netsh"', '"powershell"', '"explorer"',
-                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(")
+                "SetThreadExecutionState", "GetModuleFileNameW", "SetConsoleCtrlHandler", "TerminateProcess(",
+                "CREATE_NO_WINDOW", "CREATE_NEW_PROCESS_GROUP", "msvcrt", "winreg")
+# Windows told apart by hand, or a program named with its Windows extension: platform.WINDOWS and platform.exe_name()
+# say it once, for every OS (the maintainers' notes, portability)
+WINDOWS_ONLY_RX = (r"\bos\.name\b", r"\bsys\.platform\b", r"platform\.system\(\)", r"\.exe['\"]")
 
 
 @check("platform helper: every Windows-only call lives in core/platform.py; the helper works here and says 'not on this OS' elsewhere")
 def u_platform():
+    import re
     import subprocess as sp
     import tempfile
     from undercover.core import platform
@@ -11887,8 +12671,20 @@ def u_platform():
         if f.name == "platform.py" and f.parent.name == "core":
             continue
         text = f.read_text(encoding="utf-8")
-        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in text]
+        code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {w}" for w in WINDOWS_ONLY if w in code]
+        bad += [f"{f.relative_to(ROOT).as_posix()}: {m.group(0)!r}" for rx in WINDOWS_ONLY_RX for m in re.finditer(rx, code)]
     assert not bad, f"Windows-only calls outside core/platform.py: {bad}"
+    # a program's name and the way to get it, said once for this OS
+    assert platform.exe_name("ffmpeg") == ("ffmpeg.exe" if platform.WINDOWS else "ffmpeg")
+    assert platform.exe_name("uv") == ("uv.exe" if platform.WINDOWS else "uv")
+    hint = platform.install_hint("ffmpeg")
+    assert hint == "winget install Gyan.FFmpeg" if platform.WINDOWS else ("ffmpeg" in hint and "winget" not in hint), hint
+    assert not platform.console_python().lower().endswith("pythonw.exe") and Path(platform.console_python()).is_file()
+    assert platform.TEXT == {"text": True, "encoding": "utf-8", "errors": "replace"}
+    # a program's text comes through TEXT without ever raising: a byte that isn't UTF-8 becomes U+FFFD
+    out = sp.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok \\xff\\xfe end')"], capture_output=True, **platform.TEXT).stdout
+    assert out == "ok �� end", repr(out)
     if platform.WINDOWS:
         assert platform.supports("startup") == (True, "") and platform.drives() and platform.own_executable().endswith(".exe")
         assert platform.keep_awake(False) is True
@@ -11932,16 +12728,63 @@ def u_platform():
             from undercover.core import jobs as _jobs
             assert _jobs.friendly(e) == str(e) and "xdg-open" in str(e), e
         from undercover.core import doctor, phone
-        real = (phone.enabled, phone.lan_address)
-        phone.enabled, phone.lan_address = (lambda: True), (lambda: "192.168.1.5")
+        real = (phone.lan_needed, phone.lan_address)
+        phone.lan_needed, phone.lan_address = (lambda: True), (lambda: "192.168.1.5")
         try:
             rows = doctor.c_phone({})
             assert [r["state"] for r in rows] == ["info"] and "Windows only" in rows[0]["say"], rows
         finally:
-            phone.enabled, phone.lan_address = real
+            phone.lan_needed, phone.lan_address = real
     finally:
         platform.WINDOWS = saved
     return "no Windows-only calls elsewhere; one instance; the startup shortcut in a temp folder; the other-OS answers"
+
+
+@check("ffmpeg resolver: the installer's copy in tools/ffmpeg/bin first (ffprobe beside it), then PATH, else a ModelError with this OS's install hint; no module runs a bare 'ffmpeg'")
+def u_ffmpeg_resolver():
+    import re
+    import shutil as _sh
+    import tempfile
+    from undercover.core import manifest, platform
+    from undercover.core.voices import ModelError
+    # every call site goes through the resolver: a bare "ffmpeg"/"ffprobe" command would only find the PATH's copy
+    bare = [f"{f.relative_to(ROOT).as_posix()}:{n}" for f in (ROOT / "undercover").rglob("*.py")
+            for n, ln in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+            if re.search(r"""(\[|which\()\s*["'](ffmpeg|ffprobe)["']""", ln)]
+    assert not bare, f"ffmpeg run bare, not through manifest.ffmpeg(): {bare}"
+    from types import SimpleNamespace
+    real_root, real_shutil = manifest.ROOT, manifest.shutil
+    with tempfile.TemporaryDirectory(prefix="uc-ffm-") as t:
+        root = Path(t)
+        try:
+            manifest.ROOT = root
+            found = {}
+            manifest.shutil = SimpleNamespace(which=lambda name: found.get(name))   # (the module's own name only, never the real shutil)
+            # nothing anywhere: a plain error that says how to get it here
+            try:
+                manifest.ffmpeg()
+                raise AssertionError("no ffmpeg, no error")
+            except ModelError as e:
+                assert "ffmpeg isn't installed" in str(e) and platform.install_hint("ffmpeg") in str(e), str(e)
+            assert manifest.tool("ffprobe", folder="ffmpeg") is None
+            # on PATH only
+            found["ffmpeg"] = str(root / "elsewhere" / platform.exe_name("ffmpeg"))
+            assert manifest.ffmpeg() == found["ffmpeg"]
+            # the installer's copy wins over PATH; ffprobe is looked for beside it, never in tools/ffprobe
+            bin_ = root / "tools" / "ffmpeg" / "bin"
+            bin_.mkdir(parents=True)
+            for n in ("ffmpeg", "ffprobe"):
+                (bin_ / platform.exe_name(n)).write_bytes(b"MZ")
+            assert manifest.ffmpeg() == str(bin_ / platform.exe_name("ffmpeg"))
+            assert manifest.ffmpeg("ffprobe") == str(bin_ / platform.exe_name("ffprobe"))
+            assert manifest.tool("uv") is None and manifest.tool("deno") is None
+            (root / "tools" / "uv").mkdir()
+            (root / "tools" / "uv" / platform.exe_name("uv")).write_bytes(b"MZ")
+            assert manifest.tool("uv") == root / "tools" / "uv" / platform.exe_name("uv")
+        finally:
+            manifest.ROOT, manifest.shutil = real_root, real_shutil
+    assert _sh.which is real_shutil.which
+    return "tools/ffmpeg/bin first, PATH second, a per-OS hint third; ffprobe beside ffmpeg; nothing runs bare"
 
 
 @check("tray: the menu and the icon from what the server says (stopped, idle, working, paused, a problem); no torch")
@@ -11990,6 +12833,261 @@ def u_tray():
     return "stopped / idle / working (the module's bar) / paused / problem; job lines; icons differ; light import"
 
 
+@check("perf: load_16k remembers the last few vocals (a hit, a changed file misses, callers get copies, a byte budget)")
+def u_perf_load16k():
+    import tempfile
+    import numpy as np
+    import soundfile as sf
+    from undercover.core.engine import convert
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        f = Path(td) / "lead.flac"
+        x = (0.2 * np.sin(np.arange(16000 * 2) / 16000 * 2 * np.pi * 220)).astype(np.float32)
+        sf.write(str(f), x, 16000, subtype="PCM_16")
+        convert._LOAD16K.clear()
+        a = convert.load_16k(f)
+        assert a.flags.writeable and a.dtype == np.float32 and len(a) == len(x), (a.flags, a.dtype, len(a))
+        kept = next(iter(convert._LOAD16K.values()))
+        assert not kept.flags.writeable and a is not kept, "the memo's own array was handed out, or is writable"
+        a[0] = 1.0   # the caller's copy: its change never reaches the memo
+        b = convert.load_16k(Path(td) / "." / "lead.flac")   # the same file by another spelling: one entry, not decoded again
+        assert len(convert._LOAD16K) == 1 and next(iter(convert._LOAD16K.values())) is kept, "a repeat call didn't come from the memo"
+        assert b is not a and b[0] == kept[0] != 1.0, "a caller's change reached the memo"
+        time.sleep(0.02)
+        sf.write(str(f), x[:16000], 16000, subtype="PCM_16")   # rewritten (another size and mtime): decoded afresh
+        c = convert.load_16k(f)
+        assert c is not a and len(c) == 16000, "a changed file came from the memo"
+        for i in range(convert._LOAD16K_KEEP + 1):   # the memo stays small: the oldest entry leaves
+            g = Path(td) / f"v{i}.flac"
+            sf.write(str(g), x[:4000], 16000, subtype="PCM_16")
+            convert.load_16k(g)
+        assert len(convert._LOAD16K) == convert._LOAD16K_KEEP, len(convert._LOAD16K)
+        assert convert._LOAD16K_BUDGET == 256 * 1024 * 1024, convert._LOAD16K_BUDGET
+        saved = convert._LOAD16K_BUDGET
+        try:   # a small budget stands in for long stems: 4000 samples are 16000 bytes, the 2 s file 128000
+            convert._LOAD16K.clear()
+            convert._LOAD16K_BUDGET = 40000
+            bf = Path(td) / "big.flac"
+            sf.write(str(bf), x, 16000, subtype="PCM_16")
+            big = convert.load_16k(bf)
+            assert len(big) == len(x) and big.flags.writeable, "an array over the budget wasn't returned as a copy"
+            assert not convert._LOAD16K, "an array over the budget was kept"
+            for i in range(convert._LOAD16K_KEEP + 1):
+                g = Path(td) / f"v{i}.flac"
+                convert.load_16k(g)
+                total = sum(v.nbytes for v in convert._LOAD16K.values())
+                assert total <= convert._LOAD16K_BUDGET, (i, total)
+            names = [Path(k[0]).name for k in convert._LOAD16K]
+            assert names == [f"v{convert._LOAD16K_KEEP - 1}.flac", f"v{convert._LOAD16K_KEEP}.flac"], names   # oldest left first
+            kept = convert._LOAD16K[next(reversed(convert._LOAD16K))]
+            d = convert.load_16k(Path(td) / f"v{convert._LOAD16K_KEEP}.flac")   # a small file still hits
+            assert d is not kept and len(convert._LOAD16K) == 2 and convert._LOAD16K[next(reversed(convert._LOAD16K))] is kept, \
+                "a small file under the budget missed the memo"
+        finally:
+            convert._LOAD16K_BUDGET = saved
+            convert._LOAD16K.clear()
+    return (f"hit, miss on rewrite, callers get copies of a read-only memo, at most {convert._LOAD16K_KEEP} kept "
+            f"and {convert._LOAD16K_BUDGET // 2**20} MB; an array over the budget isn't kept")
+
+
+@check("perf: /api/status's code stamp is kept a few seconds, then walked again")
+def u_perf_code_stamp():
+    from undercover.app import server
+    saved = dict(server._CODE_STAMP)
+    try:
+        real = server.code_stamp()
+        assert real > 0 and real == server.STARTUP_STAMP, (real, server.STARTUP_STAMP)
+        server._CODE_STAMP.update(at=time.monotonic(), value=123.0)
+        assert server.code_stamp() == 123.0, "a fresh stamp wasn't served from the cache"
+        server._CODE_STAMP.update(at=time.monotonic() - server.CODE_STAMP_TTL - 1)
+        assert server.code_stamp() == real, "a stamp past its time wasn't walked again"
+        t0 = time.perf_counter()
+        for _ in range(50):
+            server.code_stamp()
+        assert time.perf_counter() - t0 < 0.05, "50 cached calls took over 50 ms"
+    finally:
+        server._CODE_STAMP.update(saved)
+    return f"kept {server.CODE_STAMP_TTL:.0f} s"
+
+
+@check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
+def u_perf_history():
+    from undercover.frontman import history as hstore, pipeline
+    with isolated_data() as t:
+        out, up = t / "app" / "output", t / "app" / "uploads"
+        out.mkdir(parents=True, exist_ok=True)
+        up.mkdir(parents=True, exist_ok=True)
+        sid = "ab" * 8
+        rows = [{"id": f"{i:010x}", "output": str(out / f"c{i}.flac"), "song": str(up / f"{sid}.mp3"), "voice": "v", "title": sid,
+                 "options": {"fit": True}, "notes": []} for i in range(3)]
+        for r in rows:
+            Path(r["output"]).write_bytes(b"x")
+        (out / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "{broken\n", encoding="utf-8")
+        hstore._PARSED["key"] = None
+        a = hstore._lines()
+        key = hstore._PARSED["key"]
+        assert len(a) == 3 and key is not None, (len(a), key)
+        a[0]["title"] = "changed by the caller"
+        a[1]["options"]["fit"] = False   # nested values are the caller's own too
+        a[2]["notes"].append("y")
+        b = hstore._lines()
+        assert hstore._PARSED["key"] == key and b[0]["title"] == sid, "a caller's change reached the cache, or the parse was redone"
+        assert b[1]["options"] == {"fit": True} and b[2]["notes"] == [], "a caller's change to a nested value reached the cache"
+        assert b[0] is not hstore._PARSED["items"][0], "the cache handed out its own rows"
+        hstore.update(rows[1]["id"], notes=["x"])   # a write drops the parse; the next read sees the new line
+        c = hstore._lines()
+        assert hstore._PARSED["key"] != key and c[1].get("notes") == ["x"], "a write wasn't seen"
+        key = hstore._PARSED["key"]
+        time.sleep(0.02)
+        (out / "history.jsonl").write_text(json.dumps(rows[0]) + "\n", encoding="utf-8")   # another writer (size and mtime change)
+        assert len(hstore._lines()) == 1 and hstore._PARSED["key"] != key, "a rewritten file came from the cache"
+        # titles: the sidecar is read once, and again after a rename rewrites it
+        side = up / f"{sid}.json"
+        side.write_text(json.dumps({"id": sid, "title": "Hold On"}), encoding="utf-8")
+        pipeline._TITLES.clear()
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On"
+        mt = pipeline._TITLES[str(side)][0]
+        side.write_bytes(b"{not json")
+        os.utime(side, ns=(mt, mt))   # the same mtime: served from memory, not read
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On", "a sidecar with the same mtime was read again"
+        time.sleep(0.02)
+        side.write_text(json.dumps({"id": sid, "title": "Hold On (edit)"}), encoding="utf-8")
+        assert pipeline.upload_title(up / f"{sid}.mp3") == "Hold On (edit)", "a rewritten sidecar came from memory"
+        assert pipeline.upload_title(up / "not-a-hash.mp3") is None
+        pipeline._TITLES.clear()
+        hstore._PARSED["key"] = None
+    return "parse kept by (path, size, mtime_ns); rows copied; dropped on write; titles by sidecar mtime"
+
+
+@check("hardening: the kept /files/ roots follow a root folder re-pointed while the server runs (a junction), within a few seconds, with [paths] unchanged; a file under the old target stops being served")
+def u_roots_follow():
+    import subprocess
+    from undercover.core import config, files
+    with isolated_data() as t:
+        a, bb, link = Path(t) / "target-a", Path(t) / "target-b", Path(t) / "out-link"
+        a.mkdir(), bb.mkdir()
+        (a / "x.wav").write_bytes(b"A"), (bb / "x.wav").write_bytes(b"B")
+
+        def point(to):
+            if link.exists() or link.is_symlink():
+                os.rmdir(link) if os.name == "nt" else link.unlink()
+            if os.name == "nt":   # a junction, as a hand-made move would make (no admin needed)
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(to)], capture_output=True, check=True)
+            else:
+                link.symlink_to(to, target_is_directory=True)
+        point(a)
+        config.CONFIG["paths"]["output_dir"] = str(link)
+        files._ROOTS["key"] = None
+        assert files.roots()["output"] == a.resolve() and files.file_url(link / "x.wav") == "/files/output/x.wav"
+        point(bb)
+        assert files.roots()["output"] == a.resolve(), "(within the few seconds, the kept root is used)"
+        files._ROOTS["at"] -= files.ROOTS_S + 1   # a few seconds on
+        assert files.roots()["output"] == bb.resolve(), "a re-pointed root kept serving its old target"
+        assert files.file_url(a / "x.wav") is None and files.file_url(link / "x.wav") == "/files/output/x.wav"
+        os.rmdir(link) if os.name == "nt" else link.unlink()
+    files._ROOTS["key"] = None
+    return "followed after the kept few seconds; the old target no longer served"
+
+
+@check("perf: the Library's summary is kept until something changes; songs and stems come out the same from one pass; file URLs")
+def u_perf_library():
+    from undercover.core import files, storage
+    from undercover.core.config import path
+    from undercover.safehouse import library
+    with isolated_data() as t:
+        app = t / "app"
+        up, out, cache = app / "uploads", app / "output", app / "cache"
+        for d in (up, out / "speech", cache / "stems", cache / "training" / "p1", cache / "keys", app / "models" / "voices" / "v1"):
+            d.mkdir(parents=True, exist_ok=True)
+        sids = ["ab" * 8, "cd" * 8]
+        for i, sid in enumerate(sids):
+            (up / f"{sid}.mp3").write_bytes(b"s" * 1000)
+            (up / f"{sid}.json").write_text(json.dumps({"id": sid, "file": f"{sid}.mp3", "title": f"Song {i}"}), encoding="utf-8")
+        for sub, names in (("m_high", ("vocals", "instrumental")), ("m_high/karaoke_x", ("vocals", "instrumental")),
+                           ("m_high/karaoke_x/dereverb_y", ("noreverb", "reverb")), ("other_fast", ("vocals",))):
+            d = cache / "stems" / sids[0] / sub
+            d.mkdir(parents=True, exist_ok=True)
+            for n in names:
+                (d / f"{n}.flac").write_bytes(b"x" * (100 + len(n)))
+            (d / "notes.txt").write_bytes(b"not a stem")
+        (cache / "training" / "p1" / "project.json").write_text("{}", encoding="utf-8")
+        (cache / "training" / "p1" / "clip.wav").write_bytes(b"t" * 700)
+        (app / "models" / "voices" / "v1" / "meta.json").write_text(json.dumps({"dir": str(app / "models/voices/v1")}), encoding="utf-8")
+        (app / "models" / "voices" / "v1" / "model.pth").write_bytes(b"v" * 900)
+        rows = []
+        for i in range(5):
+            o = out / f"c{i}.flac"
+            o.write_bytes(b"c" * 50)
+            rows.append({"id": f"{i:010x}", "output": str(o), "song": str(up / f"{sids[i % 2]}.mp3"), "voice": "v", "title": f"Cover {i}"})
+        (out / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        # file URLs: inside a root, a sibling folder that only shares the prefix, outside; roots follow the paths setting
+        assert files.roots()["output"] == path("output_dir").resolve()
+        assert files.file_url(out / "c1.flac") == "/files/output/c1.flac"
+        assert files.file_url(cache / "stems" / sids[0] / "m_high" / "karaoke_x" / "vocals.flac") == f"/files/stems/{sids[0]}/m_high/karaoke_x/vocals.flac"
+        assert files.file_url(up / "a b#c.mp3") == "/files/uploads/a%20b%23c.mp3"
+        (app / "output2").mkdir()
+        assert files.file_url(app / "output2" / "x.mp3") is None and files.file_url(t / "elsewhere.mp3") is None and files.file_url(None) is None
+        # the summary: kept while nothing changed, re-made when a folder's entries or the history change, dropped by invalidate
+        library.invalidate()
+        s1 = library.summary()
+        assert library.summary() is s1, "a summary with nothing changed was re-made"
+        assert s1["categories"]["stems"] == sum(f.stat().st_size for f in (cache / "stems").rglob("*") if f.is_file()), s1["categories"]
+        assert s1["categories"]["training"] == 702 and s1["categories"]["songs"] == 2000 + sum(f.stat().st_size for f in up.glob("*.json")), s1["categories"]
+        assert s1["categories"]["voices"] == 900 + (app / "models/voices/v1/meta.json").stat().st_size, s1["categories"]
+        assert s1["total"] == sum(g["size"] for g in storage.where().values()), (s1["total"], storage.where())
+        assert s1["total"] == sum(s1["categories"].values()) + (out / "history.jsonl").stat().st_size, (s1["total"], s1["categories"])   # (the history file is the one thing in no category)
+        assert s1["counts"] == {"covers": 5, "speech": 0, "songs": 2, "voices": 1, "training": 1}, s1["counts"]
+        assert "inside" not in json.dumps(s1)
+        time.sleep(0.02)
+        (out / "c5.flac").write_bytes(b"c" * 50)   # a new file in a counted folder: another key
+        s2 = library.summary()
+        assert s2 is not s1 and s2["categories"]["covers"] == 300, "a changed output folder didn't re-make the summary"
+        library._SUMMARY["at"] -= library.SUMMARY_TTL + 1   # past its time: re-made even with the same key
+        assert library.summary() is not s2
+        s3 = library.summary()
+        library.invalidate()
+        s4 = library.summary()
+        assert s4 is not s3
+        make = library._summary   # a change while a summary is being made (another thread's route): that one isn't kept
+        library._summary = lambda: (library.invalidate(), make())[1]
+        try:
+            library.invalidate()
+            s5 = library.summary()
+        finally:
+            library._summary = make
+        assert library.summary() is not s5, "a summary begun before an invalidate() was kept"
+        from undercover.safehouse import api as lib_api   # a writing route: the summary is dropped just before its answer
+        seen = []
+
+        class _H:
+            path = "/api/library/x"
+
+            def _json(self, obj, status=200):
+                seen.append(library._SUMMARY["value"] is None)
+
+        def route(h, method, p):   # another thread's GET keeps a summary while this route is still writing
+            library.summary()
+            h._json({"ok": True})
+        real_route, lib_api._route = lib_api._route, route
+        try:
+            fake = _H()
+            lib_api.handle(fake, "POST", "/api/library/x")
+        finally:
+            lib_api._route = real_route
+        assert seen == [True], "the summary was still kept when a writing route answered"
+        assert vars(fake)["_json"].__func__ is _H._json, "the handler's own _json wasn't put back"
+        # songs: covers per song from one pass over the history, stems as the old per-file listing gave them
+        songs = {s["id"]: s for s in library.songs()}
+        assert songs[sids[0]]["covers"] == 3 and songs[sids[1]]["covers"] == 2, {k: v["covers"] for k, v in songs.items()}
+        assert songs[sids[0]]["cover_titles"] == ["c4", "c2", "c0"], songs[sids[0]]["cover_titles"]   # (newest first, as before)
+        st = songs[sids[0]]["stems"]
+        want = sorted(x for x in (cache / "stems" / sids[0]).rglob("*") if x.suffix.lower() in (".wav", ".flac"))
+        assert [files.file_url(x) for x in want] == [s["url"] for s in st] and [x.stat().st_size for x in want] == [s["size"] for s in st], st
+        assert [s["label"] for s in st] == ["Instrumental", "Lead vocal (dry)", "Lead reverb (removed)", "Backing vocals", "Lead vocal", "Vocals", "Vocals"], [s["label"] for s in st]
+        assert {s["quality"] for s in st} == {"high", "fast"} and songs[sids[1]]["stems"] == []
+        library.invalidate()
+    return "summary kept / re-made on a change, past its time, on invalidate; songs indexed; stems from scandir; URLs by prefix"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -12036,8 +13134,10 @@ PHONE_SAMPLES = [
     ("GET", "/api/gamepause"), ("POST", "/api/gamepause"), ("POST", "/api/gamepause/settings"), ("POST", "/api/lowprofile"), ("POST", "/api/firstrun"),
     ("POST", "/api/vault/run"), ("POST", "/api/vault/restore"),
     ("GET", "/api/phone"), ("POST", "/api/phone"), ("POST", "/api/phone/pair"), ("POST", "/api/phone/pair/cancel"),
-    ("POST", "/api/phone/revoke"), ("GET", "/api/away"), ("POST", "/api/away"), ("POST", "/api/away/forget"),
+    ("POST", "/api/phone/revoke"), ("POST", "/api/phone/forget"),
     ("POST", "/api/phone/away/link"), ("POST", "/api/phone/away"), ("GET", "/away"),
+    ("POST", "/api/phone/wait"), ("POST", "/api/phone/pair/short"), ("POST", "/api/phone/allow"), ("POST", "/api/phone/refuse"),
+    ("POST", "/api/phone/revoke-all"), ("POST", "/api/phone/move/link"), ("POST", "/api/phone/move"), ("GET", "/move"),
     ("GET", "/api/themes"), ("POST", "/api/themes"), ("POST", "/api/themes/import"), ("GET", "/api/themes/midnight/export"),
     ("GET", "/api/themes/midnight/theme.css"), ("GET", "/api/themes/midnight/preview.png"),
     ("GET", "/api/themes/midnight/fonts/Manrope.woff2"), ("DELETE", "/api/themes/midnight"),
@@ -12155,8 +13255,26 @@ def a_retry():
 PHONE_ADDR = "127.0.0.2"   # the sandbox's "home network" address: loopback, so nothing reaches the network and Windows asks nothing
 
 
-def _lan(method, path, token=None, body=None, origin=True, host=None):
-    """A request as a phone would send it, to the sandbox's phone listener: -> (status, headers, body)."""
+def _plant_lan(name: str) -> tuple:
+    """A phone paired on the home Wi-Fi before the link, as 1.1 wrote it into the sandbox's phone.json (the server reads
+    the file again when it changes on disk) -> (its LAN token, its id)."""
+    from undercover.core import phone
+    f = phone.state_file()
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {"enabled": True, "devices": []}
+    token, did = "L" + os.urandom(21).hex(), os.urandom(5).hex()
+    data.setdefault("devices", []).append({"id": did, "name": name, "hash": phone.hash_token(token), "paired": "2026-10-01 10:00",
+                                           "seen": "2026-10-01 10:00", "ip": PHONE_ADDR, "used": time.time()})
+    data["enabled"] = True
+    time.sleep(0.02)   # (a new mtime)
+    f.write_text(json.dumps(data), encoding="utf-8")
+    return token, did
+
+
+def _lan(method, path, token=None, body=None, origin=True, host=None, extra=None):
+    """A request as a phone would send it, to the sandbox's home-network listener: -> (status, headers, body)."""
     import http.client
     port = int(BASE.rsplit(":", 1)[1])
     c = http.client.HTTPConnection(PHONE_ADDR, port, timeout=30)
@@ -12166,6 +13284,8 @@ def _lan(method, path, token=None, body=None, origin=True, host=None):
     if token:
         h["Cookie"] = f"other=1; uc_device={token}"
     data = None if body is None else json.dumps(body).encode()
+    if extra:
+        h.update(extra)
     if data is not None:
         h["Content-Type"] = "application/json"
     try:
@@ -12176,11 +13296,11 @@ def _lan(method, path, token=None, body=None, origin=True, host=None):
         c.close()
 
 
-def _away(method, path, port, host, cookie=None, body=None, origin=True):
-    """A request as Tailscale Funnel would bring it to the away listener: -> (status, headers, body)."""
+def _away(method, path, port, host, cookie=None, body=None, origin=True, extra=None):
+    """A request as Tailscale Funnel would bring it to the link's listener: -> (status, headers, body)."""
     import http.client
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
-    h = {"Host": host}
+    h = {"Host": host, **(extra or {})}
     if origin and method != "GET":
         h["Origin"] = origin if isinstance(origin, str) else f"https://{host}"
     if cookie:
@@ -12217,121 +13337,222 @@ def _fake_daemon_alive(st_file: Path) -> bool:
         os.close(fd)
 
 
-@check("api: away from home (phase 20) on a fake Tailscale: sign-in, approval, ready; Funnel only to the away listener; its gate (Host, Origin, no pairing, away tokens only); a home phone's link becomes its away pass; off closes it")
-def a_away():
+@check("api: the one link (1.2.1) on a fake Tailscale: setup walks sign-in, approval, ready, and Funnel only to the link's listener; its gate (Host, Origin, generic refusals, forwarded headers ignored); pairing at the link: the QR's code once, a nonce, the token once on Allow (never before, never twice), No; the typed code only when asked, five tries; the sign-in URL reaches no phone; Remove clears the phone; a phone from before moves over, its LAN token good until the new one is used; off closes everything; Private is the same gate")
+def a_link():
+    from undercover.app import phone_api
+    from undercover.core.config import path as sbx_path
     st_file = Path(os.environ["FAKE_TS_STATE"])
     st_file.write_text("{}", encoding="utf-8")
     read = lambda: json.loads(st_file.read_text(encoding="utf-8") or "{}")
     write = lambda **kw: _fake_ts_set(st_file, **kw)
-    api("/api/phone", {"on": True})
-    pr = api("/api/phone/pair", {})["pairing"]
-    status, hd, _ = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Away phone"})
-    assert status == 200
-    home = hd["set-cookie"].split("uc_device=", 1)[1].split(";", 1)[0]
+    port = host = None
     try:
-        st = api("/api/away", {"on": True})
+        st = api("/api/phone", {"on": True})   # setup: the link comes up on the fake
+        assert st["enabled"] and st["link"] is None and st["phase"] in ("fetching", "starting", "sign-in"), st
         port = st["port"]
-        assert st["on"] and st["listening"] and 7870 <= port < 7880, st
-        wait_for(lambda: api("/api/away")["auth_url"], AWAY_WAIT, every=0.5, what="the Tailscale sign-in link")
-        assert api("/api/away")["phase"] == "sign-in"
-        write(backend="Running", signed_in=True, host="uc-fakeaway.tailfake.ts.net")
-        wait_for(lambda: api("/api/away")["approve_url"], AWAY_WAIT, every=0.5, what="the approval link")
+        assert st["listening"] and 7870 <= port < 7880 and st["supported"] and st["auth_url"] is None, st
+        st = wait_for(lambda: (lambda x: x if x["auth_url"] else None)(api("/api/phone")), AWAY_WAIT, every=0.5, what="the Tailscale sign-in link")
+        assert st["phase"] == "sign-in" and st["approve_url"] is None and st["link"] is None, st
+        write(backend="Running", signed_in=True, host="uc-fakelink.tailfake.ts.net")
+        st = wait_for(lambda: (lambda x: x if x["approve_url"] else None)(api("/api/phone")), AWAY_WAIT, every=0.5, what="the approval link")
+        assert st["phase"] == "approve" and st["auth_url"] is None, st
         write(funnel_approved=True)
-        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/away")), AWAY_WAIT, every=0.5, what="ready")
-        host = st["host"]
-        assert st["link"] == f"https://{host}", st
+        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/phone")), AWAY_WAIT, every=0.5, what="ready")
+        host = st["link"].removeprefix("https://")
+        assert st["link"] == f"https://{host}" and st["lan"] is None and st["auth_url"] is st["approve_url"] is None and st["name"], st
         sandbox_port = int(BASE.rsplit(":", 1)[1])
         assert read()["funnel_target"] == f"http://127.0.0.1:{port}" and port != sandbox_port, read()   # never 7860, never the home listener
-        # the gate
-        assert _away("GET", "/", port, host)[0] == 401, "the away address answered without a pass"
-        assert _away("GET", "/", port, f"127.0.0.1:{port}")[0] == 403, "the away address took a Host that isn't its name"
-        assert _away("GET", "/pair", port, host)[0] == 403 and _away("POST", "/api/phone/claim", port, host, body={"code": "X"})[0] == 403
-        status, _, page = _away("GET", "/away", port, host)
-        assert status == 200 and b"Away from home" in page
-        status, hd, sw = _away("GET", "/sw.js", port, host)   # the away app's service worker (1.2): no pass needed, no data
-        assert status == 200 and "javascript" in hd.get("content-type", "") and b"HOME_RX" in sw, (status, hd)
-        # a paired phone, at home, asks for its link (its button shows only now); at the away address the code becomes its pass
-        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is True
-        assert api("/api/status").get("away_ready") is False, "the PC's own page offers the phone's away button"
-        status, _, body = _lan("POST", "/api/phone/away/link", home, {})
+        # the gate: generic refusals, nothing before a token says what exists
+        s0, h0, b0 = _away("GET", "/", port, host)
+        assert (s0, b0) == (401, b"Unauthorized") and "clear-site-data" not in h0, (s0, h0, b0)
+        assert _away("GET", "/", port, f"127.0.0.1:{port}")[0] == 403, "the link took a Host that isn't its name"
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": "x"}, origin=f"http://{host}")[0] == 403
+        for p_ in ("/api/phone/claim", "/api/phone/wait"):   # no window, no nonce: the same 401
+            assert _away("POST", p_, port, host, body={})[:3:2] == (401, b"Unauthorized"), p_
+            assert _away("POST", p_, port, host, body=[])[:3:2] == (401, b"Unauthorized"), p_   # (CI-58: a list is no object, and no 500)
+        assert _away("POST", "/api/phone/move", port, host, body=[1])[:3:2] == (403, b"Forbidden")
+        assert _away("POST", "/api/phone/move", port, host, body={})[:3:2] == (403, b"Forbidden")   # no code: generic too
+        status, _, page = _away("GET", "/pair", port, host)
+        assert status == 200 and b"Connect this phone" in page and b"Allow" in page, (status, page[:200])
+        status, _, page = _away("GET", "/move", port, host)
+        assert status == 200 and b"Your phone" in page
+        status, hd, sw = _away("GET", "/sw.js", port, host)
+        assert status == 200 and "javascript" in hd.get("content-type", ""), (status, hd)
+        # pairing at the link: the QR's code, once; the claim is a nonce; wrong and used nonces are "not yet"
+        pr = api("/api/phone/pair", {})["pairing"]
+        assert pr["link"].startswith(f"https://{host}/pair#") and len(pr["link"].split("#", 1)[1]) >= 20 and pr["short"] is None, pr
+        assert pr["qr"].startswith("<svg") and pr["code"] == "" and pr["wrong"] == 0, pr
+        code = pr["link"].split("#", 1)[1]
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": code[:-1] + "!", "name": "x"})[:3:2] == (403, b"Forbidden")
+        assert api("/api/phone")["pairing"]["wrong"] == 1, "a wrong claim isn't counted"
+        status, hd, body = _away("POST", "/api/phone/claim", port, host, body={"code": code, "name": "Link phone"})
+        assert status == 200 and "set-cookie" not in hd, (status, hd, body)
+        nonce = json.loads(body)["nonce"]
+        assert len(nonce) >= 20 and "token" not in body.decode() and "hash" not in body.decode(), body
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": code, "name": "Again"})[:3:2] == (401, b"Unauthorized"), "a code worked twice"
+        st = api("/api/phone")
+        assert [d["name"] for d in st["pending"]] == ["Link phone"] and st["devices"] == [] and st["pairing"] is None, st
+        not_yet = _away("POST", "/api/phone/wait", port, host, body={"nonce": nonce})
+        wrong = _away("POST", "/api/phone/wait", port, host, body={"nonce": "n" * 22})
+        assert not_yet[0] == 200 and not_yet[2] == b'{"ok": false}' and wrong[0] == 200 and wrong[2] == not_yet[2], (not_yet, wrong)
+        assert "set-cookie" not in not_yet[1] and "set-cookie" not in wrong[1]
+        api("/api/phone/allow", {"id": st["pending"][0]["id"]})
+        assert _away("POST", "/api/phone/wait", port, host, body={"nonce": "n" * 22})[2] == b'{"ok": false}'
+        status, hd, body = _away("POST", "/api/phone/wait", port, host, body={"nonce": nonce})
+        assert status == 200 and json.loads(body)["ok"] is True, (status, body)
+        cookie = hd.get("set-cookie", "")
+        assert cookie.startswith("__Host-uc=") and all(x in cookie for x in ("; Path=/", "HttpOnly", "Secure", "SameSite=Strict", "Max-Age=")) and "Domain" not in cookie, cookie
+        token = cookie.split("__Host-uc=", 1)[1].split(";", 1)[0]
+        assert token not in body.decode()
+        assert _away("POST", "/api/phone/wait", port, host, body={"nonce": nonce})[2] == b'{"ok": false}', "the token was handed over twice"
+        logs = "".join(f.read_text(encoding="utf-8", errors="replace") for f in sbx_path("logs_dir").glob("*.log") if f.is_file())
+        assert code not in logs and token not in logs and nonce not in logs, "a code, a nonce or a token in a log"
+        assert "Link phone was allowed" in logs, "the Allow isn't in the Doctor's log"
+        # with the token: a phone, the PC-only routes refused, no forwarded header decides anything, no sign-in URL reaches it
+        s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])
+        assert s_["client"] == "phone" and s_["device"] == "Link phone" and s_["move"] is None and s_.get("app_folder") is None, s_
+        fwd = {"X-Forwarded-For": "127.0.0.1", "Tailscale-User-Login": "x@example.com", "Tailscale-Funnel-Request": "?1"}
+        assert _away("GET", "/api/status", port, host, extra=fwd)[:3:2] == (401, b"Unauthorized"), "a forwarded header let something in"
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}", extra=fwd)[2])["device"] == "Link phone"
+        status, _, body = _away("POST", "/api/restart", port, host, cookie=f"__Host-uc={token}", body={})
+        assert status == 403 and b"needs the PC" in body, (status, body)
+        seen = 0
+        for m, p_ in PHONE_SAMPLES:
+            if m == "GET" and phone_api.policy(m, p_)[0] in ("phone", "open"):
+                status, _, body = _away("GET", p_, port, host, cookie=f"__Host-uc={token}")
+                assert b"login.tailscale.com" not in body and b"auth_url" not in body and b"approve_url" not in body, (p_, body[:200])
+                seen += 1
+        assert seen > 20 and read().get("auth_url", "login.tailscale.com") and api("/api/phone")["auth_url"] is None
+        assert _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token[:-2]}xx")[:3:2] == (401, b"Unauthorized")
+        # the typed code: only when asked for, five wrong tries end it, the QR's code lives on; No forgets the phone
+        api("/api/phone/pair", {})
+        assert _away("POST", "/api/phone/claim", port, host, body={"code": "ABCDEF", "name": "x"})[0] == 403
+        pr = api("/api/phone/pair/short", {})["pairing"]
+        short = pr["short"]["code"]
+        assert len(short) == 6 and pr["code"] == short and 100 < pr["short"]["until"] - time.time() <= 120, pr
+        bad = "".join(c for c in "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" if c not in short)[:6]
+        for k in range(5):   # (generic on the wire; the PC's card sees the typed code go at the fifth)
+            assert _away("POST", "/api/phone/claim", port, host, body={"code": bad, "name": "x"})[:3:2] == (403, b"Forbidden"), k
+            assert (api("/api/phone")["pairing"]["short"] is None) == (k == 4), k
+        pr = api("/api/phone")["pairing"]
+        assert pr is not None and pr["short"] is None, "the QR's code didn't survive the typed code's tries"
+        status, _, body = _away("POST", "/api/phone/claim", port, host, body={"code": short.lower(), "name": "Second"})
+        assert status == 403, "the finished typed code still worked"
+        status, _, body = _away("POST", "/api/phone/claim", port, host, body={"code": pr["link"].split("#", 1)[1], "name": "Second"})
+        assert status == 200, (status, body)
+        n2 = json.loads(body)["nonce"]
+        pend = api("/api/phone")["pending"]
+        assert [d["name"] for d in pend] == ["Second"]
+        api("/api/phone/refuse", {"id": pend[0]["id"]})
+        assert api("/api/phone")["pending"] == [] and _away("POST", "/api/phone/wait", port, host, body={"nonce": n2})[2] == b'{"ok": false}'
+        # a phone paired on the home Wi-Fi before moves over: its LAN token good until the new one is used once
+        lan, lid = _plant_lan("Old phone")
+        st = api("/api/phone")   # (reads the file again, and opens the home-network listener for that phone)
+        assert any(d["id"] == lid and d["lan"] for d in st["devices"]) and st["lan"] and st["lan"]["listening"], st
+        assert _lan("GET", "/", None)[0] == 401, "the home-network page opens without a token"
+        assert _lan("GET", "/api/status", lan)[0] == 200
+        assert "snap['link']}/move#" in inspect_src(phone_api._route), "the move's link isn't built from the node's own name"
+        status, _, body = _lan("POST", "/api/phone/move/link", lan, {})
         assert status == 200, body
         url = json.loads(body)["url"]
-        assert url.startswith(f"https://{host}/away#"), url
-        code = url.split("#", 1)[1]
-        assert _away("POST", "/api/phone/away", port, host, body={"code": code}, origin=f"http://{host}")[0] == 403
-        status, hd, body = _away("POST", "/api/phone/away", port, host, body={"code": code})
-        assert status == 200, body
-        cookie = hd.get("set-cookie", "")
-        assert all(x in cookie for x in ("uc_away=", "Secure", "HttpOnly", "SameSite=Strict")), cookie
-        away = cookie.split("uc_away=", 1)[1].split(";", 1)[0]
-        assert _away("POST", "/api/phone/away", port, host, body={"code": code})[0] == 403, "a code worked twice"
-        s_ = json.loads(_away("GET", "/api/status", port, host, cookie=f"uc_away={away}")[2])
-        assert s_["client"] == "phone" and s_["device"] == "Away phone", s_
-        assert s_["home_url"] == f"http://{PHONE_ADDR}:{sandbox_port}", s_   # the away app's way home (sw.js keeps it)
-        assert json.loads(_lan("GET", "/api/status", home)[2])["home_url"] is None and api("/api/status")["home_url"] is None
-        assert _away("GET", "/api/status", port, host, cookie=f"uc_away={home}")[0] == 401, "the home token works away"
-        assert _lan("GET", "/api/status", away)[0] == 401, "the away pass works at home"
-        status, _, body = _away("POST", "/api/restart", port, host, cookie=f"uc_away={away}", body={})
-        assert status == 403 and b"needs the PC" in body, (status, body)
-        # off: nothing reaches this PC from outside any more
-        api("/api/away", {"on": False})
-        calls = read()["calls"]
-        assert ["funnel", "reset"] in calls and ["down"] in calls and not read().get("funnel_on")
-        assert json.loads(_lan("GET", "/api/status", home)[2])["away_ready"] is False
+        assert url.startswith(f"https://{host}/move#"), url
+        mcode = url.split("#", 1)[1]
+        assert _lan("POST", "/api/phone/move/link", None, {})[0] == 401, "a move code without a token"
+        status, hd, body = _away("POST", "/api/phone/move", port, host, body={"code": mcode})
+        assert status == 200 and "set-cookie" not in hd, (status, hd, body)   # (CI-59: a move waits for the PC, as a new phone does)
+        mnonce = json.loads(body)["nonce"]
+        assert _away("POST", "/api/phone/move", port, host, body={"code": mcode})[0] == 403, "a move code worked twice"
+        assert _away("POST", "/api/phone/wait", port, host, body={"nonce": mnonce})[2] == b'{"ok": false}'
+        asks = api("/api/phone")["pending"]
+        assert [(d["name"], d["asks"]) for d in asks] == [("Old phone", "move")], asks
+        api("/api/phone/allow", {"id": lid})
+        status, hd, body = _away("POST", "/api/phone/wait", port, host, body={"nonce": mnonce})
+        assert status == 200 and hd.get("set-cookie", "").startswith("__Host-uc="), (status, hd, body)
+        main = hd["set-cookie"].split("__Host-uc=", 1)[1].split(";", 1)[0]
+        assert _lan("GET", "/api/status", lan)[0] == 200, "the LAN token stopped before the phone arrived at the link"
+        assert next(d for d in api("/api/phone")["devices"] if d["id"] == lid)["moving"]
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={main}")[2])["device"] == "Old phone"
+        status, hd, _ = _lan("GET", "/api/status", lan)
+        assert status == 401 and hd.get("clear-site-data") == '"cache", "storage"', (status, hd)   # arrived: the LAN token is finished
+        st = api("/api/phone")
+        d = next(d for d in st["devices"] if d["id"] == lid)
+        assert not d["lan"] and not d["moving"] and st["lan"] is None, st
         try:
-            _away("GET", "/", port, host)
-            raise AssertionError("the away listener still answers after Off")
+            _lan("GET", "/", None)
+            raise AssertionError("the home-network listener still answers with no LAN token left")
         except ConnectionRefusedError:
             pass
-        # on again (the sign-in is kept: no new sign-in), then Phone access off takes away from home with it
-        st = api("/api/away", {"on": True})
-        port = st["port"]
-        wait_for(lambda: api("/api/away")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready again")
-        # Private (Deep Cover, 1.2): Serve on the tailnet only, kept across a restart; then back to Funnel
-        st = api("/api/away", {"private": True})
-        assert st["private"] and st["on"], st
-        wait_for(lambda: api("/api/away")["approve_url"], AWAY_WAIT, every=0.5, what="Serve's approval link")
+        logs = "".join(f.read_text(encoding="utf-8", errors="replace") for f in sbx_path("logs_dir").glob("*.log") if f.is_file())
+        assert "Old phone was allowed to move to the link" in logs and "home-network listener closed" in logs and mcode not in logs and main not in logs and mnonce not in logs, "the move isn't in the log, or a secret is"
+        # Remove: the next request is 401 and clears the phone
+        api("/api/phone/revoke", {"id": lid})
+        status, hd, _ = _away("GET", "/api/status", port, host, cookie=f"__Host-uc={main}")
+        assert status == 401 and hd.get("clear-site-data") == '"cache", "storage"', (status, hd)
+        # Private (Deep Cover): Serve on the tailnet only, the same gate and token; then back to Funnel
+        st = api("/api/phone", {"private": True})
+        assert st["private"] and st["enabled"], st
+        wait_for(lambda: api("/api/phone")["approve_url"], AWAY_WAIT, every=0.5, what="Serve's approval link")
         write(serve_approved=True)
-        wait_for(lambda: api("/api/away")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready on the tailnet only")
+        wait_for(lambda: api("/api/phone")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready on the tailnet only")
         assert read()["serve_on"] and not read().get("funnel_on") and read()["funnel_target"] == f"http://127.0.0.1:{port}", read()
-        from undercover.core import phone
-        assert json.loads(phone.state_file().read_text(encoding="utf-8"))["away_private"], "the private switch wasn't kept"
-        assert _lan("POST", "/api/away", home, {"private": False})[0] == 403, "a phone changed away from home"
-        api("/api/away", {"private": False})
-        wait_for(lambda: api("/api/away")["phase"] == "ready" and read().get("funnel_on"), AWAY_WAIT, every=0.5, what="back on Funnel")
+        assert _away("GET", "/api/status", port, host)[:3:2] == (401, b"Unauthorized"), "the tailnet alone let a request in"
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
+        api("/api/phone", {"private": False})
+        wait_for(lambda: api("/api/phone")["phase"] == "ready" and read().get("funnel_on"), AWAY_WAIT, every=0.5, what="back on Funnel")
+        # off: nothing reaches this PC from a phone any more (funnel reset, down, the listener closed); on again keeps the sign-in
         resets = read()["calls"].count(["funnel", "reset"])
-        api("/api/phone", {"on": False})
-        st = api("/api/away")
-        assert not st["on"] and not st["listening"] and read()["calls"].count(["funnel", "reset"]) == resets + 1, st
+        st = api("/api/phone", {"on": False})
+        assert not st["enabled"] and not st["listening"] and st["link"] is None, st
+        calls = read()["calls"]
+        assert calls.count(["funnel", "reset"]) == resets + 1 and ["down"] in calls and not read().get("funnel_on"), calls[-5:]
         try:
             _away("GET", "/", port, host)
-            raise AssertionError("the away listener still answers after Phone access was switched off")
+            raise AssertionError("the link's listener still answers after Off")
         except ConnectionRefusedError:
             pass
-        # Forget with away off: the daemon comes up just for the logout, then goes, and the node's keys with it.
+        api("/api/phone", {"on": True})
+        wait_for(lambda: api("/api/phone")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready again")
+        port = api("/api/phone")["port"]
+        assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
+        import http.client as _hc   # a phone that used away from home in 1.2 holds this token as uc_away: carried over once
+        c_ = _hc.HTTPConnection("127.0.0.1", port, timeout=30)
+        try:
+            c_.request("GET", "/api/status", headers={"Host": host, "Cookie": f"uc_away={token}"})
+            r_ = c_.getresponse()
+            got = r_.msg.get_all("Set-Cookie") or []
+            assert r_.status == 200 and json.loads(r_.read())["device"] == "Link phone", r_.status
+        finally:
+            c_.close()
+        assert any(x.startswith(f"__Host-uc={token};") for x in got) and any(x.startswith("uc_away=;") and "Max-Age=0" in x for x in got), got
+        assert _away("GET", "/api/status", port, host, cookie="uc_away=" + "x" * 43)[:3:2] == (401, b"Unauthorized")
+        assert api("/api/phone/revoke-all", {})["devices"] == [] and _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[0] == 401
+        # Forget with the link off: the daemon comes up just for the logout, then goes, and the node's keys with it.
         # Judged by state, not by counting daemon starts: forget() starts one only if none answers, and the fake's
         # liveness is an OS lock Windows lets go a moment after the process ends, so first wait for the old daemon
         # to be really gone, then watch the fake's own daemon flag go from off to on, and the logout land after it
-        wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Phone access off")
+        api("/api/phone", {"on": False})
+        wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Off")
         write(daemon=False)
         n0 = len(read()["calls"])
-        api("/api/phone", {"on": True})
-        st = api("/api/away/forget", {})
+        st = api("/api/phone/forget", {})
         r = read()
         later = r["calls"][n0:]
         # (not the backend's state: forget() ends with stop(), whose `down` leaves it Stopped or, if the daemon has
         # already gone, NeedsLogin from the logout; logged_out is the forget itself)
         assert r.get("logged_out") and r.get("daemon") is True and not st["name"], (st, later)
         assert ["logout"] in later and any(c[0] == "tailscaled" for c in later), later   # a daemon came up for it, then the logout
+        assert not st["enabled"] and st["phase"] == "off" and not st["listening"], st
+        assert _api_status("/api/away") == 404 and _api_status("/api/away/forget", {}) == 404, "the old setup routes still answer"
         wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Forget")
     finally:
-        api("/api/phone", {"on": True})
-        api("/api/away", {"on": False})
-        dev = next((d for d in api("/api/phone")["devices"] if d["name"] == "Away phone"), None)
-        if dev:
-            api("/api/phone/revoke", {"id": dev["id"]})
+        api("/api/phone/revoke-all", {})
         api("/api/phone", {"on": False})
-    return f"sign-in -> approve -> ready; funnel to {port} only; the gate holds; a home link became an away pass; off and Phone access off close it"
+    return f"setup -> ready; funnel to {port} only; the gate holds; a nonce became a token on Allow; the typed code; a phone moved over; Remove clears; off closes it"
+
+
+def inspect_src(fn) -> str:
+    import inspect
+    return inspect.getsource(fn)
 
 
 @check("api: Stop is a stop: a long separation (as in a training's clip preparation) ends within 2 s of Stop, nothing cached")
@@ -12416,77 +13637,61 @@ def a_presep_progress():
     return f"presep: {p['message']} (step {p['step_n']} of {p['steps']}); the preview: {q['message']}"
 
 
-@check("api: Phone access (off = no listener; every route refused without a token; pairing; PC-only routes refused for a "
-       "phone; Revoke; switching off closes it; this PC's own requests unchanged)")
+@check("api: the home-network listener (1.2.1): closed until a phone paired before the link needs it, then every route 401 without that phone's LAN token (the page too), the home-screen manifest and icons open; with it the basic pages work and the PC-only routes are refused; this PC's own requests unchanged; Remove closes it for good")
 def a_phone():
     from undercover.app import phone_api
-    from undercover.core import phone
-    unpaired = b"This phone isn't paired with UnderCover. On the PC: SafeHouse, Settings, Phone access."
+    unpaired = b"This phone isn't connected to UnderCover. On the PC: SafeHouse, Settings, Your phone."
+    api("/api/phone", {"on": True})
     try:
         _lan("GET", "/")
-        raise AssertionError("something answers on the phone address while Phone access is off")
+        raise AssertionError("something answers on the home-network address with no phone from before")
     except ConnectionRefusedError:
         pass
-    st = api("/api/phone", {"on": True})
+    lan, lid = _plant_lan("Smoke phone")
+    st = api("/api/phone")
     port = int(BASE.rsplit(":", 1)[1])
-    assert st["enabled"] and st["listening"] and st["url"] == f"http://{PHONE_ADDR}:{port}", st
-    # 1. the walk: every route, no token
+    assert st["enabled"] and st["lan"] and st["lan"]["listening"] and st["lan"]["url"] == f"http://{PHONE_ADDR}:{port}", st
+    # 1. the walk: every route, no token: the generic 401, the manifest and icons apart
     opened = 0
     for m, p in PHONE_SAMPLES + [("GET", "/nope"), ("POST", "/api/nope"), ("DELETE", "/api/nope")]:
         status, hd, body = _lan(m, p, body={} if m == "POST" else None)
-        pol = phone_api.policy(m, p)[0]
-        if pol in ("open", "home"):   # (home: the page alone, no data; 1.2)
+        if phone_api.policy(m, p)[0] == "open" and p.startswith("/static/"):
             opened += 1
-            want = 403 if p == "/api/phone/claim" else 404 if p == "/sw.js" else 200   # (sw.js: the away address only)
-            assert status == want, (m, p, status, body[:200])
+            assert status == 200, (m, p, status, body[:200])
         else:
             assert status == 401 and body == unpaired and hd.get("connection") == "close", (m, p, status, body[:200])
     # 2. the guards before the token: another Host (DNS rebinding), a missing or foreign Origin
     assert _lan("GET", "/", host="evil.example:7862")[0] == 403
     for m in ("HEAD", "PUT", "OPTIONS"):   # any other method: the same 401
-        status, _, body = _lan(m, "/api/status")
-        assert status == 401, (m, status)
-    assert _lan("POST", "/api/phone/claim", body={}, origin=False)[0] == 403
-    assert _lan("POST", "/api/phone/claim", body={}, origin="http://evil.example")[0] == 403
-    # 3. pairing: the code from the PC, wrong then right, then never again
-    pr = api("/api/phone/pair", {})["pairing"]
-    assert pr["link"] == f"http://{PHONE_ADDR}:{port}/pair#{pr['code']}" and pr["qr"].startswith("<svg"), pr
-    wrong = "".join(c for c in phone.ALPHABET if c not in pr["code"])[:6]
-    assert _lan("POST", "/api/phone/claim", body={"code": wrong, "name": "Smoke phone"})[0] == 403
-    status, hd, body = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Smoke phone"})
-    assert status == 200, (status, body)
-    cookie = hd.get("set-cookie", "")
-    assert all(x in cookie for x in ("uc_device=", "HttpOnly", "SameSite=Strict", "Path=/")), cookie
-    token = cookie.split("uc_device=", 1)[1].split(";", 1)[0]
-    assert _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Again"})[0] == 403, "a code worked twice"
-    devs = api("/api/phone")["devices"]
-    assert [d["name"] for d in devs] == ["Smoke phone"] and "hash" not in devs[0], devs
-    # 4. with the token: the basic pages work, the PC-only routes are refused with a plain message
-    s = json.loads(_lan("GET", "/api/status", token)[2])
-    assert s["client"] == "phone" and s["device"] == "Smoke phone", s
+        assert _lan(m, "/api/status")[0] == 401, m
+    assert _lan("POST", "/api/work/settings", lan, {}, origin=False)[0] == 403
+    assert _lan("POST", "/api/work/settings", lan, {}, origin="http://evil.example")[0] == 403
+    # 3. with the token: the basic pages work, the PC-only routes are refused with a plain message
+    s = json.loads(_lan("GET", "/api/status", lan)[2])
+    assert s["client"] == "phone" and s["device"] == "Smoke phone" and s["move"] == "waiting", s
     assert s.get("app_folder") is None, "a phone was told the PC's app folder"
     assert Path(api("/api/status")["app_folder"]).resolve() == ROOT.resolve(), "this PC's status doesn't name its app folder"
     for p in ("/", "/static/app.js", "/api/jobs", "/api/work", "/api/voices", "/api/library/covers", "/api/speak/voices",
               "/api/doctor", "/api/addons", "/api/storage", "/api/history", "/api/config", "/api/train/projects"):
-        status = _lan("GET", p, token)[0]
+        status = _lan("GET", p, lan)[0]
         assert status == 200, (p, status)
-    assert _lan("POST", "/api/work/settings", token, {})[0] == 200
+    assert _lan("POST", "/api/work/settings", lan, {})[0] == 200
     from undercover.core.config import path   # the sandbox's own folders (sandbox_server points this process at them)
     proj = next(p for p in (path("cache_dir") / "training").iterdir() if (p / "project.json").exists())
     clip = next(f for f in (proj / "clips").iterdir() if f.suffix in (".flac", ".wav"))
-    assert _lan("GET", f"/files/training/{proj.name}/clips/{clip.name}", token)[0] == 200, "a phone can't play a clip"
-    assert _lan("GET", f"/files/training/{proj.name}/project.json", token)[0] == 404, "a phone read a project file"
+    assert _lan("GET", f"/files/training/{proj.name}/clips/{clip.name}", lan)[0] == 200, "a phone can't play a clip"
+    assert _lan("GET", f"/files/training/{proj.name}/project.json", lan)[0] == 404, "a phone read a project file"
     assert api(f"/files/training/{proj.name}/project.json"), "this PC can't read the project file any more"
-    assert _lan("DELETE", "/api/voices/no-such-voice", token)[0] not in (401, 403)   # reaches the route (the page asks twice)
+    assert _lan("DELETE", "/api/voices/no-such-voice", lan)[0] not in (401, 403)   # reaches the route (the page asks twice)
     refused = 0
     for m, p in PHONE_SAMPLES:
         if phone_api.policy(m, p)[0] == "pc":
-            status, hd, body = _lan(m, p, token, {} if m == "POST" else None)
+            status, hd, body = _lan(m, p, lan, {} if m == "POST" else None)
             assert status == 403 and b"needs the PC" in body and hd.get("connection") == "close", (m, p, status, body[:200])
             refused += 1
     assert api("/api/status")["client"] == "pc", "the sandbox server stopped (Quit or Restart went through from the phone?)"
-    # 5. this PC's own requests: exactly as before (a phone's cookie means nothing here; Host and Origin checks as they were)
-    req = urllib.request.Request(BASE + "/api/status", headers={"Cookie": f"uc_device={token}"})
+    # 4. this PC's own requests: exactly as before (a phone's cookie means nothing here; Host and Origin checks as they were)
+    req = urllib.request.Request(BASE + "/api/status", headers={"Cookie": f"uc_device={lan}"})
     with urllib.request.urlopen(req, timeout=30) as r:
         assert json.loads(r.read())["client"] == "pc"
     for hdrs, method in (({"Host": "evil.example"}, "GET"), ({"Origin": "http://evil.example"}, "POST")):
@@ -12497,25 +13702,16 @@ def a_phone():
             raise AssertionError(f"this PC's {method} with {hdrs} went through")
         except urllib.error.HTTPError as e:
             assert e.code == 403 and json.loads(e.read()) == {"error": "Forbidden"}, e.code
-    # 6. Revoke: the token stops working at its next request
-    api("/api/phone/revoke", {"id": devs[0]["id"]})
-    assert _lan("GET", "/api/status", token)[0] == 401
-    # 7. switching off closes the listener at once; a paired phone works again when it's switched back on
-    pr = api("/api/phone/pair", {})["pairing"]
-    hd = _lan("POST", "/api/phone/claim", body={"code": pr["code"], "name": "Second"})[1]
-    token2 = hd["set-cookie"].split("uc_device=", 1)[1].split(";", 1)[0]
-    assert _lan("GET", "/api/status", token2)[0] == 200
-    st = api("/api/phone", {"on": False})
-    assert not st["enabled"] and not st["listening"], st
+    # 5. Remove: the last phone from before is gone, so the listener closes for good at once (a refused token's 401 with
+    # Clear-Site-Data is the link's, in a_link)
+    assert api("/api/phone/revoke", {"id": lid})["lan"] is None
     try:
-        _lan("GET", "/api/status", token2)
-        raise AssertionError("the phone listener still answers after switching off")
+        _lan("GET", "/api/status", lan)
+        raise AssertionError("the home-network listener still answers after the last phone from before was removed")
     except ConnectionRefusedError:
         pass
-    api("/api/phone", {"on": True})
-    assert _lan("GET", "/api/status", token2)[0] == 200
     api("/api/phone", {"on": False})
-    return f"{len(PHONE_SAMPLES)} routes walked ({opened} open), {refused} PC-only refused, revoke, switch off"
+    return f"{len(PHONE_SAMPLES)} routes walked ({opened} open), {refused} PC-only refused, Remove closed it"
 
 
 @check("api: themes (list, import, css at load, export, delete) and the pages' Content-Security-Policy")
@@ -14195,11 +15391,12 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -14217,7 +15414,7 @@ def main():
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
                 with sandbox_server(port, full=a.full):   # (one GPU-using run at a time)
-                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_away, a_themes, a_firstrun, a_tray):
+                    for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_link, a_themes, a_firstrun, a_tray):
                         fn()
                     if not a.no_cover:
                         a_cover()

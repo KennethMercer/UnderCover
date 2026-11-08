@@ -432,7 +432,8 @@ def view(doc: dict) -> dict:
     done = compile_list(doc)
     return {k: doc[k] for k in ("cover", "duration", "words", "words_hash", "sections", "plan", "backing_plan", "octaves", "duet",
                                 "backing", "edits", "cursor")} | {"compiled": {k: [p[:5] for p in v] for k, v in done.items()},
-                                                                  "points": doc["points"]}
+                                                                  "points": doc["points"],
+                                                                  "kept_now": _state(doc) in doc.get("kept", [])}   # (this version is a cover already)
 
 
 # ------------------------------------------------------------ rendering
@@ -932,7 +933,7 @@ def price_of(item: dict, doc: dict, edit: dict) -> dict | None:
                 why = f"{round(100 * here['outside'])}% of these notes are {where} the voice's range"
             else:
                 why = f"these notes sit {abs(round(here['register_st'] or 0))} semitones {'above' if (here['register_st'] or 0) > 0 else 'below'} where the voice is comfortable"
-            said = f"{name} {way} here is a poor fit: {why}, so it may sound strained."
+            said = f"{name}, {way}, is a poor fit here: {why}, so it may sound strained."
         row = {"poor": rise >= POOR_COST, "said": said, "rise": round(rise, 3), "outside": here["outside"], "own_outside": own["outside"]}
         if worst is None or rise > worst["rise"]:
             worst = row

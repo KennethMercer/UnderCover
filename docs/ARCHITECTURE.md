@@ -64,7 +64,7 @@ undercover/
     (the Kokoro model), voices (install, search, staging, set aside, display names), voicepreview, engine/ (convert.py
     + the vendored rvc/), gpu (the shared separator and converter), jobs (Job, the GPU worker, SSE events, ETA),
     worklist (Pause / Resume, the overnight queue, registries), cadence/ (engines, client, worker, render), addons,
-    youtube, ytdlp (self-healing), doctor, manifest, about, diagnostics, phone, qr, tailnet (away from home), themes,
+    youtube, ytdlp (self-healing), doctor, manifest, about, diagnostics, phone, qr, tailnet (the phone's link), themes,
     ear (thumbs), tray (the recent tray), trayicon (the system tray), gamepause, vault, platform (OS-specific calls)
   doubleagent/             project, sources, subject, trainer, voicecheck, clipsound, cadence, night (queue items),
                            improved (a retrained voice waiting beside the current one), frozen (the Improve test),
@@ -77,7 +77,7 @@ undercover/
   app/                     server.py (the HTTP shell, shared routes, the request gate), doctor_api, ear_api, firstrun,
                            firstrun_api, gamepause_api, lowprofile_api, phone_api, themes_api, vault_api
   web/                     index.html (one page, one view per module), shell.js/.css, app.js/.css, look.css, jobs.js,
-                           one script per module and room, pair.html, away.html, manifest.webmanifest, fonts/ (OFL,
+                           one script per module and room, pair.html, move.html, manifest.webmanifest, fonts/ (OFL,
                            bundled), themes/ (the five shipped)
   assets/                  sample/ (the CC0 sample song "Hold On"), demo-voice/agent-smoke/ (its model files are built
                            by scripts/make_demo_voice.py and pinned by manifest.json), reader-prints.json, separator/
@@ -114,8 +114,15 @@ and `first_why` so the page says it. The import stand-ins AMD's Windows build of
   stream or, while it is quiet, from `/api/jobs` summaries (`ev.synthetic`). Smoke fails if any other script contains
   `new EventSource`.
 - Every OS-specific call goes through `core/platform.py`. Elsewhere it does the portable thing or raises `NotOnThisOS`
-  with a plain sentence, and `supports(feature)` lets a page hide what cannot work here. Smoke fails if another module
-  makes such a call.
+  with a plain sentence, and `supports(feature)` lets a page hide what cannot work here. A program's file name comes
+  from `platform.exe_name(name)`, a hidden child process from `platform.NO_WINDOW`, a program's text output through
+  `platform.TEXT` (UTF-8, a bad byte replaced, never a decode error; Windows' own console tools such as netsh are
+  read in the console's code page, `platform.CONSOLE`), a process that outlives the server through
+  `platform.start_detached` (its own session off Windows), and "how do I install it" from
+  `platform.install_hint(tool)` (winget, brew or apt). Smoke fails if another module makes such a call, tests
+  `os.name`/`sys.platform` itself or names a program with `.exe`.
+- ffmpeg and ffprobe are found one way, `core/manifest.ffmpeg(name)`: the installer's copy in `tools/ffmpeg/bin`,
+  else the one on PATH, else a `ModelError` that says how to install it on this OS. No module calls `"ffmpeg"` bare.
 - Expert-only elements carry `data-deep`; `[data-pc]` marks controls a paired phone does not get.
 
 ### Dependency rules
@@ -263,7 +270,9 @@ characters; every cover route uses it), `output`, `song`, `voice`, `title` (+ `t
 `converted_vocal`, `converted_backing`, `notes`, `seconds`, `options`, `created`, `kept`, `kept_at`. `history.record`
 is the one place a finished cover is added. A duet's `options` carry `duet_voice`, `duet_way`, `duet_octave`,
 `duet_backing` and `duet_plan` (`[[start_s, end_s, "A" | "B"], ...]` from 0 to the song's end), so Make again sings it
-the same way.
+the same way. The file is parsed once per change (kept by its size and mtime under the history lock, dropped by every
+write, so another process's write is seen too); readers get deep copies of the rows, and the per-cover "is its file there"
+check still runs on every read. A hash-named song's title (its sidecar JSON) is remembered by the sidecar's mtime.
 
 ### Recent tray
 
@@ -280,7 +289,9 @@ the tray only; the library lists everything. Each property is proved in `tests/s
 finished in the last hour as `Job.snapshot()`: `id, kind, state, title, project, created, ended, pausing, stage,
 message, events, progress`, and when known `epoch, epochs, eta, total_left, stage_left, index, of, elapsed`, `retry`
 (`POST /api/jobs/<id>/retry` replays a failed cover, speech, one-shot or install), a one-shot's `plan`, a finished job's
-`final`. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
+`final`. A failed job's last event and `final` say `plain`: true when its message is a refusal written for the user (a
+`ModelError`, a module's registered user error, or a sentence the job ends itself with; `jobs.fail`), false for an
+unexpected error whose `friendly()` message is a guess, so the page decides Try again on it, not on the words. Kinds registered with `register_pausable` pause (a clean stop plus a resume spec); covers and speech never
 pause. Every progress event carries `total_left` in seconds (`jobs.STAGES`, `cache/eta.json`). A heartbeat
 (`logs/heartbeat*.jsonl`) records each running job's resume spec for the Doctor; `jobs.START_GATES` lets the game pause
 ask before a queued GPU job starts.
@@ -362,7 +373,7 @@ Voices are RVC v2 pitch-guided models (`core/engine/convert.py`, a port of RVC's
 the voice's training set (`index_ratio` 0.75). A backing stem can hold a stack of voices, and RMVPE's strongest line then
 changes every few frames: `f0fix.hold_line` keeps one line through every sung run that has a second one (a part that rests
 for a moment is a rest, not a hop to another part), holds its place through quiet, and leaves runs of one voice as they are
-(`Settings.one_line`, on every backing take, never on a lead). Inside one sung note, where two parts cross and the track would move from one to the other mid-word, `f0fix.hold_parts` keeps the part it was on until the note ends or that part stops singing; a step of the tune with no second part under it is left as sung. Songs are converted in 60 s chunks cut near quiet points:
+(`Settings.one_line`, on every backing take, never on a lead). Inside one sung note, where two parts cross and the track would move from one to the other mid-word, `f0fix.hold_parts` keeps the part it was on until the note ends or that part stops singing; a step of the tune with no second part under it is left as sung. A cover's stems are decoded once: `load_16k` keeps the last four vocals as 16 kHz arrays, keyed by resolved path, size and mtime (a rewritten stem is read again), and hands each caller its own copy. Songs are converted in 60 s chunks cut near quiet points:
 60 s halves VRAM against 120 s (3.8 vs 7.6 GB) at the same warm speed. Training (`doubleagent/trainer.py`) follows upstream RVC's recipe,
 fine-tuning the official v2 base models in bf16, with a few held-out phrases for a validation loss and previews. The
 budget scales with the data: 450 steps per kept minute, at least 8000, continued while the held-out loss falls, up to
@@ -543,7 +554,7 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
   tracks are read once and kept with the list (`pitch.npz`: the lead's, and the backing's one line held; read back as data, no
-  pickles). They're read when the cover is recorded, when the list is first opened, or with the next edit of an older list, and
+  pickles). They're read when a duet's cover is recorded, when the list is first opened, or with the next edit of an older list, and
   Keep carries them. `POST .../edits` answers `{job, edit, fit}`; `POST .../edits/price` runs the gate and the price and sings
   nothing, for the page to say it before the edit is offered.
 - **`compile_list`** is pure: plans and edits as far as the cursor -> parts `[start, end, who, octave, src, base]`. `plan_of` makes
@@ -669,7 +680,11 @@ SafeHouse: a strip of rooms (`#safehouse/<room>`; on a phone all six show, three
 (Kept / Recent views, counting the kind that's chosen), Running (now, tonight with its start time once a job waits, recent,
 last night), Storage (usage in three groups, Clean up, where your files live and moving them, Make smaller, Set aside, the
 Vault), Add-ons, System (the Doctor, GPU and models, the YouTube downloader, What's new, Restart, Quit, the diagnostics
-file), Settings (Look, Deep Cover, themes, Phone access, away from home, the game pause).
+file), Settings (Look, Deep Cover, themes, Your phone, the game pause). The Library's summary
+(`/api/library/summary`) is kept for up to 15 s while the paths setting, the history file and the counted folders'
+mtimes stay the same, and dropped by every SafeHouse route that writes, before it runs and again just before it
+answers (a summary begun before a drop is never kept); its sizes come from one walk of the storage groups
+(`storage.where(folders)`). `/api/status`'s stale-code stamp is re-walked at most every 5 s.
 
 ### Deep Cover
 
@@ -687,40 +702,58 @@ ship in `web/themes` (casefile, carbon, dossier, gaslight, midnight); the person
 runs at import, at save and every time a library theme is served; import and export is one `.uctheme` zip of at most
 4 MB. Theming is Deep Cover.
 
-### Phone access and away from home
+### Your phone
 
-Off by default. On, the server also listens on the PC's private home-network address, and every request that does not
-come from this PC must carry a paired device's token (`Handler._gate`): our own Host, a same-origin Origin on anything
-but GET, an HttpOnly SameSite=Strict cookie stored on the PC as its SHA-256; else 401. Pairing is a QR code of
-`http://<address>:<port>/pair#<code>` (six characters, five minutes, once). `app/phone_api.ROUTES` is the one table of
-every route and its policy (open / home / phone / pc). Away from home (`core/tailnet.py`) runs a hidden userspace
-Tailscale (pinned MSI, hashes checked, no driver, no service) whose Funnel points only at a third, dedicated listener
-with its own away token (`away.html`). Never plain port forwarding. Windows-only for now (`platform.supports("away")`).
+Off until the person sets it up. Since 1.2.1 there is one way in for every phone, at home and away: an HTTPS link,
+`https://<name>.ts.net`, from a hidden userspace Tailscale (`core/tailnet.py`: pinned MSI, hashes checked, no driver,
+no service) whose Funnel points only at a dedicated listener on 127.0.0.1 (7870-7879). Never plain port forwarding, and
+never the PC's own listener. Windows-only for now (`platform.supports("away")`). Set up, on the PC, is the switch: it
+fetches the piece, then waits for Tailscale's sign-in and its one approval (`/api/phone`'s `phase`, with the two links,
+which never reach a phone). Turn off the phone link resets Funnel and stops the daemon, so nothing reaches the PC from a
+phone. Private (Deep Cover, `phone.away_private`): Serve instead of Funnel, to the same listener and name, so only
+devices on the person's tailnet reach it. Switching resets the serve config first, so the two are never on together.
 
-Private (Deep Cover, 1.1.4: "Private: my phone runs Tailscale", `phone.away_private`): Serve instead of Funnel, to the
-same listener and name, so only devices on the user's tailnet reach it and nothing is public. Switching resets the
-serve config first, so the two are never on together; the driver checks the mode it wants (`tailnet._funnel_on`).
+Connecting a phone: the card shows a QR code of `https://<name>/pair#<code>`, a 128-bit code in the fragment (never
+sent to a server, taken out of the address bar at once), for five minutes. Wrong claims are counted for the card but
+can't end it. A six-character typed code exists only when the person asks for it: two minutes, five tries. A claim
+(`/api/phone/claim`) gets a nonce and a pending device; the PC shows it with Allow / No and a two-digit number from the nonce's hash, which the phone shows too (`phone.match_of`): the name is the claimant's own, the number is what ties the ask to the phone in hand. Allow mints the token, which
+the phone collects once with its nonce (`/api/phone/wait`); wrong, used, expired and refused nonces all get the same
+answer as "not yet". No forgets the device; a pending one is forgotten after ten minutes. The token is one cookie,
+`__Host-uc`: Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, 30 days from its last use (`phone.TOKEN_IDLE_S`),
+stored on the PC as its SHA-256 and compared in constant time. Remove ends it at the phone's next request and closes
+its open job stream; that 401 carries `Clear-Site-Data: "cache", "storage"`. `/api/phone` and everything under it but
+the claim, the wait and the move are the PC's.
 
-The home-screen app (1.1.4) lives at the away address, the one of the two that is HTTPS, so it is the only place a
-service worker and notifications are allowed. `web/sw.js` (served there only, `/sw.js`, policy open) caches no page
-and nothing of the user's. It keeps the home-network address (`home_url` in `/api/status`, sent only to a paired phone
-at the away address, accepted only in private-address form), and when a navigation gets no answer in 20 s it serves a
-page of its own that says so and links to that address. The page itself (`/`, policy home) opens on the home Wi-Fi
-without a token: it holds no data, and the way back from the away app is a link from another site, on which a
-SameSite=Strict cookie doesn't ride (the page's own requests after it do). At the away address it needs the token.
+At the link every request comes from outside (`Handler._gate_away`): the link's own name in Host, a same-origin Origin
+on anything but GET, the token for everything but the open routes, and before a token only the generic
+`Unauthorized` / `Forbidden`, so nothing says what exists. `app/phone_api.ROUTES` is the one table of every route and
+its policy (open / phone / pc). Each phone may have three jobs waiting or running and start twelve in an hour
+(`jobs.PHONE_JOBS`, 429 past it), and keep three items in tonight's queue (`worklist.PHONE_ITEMS`); the PC has no cap, and UnderCover's own warm-up and preview jobs aren't counted. Forgetting every thumb at once is the PC's. Deletes that nothing brings back (covers, speech, songs, training
+projects) are the PC's, and the pages don't offer them on a phone.
+
+Phones paired on the home Wi-Fi before 1.2.1 hold a LAN token (`lan_hash`), good only from the PC's home network. For
+them alone the home-network listener stays open (`phone.lan_needed`, stored as `lan` in `phone.json`, so a restart
+opens it only then). Their page shows one line with Switch: a one-use move code bound to that phone
+(`/api/phone/move/link`, which needs the LAN token), opened at the link (`/move#<code>`), waits for Allow like a new
+phone, then gets the one token. The LAN token is dropped at the new token's first use, and the listener closes for good
+when no LAN token is left. A 1.1 `phone.json` is read as this one: its away token becomes the one token, and a phone that still sends it in the 1.2 cookie (`uc_away`) at the link gets it back as `__Host-uc`, the old one cleared. Link on and
+off, Allow, No, Remove, the moves and the listener closing are logged in `logs/doctor.log`, never a code or a token.
+
+The home-screen app lives at the link, the only HTTPS origin, so a service worker and notifications are allowed there.
+It starts at `/pair`, which sends a connected phone straight on and lets one that isn't (an iPhone's home-screen app may
+not share Safari's cookies) connect with a typed code. `web/sw.js` (served at the link only, policy open) caches and
+keeps nothing; a page load that gets no answer in 20 s gets a small page of its own that links only to its own origin.
 Job alerts are local only (`web/phonealerts.js`): while the page runs on a phone, a finished job gives a banner, a buzz
-on Android, the app badge and, at the away address with the phone's permission, a notification through the worker.
-No push service, so a locked phone or one that has stopped the page hears nothing. The words are generic ("Cover
-ready"), and the overnight queue's results are silent.
+on Android, the app badge and, with the phone's permission, a notification through the worker. No push service, so a
+locked phone or one that has stopped the page hears nothing. The words are generic ("Cover ready"), and the overnight
+queue's results are silent.
 
 Request rules on every listener (1.1): an Origin, when a request has one, is this server's own scheme, host and port;
 a request another site's page makes (`Sec-Fetch-Site: cross-site`) is refused, except following a link to a page;
 JSON bodies are capped per route (`JSON_MAX`, 1 MB; 413, never read) while uploads keep their own limits; every read of
 a request times out after 30 s; every response says `X-Content-Type-Options: nosniff` and `Referrer-Policy:
-no-referrer`. The phone and away listeners take `MAX_LIVE` (32) connections at once (503 past it). The away listener's
-`Server` header and its refusals before a token name nothing. A device token lasts 30 days from its last use
-(`phone.TOKEN_IDLE_S`; each use renews it and its cookie). Wrong pairing codes are counted per address (5) and in all
-(20). A phone may not cancel or retry work only the PC starts. Links the app fetches for someone (a voice install, a
+no-referrer`. The link's and the home-network listeners take `MAX_LIVE` (32) connections at once (503 past it). The link's
+`Server` header and its refusals before a token name nothing. A phone may not cancel or retry work only the PC starts. Links the app fetches for someone (a voice install, a
 training source, a song from a link) reach only the internet: `core/safeurl.py` refuses a host that is or resolves to
 this PC, the home network or a link-local address, and checks every redirect. Since 1.1.1 the check is also made at
 connect time: inside `safeurl.guarded()` (per thread) every socket connect and send-to is checked by the address it
@@ -747,7 +780,7 @@ cap (`max_download_gb`) with a member limit, links in it skipped. Windows PowerS
 
 `core/trayicon.py` (`pythonw -m undercover.tray`, pystray) is its own light process over the HTTP API, with no torch.
 The server starts it; one per user; it leaves with the server after a Quit. The icon shows idle, working (the module's
-bar), problem or stopped. Menu: Open, the running jobs with time left, Pause / Resume, Phone access, Restart, Quit,
+bar), problem or stopped. Menu: Open, the running jobs with time left, Pause / Resume, Phone link, Restart, Quit,
 Start with Windows (off by default; a Startup-folder shortcut made only on the person's click). It also asks the game
 pause's question (`core/gamepause.py`): when a game starts while UnderCover has GPU work, "Pause UnderCover
 while you play?" (Pause / Keep both running / Don't ask for this game), asked and never assumed. Not `core/tray.py`,
@@ -811,7 +844,7 @@ The installer and the app survive version mismatches and fix common problems the
 - The Doctor (`python -m undercover.doctor [--full] [--json]`, `/api/doctor`, the System room) checks Python and the
   venv, the PyTorch build against `[gpu] backend`, the card and its driver (full mode), every pinned package, ffmpeg and
   Deno, the model files (size fast; SHA-256 in full mode), free space, the `[paths]` folders, the port, leftovers,
-  interrupted work, and the firewall while Phone access is on. Fast mode runs under 2 s with no torch import; full mode
+  interrupted work, your phone's link, and the network type and firewall while a phone still uses the home Wi-Fi. Fast mode runs under 2 s with no torch import; full mode
   is a job. Each result has `id, group, state (ok | info | warn | bad), title, say, detail, fix {id, label, how}`. Fixes:
   `stale`, `model:<path>` / `models` (the new copy checks out before the old is replaced), `packages` (only the differing
   hashed pin lines, on the person's click, never PyTorch), `cpu`, `resume`, `manifest`; `setup.ps1 -Repair` is offered in
@@ -834,7 +867,10 @@ The installer and the app survive version mismatches and fix common problems the
   engine it may read with, `engines.py` vram_gb, a voice's pinned one included; transcripts: Whisper's 5 GB; a cadence
   training: both), through its environment (`UNDERCOVER_GPU_LIMIT_GB`); its cap can't move, so a worker with less than
   the next job needs is ended first, and one holding more than a job that doesn't fit needs gives its share back and that share comes out of the server's cap while the worker is loaded; a
-  training stops the worker first and gets the whole limit. Under the cap, what the next step doesn't need is freed
+  training stops the worker first and gets the whole limit. A step inside a job of another kind that hears a song's
+  words (a duet, Shape it's first open: `lowprofile.worker_step("hear")`) gets Whisper's share the same way, with the
+  server's separator and converter let go for it; the worker goes after, and a limit that can't hold it says so.
+  Under the cap, what the next step doesn't need is freed
   (`gpu.release`: the separator before a conversion or a speech; the separator, the converter and listen-back's ear
   before a training). Every GPU job records its peak (`gpu_peak_gb`, `gpu_alloc_gb`, `gpu_start_gb` on its snapshot);
   `cache/gpu_need.json` keeps each kind's allocated peaks, and a kind that needs more than the cap allows waits and says

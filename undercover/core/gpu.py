@@ -9,6 +9,41 @@ import sys
 LIMIT_ENV = "UNDERCOVER_GPU_LIMIT_GB"   # Low profile's cap for this process and the ones it starts (the cadence worker)
 
 
+def build(installed: str | None = None) -> str:
+    """Which PyTorch this is: "rocm", "cuda" or "cpu", from torch's own account of itself (torch.version.hip / .cuda:
+    a Linux ROCm wheel carries no "+rocm" in its version string). With no argument it's the torch loaded here (what
+    runs). `installed`, the version string from the package record, asks about the install on disk instead (the
+    Doctor: torch may have been replaced under a running server, and its fast checks never import it): torch's small
+    version file is read on its own, without the package, and the string is the last resort."""
+    v = None if installed is not None else getattr(sys.modules.get("torch"), "version", None)   # (None mid-import)
+    v = v or _torch_version_file()
+    if v is not None:
+        if getattr(v, "hip", None):
+            return "rocm"
+        if getattr(v, "cuda", None):
+            return "cuda"
+        version = getattr(v, "__version__", "") or installed or ""
+    else:
+        version = installed or ""
+    return "rocm" if "+rocm" in version else "cuda" if "+cu" in version else "cpu"
+
+
+def _torch_version_file():
+    """torch/version.py loaded by itself (it holds only strings: no torch, no GPU), or None when there's no torch."""
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("torch")
+        where = next(iter(spec.submodule_search_locations or []), None) if spec else None
+        if not where:
+            return None
+        f = importlib.util.spec_from_file_location("_torch_version", os.path.join(where, "version.py"))
+        mod = importlib.util.module_from_spec(f)
+        f.loader.exec_module(mod)
+        return mod
+    except Exception:   # noqa: BLE001 - an odd install: the version string decides, as before
+        return None
+
+
 def limit_gb() -> float | None:
     """The graphics-memory cap this process runs under (whole or fractional GB, binary), or None for none."""
     try:
@@ -34,6 +69,15 @@ def apply_cap(limit: float | None = None) -> float | None:
         return lim
     except Exception:   # noqa: BLE001 - a torch without the call: no cap, said by the caller
         return None
+
+
+def held_gb() -> float:
+    """What this process holds on the card right now (PyTorch's reserved, binary GB; 0 without a GPU)."""
+    torch = sys.modules.get("torch")
+    try:
+        return torch.cuda.memory_reserved() / 2**30 if torch is not None and torch.cuda.is_available() else 0.0
+    except Exception:   # noqa: BLE001
+        return 0.0
 
 
 def peak_gb() -> float | None:
@@ -90,11 +134,13 @@ MODELS = Models()
 
 def release(step: str):
     """Drop what the next step doesn't need, so it doesn't count against Low profile's cap: before a conversion or a speech
-    the separator; before a training the separator, the converter and listen-back's ear (all re-loaded on first use)."""
-    if step in ("convert", "speak", "train") and MODELS._sep is not None:
+    the separator; before the worker hears a song's words ("hear") the separator and the converter; before a training
+    those and listen-back's ear (all re-loaded on first use)."""
+    if step in ("convert", "speak", "train", "hear") and MODELS._sep is not None:
         MODELS._sep = None
-    if step == "train":
+    if step in ("train", "hear"):
         MODELS._conv = None
+    if step == "train":
         lb = sys.modules.get("undercover.speakeasy.listenback")
         if lb is not None:
             try:

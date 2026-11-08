@@ -9,7 +9,7 @@
                              fix.do / fix.alt actions: work (POST /api/work/add `body`), pick_voice, remake (POST
                              /api/history/<id>/again {options}), respeak (POST /api/speak with the speech's own fields + options)
     POST /api/ear/forget     {kind, id} one item, or {all: true} -> {forgot: n}
-Phones (app/phone_api.ROUTES): all three.
+Phones (app/phone_api.ROUTES): all three, but forgetting every thumb at once is the PC's.
 """
 from ..core import ear
 from ..core.ear import EarError
@@ -70,6 +70,8 @@ def _route(h, method, p):
     if p == "/api/ear/forget" and method == "POST":
         b = h._body()
         if b.get("all") is True:
+            if getattr(h, "remote", False):   # (every thumb at once, with nothing to bring them back: the PC's, as deletes are)
+                raise EarError("Forgetting every thumb is done on the PC. One thumb can be taken back here.")
             return h._json({"forgot": ear.forget()})
         if not b.get("kind") or not b.get("id"):
             raise EarError("Say which one to forget (kind and id), or all.")

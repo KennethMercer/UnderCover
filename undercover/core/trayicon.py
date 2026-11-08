@@ -5,7 +5,7 @@
 Its own light process: no torch, no jobs. It talks to the server the way the page does (HTTP on 127.0.0.1, the page's
 Origin) and uses the same routes, so it survives restarts and shows them:
   every 5 s: /api/status + /api/jobs (+ /api/phone for the tick); every 5 min: /api/doctor (a "bad" result = the dot)
-  actions:   Open, Pause / Resume (/api/work/pause|resume), Phone access (/api/phone), Restart, Quit, Start with
+  actions:   Open, Pause / Resume (/api/work/pause|resume), Your phone's link (/api/phone), Restart, Quit, Start with
              Windows (a Startup-folder shortcut to the launcher, only on the user's click); when the server is down:
              Start UnderCover, Close this icon.
 `menu_model` and `icon_state` are pure functions of what the server said (smoke tests them without a desktop); `run`
@@ -133,7 +133,7 @@ def menu_model(status: dict | None, jobs: list | None = None, phone_on: bool | N
     if lp:
         items.append({"id": "lowprofile", "text": "Low profile", "checked": bool(lp.get("on"))})
     if phone_on is not None:
-        items.append({"id": "phone", "text": "Phone access", "checked": bool(phone_on)})
+        items.append({"id": "phone", "text": "Phone link", "checked": bool(phone_on)})
     items += [{"id": "-"}, {"id": "restart", "text": "Restart"}, {"id": "quit", "text": "Quit UnderCover"}]
     if startup_on is not None:
         items += [{"id": "-"}, {"id": "startup", "text": "Start with Windows", "checked": bool(startup_on)}]

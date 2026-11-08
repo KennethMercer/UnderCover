@@ -31,8 +31,11 @@ from .voices import ModelError
 VERSION = "1.104.1"
 MSI = {"url": f"https://pkgs.tailscale.com/stable/tailscale-setup-{VERSION}-amd64.msi", "size": 38_718_976,
        "sha256": "6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4"}
-BINS = {"tailscaled.exe": "ae0195119cc8efbd88d11bff56394ff9f1c08dc9d51957a400d4cb35c74e4bb1",
-        "tailscale.exe": "72a499c653da6c16a50908d6ceb244d12b5f4834ab8ac19a87f2ca3117e8c20a"}
+# the daemon's and the command line's checksums, in the order platform.tailscale_names() gives their file names.
+# Only the Windows MSI's pair exists: another OS has none (never these hashes under its names) until it gets its own
+# package, and its own pair, when the away feature comes there
+BINS = dict(zip(platform.tailscale_names(), ("ae0195119cc8efbd88d11bff56394ff9f1c08dc9d51957a400d4cb35c74e4bb1",
+                                             "72a499c653da6c16a50908d6ceb244d12b5f4834ab8ac19a87f2ca3117e8c20a"))) if platform.WINDOWS else {}
 CMD: dict = {}   # tests: {"tailscale": [...], "tailscaled": [...]} instead of the downloaded binaries
 URL_RX = re.compile(r"https://login\.tailscale\.com/\S+")
 STATE = {"want": False, "phase": "off", "auth_url": None, "approve_url": None, "host": None, "error": "",
@@ -123,7 +126,7 @@ def funnel_target(port: int) -> str:
     home-network phone listener)."""
     from .config import CONFIG
     if not STATE["port"] or port != STATE["port"] or port == CONFIG["ui"]["port"]:
-        raise ModelError("Away from home only ever points at its own listener.")
+        raise ModelError("Your phone's link only ever points at its own listener.")
     return f"http://127.0.0.1:{port}"
 
 
@@ -148,8 +151,7 @@ def _run_bg(key: str, args: list):
                 if not STATE["want"]:
                     return
                 p = subprocess.Popen(_cmd("tailscale") + [f"--socket={_socket()}", *args], stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT, text=True, errors="replace",
-                                     creationflags=platform.NO_WINDOW)
+                                     stderr=subprocess.STDOUT, **platform.TEXT, creationflags=platform.NO_WINDOW)
                 _P[key] = p
             for line in p.stdout:
                 _P["out"].append(line)
@@ -250,7 +252,8 @@ def start(port: int, private: bool = False):
         raise ModelError(why)
     if STATE["want"]:
         set_private(private)
-    STATE.update(want=True, port=port, error="", private=bool(private))
+    STATE.update(want=True, port=port, error="", private=bool(private),
+                 phase="starting" if STATE["phase"] == "off" else STATE["phase"])   # (never "off" while it's on: the first step is up to 2 s away)
     _P["fetch_failed"] = 0.0   # switched on by hand: try a failed download again now
     if _P["driver"] is not None and _P["driver"].is_alive():
         return
@@ -340,7 +343,7 @@ def at_exit():
 
 def forget():
     """Switch off and sign this PC out of Tailscale (the node leaves the tailnet); its keys (the state folder) are
-    deleted. With away from home off the daemon isn't running: it's started for the logout."""
+    deleted. With the phone link off the daemon isn't running: it's started for the logout."""
     if state_dir().exists() and have_binaries() and not _daemon_alive():
         with _LOCK:
             if _P["daemon"] is None or _P["daemon"].poll() is not None:

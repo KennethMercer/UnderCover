@@ -40,12 +40,17 @@ class Control:
 USER_ERRORS: list = []   # exception classes whose message is already meant for the user (modules add theirs)
 
 
-def _platform_errors():   # core/platform's "not on this OS" is written for the user (phase 18)
+def _platform_errors():   # core/platform's "not on this OS" is written for the user (phase 18); so are the phone's cap and Low profile's NoRoom
     from .platform import NotOnThisOS
-    USER_ERRORS.append(NotOnThisOS)
+    from .lowprofile import NoRoom
+    USER_ERRORS.extend((NotOnThisOS, NoRoom))
 
 
 _platform_errors()
+
+
+def _cap_error():
+    USER_ERRORS.append(TooManyJobs)
 
 
 def register_user_error(cls):
@@ -68,6 +73,19 @@ def log_error(text: str):
             out.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}")
     except OSError:
         pass
+
+
+def is_plain(e: BaseException) -> bool:
+    """Is this error's message a refusal in plain words, already meant for the user (a ModelError, or a module's own user
+    error)? Then a job ended by it is final as it stands: the page needn't offer Try again for it. Anything else is
+    unexpected, and its friendly() message is a guess at what to do."""
+    from .voices import ModelError
+    return isinstance(e, (ModelError, *USER_ERRORS))
+
+
+def fail(job: "Job", e: BaseException, stage: str = ""):
+    """End a job with an error: friendly()'s message, and `plain` from is_plain()."""
+    job.finish("error", message=friendly(e, stage), plain=is_plain(e))
 
 
 def friendly(e: BaseException, stage: str = "") -> str:
@@ -160,6 +178,33 @@ def jobs_using(voice: str) -> list:
             and (getattr(j, "voices", None) is None or voice in j.voices)]
 
 ORIGIN = threading.local()   # .h = the HTTP request this thread is answering (Retry tags the jobs it starts; phase 10)
+PHONE_JOBS, PHONE_JOBS_HOUR = 3, 12   # one phone's jobs: waiting or running at once, and started in an hour (1.2.1)
+UNCAPPED = {"speakwarm", "voicepreview"}   # what UnderCover queues for itself while a phone looks around: never counted
+
+
+class TooManyJobs(Exception):
+    """A phone asked for more work than one phone may have: its message says so plainly (the server answers 429)."""
+
+
+_cap_error()
+
+
+def phone_of_request() -> str | None:
+    """The phone (its id) whose request this thread is answering, or None for the PC."""
+    h = getattr(ORIGIN, "h", None)
+    dev = getattr(h, "device", None) if getattr(h, "remote", False) else None
+    return dev.get("id") if isinstance(dev, dict) else None
+
+
+def _phone_cap(device_id: str):
+    """Every phone is on the internet now, so a stolen token is worth more: one phone may have PHONE_JOBS jobs waiting or
+    running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap."""
+    now = time.time()
+    mine = [j for j in list(JOBS.values()) if getattr(j, "device", None) == device_id and j.kind not in UNCAPPED]
+    if sum(not j.finished for j in mine) >= PHONE_JOBS:
+        raise TooManyJobs(f"This phone has {PHONE_JOBS} jobs waiting or running already. Wait for one to finish, or start it on the PC.")
+    if sum(now - j.created < 3600 for j in mine) >= PHONE_JOBS_HOUR:
+        raise TooManyJobs(f"This phone has started {PHONE_JOBS_HOUR} jobs in the last hour. Wait a while, or start it on the PC.")
 
 
 def eta_words(seconds: float) -> str:
@@ -187,6 +232,9 @@ class Job:
         self.id = uuid.uuid4().hex[:12]
         self.kind = kind
         self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
+        self.device = phone_of_request()   # the phone that asked for it (None: the PC)
+        if self.device and kind not in UNCAPPED:
+            _phone_cap(self.device)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label
         self.state = "queued"
         self.events: list[dict] = []
@@ -295,6 +343,10 @@ class Job:
         return round(max(0.0, left), 1)
 
     def finish(self, state: str, **ev):
+        """The job's last event. An error's says `plain`: True for a sentence written for the user (a job that ends itself
+        with one, or a ModelError's; jobs.fail), False for an unexpected error."""
+        if state == "error":
+            ev.setdefault("plain", True)
         with self.cond:
             self.state = state
             self.ended = time.time()
@@ -347,6 +399,8 @@ class Job:
                 snap["plan"]["voice_display"] = name(plan.get("voice"), "display") or vid
         if last.get("final"):
             snap["final"] = {"state": last.get("state"), "message": last.get("message")}
+            if last.get("state") == "error":
+                snap["final"]["plain"] = bool(last.get("plain"))
             # the voice a training made (Do it all: voice=; a queue item: its result), so the page needn't look it up
             res = last.get("result")
             voice = last.get("voice") or (res.get("voice") if isinstance(res, dict) else None)
@@ -376,7 +430,8 @@ def gpu_worker():
         # Which torch build this install expects ([gpu].backend; the installer writes it). Never fall back to the
         # CPU silently when a GPU build was expected (a cover would take ages, training hours): say what's wrong instead.
         want = CONFIG["gpu"].get("backend", "rocm")
-        have = "rocm" if "+rocm" in torch.__version__ else "cuda" if "+cu" in torch.__version__ else "cpu"
+        from . import gpu
+        have = gpu.build()
         STATUS["backend"] = have
         if have != want:
             names = {"rocm": "AMD's ROCm build", "cuda": "the NVIDIA CUDA build", "cpu": "the CPU-only build"}
@@ -460,7 +515,7 @@ def gpu_worker():
                 lowprofile.after_job(job)
         except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
             try:
-                job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).")
+                job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).", plain=False)
             except Exception:
                 pass
 
@@ -542,7 +597,7 @@ def run_job(job: "Job", fn):
                 job.push(stage=(job.events[-1].get("stage") if job.events else "") or "converting",
                          message="The GPU ran out of memory; freed some and trying again")
                 continue
-            job.finish("error", message=friendly(e, job.events[-1].get("stage", "") if job.events else ""))
+            fail(job, e, job.events[-1].get("stage", "") if job.events else "")
         if job.state == "paused":
             worklist.remember(job)
         return

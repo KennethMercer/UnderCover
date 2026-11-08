@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from ..core import fsutil, jobs, tray
+from ..core import fsutil, jobs, manifest, platform, tray
 from ..core.config import CONFIG, path
 from ..core.files import file_url
 from ..core.jobs import Cancelled
@@ -591,12 +591,13 @@ def _save(y: np.ndarray, sr: int, text: str, p: dict, seconds: dict, job_id: str
 
 
 def _mp3(wav: Path) -> Path | None:
-    exe = shutil.which("ffmpeg")
-    if not exe:
+    try:
+        exe = manifest.ffmpeg()
+    except ModelError:   # (the mp3 is a convenience beside the wav: without ffmpeg there's none, and nothing fails)
         return None
     out = wav.with_suffix(".mp3")
     r = subprocess.run([exe, "-hide_banner", "-nostdin", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "192k", str(out)],
-                       capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                       capture_output=True, **platform.TEXT, creationflags=platform.NO_WINDOW)
     return out if r.returncode == 0 and out.exists() else None
 
 

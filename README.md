@@ -28,7 +28,7 @@ which you switch on from the top bar.
 - About 22.5 GB of free disk space. The installer checks that it fits before it starts.
 - An internet connection for setup, which downloads about 11.4 GB with an AMD card, 12.0 GB with an NVIDIA card or 9.3 GB
   without a supported card. That is everything: Python,
-  PyTorch for your card, the tools and all the AI models. No more AI models download after setup. What you ask for later, such as songs, clips of a person or a voice from the community, comes from YouTube or Hugging Face, and an add-on, a repair, Away from home's Tailscale or a fix for the YouTube downloader download only when needed.
+  PyTorch for your card, the tools and all the AI models. No more AI models download after setup. What you ask for later, such as songs, clips of a person or a voice from the community, comes from YouTube or Hugging Face, and an add-on, a repair, the Tailscale piece for your phone's link or a fix for the YouTube downloader download only when needed.
 
 ## Installing
 
@@ -73,8 +73,8 @@ with the QR code it shows.
 UnderCover only accepts connections from your own PC and sends no usage data. Setup downloads its models from their
 publishers, pinned to fixed versions and verified by checksum. Anything you ask UnderCover to find, such as a song or
 clips of a person, comes through yt-dlp. When YouTube stops working, UnderCover fetches a newer YouTube downloader
-from PyPI, tests it and keeps it only if it works. Deep Cover's System room can switch that off. Phone access and
-access from outside your home are off until you turn them on, and each phone has to be paired.
+from PyPI, tests it and keeps it only if it works. Deep Cover's System room can switch that off. Your phone's link is off until you set it up,
+and each phone has to be allowed on the PC before it gets in.
 
 Your voices, songs, covers and speech are kept in ordinary folders that you choose. Covers and speech you don't send
 to SafeHouse roll off after the next fifteen; Send to SafeHouse keeps one for good. UnderCover never deletes a voice

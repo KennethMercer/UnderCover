@@ -35,11 +35,12 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from . import fsutil, storage
+from . import fsutil, platform, storage
 from .config import ROOT, path
 from .voices import ModelError
 
 PKG, EJS = "yt-dlp", "yt-dlp-ejs"
+MODULE = {PKG: "yt_dlp", EJS: "yt_dlp_ejs"}   # the one package each wheel of the pair may hold (and its dist-info)
 KNOWN_GOOD = ["jNQXAC9IVRw", "dQw4w9WgXcQ", "9bZkp7q19f0"]   # public, long-lived, ordinary videos
 BROKEN_VIDEOS = 3          # different videos failing the same way...
 WINDOW = 30 * 60           # ...within this many seconds
@@ -495,15 +496,24 @@ def download(w: dict, dest: Path) -> Path:
     return f
 
 
-def unpack(wheel: Path, dest: Path):
-    """A pure-Python wheel into dest (its .data part skipped; no paths that climb out)."""
+def unpack(wheel: Path, dest: Path, module: str | None = None):
+    """A pure-Python wheel into dest (its .data part skipped; no paths that climb out). module: the only package it may
+    hold, beside its own dist-info: anything else (another package's files, a top-level module) and nothing is unpacked.
+    The two wheels of a pair go into one folder, so the second can't overwrite the first's proved files."""
     with zipfile.ZipFile(wheel) as z:
+        files = []
         for i in z.infolist():
             n = i.filename
             if n.endswith("/") or ".data/" in n.split("/", 1)[0] + "/":
                 continue
             if n.startswith("/") or "\\" in n or ":" in n or any(p in ("", "..") for p in n.split("/")):
                 raise HealError(f"{wheel.name} holds a path that climbs out: {n!r}")
+            top = n.split("/", 1)[0]
+            if module and "/" not in n or module and top != module and not (top.startswith(module + "-") and top.endswith(".dist-info")):
+                raise NotVouched(f"{wheel.name} holds {n!r}, outside its own package ({module}): nothing of it is used.")
+            files.append(i)
+        for i in files:
+            n = i.filename
             f = dest / n
             f.parent.mkdir(parents=True, exist_ok=True)
             with z.open(i) as src, open(f, "wb") as out:
@@ -523,7 +533,7 @@ def stage(pair: dict, into: Path | None = None) -> Path:
         got = {name: download(pair["wheels"][name], dl) for name in (PKG, EJS)}
         own = UPSTREAM(pair, got) or {}   # (1.1) GitHub vouches for both, or nothing is unpacked
         for name in (PKG, EJS):
-            unpack(got[name], d)
+            unpack(got[name], d, MODULE[name])
         for rel, data in own.items():   # the tarball's checked copy, never the wheel's (before the files are hashed)
             (d / rel).parent.mkdir(parents=True, exist_ok=True)
             (d / rel).write_bytes(data)
@@ -573,9 +583,9 @@ print("SELFTEST " + json.dumps(out))
 def selftest(d: Path | None) -> dict:
     """Resolve KNOWN_GOOD with a pair in a separate Python (d None = the venv's pair). -> {"ok": n, "of", "errors", "version"}."""
     try:
-        r = subprocess.run([sys.executable, "-I", "-c", SELFTEST, str(d) if d else "", *KNOWN_GOOD], capture_output=True,
-                           text=True, errors="replace", timeout=SELFTEST_TIMEOUT,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # (-I ignores PYTHONIOENCODING, so -X utf8 says it: the child prints UTF-8, which platform.TEXT reads)
+        r = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", SELFTEST, str(d) if d else "", *KNOWN_GOOD], capture_output=True,
+                           **platform.TEXT, timeout=SELFTEST_TIMEOUT, creationflags=platform.NO_WINDOW)
         line = next((x for x in r.stdout.splitlines() if x.startswith("SELFTEST ")), None)
         if line is None:
             return {"ok": 0, "of": len(KNOWN_GOOD), "errors": [(r.stderr or "no answer").strip().splitlines()[-1][:200]]}
@@ -787,7 +797,7 @@ def start_heal(reason: str = "", dry_run: bool = False):
             job.finish("done", message=msg, result=r)
         except Exception as e:   # noqa: BLE001
             log(f"heal failed: {e}")
-            job.finish("error", message=jobs.friendly(e, "updating the YouTube downloader"))
+            jobs.fail(job, e, "updating the YouTube downloader")
 
     threading.Thread(target=go, daemon=True, name="ytdlp-heal").start()
     return job

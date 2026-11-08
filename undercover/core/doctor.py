@@ -6,7 +6,7 @@ ARCHITECTURE.md "Resilience and self-healing").
 
 Fast checks (startup, < 2 s, no GPU, no torch import): Python and the venv, the PyTorch build, every pinned package,
 ffmpeg and Deno, the model files (present, size), disk space, the [paths] folders, the port, stale files, interrupted
-work, and (phase 11b, only while Phone access is on) the network type and Windows Firewall for phones. Full checks
+work, and (phase 11b, only while a phone paired on the home Wi-Fi before the link uses it) the network type and Windows Firewall for phones. Full checks
 add every model file's SHA-256, the graphics card and its driver.
 
 Each result: {"id", "group", "state": ok | info | warn | bad, "title", "say" (plain words), "detail" (Deep Cover),
@@ -109,7 +109,8 @@ def c_torch(ctx) -> list:
     want_backend = CONFIG["gpu"].get("backend", "rocm")
     if not have:
         return [_r("torch", "install", "bad", "PyTorch", "PyTorch isn't installed, so nothing can run.", "", REPAIR)]
-    build = "rocm" if "+rocm" in have else "cuda" if "+cu" in have else "cpu"
+    from . import gpu
+    build = gpu.build(have)
     pin = (ctx["pins"].get("torch") or {}).get("version")
     names = {"rocm": "AMD's ROCm build", "cuda": "the NVIDIA CUDA build", "cpu": "the processor-only build"}
     if build != want_backend:
@@ -219,7 +220,10 @@ def c_tools(ctx) -> list:
     for name, need, why in (("ffmpeg", "bad", "reads and writes audio: covers and speech need it"),
                             ("deno", "warn", "lets the YouTube downloader read YouTube")):
         p = manifest.tool(name)
-        if p:
+        if p and name == "ffmpeg" and not manifest.tool("ffprobe", folder="ffmpeg"):   # (songs are measured with ffprobe)
+            out.append(_r(name, "install", need, "ffmpeg", "Found, but ffprobe isn't with it, and songs are read with both. "
+                          "Install the whole ffmpeg package.", str(p), REPAIR))
+        elif p:
             out.append(_r(name, "install", "ok", name.capitalize() if name == "deno" else "ffmpeg", f"Found ({why.split(':')[0]}).", str(p)))
         else:
             out.append(_r(name, "install", need, name.capitalize() if name == "deno" else "ffmpeg",
@@ -396,31 +400,33 @@ def phone_programs() -> set:
 
 
 def c_phone(ctx) -> list:
-    """Phone access (phase 11b): can a phone reach this PC? The connection's network type (Private / Public) and Windows
-    Firewall's rules for Python, read only (core/phone.windows_check); advice in words, never a Fix that changes Windows."""
+    """A phone on the home Wi-Fi (phase 11b): can it reach this PC? The connection's network type (Private / Public) and
+    Windows Firewall's rules for Python, read only (core/phone.windows_check); advice in words, never a Fix that changes
+    Windows. Since 1.2.1 phones come in through the link, so this runs only while a phone paired on the home Wi-Fi before
+    it still uses the home-network listener."""
     from . import jobs, phone
-    if not phone.enabled():
+    if not phone.lan_needed():
         return []
     addr = phone.lan_address()
     if not addr:
-        return [_r("phone-network", "network", "warn", "Phone access",
-                   "Phone access is on, but this PC has no home-network address right now (Wi-Fi off or not connected), so "
-                   "phones can't reach it. UnderCover tries again every minute.", "")]
+        return [_r("phone-network", "network", "warn", "Phone on the home Wi-Fi",
+                   "A phone still uses the home Wi-Fi, but this PC has no home-network address right now (Wi-Fi off or "
+                   "not connected), so it can't reach the PC there. UnderCover tries again every minute.", "")]
     if not phone.usable(addr):
-        return [_r("phone-network", "network", "info", "Phone access",
-                   f"Phone access is on, on a test address ({addr}): there's no network or firewall to check.", "")]
+        return [_r("phone-network", "network", "info", "Phone on the home Wi-Fi",
+                   f"A phone uses the home Wi-Fi, on a test address ({addr}): there's no network or firewall to check.", "")]
     from . import platform
     if not platform.supports("firewall")[0]:
-        return [_r("phone-network", "network", "info", "Phone access",
-                   "Phone access is on. Checking the network type and the firewall works on Windows only for now.", "")]
+        return [_r("phone-network", "network", "info", "Phone on the home Wi-Fi",
+                   "A phone uses the home Wi-Fi. Checking the network type and the firewall works on Windows only for now.", "")]
     port = jobs.PORT or CONFIG["ui"]["port"]
     # the server (startup, the System room) never waits on PowerShell: a cold cache is read in the background
     w = phone.windows_check(addr, port, phone_programs(), wait=ctx.get("status") is None, fresh=bool(ctx.get("full")))
     if w is None:
-        return [_r("phone-network", "network", "info", "Phone access",
+        return [_r("phone-network", "network", "info", "Phone on the home Wi-Fi",
                    "Checking the network type and Windows Firewall for phones; it shows here in a moment.", "")]
     if w["error"]:
-        return [_r("phone-network", "network", "warn", "Phone access",
+        return [_r("phone-network", "network", "warn", "Phone on the home Wi-Fi",
                    "Couldn't read the network type and the firewall's rules, so the Doctor can't tell whether phones get "
                    "through.", w["error"])]
     out, n = [], w["network"]
@@ -504,18 +510,19 @@ def c_vault(ctx) -> list:
 
 
 def c_away(ctx) -> list:
-    """Away from home (phase 20): off (nothing to say), on and where it's got to, a problem the driver hit."""
+    """Your phone's link (phase 20; the one link since 1.2.1): off (nothing to say), on and where its setup has got to, a
+    problem the driver hit."""
     from . import tailnet
     s = tailnet.snapshot()
     if not s["on"]:
         return []
     if s["error"]:
-        return [_r("away", "network", "warn", "Away from home", "Away from home hit a problem; it keeps trying.", s["error"][:300])]
+        return [_r("away", "network", "warn", "Your phone's link", "Your phone's link hit a problem; it keeps trying.", s["error"][:300])]
     if s["phase"] == "ready":
-        return [_r("away", "network", "ok", "Away from home", "Paired phones reach UnderCover from anywhere (the link is in SafeHouse, Settings, Phone).", "")]
+        return [_r("away", "network", "ok", "Your phone's link", "Phones you've connected reach UnderCover, at home or anywhere (SafeHouse, Settings, Your phone).", "")]
     step = {"fetching": "fetching its pieces", "starting": "starting", "sign-in": "waiting for the Tailscale sign-in",
             "approve": "waiting for the one-time approval"}.get(s["phase"], s["phase"])
-    return [_r("away", "network", "info", "Away from home", f"Away from home is on and {step} (SafeHouse, Settings, Phone).", "")]
+    return [_r("away", "network", "info", "Your phone's link", f"Your phone's link is {step} (SafeHouse, Settings, Your phone).", "")]
 
 
 CHECKS = [c_manifest, c_python, c_torch, c_gpu, c_packages, c_tools, c_models, c_disk, c_paths, c_port, c_stale, c_work,
@@ -753,7 +760,7 @@ def _job(key: str, title: str, work) -> dict:
             job.finish("error", message=str(e))
         except Exception as e:   # noqa: BLE001
             log(f"{title}: {type(e).__name__}: {e}")
-            job.finish("error", message=jobs.friendly(e, title.lower()))
+            jobs.fail(job, e, title.lower())
 
     threading.Thread(target=go, daemon=True, name=f"doctor-{key}").start()
     return {"job": job.id}
