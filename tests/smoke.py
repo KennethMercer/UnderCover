@@ -11613,6 +11613,26 @@ def u_perf_load16k():
     return f"hit, miss on rewrite, read-only, at most {convert._LOAD16K_KEEP} kept"
 
 
+@check("perf: /api/status's code stamp is kept a few seconds, then walked again")
+def u_perf_code_stamp():
+    from undercover.app import server
+    saved = dict(server._CODE_STAMP)
+    try:
+        real = server.code_stamp()
+        assert real > 0 and real == server.STARTUP_STAMP, (real, server.STARTUP_STAMP)
+        server._CODE_STAMP.update(at=time.monotonic(), value=123.0)
+        assert server.code_stamp() == 123.0, "a fresh stamp wasn't served from the cache"
+        server._CODE_STAMP.update(at=time.monotonic() - server.CODE_STAMP_TTL - 1)
+        assert server.code_stamp() == real, "a stamp past its time wasn't walked again"
+        t0 = time.perf_counter()
+        for _ in range(50):
+            server.code_stamp()
+        assert time.perf_counter() - t0 < 0.05, "50 cached calls took over 50 ms"
+    finally:
+        server._CODE_STAMP.update(saved)
+    return f"kept {server.CODE_STAMP_TTL:.0f} s"
+
+
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
@@ -13586,7 +13606,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_phone_pairing, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_tray,
-               u_perf_load16k):
+               u_perf_load16k, u_perf_code_stamp):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
