@@ -12980,12 +12980,22 @@ def a_voicepack():
         pack.unlink(missing_ok=True)
     return f"{src} -> {round(len(data) / 1e6, 1)} MB pack -> {got}"
 
-@check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here)")
+@check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here; then a cover changed since the run: Ask names it, Keep both brings the vaulted copy back beside it, Replace vaults what's there first and puts it back, Skip leaves it)")
 def a_vault():
     from undercover.core import storage
-    vf = storage.ALLOWED_ROOTS[0] / "vault-drive"
-    bad = api("/api/vault/check", {"folder": str(ROOT / "output")})
+    from undercover.core.config import path
+    root = storage.ALLOWED_ROOTS[0]
+    vf = root / "vault-drive"
+    out = path("output_dir")   # the sandbox's own output folder (this process's config points into the sandbox too)
+    assert storage._inside(out, root), out
+    bad = api("/api/vault/check", {"folder": str(path("uploads_dir") / "vault")})   # inside the library: refused
     assert bad["ok"] is False, bad
+    # a scratch cover of our own in the sandbox's output, so a restore meets a real conflict (2026-11-08: until then
+    # only the unit check restored over a changed file; here it's the server's routes and the background Replace)
+    mine, beside = out / "Smoke vault (zz).mp3", out / "Smoke vault (zz) (from vault).mp3"
+    orig = b"vaulted " * 2000
+    out.mkdir(parents=True, exist_ok=True)
+    mine.write_bytes(orig)
     st = api("/api/vault/settings", {"folder": str(vf), "size": "matters"})
     assert st["on"] and st["connected"], st
     try:
@@ -12997,9 +13007,30 @@ def a_vault():
         keys = [k for its in c["kinds"].values() for it in its for k in it["keys"]]
         r = api("/api/vault/restore", {"keys": keys[:20], "on_conflict": "ask"})
         assert not r["conflicts"] and not r["restored"] and r["same"], r
+        cover = next(i for i in c["kinds"]["cover"] if i["item"] == mine.name)
+        assert cover["here"] == "same" and cover["keys"], cover
+        mine.write_bytes(b"changed since the run")
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "ask"})
+        assert r["conflicts"] == cover["keys"] and not r["restored"] and mine.read_bytes() == b"changed since the run", r
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "both"})   # keep both: the vaulted copy beside it
+        assert r["restored"] == cover["keys"] and beside.read_bytes() == orig and mine.read_bytes() == b"changed since the run", r
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "skip"})
+        assert r["skipped"] == cover["keys"] and not r["restored"] and mine.read_bytes() == b"changed since the run", r
+        snaps = api("/api/vault")["snapshots"]
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "replace"})   # replace: in the background, vaulting first
+        assert r["started"] is True, r
+        rs = wait_for(lambda: (lambda s: s if s and not s["running"] else None)(api("/api/vault")["restore"]), 600, what="the Replace restore")
+        assert not rs["error"] and rs["result"]["restored"] == cover["keys"], rs
+        assert mine.read_bytes() == orig, "Replace didn't put the vaulted copy back"
+        st = api("/api/vault")
+        assert st["snapshots"] == snaps + 1, f"Replace didn't vault what was there first ({snaps} -> {st['snapshots']})"
+        c2 = api("/api/vault/contents")
+        assert any(i["item"] == mine.name for i in c2["kinds"]["cover"]), "the changed copy isn't in the fresh snapshot"
     finally:
         api("/api/vault/settings", {"folder": ""})
-    return f"{st['last']['files']} files, {st['raw'] / 1e6:.1f} MB kept in {st['stored'] / 1e6:.1f} MB"
+        storage.remove_files([f for f in (mine, beside) if f.exists()], within=[out])   # scratch, through the same guard as the app's deletes
+    return (f"{st['last']['files']} files, {st['raw'] / 1e6:.1f} MB kept in {st['stored'] / 1e6:.1f} MB; a changed cover: asked, kept both, "
+            f"skipped, replaced after a fresh snapshot ({snaps} -> {st['snapshots']})")
 
 
 @check("api: work queue, candidates, pause/resume")
