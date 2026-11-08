@@ -701,6 +701,31 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .kv2 { display: block; margin-top: 2px; font: 12.5px var(--mono); color: var(--muted); overflow-wrap: anywhere; min-width: 0; }   /* a long path wraps (it made Deep Cover's System 807 px wide at 375) */
 .sys > span { min-width: 0; }
 .setting.later { opacity: .55; }
+/* Find a setting (findset.js): the box under the room's title, the count, what's folded away, the other rooms' matches, the lit row */
+.sf { display: grid; gap: 8px; }
+.sf-box { min-height: 44px; padding-right: 6px; }
+.sf-box input::-webkit-search-cancel-button { display: none; }   /* the box has its own × */
+.sf-x { flex: none; width: 32px; height: 32px; border: 0; border-radius: 50%; background: none; color: var(--muted); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.sf-x:hover { color: var(--fg); background: var(--panel-3); }
+.sf-x[hidden], .sf-n[hidden] { display: none; }
+.sf-out { display: none !important; }
+.rn-list > :not(.sf-out):not(:not(.sf-out) ~ *) { border-top: 0; }   /* the first row left in a list has no line above it */
+mark.sf-mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+.sf-more:empty { display: none; }
+.sf-more { display: grid; gap: 8px; }
+.sf-elsewhere { display: grid; border-top: 1px solid var(--line); padding-top: 8px; }
+.sf-h { font: 500 12px var(--mono); color: var(--muted); letter-spacing: .04em; text-transform: uppercase; padding: 4px 0; }
+.sf-hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.sf-h + .sf-hit { border-top: 0; }
+.sf-hit b { font-weight: 600; }
+.sf-hit small { display: block; color: var(--muted); font-size: 13.5px; max-width: 70ch; }
+.sf-where { font: 400 12px var(--mono); color: var(--muted); }
+.sf-none { display: grid; gap: 4px; padding: 12px 0; }
+.sf-none b { font-weight: 600; }
+.sf-deep { margin: 0; font-size: 13.5px; color: var(--muted); }
+.sf-lit { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 8px; transition: background var(--t-slow); }
+.chip.sf-lit, .chip-btn.sf-lit { box-shadow: 0 0 0 2px var(--accent); }
+@media (max-width: 480px) { .sf-hit { grid-template-columns: 1fr; } }
 .sys-btns { gap: 12px 16px; }
 .dotw { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; white-space: nowrap; color: var(--muted); }
 .dotw::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }

@@ -12098,6 +12098,112 @@ def u_shape_page():
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:600] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
+@check("Find a setting in headless Chrome: the old name and other words find a row, a Deep Cover row is only hinted in basic, other rooms are listed with Go there, nothing typed becomes markup, every row has find-words (skipped when there is no Chrome)")
+def u_find_setting():
+    """index.html on a static server with a test script after findset.js (the API is absent: the page's own functions are pressed).
+    Its verdicts go in the title, which --dump-dom reads once the page says it's done (an image held back until then)."""
+    import html, http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+    test = r"""
+(async () => {
+  const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  await wait(1200);
+  try {
+    const box = $("#sh-find"), type = v => { box.value = v; box.dispatchEvent(new Event("input")); };
+    const gone = el => el.closest(".sf-out") !== null || getComputedStyle(el).display === "none";
+    setDeep(false);
+    $("#lp-chip").hidden = false;   // (the chip shows once Low profile is known to work here; the API is absent in this test)
+    R.addons = [{ id: "chatterbox", name: "Chatterbox", adds: "The original engine for SpeakEasy's speech in a person's own voice.", licence: "MIT", optional: true, modules: ["speakeasy"] }];
+    showTab("safehouse"); showRoom("settings");
+    const rows = $$("#room-settings .setting, #room-system .sys, #room-system .rn-sec, #room-system .sys-btns")
+      .filter(r => !r.parentElement.closest("[data-find]"));   // (a section's own lines, What's new's and the Doctor's, go with it)
+    const bare = rows.filter(r => !(r.dataset.find || "").trim()).map(r => r.id || r.className);
+    ok(`every row has find-words (${rows.length} rows${bare.length ? "; none on " + bare.join(", ") : ""})`, rows.length >= 14 && !bare.length);
+    const names = q => { const qs = findAsked(q), deep = document.body.classList.contains("deep");
+      return findIndex().filter(e => findScore(e, qs) && (deep || !e.deep)).map(e => e.name); };
+    for (const q of ["away from home", "remote", "tailscale", "phone link"]) ok(`"${q}" finds Your phone`, names(q).includes("Your phone"));
+    for (const q of ["gpu", "memory"]) ok(`"${q}" finds Low profile`, names(q).includes("Low profile"));
+    ok('"ome" finds nothing (words start)', !names("ome").length);
+    ok('"zebra" finds nothing', !names("zebra").length);
+    ok("the box is in Settings", $("#room-settings #sh-find") === box);
+
+    type("away from home");
+    ok("Your phone stays, the rest folds", !gone($("#set-phone-row")) && gone($("#set-tour-row")));
+    ok("its words are marked", $$("#set-phone-row mark.sf-mark").map(m => m.textContent.toLowerCase()).includes("away"));
+    ok("the count says 1 match", $("#sh-find-n").textContent === "1 match" && !$("#sh-find-n").hidden);
+
+    type("theme");
+    ok("basic: Theme isn't shown, the hint is", gone($("#set-theme-row")) && ($(".sf-deep")?.textContent || "") === "Theme is in Deep Cover. Turn on Deep Cover to see it." && !$(".sf-none"));
+    $(".sf-deep button").click(); await wait(50);
+    ok("Deep Cover: Theme is shown", document.body.classList.contains("deep") && !gone($("#set-theme-row")) && !$(".sf-deep") && $("#sh-find-n").textContent === "1 match");
+    setDeep(false);
+
+    type("zebra");
+    ok("nothing matches", ($(".sf-none")?.textContent || "").startsWith("Nothing here matches “zebra”."));
+    type("<b>x</b>");
+    ok("typed markup stays text", $(".sf-none b")?.textContent === "Nothing here matches “<b>x</b>”." && !$(".sf-none b b"));
+
+    type("chatterbox");
+    ok("an add-on is listed from the other room", /Chatterbox Add-ons/.test($(".sf-elsewhere")?.textContent || ""));
+    type("gpu");
+    const hits = $$(".sf-hit").map(h => h.querySelector("b").textContent);
+    ok("gpu lists Graphics card and Low profile", hits.includes("Graphics card") && hits.includes("Low profile") && $("#sh-find-n").textContent === "2 matches");
+    $$(".sf-hit").find(h => h.querySelector("b").textContent === "Graphics card").querySelector("button").click();
+    await wait(400);
+    const gpu = $("#sys-gpu").closest(".sys");
+    ok("Go there opens System with the search in it", R.room === "system" && $("#room-system #sh-find") === box && box.value === "gpu" && !gone(gpu) && gpu.classList.contains("sf-lit"));
+    ok("the room is folded", gone($("#sys-news")));
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    ok("Esc clears", box.value === "" && !$$(".sf-out").length && !$$("mark.sf-mark").length && $("#sh-find-x").hidden && $("#sh-find-more").children.length === 0);
+  } catch (e) { out.push("BAD threw " + e); }
+  document.title = out.join(" | ");
+  fetch("/said");
+})();
+"""
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(100)   # (the page says when it's done; this only ends the wait if it never does)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--window-size=1200,900",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = html.unescape(m.group(1)) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
+
 def _theme_tokens(web, theme: str, light: bool) -> dict:
     """A theme's tokens for one mode as the page has them: Case File's :root (and its light block), then the theme's own blocks."""
     def blocks(css):
@@ -14985,7 +15091,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_find_setting, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

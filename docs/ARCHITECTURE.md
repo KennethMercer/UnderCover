@@ -694,6 +694,12 @@ numbers, logs, ids, folder links. Elements carry `data-deep`; `body:not(.deep) [
 the top bar and remembered. Nothing is removed, only hidden. New screens are designed basic-first, and the engine's
 judgement is fixed before a setting is added.
 
+**Find a setting** (`web/findset.js`): one box at the top of SafeHouse's Settings, System and Add-ons searches all three and the
+top bar's Low profile and Deep Cover. Each row carries its own find-words in `data-find`, next to it in the markup, so a renamed
+row is still found by its old name; a typed word must start a word of the row's name, small text or find-words. Matches in the
+open room stay in place and the rest fold away; matches elsewhere are listed with Go there. A Deep Cover row is never shown in
+basic view, only counted for a line that offers Deep Cover. Typed text is only ever put into the page as text.
+
 ### Themes
 
 A theme is a grading of the look plus a type change, tokens only (`core/themes.py`, `TOKENS`; the contract is

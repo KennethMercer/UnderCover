@@ -74,6 +74,7 @@ function setDeep(on) {
   const first = $("#deep-first");
   if (first) { if (on && !store.get("uc-deep-seen", false)) first.hidden = false; else first.hidden = true; }
   $("#set-deep")?.setAttribute("aria-checked", on);   // the switch in SafeHouse's Settings room
+  if (typeof findRun === "function") findRun();   // Find a setting shows (or only counts) Deep Cover's rows (findset.js)
 }
 setDeep(!!store.get("uc-deep", false));
 $("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));

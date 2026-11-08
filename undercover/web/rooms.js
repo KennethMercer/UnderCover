@@ -27,6 +27,7 @@ function showRoom(room) {
   if (room === "storage") loadStorage();
   if (room === "system") loadDoctor();
   if (room === "settings") loadPhone();
+  if (typeof findPlace === "function") findPlace();   // the one Find a setting box moves to this room, keeping what's typed (findset.js)
 }
 // on a phone the row scrolls: keep the open room in sight, again whenever a tab changes width (the font arriving, a count)
 function roomInSight() {
@@ -113,7 +114,7 @@ function renderAddons() {
   const show = FILTERS.find(f => f[0] === R.filter)?.[2] || (() => true);
   const rows = list.filter(show);
   $("#ad-list").innerHTML = rows.length ? rows.map(a => `
-    <article class="addon${a.optional ? " optional" : ""}" data-id="${a.id}">
+    <article class="addon${a.optional ? " optional" : ""}" data-id="${esc(a.id)}">
       <div style="display:grid;gap:6px;min-width:0">
         <div class="row"><h4>${esc(a.name)}</h4>${licenceChip(a)}</div>
         <p class="what">${esc(a.adds)}</p>
@@ -157,6 +158,7 @@ function renderAddons() {
     catch (e) { c.checked = !c.checked; showError(e.message, "Couldn't switch"); }
     loadAddons();
   });
+  if (typeof findPlace === "function") findPlace();   // a search typed before the list drew still applies to it (findset.js)
 }
 
 function followInstall(id, jobId) {
@@ -467,7 +469,7 @@ async function loadPhone(after) {
 const mmss = t => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 function renderPhone() {
   const s = PH.st, p = s.pairing, ready = s.enabled && s.phase === "ready";
-  $("#set-phone-say").textContent = !s.supported ? s.why : "Use UnderCover on your phone, at home or anywhere.";
+  $("#set-phone-say").textContent = !s.supported ? s.why : "Use UnderCover from your phone, at home or away. One link works for both.";
   $("#phone-setup").hidden = s.enabled;
   $("#phone-setup").disabled = !s.supported;
   $("#phone-box").hidden = !s.enabled;
