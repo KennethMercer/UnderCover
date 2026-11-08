@@ -330,6 +330,7 @@ def _match_envelope(src16: np.ndarray, out: np.ndarray, out_sr: int, rate: float
 
 _LOAD16K: OrderedDict = OrderedDict()   # (resolved path, size, mtime_ns) -> the decoded 16 kHz mono vocal, read-only
 _LOAD16K_KEEP = 4                        # about 15 MB per 4-min stem: one cover's lead and backing, plus an edit's
+_LOAD16K_BUDGET = 256 * 1024 * 1024      # bytes kept in all; a 3-hour stem (about 690 MB) is returned but never kept
 _LOAD16K_LOCK = threading.Lock()
 
 
@@ -338,7 +339,8 @@ def load_16k(p: Path) -> np.ndarray:
     efficiency: one cover decoded its lead stem three times and its backing twice, each edit the whole stem again).
     The key is the file's resolved path, size and mtime_ns, so a rewritten stem is decoded afresh. The kept array is
     read-only and every caller gets its own copy (3 ms for a 4-minute stem against 145 ms to decode): an in-place
-    change or torch.from_numpy on the result is as safe as before the memo."""
+    change or torch.from_numpy on the result is as safe as before the memo. The memo holds at most _LOAD16K_BUDGET
+    bytes in all, so long stems don't stay in memory after their jobs end."""
     import librosa
     key = None
     try:
@@ -356,12 +358,12 @@ def load_16k(p: Path) -> np.ndarray:
     audio, _ = librosa.load(str(p), sr=SR16, mono=True)
     audio = np.ascontiguousarray(audio, dtype=np.float32)
     audio.flags.writeable = False
-    if key is not None:
+    if key is not None and audio.nbytes <= _LOAD16K_BUDGET:
         with _LOAD16K_LOCK:
             _LOAD16K[key] = audio
             _LOAD16K.move_to_end(key)
-            while len(_LOAD16K) > _LOAD16K_KEEP:
-                _LOAD16K.popitem(last=False)
+            while len(_LOAD16K) > _LOAD16K_KEEP or sum(a.nbytes for a in _LOAD16K.values()) > _LOAD16K_BUDGET:
+                _LOAD16K.popitem(last=False)   # oldest first; the new entry fits the budget alone, so it stays
     return audio.copy()
 
 
