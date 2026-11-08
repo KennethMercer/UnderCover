@@ -164,6 +164,7 @@ def _start_cover(h, body: dict):
     _cancel_presep(keep=(meta["id"], opts.quality, bool(opts.dereverb), bool(opts.karaoke or opts.backing_voice or opts.duet_voice)))
     job = Job("cover", title=f"{meta['title']} · {label_of(opts.voice)}" + (f" & {label_of(opts.duet_voice)}" if opts.duet_voice else ""))
     job.voices = {v for v in (opts.voice, opts.backing_voice, opts.duet_voice) if v}   # what it reads with (jobs.jobs_using)
+    job.lp_hears = bool(opts.duet_voice and not opts.duet_plan)   # (a duet finds its verses and choruses in the words)
     JOBS[job.id] = job
     try:   # its own time after the song's preparation (which does the separating), added to that wait
         from .pipeline import estimate
@@ -296,6 +297,7 @@ def _edit(h, item_id: str, what: str | None, body: dict):
     job = Job("cover", title=edits.title_of(it))
     job.voices = edits.voices_of(it)   # what it reads with (jobs.jobs_using)
     job.editing = item_id
+    job.lp_hears = what == "open" and doc is None   # (a first open hears the song's words: Low profile sizes it so)
     JOBS[job.id] = job
     GPU_QUEUE.put((job, run))
     h._json({"job": job.id, **answer})

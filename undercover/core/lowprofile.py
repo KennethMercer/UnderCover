@@ -301,8 +301,10 @@ def worker_step(kind: str):
     it the worker starts with speech's share (3.6 GB), and Whisper needs 5 (Shape it's first open ran out of memory under
     every limit; a duet quietly shared by phrases). For the step the worker gets the kind's share (one started with less is
     ended first: its cap can't grow), the server drops what it holds on the card (the separator and the converter, loaded
-    again on first use) and its cap makes room, so the two together keep to the limit. After the step the worker goes,
-    and its share comes back to the job. NoRoom when the limit can't hold the step at all."""
+    again on first use: the converter only when what's held wouldn't fit beside the worker) and its cap makes room, so
+    the two together keep to the limit. After the step the worker goes, and its share comes back to the job. NoRoom
+    when the limit can't hold the step at all (a job that will hear words waits at the queue instead: before_job and
+    `job.lp_hears`; this is for a limit lowered under a job already running)."""
     if not on():
         yield
         return
@@ -317,7 +319,9 @@ def worker_step(kind: str):
     STATE["worker_next"] = need
     if worker_running() and (STATE.get("worker_cap") or 0) < need:
         client.WORKER.stop(f"Low profile: hearing the words needs a bigger share ({need} GB)")
-    gpu.release("hear")
+    gpu.release("speak")   # the separator
+    if gpu.held_gb() > lim - need:   # (the converter too, only when it wouldn't fit beside the worker's share)
+        gpu.release("hear")
     apply(reserve_worker=True)
     try:
         yield
@@ -362,6 +366,9 @@ def before_job(job) -> bool:
         free_for("speak")
     apply(reserve_worker=kind in WORKER_KINDS and kind not in TRAIN_KINDS)
     ok, why = fits(kind)
+    total = float(settings()["limit_gb"])
+    if ok and getattr(job, "lp_hears", False) and total - 1.0 < worker_need("hear"):   # (it hears the song's words: Whisper)
+        ok, why = False, f"hears the song's words, which needs about {worker_need('hear') + 1.0:.0f} GB; Low profile allows {total:.0f}"
     if not ok and worker_running() and (STATE.get("worker_cap") or 0) > need:
         # a worker loaded with a bigger share than this job's (a cadence training's, before a speech): its share comes
         # back; the next request starts it with the right one

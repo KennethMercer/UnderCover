@@ -71,6 +71,15 @@ def apply_cap(limit: float | None = None) -> float | None:
         return None
 
 
+def held_gb() -> float:
+    """What this process holds on the card right now (PyTorch's reserved, binary GB; 0 without a GPU)."""
+    torch = sys.modules.get("torch")
+    try:
+        return torch.cuda.memory_reserved() / 2**30 if torch is not None and torch.cuda.is_available() else 0.0
+    except Exception:   # noqa: BLE001
+        return 0.0
+
+
 def peak_gb() -> float | None:
     """The most graphics memory this process has held since the last reset_peak() (PyTorch's reserved, binary GB)."""
     torch = sys.modules.get("torch")

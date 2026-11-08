@@ -5756,7 +5756,7 @@ def u_lowprofile_hear():
     from undercover.core.cadence import client
     from undercover.frontman import duets
     saved = (dict(L.STATE), dict(jobs.STATUS), os.environ.get("UNDERCOVER_TEST_ROOTS"), os.environ.get("UNDERCOVER_LOW_PROFILE"))
-    real = (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines)
+    real = (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines, gpu.held_gb)
     seen, caps, freed, alive = {}, [], [], [False]
     try:
         with isolated_data() as t:
@@ -5768,6 +5768,10 @@ def u_lowprofile_hear():
             client.WORKER.call = lambda op, **kw: {}
             gpu.apply_cap = lambda lim=None: caps.append(lim) or lim
             gpu.release = lambda step: freed.append(step)
+            held = [9.0]   # the server holds 9 GB (a converter and a separator): both must go for Whisper's 5 beside it
+            gpu.held_gb = lambda: held[0]
+            calls = []
+            client.WORKER.call = lambda op, **kw: calls.append(op) or {}
 
             def transcribe(files, words=False, cancel=None):   # as the worker starting now would: its share, the server's cap
                 seen["worker"] = L.worker_limit_gb()
@@ -5786,10 +5790,29 @@ def u_lowprofile_hear():
             assert words and words[0][0] == "hold", words
             assert seen["stops"][0].startswith("Low profile: hearing the words needs a bigger share"), seen
             assert seen["worker"] == L.WHISPER_GB and seen["server"] == round(12 - L.WHISPER_GB, 2), seen
-            assert freed == ["hear"], freed
+            assert freed == ["speak", "hear"] and "free" not in calls, (freed, calls)   # (the worker goes: no separate free)
+            held[0], freed[:] = 2.0, []   # holding little: the separator goes, the converter stays
+            L.STATE.update(applied=None)
+            duets.heard_words(vox, None, Path(t) / "work")
+            assert freed == ["speak"], freed
             assert not alive[0] and L.STATE["server_gb"] == 12.0 and L.STATE["worker_next"] is None, (alive, L.STATE)
             assert not (Path(t) / "work" / "duet-vocal.wav").exists()
             # what release("hear") lets go: the separator and the converter, not listen-back's ear
+            # a job that will hear words waits at the queue when the limit can't hold Whisper, and runs when it can
+            class HJ:
+                kind, cancel, lp_hears = "cover", False, True
+                said = []
+                def push(self, **ev):
+                    self.said.append(ev)
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "5"
+            hj = HJ()
+            assert L.before_job(hj) is None and "hears the song's words" in hj.said[-1]["message"] and hj.said[-1]["waits_for"] == "Low profile", hj.said
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "12"
+            assert L.before_job(HJ()) is True
+            HJ.lp_hears = False
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "5"
+            assert L.before_job(HJ()) is True, "a cover that hears nothing waited for Whisper's room"
+            os.environ["UNDERCOVER_LOW_PROFILE"] = "12"
             gpu.release = real[5]
             gpu.MODELS._sep, gpu.MODELS._conv = object(), object()
             gpu.release("hear")
@@ -5811,7 +5834,7 @@ def u_lowprofile_hear():
             alive[0] = True   # (a speech worker loaded: off, it's left as it is)
             assert duets.heard_words(vox, None, Path(t) / "work") and freed == [] and seen["worker"] is None and "stops" not in seen and alive[0], (freed, seen)
     finally:
-        (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines) = real
+        (client.WORKER.running, client.WORKER.stop, client.WORKER.call, client.transcribe, gpu.apply_cap, gpu.release, L.worker_engines, gpu.held_gb) = real
         gpu.MODELS._sep = gpu.MODELS._conv = None
         L.STATE.clear(), L.STATE.update(saved[0])
         jobs.STATUS.clear(), jobs.STATUS.update(saved[1])
@@ -5822,6 +5845,8 @@ def u_lowprofile_hear():
                 os.environ[k] = v
     src = inspect.getsource(__import__("undercover.frontman.pipeline", fromlist=["x"]).CoverEngine._duet_plan)
     assert "no_room = isinstance(e, NoRoom)" in src and "Low profile's limit leaves no room to hear the words" in src
+    api_src = (ROOT / "undercover" / "frontman" / "api.py").read_text(encoding="utf-8")   # the jobs that hear are tagged
+    assert 'job.lp_hears = what == "open" and doc is None' in api_src and "job.lp_hears = bool(opts.duet_voice and not opts.duet_plan)" in api_src
     return "Whisper's 5 GB for the worker, the server at 7 GB meanwhile, its models let go; back to 12 after; 5 GB said plainly; off untouched"
 
 

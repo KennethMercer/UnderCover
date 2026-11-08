@@ -627,10 +627,11 @@ def heard_words(lead: Path, backing: Path | None, work: Path, cancel=None) -> li
             try:
                 r = client.transcribe([f], words=True, cancel=cancel)
             finally:
-                try:
-                    client.WORKER.call("free", what="whisper", timeout=30)
-                except Exception:   # noqa: BLE001 - nothing loaded to free
-                    pass
+                if not lowprofile.on():   # (under Low profile the worker itself goes after the step)
+                    try:
+                        client.WORKER.call("free", what="whisper", timeout=30)
+                    except Exception:   # noqa: BLE001 - nothing loaded to free
+                        pass
     finally:
         f.unlink(missing_ok=True)
     return [w for w in (r[0].get("words") or []) if len(w) >= 3] if r else []
