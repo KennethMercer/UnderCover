@@ -11413,7 +11413,8 @@ def u_token_ratios():
     bad, worst = [], {k: 99.0 for k in floors}
     themes = ["casefile"] + sorted(p.name for p in (web / "themes").iterdir() if (p / "theme.css").is_file() and p.name != "casefile")
     for theme in themes:
-        for light in (False, True):
+        own = "" if theme == "casefile" else (web / "themes" / theme / "theme.css").read_text(encoding="utf-8")
+        for light in ((False, True) if theme == "casefile" or 'data-theme="light"' in own else (False,)):   # (a dark-only theme's light is derived by the page)
             t = _theme_tokens(web, theme, light)
             pct = lambda k: float(t[k].rstrip("%")) / 100
             for m in ("frontman", "doubleagent", "speakeasy", "safehouse"):

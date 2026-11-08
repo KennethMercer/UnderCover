@@ -122,13 +122,11 @@ canvas.seekable { cursor: pointer; height: 64px; }
    the layout must not move, a negative margin gives the padding back, and a round ▶ keeps its size under a wider target (::after) */
 .linkbtn { background: none; border: 0; color: var(--accent); padding: 6px 2px; margin: -6px -2px; font-size: 13.5px; }
 .play.vline, .tplay, .fm-duet .vchip .x { position: relative; }
-.play.vline::after, .tplay::after, .fm-duet .vchip .x::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; }
 .mute { padding: 8px; }
 .top .lp-btn, .top .deep-btn, .top .lp-more { min-height: 32px; }
 @media (max-width: 480px) {
   .linkbtn { padding: 12px 2px; margin: -12px -2px; }
-  .ex button { padding: 12px 0; margin: -12px 0; }
-  .play.vline::after, .tplay::after, .fm-duet .vchip .x::after { inset: -7px; }
+  .play.vline::after, .tplay::after, .fm-duet .vchip .x::after { content: ""; position: absolute; inset: -7px; border-radius: inherit; }
   .btn, .icon-btn, .mini, .cat, .tab, .seg button, .thumb, .ab button, .install, .fchip, .stoggle, .chip-btn, .top .lp-btn, .top .deep-btn, .top .lp-more,
   input[type=text], input[type=search], input[type=time], input:not([type]), select { min-height: 44px; }
   .song-wave .play, .pcard .play, .lplayer .play, .se-rrow .play, .os-oct-ab .pcard .play { width: 44px; height: 44px; }

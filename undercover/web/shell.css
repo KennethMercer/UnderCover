@@ -99,7 +99,6 @@
 #da-train { white-space: nowrap; padding: 8px 16px; font-weight: 600; }
 .da-under { display: flex; justify-content: space-between; gap: 6px 16px; flex-wrap: wrap; align-items: baseline; font-size: 13.5px; color: var(--muted); }
 .da-under .da-time { text-align: right; }
-.da-under .da-time b { font-weight: 500; color: var(--fg); }
 .da-under .linkbtn { font-size: 13.5px; }
 .da-work { --jc: var(--c-doubleagent); display: grid; gap: 12px; background: var(--panel); border-left: 3px solid var(--jc); border-radius: var(--r); padding: 16px 16px; }
 .da-work[hidden], .da-outcome[hidden] { display: none; }
