@@ -2011,44 +2011,77 @@ def u_tailnet():
     return "starting -> sign-in -> approve -> ready; funnel only to the away port; off, forget; wrong download refused"
 
 
-@check("away tokens (phase 20): a paired phone's single-use transfer code becomes an away token; never the home one; codes expire and work once; Revoke ends both")
+@check("the move to the link (1.2.1): a phone paired on the home Wi-Fi asks for a single-use move code with its LAN token; redeemed at the link it gives the one token; the LAN token stays until the new one is used once, then goes, and the LAN listener's need with it; codes expire and work once; a file from before is read as it was; Remove ends both")
 def u_phone_away():
     from undercover.core import phone
     from undercover.core.phone import PhoneError
+    from undercover.core import platform as P
     with isolated_data():
-        phone._FILE[0] = None
-        phone.set_enabled(True)
-        code = phone.new_pairing()["code"]
-        home, dev = phone.claim(code, "Test phone", "192.168.1.50")
-        assert phone.device_for(home) and phone.device_for(home, away=True) is None
-        phone.set_away(True)
-        c = phone.away_code(dev["id"])
-        assert len(c) >= 20
-        away, d2 = phone.redeem_away(c)
-        assert d2["id"] == dev["id"] and away != home
-        assert phone.device_for(away, away=True)["id"] == dev["id"]
-        assert phone.device_for(away) is None and phone.device_for(home, away=True) is None, "home and away tokens mixed"
-        for bad in (c, "x" * 22, ""):   # used once already, made up, empty
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        lan, away = "L" * 43, "A" * 43
+        phone.state_file().write_text(json.dumps({"enabled": True, "away": True, "devices": [   # as 1.1 wrote it
+            {"id": "aaaaaaaaaa", "name": "Old phone", "hash": phone.hash_token(lan), "paired": "p", "seen": "s", "ip": "192.168.1.9", "used": time.time()},
+            {"id": "bbbbbbbbbb", "name": "Both", "hash": phone.hash_token("H" * 43), "away_hash": phone.hash_token(away), "paired": "p", "seen": "s",
+             "ip": "192.168.1.8", "used": time.time(), "away_used": time.time()}]}), encoding="utf-8")
+        saved_nets, real_prefix, was = dict(phone._NETS), P.prefix_length, os.environ.get("UNDERCOVER_PHONE_ADDR")
+        phone._NETS.clear()
+        P.prefix_length = lambda a: None
+        os.environ["UNDERCOVER_PHONE_ADDR"] = "192.168.1.20"
+        try:
+            st = phone._load()
+            assert "away" not in st and st["lan"] and [d["id"] for d in st["devices"]] == ["aaaaaaaaaa", "bbbbbbbbbb"]
+            assert phone.device_for(lan, "192.168.1.77")["id"] == "aaaaaaaaaa" and phone.device_for(lan, away=True) is None
+            assert phone.device_for(away, away=True)["id"] == "bbbbbbbbbb", "the away token of 1.1 isn't the one token"
+            assert phone.lan_needed() and phone.devices()[0]["lan"] and not phone.devices()[1]["lan"]
+            assert phone.device_for("H" * 43, "192.168.1.77") is None, "a moved phone's LAN token still works after its new one was used"
+            for bad in ("nope", "bbbbbbbbbb"):   # unknown, and a phone with no LAN token left
+                try:
+                    phone.move_code(bad)
+                    raise AssertionError(f"a move code for {bad}")
+                except PhoneError:
+                    pass
+            c = phone.move_code("aaaaaaaaaa")
+            assert len(c) >= 20
+            main, d2 = phone.redeem_move(c)
+            assert d2["id"] == "aaaaaaaaaa" and main != lan and d2["moving"] and phone.lan_needed(), "the LAN token went before the new one was used"
+            for bad in (c, "x" * 22, ""):   # used once already, made up, empty
+                try:
+                    phone.redeem_move(bad)
+                    raise AssertionError(f"redeemed {bad!r}")
+                except PhoneError:
+                    pass
+            assert phone.device_for(lan, "192.168.1.77")["id"] == "aaaaaaaaaa", "the LAN token stopped before the phone arrived"
+            assert phone.device_for(main, away=True)["id"] == "aaaaaaaaaa"   # arrived: the LAN token is finished
+            assert not phone.lan_needed() and phone.device_for(lan, "192.168.1.77") is None and not phone.devices()[0]["moving"]
+            assert not json.loads(phone.state_file().read_text(encoding="utf-8"))["lan"], "the file still says the LAN listener is needed"
+            phone._MOVE_CODES[phone.hash_token("expired")] = ("aaaaaaaaaa", time.time() - 1)
             try:
-                phone.redeem_away(bad)
-                raise AssertionError(f"redeemed {bad!r}")
+                phone.redeem_move("expired")
+                raise AssertionError("an expired code worked")
             except PhoneError:
                 pass
-        old = phone.away_code(dev["id"])
-        phone._AWAY_CODES[phone.hash_token(old)] = (dev["id"], time.time() - 1)
-        try:
-            phone.redeem_away(old)
-            raise AssertionError("an expired code worked")
-        except PhoneError:
-            pass
-        phone.set_away(False)
-        assert phone.device_for(away, away=True) is None, "away off, yet the away token works"
-        phone.set_away(True)
-        assert "away_hash" not in json.dumps(phone.devices()), "a hash in the public list"
-        phone.revoke(dev["id"])
-        assert phone.device_for(home) is None and phone.device_for(away, away=True) is None
-        phone._FILE[0] = None
-    return "code -> away token; home and away kept apart; once only; expiry; away off; Revoke ends both"
+            assert phone.still_valid(phone.hash_token(main)) and not phone.still_valid(phone.hash_token(lan))
+            phone.set_enabled(False)
+            assert phone.device_for(main, away=True) is None, "the link off, yet the token works"
+            phone.set_enabled(True)
+            text = json.dumps(phone.devices())
+            assert "hash" not in text and main not in text and lan not in text, "a hash or a token in the public list"
+            phone.revoke("aaaaaaaaaa")
+            assert phone.device_for(main, away=True) is None and [d["id"] for d in phone.devices()] == ["bbbbbbbbbb"]
+            assert phone.revoke_all() == 1 and phone.devices() == [] and phone.device_for(away, away=True) is None
+        finally:
+            P.prefix_length = real_prefix
+            phone._NETS.clear()
+            phone._NETS.update(saved_nets)
+            if was is None:
+                os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
+            else:
+                os.environ["UNDERCOVER_PHONE_ADDR"] = was
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+            phone._SEEN_AT.clear()
+    return "a 1.1 file read as it was; LAN token -> move code -> the one token; the LAN token goes at the first use; once only; expiry; off; Remove"
 
 
 @check("overnight improve never replaces or deletes the user's voice (Internal Affairs P2-1): the retrained one waits beside it as pending, whatever the numbers; no improve over a pending one")
@@ -10161,40 +10194,90 @@ def u_qr():
     return "Reed-Solomon, format, version bits; versions 3 and 10"
 
 
-@check("phone: pairing (single use, expiry, wrong codes, rate limit), tokens stored hashed, Revoke, the switch")
+@check("phone: pairing at the link (1.2.1): the QR's 128-bit code, once; wrong claims can't end it; the typed code only when asked for, 2 minutes and 5 tries; no window means the generic refusal; a claim is a nonce, and the token comes once, on Allow; No forgets the phone; tokens stored hashed; a token's life; LAN tokens good only from the home network")
 def u_phone_pairing():
     from undercover.core import phone
     with isolated_data() as t:
-        saved = (None, phone.PAIRING, list(phone._TRIES))
-        phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, None, []
+        saved = phone.PAIRING
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._HANDOVER.clear(), phone._MOVE_CODES.clear(), phone._STATE.clear()
         try:
             assert phone.state_file().parent == t, phone.state_file()
-            assert not phone.enabled() and phone.device_for("anything") is None
+            assert not phone.enabled() and phone.device_for("anything", away=True) is None
             try:
                 phone.new_pairing()
-                raise AssertionError("a code was made with Phone access off")
+                raise AssertionError("a code was made with the link off")
             except phone.PhoneError:
                 pass
-            phone.set_enabled(True)
-            p = phone.new_pairing()
-            assert len(p["code"]) == 6 and set(p["code"]) <= set(phone.ALPHABET) and 290 < p["until"] - time.time() <= 300
 
-            def refused(code, addr="10.0.0.9", want=403):
+            def refused(code, want=403, generic=False):
                 try:
-                    phone.claim(code, "x", addr)
+                    phone.claim(code, "x", "10.0.0.9")
                 except phone.PhoneError as e:
-                    assert e.status == want, (e.status, str(e))
+                    assert (e.status, e.generic) == (want, generic), (e.status, e.generic, str(e))
                     return str(e)
                 raise AssertionError(f"{code!r} was accepted")
-            wrong = "".join(c for c in phone.ALPHABET if c not in p["code"])[:6]
-            refused(wrong)
-            token, dev = phone.claim(" " + p["code"].lower()[:3] + "-" + p["code"][3:], "Pixel 8", "10.0.0.9")   # typed loosely
-            assert dev["name"] == "Pixel 8" and len(token) >= 40
-            refused(p["code"])   # once only
+            phone.set_enabled(True)
+            refused("anything", 401, True)   # no window open: the generic refusal, with no hint that pairing exists
+            p = phone.new_pairing()
+            assert len(p["code"]) >= 20 and 290 < p["until"] - time.time() <= 300 and p["short"] is None, p
+            for _ in range(20):   # wrong claims against the QR's code are counted and change nothing
+                refused(p["code"][:-1] + "x")
+            assert phone.pairing() is not None and phone.PAIRING["wrong"] == 20
+            refused("ABCDEF")   # no typed code exists until it's asked for
+            s = phone.short_code()
+            assert len(s["code"]) == 6 and set(s["code"]) <= set(phone.ALPHABET) and 110 < s["until"] - time.time() <= 120, s
+            wrong = "".join(c for c in phone.ALPHABET if c not in s["code"])[:6]
+            for _ in range(phone.SHORT_TRIES - 1):
+                assert "isn't the code" in refused(wrong)
+            assert "finished" in refused(wrong)
+            assert phone.pairing()["short"] is None and phone.pairing() is not None   # the typed code is gone, the QR's lives
+            refused(s["code"])
+            phone.short_code()
+            phone.PAIRING["short"]["until"] = time.time() - 1   # the typed code runs out on its own
+            assert phone.pairing()["short"] is None
+            s3 = phone.short_code()
+            nonce, dev = phone.claim(" " + s3["code"].lower()[:3] + "-" + s3["code"][3:], "Pixel 8", "10.0.0.9")   # typed loosely
+            assert dev["name"] == "Pixel 8" and dev["pending"] and len(nonce) >= 20, dev
+            assert phone.pairing() is None   # once
+            refused(s3["code"], 401, True)
+            assert phone.devices() == [] and [d["id"] for d in phone.pending()] == [dev["id"]]
+            assert phone.collect(nonce) is None and phone.collect("wrong") is None   # not yet, and a wrong nonce the same
             text = phone.state_file().read_text(encoding="utf-8")
-            assert token not in text and phone.hash_token(token) in text, "the token isn't stored as its hash"
-            assert phone.device_for(token)["id"] == dev["id"] and phone.device_for(token + "x") is None
-            # a home token is good only from the PC's own home network (its interface's prefix; /24 when the OS can't say)
+            assert nonce not in text and phone.hash_token(nonce) in text and '"hash": null' in text, "a token exists before Allow"
+            phone.allow(dev["id"])
+            assert phone.collect("wrong") is None
+            got = phone.collect(nonce)
+            assert got and got[1]["id"] == dev["id"] and len(got[0]) >= 40, got
+            token = got[0]
+            assert phone.collect(nonce) is None, "the token was handed over twice"
+            text = phone.state_file().read_text(encoding="utf-8")
+            assert token not in text and phone.hash_token(token) in text and "nonce" not in json.loads(text)["devices"][0]
+            assert phone.device_for(token, away=True)["id"] == dev["id"] and phone.device_for(token + "x", away=True) is None
+            assert phone.device_for(token, "192.168.1.5") is None, "the one token worked as a LAN token"
+            assert phone.devices()[0]["id"] == dev["id"] and not phone.devices()[0]["pending"] and phone.pending() == []
+            p2 = phone.new_pairing()   # No: the phone that claimed is forgotten, and its nonce is "not yet" forever
+            n2, d2 = phone.claim(p2["code"], "Tablet", "10.0.0.7")   # the QR's code, once
+            refused(p2["code"], 401, True)
+            phone.refuse(d2["id"])
+            assert phone.pending() == [] and phone.collect(n2) is None
+            try:
+                phone.allow(d2["id"])
+                raise AssertionError("allowed a phone that was refused")
+            except phone.PhoneError:
+                pass
+            p3 = phone.new_pairing()   # a phone never allowed is forgotten after PENDING_S
+            n3, d3 = phone.claim(p3["code"], "Old", "10.0.0.6")
+            next(d for d in phone._load()["devices"] if d["id"] == d3["id"])["asked"] = time.time() - phone.PENDING_S - 1
+            phone._save()
+            phone._FILE[0] = None
+            assert phone.pending() == [] and phone.collect(n3) is None and len(phone.devices()) == 1
+            # a LAN token (a phone paired on the home Wi-Fi before the link) is good only from the PC's own home network
+            # (its interface's prefix; /24 when the OS can't say)
+            lan = "L" * 43
+            rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
+            rec["lan_hash"] = phone.hash_token(lan)
+            phone._relan(phone._load())
             saved_nets = dict(phone._NETS)
             from undercover.core import platform as P
             real_prefix = P.prefix_length
@@ -10207,9 +10290,10 @@ def u_phone_pairing():
                 assert phone.home_net("192.168.1.20").with_prefixlen == "192.168.1.0/24"
                 os.environ["UNDERCOVER_PHONE_ADDR"], was = "192.168.1.20", os.environ.get("UNDERCOVER_PHONE_ADDR")
                 try:
-                    assert phone.device_for(token, "192.168.1.77")["id"] == dev["id"], "refused on the home network"
-                    for elsewhere in ("192.168.2.77", "10.0.0.9", "8.8.8.8", "not-an-address"):
-                        assert phone.device_for(token, elsewhere) is None, f"a home token worked from {elsewhere}"
+                    assert phone.device_for(lan, "192.168.1.77")["id"] == dev["id"], "refused on the home network"
+                    for elsewhere in ("192.168.2.77", "10.0.0.9", "8.8.8.8", "not-an-address", ""):
+                        assert phone.device_for(lan, elsewhere) is None, f"a LAN token worked from {elsewhere!r}"
+                    assert phone.device_for(lan, away=True) is None, "a LAN token worked at the link"
                 finally:
                     if was is None:
                         os.environ.pop("UNDERCOVER_PHONE_ADDR", None)
@@ -10219,7 +10303,8 @@ def u_phone_pairing():
                 P.prefix_length = real_prefix
                 phone._NETS.clear()
                 phone._NETS.update(saved_nets)
-            assert "Only if this phone is on your own home Wi-Fi" in (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
+            rec["lan_hash"] = None
+            phone._relan(phone._load())
             # an address only ever goes into a command line as plain IPv4: an IPv6 zone part can hold anything
             ran, real_run = [], P.run_text
             P.run_text = lambda cmd, timeout=20: ran.append(cmd) or ""
@@ -10237,68 +10322,45 @@ def u_phone_pairing():
                 assert ran and any("'192.168.1.20'" in " ".join(c) or "192.168.1.20" in " ".join(c) for c in ran), ran
             finally:
                 P.run_text = real_run
-            p2 = phone.new_pairing()   # expiry
+            p4 = phone.new_pairing()   # expiry
             phone.PAIRING["until"] = time.time() - 1
-            assert "run out" in refused(p2["code"])
-            # five wrong codes from one address: that address is out of tries, even with the right code; the code lives
-            # on for the phone that's really pairing (1.1: a stranger's guesses can't cancel it)
-            p3 = phone.new_pairing()
-            for _ in range(phone.MAX_TRIES):
-                refused(wrong, addr="10.0.0.8")
-            assert phone.pairing() is not None and "from this phone" in refused(p3["code"], addr="10.0.0.8")
-            t3, d3 = phone.claim(p3["code"], "Tablet", "10.0.0.7")
-            assert d3["name"] == "Tablet" and phone.pairing() is None
-            phone.revoke(d3["id"])
-            phone._TRIES[:] = []
-            p3b = phone.new_pairing()   # MAX_WRONG in all, from any addresses, cancels it
-            for i in range(phone.MAX_WRONG):
-                if i % phone.RATE[1] == 0:
-                    phone._TRIES[:] = []
-                refused(wrong, addr=f"10.0.1.{i // (phone.MAX_TRIES - 1)}")
-            assert phone.pairing() is None and "run out" in refused(p3b["code"], addr="10.0.0.5")
-            phone._TRIES[:] = []
-            phone._TRIES[:] = []   # the rate limit: 10 tries per address in 10 minutes, then 429 even with the right code
-            p4 = phone.new_pairing()
-            for _ in range(phone.RATE[1]):
-                try:
-                    phone.claim(wrong, "x", "10.0.0.6")
-                except phone.PhoneError:
-                    pass
-                phone.PAIRING = p4 if phone.PAIRING is None else phone.PAIRING
-            refused(p4["code"], addr="10.0.0.6", want=429)
-            phone._TRIES[:] = []
+            refused(p4["code"], 401, True)
             phone._FILE[0] = None   # read back from the file
-            assert phone.device_for(token)["name"] == "Pixel 8"
+            assert phone.device_for(token, away=True)["name"] == "Pixel 8"
             # a token's life (1.1): 30 days from its last use, renewed by every use; a record from before starts at its
             # first use; the cookie lives as long and is sent again with each answer
             rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
             rec["used"] = time.time() - phone.TOKEN_IDLE_S + 60
-            assert phone.device_for(token) and time.time() - rec["used"] < 5, "a use didn't renew the token"
+            assert phone.device_for(token, away=True) and time.time() - rec["used"] < 5, "a use didn't renew the token"
             rec["used"] = time.time() - phone.TOKEN_IDLE_S - 1
-            assert phone.device_for(token) is None, "a token unused for 30 days still worked"
+            assert phone.device_for(token, away=True) is None, "a token unused for 30 days still worked"
             rec.pop("used")
-            assert phone.device_for(token) and "used" in rec
+            assert phone.device_for(token, away=True) and "used" in rec
             from undercover.app import phone_api as PA
-            assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t") and "Secure" in PA.away_cookie("t")
+            assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t")
+            assert PA.away_cookie("t").startswith("__Host-uc=t; Path=/;") and "Secure" in PA.away_cookie("t") and "Domain" not in PA.away_cookie("t")
             assert phone.TOKEN_IDLE_S == 30 * 86400
             phone.revoke(dev["id"])
-            assert phone.device_for(token) is None and phone.devices() == []
-            token2, dev2 = phone.claim(phone.new_pairing()["code"], "<b>Tab</b>\n", "10.0.0.5")
+            assert phone.device_for(token, away=True) is None and phone.devices() == []
+            n5, dev2 = phone.claim(phone.new_pairing()["code"], "<b>Tab</b>\n", "10.0.0.5")
             assert dev2["name"] == "bTab/b", dev2["name"]
+            phone.allow(dev2["id"])
+            token2 = phone.collect(n5)[0]
             phone.set_enabled(False)
-            assert phone.device_for(token2) is None and phone.pairing() is None
+            assert phone.device_for(token2, away=True) is None and phone.pairing() is None
             phone.set_enabled(True)
-            assert phone.device_for(token2)["id"] == dev2["id"]
+            assert phone.device_for(token2, away=True)["id"] == dev2["id"]
             assert phone.name_from_agent("Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A) AppleWebKit") == "Pixel 8"
             assert phone.name_from_agent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit") == "Android phone"
             assert phone.name_from_agent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)") == "iPhone"
             assert phone.usable("192.168.1.5") and phone.usable("10.1.2.3") and not phone.usable("8.8.8.8")
             assert not phone.usable("127.0.0.1") and not phone.usable("169.254.1.1")
         finally:   # forget the test's state: the next use reads its own file again
-            phone._FILE[0], phone.PAIRING, phone._TRIES[:] = None, saved[1], saved[2]
+            phone._FILE[0], phone.PAIRING = None, saved
             phone._STATE.clear()
             phone._SEEN_AT.clear()
-    return "6-character codes, hashed tokens, 5 wrong codes, 10 tries per address"
+            phone._HANDOVER.clear()
+    return "a 128-bit QR code; a typed code only when asked, 5 tries; generic refusals; nonce -> Allow -> the token once; No; hashed tokens; LAN tokens on the home network only"
 
 
 NETSH_RULE = """Rule Name:                            {name}
