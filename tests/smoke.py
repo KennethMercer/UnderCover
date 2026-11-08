@@ -11492,6 +11492,11 @@ def u_token_ratios():
                     if v < floors[k]:
                         bad.append(f"{theme} {'light' if light else 'dark'} {m}: {k} {v:.2f} < {floors[k]}")
     assert not bad, bad
+    # the WinAmp skin stays as it was (look.md): the bones wave's base-rule changes are pinned back for it, at the base rules' own
+    # specificity (:where), so the skin's own rules still win; a later base change needs the same (the designer's review of bones1)
+    wa = (web / "winamp.css").read_text(encoding="utf-8")
+    assert "/* -- bones pins -- */" in wa and ':where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0;' in wa
+    assert wa.index("/* -- end bones pins -- */") < wa.index('html[data-skin="winamp"] .mod'), "the pins come before the skin's own rules"
     return f"{len(themes)} themes x 2 modes x 4 modules; worst " + ", ".join(f"{k} {v:.2f}" for k, v in worst.items())
 
 

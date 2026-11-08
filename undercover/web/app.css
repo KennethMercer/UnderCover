@@ -126,6 +126,9 @@ canvas.seekable { cursor: pointer; height: 64px; }
 .top .lp-btn, .top .deep-btn, .top .lp-more { min-height: 32px; }
 @media (max-width: 480px) {
   .linkbtn { padding: 12px 2px; margin: -12px -2px; }
+  /* where link-buttons stack (a column, a side, a pair of head links) or end a box, the padding isn't taken back: the group grows a little
+     and no two targets share a pixel (the designer's review of bones1) */
+  :is(.rn-more, .addon .side, .row-gap, .se-tags-hint) > .linkbtn { margin-block: 0; }
   .play.vline::after, .tplay::after, .fm-duet .vchip .x::after { content: ""; position: absolute; inset: -7px; border-radius: inherit; }
   .btn, .icon-btn, .mini, .cat, .tab, .seg button, .thumb, .ab button, .install, .fchip, .stoggle, .chip-btn, .top .lp-btn, .top .deep-btn, .top .lp-more,
   input[type=text], input[type=search], input[type=time], input:not([type]), select { min-height: 44px; }
@@ -702,6 +705,8 @@ body[data-gpu="cpu"] .room[data-room="system"]::after { background: var(--warn);
 .dotw { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; white-space: nowrap; color: var(--muted); }
 .dotw::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .dotw.ok { color: var(--ok); } .dotw.warn { color: var(--warn); } .dotw.bad { color: var(--err); } .dotw.now { color: var(--accent); }
+.switch::before { content: ""; position: absolute; inset: -4px 0; border-radius: inherit; }   /* a 32 px target (44 on a phone), the switch's look kept */
+@media (max-width: 480px) { .switch::before { inset: -10px 0; } }
 .switch { position: relative; flex: none; width: 44px; height: 24px; padding: 0; border: 0; border-radius: 99px; background: var(--panel-3); }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--fg); transition: transform var(--t-fast); }
 .switch[aria-checked="true"] { background: var(--accent); }
