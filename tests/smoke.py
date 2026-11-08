@@ -10973,6 +10973,20 @@ def u_ytdlp_heal():
                 raise AssertionError("a wheel with a climbing path was unpacked")
             except ytdlp.HealError:
                 pass
+            # 8b. a wheel of the pair holds its own package and dist-info only: yt-dlp-ejs's can't overwrite yt-dlp's
+            #     proved files, nor put a module at the top of the folder (and nothing of such a wheel is unpacked)
+            ok_ejs = _fake_wheel(pypi, "yt-dlp-ejs", "yt_dlp_ejs", "0.9.1")
+            ytdlp.unpack(Path(ok_ejs["url"].replace("file:///", "")), t / "ok-ejs", "yt_dlp_ejs")
+            assert sorted(p.name for p in (t / "ok-ejs").iterdir()) == ["yt_dlp_ejs", "yt_dlp_ejs-0.9.1.dist-info"]
+            for extra in ({"yt_dlp/YoutubeDL.py": "x = 'replaced'"}, {"sitecustomize.py": "x = 1"}, {"yt_dlp_ejs_x/a.py": "x"}):
+                bad = _fake_wheel(pypi, "yt-dlp-ejs", "yt_dlp_ejs", "0.9.2", extra_files=extra)
+                try:
+                    ytdlp.unpack(Path(bad["url"].replace("file:///", "")), t / "bad-ejs", "yt_dlp_ejs")
+                    raise AssertionError(f"an ejs wheel holding {extra} was unpacked")
+                except ytdlp.NotVouched:
+                    pass
+                assert not (t / "bad-ejs").exists(), f"part of a refused wheel was unpacked ({extra})"
+            assert "unpack(got[name], d, MODULE[name])" in __import__("inspect").getsource(ytdlp.stage)
             # 9. detection: three different videos breaking the same way; the bot check and one bad link don't count
             ytdlp._EVENTS.clear()
             st = ytdlp.load()

@@ -40,6 +40,7 @@ from .config import ROOT, path
 from .voices import ModelError
 
 PKG, EJS = "yt-dlp", "yt-dlp-ejs"
+MODULE = {PKG: "yt_dlp", EJS: "yt_dlp_ejs"}   # the one package each wheel of the pair may hold (and its dist-info)
 KNOWN_GOOD = ["jNQXAC9IVRw", "dQw4w9WgXcQ", "9bZkp7q19f0"]   # public, long-lived, ordinary videos
 BROKEN_VIDEOS = 3          # different videos failing the same way...
 WINDOW = 30 * 60           # ...within this many seconds
@@ -495,15 +496,24 @@ def download(w: dict, dest: Path) -> Path:
     return f
 
 
-def unpack(wheel: Path, dest: Path):
-    """A pure-Python wheel into dest (its .data part skipped; no paths that climb out)."""
+def unpack(wheel: Path, dest: Path, module: str | None = None):
+    """A pure-Python wheel into dest (its .data part skipped; no paths that climb out). module: the only package it may
+    hold, beside its own dist-info: anything else (another package's files, a top-level module) and nothing is unpacked.
+    The two wheels of a pair go into one folder, so the second can't overwrite the first's proved files."""
     with zipfile.ZipFile(wheel) as z:
+        files = []
         for i in z.infolist():
             n = i.filename
             if n.endswith("/") or ".data/" in n.split("/", 1)[0] + "/":
                 continue
             if n.startswith("/") or "\\" in n or ":" in n or any(p in ("", "..") for p in n.split("/")):
                 raise HealError(f"{wheel.name} holds a path that climbs out: {n!r}")
+            top = n.split("/", 1)[0]
+            if module and "/" not in n or module and top != module and not (top.startswith(module + "-") and top.endswith(".dist-info")):
+                raise NotVouched(f"{wheel.name} holds {n!r}, outside its own package ({module}): nothing of it is used.")
+            files.append(i)
+        for i in files:
+            n = i.filename
             f = dest / n
             f.parent.mkdir(parents=True, exist_ok=True)
             with z.open(i) as src, open(f, "wb") as out:
@@ -523,7 +533,7 @@ def stage(pair: dict, into: Path | None = None) -> Path:
         got = {name: download(pair["wheels"][name], dl) for name in (PKG, EJS)}
         own = UPSTREAM(pair, got) or {}   # (1.1) GitHub vouches for both, or nothing is unpacked
         for name in (PKG, EJS):
-            unpack(got[name], d)
+            unpack(got[name], d, MODULE[name])
         for rel, data in own.items():   # the tarball's checked copy, never the wheel's (before the files are hashed)
             (d / rel).parent.mkdir(parents=True, exist_ok=True)
             (d / rel).write_bytes(data)
