@@ -787,7 +787,7 @@ def start_heal(reason: str = "", dry_run: bool = False):
             job.finish("done", message=msg, result=r)
         except Exception as e:   # noqa: BLE001
             log(f"heal failed: {e}")
-            job.finish("error", message=jobs.friendly(e, "updating the YouTube downloader"))
+            jobs.fail(job, e, "updating the YouTube downloader")
 
     threading.Thread(target=go, daemon=True, name="ytdlp-heal").start()
     return job

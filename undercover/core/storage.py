@@ -501,7 +501,7 @@ def start_move(group: str, folder: str, confirmed: bool = False):
         except ModelError as e:
             job.finish("error", message=str(e))
         except Exception as e:
-            job.finish("error", message=jobs.friendly(e, "moving files"))
+            jobs.fail(job, e, "moving files")
 
     threading.Thread(target=run, daemon=True).start()
     return job

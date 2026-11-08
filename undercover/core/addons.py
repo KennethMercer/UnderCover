@@ -380,7 +380,7 @@ def start_install(addon_id: str, accept: bool):
         except ModelError as e:
             job.finish("error", message=str(e))
         except Exception as e:
-            job.finish("error", message=jobs.friendly(e, f"installing {a.name}"))
+            jobs.fail(job, e, f"installing {a.name}")
 
     threading.Thread(target=run, daemon=True).start()
     return job

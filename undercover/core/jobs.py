@@ -70,6 +70,19 @@ def log_error(text: str):
         pass
 
 
+def is_plain(e: BaseException) -> bool:
+    """Is this error's message a refusal in plain words, already meant for the user (a ModelError, or a module's own user
+    error)? Then a job ended by it is final as it stands: the page needn't offer Try again for it. Anything else is
+    unexpected, and its friendly() message is a guess at what to do."""
+    from .voices import ModelError
+    return isinstance(e, (ModelError, *USER_ERRORS))
+
+
+def fail(job: "Job", e: BaseException, stage: str = ""):
+    """End a job with an error: friendly()'s message, and `plain` from is_plain()."""
+    job.finish("error", message=friendly(e, stage), plain=is_plain(e))
+
+
 def friendly(e: BaseException, stage: str = "") -> str:
     """Turn an exception into a message that says what to do. Full traceback goes to logs/errors.log."""
     from .voices import ModelError
@@ -295,6 +308,10 @@ class Job:
         return round(max(0.0, left), 1)
 
     def finish(self, state: str, **ev):
+        """The job's last event. An error's says `plain`: True for a sentence written for the user (a job that ends itself
+        with one, or a ModelError's; jobs.fail), False for an unexpected error."""
+        if state == "error":
+            ev.setdefault("plain", True)
         with self.cond:
             self.state = state
             self.ended = time.time()
@@ -347,6 +364,8 @@ class Job:
                 snap["plan"]["voice_display"] = name(plan.get("voice"), "display") or vid
         if last.get("final"):
             snap["final"] = {"state": last.get("state"), "message": last.get("message")}
+            if last.get("state") == "error":
+                snap["final"]["plain"] = bool(last.get("plain"))
             # the voice a training made (Do it all: voice=; a queue item: its result), so the page needn't look it up
             res = last.get("result")
             voice = last.get("voice") or (res.get("voice") if isinstance(res, dict) else None)
@@ -460,7 +479,7 @@ def gpu_worker():
                 lowprofile.after_job(job)
         except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
             try:
-                job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).")
+                job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).", plain=False)
             except Exception:
                 pass
 
@@ -542,7 +561,7 @@ def run_job(job: "Job", fn):
                 job.push(stage=(job.events[-1].get("stage") if job.events else "") or "converting",
                          message="The GPU ran out of memory; freed some and trying again")
                 continue
-            job.finish("error", message=friendly(e, job.events[-1].get("stage", "") if job.events else ""))
+            fail(job, e, job.events[-1].get("stage", "") if job.events else "")
         if job.state == "paused":
             worklist.remember(job)
         return
