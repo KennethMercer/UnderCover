@@ -50,6 +50,7 @@ MAX_DEVICES = 10
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I: easy to type from the screen
 MAIN_COOKIE = "__Host-uc"  # the one token's cookie: the browser takes a __Host- name only Secure, Path=/, no Domain
 LAN_COOKIE = "uc_device"   # a token from before the move, on the home Wi-Fi only
+OLD_AWAY_COOKIE = "uc_away"   # 1.1/1.2's away token at the link: read once, then re-issued as MAIN_COOKIE (the same token)
 MOVE_CODE_S = 600         # a move code (a LAN-paired phone -> the link) lasts 10 minutes, and works once
 
 SEEN_EVERY = 300          # write "last seen" at most this often (s)
@@ -322,7 +323,7 @@ def pairing() -> dict | None:
 
 
 def clean_name(name: str) -> str:
-    name = re.sub(r"[\x00-\x1f\x7f<>]", "", str(name or "")).strip()
+    name = re.sub(r"[\x00-\x1f\x7f<>\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", str(name or "")).strip()   # (no bidi controls)
     return re.sub(r"\s+", " ", name)[:40] or "Phone"
 
 
@@ -431,12 +432,19 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(str(token).encode()).hexdigest()
 
 
+def match_of(nonce_hash: str | None) -> str | None:
+    """The two digits a phone that's asking shows, and the PC's card shows beside its Allow / No (from its nonce's hash):
+    a name is the claimant's own choice, so the number is what ties the ask to the phone in hand."""
+    return f"{int(nonce_hash[:8], 16) % 90 + 10}" if nonce_hash else None
+
+
 def public(d: dict) -> dict:
     out = {k: d.get(k) for k in ("id", "name", "paired", "seen", "ip")}
     out["pending"] = bool(d.get("pending"))
     out["lan"] = bool(d.get("lan_hash")) and not d.get("hash")   # (paired on the home Wi-Fi, not moved to the link yet)
     out["moving"] = bool(d.get("lan_hash")) and bool(d.get("hash"))   # (moved, the new token not used yet)
     out["asks"] = "new" if d.get("pending") else "move" if d.get("move_nonce") else None
+    out["match"] = match_of(d.get("nonce") if d.get("pending") else d.get("move_nonce"))
     return out
 
 

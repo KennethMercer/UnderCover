@@ -12,7 +12,7 @@
      waits for the PC's Allow, then gets its token once. It's also where the home-screen app starts (manifest.webmanifest):
      a phone that's connected goes straight on to UnderCover, and an iPhone's home-screen app, which may not share
      Safari's cookies, can connect itself with a typed code. Hooks for the look chat: #pair-form, #pair-code, #pair-name,
-     #pair-go, #pair-msg, #pair-wait, #pair-done. -->
+     #pair-go, #pair-msg, #pair-wait, #pair-match, #pair-done. -->
 <style>
   :root { color-scheme: dark; --bg: #0a0908; --ink: #ece7de; --dim: #a39d93; --line: #2b2723; --gold: #c9a45c; --bad: #d8735f; }
   * { box-sizing: border-box; }
@@ -45,7 +45,7 @@
     <button id="pair-go" type="submit">Connect this phone</button>
     <div id="pair-msg" role="status"></div>
   </form>
-  <p id="pair-wait" hidden>Waiting for the PC. On the PC, press <b>Allow</b>.</p>
+  <p id="pair-wait" hidden>Waiting for the PC. On the PC, press <b>Allow</b> next to <b id="pair-match"></b>.</p>
   <p id="pair-done" hidden>Connected. Opening UnderCover…</p>
 </main>
 <script>
@@ -67,6 +67,7 @@ document.getElementById("pair-form").addEventListener("submit", async e => {
     if (!r.ok) throw new Error(r.status === 401 ? "That code has run out. Make a new one on the PC."
       : r.status === 403 ? "That isn't the code on the PC. Check it and try again, or scan the code."
       : r.status === 409 ? "The PC has 10 phones connected already. Remove one there, then try this code again." : `That didn't work (${r.status}).`);
+    document.getElementById("pair-match").textContent = data.match || "";
     show("pair-wait");
     const until = Date.now() + 10 * 60 * 1000;   // (the PC forgets a phone it hasn't allowed after this long)
     while (Date.now() < until) {

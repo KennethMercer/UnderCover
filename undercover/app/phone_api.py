@@ -368,7 +368,7 @@ def _route(h, method, p):
             raise PhoneError("", 401, generic=True)
         nonce, dev = phone.redeem_move(str(h._body().get("code") or ""))
         doctor_log(f"Your phone: {dev['name']} asked to move to the link.")
-        return h._json({"ok": True, "nonce": nonce, "device": {"name": dev["name"]}})
+        return h._json({"ok": True, "nonce": nonce, "match": dev["match"], "device": {"name": dev["name"]}})
     if h.remote:   # the gate refuses these for phones already; never let a phone change Your phone
         raise PhoneError("Your phone is managed on the PC.", 403)
     if p == "/api/phone" and method == "GET":
@@ -445,6 +445,11 @@ def home_cookie(token: str) -> str:
     return f"{phone.LAN_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={phone.TOKEN_IDLE_S}"
 
 
+def gone_cookie(name: str) -> str:
+    """A cookie the phone should drop (1.2's away token, once it's carried over to the one name)."""
+    return f"{name}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
+
+
 def main_cookie(token: str) -> str:
     """The one token as a cookie, at the link: a __Host- name, so the browser takes it only Secure, with Path=/ and no
     Domain; HttpOnly; SameSite=Strict; the same life as above."""
@@ -461,4 +466,4 @@ def _claim(h):
         raise PhoneError("", 401, generic=True)
     b = h._body()
     nonce, dev = phone.claim(b.get("code"), b.get("name") or phone.name_from_agent(h.headers.get("User-Agent")), "")
-    h._json({"ok": True, "nonce": nonce, "device": dev})
+    h._json({"ok": True, "nonce": nonce, "match": dev["match"], "device": dev})

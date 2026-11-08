@@ -484,7 +484,7 @@ function renderPhone() {
   $("#set-away-private").setAttribute("aria-checked", !!s.private);
   // the phones asking in: a new one (it scanned the QR or typed the code) or one from before switching to the link
   phoneDraw("phone-asks", s.pending.map(d => `
-    <div class="sys" data-ask="${esc(d.id)}"><span><b>${esc(d.name)}</b> ${d.asks === "move" ? "wants to switch to the new link." : "wants to connect."}</span>
+    <div class="sys" data-ask="${esc(d.id)}"><span><b>${esc(d.name)}</b> ${d.asks === "move" ? "wants to switch to the new link." : "wants to connect."} Allow only if your phone shows <b class="mono">${esc(d.match || "")}</b>.</span>
       <span class="acts"><button class="btn" type="button" data-allow="${esc(d.id)}">Allow</button><button class="btn" type="button" data-refuse="${esc(d.id)}">No</button></span></div>`).join(""));
   $$("#phone-asks [data-allow]").forEach(b => b.onclick = async () => {
     try { PH.st = await api("/api/phone/allow", { json: { id: b.dataset.allow } }); renderPhone(); } catch (e) { showError(e.message, "Couldn't allow it"); loadPhone(); }

@@ -221,8 +221,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        if getattr(self, "set_cookie", None):
-            self.send_header("Set-Cookie", self.set_cookie)
+        sc = getattr(self, "set_cookie", None)
+        for c in ([sc] if isinstance(sc, str) else sc or []):
+            self.send_header("Set-Cookie", c)
         self.end_headers()
         self.wfile.write(body)
 
@@ -354,10 +355,13 @@ class Handler(BaseHTTPRequestHandler):
         if pol == "open":
             return True
         tok = self._cookie(phone.MAIN_COOKIE)
-        self.device = phone.device_for(tok, "", away=True)   # Funnel's loopback: no address to keep, no header read
+        old = None if tok else self._cookie(phone.OLD_AWAY_COOKIE)   # (a phone that used away from home in 1.1/1.2)
+        self.device = phone.device_for(tok or old, "", away=True)   # Funnel's loopback: no address to keep, no header read
         if self.device is None:
-            return self._deny(401, AWAY_401, clear=bool(tok))
-        self.set_cookie = phone_api.main_cookie(tok)   # (its life runs from this use)
+            return self._deny(401, AWAY_401, clear=bool(tok or old))
+        self.set_cookie = phone_api.main_cookie(tok or old)   # (its life runs from this use)
+        if old:   # the same token under the one name, and the old name gone
+            self.set_cookie = [self.set_cookie, phone_api.gone_cookie(phone.OLD_AWAY_COOKIE)]
         if pol == "pc":
             return self._deny(403, json.dumps({"error": f"That needs the PC ({what}): it can't be done from a phone."}).encode(),
                               "application/json")

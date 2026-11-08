@@ -29,7 +29,7 @@
   <h1>Your phone</h1>
   <p id="away-wait">Moving this phone to its link…</p>
   <p id="away-msg" role="status" hidden></p>
-  <p id="away-allow" hidden>Waiting for the PC. On the PC, press <b>Allow</b>.</p>
+  <p id="away-allow" hidden>Waiting for the PC. On the PC, press <b>Allow</b> next to <b id="away-match"></b>.</p>
   <p id="away-done" hidden>Done. This phone now opens UnderCover at this link, at home and anywhere else. Opening it… Add it to your home screen to keep it.</p>
 </main>
 <script>
@@ -43,6 +43,7 @@
     const r = await post("/api/phone/move", { code });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return say("away-msg", "That code didn't work. On the home Wi-Fi, open UnderCover on this phone and tap Switch again.");
+    document.getElementById("away-match").textContent = j.match || "";
     say("away-allow");
     const until = Date.now() + 10 * 60 * 1000;   // (the PC forgets a move it hasn't allowed after this long)
     while (Date.now() < until) {

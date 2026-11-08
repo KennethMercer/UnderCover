@@ -188,6 +188,13 @@ class TooManyJobs(Exception):
 _cap_error()
 
 
+def phone_of_request() -> str | None:
+    """The phone (its id) whose request this thread is answering, or None for the PC."""
+    h = getattr(ORIGIN, "h", None)
+    dev = getattr(h, "device", None) if getattr(h, "remote", False) else None
+    return dev.get("id") if isinstance(dev, dict) else None
+
+
 def _phone_cap(device_id: str):
     """Every phone is on the internet now, so a stolen token is worth more: one phone may have PHONE_JOBS jobs waiting or
     running at once, and start PHONE_JOBS_HOUR in an hour. The PC has no cap."""
@@ -224,8 +231,7 @@ class Job:
         self.id = uuid.uuid4().hex[:12]
         self.kind = kind
         self.origin = getattr(ORIGIN, "h", None)   # which request made it (not serialised; only compared)
-        dev = getattr(self.origin, "device", None) if getattr(self.origin, "remote", False) else None
-        self.device = dev.get("id") if isinstance(dev, dict) else None   # the phone that asked for it (None: the PC)
+        self.device = phone_of_request()   # the phone that asked for it (None: the PC)
         if self.device and kind not in UNCAPPED:
             _phone_cap(self.device)
         self.title = title        # what the page's job list calls it ("Hello · obama-uc"); None: the kind's label

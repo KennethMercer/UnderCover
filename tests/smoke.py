@@ -2405,6 +2405,70 @@ def u_phone_records():
     return "asks run out; No leaves a connected phone; a full list keeps the code; an unreadable file isn't saved over; warm-ups uncounted"
 
 
+@check("CounterIntelligence on onephone (CI-64, CI-65, CI-66): a phone's night-queue items count against it (three at once, said plainly) while the PC's don't; forgetting every thumb is the PC's (one thumb stays a phone's); an ask carries a two-digit match number from its nonce, the same on the phone's answer and beside Allow; a name loses its bidi controls")
+def u_phone_ci64():
+    from types import SimpleNamespace
+    from undercover.app import ear_api
+    from undercover.core import jobs, phone, worklist
+    from undercover.core.ear import EarError
+    with isolated_data():
+        worklist.register_kind("smoke-ci64", run=lambda *a: None, estimate=lambda item: {"total": 60})
+        try:
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p1", "name": "p"})
+            for n in range(worklist.PHONE_ITEMS):
+                worklist.add("smoke-ci64", f"Someone {n}")
+            try:
+                worklist.add("smoke-ci64", "Someone more")
+                raise AssertionError("a fourth item from one phone")
+            except jobs.TooManyJobs as e:
+                assert "3 things in the queue" in str(e)
+            q = worklist._state()["queue"]
+            assert [i.get("device") for i in q] == ["p1"] * 3, q
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p2", "name": "other"})
+            worklist.add("smoke-ci64", "Another phone's")   # (another phone has its own three)
+            jobs.ORIGIN.h = None
+            for n in range(4):   # the PC: no cap, and no device on its items
+                worklist.add("smoke-ci64", f"PC {n}")
+            assert not any(i.get("device") for i in worklist._state()["queue"][-4:])
+            q[0]["state"] = "done"   # one finished: room for one more
+            jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "p1", "name": "p"})
+            worklist.add("smoke-ci64", "Someone later")
+        finally:
+            jobs.ORIGIN.h = None
+            worklist.KINDS.pop("smoke-ci64", None)
+        # CI-65: every thumb at once is the PC's
+        said = {}
+        h = SimpleNamespace(remote=True, _body=lambda: {"all": True}, _json=lambda o, status=200: said.update(json=o),
+                            _error=lambda m, s=400: said.update(err=(m, s)))
+        ear_api.handle(h, "POST", "/api/ear/forget")
+        assert said.get("err") and said["err"][1] == 422 and "done on the PC" in said["err"][0] and "json" not in said, said
+        said.clear()
+        h.remote = False
+        ear_api.handle(h, "POST", "/api/ear/forget")
+        assert said.get("json") == {"forgot": 0}, said
+        page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+        assert 'id="set-ear-forget" type="button" data-pc' in page
+        # CI-66: the match number, and a name with no bidi controls
+        phone._FILE[0], phone.PAIRING = None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        try:
+            phone.set_enabled(True)
+            phone.new_pairing()
+            nonce, d = phone.claim(phone.PAIRING["code"], "\u202eenohp\u202c Pixel\u2066")
+            assert d["name"] == "enohp Pixel", repr(d["name"])
+            m = phone.match_of(phone.hash_token(nonce))
+            assert m and len(m) == 2 and m.isdigit() and d["match"] == m and phone.pending()[0]["match"] == m, (m, d)
+            phone.allow(d["id"])
+            assert phone.devices()[0]["match"] is None, "a connected phone still shows a match number"
+        finally:
+            phone._FILE[0], phone.PAIRING = None, None
+            phone._STATE.clear()
+    web = ROOT / "undercover" / "web"
+    assert "Allow only if your phone shows" in (web / "rooms.js").read_text(encoding="utf-8")
+    assert 'data.match' in (web / "pair.html").read_text(encoding="utf-8") and 'j.match' in (web / "move.html").read_text(encoding="utf-8")
+    return "three items a phone, the PC free; all thumbs the PC's; one match number on both sides; bidi controls gone"
+
+
 @check("the home-network listener's state is stored (1.2.1): at start it opens only while a phone paired before the link still holds its LAN token, never because the link is on; it closes for good when the last such token goes")
 def u_phone_listen():
     from types import SimpleNamespace
@@ -12980,6 +13044,17 @@ def a_link():
         wait_for(lambda: api("/api/phone")["phase"] == "ready", 60, every=0.5, what="ready again")
         port = api("/api/phone")["port"]
         assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
+        import http.client as _hc   # a phone that used away from home in 1.2 holds this token as uc_away: carried over once
+        c_ = _hc.HTTPConnection("127.0.0.1", port, timeout=30)
+        try:
+            c_.request("GET", "/api/status", headers={"Host": host, "Cookie": f"uc_away={token}"})
+            r_ = c_.getresponse()
+            got = r_.msg.get_all("Set-Cookie") or []
+            assert r_.status == 200 and json.loads(r_.read())["device"] == "Link phone", r_.status
+        finally:
+            c_.close()
+        assert any(x.startswith(f"__Host-uc={token};") for x in got) and any(x.startswith("uc_away=;") and "Max-Age=0" in x for x in got), got
+        assert _away("GET", "/api/status", port, host, cookie="uc_away=" + "x" * 43)[:3:2] == (401, b"Unauthorized")
         assert api("/api/phone/revoke-all", {})["devices"] == [] and _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[0] == 401
         # Forget with the link off: the daemon comes up just for the logout, then goes, and the node's keys with it
         api("/api/phone", {"on": False})
@@ -14634,7 +14709,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
