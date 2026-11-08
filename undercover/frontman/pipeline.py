@@ -239,7 +239,7 @@ class CoverEngine:
         # is the lead stem singing? (phase 15) an instrument left in it isn't turned into singing, and lines the
         # karaoke split put in the backing are converted too; the stems themselves stay as they were
         cstems = stems
-        gate, heard = {}, {}
+        gate, heard, gate_said = {}, {}, None
         if opts.lead_gate is not False:
             from .leadgate import CHORUS_MODES, apply as gate_apply, note as gate_note, plan as gate_plan, split_top
             g = gate = gate_plan(load_16k(stems["vocals"]), load_16k(stems["backing"]) if stems.get("backing") else None)
@@ -251,7 +251,7 @@ class CoverEngine:
                 top = (split_top(stems["backing"], self.separator, Path(stems["backing"]).parent)
                        if mode == "top" and g["chorus"] and stems.get("backing") else None)
                 cstems = gate_apply(stems, g, gwork, stamp, chorus=mode, top=top)
-                notes += gate_note(g, mode)
+                gate_said = (len(notes), g, mode)   # (said once it's known who sings the backing)
         work = path("cache_dir") / "converted"
         work.mkdir(parents=True, exist_ok=True)
         if dvoice:   # who sings when: the plan from Make again (checked), else found in the song itself; then the fit
@@ -273,6 +273,9 @@ class CoverEngine:
         dback = bool(dvoice) and self._duet_backing(opts, cstems, notes)   # the backing in the two singers too
         if dback:
             bvoice = None   # (one backing voice gives way to the duet's two)
+        if gate_said:
+            at, g, mode = gate_said
+            notes[at:at] = gate_note(g, mode, backing_converted=bool(bvoice or dback))
         passes = 1 + bool(dvoice) + bool(bvoice) + 2 * dback
         share = 1.0 / passes
         from ..core import lowprofile
@@ -301,7 +304,7 @@ class CoverEngine:
         if bvoice:
             from dataclasses import replace
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
-            bs = replace(s, pitch=key + 12 * boct)
+            bs = replace(s, pitch=key + 12 * boct, one_line=True)
             baudio, bsr = self.converter.convert(load_16k(cstems["backing"]), bvoice.name, bs,
                                                  progress=lambda f: report("converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
@@ -313,9 +316,9 @@ class CoverEngine:
             aoct = (s.pitch - key) / 12
             doct = opts.duet_octave if opts.duet_octave is not None else aoct
             with self.converter.shared_f0():
-                ba, bsr = self.converter.convert(back16, voice.name, s, progress=lambda f: report(
+                ba, bsr = self.converter.convert(back16, voice.name, _replace(s, one_line=True), progress=lambda f: report(
                     "converting", 1 - 2 * share + share * f, f"Converting the backing vocals to {label_of(voice.name)}"))
-                bb, dbsr = self.converter.convert(back16, dvoice.name, _replace(s, pitch=key + 12 * doct), progress=lambda f: report(
+                bb, dbsr = self.converter.convert(back16, dvoice.name, _replace(s, pitch=key + 12 * doct, one_line=True), progress=lambda f: report(
                     "converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(dvoice.name)} too"))
             if dbsr != bsr:
                 from math import gcd
