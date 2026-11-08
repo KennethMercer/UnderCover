@@ -4511,12 +4511,27 @@ def u_launcher_moved():
 
         def target(link):
             r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                                f"(New-Object -ComObject WScript.Shell).CreateShortcut('{link}').TargetPath"],
-                               capture_output=True, text=True, timeout=30)
+                                "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+                                "(New-Object -ComObject WScript.Shell).CreateShortcut($env:UC_LINK).TargetPath"],
+                               capture_output=True, text=True, encoding="utf-8", timeout=30, env={**os.environ, "UC_LINK": str(link)})
             return Path(r.stdout.strip())
         assert target(d / "UnderCover.lnk") == new and target(sub / "UnderCover.lnk") == new
         assert target(d / "keep" / "UnderCover.lnk") == other, "a shortcut to another file moved"
         assert platform.repoint_shortcuts(old, new, folders=[d]) == []
+        # (hardening) a folder name with quotes in it, the curly ones too, is a name: nothing of it runs
+        odd = d / "a\u2019+(New-Item -ItemType File -Force -Path ran)+\u2019b ' \u2018x\u201a"   # (no colon: not in a name; WScript.Shell saves only ANSI-page names, so not U+201B)
+        odd.mkdir()
+        here = os.getcwd()
+        os.chdir(d)   # (where a "ran" would be made: PowerShell starts in this process's folder)
+        try:
+            platform.startup_entry(True, odd / "UnderCover.bat", folder=odd, icon=odd / "i.ico")
+            assert target(odd / "UnderCover.lnk") == odd / "UnderCover.bat", target(odd / "UnderCover.lnk")
+            assert platform.repoint_shortcuts(odd / "UnderCover.bat", odd / "scripts" / "UnderCover.bat", folders=[odd]) == [str(odd / "UnderCover.lnk")]
+            assert target(odd / "UnderCover.lnk") == odd / "scripts" / "UnderCover.bat"
+        finally:
+            os.chdir(here)
+        assert not (d / "ran").exists(), "a quote in a folder name ended PowerShell's string and ran what followed"
+        assert "q = lambda" not in inspect.getsource(platform), "a path is quoted into a PowerShell command again"
     return "repointed once (the old .bat's shortcuts, deep too; others kept); never in tests / sandboxes / installed copies; retried after a failure"
 
 
@@ -11597,6 +11612,20 @@ def u_ytdlp_heal():
                 raise AssertionError("a wheel with a climbing path was unpacked")
             except ytdlp.HealError:
                 pass
+            # 8b. a wheel of the pair holds its own package and dist-info only: yt-dlp-ejs's can't overwrite yt-dlp's
+            #     proved files, nor put a module at the top of the folder (and nothing of such a wheel is unpacked)
+            ok_ejs = _fake_wheel(pypi, "yt-dlp-ejs", "yt_dlp_ejs", "0.9.1")
+            ytdlp.unpack(Path(ok_ejs["url"].replace("file:///", "")), t / "ok-ejs", "yt_dlp_ejs")
+            assert sorted(p.name for p in (t / "ok-ejs").iterdir()) == ["yt_dlp_ejs", "yt_dlp_ejs-0.9.1.dist-info"]
+            for extra in ({"yt_dlp/YoutubeDL.py": "x = 'replaced'"}, {"sitecustomize.py": "x = 1"}, {"yt_dlp_ejs_x/a.py": "x"}):
+                bad = _fake_wheel(pypi, "yt-dlp-ejs", "yt_dlp_ejs", "0.9.2", extra_files=extra)
+                try:
+                    ytdlp.unpack(Path(bad["url"].replace("file:///", "")), t / "bad-ejs", "yt_dlp_ejs")
+                    raise AssertionError(f"an ejs wheel holding {extra} was unpacked")
+                except ytdlp.NotVouched:
+                    pass
+                assert not (t / "bad-ejs").exists(), f"part of a refused wheel was unpacked ({extra})"
+            assert "unpack(got[name], d, MODULE[name])" in __import__("inspect").getsource(ytdlp.stage)
             # 9. detection: three different videos breaking the same way; the bot check and one bad link don't count
             ytdlp._EVENTS.clear()
             st = ytdlp.load()
@@ -12693,6 +12722,36 @@ def u_perf_history():
         pipeline._TITLES.clear()
         hstore._PARSED["key"] = None
     return "parse kept by (path, size, mtime_ns); rows copied; dropped on write; titles by sidecar mtime"
+
+
+@check("hardening: the kept /files/ roots follow a root folder re-pointed while the server runs (a junction), within a few seconds, with [paths] unchanged; a file under the old target stops being served")
+def u_roots_follow():
+    import subprocess
+    from undercover.core import config, files
+    with isolated_data() as t:
+        a, bb, link = Path(t) / "target-a", Path(t) / "target-b", Path(t) / "out-link"
+        a.mkdir(), bb.mkdir()
+        (a / "x.wav").write_bytes(b"A"), (bb / "x.wav").write_bytes(b"B")
+
+        def point(to):
+            if link.exists() or link.is_symlink():
+                os.rmdir(link) if os.name == "nt" else link.unlink()
+            if os.name == "nt":   # a junction, as a hand-made move would make (no admin needed)
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(to)], capture_output=True, check=True)
+            else:
+                link.symlink_to(to, target_is_directory=True)
+        point(a)
+        config.CONFIG["paths"]["output_dir"] = str(link)
+        files._ROOTS["key"] = None
+        assert files.roots()["output"] == a.resolve() and files.file_url(link / "x.wav") == "/files/output/x.wav"
+        point(bb)
+        assert files.roots()["output"] == a.resolve(), "(within the few seconds, the kept root is used)"
+        files._ROOTS["at"] -= files.ROOTS_S + 1   # a few seconds on
+        assert files.roots()["output"] == bb.resolve(), "a re-pointed root kept serving its old target"
+        assert files.file_url(a / "x.wav") is None and files.file_url(link / "x.wav") == "/files/output/x.wav"
+        os.rmdir(link) if os.name == "nt" else link.unlink()
+    files._ROOTS["key"] = None
+    return "followed after the kept few seconds; the old target no longer served"
 
 
 @check("perf: the Library's summary is kept until something changes; songs and stems come out the same from one pass; file URLs")
@@ -14866,7 +14925,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
+               u_roots_follow, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
