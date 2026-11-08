@@ -15,6 +15,7 @@ import threading
 import time
 from concurrent.futures import Future
 
+from .. import platform
 from ..config import CONFIG, ROOT, path
 
 
@@ -56,7 +57,7 @@ class Worker:
         self.log.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting the cadence worker\n")
         self.proc = subprocess.Popen([sys.executable, "-m", "undercover.core.cadence.worker"], cwd=ROOT, env=env,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
-                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                     creationflags=platform.NO_WINDOW)
         threading.Thread(target=self._reader, args=(self.proc,), daemon=True, name="cadence-reader").start()
         lowprofile.apply()   # (the worker's share comes out of the server's cap while it's loaded)
         if self._watch is None:

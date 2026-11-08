@@ -32,13 +32,11 @@ def main():
             log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] restart: old server {old_pid} "
                       f"{'exited' if ok else 'did NOT exit within 60 s'}; starting a new one\n")
         log.flush()
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        # python.exe (not pythonw) with a hidden console: tools the server runs (ffmpeg...) share it, no pop-ups
-        exe = Path(sys.executable)
-        exe = exe.with_name("python.exe") if exe.name.lower() == "pythonw.exe" else exe
-        subprocess.Popen([str(exe), "-m", "undercover.server", *args], cwd=str(ROOT),
+        from . import platform   # (the OS part, kept out of the top: this helper starts before anything else loads)
+        # the console interpreter with a hidden console: tools the server runs (ffmpeg...) share it, no pop-ups
+        subprocess.Popen([platform.console_python(), "-m", "undercover.server", *args], cwd=str(ROOT),
                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                         creationflags=flags, close_fds=True)
+                         creationflags=platform.DETACHED, close_fds=True)
 
 
 if __name__ == "__main__":
