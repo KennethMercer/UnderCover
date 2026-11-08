@@ -14,15 +14,15 @@ LOW_WEIGHT = 1.5     # a note under the voice's range (mumbled, growly) is worse
 REGISTER_ABOVE = 0.02  # per semitone the melody's median sits above where the voice is comfortable (too high strains)
 REGISTER_BELOW = 0.006  # ...and below it (too low is milder)
 UP_COST = 0.006      # per semitone the voice ends up HIGHER than the original singer (octave + key): the ear dislikes a
-                     # song raised to reach a voice's register more than one lowered (SpongeBob's "Hold On" moved up 6
-                     # lost to 0; his "Pink Pony Club" moved down 5 to the same pitch won)
+                     # song raised to reach a voice's register more than one lowered (a high cartoon voice's "Hold On" moved up 6
+                     # lost to 0; its "Pink Pony Club" moved down 5 to the same pitch won)
 SPEECH_LIFT = 5.0    # a speech-trained voice sings comfortably ~5 st above its speaking median (phase 22, by ear:
                      # Agent Smoke's "Hold On" wanted 4-6 st down (+5.5-6.5 over his median), not 0 (+10) nor -10
-                     # (+0.3); SpongeBob's "Pink Pony Club" -5 (+3.7) over 0 (+8.7) and -12 (-3.3))
+                     # (+0.3); the cartoon voice's "Pink Pony Club" -5 (+3.7) over 0 (+8.7) and -12 (-3.3))
 FLOOR_LIFT = 3.0     # the melody's low part (10th percentile) stays this far over a speech-trained voice's bottom (its
                      # 5th percentile; a sung voice's bottom itself): under it the low notes growl
-FLOOR_COST = 0.03    # per semitone under that floor (phase 22, by ear: Freeman's Toxic at -18 put its low notes at
-                     # ~77 Hz, at the bottom of his range, and lost to -15, though its median sat at his comfortable point)
+FLOOR_COST = 0.03    # per semitone under that floor (phase 22, by ear: a deep voice's Toxic at -18 put its low notes at
+                     # ~77 Hz, at the bottom of its range, and lost to -15, though its median sat at his comfortable point)
 CLOSE = 0.03         # two registers this close in cost: both are worth hearing
 ALT_APART = 5        # ...when they're at least this many semitones apart (not the same pitch reached another way)
 

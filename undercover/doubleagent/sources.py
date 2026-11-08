@@ -34,8 +34,8 @@ SUSPECT = [
 ]
 COMMENTARY = re.compile(r"destroys|obliterates|slams|owns|claps back|shuts down|what were they thinking|baffling|"
                         r"breaks down|explained|analysis|tier list|ranking|top \d+", re.I)
-# A real person's own material (smallfix7; Trump's new run 2026-10-14 ticked 1980 interviews, a podcast ABOUT him and
-# "Zelenskyy talks Trump"): by them, recent, one voice. A title with the person as its object is talk about them; a
+# A real person's own material (smallfix7; a politician's new run 2026-10-14 ticked 1980 interviews, a podcast ABOUT him and
+# another leader talking about him): by them, recent, one voice. A title with the person as its object is talk about them; a
 # speech or an address is one voice at a microphone; a chamber, a stadium or a stage is echo, applause and laughter.
 ABOUT_VERBS = (r"about|on|for|against|vs\.?|versus|talks?|discuss(?:es|ing)?|reacts? to|slams?|blasts?|mocks?|warns?|"
                r"says|explains?|why|how|what|inside|the truth about|the rise of|the fall of|biography of|life of")
@@ -47,12 +47,12 @@ SPEECH = re.compile(r"\bspeech\b|\baddress\b|\bremarks\b|oval office|\bkeynote\b
 ECHO = re.compile(r"joint session|state of the union|\bcongress\b|\bparliament\b|\bstadium\b|stand-?up|comedy special", re.I)
 CROWD = re.compile(r"\brally\b|\bdebate\b|\bpanel\b|\broundtable\b", re.I)
 YEAR = re.compile(r"(?<!\d)(19[5-9]\d|20[0-4]\d)(?!\d)")
-ERA_YEARS = 15   # a source this many years before the newest one found is a younger voice (Trump 1980 against 2025)
+ERA_YEARS = 15   # a source this many years before the newest one found is a younger voice (1980 interviews against 2025 speeches)
 
 
 def about_them(title: str, name: str) -> bool:
-    """The title has the person as its object ("Canada's Plans for Donald Trump", "Zelenskyy talks Trump", "How Trump
-    Just Became ..."): talk about them, mostly someone else's voice. "Trump on The Axios Show" is theirs."""
+    """The title has the person as its object ("Canada's Plans for Smith", "Jones talks Smith", "How Smith
+    Just Became ..."): talk about them, mostly someone else's voice. "Smith on The Axios Show" is theirs."""
     toks = [w for w in re.findall(r"[\w']+", name) if len(w) > 1]
     if not toks:
         return False
@@ -91,7 +91,7 @@ GOOD = {"speaking": re.compile(r"interview|podcast|speech|address|conversation|t
         "singing": re.compile(r"acapella|a cappella|isolated|vocals? only|live|unplugged|session", re.I)}
 
 
-# Dubs and other languages (phase 15: "SpongeBob en español" is another actor): unticked unless the request names
+# Dubs and other languages (phase 15: a cartoon "en español" is another actor): unticked unless the request names
 # the language. The words are the titles' own; the request's language is English unless it says otherwise.
 LANGUAGES = {"spanish": r"spanish|espa[nñ]ol|latino|latinoam[eé]rica|castellano|doblaje|doblado",
              "portuguese": r"portugu[eê]s|brasil|dublado|dublagem", "german": r"deutsch|german|synchron",
@@ -109,7 +109,7 @@ def other_language(title: str, request: str) -> str | None:
     return None
 
 
-# Fictional characters (phase 15: "Toxic as SpongeBob" trained on a podcast host talking ABOUT SpongeBob). A character
+# Fictional characters (phase 15: a cover as a cartoon character trained on a podcast host talking ABOUT the character). A character
 # is recognised from what the search finds (cast, voice actors, episodes, cartoons), then searched for in scenes and
 # voice lines; talk about the character (podcasts, cast interviews, reactions, reviews) is left unticked: for a voiced
 # character, even the voice actor's own interviews are the wrong voice.
@@ -117,12 +117,12 @@ CHARACTER_HINT = re.compile(r"\bcast\b|voice actors?|\bvoices? of\b|\bepisodes?\
                             r"nicktoons|disney|pixar|dreamworks|cartoon network|\banime\b|movie clip|\bseason \d|"
                             r"full episode|\bcharacters?\b|out of character", re.I)
 CHAR_QUERIES = ["{name} scenes", "{name} best moments", "{name} voice lines", "{name} quotes"]
-# A second round when most of what was found can't be downloaded here (blocked in this region: nearly every SpongeBob
-# video was): other uploads of the same material, under other words
+# A second round when most of what was found can't be downloaded here (blocked in this region: nearly every video of one
+# cartoon was): other uploads of the same material, under other words
 MORE_QUERIES = {"character": ["{name} full episode", "{name} episode clip", "{name} movie scene", "{name} funny moments"],
                 "speaking": ["{name} speech", "{name} conversation", "{name} on stage", "{name} keynote"]}
 # Why a video couldn't be had, from yt-dlp's own words (the cause decides the advice; a region block is never got
-# around). On 2026-10-12 17 of 18 SpongeBob videos said "This video is not available": not a region block but a
+# around). On 2026-10-12 17 of 18 videos of one cartoon said "This video is not available": not a region block but a
 # missing piece of the downloader (yt-dlp-ejs), so "not available" alone points at the downloader, not the region.
 UNAVAILABLE = [
     ("geo", re.compile(r"not made this video available in your country|available in your country|geo.?restrict|"
@@ -164,7 +164,7 @@ TALK_NOTE = "talk about the character"
 def left_out_for_a_reason(s) -> bool:
     """Unticked with the engine's (or the user's) reason in its note: a younger voice, a song, a dub, talk about them,
     left out by the gate. It stays unticked, the reason shown; a training short of voice never ticks it back in
-    (rc-polish1: Obama's 2004 keynote, marked "a younger voice", was trained on). A source unticked only because there
+    (rc-polish1: a politician's keynote from 20 years back, marked "a younger voice", was trained on). A source unticked only because there
     was enough has no note, the word its title matched ("interview"), or "album track" (a singer's own recordings)."""
     n = (s.note or "").strip()
     return bool(n) and n != "album track" and not any(rx.fullmatch(n) for rx in (GOOD["speaking"], GOOD["singing"], CHAR_GOOD))
@@ -172,8 +172,8 @@ def left_out_for_a_reason(s) -> bool:
 
 def show_of(name: str, found) -> str | None:
     """A show the titles keep naming besides the person ("Family Guy - Peter Makes A Podcast": "family guy" in 10 of
-    Peter Griffin's 12 titles). Two words other than the name, in at least 4 titles and half of them. People don't
-    have one (the most for a real person here: "president barack", a third of the "obama" titles)."""
+    a Family Guy character's 12 titles). Two words other than the name, in at least 4 titles and half of them. People don't
+    have one (the most for a real person here: "president <first name>", a third of one politician's titles)."""
     from collections import Counter
     names = set(re.findall(r"\w+", name.lower()))
     c = Counter()
@@ -240,8 +240,8 @@ def _rank_character(src, name: str, show: str | None = None) -> float:
     return score
 
 
-# Spoken-word "album tracks": YouTube Music lists speeches, audiobooks and narration as music (Barack Obama:
-# "Obama DNC Speech", "Presidential Oath Of Office"; Morgan Freeman's narration albums). Not singing.
+# Spoken-word "album tracks": YouTube Music lists speeches, audiobooks and narration as music (a politician:
+# "DNC Speech", "Presidential Oath Of Office"; a narrator's audiobook albums). Not singing.
 SPOKEN = re.compile(r"speech|address|remarks|rally|debate|oath|interview|keynote|sermon|commencement|audiobook|"
                     r"chapter|lecture|conversation|podcast|town hall|state of the union|press conference|q ?& ?a|"
                     r"narrat|poem|reading|spoken|monologue|stand-?up|comedy|testimony|eulogy|introduc", re.I)
@@ -259,8 +259,8 @@ def is_sung(src) -> bool:
 
 def album_tracks(name: str, n: int = 20) -> list:
     """The person's own studio recordings from YouTube Music (their "Artist - Topic" channel): consistent,
-    well-recorded singing, separated here with the same model as covers. Fan acapellas vary a lot (Elliott Smith's
-    Clementine upload was too hissy to use) and there are only a handful per artist."""
+    well-recorded singing, separated here with the same model as covers. Fan acapellas vary a lot (one singer's
+    fan upload was too hissy to use) and there are only a handful per artist."""
     words = [w for w in re.findall(r"\w+", name.lower()) if len(w) > 2]
     out: dict = {}
     for q in (name, f"{name} songs"):
@@ -536,7 +536,7 @@ STRETCH_GAP = 3.0   # s of silence between stretches: more than cadence's 2.5 s 
 
 def stretches(duration: float, cap: float, length: float) -> list[tuple[float, float]]:
     """[(start, seconds)] of a long video to keep: max_minutes_per_source in stretches of `length` spread evenly
-    between its first and last minute (intros, outros), instead of its first 12 min. Phase 19: a 4 h SpongeBob
+    between its first and last minute (intros, outros), instead of its first 12 min. Phase 19: a 4 h cartoon
     compilation's first 12 min gave 0.0-0.4 min of clean voice; one episode's scenes run long, so spreading
     samples more scenes. A video up to 2 min longer than the cap keeps one stretch from the start."""
     if not duration or duration <= cap:
@@ -572,7 +572,7 @@ def download(src: Source, dest_dir: Path, progress=None) -> Path:
     # The whole audio stream is fetched (yt-dlp's range download streams through ffmpeg at about real time,
     # ~10x slower) and trimmed locally.
     # Spread only through a character's scenes (a compilation of many). A person's long video is mostly one talk, and
-    # measured on the user's projects spreading gained nothing (Obama 51.9 / 51.8 min) or lost (Freeman's Q&As: the
+    # measured on the maintainers' projects spreading gained nothing (one voice 51.9 / 51.8 min) or lost (another's Q&As: the
     # audience's questions, 11.8 -> 10.3).
     trim = trim_args(src.duration, spread=(src.extra or {}).get("kind") == "scene")
     if not trim:   # no length known (or one too short to cut): the decode is bounded by time anyway, to what a source
