@@ -4029,12 +4029,27 @@ def u_launcher_moved():
 
         def target(link):
             r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                                f"(New-Object -ComObject WScript.Shell).CreateShortcut('{link}').TargetPath"],
-                               capture_output=True, text=True, timeout=30)
+                                "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+                                "(New-Object -ComObject WScript.Shell).CreateShortcut($env:UC_LINK).TargetPath"],
+                               capture_output=True, text=True, encoding="utf-8", timeout=30, env={**os.environ, "UC_LINK": str(link)})
             return Path(r.stdout.strip())
         assert target(d / "UnderCover.lnk") == new and target(sub / "UnderCover.lnk") == new
         assert target(d / "keep" / "UnderCover.lnk") == other, "a shortcut to another file moved"
         assert platform.repoint_shortcuts(old, new, folders=[d]) == []
+        # (hardening) a folder name with quotes in it, the curly ones too, is a name: nothing of it runs
+        odd = d / "a\u2019+(New-Item -ItemType File -Force -Path ran)+\u2019b ' \u2018x\u201a"   # (no colon: not in a name; WScript.Shell saves only ANSI-page names, so not U+201B)
+        odd.mkdir()
+        here = os.getcwd()
+        os.chdir(d)   # (where a "ran" would be made: PowerShell starts in this process's folder)
+        try:
+            platform.startup_entry(True, odd / "UnderCover.bat", folder=odd, icon=odd / "i.ico")
+            assert target(odd / "UnderCover.lnk") == odd / "UnderCover.bat", target(odd / "UnderCover.lnk")
+            assert platform.repoint_shortcuts(odd / "UnderCover.bat", odd / "scripts" / "UnderCover.bat", folders=[odd]) == [str(odd / "UnderCover.lnk")]
+            assert target(odd / "UnderCover.lnk") == odd / "scripts" / "UnderCover.bat"
+        finally:
+            os.chdir(here)
+        assert not (d / "ran").exists(), "a quote in a folder name ended PowerShell's string and ran what followed"
+        assert "q = lambda" not in inspect.getsource(platform), "a path is quoted into a PowerShell command again"
     return "repointed once (the old .bat's shortcuts, deep too; others kept); never in tests / sandboxes / installed copies; retried after a failure"
 
 

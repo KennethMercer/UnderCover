@@ -66,6 +66,13 @@ def _ps(command: str) -> list[str]:
     return [_powershell(), "-NoProfile", "-NonInteractive", "-Command", utf8 + command]
 
 
+def _ps_values(**values) -> dict:
+    """The environment for a PowerShell child that reads these values as $env:UC_<NAME> (hardening): a path is never
+    put inside the command itself, so no quote in it (PowerShell ends a quoted string at ' and at the curly ones too)
+    is ever read as PowerShell."""
+    return {**os.environ, **{f"UC_{k.upper()}": str(v) for k, v in values.items()}}
+
+
 class NotOnThisOS(Exception):
     """This needs Windows (for now); the message says what, plainly."""
 
@@ -524,13 +531,13 @@ def startup_entry(on: bool, target, folder=None, icon=None) -> bool:
     if not WINDOWS:
         raise _not("Starting with the computer")
     target = Path(target)
-    q = lambda s: str(s).replace("'", "''")   # noqa: E731 - a PowerShell single-quoted string
-    ps = (f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{q(link)}'); $s.TargetPath = '{q(target)}'; "
-          f"$s.WorkingDirectory = '{q(target.parent)}'; $s.WindowStyle = 7; "
-          + (f"$s.IconLocation = '{q(icon)}'; " if icon else "")
+    ps = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:UC_LINK); $s.TargetPath = $env:UC_TARGET; "
+          "$s.WorkingDirectory = $env:UC_DIR; $s.WindowStyle = 7; "
+          + ("$s.IconLocation = $env:UC_ICON; " if icon else "")
           + "$s.Description = 'UnderCover'; $s.Save()")
+    env = _ps_values(link=link, target=target, dir=target.parent, **({"icon": icon} if icon else {}))
     folder.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(_ps(ps), capture_output=True, **TEXT, timeout=30, creationflags=NO_WINDOW)
+    r = subprocess.run(_ps(ps), capture_output=True, **TEXT, timeout=30, creationflags=NO_WINDOW, env=env)
     if r.returncode or not link.exists():
         raise OSError(f"The startup shortcut couldn't be made: {(r.stderr or r.stdout).strip()[:200]}")
     return True
@@ -542,18 +549,19 @@ def repoint_shortcuts(old, new, folders=None) -> list[str]:
     their own, and every folder is searched to any depth then. -> the shortcuts changed."""
     if not WINDOWS:
         raise _not("Moving shortcuts")
-    q = lambda s: str(s).replace("'", "''")   # noqa: E731 - a PowerShell single-quoted string
     # (hashtables, not pairs: PowerShell flattens a one-item list of arrays into its items)
+    folders = list(folders) if folders is not None else None
     if folders is not None:
-        where = "@(" + ", ".join(f"@{{p='{q(f)}'; r=$true}}" for f in folders) + ")"
+        where = "@(" + ", ".join(f"@{{p=$env:UC_F{i}; r=$true}}" for i in range(len(folders))) + ")"
     else:   # the desktop's own shortcuts only; the Start menu (Startup is inside it) to any depth
         where = "@(@{p=[Environment]::GetFolderPath('Desktop'); r=$false}, @{p=[Environment]::GetFolderPath('Programs'); r=$true})"
-    ps = (f"$sh = New-Object -ComObject WScript.Shell; $old = '{q(old)}'; $new = '{q(new)}'; "
+    ps = ("$sh = New-Object -ComObject WScript.Shell; $old = $env:UC_OLD; $new = $env:UC_NEW; "
           f"foreach ($w in {where}) {{ $d = $w.p; if (-not $d -or -not (Test-Path -LiteralPath $d)) {{ continue }}; "
           "Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse:$w.r -ErrorAction SilentlyContinue | ForEach-Object { "
           "$l = $sh.CreateShortcut($_.FullName); if ($l.TargetPath -ieq $old) { $l.TargetPath = $new; $l.Save(); "
           "Write-Output $_.FullName } } }")
-    r = subprocess.run(_ps(ps), capture_output=True, **TEXT, timeout=60, creationflags=NO_WINDOW)
+    env = _ps_values(old=old, new=new, **{f"f{i}": f for i, f in enumerate(folders or [])})
+    r = subprocess.run(_ps(ps), capture_output=True, **TEXT, timeout=60, creationflags=NO_WINDOW, env=env)
     if r.returncode:
         raise OSError(f"The shortcuts couldn't be moved: {(r.stderr or r.stdout).strip()[:200]}")
     return [line.strip() for line in r.stdout.splitlines() if line.strip()]
