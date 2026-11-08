@@ -13350,7 +13350,8 @@ def a_link():
         st = api("/api/phone", {"on": True})   # setup: the link comes up on the fake
         assert st["enabled"] and st["link"] is None and st["phase"] in ("fetching", "starting", "sign-in"), st
         port = st["port"]
-        assert st["listening"] and 7870 <= port < 7880 and st["supported"] and st["auth_url"] is None, st
+        # (the driver may already be at sign-in when the answer comes back: a sign-in link only once it is)
+        assert st["listening"] and 7870 <= port < 7880 and st["supported"] and (st["auth_url"] is None or st["phase"] == "sign-in"), st
         st = wait_for(lambda: (lambda x: x if x["auth_url"] else None)(api("/api/phone")), AWAY_WAIT, every=0.5, what="the Tailscale sign-in link")
         assert st["phase"] == "sign-in" and st["approve_url"] is None and st["link"] is None, st
         write(backend="Running", signed_in=True, host="uc-fakelink.tailfake.ts.net")
