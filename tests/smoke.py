@@ -9916,6 +9916,8 @@ def u_edits():
             assert E.result_of(it["id"]) == r
             new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
+            assert new["title"] == "T (edited)" and Path(new["output"]).stem == "T (edited)", new["title"]   # one name: the file's, numbered as it is
+            assert E.keep_name(H.get(it["id"]), "flac")[1] == E.keep_name(H.get(new["id"]), "flac")[1] == "T (edited) 2"   # a kept one counts on, not "(edited) (edited)"
             assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, True]   # (read with an edit, kept with the list)
             try:
                 E.keep(H.get(it["id"]))   # a version is kept once: each Keep rolls a cover off the tray
@@ -9927,6 +9929,7 @@ def u_edits():
             E.mix = stand_in
             E.step(engine, it, 1)
             second = E.keep(H.get(it["id"]))
+            assert second["title"] == "T (edited) 2", second["title"]
             for to in (2, 1, 2):
                 E.step(engine, it, to)
                 try:
@@ -13903,6 +13906,123 @@ def _ternary(x: str):
 def _bare_text(src: str) -> list:
     """The ${...} in a page script that aren't on the allow-list: outside text that would land in HTML unescaped."""
     return [x for x in _tpl_exprs(src) if not _text_ok(x)]
+
+
+@check("Shape it by keyboard in headless Chrome: a picked word keeps the focus through the probes and a job's messages, unpicked words say aria-pressed false, Keep's sheet, kept line and Recent row say one name, Done hands focus back to the row, no Try again on a refusal (skipped when there is no Chrome)")
+def u_shape_keys():
+    """IA pass 13's page tests. index.html on a static server with a test script after shape.js: the API and the job feed are stubbed,
+    the page's own handlers are pressed; the verdicts go in the title, read by --dump-dom once the page says it's done."""
+    import html, http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+    test = r"""
+(async () => {
+  const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  await wait(1200);
+  try {
+    const doc = { cover: "aaaaaaaaaa", duration: 10, words: [["Hold", 1, 1.3, 0.9], ["the", 1.4, 1.7, 0.9], ["night", 1.8, 2.1, 0.9]], words_hash: "h", sections: [],
+      plan: [[0, 10, "A"]], backing_plan: [[0, 10, "A"]], octaves: { A: 0, B: 0 }, points: { lead: [], backing: [], dips: [] }, duet: false, backing: false,
+      edits: [{ id: "e1", op: "octave", part: "lead", octave: 1, t0: 1, t1: 2.1 }], cursor: 1,
+      compiled: { lead: [[0, 1, "A", null, null], [1, 2.1, "A", 1, "e1"], [2.1, 10, "A", null, null]], backing: [] }, result: "/wav", keep_as: "T (edited) 2" };
+    const item = { id: "aaaaaaaaaa", title: "T", voice: "a-uc", output: "/wav", created: "2026-11-08 10:00:00" };
+    HIST.length = 0; HIST.push(item);
+    const held = [], release = () => held.splice(0).forEach(r => r());
+    window.api = async (u, o) => {
+      if (/edits\/price$/.test(u)) { await new Promise(r => held.push(r)); return { edit: { t0: 1, t1: 2.1, words: o.json.words }, fit: null }; }
+      if (/edits\/keep$/.test(u)) return { job: "jk" };
+      if (/\/edits$/.test(u) && !o) return doc;
+      throw new Error("stub");
+    };
+    const feed = {};
+    window.watchJob = (id, fn) => { feed[id] = fn; return () => {}; };
+    const row = document.createElement("button"); row.dataset.shape = "aaaaaaaaaa"; document.body.appendChild(row);
+    shapeOpen("aaaaaaaaaa"); await wait(100);
+    const box = $("#shape");
+    ok("the page opened", SH.state === "ready" && $$("[data-w]", box).length === 3);
+    ok("unpicked words say aria-pressed false", $$("[data-w]", box).every(w => w.getAttribute("aria-pressed") === "false"));
+    ok("the hint says a third word starts again", /A third word starts a new stretch\./.test(box.textContent));
+    ok("no fixed time in the copy", !/about 5 seconds|About 20 s/i.test(box.textContent));
+    const w0 = $('[data-w="0"]', box); w0.focus();
+    w0.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(50);
+    ok("a picked word keeps the focus while the probes are out", document.activeElement?.dataset.w === "0" && $('[data-w="0"]', box).getAttribute("aria-pressed") === "true");
+    release(); await wait(50);
+    ok("and when they arrive", document.activeElement?.dataset.w === "0" && SH.probes);
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(50); release(); await wait(50);
+    ok("the arrows and Enter pick the stretch, focus stays", document.activeElement?.dataset.w === "2" && SH.pick.join() === "0,2");
+    SH.busy = "Singing it again…"; shDraw(); SH.live = "Singing the stretch"; shDraw();
+    ok("a job's message keeps the focus", document.activeElement?.dataset.w === "2");
+    ok("the live region says it once", $("#shape-say").textContent === "Singing the stretch" && !$$("[role=status]", box).length);
+    SH.busy = SH.live = null; shDraw();
+    $('[data-sh="keep"]', box).click(); await wait(20);
+    ok("Keep's sheet says the name it gets", $(".sheet b", box)?.textContent === "T (edited) 2" && document.activeElement?.dataset.sh === "keep-yes");
+    $('[data-sh="keep-no"]', box).click();
+    ok("Not yet hands focus back to Keep", document.activeElement?.dataset.sh === "keep" && !$(".sheet", box));
+    $('[data-sh="keep"]', box).click(); $('[data-sh="keep-yes"]', box).click(); await wait(20);
+    const kept = { id: "bbbbbbbbbb", title: "T (edited) 2", voice: "a-uc", output: "/wav2", created: "2026-11-08 10:05:00", edited_from: "aaaaaaaaaa" };
+    HIST.push(kept); window.loadHistory = () => {};
+    feed.jk({ final: true, state: "done", result: kept }); await wait(20);
+    ok("the kept line says the same name", ($(".kept b", box)?.textContent || "") === "T (edited) 2");
+    ok("and so does the Recent row", coverTitle(kept) === "T (edited) 2");
+    $('[data-sh="done"]', box).focus(); $('[data-sh="done"]', box).click();
+    ok("Done hands focus back to the row's Shape it", document.activeElement === row && $("#shape").hidden);
+    window.api = async () => { throw Object.assign(new Error("That isn't a cover."), { status: 404 }); };
+    shapeOpen("aaaaaaaaaa"); await wait(50);
+    ok("a refusal offers no Try again", SH.state === "error" && !$('[data-sh="retry"]', box));
+    window.api = async () => { throw Object.assign(new Error("Lost contact with UnderCover."), {}); };
+    shapeOpen("aaaaaaaaaa"); await wait(50);
+    ok("no answer does", !!$('[data-sh="retry"]', box));
+    shapeClose();
+  } catch (e) { out.push("BAD threw " + e); }
+  document.title = out.join(" | ");
+  fetch("/said");
+})();
+"""
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(100)   # (the page says when it's done; this only ends the wait if it never does)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--window-size=1200,900",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = html.unescape(m.group(1)) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
 
 
 @check("the edit list's page in headless Chrome: Hear it takes the page's volume and mute, one player at a time with the voice line and the cover (both ways), the price probes drawn as the gate's sentences and a late answer dropped (skipped when there is no Chrome)")
@@ -17897,7 +18017,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe, u_installer_pass12, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_vault_restore_forgets_voice, u_cleanup_guard,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden, u_shape_keys,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk,

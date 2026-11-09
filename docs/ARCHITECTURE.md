@@ -590,7 +590,8 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   with a voice change's crossfade, and mixes the **whole song** (`remix`): a stretch mixed alone comes out of balance. The cover isn't
   touched. **Undo and redo** move the cursor and mix again, with no conversion. A new edit cuts off what lay past the cursor.
 - **Keep** writes a new cover beside the old one, with its list and its own copy of the base takes, and doesn't roll the old one off
-  the tray. A version is kept once. A cover with an unkept list rolls off like any other, its list with it. Make again takes a
+  the tray. It's named "<title> (edited)", numbered as its file is (`edits.keep_name`; the page's sheet asks for it as `keep_as`), and
+  that one name shows in the sheet, the kept line and Recent covers. A version is kept once. A cover with an unkept list rolls off like any other, its list with it. Make again takes a
   kept cover's singers from `duet_plan` and doesn't carry its octave edits yet.
 - **Stored data:** `load()` checks every field of `edit.json` and answers "no list" for anything off, a file over 4 MB included. File
   names come from an edit's id and nothing else. The list goes with its cover through `storage.remove_files`, and Storage's "Temporary
@@ -599,9 +600,10 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
 - **Routes** are in `frontman/api.py`, one job at a time per cover in the GPU queue, PC only (`app/phone_api`).
 - **The page** (`web/shape.js`, "Shape it" on a Recent covers row; a paired phone's row says to use the PC): the words in lines, a
   stretch picked from one word to another, and a bar that sends each choice through `.../edits/price` first, so what it says is the
-  gate's own sentence and the fit's. Keep always asks first. Heard words, sentences, notes and titles are shown as text, never as
-  HTML (a lint in `tests/smoke.py` checks it). Deep Cover adds the plan as a strip, each word in its singer's colour, and who made each
-  edit.
+  gate's own sentence and the fit's. Keep always asks first. A redraw keeps the keyboard on the control it was on, and what the page
+  says goes through one live region beside it (`#shape-say`), so a screen reader hears each sentence once. Heard words, sentences, notes and titles are shown as text, never as
+  HTML (a lint in `tests/smoke.py` checks it). In basic view a changed stretch is underlined in one colour; Deep Cover adds the plan as
+  a strip, each word in its singer's colour, and who made each edit.
 
 ### The one-shot's checks and gates
 
