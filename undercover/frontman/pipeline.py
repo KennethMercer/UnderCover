@@ -17,7 +17,8 @@ from . import history as hstore
 
 
 DUET_NOTE = "Two singers in harmony: UnderCover can't separate them yet, so they're sung as one voice."   # phase 22: said plainly (the user: both ways were bad)
-BACKING_QUIET_LUFS = -45.0   # a backing stem under this has nothing worth converting (a backing voice's or a duet's)
+DUET_BACKING_SAID = "Converting the backing vocals (both singers)"   # a duet's backing, in the two singers (the progress line)
+BACKING_QUIET_LUFS = -45.0  # a backing stem under this has nothing worth converting (a backing voice's or a duet's)
 
 
 @dataclass
@@ -321,10 +322,11 @@ class CoverEngine:
             aoct = (s.pitch - key) / 12
             doct = opts.duet_octave if opts.duet_octave is not None else aoct
             with self.converter.shared_f0():
+                # (one line for both passes: the backing is shared out between the two, never all one singer's; Internal Affairs D5)
                 ba, bsr = self.converter.convert(back16, voice.name, _replace(s, one_line=True), progress=lambda f: report(
-                    "converting", 1 - 2 * share + share * f, f"Converting the backing vocals to {label_of(voice.name)}"))
+                    "converting", 1 - 2 * share + share * f, DUET_BACKING_SAID))
                 bb, dbsr = self.converter.convert(back16, dvoice.name, _replace(s, pitch=key + 12 * doct, one_line=True), progress=lambda f: report(
-                    "converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(dvoice.name)} too"))
+                    "converting", 1 - share + share * f, DUET_BACKING_SAID))
             if dbsr != bsr:
                 from math import gcd
                 from scipy.signal import resample_poly
