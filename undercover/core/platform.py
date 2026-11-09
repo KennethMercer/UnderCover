@@ -115,10 +115,16 @@ def tailscale_names() -> tuple[str, str]:
     return ("tailscaled.exe", "tailscale.exe") if WINDOWS else ("tailscaled", "tailscale")
 
 
-def tailscale_socket(state_dir) -> str:
-    """Where our tailscaled listens for its CLI: our own named pipe on Windows (never the system Tailscale's), a
-    socket in its state folder elsewhere."""
-    return r"\\.\pipe\undercover-tailscaled" if WINDOWS else str(Path(state_dir) / "tailscaled.sock")
+def tailscale_socket(state_dir, key: str = "") -> str:
+    """Where our tailscaled listens for its CLI: our own named pipe on Windows (never the system Tailscale's), named
+    after its state folder and that folder's own random key (core/tailnet keeps it there), so two copies of UnderCover
+    on one PC (an install and a sandbox, two test runs) each reach their own daemon, and nobody can guess the name to
+    take it first; a socket in its state folder elsewhere."""
+    if not WINDOWS:
+        return str(Path(state_dir) / "tailscaled.sock")
+    import hashlib
+    where = os.path.normcase(os.path.abspath(str(state_dir))).rstrip("\\/") + "|" + str(key)
+    return r"\\.\pipe\undercover-tailscaled-" + hashlib.sha256(where.encode("utf-8", "surrogatepass")).hexdigest()[:24]
 
 
 def tailscaled_os_args() -> list:
@@ -188,6 +194,26 @@ def process_path(pid: int) -> str:
     try:
         n, buf = wintypes.DWORD(1024), ctypes.create_unicode_buffer(1024)
         return buf.value if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)) else ""
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def process_started(pid: int) -> int | None:
+    """When a process started (its creation time, in 100 ns ticks), or None when it can't be read: with a pid, it tells
+    the same process from a later one Windows gave that pid again. Read only."""
+    if not WINDOWS:
+        raise _not("Reading when a program started")
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.windll.kernel32
+    h = kernel32.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    try:
+        t = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(h, *(ctypes.byref(x) for x in t)):
+            return None
+        return (t[0].dwHighDateTime << 32) | t[0].dwLowDateTime
     finally:
         kernel32.CloseHandle(h)
 
