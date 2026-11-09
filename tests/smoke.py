@@ -9926,6 +9926,108 @@ def u_duets():
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
 
 
+def _js_between(src: str, start: str, end: str) -> str:
+    """The page's own code from start up to (not including) end, to run on its own in headless Chrome."""
+    i = src.index(start)
+    return src[i:src.index(end, i)]
+
+
+def _js_run(script: str) -> list | None:
+    """Runs script in headless Chrome on a blank page (muted); the script sets `out` to a JSON-able list (the failures,
+    plain words). -> that list, or None when there's no Chrome here."""
+    import subprocess, tempfile
+    exe = _chrome()
+    if not exe:
+        return None
+    with tempfile.TemporaryDirectory() as td:
+        page = Path(td) / "t.html"
+        page.write_text("<!doctype html><meta charset=utf-8><body><pre id=o></pre><script>let out = ['did not run'];\ntry {\n" + script
+                        + "\n} catch (e) { out = ['threw: ' + e.message]; }\ndocument.getElementById('o').textContent = 'RESULT ' + "
+                          "JSON.stringify(out).replace(/[<>&]/g, c => ({'<': '[lt]', '>': '[gt]', '&': '[amp]'}[c])) + ' END';</script>",
+                        encoding="utf-8")
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--dump-dom",
+                                page.as_uri()], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+    m = re.search(r"RESULT (.*?) END", r.stdout)
+    assert m, r.stdout[-300:]
+    return json.loads(m.group(1))
+
+
+@check("duets in the one-shot (Internal Affairs D1): the plan, the voice step and the done line name both singers, taking turns; the done line's key is the cover's own (the fit for two); the say line keeps both names; a second singer who isn't a voice here is said before anything starts")
+def u_duet_oneshot_names():
+    from types import SimpleNamespace
+    from undercover.core import voices as V
+    from undercover.doubleagent import service
+    from undercover.frontman import ambiguity as A, api as fapi, oneshot as OS
+    # the cover's own numbers replace the first voice's alone (the history's options, read as data)
+    plan = {"settings": {"octave": 0, "key": -6, "why": "first voice alone", "options": {"key": -6, "octave": 0, "fit": True}},
+            "settings_fit": {"octave": 0, "key": -6, "alt": {"octave": -1, "key": 6}}}
+    OS.duet_settings(plan, {"key": -5, "octave": 0, "duet_octave": 1, "fit": True}, ["Polished.", "Fit for two: key -5, A at octave +0, B at octave +1."])
+    s = plan["settings"]
+    assert (s["key"], s["octave"], s["duet_octave"]) == (-5, 0, 1) and s["options"]["key"] == -5 and s["options"]["duet_octave"] == 1, s
+    assert s["why"] == "key -5, A at octave +0, B at octave +1" and "settings_fit" not in plan, plan
+    plan2 = {"settings": {"octave": 1, "key": 2, "why": "w"}}
+    OS.duet_settings(plan2, {"key": True, "octave": "x"}, [])   # (nothing a number can't be is taken)
+    assert plan2["settings"] == {"octave": 1, "key": 2, "why": "w"}, plan2
+    src = (ROOT / "undercover" / "frontman" / "oneshot.py").read_text(encoding="utf-8")
+    assert "if opts.duet_voice and item:" in src and 'duet_settings(plan, item.get("options") or {}, res.notes)' in src
+    # the plan: both names in the say line, the alone sentence before anything starts
+    vs = {"barry-white-uc": "Barry White", "michael-jackson-uc": "Michael Jackson"}
+    find = lambda p: [SimpleNamespace(name=n, display=d, extra={"trained": True}) for n, d in vs.items() if d.lower() == p.lower().strip()]
+    keep = (service.installed_for, OS.installed_for, service.voice_quality, V.get_voice, A.choices_for, A.recall, service.online_for)
+    service.installed_for = OS.installed_for = find
+    service.voice_quality = lambda v: {"ok": True, "problems": []}
+    V.get_voice = lambda n: SimpleNamespace(name=n, display=vs[n], extra={})
+    A.choices_for = lambda *a, **k: []
+    A.recall = lambda *a, **k: None
+    service.online_for = lambda p, n=2: []
+
+    def plan_of(text):
+        h = _FakeHandler()
+        fapi._auto_plan(h, text, False)
+        assert h.err is None, h.err
+        return h.out
+    try:
+        with isolated_data():
+            p = plan_of("Hold On by Barry White and Michael Jackson")
+            assert p["person"] == "Barry White" and p["duet"]["voice"] == "michael-jackson-uc" and p["duet"]["display"] == "Michael Jackson", p
+            assert "alone" not in p["duet"] and "“by Barry White and Michael Jackson”" in p["note"], p
+            assert "“Hold On by Barry White and Michael Jackson as <voice>”" in p["note"], p["note"]
+            q = plan_of("Hold On as Barry White and Prince")
+            assert q["duet"]["voice"] is None and q["duet"]["alone"] == ("Prince isn't one of your voices yet, so Barry White sings it alone. "
+                                                                           "Get their voice in DoubleAgent, then ask again."), q
+    finally:
+        service.installed_for, OS.installed_for, service.voice_quality, V.get_voice, A.choices_for, A.recall, service.online_for = keep
+    # the page: the plan's rows, the voice step and the done line, run in headless Chrome
+    app = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    one = (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    code = (re.search(r"const esc = .*\n", app).group(0) + re.search(r"const octaveWords = .*\n", one).group(0)
+            + _js_between(one, "const twoVoices = ", "// how the plan goes") + _js_between(one, "const keyWords = ", "function card("))
+    assert "with ${whoSang(plan)}" in one and "doneLine(plan, ev.elapsed)" in one and "fitWords(set, plan)" in one
+    assert "const two = twoVoices(plan) ?" in one and "two && \"taking turns\"" in one, "the voice step doesn't name both"
+    out = _js_run("""const VD = {"barry-white-uc": "Barry White", "michael-jackson-uc": "Michael Jackson"};
+const vname = id => esc(VD[id] || id), voiceDisplay = id => VD[id] || id, fmtSecs = s => s + " s", voiceLine = () => "LINE";
+""" + code + """
+out = [];
+const duet = {voice: "michael-jackson-uc", display: "Michael Jackson", with: "michael jackson"};
+const bw = {how: "installed", name: "barry-white-uc", display: "Barry White"};
+const want = (name, got, has, hasnt) => { if (!got.includes(has)) out.push(name + ": " + got); if (hasnt && got.includes(hasnt)) out.push(name + " has " + hasnt); };
+want("rows", voiceRows({voice: bw, duet}), '<span class="k">Voices</span><span><b>Barry White</b> &amp; <b>Michael Jackson</b>, taking turns</span>');
+want("rows, training", voiceRows({voice: {how: "train"}, duet}), '<span class="k">With</span><span><b>Michael Jackson</b>, taking turns</span>');
+want("rows, alone", voiceRows({voice: bw, duet: {...duet, voice: null, alone: "x"}}), '<span class="k">Voice</span><span>LINE</span>', "With");
+want("rows, one", voiceRows({voice: bw}), '<span class="k">Voice</span><span>LINE</span>', "taking turns");
+const set = {octave: 0, key: -5, why: "key -5, Barry White at octave +0, Michael Jackson at octave +1"};
+want("done", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: set}, 61),
+     "Done in 61 s: <b>Hold On</b> with <b>Barry White</b> &amp; <b>Michael Jackson</b>, taking turns · song 5 semitones lower<span data-deep>", "octave ·");
+want("done, own key", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: {...set, key: 0}}, 61), "taking turns · the song&#39;s own key");
+want("done, one", doneLine({song: {title: "Hold On"}, voice: bw, settings: {octave: 0, key: -6, why: "w"}}, 61),
+     "with <b>Barry White</b> · the singer&#39;s octave · song 6 semitones lower", "taking turns");
+want("done, same voice", doneLine({song: {title: "x"}, voice: {...bw, name: "michael-jackson-uc"}, duet, settings: set}, 1), "with <b>Barry White</b> · the singer&#39;s octave", "taking turns");""")
+    assert not out, "; ".join(out or [])
+    return "the cover's own key; both names in the say line; the alone line; " + (
+        "no Chrome here: the page's lines not run" if out is None else "the plan's rows and the done line in Chrome")
+
+
 @check("hangs (hangfix, hangtune): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 200 ms or more with 100 ms silent, no pause marked in the text), or a break (60 ms of silence where the words run into each other, no stop at the join), and reads it again with another seed, up to 5 tries, keeping the take whose longest join is shortest among takes as bad; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
 def u_hangfix():
     import inspect
@@ -16520,7 +16622,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting):
