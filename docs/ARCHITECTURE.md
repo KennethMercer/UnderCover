@@ -548,8 +548,10 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
   refused. Later edits paint over earlier ones.
 - **`check_edit` is the one gate**, and it answers before any GPU: every field, the stretch resolved, its edges snapped, and the plan it
   leaves through `check_plan`. A word index counts only against `words_hash`. An edge goes to the nearest silence (the backing's
-  own, for the backing), or for the lead to a dip when there's no silence within 2 s, and the edit says what it moved past. With no place
-  to land it's refused, naming the word.
+  own, for the backing; the quiet before the first line and after the last count), or for the lead to a dip when there's no silence
+  within 2 s, and an end never lands at or before its start. The edit says which word it took in or left out. With no place
+  to land it's refused, naming the word. The list reads the stems through the cover's lead gate, chorus stretches included under
+  every chorus mode, so an edit sings what the cover sang.
 - **An octave edit is priced before it's sung** (`edits.price`): `fit.pick_fit` at the cover's key on the stretch's notes, at the
   edit's octave against the singer's own. When the cost rises by `POOR_COST` (0.25) or more, the answer says it's a poor fit and
   why (the share of notes out of the voice's range, or how far from where it's comfortable). It's said, never refused. The pitch
