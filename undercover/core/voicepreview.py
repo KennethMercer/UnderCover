@@ -44,28 +44,34 @@ READY_TTL = 2.0   # seconds an engine's "can read here" is kept: a voice list as
 _READY: dict = {}   # (engine, pin) -> (time.monotonic(), ready)
 
 
-def _pack_ready(engine: str, pin) -> bool:
+def _pack_ready(engine: str, pin, fresh: bool = False) -> bool:
     """cadence.pack_ready, kept READY_TTL seconds (it looks for the engine's packages: about 2 ms a voice). An add-on
-    installed or removed shows on the voices' play buttons within that."""
+    installed or removed shows on the voices' play buttons within that. fresh: asked now (a render records it)."""
+    from .cadence import pack_ready
+    try:
+        k = (engine, pin)
+        hash(k)
+    except TypeError:   # (a pin from another version that isn't a name: asked each time, as before)
+        return bool(pack_ready(engine, pin))
     now = time.monotonic()
     with _MEMO_LOCK:
-        hit = _READY.get((engine, pin))
-    if hit and now - hit[0] < READY_TTL:
+        hit = _READY.get(k)
+    if hit and not fresh and now - hit[0] < READY_TTL:
         return hit[1]
-    from .cadence import pack_ready
     ready = bool(pack_ready(engine, pin))
     with _MEMO_LOCK:
-        _READY[(engine, pin)] = (now, ready)
+        _READY[k] = (now, ready)
     return ready
 
 
-def key(v) -> str:
+def key(v, fresh: bool = False) -> str:
     """What the clip was made from: the line as said, the model, the index and the live speech pack (when it was made,
-    by which engine: a pack still waiting to be heard, tts/pending, isn't the voice's yet)."""
+    by which engine: a pack still waiting to be heard, tts/pending, isn't the voice's yet). fresh: the engine's
+    readiness asked now, not the kept one (make() records this key)."""
     rec = (v.extra or {}).get("tts") or {}
     pack = {k: rec.get(k) for k in ("made", "engine", "engine_pin", "project")} if (Path(v.dir) / "tts").is_dir() and rec else None
     if pack is not None:   # (a pack whose engine isn't installed reads nothing: the Reader said the line instead)
-        pack["ready"] = _pack_ready(rec.get("engine", "chatterbox"), rec.get("engine_pin"))
+        pack["ready"] = _pack_ready(rec.get("engine", "chatterbox"), rec.get("engine_pin"), fresh)
     raw = json.dumps([line_for(v), _stat(v.pth), _stat(v.index), pack], sort_keys=True)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -100,7 +106,7 @@ def fresh(v) -> bool:
     """The voice has its clip, made from what it is now (the ▶ shows only then)."""
     try:
         return clip(v).is_file() and _recorded(Path(v.dir) / FILES[1]) == key(v)
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError):
         return False
 
 
@@ -145,7 +151,7 @@ def make(v, job=None, force: bool = False) -> bool:
             fsutil._replace(tmp, clip(v))
         finally:
             wav.unlink(missing_ok=True)
-        fsutil.write_text(d / FILES[1], json.dumps({"key": key(v), "line": line_for(v), "seconds": round(len(y) / sr, 2),
+        fsutil.write_text(d / FILES[1], json.dumps({"key": key(v, fresh=True), "line": line_for(v), "seconds": round(len(y) / sr, 2),
                                                     "made": time.strftime("%Y-%m-%d %H:%M")}, indent=1))
         _broken(v.name, None)
         return True

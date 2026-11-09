@@ -13176,6 +13176,10 @@ def u_perf_voices():
         assert voicepreview._pack_ready("chatterbox", None) == "kept"
         voicepreview._READY[("chatterbox", None)] = (time.monotonic() - voicepreview.READY_TTL - 1, "kept")
         assert voicepreview._pack_ready("chatterbox", None) in (True, False), "a readiness past its time wasn't asked again"
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic(), "kept")
+        assert voicepreview._pack_ready("chatterbox", None, fresh=True) in (True, False), "a render recorded a kept readiness"
+        assert voicepreview._pack_ready("chatterbox", ["not", "a", "name"]) in (True, False)   # (unhashable: asked, not kept)
+        assert 'key(v, fresh=True)' in __import__("inspect").getsource(voicepreview.make), "make() records a kept readiness"
         voicepreview._READY.clear()
     V._META.clear()
     voicepreview._RECS.clear()
@@ -13211,6 +13215,14 @@ def u_perf_static():
         assert not server.static_page(small).vary and server.static_page(small).gzipped() is None
         server._STATIC.pop(str(f), None)
         server._STATIC.pop(str(small), None)
+    with isolated_data():   # (the real Handler answers: on the test's own config, never the user's)
+        _static_over_http(server, page, body)
+    return f"index {len(body) // 1024} KB, gzip {len(page.gzipped()) // 1024} KB; 304 with no body, kept-alive after it"
+
+
+def _static_over_http(server, page, body):
+    import http.client
+    import threading
     srv = server.ExclusiveServer(("127.0.0.1", 0), server.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
@@ -13236,7 +13248,6 @@ def u_perf_static():
     finally:
         srv.shutdown()
         srv.server_close()
-    return f"index {len(body) // 1024} KB, gzip {len(page.gzipped()) // 1024} KB; 304 with no body, kept-alive after it"
 
 
 class _CountingModels:
@@ -13331,6 +13342,11 @@ def u_perf_voicecheck():
         for t_ in ts:
             t_.join(60)
         assert not errors and len(set(out)) == 1 and out[0] == q1["score"], (errors[:1], out)
+        other = _CountingModels()   # a converter made again: its models are new objects, never served the old values
+        assert vc._model_token(other.rmvpe) != vc._model_token(m.rmvpe) and vc._model_token(m.rmvpe) == vc._model_token(m.rmvpe)
+        n2 = other.calls["f0"]
+        vc._phrase_f0(other.rmvpe, tests[0][0])
+        assert other.calls["f0"] == n2 + 1, "a new pitch model was served another's values"
         for i in range(vc.INPUT_KEEP + 5):   # bounded: the oldest go
             vc._phrase_f0(m.rmvpe, np.full(1600, i / 1000, np.float32))
         assert len(vc._INPUT) == vc.INPUT_KEEP, len(vc._INPUT)
@@ -13471,6 +13487,21 @@ def u_perf_stems_flac():
         assert len(threads) == 2, f"the two stems weren't encoded side by side ({len(threads)} thread)"
         again = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s1" / "main", overlap=2)   # the cache, as before
         assert again == out, (again, out)
+
+        class Twice(Fake):   # two outputs naming one stem: one at a time, the last one kept (as before)
+            def separate(self, audio):
+                outs = []
+                for k in range(2):
+                    f = sep.work_dir / f"song{k}_(Vocals)_model.wav"
+                    sf.write(str(f), np.stack([x * (k + 1) / 3] * 2, 1), sr, subtype="PCM_24")
+                    made[k] = sf.read(str(f), dtype="int32")[0]
+                    outs.append(f.name)
+                f = sep.work_dir / "song_(Instrumental)_model.wav"
+                sf.write(str(f), np.stack([x, x], 1), sr, subtype="PCM_24")
+                return outs + [f.name]
+        sep._get = lambda model: Twice()
+        two = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s2" / "main", overlap=2)
+        assert two["vocals"].is_file() and np.array_equal(sf.read(str(two["vocals"]), dtype="int32")[0], made[1]), two
     return "2 stems, 2 threads, bit-identical 24-bit FLAC, no WAV left; the second run from the cache"
 
 

@@ -213,13 +213,27 @@ def _kept(memo: OrderedDict, key, make):
     return value
 
 
+def _model_token(model) -> str:
+    """A model object's own name for the memo keys: an object's id() can be reused once a converter is freed and made
+    again (Low profile does that), a token set on the object can't."""
+    tok = getattr(model, "_uc_memo_token", None)
+    if tok is None:
+        import uuid
+        tok = uuid.uuid4().hex
+        try:
+            model._uc_memo_token = tok
+        except AttributeError:   # (an object that takes no attributes: kept by nothing, worked out each time)
+            return uuid.uuid4().hex
+    return tok
+
+
 def _digest(x: np.ndarray) -> bytes:
     x = np.ascontiguousarray(x, dtype=np.float32)
     return hashlib.blake2b(x.tobytes(), digest_size=16).digest() + len(x).to_bytes(8, "little")
 
 
 def _phrase_f0(rmvpe, x: np.ndarray) -> np.ndarray:
-    f = _kept(_INPUT, ("f0", id(rmvpe), _digest(x)), lambda: rmvpe.infer_from_audio(x, thred=0.03))
+    f = _kept(_INPUT, ("f0", _model_token(rmvpe), _digest(x)), lambda: rmvpe.infer_from_audio(x, thred=0.03))
     return np.array(f)
 
 
@@ -236,8 +250,8 @@ def _phrase_hubert(converter, x: np.ndarray):
     def make():
         with torch.no_grad():
             return converter.hubert.extract(torch.from_numpy(x).to(converter.device, dt)[None], "v2")[0].cpu()
-    a = _kept(_INPUT, ("hubert", id(converter.hubert), str(converter.device), dt, _digest(x)), make)
-    return a.to(converter.device).float()   # (fp16 -> fp32 is exact: the same numbers as before)
+    a = _kept(_INPUT, ("hubert", _model_token(converter.hubert), str(converter.device), dt, _digest(x)), make)
+    return a.to(converter.device, copy=True).float()   # (a copy, also on the CPU; fp16 -> fp32 is exact: the same numbers)
 
 
 def target_pitch(proj, rmvpe, n: int = 8) -> float | None:
@@ -268,7 +282,7 @@ def target_range(proj, rmvpe, n: int = 16) -> list | None:
         return [round(float(np.percentile(f, q)), 1) for q in (5, 50, 95)] if len(f) > 50 else None
     if stamps is None:
         return make()
-    r = _kept(_RANGE, (id(rmvpe), stamps), make)
+    r = _kept(_RANGE, (_model_token(rmvpe), stamps), make)
     return list(r) if r else None
 
 
