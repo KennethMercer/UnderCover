@@ -382,7 +382,7 @@ async function installFile(file) {
     await loadVoices(data.voice);
   } catch (e) {
     $("#online-h").hidden = $("#online").hidden = true;
-    showError(e.message, "That voice couldn't be installed");
+    showError(e instanceof TypeError ? await uploadLost(e.message) : e.message, "That voice couldn't be installed");   // (TypeError: the connection dropped)
   }
 }
 
@@ -409,6 +409,13 @@ function presep() {
     });
   }).catch(() => {});
 }
+// An upload the PC refused before reading it (a Storage move runs) can arrive as a dropped connection instead of its
+// sentence: ask the status, and say the move when that's what it is. -> the message to show
+async function uploadLost(fallback) {
+  try { if ((await api("/api/status")).moving) return "UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done."; }
+  catch (e) {}
+  return fallback;
+}
 function upload(file) {
   if (S.job || S.osBusy) return showError("Wait for the current cover to finish (or cancel it) before loading another song.", "Busy");
   setDrop("uploading");
@@ -423,7 +430,7 @@ function upload(file) {
     if (xhr.status !== 200) { setDrop(S.song ? "loaded" : "empty"); return showError(data.error || "The upload failed.", "Couldn't load that song"); }
     S.song = data; store.set("uc-song", data.id); renderSong(); refreshEstimate(); presep();
   };
-  xhr.onerror = () => { setDrop(S.song ? "loaded" : "empty"); showError("Lost contact with UnderCover while uploading. Is its window still open?", "Couldn't load that song"); };
+  xhr.onerror = async () => { setDrop(S.song ? "loaded" : "empty"); showError(await uploadLost("Lost contact with UnderCover while uploading. Is its window still open?"), "Couldn't load that song"); };
   xhr.send(file);
 }
 // The build path (Song / Voice / Convert) is a section of the one-shot card (consult 1): open while something is on its desk, a song loaded or a

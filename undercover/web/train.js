@@ -177,7 +177,7 @@ async function addFiles(files) {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || "Upload failed.");
       await openProject(T.proj.name, data);
-    } catch (e) { showError(e.message, `Couldn't add ${f.name}`); }
+    } catch (e) { showError(e instanceof TypeError ? await uploadLost(e.message) : e.message, `Couldn't add ${f.name}`); }   // (TypeError: dropped)
   }
   render();
 }

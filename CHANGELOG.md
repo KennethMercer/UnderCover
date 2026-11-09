@@ -64,6 +64,10 @@ in brackets.
 **Fixes** (tidy1)
 - A file that only looks like a song (nothing in it plays) is refused with a plain message.
 
+**Fixes** (bodyclose)
+- An upload that drops while UnderCover's files are being moved says so, instead of saying contact was lost.
+- Hardening of how the server answers an upload it refuses.
+
 ## 1.1.3 (2026-10-29)
 
 **Hardening** (sections, bytecap, decodecap)

@@ -238,10 +238,53 @@ def voices_json() -> list[dict]:
 
 # ---------------------------------------------------------------- HTTP handler
 
+class _Counted:
+    """The request's reader, counting what's read: a body left unread ends the connection (Handler._left_unread)."""
+
+    def __init__(self, f):
+        self._f, self.n = f, 0
+
+    def read(self, size=-1):
+        b = self._f.read(size)
+        self.n += len(b)
+        return b
+
+    def readline(self, size=-1):
+        b = self._f.readline(size)
+        self.n += len(b)
+        return b
+
+    def __getattr__(self, k):
+        return getattr(self._f, k)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "UnderCover"
     protocol_version = "HTTP/1.1"
     timeout = 30   # (1.1 hardening) every read of a request, on every listener: a client that stalls is dropped
+
+    def setup(self):
+        super().setup()
+        self.rfile = _Counted(self.rfile)
+
+    def parse_request(self) -> bool:
+        ok = super().parse_request()
+        self.rfile.n = 0   # (the body starts here)
+        return ok
+
+    def handle_one_request(self):
+        super().handle_one_request()
+        self._left_unread()
+
+    def _left_unread(self):
+        """(hardening) A request answered without its whole body read (a refusal before the upload): the rest would be
+        read as the next request on a kept-alive connection, so the connection ends instead."""
+        h = getattr(self, "headers", None)
+        if self.close_connection or h is None:
+            return
+        v = (h.get("Content-Length") or "").strip()
+        if h.get("Transfer-Encoding") or (v and (not v.isdigit() or self.rfile.n < int(v))):
+            self.close_connection = True
 
     def log_message(self, fmt, *args):  # keep the console quiet; errors are reported in the UI
         pass
@@ -474,7 +517,7 @@ class Handler(BaseHTTPRequestHandler):
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
                         "start": w["start"], "start_at": w["settings"].get("start_at"),
                         "waits_until": w.get("waits_until"), "waits_for": w.get("waits_for")}   # B3: the strip says the wait
-                from ..core import addons, gamepause, lowprofile
+                from ..core import addons, gamepause, lowprofile, storage
                 ga = gamepause.STATE.get("asking")   # the game pause's open question: every page and a paired phone show it
                 work["game_ask"] = {**ga, "reason": gamepause.STATE.get("reason") or ""} if ga else None
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
@@ -483,6 +526,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "low_profile": lowprofile.status(),   # (absent = None: no card to share, the control hides)
                                    "tour": firstrun.tour_status(),   # the First assignment's spotlight tour (web/firstrun.js)
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
+                                   "moving": bool(storage.MOVING),   # (a Storage move: an upload refused meanwhile may arrive as a drop)
                                    "move": _move_state() if self.remote and not self.away else None,
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
                                    "app_folder": None if self.remote else str(ROOT)})
