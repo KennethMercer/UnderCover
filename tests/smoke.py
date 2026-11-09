@@ -12263,6 +12263,13 @@ def u_token_ratios():
     wa = (web / "winamp.css").read_text(encoding="utf-8")
     ix = (web / "index.html").read_text(encoding="utf-8")
     assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
+    # bones wave 2: the song's stems in one closed Deep disclosure, the voice card's one ledger line, the one-shot's one line, a reading width
+    lib, da, osj = ((web / n).read_text(encoding="utf-8") for n in ("library.js", "doubleagent.js", "oneshot.js"))
+    assert '<details class="stems-box" data-deep>' in lib and "<h2>Stems</h2>" not in lib and "Separated already, so a new cover of it skips that minute." in lib
+    assert 'class="vc-ledger" data-deep' in da and "aria-expanded=\"${open}\"" in da and "cadence ${cd.engine}" not in da
+    assert 'const PLAN_IDLE = "Name a song and a voice, and UnderCover does the rest.";' in osj and 'class="os-foot"' not in ix
+    assert ix.count('<p class="meta os-else">Your own file or exact settings? <button class="linkbtn" id="build-toggle"') == 1
+    assert "#room-settings, #room-system, #room-addons { max-width: 820px; }" in (web / "app.css").read_text(encoding="utf-8")
     assert "/* -- bones pins -- */" in wa and ':where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0;' in wa
     assert wa.index("/* -- end bones pins -- */") < wa.index('html[data-skin="winamp"] .mod'), "the pins come before the skin's own rules"
     return f"{len(themes)} themes x 2 modes x 4 modules; worst " + ", ".join(f"{k} {v:.2f}" for k, v in worst.items())
