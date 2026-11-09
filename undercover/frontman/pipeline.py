@@ -280,7 +280,7 @@ class CoverEngine:
             bvoice = None   # (one backing voice gives way to the duet's two)
         if gate_said:
             at, g, mode, missing = gate_said
-            notes[at:at] = gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing)
+            notes[at:at] = gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing, shared=dback)
         passes = 1 + bool(dvoice) + bool(bvoice) + 2 * dback
         share = 1.0 / passes
         from ..core import lowprofile

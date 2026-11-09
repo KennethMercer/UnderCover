@@ -10641,10 +10641,15 @@ def u_leadgate():
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
     said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)
     assert said and not any("original singers" in s for s in said) and any("in the backing's voice" in s for s in said), said
+    # a duet's two singers sharing the backing (Internal Affairs D4): no one "backing's voice", so the line says who sings it
+    said = G.note(g, "keep", backing_converted=True, shared=True)
+    assert any(s.endswith("they're sung with the rest of the backing, by whichever singer has the backing there.") for s in said), said
+    assert not any("the backing's voice" in s for s in said), said
+    assert any("by whichever singer" in s for s in G.note(g, "top", backing_converted=True, missing=g["chorus"], shared=True)) or not g["chorus"]
     import inspect
     from undercover.frontman import pipeline as _PLg
     src = inspect.getsource(_PLg.CoverEngine.make_cover)
-    assert "gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing)" in src and src.index("gate_note(g, mode,") > src.index("dback = bool(dvoice)")
+    assert "gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing, shared=dback)" in src and src.index("gate_note(g, mode,") > src.index("dback = bool(dvoice)")
     assert "gate_apply(stems, g, gwork, stamp, chorus=mode, top=top, missing=missing)" in src and "top_missing(g, top, stems.get(\"backing\"))" in src
     # a duet (phase 22): two voices in harmony all the way are "backing" to the karaoke model and its lead is silence;
     # then there's no lead to split off and the whole vocal is converted as one voice
