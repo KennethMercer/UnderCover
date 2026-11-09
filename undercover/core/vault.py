@@ -617,16 +617,60 @@ def contents(folder: str | None = None, stamp: str | None = None) -> dict:
     return {"snapshot": snap["made"], "snapshots": snapshots(root), "kinds": out}
 
 
-def _both_name(t: Path, key: str) -> Path:
-    """Keep both: the restored copy goes beside the current one. A voice keeps its folder shape (<name>-from-vault)."""
-    top, _, rest = key.partition("/")
-    if top == "voices":
-        name, _, inner = rest.partition("/")
-        return path("voices_dir") / f"{name}-from-vault" / inner
-    if top == "training":
-        name, _, inner = rest.partition("/")
-        return path("cache_dir") / "training" / f"{name}-from-vault" / inner
-    return t.with_name(f"{t.stem} (from vault){t.suffix}")
+def _both_names(item_keys: list[str]) -> tuple[dict, int]:
+    """Keep both: where one item's restored copy goes, beside the current one and never over anything already there (a
+    copy from an earlier Keep both included). A voice or a project keeps its folder shape (<name>-from-vault, then
+    -from-vault-2, ...) under a name the voice list reads back as itself (slug: 60 characters at most); a file gets
+    " (from vault)" (then " (from vault 2)", ...). -> ({key: where it goes}, n)"""
+    from .voices import slug
+    for n in range(1, 100):
+        out, taken = {}, False
+        for key in item_keys:
+            top, _, rest = key.partition("/")
+            if top in ("voices", "training"):
+                name, _, inner = rest.partition("/")
+                tail = "-from-vault" + (f"-{n}" if n > 1 else "")
+                folder = (path("voices_dir") if top == "voices" else path("cache_dir") / "training") / (slug(name[:60 - len(tail)]) + tail)
+                out[key] = folder / inner
+                taken = taken or folder.exists()
+            else:
+                t = target_of(key)
+                out[key] = t.with_name(f"{t.stem} (from vault{f' {n}' if n > 1 else ''}){t.suffix}")
+                taken = taken or out[key].exists()
+        if not taken:
+            return out, n
+    raise ModelError("There are already too many copies from the vault beside this one; nothing was restored.")
+
+
+def _record_of(key: str) -> bool:
+    """A voice's meta.json or a project's project.json: what makes its folder show up as one (restored last)."""
+    parts = key.split("/")
+    return len(parts) == 3 and (parts[0], parts[2]) in (("voices", "meta.json"), ("training", "project.json"))
+
+
+def _as_copy(key: str, dest: Path, n: int):
+    """Keep both: a restored voice's or project's record names the copy, not the one it sits beside (2026-11-08: the
+    copy's meta still said "<name>", so two voices had one name and the copy never loaded; a project's copy would have
+    saved over the original's project.json). A record that isn't readable JSON is left as it came back."""
+    try:
+        rec = json.loads(dest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(rec, dict):
+        return
+    d = dest.parent
+    if key.startswith("voices/"):
+        from .voices import display_of_meta
+        shown = display_of_meta(rec)   # (the original's name, before it's the copy's)
+        rec.update(name=d.name,dir=str(d), pth=str(d / Path(rec.get("pth") or "model.pth").name),
+                   index=str(d / Path(rec["index"]).name) if rec.get("index") else None,
+                   display=f"{shown} from vault" + (f" {n}" if n > 1 else ""))
+        extra = rec.get("extra") if isinstance(rec.get("extra"), dict) else {}
+        for k in ("improved_pending", "pending_for"):   # a retrained candidate's link is the original's, not the copy's
+            extra.pop(k, None)
+    else:
+        rec["name"] = d.name
+    fsutil.write_text(dest, json.dumps(rec, indent=2 if key.startswith("voices/") else 1))
 
 
 def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None, stamp: str | None = None) -> dict:
@@ -657,12 +701,18 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
         # or one the allow-list below refuses): say so plainly, before anything is written
         raise ModelError("Settings can't be kept side by side with the ones here: Replace them (the ones here go into the "
                          "vault first) or leave them as they are. Nothing was restored.")
+    both, copy_n = {}, {}   # keep both: {key: where its copy goes}, {key: which copy it is}
+    if on_conflict == "both":
+        for item in differ:
+            where, n = _both_names([k for k in keys if whole(k) == item])
+            both.update(where)
+            copy_n.update(dict.fromkeys(where, n))
     for key in keys:
         sha, t = files[key][0], target_of(key)
-        if on_conflict == "both" and whole(key) in differ:   # keep both: the whole item comes back beside the current one
+        if key in both:   # keep both: the whole item comes back beside the current one
             if status[key] == "different":
                 conflicts.append(key)
-            plan.append((key, sha, _both_name(t, key)))
+            plan.append((key, sha, both[key]))
             continue
         if status[key] == "same":
             same.append(key)
@@ -687,6 +737,7 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
     # the settings are made up before anything is written: one that can't keep this install's [paths] stops it all
     settings_data = {key: _config_keeping_paths(get(root / "objects", sha)) for key, sha, t in plan
                      if storage._same(t, config.CONFIG_FILE)}
+    plan.sort(key=lambda p: _record_of(p[0]))   # a voice's or project's record last: cut short, a half-restored one isn't listed
     done = []
     for key, sha, t in plan:
         if key in settings_data:
@@ -707,6 +758,8 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
                 part.unlink(missing_ok=True)
                 raise ModelError(f"A piece of the vault is damaged ({obj.name}); that file wasn't restored.")
             os.replace(part, t)
+            if key in both and _record_of(key):
+                _as_copy(key, t, copy_n[key])
         done.append(key)
     return {"restored": done, "same": same, "skipped": conflicts if on_conflict == "skip" else [], "conflicts": []}
 

@@ -664,6 +664,54 @@ def u_vault_settings_both():
     return "settings: refused plainly, nothing written; a song's Keep both unchanged; the page doesn't offer it"
 
 
+@check("vault: Keep both on a voice or a project makes a copy that loads under its own name, never over the original or an earlier copy (2026-11-08: the copy's meta still named the original, so two voices had one name and the copy never loaded)")
+def u_vault_keep_both_copy():
+    from undercover.core import vault, voices
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            vd = path("voices_dir")
+            long = "a" * 55   # the copy's name must still read back as itself (names are cut at 60)
+            for name in ("spy", long):
+                (vd / name).mkdir(parents=True)
+                (vd / name / "meta.json").write_text(json.dumps({"name": name, "pth": str(vd / name / "model.pth"),
+                    "index": str(vd / name / "model.index"), "display": "The Spy",
+                    "extra": {"trained": True, "improved_pending": {"voice": f"{name}-next"}}}), encoding="utf-8")
+                (vd / name / "model.pth").write_bytes(b"older " + name.encode())
+                (vd / name / "model.index").write_bytes(b"index")
+            tr = path("cache_dir") / "training" / "spy"
+            tr.mkdir(parents=True)
+            (tr / "project.json").write_text(json.dumps({"name": "spy", "person": "The Spy"}), encoding="utf-8")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            snap = vault.load_snapshot(vault.root_of(box / "vault-drive"))["files"]
+            for name in ("spy", long):
+                (vd / name / "model.pth").write_bytes(b"retrained")
+            (tr / "project.json").write_text(json.dumps({"name": "spy", "person": "The Spy", "mode": "singing"}), encoding="utf-8")
+            for n, want in ((1, "spy-from-vault"), (2, "spy-from-vault-2")):
+                vault.restore([k for k in snap if k.startswith("voices/spy/")], "both")
+                v = voices.get_voice(want)
+                assert v.dir == vd / want and v.pth == vd / want / "model.pth" and v.pth.read_bytes() == b"older spy", v
+                assert v.index == vd / want / "model.index", v.index
+                meta = json.loads((vd / want / "meta.json").read_text(encoding="utf-8"))
+                assert meta["name"] == want and meta["display"] == "The Spy from vault" + (" 2" if n > 1 else ""), meta
+                assert "improved_pending" not in meta["extra"], "the copy claims the original's retrained candidate"
+            assert voices.get_voice("spy").pth.read_bytes() == b"retrained", "keep both touched the original"
+            assert [v.name for v in voices.list_voices()].count("spy") == 1
+            vault.restore([k for k in snap if k.startswith(f"voices/{long}/")], "both")
+            copy = next(v for v in voices.list_voices() if v.name != long and v.name.startswith("a" * 40))
+            assert voices.get_voice(copy.name).dir.name == copy.name and copy.name.endswith("-from-vault"), copy.name
+            vault.restore(["training/spy/project.json"], "both")
+            from undercover.doubleagent.project import Project
+            p = Project.load("spy-from-vault")
+            assert p.name == "spy-from-vault" and p.dir == tr.parent / "spy-from-vault", p.name
+            assert json.loads((tr / "project.json").read_text(encoding="utf-8"))["mode"] == "singing", "the original project changed"
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "spy-from-vault, then -2, each loading with its own files and display; a long name stays itself; a project copy saves as itself"
+
+
 @check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
        "Checking it stage, the voice a finished training made in its job snapshot")
 def u_da_mode():
@@ -15475,7 +15523,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_vault_settings_both, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
