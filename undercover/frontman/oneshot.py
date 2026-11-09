@@ -108,8 +108,9 @@ def split_duet(person: str) -> dict | None:
     """"<song> as <one singer> and <another>" (also "with", "&", "a duet of ..."): two singers taking turns, in the order
     written (1.2, duets.py). Only when the second one is a voice here, or the first is and the second isn't (then the
     first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"). Two names neither of
-    which is here are two singers only when each is a full name and the second isn't "the ..." or "his ..." ("Barry White and Michael
-    Jackson", the one-shot's duet example on a new install); otherwise they're a band's name ("Hall and Oates", "Tom
+    which is here are two singers only when each is a full name and the second isn't "the ..." or "his ..." ("Barry
+    White and Michael Jackson" on a new install: the first is made, the second said to need its voice); otherwise they're
+    a band's name ("Hall and Oates", "Tom
     Petty and the Heartbreakers", "Peter, Paul and Mary"). -> {person, with, voice (the second's, or None)} or None."""
     from ..core.voices import slug
     p = re.sub(r"^(?:an?\s+)?duet\s+(?:of|by|between|with)?\s*", "", (person or "").strip(), flags=re.I)
