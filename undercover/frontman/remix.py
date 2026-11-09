@@ -137,7 +137,6 @@ def _reverb_ir(seconds: float, sr: int) -> Path:
     p = path("cache_dir") / f"reverb_ir_{seconds:.1f}s_{sr}.wav"
     if p.exists():
         return p
-    import soundfile as sf
     rng = np.random.default_rng(7)
     n = int(seconds * sr)
     t = np.arange(n) / sr
@@ -153,9 +152,8 @@ def _reverb_ir(seconds: float, sr: int) -> Path:
     pre = int(0.02 * sr)                                 # 20 ms pre-delay
     ir = np.vstack([np.zeros((pre, 2)), ir])
     ir /= np.sqrt((ir ** 2).sum(axis=0, keepdims=True))  # unit energy per channel
-    part = p.with_name(f"{p.stem}.{os.getpid()}.part{p.suffix}")   # (whole or not at all: the file's being there is its proof)
-    sf.write(str(part), ir.astype(np.float32), sr, subtype="FLOAT")
-    os.replace(part, p)
+    from .leadgate import write_whole
+    write_whole(p, ir.astype(np.float32), sr, subtype="FLOAT", clip=False)   # (whole or not at all: the file's being there is its proof)
     return p
 
 

@@ -223,9 +223,12 @@ def _cover_again(h, item_id: str, body: dict):
 
 
 def _signed(v) -> str:
-    """A stored octave or key for a label, "+2": a cover's own settings may hold it as a float (2.0), or not at all."""
+    """A stored octave or key for a label, "+2" or "+1.5": a cover's own settings hold a key as a float (2.0), or not at all."""
     try:
-        return f"{int(round(float(v))):+d}" if v not in (None, "") else "+0"
+        f = float(v) if v not in (None, "") else 0.0
+        if not abs(f) < 100:   # (NaN and Infinity too: no key a cover sings)
+            return "+0"
+        return f"{int(f):+d}" if f.is_integer() else f"{f:+g}"
     except (TypeError, ValueError, OverflowError):
         return "+0"
 
