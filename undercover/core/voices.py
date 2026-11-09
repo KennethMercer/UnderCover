@@ -16,6 +16,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from dataclasses import asdict, dataclass, field, fields
@@ -905,15 +906,58 @@ def download_and_install(src: str, name: str | None = None, progress: Progress |
         shutil.rmtree(dl if dl.is_dir() else dl.parent, ignore_errors=True)
 
 
+_META: dict = {}   # meta.json path -> ((st_ino, st_mtime_ns, st_size), its text): read once per change (perf2)
+_META_KEEP = 1024
+_META_LOCK = threading.Lock()
+
+
+def _meta_text(f: str) -> str:
+    """A meta.json's text, read again only when its stat changes. Every writer replaces the file whole (fsutil.write_text:
+    a new file, so a new st_ino even where mtimes are coarse), and the stat is taken before the read, so a write racing
+    this read is seen on the next call. The text, not the parsed dict, is kept: each caller parses its own (callers
+    change their Voice's extra in place)."""
+    st = os.stat(f)
+    key = (st.st_ino, st.st_mtime_ns, st.st_size)
+    with _META_LOCK:
+        hit = _META.get(f)
+    if hit and hit[0] == key:
+        return hit[1]
+    with open(f, encoding="utf-8") as fh:
+        text = fh.read()
+    with _META_LOCK:
+        _META.pop(f, None)
+        _META[f] = (key, text)
+        while len(_META) > _META_KEEP:   # (voices set aside or removed leave entries: the oldest go)
+            _META.pop(next(iter(_META)))
+    return text
+
+
 def list_voices() -> list[Voice]:
+    """Every voice folder with a meta.json, by folder name. One listing per folder tells which files are there (the
+    model and index are found next to meta.json, whatever folder was stored: the app folder may have been moved)."""
     out = []
-    for meta in sorted(voices_dir().glob("*/meta.json")):
-        d = json.loads(meta.read_text(encoding="utf-8"))
-        # files are found next to meta.json, whatever folder was stored (the app folder may have been moved)
-        here = meta.parent
+    with os.scandir(voices_dir()) as it:
+        folders = sorted(Path(e.path) for e in it if e.is_dir())
+    for here in folders:
+        try:
+            with os.scandir(here) as it:
+                names = {os.path.normcase(e.name) for e in it}
+        except OSError:   # (removed between the two listings)
+            continue
+        if "meta.json" not in names:
+            continue
+        try:
+            d = json.loads(_meta_text(str(here / "meta.json")))
+        except FileNotFoundError:
+            continue
         d["dir"] = here
-        d["pth"] = here / Path(d["pth"]).name if (here / Path(d["pth"]).name).exists() else Path(d["pth"])
-        d["index"] = (here / Path(d["index"]).name if (here / Path(d["index"]).name).exists() else Path(d["index"]))             if d.get("index") else None
+        pth = Path(d["pth"]).name
+        d["pth"] = here / pth if os.path.normcase(pth) in names else Path(d["pth"])
+        if d.get("index"):
+            ix = Path(d["index"]).name
+            d["index"] = here / ix if os.path.normcase(ix) in names else Path(d["index"])
+        else:
+            d["index"] = None
         out.append(Voice(**voice_args(d)))
     return out
 

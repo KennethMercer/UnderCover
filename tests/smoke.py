@@ -13093,6 +13093,95 @@ def u_perf_library():
 
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
+@check("perf: voices' meta.json read once per change (a rewrite misses, callers' changes stay theirs, safe across threads); the preview's record kept by stat")
+def u_perf_voices():
+    import threading
+    from undercover.core import fsutil, voicepreview, voices as V
+    from undercover.core.config import path
+    with isolated_data():
+        vdir = path("voices_dir")
+        for i in range(3):
+            d = vdir / f"pv-{i}"
+            d.mkdir(parents=True)
+            (d / "model.pth").write_bytes(b"\0" * 100)
+            if i != 2:
+                (d / "model.index").write_bytes(b"\0" * 50)
+            meta = {"name": d.name, "dir": "X:/elsewhere", "pth": "X:/elsewhere/model.pth",
+                    "index": "X:/elsewhere/model.index", "version": "v2", "sr": 40000, "extra": {"person": f"P {i}"}}
+            fsutil.write_text(d / "meta.json", json.dumps(meta))
+        (vdir / "no-meta").mkdir()
+        V._META.clear()
+        vs = V.list_voices()
+        assert [v.name for v in vs] == ["pv-0", "pv-1", "pv-2"], [v.name for v in vs]
+        assert vs[0].dir == vdir / "pv-0" and vs[0].pth == vdir / "pv-0" / "model.pth" and vs[0].index == vdir / "pv-0" / "model.index", vs[0]
+        assert vs[2].index == Path("X:/elsewhere/model.index"), "a file not next to meta.json isn't the stored path any more"
+        f0 = str(vdir / "pv-0" / "meta.json")
+        assert len(V._META) == 3 and f0 in V._META, list(V._META)
+        stamp, text = V._META[f0]
+        V._META[f0] = (stamp, text.replace('"P 0"', '"From the memo"'))   # same stat: served from the memo
+        assert V.get_voice("pv-0").extra["person"] == "From the memo", "an unchanged meta.json was read again"
+        vs = V.list_voices()
+        vs[1].extra["person"] = "changed by a caller"   # (callers do change their Voice's extra in place)
+        assert V.get_voice("pv-1").extra["person"] == "P 1", "a caller's change reached the memo"
+        v = V.get_voice("pv-0")
+        v.extra = {"person": "Rewritten"}
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json()))   # a writer anywhere: the stat changes
+        assert V.get_voice("pv-0").extra["person"] == "Rewritten", "a rewritten meta.json came from the memo"
+        V.set_display("pv-1", "Shown")
+        assert V.get_voice("pv-1").display == "Shown"
+        errors = []
+
+        def reader():
+            try:
+                for _ in range(30):
+                    names = [x.name for x in V.list_voices()]
+                    assert names == ["pv-0", "pv-1", "pv-2"], names
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+
+        def writer():
+            try:
+                for k in range(30):
+                    x = V.get_voice("pv-2")
+                    x.display = f"Name {k}"
+                    fsutil.write_text(x.dir / "meta.json", json.dumps(x.to_json()))
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+        ts = [threading.Thread(target=reader) for _ in range(4)] + [threading.Thread(target=writer)]
+        for t_ in ts:
+            t_.start()
+        for t_ in ts:
+            t_.join(60)
+        assert not errors, errors[:2]
+        assert V.get_voice("pv-2").display == "Name 29", V.get_voice("pv-2").display
+        # the preview line's record: read by stat, a new record (another key) misses
+        v = V.get_voice("pv-0")
+        (v.dir / "preview.mp3").write_bytes(b"\0" * 10)
+        fsutil.write_text(v.dir / "preview.json", json.dumps({"key": voicepreview.key(v)}))
+        voicepreview._RECS.clear()
+        assert voicepreview.fresh(v) and len(voicepreview._RECS) == 1
+        rec = str(v.dir / "preview.json")
+        voicepreview._RECS[rec] = (voicepreview._RECS[rec][0], "not-the-key")   # same stat: the memo answers
+        assert not voicepreview.fresh(v), "an unchanged preview.json was read again"
+        fsutil.write_text(v.dir / "preview.json", json.dumps({"key": voicepreview.key(v)}))
+        assert voicepreview.fresh(v), "a rewritten preview.json came from the memo"
+        v.display = "Another name"   # what the line says changed: not fresh, whatever the memo holds
+        assert not voicepreview.fresh(v)
+        (v.dir / "preview.mp3").unlink()
+        v.display = ""
+        assert not voicepreview.fresh(v), "fresh without its clip"
+        # an engine's readiness is kept READY_TTL seconds, then asked again
+        voicepreview._READY.clear()
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic(), "kept")
+        assert voicepreview._pack_ready("chatterbox", None) == "kept"
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic() - voicepreview.READY_TTL - 1, "kept")
+        assert voicepreview._pack_ready("chatterbox", None) in (True, False), "a readiness past its time wasn't asked again"
+        voicepreview._READY.clear()
+    V._META.clear()
+    voicepreview._RECS.clear()
+    return f"3 voices, a rewrite and a display change seen at once; 4 readers + 1 writer x 30; readiness kept {voicepreview.READY_TTL:.0f} s"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -15401,7 +15490,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

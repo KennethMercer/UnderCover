@@ -25,6 +25,7 @@ FILES = ("preview.mp3", "preview.json")   # the clip and its record: not part of
 ESTIMATE_S = 5.0   # one render: the Reader's line (about 2 s of audio) and the voice's conversion, its load included
 RENDER = [None]    # (job, voice) -> (samples, sample rate): SpeakEasy's render_line, set by the app at start
 _LOCK = threading.Lock()
+_MEMO_LOCK = threading.Lock()   # the memos below (perf2): held for a dict lookup only
 
 
 def line_for(v) -> str:
@@ -39,14 +40,32 @@ def _stat(p) -> int:
         return 0
 
 
+READY_TTL = 2.0   # seconds an engine's "can read here" is kept: a voice list asks it once per voice with a pack (perf2)
+_READY: dict = {}   # (engine, pin) -> (time.monotonic(), ready)
+
+
+def _pack_ready(engine: str, pin) -> bool:
+    """cadence.pack_ready, kept READY_TTL seconds (it looks for the engine's packages: about 2 ms a voice). An add-on
+    installed or removed shows on the voices' play buttons within that."""
+    now = time.monotonic()
+    with _MEMO_LOCK:
+        hit = _READY.get((engine, pin))
+    if hit and now - hit[0] < READY_TTL:
+        return hit[1]
+    from .cadence import pack_ready
+    ready = bool(pack_ready(engine, pin))
+    with _MEMO_LOCK:
+        _READY[(engine, pin)] = (now, ready)
+    return ready
+
+
 def key(v) -> str:
     """What the clip was made from: the line as said, the model, the index and the live speech pack (when it was made,
     by which engine: a pack still waiting to be heard, tts/pending, isn't the voice's yet)."""
-    from .cadence import pack_ready
     rec = (v.extra or {}).get("tts") or {}
     pack = {k: rec.get(k) for k in ("made", "engine", "engine_pin", "project")} if (Path(v.dir) / "tts").is_dir() and rec else None
     if pack is not None:   # (a pack whose engine isn't installed reads nothing: the Reader said the line instead)
-        pack["ready"] = bool(pack_ready(rec.get("engine", "chatterbox"), rec.get("engine_pin")))
+        pack["ready"] = _pack_ready(rec.get("engine", "chatterbox"), rec.get("engine_pin"))
     raw = json.dumps([line_for(v), _stat(v.pth), _stat(v.index), pack], sort_keys=True)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -55,12 +74,33 @@ def clip(v) -> Path:
     return Path(v.dir) / FILES[0]
 
 
+_RECS: dict = {}   # preview.json path -> ((st_ino, st_mtime_ns, st_size), the key it records): read once per change
+_RECS_KEEP = 1024
+
+
+def _recorded(f: Path):
+    """The key a preview.json records, read again only when its stat changes (make() replaces it whole: a new st_ino;
+    the stat comes before the read, so a write racing it is seen next time)."""
+    st = f.stat()
+    stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
+    with _MEMO_LOCK:
+        hit = _RECS.get(str(f))
+    if hit and hit[0] == stamp:
+        return hit[1]
+    got = json.loads(f.read_text(encoding="utf-8")).get("key")
+    with _MEMO_LOCK:
+        _RECS.pop(str(f), None)
+        _RECS[str(f)] = (stamp, got)
+        while len(_RECS) > _RECS_KEEP:
+            _RECS.pop(next(iter(_RECS)))
+    return got
+
+
 def fresh(v) -> bool:
     """The voice has its clip, made from what it is now (the ▶ shows only then)."""
     try:
-        rec = json.loads((Path(v.dir) / FILES[1]).read_text(encoding="utf-8"))
-        return clip(v).is_file() and rec.get("key") == key(v)
-    except (OSError, ValueError):
+        return clip(v).is_file() and _recorded(Path(v.dir) / FILES[1]) == key(v)
+    except (OSError, ValueError, AttributeError):
         return False
 
 
