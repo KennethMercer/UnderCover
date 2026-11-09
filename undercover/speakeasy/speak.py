@@ -747,13 +747,28 @@ def rename_speech(sid: str, name: str) -> dict:
         if not name:
             raise SpeakError("Type a name.")
         d = speech_dir()
-        moves = [(d / m[k], d / (name + Path(m[k]).suffix)) for k in ("file", "mp3") if m.get(k)]
-        for old, new in moves:
+        moves = [(k, d / m[k], d / (name + Path(m[k]).suffix)) for k in ("file", "mp3") if m.get(k)]
+        for _, old, new in moves:
             if new.exists() and new != old:
                 raise SpeakError(f"There's already a file called \"{new.name}\".")
-        for old, new in moves:
-            if old.exists():
-                fsutil.retry(lambda old=old, new=new: old.rename(new))
+        done, held = [], None
+        try:
+            for k, old, new in moves:
+                if old.exists():
+                    held = old
+                    fsutil.retry(lambda old=old, new=new: old.rename(new))
+                    done.append((k, old, new))
+        except OSError:   # (one file held open, a download of it: the speech and its files stay together, as they were)
+            stuck = False
+            for k, old, new in reversed(done):
+                try:
+                    fsutil.retry(lambda old=old, new=new: new.rename(old))
+                except OSError:   # can't go back either: the record follows the file, so the speech still lists
+                    m[k], stuck = new.name, True
+            if stuck:
+                fsutil.write_text(f, json.dumps(m, indent=1))
+            raise SpeakError(f"\"{held.name}\" is open somewhere (a download or a player?), so the speech "
+                             "keeps its name. Try again in a moment.")
         m["file"] = name + Path(m["file"]).suffix
         if m.get("mp3"):
             m["mp3"] = name + ".mp3"

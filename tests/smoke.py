@@ -7481,6 +7481,52 @@ def u_split_tags():
     return f"{n} cuts across a tag, none inside it"
 
 
+@check("bugs-da 4: a speech renamed while one of its files is held open keeps its name and its files together (the first move is put back); if even that can't be, its record follows the file, so it still lists")
+def u_rename_held():
+    from undercover.core import fsutil
+    from undercover.speakeasy import speak
+    with isolated_data():
+        d = speak.speech_dir()
+        sid = "0123456789"
+        (d / "Old one.flac").write_bytes(b"flac")
+        (d / "Old one.mp3").write_bytes(b"mp3")
+        (d / f"{sid}.json").write_text(json.dumps({"id": sid, "title": "Old one", "file": "Old one.flac", "mp3": "Old one.mp3",
+                                                   "created": "2026-11-08 10:00:00", "finished": 1.0}), encoding="utf-8")
+        real = fsutil.retry
+
+        def held(*fail):   # a retry that gives up on the calls numbered in `fail` (as after ~3 s of a held file)
+            n = [0]
+
+            def retry(fn, tries=30):
+                n[0] += 1
+                if n[0] in fail:
+                    raise PermissionError("held open")
+                return fn()
+            return retry
+        try:
+            fsutil.retry = held(2)   # the FLAC moves, the MP3 is held: the FLAC goes back
+            try:
+                speak.rename_speech(sid, "New name")
+                raise AssertionError("a rename with a held file said it worked")
+            except speak.SpeakError as e:
+                assert "Old one.mp3" in str(e), e
+            assert sorted(p.name for p in d.iterdir() if p.suffix != ".json") == ["Old one.flac", "Old one.mp3"]
+            assert [x["id"] for x in speak.list_speech()] == [sid] and speak.get_speech(sid)["file"] == "Old one.flac"
+            fsutil.retry = held(2, 3)   # and the FLAC can't go back either: the record names where it is
+            try:
+                speak.rename_speech(sid, "New name")
+                raise AssertionError("a rename with a held file said it worked")
+            except speak.SpeakError:
+                pass
+            got = speak.get_speech(sid)
+            assert got["file"] == "New name.flac" and got["mp3"] == "Old one.mp3" and [x["id"] for x in speak.list_speech()] == [sid], got
+            fsutil.retry = real
+            assert speak.rename_speech(sid, "Fine")["file"] == "Fine.flac" and (d / "Fine.mp3").exists()
+        finally:
+            fsutil.retry = real
+    return "held MP3: the FLAC put back, the speech lists; can't put back: the record follows"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15471,7 +15517,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
