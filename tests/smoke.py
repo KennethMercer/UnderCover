@@ -9824,6 +9824,18 @@ def u_ear():
         finally:
             fapi._start_preview = realp
         assert [(v["octave"], v["key"]) for v in pv["variants"]] == [(0, 1), (-1, 0)] and pv["voice"] == "zed-2-uc" and "voice" not in pv["variants"][1], pv
+        # a cover whose settings hold its key as a float (as a cover's settings store it): variants without a key still have labels
+        import undercover.frontman.history as _fh
+        realg = _fh.get
+        _fh.get = lambda i: {**realg(i), "options": {**realg(i)["options"], "key": 2.0, "octave": -1.0}}
+        fapi._start_preview = lambda h, body: pv.update(body)
+        try:
+            h5 = _FakeHandler()
+            fapi._cover_octaves(h5, cov["id"], {"variants": [{"octave": 0}, {"octave": 1}]})
+        finally:
+            _fh.get, fapi._start_preview = realg, realp
+        assert [v["label"] for v in pv["variants"]] == ["octave +0, key +2", "octave +1, key +2"], pv["variants"]
+        assert (fapi._signed(None), fapi._signed(-1.0), fapi._signed(float("nan")), fapi._signed("x")) == ("+0", "-1", "+0", "+0")
         f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
         assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
         # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix

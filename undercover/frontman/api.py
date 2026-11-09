@@ -222,6 +222,14 @@ def _cover_again(h, item_id: str, body: dict):
                      "options": opts})
 
 
+def _signed(v) -> str:
+    """A stored octave or key for a label, "+2": a cover's own settings may hold it as a float (2.0), or not at all."""
+    try:
+        return f"{int(round(float(v))):+d}" if v not in (None, "") else "+0"
+    except (TypeError, ValueError, OverflowError):
+        return "+0"
+
+
 def _cover_octaves(h, item_id: str, body: dict):
     """Short previews of a finished cover at two octave / key settings (phase 22: when two octaves fit a voice about as
     well, the user picks by ear). Only octave and key change; the backing follows the lead's octave as in /again."""
@@ -238,7 +246,7 @@ def _cover_octaves(h, item_id: str, body: dict):
             return h._error(str(e))
         if "octave" in change and old.get("backing_octave") == old.get("octave"):
             change["backing_octave"] = change["octave"]
-        variants.append({"label": f"octave {change.get('octave', old.get('octave', 0)):+d}, key {change.get('key', old.get('key', 0)):+d}",
+        variants.append({"label": f"octave {_signed(change.get('octave', old.get('octave')))}, key {_signed(change.get('key', old.get('key')))}",
                          **change})
     if len(variants) != 2:
         return h._error("Give the two octave / key settings to compare.")
