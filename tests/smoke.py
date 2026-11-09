@@ -8128,7 +8128,7 @@ def u_rolloff_covers():
     # strays, only inside the lists' folder; one with the cover's delete, the list's folder only); a new caller must be added
     # here on purpose
     assert sorted(c.split(":")[0] for c in calls["remove_files("]) == ["app/firstrun.py", "core/doctor.py", "core/tailnet.py",
-                                                                        "core/tailnet.py", "core/themes.py",
+                                                                        "core/tailnet.py", "core/tailnet.py", "core/themes.py",   # (forget: the hidden link's too)
                                                                         "core/vault.py", "core/vault.py", "core/voices.py", "core/ytdlp.py", "doubleagent/improved.py",
                                                                         "frontman/edits.py", "frontman/edits.py", "frontman/edits.py",
                                                                         "frontman/history.py", "safehouse/api.py", "safehouse/library.py", *["safehouse/smaller.py"] * 10,
