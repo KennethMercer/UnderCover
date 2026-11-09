@@ -5923,7 +5923,7 @@ def u_rcpreview():
     st = inspect.getsource(VP.start)
     assert 'if os.environ.get("UNDERCOVER_NO_BACKFILL"):' in st and "jobs.JOBS.pop(j.id, None)" in st
     assert '"UNDERCOVER_NO_BACKFILL": "1"' in inspect.getsource(sys.modules[__name__])
-    assert 'pack["ready"] = bool(pack_ready(' in inspect.getsource(VP.key) and "wait=20.0)" in inspect.getsource(srv.Handler._voice_upload)
+    assert 'pack["ready"] = _pack_ready(' in inspect.getsource(VP.key) and "bool(pack_ready(" in inspect.getsource(VP._pack_ready) and "wait=20.0)" in inspect.getsource(srv.Handler._voice_upload)
     assert 'out["check_s"] = round(service.check_estimate_s(person, len(cands))' in inspect.getsource(FA._auto_plan)
     page = {f: (web / f).read_text(encoding="utf-8") for f in ("app.js", "oneshot.js", "speakeasy.js", "doubleagent.js")}
     assert "const chk = p.check_s != null ? etaWords" in page["oneshot.js"]
