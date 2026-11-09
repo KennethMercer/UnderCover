@@ -120,6 +120,7 @@ def sentences(text: str) -> list[dict]:
     paras = [p.strip() for p in re.split(r"\n\s*\n", text.replace("\r", "")) if p.strip()]
     for pi, para in enumerate(paras):
         para = re.sub(r"\s+", " ", para)
+        para = re.sub(r"(\[[A-Za-z][A-Za-z ]*\s+[\d.]*\d\s*[A-Za-z]*)\.\s*\]", r"\1]", para)   # [pause 1.5 s.]: not a sentence's end
         parts = []
         for s in (s.strip() for s in _END.split(para) if s.strip()):
             if parts and _ABBR.search(parts[-1]):   # "Mr. Smith" isn't two sentences

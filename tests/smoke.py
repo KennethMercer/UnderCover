@@ -7527,6 +7527,23 @@ def u_rename_held():
     return "held MP3: the FLAC put back, the speech lists; can't put back: the record follows"
 
 
+@check("bugs-da 5: a pause written without a unit, in milliseconds or with a stop ([pause 2], [pause 500ms], [pause 1.5 s.]) is a pause, never read out; one in a unit we don't read ([pause 2 minutes]) is named, not spoken")
+def u_pause_forms():
+    from undercover.speakeasy import tags, tts
+    d = lambda text: tags.directions(tts.sentences(text))[:2]
+    for tag, secs in (("[pause 2]", 2.0), ("[pause 500ms]", 0.5), ("[pause 1.5 s.]", 1.5), ("[pause 2 sec.]", 2.0),
+                      ("[pause 250 milliseconds]", 0.25), ("[Pause 3 Seconds]", 3.0), ("[pause 9]", tags.PAUSE_MAX_S)):
+        ps, unk = d(f"Wait {tag} for it.")
+        assert [p["text"] for p in ps] == ["Wait", "for it."] and ps[0]["hold"] == secs and unk == [], (tag, ps, unk)
+    ps, unk = d("The first part is done. [pause 1.5 s.] Now the second part starts.")   # (a stop in the tag ends no sentence)
+    assert [p["text"] for p in ps] == ["The first part is done.", "Now the second part starts."] and ps[0]["hold"] == 1.5, ps
+    ps, unk = d("Hold [pause 2 minutes] on.")
+    assert [p["text"] for p in ps] == ["Hold on."] and unk == ["[pause 2 minutes]"], (ps, unk)
+    ps, unk = d("See [John 3] and [Fig 2] here.")   # a name and a number: still text
+    assert ps[0]["text"] == "See [John 3] and [Fig 2] here." and unk == [], (ps, unk)
+    return "2, 500ms, 1.5 s., milliseconds, capitals: pauses; 2 minutes named"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15517,7 +15534,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

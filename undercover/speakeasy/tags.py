@@ -29,7 +29,10 @@ STYLES = {"whispering", "happy", "angry"}
 # the ones the ear has passed, which go to the engine. None yet (blind pairs, 2026-10-29): [laugh] was heard but not as
 # real, the styles weren't told from none. The others are taken out and named as not used yet.
 ENGINE_ON: frozenset = frozenset()
-_TAG = re.compile(r"\[([A-Za-z][A-Za-z ]{0,24}?)(?:\s+(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?))?\s*\]")
+# a number after the name, its unit optional ([pause 2], [pause 500ms], [pause 1.5 s.]): seconds unless said otherwise
+_TAG = re.compile(r"\[([A-Za-z][A-Za-z ]{0,24}?)(?:\s+(\d+(?:\.\d+)?)\s*([A-Za-z]+)?\.?)?\s*\]")
+_UNITS = {**dict.fromkeys(("s", "sec", "secs", "second", "seconds"), 1.0),
+          **dict.fromkeys(("ms", "msec", "msecs", "millisecond", "milliseconds"), 0.001)}
 _ENGINE: dict = {}
 
 
@@ -84,8 +87,15 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
                 elif f"[{low}]" not in unknown:
                     unknown.append(f"[{low}]")
                 continue
+            per = _UNITS.get((m.group(3) or "s").lower())
+            if secs and per is None:   # a number we don't read as a length ([pause 2 minutes]): a pause named, else text
+                if name != "pause":
+                    cur.append(m.group(0))
+                elif (t := " ".join(m.group(0).lower().split())) not in unknown:
+                    unknown.append(t)
+                continue
             if name == "pause":
-                parts.append(("".join(cur), min(PAUSE_MAX_S, float(secs)) if secs else PAUSE_S, sounds))
+                parts.append(("".join(cur), min(PAUSE_MAX_S, float(secs) * per) if secs else PAUSE_S, sounds))
                 cur, sounds = [], False
             elif name in ("louder", "softer"):
                 gain = max(-GAIN_DB, min(GAIN_DB, gain + (GAIN_DB if name == "louder" else -GAIN_DB)))
