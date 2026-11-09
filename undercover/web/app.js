@@ -435,7 +435,7 @@ function upload(file) {
   xhr.send(file);
 }
 // The build path (Song / Voice / Convert) is a section of the one-shot card (consult 1): open while something is on its desk, a song loaded or a
-// voice picked by hand, and closed by itself when the desk is empty; "or set it up yourself" opens it by hand. No memory: a first visit is empty.
+// voice picked by hand, and closed by itself when the desk is empty; "Set it up yourself" (the one-shot's line) opens it by hand. No memory: a first visit is empty.
 function syncBuild() {
   const build = $("#build"), tog = $("#build-toggle"); if (!build) return;
   const desk = !!S.song || S.deskVoice;
@@ -444,7 +444,7 @@ function syncBuild() {
   const open = S.buildOpen != null ? S.buildOpen : desk;
   build.hidden = !open;
   if (open) drawSongWave();   // its waveform gets its width now (the ResizeObserver needs a painted frame)
-  tog.setAttribute("aria-expanded", open); tog.innerHTML = open ? "set it up yourself &#9662;" : "or set it up yourself &#8250;";
+  tog.setAttribute("aria-expanded", open); tog.innerHTML = open ? "Set it up yourself &#9662;" : "Set it up yourself &#8250;";
 }
 $("#build-toggle")?.addEventListener("click", () => { S.buildOpen = $("#build").hidden; syncBuild(); if (!$("#build").hidden) $("#build").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
 function renderSong() {
