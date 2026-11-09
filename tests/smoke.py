@@ -13182,6 +13182,63 @@ def u_perf_voices():
     return f"3 voices, a rewrite and a display change seen at once; 4 readers + 1 writer x 30; readiness kept {voicepreview.READY_TTL:.0f} s"
 
 
+@check("perf: page files carry an ETag (304 when unchanged), the CSP made once per change, gzip only when asked (phones)")
+def u_perf_static():
+    import gzip
+    import http.client
+    import tempfile
+    import threading
+    from undercover.app import server
+    idx = (server.WEB / "index.html").resolve()
+    page = server.static_page(idx)
+    body = idx.read_bytes()
+    assert page.body == body and page.csp == server.csp(body) and page.etag.startswith('"') and page.vary
+    assert server.static_page(idx) is page, "an unchanged page was made again"
+    assert gzip.decompress(page.gzipped()) == body and page.etag_gz != page.etag
+    for header, want in (("gzip, deflate, br", True), ("br;q=1.0, gzip;q=0.8", True), ("gzip;q=0", False),
+                         ("deflate", False), (None, False), ("GZIP", True), ("gzip;q=x", False)):
+        assert server.takes_gzip(header) is want, (header, want)
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:   # a rewritten file: its stat moves, it's made again
+        f = Path(td) / "a.js"
+        f.write_text("let a = 1;\n" * 200, encoding="utf-8")
+        a = server.static_page(f)
+        time.sleep(0.02)
+        f.write_text("let b = 2;\n" * 200, encoding="utf-8")
+        b = server.static_page(f)
+        assert b is not a and b.body != a.body and b.etag != a.etag and b.csp is None, "a changed file came from the memo"
+        small = Path(td) / "s.css"
+        small.write_text("a{}", encoding="utf-8")
+        assert not server.static_page(small).vary and server.static_page(small).gzipped() is None
+        server._STATIC.pop(str(f), None)
+        server._STATIC.pop(str(small), None)
+    srv = server.ExclusiveServer(("127.0.0.1", 0), server.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=10)
+
+        def get(p, **h):
+            conn.request("GET", p, headers=h)
+            r = conn.getresponse()
+            return r.status, r.read(), {k.lower(): v for k, v in r.getheaders()}
+        st, b1, h = get("/", **{"Accept-Encoding": "gzip"})
+        assert st == 200 and b1 == body and "content-encoding" not in h, "this PC got gzip (only phones do)"
+        assert h["etag"] == page.etag and h["cache-control"] == "no-cache" and h["content-security-policy"] == page.csp, h
+        st, b2, h = get("/", **{"If-None-Match": page.etag})
+        assert st == 304 and b2 == b"" and h["etag"] == page.etag and "content-length" not in h, (st, len(b2), h)
+        st, b3, _ = get("/", **{"If-None-Match": '"stale", W/' + page.etag})
+        assert st == 304 and not b3, "a list holding the tag (weak form) wasn't a 304"
+        st, b4, _ = get("/", **{"If-None-Match": '"stale"'})
+        assert st == 200 and b4 == body, "another tag got a 304"
+        st, js, h = get("/static/app.js")   # the same connection after a 304: still in step
+        assert st == 200 and js == (server.WEB / "app.js").read_bytes(), st
+        assert get("/static/../config.toml")[0] == 404 and get("/static/nope.js")[0] == 404
+        conn.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    return f"index {len(body) // 1024} KB, gzip {len(page.gzipped()) // 1024} KB; 304 with no body, kept-alive after it"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -15490,7 +15547,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

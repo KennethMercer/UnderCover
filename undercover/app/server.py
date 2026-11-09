@@ -624,18 +624,32 @@ class Handler(BaseHTTPRequestHandler):
 
     # static + files
     def _static(self, f: Path):
+        """A page file. no-cache as before (the browser asks every time), now with an ETag: an unchanged file is a 304
+        with no body. Over the network (a phone) text files go gzipped when the browser takes it."""
         f = f.resolve()
         if WEB.resolve() not in f.parents or not f.is_file():
             return self._error("Not found", 404)
-        body = f.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", (mimetypes.guess_type(f.name)[0] or "application/octet-stream") + "; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
+        page = static_page(f)
+        gz = self.remote and page.vary and takes_gzip(self.headers.get("Accept-Encoding"))
+        etag = page.etag_gz if gz else page.etag
+        match = self.headers.get("If-None-Match")
+        fresh = match is not None and (match.strip() == "*" or etag in [t.strip().removeprefix("W/") for t in match.split(",")])
+        self.send_response(304 if fresh else 200)
+        if not fresh:
+            body = page.gzipped() if gz else page.body
+            self.send_header("Content-Type", page.ctype)
+            self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
         self.send_header("Cache-Control", "no-cache")
-        if f.suffix == ".html":
-            self.send_header("Content-Security-Policy", csp(body))
+        if page.vary:
+            self.send_header("Vary", "Accept-Encoding")
+        if gz and not fresh:
+            self.send_header("Content-Encoding", "gzip")
+        if page.csp:
+            self.send_header("Content-Security-Policy", page.csp)
         self.end_headers()
-        self.wfile.write(body)
+        if not fresh:
+            self.wfile.write(body)
 
     def _file(self, url_path: str, download: bool):
         parts = url_path.split("/", 3)  # ['', 'files', root, rel]
@@ -923,6 +937,65 @@ class Handler(BaseHTTPRequestHandler):
         else:
             platform.open_folder(path("output_dir"))
         self._json({"ok": True})
+
+
+class StaticPage:
+    """A page file as served: its bytes, ETag, Content-Type, CSP (pages) and gzipped bytes (text files, for phones)."""
+    GZIP_TYPES = (".html", ".js", ".css", ".json", ".svg", ".webmanifest", ".txt")
+    GZIP_MIN = 1024   # (smaller files gain nothing)
+
+    def __init__(self, f: Path, body: bytes):
+        import hashlib
+        self.body = body
+        tag = hashlib.sha256(body).hexdigest()[:20]
+        self.etag, self.etag_gz = f'"{tag}"', f'"{tag}-gz"'
+        self.ctype = (mimetypes.guess_type(f.name)[0] or "application/octet-stream") + "; charset=utf-8"
+        self.csp = csp(body) if f.suffix == ".html" else None
+        text = f.suffix.lower() in self.GZIP_TYPES and len(body) >= self.GZIP_MIN
+        self._gzip = None
+        self.vary = text   # (a phone's answer differs by Accept-Encoding: every answer says so, for any cache between)
+
+    def gzipped(self) -> bytes | None:
+        """The gzipped bytes of a text file (made on a phone's first ask: the PC never needs them), else None. Two
+        threads making them at once make the same bytes."""
+        if self.vary and self._gzip is None:
+            import gzip
+            self._gzip = gzip.compress(self.body, compresslevel=6, mtime=0)
+        return self._gzip
+
+
+def takes_gzip(accept: str | None) -> bool:
+    """Accept-Encoding names gzip, without q=0."""
+    for part in (accept or "").split(","):
+        name, *params = [x.strip().lower() for x in part.split(";")]
+        if name == "gzip":
+            q = next((p[2:] for p in params if p.startswith("q=")), "1")
+            try:
+                return float(q) > 0
+            except ValueError:
+                return False
+    return False
+
+
+_STATIC: dict = {}   # resolved path -> ((st_ino, st_mtime_ns, st_size), StaticPage): made once per change (perf2)
+_STATIC_LOCK = threading.Lock()
+
+
+def static_page(f: Path) -> StaticPage:
+    """The StaticPage for a file under WEB, made again only when the file's stat changes (the stat comes before the
+    read, so an edit racing it is seen on the next request). Holds at most the page files themselves (about 1 MB)."""
+    st = f.stat()
+    stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
+    with _STATIC_LOCK:
+        hit = _STATIC.get(str(f))
+    if hit and hit[0] == stamp:
+        return hit[1]
+    page = StaticPage(f, f.read_bytes())
+    with _STATIC_LOCK:
+        _STATIC[str(f)] = (stamp, page)
+        while len(_STATIC) > 256:   # (only WEB's files come here; a bound all the same)
+            _STATIC.pop(next(iter(_STATIC)))
+    return page
 
 
 def csp(html: bytes) -> str:
