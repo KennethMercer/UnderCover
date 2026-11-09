@@ -129,14 +129,14 @@ Type: filesandordirs; Name: "{app}\cache\converted"
 Type: filesandordirs; Name: "{app}\cache\keyshift"
 Type: filesandordirs; Name: "{app}\cache\previews"
 Type: filesandordirs; Name: "{app}\cache\stems"
-; (pass 12) more the app makes and makes again: yt-dlp's staged updates, scratch readings, the voice check's readers,
+; (pass 12) more the app makes and makes again: yt-dlp's staged updates, the voice check's readers,
 ; voice packs on their way out, Hugging Face listings, matplotlib's font cache, separation scratch, songs' musical keys,
 ; and the measured speeds and timings. Kept in cache\ with the training projects: voice_quality.json and
 ; voice_check_failed.json (the voice checks' verdicts), subjects.json (the user's picks of who a name means),
-; youtube_songs.json (where the kept songs came from), worklist*.json (tonight's queue) and root.txt (where the kept
-; files' stored paths point). tests\smoke.py (u_uninstall_kept_paths) holds this list against the app's own.
+; youtube_songs.json (where the kept songs came from), worklist*.json (tonight's queue), root.txt (where the kept
+; files' stored paths point) and cadence\ (the vault keeps it as settings: nothing approved by ear is lost).
+; tests\smoke.py (u_uninstall_kept_paths) holds this list against the app's own.
 Type: filesandordirs; Name: "{app}\cache\ytdlp"
-Type: filesandordirs; Name: "{app}\cache\cadence"
 Type: filesandordirs; Name: "{app}\cache\voicecheck"
 Type: filesandordirs; Name: "{app}\cache\packs"
 Type: filesandordirs; Name: "{app}\cache\hf_lists"

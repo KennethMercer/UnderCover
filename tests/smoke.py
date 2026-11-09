@@ -7238,7 +7238,7 @@ def u_uninstall_kept_paths():
     sect = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
     gone = [m.group(2) for m in re.finditer(r'^Type: (files|filesandordirs); Name: "\{app\}\\([^"]+)"', sect, re.M)]
     cache_gone = {g.split("\\", 1)[1] for g in gone if g.startswith("cache\\")}
-    KEPT_CACHE = {"training", "voice_quality.json", "voice_check_failed.json", "subjects.json", "youtube_songs.json",
+    KEPT_CACHE = {"training", "cadence", "voice_quality.json", "voice_check_failed.json", "subjects.json", "youtube_songs.json",
                   "worklist.json", "root.txt"}
     MINE = ("uploads", "output", "models", "models\\voices", "cache\\training", "config.toml", "tutorial.json", "ear.json",
             "themes", "manifest.json")
@@ -7261,7 +7261,7 @@ def u_uninstall_kept_paths():
         hit = name in cache_gone or name in KEPT_CACHE or any("*" in g and re.fullmatch(re.escape(g).replace(r"\*", ".*"), name)
                                                               for g in cache_gone)
         assert hit, f"cache\\{name} is made by the app but the uninstaller neither removes it nor lists it as kept"
-    assert "reverb_ir_*.wav" in cache_gone and {"ytdlp", "cadence", "voicecheck", "packs", "hf_lists", "matplotlib", "_work", "keys"} <= cache_gone
+    assert "reverb_ir_*.wav" in cache_gone and {"ytdlp", "voicecheck", "packs", "hf_lists", "matplotlib", "_work", "keys"} <= cache_gone
     iscc = next((c for c in (Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Inno Setup 6/ISCC.exe",
                              Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6/ISCC.exe") if c.is_file()), None)
     if os.name != "nt" or iscc is None:
