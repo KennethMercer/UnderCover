@@ -157,6 +157,20 @@ class CoverEngine:
             notes.append("The backing goes to the singer not on the lead, one backing phrase at a time.")
         return True
 
+    def _chord_note(self, back16, notes: list) -> None:
+        """Where a converted backing (a backing voice's or a duet's) is a chord of several voices, one singer can't
+        follow it and may waver: the notes say where (duets.chord_spans), so it's no surprise. The audio isn't
+        changed. One read of the stem's salience: the conversion's own reads are per region and keep only the track.
+        A measure that fails costs the note, never the cover."""
+        from .duets import chord_note, chord_spans
+        try:
+            line = chord_note(chord_spans(self.converter.rmvpe.salience(back16)))
+        except Exception as e:   # noqa: BLE001 - the cover stands without the note
+            print(f"Chord note: not measured ({type(e).__name__}: {e}).", flush=True)
+            return
+        if line:
+            notes.append(line)
+
     def _duet_plan(self, opts: "CoverOptions", voice, dvoice, cstems: dict, work: Path, notes: list, report,
                    lead_f0=None, heard: dict | None = None) -> "CoverOptions":
         """Who sings when (duets.py): the cover's own plan from Make again, checked; else found from the song's words
@@ -335,6 +349,8 @@ class CoverEngine:
             if opts.duet_backing == "other":
                 bplan = other_singer(bplan)
             sf.write(str(conv_backing), np.clip(stitch(ba, bb, bplan, bsr), -1, 1), bsr, subtype="PCM_24")
+        if conv_backing:   # a converted backing that's a chord: the notes say where it may waver
+            self._chord_note(back16 if dback else load_16k(cstems["backing"]), notes)
         secs["convert"] = round(time.perf_counter() - t, 2)
         report("converting", 1.0, "Vocal converted")
 

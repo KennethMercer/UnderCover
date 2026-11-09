@@ -534,7 +534,10 @@ stitched by the plan.
   never split says nothing: nothing is separated just to know. The
   backing has its own plan (`duets.backing_plan`): its phrases are its singing between its own silences, each is sung
   whole by whoever sings most of the lead under it, and its voice changes only inside its own silence, at the point
-  nearest the lead's change.
+  nearest the lead's change. Where a converted backing (a duet's or a backing voice's) is a chord one singer can't
+  follow, 3 s or more with a second line (`f0fix._second_line` over `RIVAL`) on most of its singing, the cover's notes
+  name the times, at most three and then "and N more" (`duets.chord_spans`, `chord_note`, `pipeline._chord_note`, one
+  salience read of the stem); the audio isn't changed.
 - **Too few words** (under 20 heard): there's no chorus to find, and the voices take every two lines in turn.
 - **On the page** (`renderDuet`, `renderDuetPlan` in `app.js`): the second singer is picked from the same voice rows, and
   the Convert bar says the backing in words. The strip is the plan of the newest cover of this song by these two, from the

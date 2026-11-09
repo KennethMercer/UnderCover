@@ -440,6 +440,56 @@ def stitch(a: np.ndarray, b: np.ndarray, plan: list, sr: int) -> np.ndarray:
     return (a[:n] * wa + b[:n] * wb).astype(np.float32)
 
 
+CHORD_MIN_S = 3.0     # a chord in a converted backing this long or longer is named in the cover's notes (chord_spans)
+CHORD_MOST = 0.4      # ...where a second line sounds on this share of the sung frames, over CHORD_WIN_S around each one.
+CHORD_WIN_S = 1.0     # On Pink Pony Club's chord (3:19-3:37, the maintainers' notes, glitch3) half its sung frames have
+                      # one, as its parts take turns. It names 3:20-3:34 there, three stretches of Toxic's (1:00, 1:56,
+                      # 2:41) and nothing in Hello's backing (one line, the control)
+CHORD_MERGE_S = 1.0   # two stretches this close are one
+CHORD_NAMED = 3       # the note names this many, then "and N more"
+
+
+def chord_spans(salience: np.ndarray, thred: float = 0.03) -> list:
+    """Where a backing stem is a chord one voice can't follow: stretches of CHORD_MIN_S or more where a second line
+    (f0fix._second_line over f0fix.RIVAL, as hold_line counts one) sounds on most of the sung frames. `salience` is
+    RMVPE's (frames, 360), 10 ms a frame; it isn't changed. -> [[t0, t1]] in seconds."""
+    from ..core.engine.rvc.f0fix import RIVAL, _second_line
+    if len(salience) < CHORD_MIN_S * 100:
+        return []
+    s = np.where(salience > thred, salience, 0).astype(np.float32)
+    sung = s.max(1) > 0
+    chord = sung & (_second_line(s) > RIVAL)
+    del s
+    win = np.ones(int(CHORD_WIN_S * 100))
+    most = np.convolve(chord.astype(float), win, "same") >= CHORD_MOST * np.maximum(np.convolve(sung.astype(float), win, "same"), 1)
+    on = np.flatnonzero(most & chord)
+    if not len(on):
+        return []
+    out = []
+    for run in np.split(on, np.flatnonzero(np.diff(on) > CHORD_MERGE_S * 100) + 1):
+        a, b = run[0] / 100, (run[-1] + 1) / 100
+        if b - a >= CHORD_MIN_S:
+            out.append([round(a, 2), round(b, 2)])
+    return out
+
+
+def _clock(t: float) -> str:
+    return f"{int(t // 60)}:{int(t % 60):02d}"
+
+
+def chord_note(spans: list) -> str | None:
+    """The cover's note for chord_spans, said plainly so a waver there is no surprise; None when there are none."""
+    if not spans:
+        return None
+    named = [f"{_clock(a)}-{_clock(b)}" for a, b in spans[:CHORD_NAMED]]
+    more = len(spans) - len(named)
+    if more:
+        where = ", ".join(named) + f" and {more} more place{'s' if more > 1 else ''}"
+    else:
+        where = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
+    return f"The backing at {where} is a chord of several voices; one singer can't follow it cleanly, so it may waver there."
+
+
 def singer_frames(plan: list, n: int) -> np.ndarray:
     """Who sings each 10 ms frame of the pitch track (n frames), by the plan: an array of "A" / "B"."""
     who = np.full(n, plan[-1][2] if plan else "A", dtype="<U1")

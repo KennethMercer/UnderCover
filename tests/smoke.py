@@ -9855,6 +9855,57 @@ def u_duets():
     finally:
         RM.lufs = real_lufs
     assert 'if opts.duet_backing == "other":' in inspect.getsource(PL.CoverEngine.make_cover)
+    # a converted backing that's a chord: the notes say where it may waver (no audio change). Only when the backing is
+    # converted (a quiet one never is: _duet_backing and the backing voice's own rule above)
+    import tempfile as _tf
+    import soundfile as _sf
+    from undercover.core.engine.convert import load_16k as _l16
+
+    def tone_salience(x):   # a stand-in for RMVPE: each 10 ms frame's spectral peaks, at their own pitch bins
+        win, n = 2048, len(x) // 160
+        xp, hz = np.pad(x, (win // 2, win // 2)), np.fft.rfftfreq(2048, 1 / 16000)
+        out = np.zeros((n, 360), np.float32)
+        for i in range(n):
+            m = np.abs(np.fft.rfft(xp[i * 160:i * 160 + win] * np.hanning(win)))
+            if m.max() < 1.0:
+                continue
+            for k in np.flatnonzero((m[1:-1] > m[:-2]) & (m[1:-1] >= m[2:]) & (m[1:-1] > 0.3 * m.max())) + 1:
+                b = int(round((1200 * np.log2(hz[k] / 10) - 1997.3794084376191) / 20))
+                if 0 <= b < 360:
+                    out[i, b] = 0.9 * m[k] / m.max()
+        return out
+    t = np.arange(14 * sr) / sr
+    solo = np.where((t >= 2) & (t < 12), 0.2 * np.sin(2 * np.pi * 440 * t), 0).astype(np.float32)
+    third = solo + np.where((t >= 5.5) & (t < 9.5), 0.2 * np.sin(2 * np.pi * 554.37 * t), 0).astype(np.float32)   # a major third up
+    eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=tone_salience)))
+    with _tf.TemporaryDirectory(prefix="uc-chord-") as td:   # (its own folder: never the user's)
+        for name, x in (("third", third), ("solo", solo)):
+            _sf.write(str(Path(td) / f"{name}.wav"), x, sr)
+        spans = D.chord_spans(tone_salience(_l16(Path(td) / "third.wav")))
+        assert len(spans) == 1 and abs(spans[0][0] - 5.5) < 0.2 and abs(spans[0][1] - 9.5) < 0.2, spans
+        notes = []
+        PL.CoverEngine._chord_note(eng, _l16(Path(td) / "third.wav"), notes)
+        assert notes == ["The backing at 0:05-0:09 is a chord of several voices; one singer can't follow it cleanly, "
+                         "so it may waver there."], notes
+        notes = []
+        PL.CoverEngine._chord_note(eng, _l16(Path(td) / "solo.wav"), notes)
+        assert notes == [] and D.chord_spans(tone_salience(_l16(Path(td) / "solo.wav"))) == [], notes
+    # two chords a moment apart are one; a short one isn't named; past three, "and N more"
+    sal = np.zeros((6000, 360), np.float32)
+    sal[100:500, 100] = sal[100:500, 120] = 0.8     # 1-5 s, a chord
+    sal[500:550, 100] = 0.8                          # half a second of one line
+    sal[550:900, 100] = sal[550:900, 120] = 0.8     # then the chord again, to 9 s: one stretch
+    sal[2000:2200, 100] = sal[2000:2200, 120] = 0.8  # 2 s: too short to name
+    sal[3000:3400, 150] = 0.8                        # one line alone: not a chord
+    assert D.chord_spans(sal) == [[1.0, 9.0]], D.chord_spans(sal)
+    assert D.chord_spans(np.zeros((200, 360), np.float32)) == [] and D.chord_note([]) is None
+    five = [[1.0, 4.0], [10.0, 14.0], [70.0, 74.5], [80.0, 84.0], [90.0, 94.0]]
+    assert D.chord_note(five).startswith("The backing at 0:01-0:04, 0:10-0:14, 1:10-1:14 and 2 more places is a chord"), D.chord_note(five)
+    assert "0:10-0:14 and 1:10-1:14 is" in D.chord_note(five[:3]) and "and 1 more place is" in D.chord_note(five[:4])
+    deaf, notes = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=lambda x: 1 / 0))), []
+    PL.CoverEngine._chord_note(deaf, np.zeros(sr, np.float32), notes)
+    assert notes == []   # (a measure that fails costs the note, never the cover)
+    assert "if conv_backing:   # a converted backing that's a chord" in inspect.getsource(PL.CoverEngine.make_cover)
     import inspect as _ins
     from undercover.frontman import oneshot as OS3
     os_src = _ins.getsource(OS3.run)
