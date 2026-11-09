@@ -667,6 +667,7 @@ $("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.t
 // A duet (1.2): a second singer takes turns with the voice (frontman/duets.py), shared one of two ways. Never the lead
 // itself, and only a voice that's installed.
 // (Line by line stays hidden until it passes the ear; I'll choose waits for its editor)
+const DUET_WAY_ONE = { turns: "They take turns.", lines: "They take a line each." };   // the way, said when it's the only one shown
 const DUET_WAYS = { turns: "One takes the verses and the other the choruses, by whose range suits them.", lines: "A line each, changing only where the singer breathes." };
 const DUET_BACKINGS = { singers: "Under each line, the backing is sung by whoever has the lead there.", other: "The backing goes to whoever isn't on the lead, one backing phrase at a time.",
                         original: "The song's own backing singers stay." };
@@ -687,12 +688,15 @@ function renderDuet() {
   $("#fm-duet-box").classList.toggle("two", !!duet);
   $("#fm-duet-q").textContent = duet ? "Singing it" : "Sing it with someone?";
   $("#fm-duet-add").hidden = !!duet;
-  $("#fm-duet-chips").innerHTML = duet && S.voice ? `<span class="vchip a"><span class="av">${vinitial(S.voice)}</span>${vname(S.voice)}<small>lead</small></span>
+  $("#fm-duet-chips").innerHTML = duet && S.voice ? `<span class="vchip a"><span class="av">${vinitial(S.voice)}</span>${vname(S.voice)}</span>
     <span class="vchip b"><span class="av">${vinitial(duet)}</span>${vname(duet)}<button class="x" id="fm-duet-x" type="button" aria-label="Just one singer" title="Just one singer">×</button></span>` : "";
   duetPick(!duet && !$("#fm-duet").hidden);
   const shown = $$("#fm-duet-way button").filter(b => !b.hidden && !b.disabled).map(b => b.dataset.v);   // (a hidden way isn't kept from before)
   const way = shown.includes(S.opts.duet_way) ? S.opts.duet_way : shown.includes(S.defaults.duet_way) ? S.defaults.duet_way : shown[0];
   if (S.opts.duet_voice) S.opts.duet_way = way;
+  // one way to share it: said as a sentence, not a lone pill to press (Internal Affairs D6); the question comes back with a second way
+  $("#fm-duet-way").hidden = shown.length < 2;
+  $("#fm-duet-way-l").textContent = shown.length < 2 ? DUET_WAY_ONE[way] || DUET_WAY_ONE.turns : "How do they share it?";
   $("#fm-duet-way-box").hidden = !S.opts.duet_voice;
   $$("#fm-duet-way button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === way)));
   const own = v => typeof v === "string" && Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v);   // (a stored value is only data)

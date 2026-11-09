@@ -8847,7 +8847,7 @@ def u_edits():
     e = E.check_edit({**sing, "t0": 20.4, "t1": 40.4}, doc)
     assert (e["t0"], e["t1"]) == (20.4, 40.4) and e["moved"] == "", e
     e = E.check_edit({**sing, "t0": 19.0, "t1": 39.0}, doc)
-    assert (e["t0"], e["t1"]) == (20.02, 40.02) and 'The start moved past "w34"' in e["moved"] and 'The end moved past "w74"' in e["moved"], e
+    assert (e["t0"], e["t1"]) == (20.02, 40.02) and e["moved"] == 'It starts just after "w35" and ends just after "w75" (0:20–0:40).', e   # (the word next to where it landed)
     assert e["words"] == [36, 75], e
     e = E.check_edit({**sing, "section": 1}, doc)
     assert (e["t0"], e["t1"]) == (20.98, 40.02), e
@@ -8856,7 +8856,7 @@ def u_edits():
     e = E.check_edit({**sing, "t0": 0.01, "t1": 59.99}, doc)
     assert (e["t0"], e["t1"]) == (0.0, 60.0), e   # the ends of the song are ends
     e = E.check_edit({**sing, "t0": 44.0, "t1": 59.99}, doc)
-    assert (e["t0"], e["t1"]) == (45.0, 60.0) and "between two sung sounds" in e["moved"], e   # a dip only with no silence near, and it says so
+    assert (e["t0"], e["t1"]) == (45.0, 60.0) and e["moved"] == 'It starts just after "w85" and ends at the end of the song (0:45–1:00); the start may be heard.', e   # a dip only with no silence near, and it says so
     # what's refused, and the list unchanged
     for bad in ([], "x", None, 3, {**sing}, {**sing, "t0": 1}, {**sing, "t0": 1, "t1": 9, "section": 0},
                 {**sing, "t0": 1, "t1": 9, "path": "../x"}, {**sing, "t0": float("nan"), "t1": 9}, {**sing, "t0": 1, "t1": float("inf")},
@@ -8875,7 +8875,7 @@ def u_edits():
     refused({"op": "key", "part": "lead", "t0": 20.2, "t1": 40.2}, doc, "key")
     assert E.check_edit({**sing, "t0": 20.2, "t1": 40.2, "note": "a\u202eb\x07c\nd\u200fé"}, doc)["note"] == "abcdé"   # (outside text, shown as text)
     long = [list(w) for w in words]   # a heard word of any length can't make an edit the list can't read back
-    long[34][0], long[74][0], long[6][0] = (" " + "x" * 180,) * 3
+    long[35][0], long[75][0], long[6][0] = (" " + "x" * 180,) * 3
     big = E.new_doc("0123456789", long, rows, plan, plan, 60.0, {"A": 0, "B": -1}, pts, gate, True, True)
     e = E.check_edit({**sing, "t0": 19.0, "t1": 39.0}, big)
     assert len(e["moved"]) <= E.MAX_SAID and '"' + "x" * E.MAX_WORD + '"' in e["moved"], e["moved"]
@@ -9281,12 +9281,12 @@ def u_edits():
     pd = E.new_doc("0123456789", ws, [], two, two, 30.0, {"A": 0, "B": 0}, E.snap_points(x, x, ws), gate, True, True)
     assert pd["points"]["lead"] == [[0.0, 8.0], [12.0, 15.0], [20.0, 30.0]], pd["points"]
     e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [12, 26], "words_hash": pd["words_hash"]}, pd)
-    assert e["t1"] > 20.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the end in the outro
+    assert e["t1"] > 20.0 and "may be heard" not in (e["moved"] or ""), e   # the end in the outro
     e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [0, 11], "words_hash": pd["words_hash"]}, pd)
-    assert 7.9 <= e["t0"] <= 8.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
-    assert "past" not in e["moved"] and e["moved"] == "The end moved 0.5 s.", e   # an edge moved outward is past none of its own words
+    assert 7.9 <= e["t0"] <= 8.0 and "may be heard" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
+    assert e["moved"] == 'It starts just before "w0" and ends just after "w11" (0:07–0:12).', e   # an edge moved outward is past none of its own words
     e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 6.0, "t1": 16.5}, pd)   # an end moved in: the nearest word it left out
-    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'The end moved past "x4".'), e
+    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'It starts just before "w0" and ends just before "x0" (0:06–0:14).'), e
     refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
     assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
     long_back = np.concatenate([x, 0.3 * np.sin(2 * np.pi * 220 * np.arange(16000 * 3) / 16000).astype(np.float32), np.zeros(16000, np.float32)])
@@ -9649,6 +9649,10 @@ def u_duets():
             assert OS.split_duet(text) == {"person": "Michael Jackson", "with": "Barry White", "voice": "barry-white-uc"}, text
         assert OS.split_duet("Michael Jackson and Prince") == {"person": "Michael Jackson", "with": "Prince", "voice": None}
         assert OS.split_duet("Simon and Garfunkel") is None and OS.split_duet("Hall and Oates") is None
+        # neither here: two singers only as two full names, never a band's ("the ...", a list with commas, one-word names)
+        assert OS.split_duet("Daryl Hall and John Oates") == {"person": "Daryl Hall", "with": "John Oates", "voice": None}
+        for band in ("Glenn Miller and His Orchestra", "Tom Petty and the Heartbreakers", "Peter, Paul and Mary", "Earth, Wind and Fire", "Sly and the Family Stone", "Mumford & Sons"):
+            assert OS.split_duet(band) is None, band
         assert OS.split_duet("Michael Jackson") is None and OS.split_duet("Michael Jackson and Michael Jackson") is None
     finally:
         OS.installed_for = real_inst
@@ -10025,7 +10029,7 @@ def u_duets():
     assert 'data-v="lines" hidden' in page and 'id="fm-duet-strip"' in page   # By line waits for the ear; style A's strip
     duet_box = page[page.index('id="fm-duet-way-box"'):page.index("</div>", page.index('id="fm-duet-backing-note"'))]
     assert 'id="fm-duet-backing"' in duet_box and 'data-v="singers"' in duet_box and 'data-v="other"' in duet_box and 'data-v="original"' in duet_box
-    assert 'data-v="mine" data-deep disabled' in duet_box   # I'll choose: Deep Cover's, and shut until its editor exists
+    assert 'data-v="mine"' not in duet_box   # I'll choose: back with its editor, after 1.2 (Internal Affairs D6)
     js = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
     assert "S.opts.duet_backing = b.dataset.v" in js and "S.defaults.duet_backing" in js and "sel.hidden = duet" in js
     assert "Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v)" in js   # (a stored "constructor" is no backing)
@@ -10079,6 +10083,189 @@ def u_duets():
     assert "backing_quiet(k_dir) if opts.duet_voice and song is not None" in _i2.getsource(_PL2.estimate_for)
     assert "S.estimate.song === S.song?.id" in js and "summary(); duetBackNote();" in js   # (another song's measure is never said)
     return "Hello's shape found (V C V C V C), both ways, cuts in the quiet; fallback by twos; equal-power stitch; plans checked; fit for two; 'A and B'; options checked; one pitch track"
+
+
+def _js_between(src: str, start: str, end: str) -> str:
+    """The page's own code from start up to (not including) end, to run on its own in headless Chrome."""
+    i = src.index(start)
+    return src[i:src.index(end, i)]
+
+
+def _js_run(script: str) -> list | None:
+    """Runs script in headless Chrome on a blank page (muted); the script sets `out` to a JSON-able list (the failures,
+    plain words). -> that list, or None when there's no Chrome here."""
+    import subprocess, tempfile
+    exe = _chrome()
+    if not exe:
+        return None
+    with tempfile.TemporaryDirectory() as td:
+        page = Path(td) / "t.html"
+        page.write_text("<!doctype html><meta charset=utf-8><body><pre id=o></pre><script>let out = ['did not run'];\ntry {\n" + script
+                        + "\n} catch (e) { out = ['threw: ' + e.message]; }\ndocument.getElementById('o').textContent = 'RESULT ' + "
+                          "JSON.stringify(out).replace(/[<>&]/g, c => ({'<': '[lt]', '>': '[gt]', '&': '[amp]'}[c])) + ' END';</script>",
+                        encoding="utf-8")
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--dump-dom",
+                                page.as_uri()], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+    m = re.search(r"RESULT (.*?) END", r.stdout)
+    assert m, r.stdout[-300:]
+    return json.loads(m.group(1))
+
+
+@check("duets in the one-shot (Internal Affairs D1): the plan, the voice step and the done line name both singers, taking turns; the done line's key is the cover's own (the fit for two); the say line keeps both names; a second singer who isn't a voice here is said before anything starts")
+def u_duet_oneshot_names():
+    from types import SimpleNamespace
+    from undercover.core import voices as V
+    from undercover.doubleagent import service
+    from undercover.frontman import ambiguity as A, api as fapi, oneshot as OS
+    # the cover's own numbers replace the first voice's alone (the history's options, read as data)
+    plan = {"settings": {"octave": 0, "key": -6, "why": "first voice alone", "options": {"key": -6, "octave": 0, "fit": True}},
+            "settings_fit": {"octave": 0, "key": -6, "alt": {"octave": -1, "key": 6}}}
+    OS.duet_settings(plan, {"key": -5, "octave": 0, "duet_octave": 1, "fit": True}, ["Polished.", "Fit for two: key -5, A at octave +0, B at octave +1."])
+    s = plan["settings"]
+    assert (s["key"], s["octave"], s["duet_octave"]) == (-5, 0, 1) and s["options"]["key"] == -5 and s["options"]["duet_octave"] == 1, s
+    assert s["why"] == "key -5, A at octave +0, B at octave +1" and "settings_fit" not in plan, plan
+    plan3 = {"settings": {"octave": 0, "key": 3, "why": "song melody ~220 Hz, voice ~110 Hz"}}   # (no range for either: the cover says so)
+    OS.duet_settings(plan3, {"key": 3, "octave": 0}, ["Fit to voice: neither A nor B has a measured range yet, so your octave and key were used."])
+    assert plan3["settings"]["why"] == "neither A nor B has a measured range yet, so your octave and key were used", plan3
+    plan2 = {"settings": {"octave": 1, "key": 2, "why": "w"}}
+    OS.duet_settings(plan2, {"key": True, "octave": "x"}, [])   # (nothing a number can't be is taken)
+    assert plan2["settings"] == {"octave": 1, "key": 2, "why": "w"}, plan2
+    src = (ROOT / "undercover" / "frontman" / "oneshot.py").read_text(encoding="utf-8")
+    assert "if opts.duet_voice and item:" in src and 'duet_settings(plan, item.get("options") or {}, res.notes)' in src
+    # the plan: both names in the say line, the alone sentence before anything starts
+    vs = {"barry-white-uc": "Barry White", "michael-jackson-uc": "Michael Jackson"}
+    find = lambda p: [SimpleNamespace(name=n, display=d, extra={"trained": True}) for n, d in vs.items() if d.lower() == p.lower().strip()]
+    keep = (service.installed_for, OS.installed_for, service.voice_quality, V.get_voice, A.choices_for, A.recall, service.online_for)
+    service.installed_for = OS.installed_for = find
+    service.voice_quality = lambda v: {"ok": True, "problems": []}
+    V.get_voice = lambda n: SimpleNamespace(name=n, display=vs[n], extra={})
+    A.choices_for = lambda *a, **k: []
+    A.recall = lambda *a, **k: None
+    service.online_for = lambda p, n=2: []
+
+    def plan_of(text):
+        h = _FakeHandler()
+        fapi._auto_plan(h, text, False)
+        assert h.err is None, h.err
+        return h.out
+    try:
+        with isolated_data():
+            p = plan_of("Hold On by Barry White and Michael Jackson")
+            assert p["person"] == "Barry White" and p["duet"]["voice"] == "michael-jackson-uc" and p["duet"]["display"] == "Michael Jackson", p
+            assert "alone" not in p["duet"] and "“by Barry White and Michael Jackson”" in p["note"], p
+            assert "“Hold On by Barry White and Michael Jackson as <voice>”" in p["note"], p["note"]
+            q = plan_of("Hold On as Barry White and Prince")
+            assert q["duet"]["voice"] is None and q["duet"]["alone"] == ("Prince isn't one of your voices yet, so Barry White sings it alone. "
+                                                                           "Get their voice in DoubleAgent, then ask again."), q
+    finally:
+        service.installed_for, OS.installed_for, service.voice_quality, V.get_voice, A.choices_for, A.recall, service.online_for = keep
+    # the page: the plan's rows, the voice step and the done line, run in headless Chrome
+    app = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    one = (ROOT / "undercover" / "web" / "oneshot.js").read_text(encoding="utf-8")
+    code = (re.search(r"const esc = .*\n", app).group(0) + re.search(r"const octaveWords = .*\n", one).group(0)
+            + _js_between(one, "const twoVoices = ", "// how the plan goes") + _js_between(one, "const keyWords = ", "function card("))
+    assert "with ${whoSang(plan)}" in one and "doneLine(plan, ev.elapsed)" in one and "fitWords(set, plan)" in one
+    assert "const two = twoVoices(plan) ?" in one and "two && \"taking turns\"" in one, "the voice step doesn't name both"
+    out = _js_run("""const VD = {"barry-white-uc": "Barry White", "michael-jackson-uc": "Michael Jackson"};
+const vname = id => esc(VD[id] || id), voiceDisplay = id => VD[id] || id, fmtSecs = s => s + " s", voiceLine = () => "LINE";
+""" + code + """
+out = [];
+const duet = {voice: "michael-jackson-uc", display: "Michael Jackson", with: "michael jackson"};
+const bw = {how: "installed", name: "barry-white-uc", display: "Barry White"};
+const want = (name, got, has, hasnt) => { if (!got.includes(has)) out.push(name + ": " + got); if (hasnt && got.includes(hasnt)) out.push(name + " has " + hasnt); };
+want("rows", voiceRows({voice: bw, duet}), '<span class="k">Voices</span><span><b>Barry White</b> &amp; <b>Michael Jackson</b>, taking turns</span>');
+want("rows, training", voiceRows({voice: {how: "train"}, duet}), '<span class="k">With</span><span><b>Michael Jackson</b>, taking turns</span>');
+want("rows, alone", voiceRows({voice: bw, duet: {...duet, voice: null, alone: "x"}}), '<span class="k">Voice</span><span>LINE</span>', "With");
+want("rows, one", voiceRows({voice: bw}), '<span class="k">Voice</span><span>LINE</span>', "taking turns");
+const set = {octave: 0, key: -5, why: "key -5, Barry White at octave +0, Michael Jackson at octave +1"};
+want("done", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: set}, 61),
+     "Done in 61 s: <b>Hold On</b> with <b>Barry White</b> &amp; <b>Michael Jackson</b>, taking turns · song 5 semitones lower<span data-deep>", "octave ·");
+want("done, own key", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: {...set, key: 0}}, 61), "taking turns · the song&#39;s own key");
+want("done, one", doneLine({song: {title: "Hold On"}, voice: bw, settings: {octave: 0, key: -6, why: "w"}}, 61),
+     "with <b>Barry White</b> · the singer&#39;s octave · song 6 semitones lower", "taking turns");
+want("done, no voice yet", doneLine({song: {title: "x"}, person: "Barry White", settings: {octave: 0, key: 0, why: "w"}}, 1), "with <b>Barry White</b> ·");
+want("done, same voice", doneLine({song: {title: "x"}, voice: {...bw, name: "michael-jackson-uc"}, duet, settings: set}, 1), "with <b>Barry White</b> · the singer&#39;s octave", "taking turns");""")
+    assert not out, "; ".join(out or [])
+    # a duet asked for on a new install (no voices but the demo): read as two singers, the first trained, the second said
+    ex = "Hello by Adele as Barry White and Michael Jackson"
+    keep = (service.installed_for, OS.installed_for, service.online_for, service.check_failed, service.subject_of, A.settle, A.choices_for, A.recall)
+    service.installed_for = OS.installed_for = lambda p: []
+    service.online_for, service.check_failed = (lambda p, n=2: []), (lambda p: None)
+    service.subject_of = lambda p, pick=None: {"kind": "person", "label": f"{p} is a real person.", "choices": []}
+    A.settle, A.choices_for, A.recall = (lambda req, search=None: req), (lambda *a, **k: []), (lambda *a, **k: None)
+    try:
+        with isolated_data():
+            p = plan_of(ex)
+        assert p["person"] == "Barry White" and p["artist"] == "Adele" and p["voice"]["how"] == "train" and p["voice"]["display"] == "Barry White", p
+        assert p["duet"]["with"] == "Michael Jackson" and p["duet"]["alone"].startswith("Michael Jackson isn't one of your voices yet, so Barry White sings it alone."), p
+    finally:
+        service.installed_for, OS.installed_for, service.online_for, service.check_failed, service.subject_of, A.settle, A.choices_for, A.recall = keep
+    return "the cover's own key; both names in the say line; the alone line; a duet of two new voices; " + (
+        "no Chrome here: the page's lines not run" if out is None else "the plan's rows and the done line in Chrome")
+
+
+@check("Shape it's landing sentences (Internal Affairs D2), on synthetic audio: a line picked from its first word, the other singer running right up to it, says in one sentence where the stretch starts and ends and which join may be heard; a refusal names the picked word, not the one before it")
+def u_duet_shape_words():
+    import numpy as np
+    from undercover.core.voices import ModelError
+    from undercover.frontman import edits as E
+    sr, dur = 16000, 30.0
+    t = np.arange(int(sr * dur)) / sr
+    tone = lambda *spans: np.where(np.any([(t >= a) & (t < b) for a, b in spans], axis=0), 0.3 * np.sin(2 * np.pi * 220 * t), 0.0).astype(np.float32)
+    # the other singer runs right up to "Baby,"; a breath after it; a held note to "calling?"; then quiet. The backing never stops.
+    lead = tone((10.0, 13.4), (13.6, 18.0), (18.5, 19.0))
+    back = tone((0.0, dur))
+    ws = [[" oh", 10.0, 12.9], [" Baby,", 12.9, 13.4], [" are", 13.6, 13.8], [" you", 13.9, 14.2], [" calling?", 17.5, 18.0], [" so", 18.5, 19.0]]
+    rows = [{"t0": 10.0, "t1": 12.9, "text": "", "rep": False}, {"t0": 12.9, "t1": 18.0, "text": "", "rep": False}, {"t0": 18.5, "t1": 19.0, "text": "", "rep": False}]
+    plan = [[0.0, 12.9, "B"], [12.9, dur, "A"]]
+    gate = {"instrument": [], "chorus": [], "mode": "keep"}
+    doc = E.new_doc("0123456789", ws, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead, back, ws), gate, True, True)
+    pick = lambda part, w, d=doc: E.check_edit({"op": "singer", "part": part, "who": "B", "words": w, "words_hash": doc["words_hash"]}, d)
+    e = pick("lead", [1, 4])
+    assert e["moved"] == 'It starts just after "Baby," and ends just after "calling?" (0:13–0:18).', e
+    try:
+        pick("backing", [1, 4])
+        raise AssertionError("the backing found a place")
+    except ModelError as x:
+        assert str(x) == "There's no place to change near the start, at \"Baby,\".", x   # (not "oh", which ends where "Baby," starts)
+    # a dip at a join: said once, as the join that may be heard
+    dipped = {**doc, "points": {**doc["points"], "lead": [p for p in doc["points"]["lead"] if p[0] > 14.0], "dips": [13.5]}}
+    e = pick("lead", [1, 4], dipped)
+    assert e["moved"] == 'It starts just after "Baby," and ends just after "calling?" (0:13–0:18); the start may be heard.', e
+    # both edges moved out: each names its own word
+    wide = {**doc, "points": {"lead": [[9.0, 9.9], [13.4, 13.6]], "backing": [], "dips": []}}
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "t0": 10.4, "t1": 12.0}, wide)
+    assert e["moved"] == 'It starts just before "oh" and ends just after "Baby," (0:09–0:13).', e
+    # edges where they were asked: nothing to say (the page says where it starts and ends itself)
+    assert pick("lead", [5, 5])["moved"] == ""
+    return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
+
+
+@check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown; the first singer's chip has no 'lead' tag; Keep's sheet says a cover rolls off only when one will")
+def u_duet_copy():
+    import inspect
+    from undercover.frontman import pipeline as PL
+    src = inspect.getsource(PL.CoverEngine.make_cover)
+    assert PL.DUET_BACKING_SAID == "Converting the backing vocals (both singers)"
+    assert src.count("DUET_BACKING_SAID") == 2 and "backing vocals to {label_of(dvoice.name)} too" not in src, "a duet's backing named one singer"
+    # one way to share it is said as a sentence, not a lone pill (D6); "I'll choose" isn't shown, even in Deep Cover, until it's built
+    page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    assert "I'll choose <" not in page and 'data-v="mine"' not in page
+    assert 'const DUET_WAY_ONE = { turns: "They take turns.", lines: "They take a line each." };' in js
+    assert '$("#fm-duet-way").hidden = shown.length < 2;' in js and 'shown.length < 2 ? DUET_WAY_ONE[way] || DUET_WAY_ONE.turns : "How do they share it?"' in js
+    assert js.index('const shown = $$("#fm-duet-way button")') < js.index('$("#fm-duet-way").hidden = shown.length < 2;')
+    # the first singer's chip has no "lead" tag: it read as "sings first", and with Fit on the key is the two's together (D7)
+    assert '${vname(S.voice)}</span>\n    <span class="vchip b">' in js.replace("\r\n", "\n") and "<small>lead</small>" not in js
+    # Keep's sheet says a cover rolls off only when one will (D8; the edit list's page check runs it in Chrome)
+    sh = (ROOT / "undercover" / "web" / "shape.js").read_text(encoding="utf-8")
+    assert "with its changes.${shRollsOff() ? ` Recent covers holds 15, so the oldest one there, <b>${esc(shRollsOff().title)}</b>, rolls off" in sh
+    assert 'HIST.length >= RECENT_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null;' in sh
+    assert "return loadHistory().then(() => { if (SH.confirm && SH.id === id)" in sh   # (Recent as it is when the sheet opens)
+    from undercover.core import tray
+    assert tray.TRAY_SIZE == 15 and "RECENT_TRAY = 15;" in js, "Keep's sheet counts Recent covers differently from the tray"
+    return "the backing's progress line; one way said as a sentence; no 'lead' on the chip; Keep's roll-off said when it happens"
 
 
 @check("hangs (hangfix, hangtune): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 200 ms or more with 100 ms silent, no pause marked in the text), or a break (60 ms of silence where the words run into each other, no stop at the join), and reads it again with another seed, up to 5 tries, keeping the take whose longest join is shortest among takes as bad; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
@@ -10657,10 +10844,15 @@ def u_leadgate():
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
     said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)
     assert said and not any("original singers" in s for s in said) and any("in the backing's voice" in s for s in said), said
+    # a duet's two singers sharing the backing (Internal Affairs D4): no one "backing's voice", so the line says who sings it
+    said = G.note(g, "keep", backing_converted=True, shared=True)
+    assert any(s.endswith("they're sung with the rest of the backing, by whichever singer has the backing there.") for s in said), said
+    assert not any("the backing's voice" in s for s in said), said
+    assert any("by whichever singer" in s for s in G.note(g, "top", backing_converted=True, missing=g["chorus"], shared=True)) or not g["chorus"]
     import inspect
     from undercover.frontman import pipeline as _PLg
     src = inspect.getsource(_PLg.CoverEngine.make_cover)
-    assert "gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing)" in src and src.index("gate_note(g, mode,") > src.index("dback = bool(dvoice)")
+    assert "gate_note(g, mode, backing_converted=bool(bvoice or dback), missing=missing, shared=dback)" in src and src.index("gate_note(g, mode,") > src.index("dback = bool(dvoice)")
     assert "gate_apply(stems, g, gwork, stamp, chorus=mode, top=top, missing=missing)" in src and "top_missing(g, top, stems.get(\"backing\"))" in src
     # a duet (phase 22): two voices in harmony all the way are "backing" to the karaoke model and its lead is silence;
     # then there's no lead to split off and the whole vocal is converted as one voice
@@ -12909,6 +13101,15 @@ def u_shape_page():
     // a player has started once its "play" event has run (the page's stopOthers runs in the listener ownPlayer added first); a timeout says so
     const started = a => new Promise(r => { if (!a.paused && a.currentTime > 0) return r(true); a.addEventListener("play", () => r(true), { once: true }); setTimeout(() => r(false), 5000); });
     $("#shape").hidden = false; shDraw();
+    // Keep's sheet speaks of rolling off only when a Keep will roll one off (Internal Affairs D8)
+    const sheet = () => ($("#shape .sheet")?.innerText || "");
+    SH.confirm = true; HIST = [{ id: "aaaaaaaaaa", title: "T" }]; shDraw();
+    ok("Keep with room in Recent says nothing of rolling off", sheet().includes("next to the one it came from, with its changes.") && !sheet().includes("rolls off"));
+    HIST = Array.from({ length: 15 }, (_, i) => ({ id: "c" + i, title: "Cover " + i, kept: false })); shDraw();
+    ok("Keep with Recent full names the one that goes", sheet().includes("Recent covers holds 15, so the oldest one there, Cover 14, rolls off to make room. Covers sent to SafeHouse stay."));
+    HIST[14].kept = true; shDraw(); ok("a kept oldest one stays, and isn't said to go", !sheet().includes("rolls off"));
+    HIST[14] = { id: "aaaaaaaaaa", title: "T" }; shDraw(); ok("the cover being edited is spared, and isn't said to go", !sheet().includes("rolls off"));
+    SH.confirm = false; HIST = []; shDraw();
     shHear(1, 2);
     const b = document.createElement("button"); b.dataset.vline = "x"; b.dataset.label = "x"; document.body.appendChild(b);
     ok("Hear it starts", await started(SH.audio));
@@ -12924,13 +13125,17 @@ def u_shape_page():
     window.api = async (u, o) => {
       if (/edits\/price$/.test(u)) {
         if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
-        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
+        return { edit: { moved: "It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the start may be heard.", t0: 1.35, t1: 2.1, words: [1, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
       }
       throw new Error("stub");
     };
     SH.pick = [0, 2]; await shProbe();
     const bar = $("#shape .sh-bar").innerText;
-    ok("the bar says the gate's sentence", bar.includes("moved past \"Hold\"") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
+    ok("the bar says the gate's sentence", bar.includes("It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the start may be heard.") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
+    ok("a pick from a line's first word isn't told to start there (D2)", !bar.includes("Take the stretch from the start of the line"));
+    SH.pick = [1, 2]; await shProbe();
+    ok("a pick inside a line is", $("#shape .sh-bar").innerText.includes("at \"Hold\". Take the stretch from the start of the line."));
+    SH.pick = [0, 2]; await shProbe();
     ok("the choices are the gate's", $$("#shape .pill").map(p => p.textContent).join("|") === "b-uc takes it|An octave up|An octave down");
     const late = shProbe(); SH.pick = null; SH.seq++; await late;
     ok("a late answer is dropped", SH.probes === null);
@@ -16858,7 +17063,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk):

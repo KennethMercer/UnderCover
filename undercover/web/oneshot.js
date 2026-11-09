@@ -91,6 +91,16 @@ function voiceLine(v, p) {
   if (v.after_failed) return `a new <b>${who}</b> voice is trained first: the last check couldn't be done (${esc(v.after_failed)}). Adding clips of ${who} in DoubleAgent lets it check again`;
   return `none yet: a new <b>${who}</b> voice is trained first<span class="meta" data-deep> (~2 GB while training)</span>`;
 }
+// A duet ("Hold On as A and B", 1.2): two voices taking turns, named wherever the one voice is (Internal Affairs D1: the
+// plan, the voice step and the done line named only the first). duet.alone: one voice sings it after all, said as a line.
+const twoVoices = p => !!(p?.duet?.voice && !p.duet.alone && p.duet.voice !== p.voice?.name);
+const duetWith = p => p.duet.display || p.duet.with;
+function voiceRows(p) {
+  if (!twoVoices(p)) return `<span class="k">Voice</span><span>${voiceLine(p.voice, p)}</span>`;
+  if (p.voice?.how === "installed" && !p.voice_ask)
+    return `<span class="k">Voices</span><span><b>${vname(p.voice.name)}</b> &amp; <b>${esc(duetWith(p))}</b>, taking turns</span>`;
+  return `<span class="k">Voice</span><span>${voiceLine(p.voice, p)}</span><span class="k">With</span><span><b>${esc(duetWith(p))}</b>, taking turns</span>`;
+}
 // how the plan goes: "train" (a voice first), "check" (community voices first), "installed" (a voice of yours), or "" (no plan, or a pick missing)
 function planPath(p) {
   if (!p) return "";
@@ -172,7 +182,7 @@ function drawPlan(p) {
     : `<b>${esc(p.song_query)}</b>, the album version`;
   const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
   const warn = planPath(p) === "train" && !personWarned() ? `<p class="meta" id="os-warn">${PERSON_WARN}</p>` : "";
-  $("#os-plan").innerHTML = `<div class="os-plan-grid"><span class="k">Song</span><span>${songLine}</span><span class="k">Voice</span><span>${voiceLine(p.voice, p)}</span><span class="k">Time</span><span>${planTime(p)}</span></div>${hint}${subjectHtml(p)}${voiceAskHtml(p)}${p.voice_ask ? "" : qualityHtml(p.voice)}${warn}`;
+  $("#os-plan").innerHTML = `<div class="os-plan-grid"><span class="k">Song</span><span>${songLine}</span>${voiceRows(p)}<span class="k">Time</span><span>${planTime(p)}</span></div>${hint}${p.duet?.alone ? `<p class="meta">${esc(p.duet.alone)}</p>` : ""}${subjectHtml(p)}${voiceAskHtml(p)}${p.voice_ask ? "" : qualityHtml(p.voice)}${warn}`;
   bindQuality(); bindSubject(); bindVoiceAsk();
   renderChoices(p);
   syncGo(p);
@@ -255,7 +265,16 @@ function setRunning(on, title) {
 }
 const ORDER_OS = ["song", "voice", "cover"];
 const octaveWords = o => !o ? "the singer's octave" : `voice ${Math.abs(o) === 1 ? "one octave" : "two octaves"} ${o < 0 ? "lower" : "higher"}`;
-const fitWords = set => octaveWords(set.octave) + (set.key ? ` · song ${Math.abs(set.key)} semitone${Math.abs(set.key) === 1 ? "" : "s"} ${set.key < 0 ? "lower" : "higher"}` : "");
+const keyWords = k => k ? `song ${Math.abs(k)} semitone${Math.abs(k) === 1 ? "" : "s"} ${k < 0 ? "lower" : "higher"}` : "";
+// a duet's settings are the cover's own (one key for both, each singer at their own octave: the octaves stay in the why)
+const fitWords = (set, plan) => twoVoices(plan) ? keyWords(set.key) || "the song's own key"
+  : octaveWords(set.octave) + (set.key ? ` · ${keyWords(set.key)}` : "");
+const whoSang = plan => `<b>${esc(plan.voice ? plan.voice.display || voiceDisplay(plan.voice.name) : plan.person || "")}</b>` +
+  (twoVoices(plan) ? ` &amp; <b>${esc(duetWith(plan))}</b>, taking turns` : "");
+function doneLine(plan, elapsed) {
+  return `Done in ${fmtSecs(elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with ${whoSang(plan)}` +
+    (plan.settings ? ` · ${esc(fitWords(plan.settings, plan))}<span data-deep> (${esc(plan.settings.why)})</span>` : "") + ". Change anything below and press Convert to try a variation.";
+}
 function card(stage) { return $(`#os-running .pstep[data-s=${stage}]`); }
 function renderOS(ev) {
   const plan = ev.plan || OS.plan || {};
@@ -277,12 +296,15 @@ function renderOS(ev) {
   $("small", sc).innerHTML = ev.stage === "song" ? esc(ev.message) : song ? [plan.went_with, song.channel, song.note].filter(Boolean).map(esc).concat(cmp || []).join(" · ") : esc(plan.went_with || "");
   sc.title = song?.compared?.length > 1 ? song.compared.map(x => `${x.chosen ? "✓" : "·"} ${x.title}` +
     (x.outside != null ? ` · ${Math.round(x.outside * 100)}% out of range` : "") + ` · bleed ${Math.round(x.bleed)} dB`).join("\n") : "";
-  $("b", vc).textContent = voice ? (voice.how === "train" && ev.stage === "voice" ? `Training ${voice.display || voice.name}` : voice.display || voiceDisplay(voice.name)) : (plan.person || "Waiting");
+  const two = twoVoices(plan) ? ` & ${duetWith(plan)}` : "";   // (a duet: both singers, the step's voice first)
+  $("b", vc).textContent = voice ? (voice.how === "train" && ev.stage === "voice" ? `Training ${voice.display || voice.name}` : (voice.display || voiceDisplay(voice.name)) + two) : (plan.person ? plan.person + two : "Waiting");
   $("small", vc).textContent = ev.stage === "voice" ? ev.message
-    : voice ? (voice.checked || { installed: "your installed voice", online: `community voice${voice.repo ? " · " + voice.repo : ""}`, train: "trained in UnderCover" }[voice.how]) : "";
+    : voice ? [voice.checked || { installed: "your installed voice", online: `community voice${voice.repo ? " · " + voice.repo : ""}`, train: "trained in UnderCover" }[voice.how], two && "taking turns"].filter(Boolean).join(" · ") : "";
   $("b", cc).textContent = ev.stage === "cover" ? "Making the cover" : (ev.final && ev.state === "done" ? "Done" : "Waiting");
+  const kept = set?.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "";
   $("small", cc).innerHTML = ev.stage === "cover" && !ev.final ? esc(ev.message)
-    : set ? esc(`Best settings · ${fitWords(set)}`) + `<span data-deep> (${esc(set.why)})</span>` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
+    : set && two && !(ev.final && ev.state === "done") ? "Best settings" + kept   // (a duet's key is the cover's own, found as it's made)
+    : set ? esc(`Best settings · ${fitWords(set, plan)}`) + `<span data-deep> (${esc(set.why)})</span>` + kept : "Best settings";
   OS.eta = ev.total_left ?? ev.eta ?? null; OS.etaAt = performance.now();
   // before the cover itself starts, never count less than what's left of the picked path (a check's whole time, then the cover): the server's first number was the cover's alone
   if (OS.pathEta && !ev.final && ev.stage !== "cover") OS.eta = Math.max(OS.eta ?? 0, OS.pathEta - (OS.etaAt - OS.pathAt) / 1000);
@@ -378,8 +400,7 @@ function osFollow(id, title) {
     const plan = ev.plan || OS.plan || {};
     setRunning(false);
     if (ev.state === "done") {
-      $("#os-plan").innerHTML = `Done in ${fmtSecs(ev.elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with <b>${esc(plan.voice ? plan.voice.display || voiceDisplay(plan.voice.name) : "")}</b>` +
-        (plan.settings ? ` · ${esc(fitWords(plan.settings))}<span data-deep> (${esc(plan.settings.why)})</span>` : "") + ". Change anything below and press Convert to try a variation.";
+      $("#os-plan").innerHTML = doneLine(plan, ev.elapsed);
       try {
         if (plan.song?.id) { S.song = await api(`/api/songs/${plan.song.id}`); store.set("uc-song", S.song.id); renderSong(); }
         await loadVoices(plan.voice?.name);

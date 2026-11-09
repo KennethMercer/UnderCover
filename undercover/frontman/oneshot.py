@@ -107,8 +107,11 @@ _DUET_JOIN = re.compile(r"\s+(?:and|&|with)\s+", re.I)
 def split_duet(person: str) -> dict | None:
     """"<song> as <one singer> and <another>" (also "with", "&", "a duet of ..."): two singers taking turns, in the order
     written (1.2, duets.py). Only when the second one is a voice here, or the first is and the second isn't (then the
-    first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"), and not for two
-    names neither of which is here (a band's name). -> {person, with, voice (the second's, or None)} or None."""
+    first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"). Two names neither of
+    which is here are two singers only when each is a full name and the second isn't "the ..." or "his ..." ("Barry
+    White and Michael Jackson" on a new install: the first is made, the second said to need its voice); otherwise they're
+    a band's name ("Hall and Oates", "Tom
+    Petty and the Heartbreakers", "Peter, Paul and Mary"). -> {person, with, voice (the second's, or None)} or None."""
     from ..core.voices import slug
     p = re.sub(r"^(?:an?\s+)?duet\s+(?:of|by|between|with)?\s*", "", (person or "").strip(), flags=re.I)
     p = re.sub(r"\s+(?:as\s+)?(?:an?\s+)?duet$", "", p, flags=re.I)
@@ -123,7 +126,8 @@ def split_duet(person: str) -> dict | None:
         return None
     va, vb = installed_for(a) or [], installed_for(b) or []
     vb = [v for v in vb if not va or v.name != va[0].name]
-    if not (va or vb):
+    full = lambda n: len(n.split()) >= 2 and "," not in n   # (a first and last name; a list with commas is a band's)
+    if not (va or vb) and not (full(a) and full(b) and not re.match(r"(?:the|his|her|their)\s", b, re.I)):
         return None
     return {"person": a, "with": b, "voice": vb[0].name if vb else None}
 
@@ -321,7 +325,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     song_q = f"{title_q} by {artist}" if artist else title_q   # what people read; the search uses search_q
     plan.update(song_query=song_q, person=person, style=style, artist=artist)
     if duet:
-        plan["duet"] = {"with": duet["with"], "voice": duet["voice"]}
+        plan["duet"] = {"with": duet["with"], "voice": duet["voice"],   # (named from the start: the steps say both)
+                        "display": label_of(duet["voice"]) if duet["voice"] else duet["with"]}
 
     # Network work for the voice starts now, alongside the song's download and separation (review C6): if there's no
     # voice trained here for this person, find their clips and pre-download the first sources (no GPU involved).
@@ -554,10 +559,7 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
             plan["duet"].update(way=DUET_DEFAULT, display=label_of(duet["voice"]))
             push("cover", 0.0, f"{label_of(v.name)} and {label_of(duet['voice'])} take turns")
         else:
-            plan["duet"]["alone"] = (f"{duet['with']} is the same voice as {label_of(v.name)} here, so it sings alone."
-                                     if duet["voice"] else
-                                     f"{duet['with']} isn't one of your voices yet, so {label_of(v.name)} sings it alone. "
-                                     "Get their voice in DoubleAgent, then ask again.")
+            plan["duet"]["alone"] = duet_alone(duet["with"], duet["voice"], label_of(v.name))
             push("cover", 0.0, plan["duet"]["alone"])
     # the exact options this cover used, for "Convert to try a variation" (Internal Affairs m1: the page assumed the
     # backing was converted, so a variation of a stacked-harmony song converted the harmonies after all)
@@ -574,6 +576,8 @@ def run(job, text: str, prefer_train: bool = False, song_url: str | None = None,
     push("cover", 0.0, f"Making the cover with {label_of(v.name)}", total_left=est["total"])
     res = ENGINE.make_cover(song, opts, progress=cprog, title=meta["title"])
     item = next((h for h in history_items() if h["id"] == res.id), None)
+    if opts.duet_voice and item:   # the cover's own key and octaves (the fit for two), not the first voice's alone
+        duet_settings(plan, item.get("options") or {}, res.notes)
     for k in ("voice_until", "cover_s", "train_est_s"):   # the countdown's own numbers, not part of what was planned
         plan.pop(k, None)
     job.finish("done", message="Finished" if q["ok"] else f"Finished, with a weak voice: {q['summary']}", result=item,
@@ -652,6 +656,31 @@ def cover_options_of(opts: "CoverOptions") -> dict:
     plan stays with its cover: it's cut for that song's lines, never for the next song the form converts."""
     from dataclasses import asdict
     return {k: v for k, v in asdict(opts).items() if k not in ("voice", "duet_plan") and v is not None}
+
+
+def duet_settings(plan: dict, used: dict, notes: list) -> None:
+    """A duet's settings as the cover made them: the fit for two sets one key and each singer's octave while the cover
+    runs (pipeline._fit_duet), so the plan's first numbers (the first voice's own fit) give way to the cover's own
+    (Internal Affairs D1: the done line said the first voice's key, -6, for a duet made at -5). used: the history's
+    options for the cover, read as data."""
+    s = plan.setdefault("settings", {})
+    for k in ("key", "octave", "duet_octave"):
+        v = used.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            s[k] = int(v)
+            if isinstance(s.get("options"), dict):
+                s["options"][k] = int(v)
+    # why, as the cover said it: the fit for two, or why there was none (neither voice has a measured range)
+    said = next((n for n in notes or [] if isinstance(n, str) and n.startswith(("Fit for two:", "Fit to voice:"))), None)
+    if said:
+        s["why"] = said.split(":", 1)[1].strip().rstrip(".")
+    plan.pop("settings_fit", None)   # (the first voice's alone: no octave pick between two of its fits on a duet)
+
+
+def duet_alone(with_: str, voice: str | None, first: str) -> str:
+    """Why a duet asked for is sung by one voice: the second isn't a voice here, or it's the same voice as the first."""
+    return (f"{with_} is the same voice as {first} here, so it sings alone." if voice else
+            f"{with_} isn't one of your voices yet, so {first} sings it alone. Get their voice in DoubleAgent, then ask again.")
 
 
 VOICE_CHOICE = re.compile(r"check|train|use:[a-z0-9][a-z0-9-]*")
