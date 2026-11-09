@@ -116,9 +116,11 @@ def node_name() -> str:
     return n
 
 
-def _pipe_key() -> str:
-    """The state folder's own random key in its pipe's name: made once, kept beside the node's keys (it goes with
-    Forget), read back so a daemon left running is found again."""
+def _pipe_key(create: bool = False) -> str:
+    """The state folder's own random key in its pipe's name: made once, by the daemon's start (create), kept beside the
+    node's keys (it goes with Forget), read back so a daemon left running is found again. Anything else that asks (the
+    CLI, a status) only reads it: with none there's no daemon of ours to reach, and asking never makes the state folder
+    (it came back after Forget: a_link, 2026-11-09)."""
     f = state_dir() / "uc-pipe"
     try:
         k = f.read_text(encoding="utf-8").strip()
@@ -126,6 +128,8 @@ def _pipe_key() -> str:
             return k
     except OSError:
         pass
+    if not create:
+        return ""
     k = secrets.token_hex(16)
     state_dir().mkdir(parents=True, exist_ok=True)
     from . import fsutil
@@ -133,8 +137,8 @@ def _pipe_key() -> str:
     return k
 
 
-def _socket() -> str:
-    return platform.tailscale_socket(state_dir(), _pipe_key())
+def _socket(create: bool = False) -> str:
+    return platform.tailscale_socket(state_dir(), _pipe_key(create))
 
 
 def _end_orphans():
@@ -219,7 +223,7 @@ def _start_daemon():
     except OSError:
         pass
     _end_orphans()
-    cmd = _cmd("tailscaled") + ["--tun=userspace-networking", f"--statedir={state_dir()}", f"--socket={_socket()}",
+    cmd = _cmd("tailscaled") + ["--tun=userspace-networking", f"--statedir={state_dir()}", f"--socket={_socket(create=True)}",
                                 "--port=0", "--no-logs-no-support", *platform.tailscaled_os_args()]
     with open(log_file, "a", encoding="utf-8") as log:   # the daemon keeps its own copy
         _P["daemon"] = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
