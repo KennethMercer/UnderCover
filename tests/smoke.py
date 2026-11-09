@@ -7544,6 +7544,49 @@ def u_pause_forms():
     return "2, 500ms, 1.5 s., milliseconds, capitals: pauses; 2 minutes named"
 
 
+@check("bugs-da 6: a training that crashes before its first resume point is said as failed, never paused (Resume would start over and delete its saves); with a resume point it's paused")
+def u_crash_no_resume():
+    import types
+    from undercover.core import gpu, jobs
+    from undercover.doubleagent import api as DA, project as P, trainer
+    with isolated_data():
+        proj = P.Project.create("Crash Early", "speaking")
+
+        class FakeTrainer:
+            def __init__(self, pr, *a, **k):
+                self.pr = pr
+
+            def run(self, control, progress=None):
+                self.pr.train["epoch"] = 3
+                self.pr.save_train()
+                raise RuntimeError("the GPU fell over")
+        queued = []
+        saved = trainer.Trainer, gpu.MODELS, jobs.GPU_QUEUE
+        trainer.Trainer = FakeTrainer
+        gpu.MODELS = types.SimpleNamespace(converter=types.SimpleNamespace(hubert=None, rmvpe=None, device="cpu", half=False))
+        jobs.GPU_QUEUE = types.SimpleNamespace(put=queued.append)
+        try:
+            states = []
+            for with_resume in (False, True):
+                job = DA.start_train(proj.name, {"fresh": True})
+                if with_resume:   # (start_train removes an old one: this run's own, written at a save)
+                    (proj.dir / "train").mkdir(parents=True, exist_ok=True)
+                    (proj.dir / "train" / "resume.pt").write_bytes(b"pt")
+                try:
+                    queued[-1][1](job)
+                    raise AssertionError("the crash didn't come through")
+                except RuntimeError:
+                    pass
+                job.state = "error"   # (as the GPU worker ends it)
+                states.append(P.Project.load(proj.name).train["state"])
+                jobs.JOBS.pop(job.id, None)
+            assert states == ["failed", "paused"], states
+        finally:
+            trainer.Trainer, gpu.MODELS, jobs.GPU_QUEUE = saved
+            DA.ACTIVE.pop(proj.name, None)
+    return "no resume point: failed; with one: paused"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15534,7 +15577,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

@@ -382,8 +382,9 @@ def start_train(name: str, b: dict):
             job.push(**ev)
         try:
             st = tr.run(control, progress=progress)
-        except BaseException:
-            pr.train["state"] = "paused" if pr.train.get("epoch") else "failed"
+        except BaseException:   # Resume only from a resume point (as _heal): without one it would start over, saves gone
+            resumable = pr.train.get("epoch") and (pr.dir / "train" / "resume.pt").exists()
+            pr.train["state"] = "paused" if resumable else "failed"
             pr.save_train()
             raise
         if st.get("state") == "paused":
