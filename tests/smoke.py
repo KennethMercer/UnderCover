@@ -13934,6 +13934,7 @@ def u_shape_keys():
       if (/edits\/price$/.test(u)) { await new Promise(r => held.push(r)); return { edit: { t0: 1, t1: 2.1, words: o.json.words }, fit: null }; }
       if (/edits\/keep$/.test(u)) return { job: "jk" };
       if (/\/edits$/.test(u) && !o) return doc;
+      if (u === "/api/history") return [item];   // (Keep reads Recent covers before its sheet says what rolls off)
       throw new Error("stub");
     };
     const feed = {};
@@ -13971,7 +13972,7 @@ def u_shape_keys():
     ok("the kept line says the same name", ($(".kept b", box)?.textContent || "") === "T (edited) 2");
     ok("and so does the Recent row", coverTitle(kept) === "T (edited) 2");
     $('[data-sh="done"]', box).focus(); $('[data-sh="done"]', box).click();
-    ok("Done hands focus back to the row's Shape it", document.activeElement === row && $("#shape").hidden);
+    ok("Done hands focus back to the row's Shape it", document.activeElement?.dataset.shape === "aaaaaaaaaa" && $("#shape").hidden);   // (Recent covers' own row, or the stand-in)
     window.api = async () => { throw Object.assign(new Error("That isn't a cover."), { status: 404 }); };
     shapeOpen("aaaaaaaaaa"); await wait(50);
     ok("a refusal offers no Try again", SH.state === "error" && !$('[data-sh="retry"]', box));
