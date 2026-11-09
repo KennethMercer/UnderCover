@@ -613,22 +613,22 @@
     </section>
     <!-- two groups (consult 5): each feature is one row with what it's for and its number, until opened; one row open at a time -->
     <section class="panel grp" id="st-make"><h3 class="grp-h">Make room</h3>
-      <button class="frow" id="lib-clean-btn" type="button" data-open="lib-clean" aria-expanded="false" data-pc><b>Clean up</b><span class="what">stems, previews, old working files</span><span class="num" id="st-n-clean"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" id="lib-clean-btn" type="button" data-open="lib-clean" aria-expanded="false" data-pc data-find="clean, clean up, delete, remove, free space, space, disk, stems, previews, cache, junk"><b>Clean up</b><span class="what">stems, previews, old working files</span><span class="num" id="st-n-clean"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="lib-clean" hidden>
         <p class="meta">Frees space without touching your covers, songs or voices (unless you tick those).</p>
         <div class="clean" id="lib-clean-list"></div>
         <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
           <span class="meta">Can't be undone; anything here is made again when it's needed.</span></div>
       </div>
-      <button class="frow" type="button" data-open="smaller" aria-expanded="false"><b>Make it smaller</b><span class="what">voices and projects, checked to sound the same</span><span class="num" id="sm-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="smaller" aria-expanded="false" data-find="smaller, shrink, compress, space, disk, size, delete"><b>Make it smaller</b><span class="what">voices and projects, checked to sound the same</span><span class="num" id="sm-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="smaller" hidden><div class="vt-body" id="sm-body"></div></div>
-      <button class="frow" type="button" data-open="aside" aria-expanded="false"><b>Set aside</b><span class="what" id="as-what">voices UnderCover moved out of the way</span><span class="num" id="as-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="aside" aria-expanded="false" data-find="set aside, moved, missing voices, restore, put back"><b>Set aside</b><span class="what" id="as-what">voices UnderCover moved out of the way</span><span class="num" id="as-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="aside" hidden><div class="vt-body" id="as-body"></div></div>
     </section>
     <section class="panel grp" id="st-keep"><h3 class="grp-h">Keep it safe</h3>
-      <button class="frow" type="button" data-open="vault" aria-expanded="false"><b>Vault</b><span class="what">a copy of what can't be downloaded again, on another drive</span><span class="num" id="vt-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="vault" aria-expanded="false" data-find="backup, back up, vault, copy, safe, another drive, external drive, restore, files"><b>Vault</b><span class="what">a copy of what can't be downloaded again, on another drive</span><span class="num" id="vt-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="vault" hidden><div class="vt-body" id="vt-body"><p class="meta">Loading…</p></div></div>
-      <button class="frow" type="button" data-open="st-places-wrap" aria-expanded="false"><b>Where your files live</b><span class="what">UnderCover's folders, and where to move them</span><span class="num" id="st-drive"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="st-places-wrap" aria-expanded="false" data-find="files, folder, folders, where are my files, location, move, drive, storage, path, space"><b>Where your files live</b><span class="what">UnderCover's folders, and where to move them</span><span class="num" id="st-drive"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="st-places-wrap" hidden><div class="places" id="st-places"></div><p class="meta">Logs and settings stay with the app.</p></div>
     </section>
     </div>
