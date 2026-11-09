@@ -468,6 +468,7 @@ const mmss = t => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 function renderPhone() {
   const s = PH.st, p = s.pairing, ready = s.enabled && s.phase === "ready";
   $("#set-phone-say").textContent = !s.supported ? s.why : "Use UnderCover on your phone, at home or anywhere.";
+  $("#set-phone-row").hidden = s.offered === false && !s.enabled;   // (a release without the phone link: no setup at all)
   $("#phone-setup").hidden = s.enabled;
   $("#phone-setup").disabled = !s.supported;
   $("#phone-box").hidden = !s.enabled;
@@ -476,6 +477,7 @@ function renderPhone() {
   let say = PHONE_STEP[s.phase] || "";
   if (s.phase === "fetching" && s.progress && s.progress.total) say += ` ${Math.round(100 * s.progress.done / s.progress.total)}%`;
   say = s.problem || (s.error ? `${say} (${s.error})`.trim() : say);
+  if (s.offered === false) say = s.why;   // (switched on before: its phones on the home Wi-Fi, no link)
   $("#phone-step").hidden = !say; $("#phone-step").textContent = say;
   const si = $("#phone-signin"), ap = $("#phone-approve");
   si.hidden = !s.auth_url; if (s.auth_url) si.href = s.auth_url;

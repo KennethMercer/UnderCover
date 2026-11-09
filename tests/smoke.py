@@ -15885,6 +15885,57 @@ def _users_server_training(since: float | None = None) -> set:
             and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
+@check("a release can ship without the phone link's setup (tailnet.OFFERED, on by default): off, the card has no Set up, the tray no Phone link, Set up is refused plainly and the link never starts; a copy that had it on keeps its phones on the home Wi-Fi")
+def u_link_offered():
+    from types import SimpleNamespace
+    from undercover.app import phone_api
+    from undercover.core import phone, tailnet, trayicon
+    from undercover.core.phone import PhoneError
+    from undercover.core.voices import ModelError
+    assert tailnet.OFFERED is True, "the phone link's setup is hidden: only a release decides that"
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        real_start, started = tailnet.start, []
+        tailnet.OFFERED = False
+        try:
+            s = phone_api.state()
+            assert s["offered"] is False and s["supported"] is False and s["why"] == tailnet.NOT_OFFERED_WHY
+            try:
+                tailnet.start(7871)
+                raise AssertionError("the link started while it isn't offered")
+            except ModelError as e:
+                assert str(e) == tailnet.NOT_OFFERED_WHY
+            tailnet.start = lambda *a, **k: started.append(a)
+            h = SimpleNamespace(remote=False, _body=lambda: {"on": True}, _json=lambda o: o)
+            try:
+                phone_api._route(h, "POST", "/api/phone")
+                raise AssertionError("Set up went ahead while the link isn't offered")
+            except PhoneError as e:
+                assert e.status == 409 and str(e) == tailnet.NOT_OFFERED_WHY
+            assert not phone.enabled()
+            phone.set_enabled(True)   # a copy from before with the phone on: it stays on, its phones on the home Wi-Fi
+            phone_api.away_open()
+            assert started == [] and phone_api._A["srv"] is None, "the link's listener opened while it isn't offered"
+            h = SimpleNamespace(remote=False, _body=lambda: {"on": False}, _json=lambda o: o)
+            assert phone_api._route(h, "POST", "/api/phone")["enabled"] is False   # (Off still works)
+        finally:
+            tailnet.OFFERED = True
+            tailnet.start = real_start
+            phone.set_enabled(False)
+            phone._STATE.clear()
+            phone._FILE[0] = None
+    assert not any(i["id"] == "phone" for i in trayicon.menu_model({"models": "ready"}, [], None, False, None)), "the tray offers the link"
+    assert 'ph.get("offered", True) else None' in inspect_src(trayicon)
+    js = (ROOT / "undercover" / "web" / "rooms.js").read_text(encoding="utf-8")
+    assert '$("#set-phone-row").hidden = s.offered === false && !s.enabled;' in js and "if (s.offered === false) say = s.why;" in js
+    wn = (ROOT / "undercover" / "web" / "whatsnew.js").read_text(encoding="utf-8")   # the one-time note (ExteriorDesign's words)
+    assert "<b>Your phone's link is off for now.</b> It comes back in a later version of UnderCover." in wn
+    assert 'lan ? " Phones connected on your home Wi-Fi still work." : ""' in wn and "s.offered !== false || !s.enabled" in wn
+    assert "if (WN.shown || store.get(WN_PHONE, null)) return;" in wn and "wnBoot().then(wnPhoneNote);" in wn
+    return "off: no Set up, no tray item, refused plainly, never started; Off still works; a note once for a PC that had it on; on by default"
+
+
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
 def a_untouched(before: dict, dirs: dict, busy: set = frozenset(), since: float | None = None):
     """busy: the projects the user's server was training when the run started; with the ones it trained during the
@@ -15937,7 +15988,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_link_offered, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

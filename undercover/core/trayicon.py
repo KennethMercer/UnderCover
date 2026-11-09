@@ -253,7 +253,7 @@ def run(port: int):
             say(f"{game_question(st['game'], bool((st['status'] or {}).get('low_profile')))} Choose in this icon's menu, or on your phone.")
         if time.time() - st["phone_at"] > 60:   # the tick changes only when someone flips it (the action re-reads it)
             ph = srv.get("/api/phone")
-            st["phone"] = ph.get("enabled") if isinstance(ph, dict) else None
+            st["phone"] = ph.get("enabled") if isinstance(ph, dict) and ph.get("offered", True) else None   # (none to offer)
             st["phone_at"] = time.time()
         if time.time() - st["doctor_at"] > 300:
             d = srv.get("/api/doctor", timeout=15)

@@ -28,6 +28,11 @@ from . import platform, storage
 from .config import path
 from .voices import ModelError
 
+# A release ships the phone link's setup only once it has been checked live with Tailscale (the maintainers' notes,
+# release-1.2-plan). False: no Set up on the card, no Phone link in the tray, the link never starts; phones paired on the
+# home Wi-Fi before keep working there.
+OFFERED = True
+NOT_OFFERED_WHY = "Your phone's link comes in a later UnderCover. Phones connected on the home Wi-Fi before keep working there."
 VERSION = "1.104.1"
 MSI = {"url": f"https://pkgs.tailscale.com/stable/tailscale-setup-{VERSION}-amd64.msi", "size": 38_718_976,
        "sha256": "6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4"}
@@ -247,6 +252,8 @@ def tick():
 def start(port: int, private: bool = False):
     """Switch on: the driver walks to ready (the away listener on `port` is the only funnel target). private: Serve
     on the tailnet instead of Funnel."""
+    if not OFFERED:
+        raise ModelError(NOT_OFFERED_WHY)
     ok, why = platform.supports("away")
     if not ok:
         raise ModelError(why)
@@ -365,7 +372,9 @@ def forget():
 def snapshot() -> dict:
     """For SafeHouse and the Doctor."""
     ok, why = platform.supports("away")
-    return {"supported": ok, "why": why, "on": STATE["want"], "phase": STATE["phase"], "auth_url": STATE["auth_url"],
+    if not OFFERED:
+        ok, why = False, NOT_OFFERED_WHY
+    return {"supported": ok, "why": why, "offered": OFFERED, "on": STATE["want"], "phase": STATE["phase"], "auth_url": STATE["auth_url"],
             "approve_url": STATE["approve_url"], "link": f"https://{STATE['host']}" if STATE["phase"] == "ready" else None,
             "host": STATE["host"], "error": STATE["error"], "progress": STATE["progress"],
             "downloaded": have_binaries(), "name": node_name() if state_dir().exists() else None,

@@ -21,6 +21,22 @@ async function wnBoot() {
   const at = seen ? WN.list.findIndex(e => e.id === seen) : -1;
   const fresh = at > 0 ? WN.list.slice(0, at) : WN.list.slice(0, 1);   // never seen any (or an unknown one): just the newest
   renderWn(fresh);
+  WN.shown = true;
+}
+// A release without the phone link (core/tailnet.OFFERED off), on a PC that had it on: one note, once, in this card's place
+// (the words: the maintainers' notes, phone-hidden-1.2). The PC only (/api/phone is the PC's); after What's new, never with it.
+const WN_PHONE = "uc-phone-off-seen";
+async function wnPhoneNote() {
+  if (WN.shown || store.get(WN_PHONE, null)) return;
+  let s = null;
+  try { s = await api("/api/phone"); } catch (e) { return; }
+  if (!s || s.offered !== false || !s.enabled) return;
+  const lan = (s.devices || []).some(d => d.lan);
+  $("#wn-when").textContent = "";
+  $("#wn-body").innerHTML = `<p><b>Your phone's link is off for now.</b> It comes back in a later version of UnderCover.${lan ? " Phones connected on your home Wi-Fi still work." : ""}</p>`;
+  $("#wn-all").hidden = true;
+  $("#wn").hidden = false;
+  WN.phone = true;
 }
 function renderWn(fresh) {
   const shown = fresh.slice(0, WN_SHOW), more = fresh.length - shown.length;
@@ -28,7 +44,11 @@ function renderWn(fresh) {
   $("#wn-body").innerHTML = shown.map(e => wnEntry(e)).join("") + (more > 0 ? `<p class="meta">and ${more} more in SafeHouse's System room</p>` : "");
   $("#wn").hidden = false;
 }
-function wnDone() { if (WN.list[0]) store.set(WN_SEEN, WN.list[0].id); $("#wn").hidden = true; }
+function wnDone() {
+  if (WN.phone) { store.set(WN_PHONE, "1"); WN.phone = false; $("#wn-all").hidden = false; $("#wn").hidden = true; return; }
+  if (WN.list[0]) store.set(WN_SEEN, WN.list[0].id);
+  $("#wn").hidden = true;
+}
 $("#wn-ok").onclick = wnDone;
 $("#wn-all").onclick = () => { wnDone(); location.hash = "#safehouse/system"; window.scrollTo({ top: 0 }); };
 
@@ -42,4 +62,4 @@ function renderWnRoom() {
   b.textContent = WN.all ? "Show fewer" : `Show all ${WN.list.length}`;
 }
 $("#sys-news-more").onclick = () => { WN.all = !WN.all; renderWnRoom(); };
-wnBoot();
+wnBoot().then(wnPhoneNote);
