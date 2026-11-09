@@ -15961,7 +15961,7 @@ def _users_server_training(since: float | None = None) -> set:
             and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
-@check("the server's log keeps real errors only: a client that went away mid-request (closed tab, dropped connection) leaves nothing; any other error still leaves its traceback")
+@check("the server's log keeps real errors only: a client that went away mid-request (closed tab, dropped connection) leaves nothing; any other error still leaves its traceback; two known library warnings are filtered by their own words")
 def u_quiet_drops():
     import contextlib, http.server, io, socket, threading
     from undercover.app import server
@@ -15996,7 +15996,18 @@ def u_quiet_drops():
     finally:
         srv.shutdown()
         srv.server_close()
-    return "dropped clients: nothing logged; a real error: its traceback"
+    import inspect, warnings   # two library warnings repeated on every run: filtered by their own message, nothing wider
+    from undercover.core import quiet
+    from undercover.core.cadence import worker
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        quiet.known_warnings()
+        warnings.warn("Failed to launch Triton kernels, likely due to missing CUDA toolkit; falling back", UserWarning)
+        warnings.warn("`torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)`", FutureWarning)
+        warnings.warn("a library's own news", UserWarning)
+    assert [str(x.message) for x in w] == ["a library's own news"], [str(x.message) for x in w]
+    assert "known_warnings()" in inspect.getsource(server.main) and "known_warnings()" in inspect.getsource(worker.main)
+    return "dropped clients: nothing logged; a real error: its traceback; two known library warnings out of the logs"
 
 
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")

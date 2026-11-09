@@ -1285,6 +1285,8 @@ def _relaunch(extra_args: list[str]):
 
 def main():
     global SERVER
+    from ..core.quiet import known_warnings
+    known_warnings()   # (two library warnings that only hide what matters in the log)
     try:   # the app folder may have been moved or renamed: fix stored paths before anything reads them
         from ..core import relocate
         relocate.check_and_fix()

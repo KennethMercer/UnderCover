@@ -313,6 +313,8 @@ def main():
     _OUT = os.fdopen(os.dup(1), "w", encoding="utf-8", buffering=1)
     os.dup2(2, 1)
     sys.stdout = sys.stderr
+    from ..quiet import known_warnings
+    known_warnings()
     _standins()
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     from .. import gpu as G
