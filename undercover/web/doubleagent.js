@@ -394,7 +394,7 @@ function ownHtml(c) {
   const person = ownPerson(c), m = DA.own.mode, eta = person && m ? estWords("new", person, m) : "";
   if (person && m && !eta && !EST.asked.has(estKey("new", person, m))) estimateFor("new", person, m).then(() => { if (DA.own) renderVoiceCards(DA.cands); });
   const ask = !c.person;
-  return `<div class="vc-own">${ask ? `<label class="own-who"><span>Whose voice is this?</span><input type="text" data-own-name autocomplete="off" value="${esc(DA.own.name || "")}" placeholder="their name, e.g. Barack Obama" aria-label="Whose voice is this"></label>
+  return `<div class="vc-own">${ask ? `<label class="own-who"><span>Whose voice is this?</span><input type="text" data-own-name autocomplete="off" value="${esc(DA.own.name || "")}" placeholder="their name, e.g. Audrey Hepburn" aria-label="Whose voice is this"></label>
     <p class="meta">UnderCover finds clips of them and trains your own voice of them, to compare with this one.</p>`
     : `<p class="meta">Train your own <b>${esc(person)}</b> voice to compare with this one: UnderCover finds clips of them and trains it${c.singing == null ? "" : ` (${c.singing ? "singing" : "speaking"}, like this one)`}.</p>`}
     <div class="own-mode">${c.singing == null ? `<span class="meta">Speaking or singing?</span>` : ""}<div class="seg" role="group" aria-label="Speaking or singing"><button type="button" data-own-mode="speaking" aria-pressed="${m === "speaking"}">Speaking</button><button type="button" data-own-mode="singing" aria-pressed="${m === "singing"}">Singing</button></div></div>

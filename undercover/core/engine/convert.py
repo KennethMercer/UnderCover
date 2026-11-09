@@ -94,16 +94,19 @@ class Converter:
             self.rmvpe = RMVPE(mdir / CCFG["rmvpe"], self.device, self.half)
         self.voices: OrderedDict[str, LoadedVoice] = OrderedDict()
         self._f0_memo: dict | None = None   # shared_f0: the pitch track read once for the same vocal
+        self._feat_memo: dict | None = None   # ...and its HuBERT features (perf2)
 
     @contextlib.contextmanager
     def shared_f0(self):
-        """Inside it, the pitch track of a stretch of audio is read once and reused: the same vocal converted in two
-        voices (a duet) pays RMVPE once. The track depends on the audio alone; each voice's shift comes after."""
-        self._f0_memo = {}
+        """Inside it, the pitch track and the HuBERT features of a stretch of audio are read once and reused: the same
+        vocal converted in two voices (a duet) pays RMVPE and HuBERT once. Both depend on the audio alone (the features
+        on the voice's RVC version too, in the key); each voice's shift, index and synth come after. The features are
+        kept on the GPU until the block ends (about 9 MB for 2 minutes of singing)."""
+        self._f0_memo, self._feat_memo = {}, {}
         try:
             yield
         finally:
-            self._f0_memo = None
+            self._f0_memo = self._feat_memo = None
 
     def voice(self, name: str) -> LoadedVoice:
         if name in self.voices:
@@ -172,8 +175,17 @@ class Converter:
 
     def _vc_chunk_raw(self, lv: LoadedVoice, audio: np.ndarray, pitch, pitchf, s: Settings) -> np.ndarray:
         dtype = torch.float16 if self.half else torch.float32
-        wav = torch.from_numpy(audio).to(self.device, dtype)[None]
-        feats = self.hubert.extract(wav, lv.version)                    # (1, T50, D)
+        memo, key = self._feat_memo, None
+        if memo is not None:
+            import hashlib
+            key = (len(audio), lv.version, hashlib.blake2b(np.ascontiguousarray(audio).tobytes(), digest_size=16).digest())
+        if memo is not None and key in memo:
+            feats = memo[key]   # (never changed in place below: each step makes a new tensor)
+        else:
+            wav = torch.from_numpy(audio).to(self.device, dtype)[None]
+            feats = self.hubert.extract(wav, lv.version)                # (1, T50, D)
+            if memo is not None:
+                memo[key] = feats
         protect_on = s.protect < 0.5 and pitch is not None
         feats0 = feats.clone() if protect_on else None
         if lv.index is not None and s.index_ratio > 0:

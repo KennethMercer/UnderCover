@@ -352,7 +352,7 @@ async function loadDoctor() {
 function doctorRow(r) {
   const [cls, word] = DSTATE[r.state] || DSTATE.info, f = r.fix;
   const asking = f && D.ask?.id === f.id;
-  const act = !f ? "" : f.how === "offer" ? `<small class="meta">${esc(f.label)}</small>`
+  const act = !f ? "" : f.how === "offer" ? `<small class="meta">${esc(f.label)}</small>${f.detail ? `<small class="meta mono" data-deep>${esc(f.detail)}</small>` : ""}`
     : asking ? "" : `<button class="btn" type="button" data-fix="${esc(f.id)}" data-pc>${esc(f.label)}</button>`;
   return `<div class="sys" data-check="${esc(r.id)}"><span><b>${esc(r.title)}</b><small>${esc(r.say)}</small>${r.detail ? `<span class="kv2" data-deep>${esc(r.detail)}</span>` : ""}</span>
     <span class="acts"><span class="dotw ${cls}">${esc(word)}</span>${act}</span>${asking ? fixAsk(D.ask) : ""}</div>`;

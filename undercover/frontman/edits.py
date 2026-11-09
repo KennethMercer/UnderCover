@@ -317,29 +317,48 @@ def snap(t: float, part: str, doc: dict, after: float | None = None) -> tuple[fl
     return None
 
 
-def _word_at(doc: dict, t: float) -> str | None:
-    for w in doc["words"]:
+def _word_at(doc: dict, t: float, end: bool = False) -> str | None:
+    """The word sung at t. Where one word ends as the next starts, a start names the one it starts, an end the one it ends
+    (Internal Affairs D2: a stretch from "Baby," was refused "at" the word before it)."""
+    for w in (doc["words"] if end else reversed(doc["words"])):   # (words in time order: the later of two first, for a start)
         if w[1] <= t <= w[2]:
-            return w[0].strip()[:MAX_WORD]
+            return _quoted(w[0])
     return None
 
 
-def _passed(doc: dict, a: float, b: float) -> str | None:
-    """The word an edge moved past, going from a to b: the nearest one it took in or left out, by the word's middle (a word that
-    stays in or out of the stretch, as asked, isn't named)."""
-    lo, hi = min(a, b), max(a, b)
-    got = [w[0].strip()[:MAX_WORD] for w in doc["words"] if lo < (w[1] + w[2]) / 2 < hi]
-    return got[0 if b > a else -1] if got else None
+def _quoted(word: str) -> str:
+    """A heard word as the sentences quote it: the quote marks the word, so the punctuation the transcript put after it goes
+    ("Baby," -> "Baby"). A word that is all punctuation stays as heard."""
+    w = word.strip()
+    return (w.rstrip(",.?!;:…\"”") or w)[:MAX_WORD]   # (and an ellipsis or a closing quote)
 
 
-def _moved(name: str, was: float, now: float, kind: str, doc: dict) -> str | None:
-    say = []
-    if abs(now - was) > MOVED_S:
-        word = _passed(doc, was, now)
-        say.append(f"The {name} moved past \"{word}\"." if word else f"The {name} moved {abs(now - was):.1f} s.")
-    if kind == "dip":
-        say.append(f"The {name} lands between two sung sounds, with no silence there.")
-    return " ".join(say) or None
+def _clock(t: float) -> str:
+    return f"{int(t // 60)}:{int(t % 60):02d}"
+
+
+def _landed(doc: dict, t0: float, t1: float, a: tuple, b: tuple) -> str:
+    """Where a stretch landed, as one sentence, when an edge moved or lands where the join may be heard (a dip): "It starts
+    just after "Baby" and ends just after "calling" (0:13–0:18); the join at its start may be heard." An edge that moved past a word
+    names that word, one that didn't names the word it stays next to (Internal Affairs D2: "moved past" read both ways, and
+    named the same word at both ends of a one-word pick). "" when both edges landed where asked."""
+    dips = [n for n, e in (("start", a), ("end", b)) if e[1] == "dip"]
+    if abs(a[0] - t0) <= MOVED_S and abs(b[0] - t1) <= MOVED_S and not dips:
+        return ""
+    mid = lambda w: (w[1] + w[2]) / 2
+    say = lambda w: _quoted(w[0])
+    inside = [w for w in doc["words"] if a[0] <= mid(w) <= b[0]]
+    before = [w for w in doc["words"] if mid(w) < a[0]]
+    after = [w for w in doc["words"] if mid(w) > b[0]]
+    # the word next to where an edge landed: one it left out when it moved in past a word asked for, else the stretch's own
+    out0 = before[-1] if a[0] > t0 + MOVED_S and before and mid(before[-1]) > t0 else None
+    out1 = after[0] if b[0] < t1 - MOVED_S and after and mid(after[0]) < t1 else None
+    start = ("at the top of the song" if a[0] <= EDGE_S else f"just after \"{say(out0)}\"" if out0
+             else f"just before \"{say(inside[0])}\"" if inside else f"at {_clock(a[0])}")
+    end = ("at the end of the song" if b[0] >= doc["duration"] - EDGE_S else f"just before \"{say(out1)}\"" if out1
+           else f"just after \"{say(inside[-1])}\"" if inside else f"at {_clock(b[0])}")
+    heard = "; both joins may be heard" if len(dips) == 2 else f"; the join at its {dips[0]} may be heard" if dips else ""
+    return f"It starts {start} and ends {end} ({_clock(a[0])}–{_clock(b[0])}){heard}."
 
 
 def check_edit(req, doc: dict) -> dict:
@@ -362,11 +381,11 @@ def check_edit(req, doc: dict) -> dict:
     b = snap(t1, clean["part"], doc, a[0] if a else None)
     for got, t, name in ((a, t0, "start"), (b, t1, "end")):
         if got is None:
-            word = _word_at(doc, t)
+            word = _word_at(doc, t, end=name == "end")
             raise ModelError(f"There's no place to change near the {name}" + (f", at \"{word}\"." if word else "."))
     if b[0] - a[0] < MIN_EDIT_S:
         raise ModelError("That's too short a stretch to change.")
-    moved = " ".join(m for m in (_moved("start", t0, a[0], a[1], doc), _moved("end", t1, b[0], b[1], doc)) if m)[:MAX_SAID]
+    moved = _landed(doc, t0, t1, a, b)[:MAX_SAID]
     words = [i for i, w in enumerate(doc["words"]) if a[0] <= (w[1] + w[2]) / 2 <= b[0]]
     n = 1 + max((int(e["id"][1:]) for e in doc["edits"]), default=0) if doc["edits"] else 1
     edit = {"id": f"e{n}", **clean, "t0": a[0], "t1": b[0], "words": [words[0], words[-1]] if words else None,
@@ -701,12 +720,26 @@ def _state(doc: dict) -> str:
     return hashlib.sha256(",".join(e["id"] for e in doc["edits"][:doc["cursor"]]).encode("utf-8")).hexdigest()[:16]
 
 
+_EDITED = re.compile(r" \(edited\)(?: \d+)?$")
+
+
+def keep_name(item: dict, fmt: str) -> tuple:
+    """Where a Keep puts the edited song, and the cover's name: "<title> (edited)", numbered as its file is ("(edited) 2", ...).
+    A kept cover kept again counts on from the title it came from, not "(edited) (edited)". The page's Keep sheet says this name
+    (GET .../edits keep_as), the kept line and the Recent row show it: one name everywhere (IA pass 13)."""
+    from .pipeline import _safe, _unique
+    title = _EDITED.sub("", item.get("title") or Path(item["output"]).stem)
+    stem = f"{_safe(title)[:80]} (edited)"
+    out = _unique(path("output_dir") / stem, fmt)
+    return out, f"{title} (edited){out.name[:-len(fmt) - 1][len(stem):]}"
+
+
 def keep(item: dict) -> dict:
     """The edited song as a new cover in the history, the one it came from untouched. Its list comes with it, with its own copy of
     the base takes, so an undo past Keep still works when the old cover has gone. Each version is kept once, whichever way the list
     has moved between them: each new cover rolls the oldest off the tray, and the one this came from is spared that."""
     import uuid
-    from .pipeline import _append_history, _safe, _unique, CoverResult
+    from .pipeline import _append_history, _safe, CoverResult
     doc, res = load(item["id"]), result_of(item["id"])
     if doc is None or res is None or not doc["cursor"]:
         raise ModelError("There's nothing edited to keep.")
@@ -719,9 +752,8 @@ def keep(item: dict) -> dict:
     base = base_files(item, doc)
     d = folder(doc["cover"])
     fmt = res.suffix.lstrip(".")
-    title = item.get("title") or Path(item["output"]).stem
+    out, title = keep_name(item, fmt)
     name, tag = _safe(title)[:80], uuid.uuid4().hex[:10]
-    out = _unique(path("output_dir") / f"{name} (edited)", fmt)
     work = path("cache_dir") / "converted"
     vocal, backing = work / f"{name}__edited__{tag}.flac", work / f"{name}__edited__backing__{tag}.flac" if base["backing"] else None
     o = dict(item.get("options") if isinstance(item.get("options"), dict) else {})

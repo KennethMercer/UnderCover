@@ -17,7 +17,7 @@ POST   /api/history/<id>/octaves            {variants: [{octave, key}, {octave, 
 POST   /api/history/<id>/again              {options} the cover made again: its song, voice and settings, with these
                                             changed (the ear's fix: {octave: -1}; the backing follows the lead's octave)
 POST   /api/auto                            {text, prefer_train, song_url, choice} -> one-shot job (choice: the song_url picked from the plan's `choices`)
-GET    /api/history/<id>/edits              the cover's edit list (edits.view), or {none: true}
+GET    /api/history/<id>/edits              the cover's edit list (edits.view) and keep_as, or {none: true}
 POST   /api/history/<id>/edits              an edit (edits.check_edit): refused at once with a plain 400, else -> {job, edit, fit}
 POST   /api/history/<id>/edits/price        the same edit through the gate and priced (edits.price), nothing sung -> {edit, fit}
 POST   /api/history/<id>/edits/open         hear the words of a cover that has no list yet -> {job}
@@ -61,8 +61,12 @@ def handle(h, method: str, p: str) -> bool:
         elif m := re.fullmatch(r"/api/history/([0-9a-f]{10})/edits", p):
             from . import edits
             from .history import get
-            doc = edits.load(get(m.group(1))["id"])
-            h._json({**edits.view(doc), "result": file_url(edits.result_of(doc["cover"]))} if doc else {"none": True})
+            item = get(m.group(1))
+            doc = edits.load(item["id"])
+            if doc:   # keep_as: the name a Keep would give it now (edits.keep_name), so the page's sheet says the name it gets
+                res = edits.result_of(doc["cover"])
+                keep_as = edits.keep_name(item, (res or Path(item["output"])).suffix.lstrip(".") or "wav")[1]
+            h._json({**edits.view(doc), "result": file_url(res), "keep_as": keep_as} if doc else {"none": True})
         elif m := re.fullmatch(r"/api/songs/([0-9a-f]{16})/key", p):
             from .pipeline import song_key
             h._json(song_key(path("uploads_dir") / song_meta(m.group(1))["file"]))
@@ -446,6 +450,7 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     except ModelError as e:
         return h._error(str(e))
     song, person, artist = req["song"], req["person"], req["artist"]
+    asked = person   # the voices as written ("Barry White and Michael Jackson"): what the plan's notes say back
     duet = oneshot.split_duet(person)   # "... as A and B" (duets.py): A as below, B a voice here
     if duet:
         person = duet["person"]
@@ -479,12 +484,15 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
         from .duets import DUET_DEFAULT
         out["duet"] = {"with": duet["with"], "voice": duet["voice"], "way": DUET_DEFAULT,
                        "display": display_name(get_voice(duet["voice"])) if duet["voice"] else duet["with"]}
+        if not duet["voice"] or duet["voice"] == voice["name"]:   # one voice sings it: said before anything starts
+            out["duet"]["alone"] = oneshot.duet_alone(duet["with"], duet["voice"], voice.get("display") or person)
     sample = None if req["style"] else oneshot.sample_song(song, artist)   # the first run's song, on the desk
     here = (path("uploads_dir") / sample["file"]) if sample else None if req["style"] else oneshot.library_song(song, artist)
     if sample:
-        out["from_library"] = {"id": sample["id"], "title": sample.get("title") or song, "artist": sample.get("artist") or ""}
+        out["from_library"] = {"id": sample["id"], "title": sample.get("title") or song, "artist": sample.get("artist") or "",
+                               "seconds": sample.get("duration")}   # (the plan says what it is: the sample, an excerpt this long)
         out["note"] = (f"Using the sample song in your library. For another “{song}”, add its artist "
-                       f"(“{song} by <artist> as {person}”).")
+                       f"(“{song} by <artist> as {asked}”).")
     if voice["how"] == "installed":   # from the measured speeds (timings.jsonl), not a fixed "1-3 min"
         out["eta_s"] = oneshot.cover_eta(voice["name"], here)
     elif voice["how"] == "check" and community:   # "Ask me each time" (the user): use one now, check, or train first
@@ -511,8 +519,8 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
         except Exception:
             out["subject"] = None
     if req["by_only"]:   # "<song> by <name>": the name is the voice, said out loud because it could be the artist
-        out["note"] = (f"I read “by {person}” as the voice. If {person} is the song's artist, say "
-                       f"“{song} by {person} as <voice>”.")
+        out["note"] = (f"I read “by {asked}” as the voice. If {asked} is the song's artist, say "
+                       f"“{song} by {asked} as <voice>”.")
     if not artist and not sample:
         known = ambiguity.recall(ambiguity.song_key(song))
         if known:

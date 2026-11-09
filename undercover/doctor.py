@@ -68,7 +68,8 @@ def main(argv=None) -> int:
             print(f"{MARK[r['state']]}  {r['title']}: {r['say']}")
             if r["fix"] and r["state"] in ("bad", "warn", "info"):
                 print(f"        Fix: {r['fix']['label']}" + (f"  (python -m undercover.doctor fix {r['fix']['id']})"
-                                                           if r["fix"]["how"] != "offer" else ""))
+                                                           if r["fix"]["how"] != "offer" else
+                                                           f"  ({r['fix']['detail']})" if r["fix"].get("detail") else ""))
     c = rep["counts"]
     return 2 if c["bad"] else 1 if c["warn"] else 0
 

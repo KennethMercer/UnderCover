@@ -15,7 +15,7 @@
 // Uses app.js ($, $$, api, esc, S, HIST, showResult), shell.js (showTab), jobs.js (runningJobs), work.js (jobName, jobLine, glyph).
 
 const TOUR = { known: null, step: 0, sub: 0, on: false, wait: false, job: null, failed: null, confirm: false, tip: 0, tipAt: 0, timer: 0, began: false,
-               left: null, long: false, away: false, ready: null };
+               left: null, long: false, away: false, ready: null, seen: false, tryT: "", tryAsked: false };
 const TOUR_LONG = 180;   // seconds left above which the waiting panel offers to let them look around
 const TOUR_TIPS = [
   "The glasses in the top bar are Deep Cover: every number and setting. You never need them to make a cover.",
@@ -90,7 +90,8 @@ function tourCard() {
   } else if (n === 1) {
     c.innerHTML = `<div class="tour-k"><b id="tour-h">Your first assignment: a cover</b>${k}</div>
       <p>Type a song and a voice and press Make it. Or press the sample below: our own song, sung by Agent Smoke, the demo voice.</p>
-      <div class="tour-acts"><button class="tour-try" type="button" data-tour="sample">${glyph("play")}${TOUR_SAMPLE}<small id="tour-try-t">about a minute</small></button>${tourSkip}</div>`;
+      <div class="tour-acts"><button class="tour-try" type="button" data-tour="sample">${glyph("play")}${TOUR_SAMPLE}<small id="tour-try-t">${esc(TOUR.tryT || "")}</small></button>${tourSkip}</div>`;
+    tourTryTime();
   } else if (n === 2) {
     c.innerHTML = `<div class="tour-k"><b id="tour-h">Listen, then keep it</b>${k}</div>
       <p>Press play. Switch between Cover and Original to hear what changed. Then press Send to SafeHouse: it keeps the cover for good, and the rest roll off after fifteen.</p>
@@ -110,18 +111,38 @@ function tourCard() {
   }
   c.querySelector("[data-tour].btn.primary, .tour-try")?.focus({ preventScroll: true });
 }
+// the sample button's time: the one-shot's own plan for this PC (its measured speeds: minutes on a processor install), the same
+// words the Make it button shows; never a number of the tour's own. Only while the sample song is in the library (the plan
+// then reads it from the desk: nothing searched or downloaded). No answer, no time, and the next card asks again.
+function tourTryTime() {
+  if (TOUR.tryAsked) return;
+  TOUR.tryAsked = true;
+  (async () => {
+    const songs = await api("/api/library/songs");
+    if (!(Array.isArray(songs) ? songs : songs?.songs || []).some(s => s.sample)) return "";
+    const p = await api(`/api/auto/plan?text=${encodeURIComponent(TOUR_SAMPLE)}&train=0`);
+    return p && p.voice?.how === "installed" && p.eta_s && typeof planTime === "function" ? planTime(p) : "";
+  })().then(t => {
+    TOUR.tryT = t; if (!t) TOUR.tryAsked = false;
+    const el = $("#tour-try-t"); if (el) el.textContent = t;
+  }).catch(() => { TOUR.tryAsked = false; });
+}
 // the waiting panel's line: the job's own words (the stage it's at), never a made-up timer; its bar and time stay the app's, lit
 function tourNow() {
   const el = $("#tour-now"); if (!el) return;
   const j = (typeof runningJobs === "function" ? runningJobs() : []).find(x => x.id === TOUR.job) || (typeof runningJobs === "function" ? runningJobs()[0] : null);
   const line = j ? (typeof jobLine === "function" ? jobLine(j, false) : "") || j.message || "" : "";
   TOUR.left = j ? j.total_left ?? j.eta ?? null : null;
-  const said = line ? line.replace(/^./, c => c.toUpperCase()).replace(/[.\s]+$/, "") + "." : "Getting started.";   // one full stop, whatever the job's words end with
+  if (j && j.id === TOUR.job) TOUR.seen = true;   // once the tour's own job has run, no line means it's ending (the cover done, step 2 not drawn yet), not starting
+  const said = line ? line.replace(/^./, c => c.toUpperCase()).replace(/[.\s]+$/, "") + "."   // one full stop, whatever the job's words end with
+    : TOUR.seen ? "Finishing up." : "Getting started.";
   el.textContent = `${said} The bar and the time left are lit on the page.`;
 }
 function tourTip(first) {
   const t = $("#tour-tip-t"); if (!t) return;
-  const tips = TOUR_TIPS.filter(x => !/^Low profile/.test(x) || !$("#lp-chip")?.hidden);   // only what this copy shows
+  // only what this copy shows (Low profile, Your phone), and only what this view shows (Theme is a Deep Cover row)
+  const tips = TOUR_TIPS.filter(x => (!/^Low profile/.test(x) || !$("#lp-chip")?.hidden) && (!/^Your phone/.test(x) || !$("#set-phone-row")?.hidden)
+    && (!/^Themes/.test(x) || document.body.classList.contains("deep")));
   if (!first) TOUR.tip = (TOUR.tip + 1) % tips.length;
   TOUR.tipAt = Date.now();
   if (tourReduced() || first) { t.textContent = tips[TOUR.tip % tips.length]; return; }
@@ -131,7 +152,7 @@ function tourTip(first) {
 // ------------------------------------------------------------ moving on: the real actions, polled while the tour is on
 function tourTick() {
   if (!TOUR.on) return;
-  if (TOUR.step === 1 && !TOUR.wait && !TOUR.failed && (S.osBusy || S.job)) { TOUR.wait = true; TOUR.job = (typeof OS !== "undefined" && OS.job) || S.job; tourCard(); }
+  if (TOUR.step === 1 && !TOUR.wait && !TOUR.failed && (S.osBusy || S.job)) { TOUR.wait = true; TOUR.seen = false; TOUR.job = (typeof OS !== "undefined" && OS.job) || S.job; tourCard(); }
   if (TOUR.wait) {
     tourNow(); if (Date.now() - TOUR.tipAt > 10000) tourTip(false);
     const long = TOUR.left != null && TOUR.left > TOUR_LONG;
@@ -205,7 +226,7 @@ document.addEventListener("click", e => {
   else if (a === "skip-no") { TOUR.confirm = false; tourCard(); }
   else if (a === "skip-yes") tourEnd("skip");
   else if (a === "sample") { $("#os-text").value = TOUR_SAMPLE; $("#os-text").dispatchEvent(new Event("input")); $("#os-go").click(); }
-  else if (a === "retry") { const id = TOUR.failed?.id; TOUR.failed = null; TOUR.wait = true; tourCard();
+  else if (a === "retry") { const id = TOUR.failed?.id; TOUR.failed = null; TOUR.wait = true; TOUR.seen = false; tourCard();
     api(`/api/jobs/${id}/retry`, { method: "POST" }).then(r => { TOUR.job = r?.job || TOUR.job; if (typeof refreshJobs === "function") refreshJobs(true); })
       .catch(() => { TOUR.wait = false; $("#os-go").click(); }); }   // no retry for it: the same request again
   else if (a === "next") tourGo(TOUR.step + 1);

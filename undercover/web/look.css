@@ -118,6 +118,8 @@ html:not([data-skin="winamp"]) {
 
   /* ------------------------------------------------------------------ inputs: a tone, and a ring of the accent on focus */
   & input[type=text], & input[type=search], & input[type=time], & input:not([type]), & select, & textarea { border-color: transparent !important; }
+  /* on an accent fill the accent ring would vanish into the button: the ring is the text colour there (tokens.md: a fallback to --fg) */
+  & :is(.btn.primary, .convert, .play, .tplay.main, .ab-play, .tour-card .tour-try, .shape .sh-play):focus-visible { outline-color: var(--fg); }
   & :is(input[type=text], input[type=search], input[type=time], input:not([type]), select, textarea):focus-visible {
     outline: none; box-shadow: inset 0 0 0 1.5px var(--accent); }
   & .seg { border-color: transparent; background: var(--panel-2); padding: 2px; gap: 2px; border-radius: 8px; overflow: visible; }

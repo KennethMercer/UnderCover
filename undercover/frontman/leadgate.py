@@ -245,31 +245,33 @@ def apply(stems: dict, gate: dict, work: Path, stamp: str, chorus: str = "conver
     return out
 
 
-def note(gate: dict, chorus: str = "convert", backing_converted: bool = False, missing: list | tuple = ()) -> list[str]:
+def note(gate: dict, chorus: str = "convert", backing_converted: bool = False, missing: list | tuple = (),
+         shared: bool = False) -> list[str]:
     """Plain sentences for the cover's notes. backing_converted: the backing is sung by a voice in this cover (a backing voice,
     or a duet's singers), so lines kept in it are sung by that voice, not left to the original singers. missing: under "top",
-    the stretches with no top voice to move (top_missing), said as kept lines."""
+    the stretches with no top voice to move (top_missing), said as kept lines. shared: a duet's two singers share the
+    backing, so a kept line is sung by whichever of them has the backing there (Internal Affairs D4), not "the backing's voice"."""
     out = []
     gone = [list(m) for m in missing] if chorus == "top" else []
     if gone:
         found = [c for c in gate["chorus"] if list(c) not in gone]
-        out += note({**gate, "chorus": found}, chorus, backing_converted)
-        kept = note({"instrument": [], "chorus": gone}, "keep", backing_converted)
-        return out + [s.replace("Some lines are in the backing track", "Some lines are in the backing track and have no top voice to move")
+        out += note({**gate, "chorus": found}, chorus, backing_converted, shared=shared)
+        kept = note({"instrument": [], "chorus": gone}, "keep", backing_converted, shared=shared)
+        return out + [s.replace("Some lines are in the backing vocals", "Some lines are in the backing vocals and have no top voice to move")
                       for s in kept]
-    span = lambda rs: ", ".join(f"{int(a) // 60}:{int(a) % 60:02d}-{int(b) // 60}:{int(b) % 60:02d}" for a, b in rs[:4]) + (" ..." if len(rs) > 4 else "")
+    span = lambda rs: ", ".join(f"{int(a) // 60}:{int(a) % 60:02d}–{int(b) // 60}:{int(b) % 60:02d}" for a, b in rs[:4]) + (" ..." if len(rs) > 4 else "")
     if gate["instrument"]:
         out.append(f"Parts of the lead track were an instrument, not singing ({span(gate['instrument'])}): left as they are, "
                    "not turned into singing.")
     if gate["chorus"] and chorus == "top":
-        out.append(f"Some lines were in the backing track ({span(gate['chorus'])}): their top voice was converted too, "
+        out.append(f"Some lines were in the backing vocals ({span(gate['chorus'])}): their top voice was converted too, "
                    "the harmonies under it kept as they were.")
     elif gate["chorus"] and chorus != "keep":
-        out.append(f"Some lines were in the backing track ({span(gate['chorus'])}): converted with the voice too.")
+        out.append(f"Some lines were in the backing vocals ({span(gate['chorus'])}): converted with the voice too.")
     elif gate["chorus"] and backing_converted:
-        out.append(f"Some lines are in the backing track ({span(gate['chorus'])}): they're sung with the rest of the backing, "
-                   "in the backing's voice.")
+        out.append(f"Some lines are in the backing vocals ({span(gate['chorus'])}): they're sung with the rest of the backing, "
+                   + ("by whichever singer has it there." if shared else "in the backing's voice."))
     elif gate["chorus"]:
-        out.append(f"Some lines are in the backing track ({span(gate['chorus'])}): left to the original singers, as the "
+        out.append(f"Some lines are in the backing vocals ({span(gate['chorus'])}): left to the original singers, as the "
                    "backing harmonies are.")
     return out

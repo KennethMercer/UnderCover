@@ -1131,7 +1131,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
     from . import project as P
     from . import sources as srcmod
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import Trainer, epoch_line, export_voice
+    from .trainer import FRESH_KEYS, Trainer, epoch_line, export_voice
     TC = {**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
     key = slug(person)
     if project:
@@ -1143,12 +1143,13 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         proj = project_for(person, mode, subject)
     if job is not None:
         job.project = proj.name   # (said in the job list: a night item or a one-shot names the project it trains)
-    busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
-                 and (n == proj.name or a["kind"] in ("train", "auto"))), None)
-    if busy:
-        raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time; "
-                         "try again when it's done (or pause it).")
-    train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
+    with train_api._STARTING:   # (the check and the entry as one step, as the training form's)
+        busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
+                     and (n == proj.name or a["kind"] in ("train", "auto"))), None)
+        if busy:
+            raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time; "
+                             "try again when it's done (or pause it).")
+        train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
     try:
         proj = apply_mode(proj, person, mode)   # once the project is ours (a reused one too: the queue's)
         if not proj.sources:
@@ -1304,7 +1305,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         push("voice", 0.12, f"Training a voice from {mins:.1f} min of {person}")
         st = proj.train
         if st.get("state") != "paused":
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
+            for k in FRESH_KEYS:   # (an Improve's refine plan left behind never leaks in; exported stays)
                 st.pop(k, None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
         st.update(sr=st.get("sr") or TC["sample_rate"], length="auto", voice_name=st.get("voice_name") or f"{key}-uc")
@@ -1357,15 +1358,16 @@ def run_project(job, name: str, control, push) -> str:
     from . import api as train_api
     from . import project as P
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import LENGTHS, Trainer, epoch_line, export_voice
+    from .trainer import FRESH_KEYS, LENGTHS, Trainer, epoch_line, export_voice
     proj = P.Project.load(name)
-    busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
-                 and (n == proj.name or a["kind"] in ("train", "auto"))), None)
-    if busy:
-        raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time.")
-    vname = slug(proj.train.get("voice_name") or f"{proj.name}-uc")
-    train_api.check_voice_name(proj, vname)   # before any work: never another person's voice
-    train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
+    with train_api._STARTING:   # (the check and the entry as one step, as the training form's)
+        busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
+                     and (n == proj.name or a["kind"] in ("train", "auto"))), None)
+        if busy:
+            raise ModelError(f"'{busy}' is being prepared or trained right now. One voice trains at a time.")
+        vname = slug(proj.train.get("voice_name") or f"{proj.name}-uc")
+        train_api.check_voice_name(proj, vname)   # before any work: never another person's voice
+        train_api.ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
     try:
         todo = [s.id for s in proj.sources if s.selected and s.status not in ("ready", "failed")]
         if todo:
@@ -1390,7 +1392,7 @@ def run_project(job, name: str, control, push) -> str:
                              "ticked (3+ needed). Tick more sources in DoubleAgent, then queue it again.")
         st = proj.train
         if st.get("state") != "paused":
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
+            for k in FRESH_KEYS:   # (an Improve's refine plan left behind never leaks in; exported stays)
                 st.pop(k, None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
         st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"],

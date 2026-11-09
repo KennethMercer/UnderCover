@@ -88,9 +88,11 @@ function seVoices() {
       <div class="vtext"><b>${vname(v.name, false)}</b>${facts([{ html: `<span class="se-cad">${cad}</span>` }, ...bits, v.trained && v.likeness != null ? { t: `likeness ${(+v.likeness).toFixed(2)}`, deep: true } : ""])}</div>
       <div class="se-vact">${voiceLineButton(v.name)}${act}</div></div>`;
   };
-  const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
+  // the demo voice is its own group: it isn't downloaded, and nobody's clips to learn from
+  const demo = list.filter(v => v.demo), trained = list.filter(v => v.trained && !v.demo), dl = list.filter(v => !v.trained && !v.demo);
   $("#se-voices").innerHTML = (trained.length ? `<div class="se-vgroup">Trained in DoubleAgent</div>` + trained.map(row).join("") : "")
     + (dl.length ? `<div class="se-vgroup">Downloaded (they learn to speak from clips first)</div>` + dl.map(row).join("") : "")
+    + (demo.length ? `<div class="se-vgroup">Demo voice</div>` + demo.map(row).join("") : "")
     || (SE.voices.length ? `<p class="meta">No voice matches “${esc(q)}”.</p>` : `<div class="empty"><b>No one to speak yet.</b><button class="btn" type="button" data-goto="doubleagent">Get a voice</button></div>`);
   $$("#se-voices [data-cad]").forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
@@ -163,8 +165,12 @@ function sePlan(soon) {
     catch (e) { if (seq === sePlanSeq) { SE.plan = null; seSummary(); } }
   }, soon ? 120 : 0);
 }
-// "Speak the way Morgan Freeman really does" (a name), "the way they really do" (none)
-function seCadName(name) { $("#se-cad-name").textContent = name || "they"; $("#se-cad-verb").textContent = name ? "does" : "do"; $("#se-cad").setAttribute("aria-label", `Speak the way ${name || "they"} really ${name ? "does" : "do"}`); }
+// "Speak the way Johnny Cash really does" (a name), "the way they really do" (none); the demo voice isn't a real person: "Speak in Agent Smoke's own way"
+function seCadName(name, demo) {
+  const say = demo && name ? `Speak in ${name}'s own way` : `Speak the way ${name || "they"} really ${name ? "does" : "do"}`;
+  $("#se-cad-say").textContent = say; $("#se-cad").setAttribute("aria-label", say);
+}
+const seIsDemo = id => !!SE.voices.find(x => x.name === id)?.demo;
 $("#se-cad").checked = store.get("uc-se-cad", true);
 $("#se-cad").onchange = () => { store.set("uc-se-cad", $("#se-cad").checked); sePlan(); };
 // Deep Cover's engine line under "Speak the way they really do": the engine that reads, and the original Chatterbox (an optional add-on since
@@ -197,7 +203,7 @@ function seShowPlan() {
   if (cadOn) {
     $("#se-nudge-out").textContent = p.nudge ? st(p.nudge) : "their own";
     $("#se-pitch-note").textContent = "Speaking their own way, they use their own pitch. Nudge it only if it sounds off.";
-    seCadName(v0?.person || voiceDisplay(p.voice));
+    seCadName(v0?.person || voiceDisplay(p.voice), v0?.demo);
     return seSummary();
   }
   $("#se-reader-out").textContent = `${p.auto ? "auto · " : ""}${p.reader}`;
@@ -206,7 +212,7 @@ function seShowPlan() {
     ? `Speaks around ${Math.round(p.target_hz)} Hz (from ${p.pitch_from}); the Reader is at ${Math.round(p.reader_hz)} Hz. Nudge it if they sound too high or low.`
     : "This voice's speaking pitch isn't known (a downloaded voice nobody checked), so the Reader's own pitch is used. Nudge it, or pick another Reader, if it sounds off.";
   const v = SE.voices.find(x => x.name === p.voice);
-  seCadName(v?.person || voiceDisplay(p.voice));
+  seCadName(v?.person || voiceDisplay(p.voice), v?.demo);
   seSummary();
 }
 function seSummary() {
@@ -217,10 +223,14 @@ function seSummary() {
   const est = SE.est && SE.est.key === seEstKey() ? SE.est : null;   // the server's, while it still matches what's on the page
   const secs = est ? est.audio_seconds : w / 3.0 / sePaceFactor();
   const cad = est ? est.mode === "cadence" : SE.plan?.mode === "cadence" && SE.plan.voice === SE.voice;
-  const first = est && est.first_s >= 5 ? `, ${fmtTime(est.first_s)} of it because ${esc(est.first_why)} (the first speech only)` : "";   // (1.0.1)
+  // the first speech's start-up (1.0.1): what it is in plain words; the parts (the engine, listen-back) are Deep Cover's
+  const first = est && est.first_s >= 5 ? `, ${fmtTime(est.first_s)} of it<span data-basic> to get ready, the first time only</span><span data-deep> because ${esc(est.first_why)} (the first speech only)</span>` : "";
   const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${first}${est.waiting ? ` (${esc(est.waiting)} ahead in the queue)` : ""}`
     : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
-  const when = `${cad ? "the way they really do" : "read by the Reader"}${ready} · ready to play after the ${cad ? "first few sentences" : "first sentence"}`;
+  // one sentence plays when it's all made: "ready in" says it already (the count is the server's, tts.sentences; said as before until it comes)
+  const n = est ? est.sentences : 2;
+  const way = seIsDemo(SE.voice) ? "in its own way" : "the way they really do";
+  const when = `${cad ? way : "read by the Reader"}${ready}${n > 1 ? ` · ready to play after the ${cad ? "first few sentences" : "first sentence"}` : ""}`;
   $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice, false)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`
     : `<b>${vname(SE.voice, false)}</b> <span class="meta">· type or paste something for them to say</span>`;
 }
@@ -278,10 +288,11 @@ function seStart(job, plan, estimate, resumed = false) {
       $("#se-stop").hidden = true;
       if (ev.state === "done" && ev.result) {
         SE.result = ev.result;
-        const unk = ev.result.directions_unknown || [], held = ev.result.directions_held || [];   // read as nothing, said once here
+        const unk = ev.result.directions_unknown || [], held = ev.result.directions_held || [], foreign = ev.result.not_english || 0;   // read as nothing, said once here
         $("#se-progress").innerHTML = `${SE.sents.length} sentence${SE.sents.length === 1 ? "" : "s"}<span data-deep> · made in ${(ev.result.seconds?.total || 0).toFixed(1)} s</span>`
           + (unk.length ? ` · <span class="se-unknown">I didn't know ${esc(unk.join(", "))}, so I left ${unk.length === 1 ? "it" : "them"} out.</span>` : "")
-          + (held.length ? ` · <span class="se-unknown">${esc(held.join(", "))} ${held.length === 1 ? "isn't" : "aren't"} used yet, so I left ${held.length === 1 ? "it" : "them"} out.</span>` : "");
+          + (held.length ? ` · <span class="se-unknown">${esc(held.join(", "))} ${held.length === 1 ? "isn't" : "aren't"} used yet, so I left ${held.length === 1 ? "it" : "them"} out.</span>` : "")
+          + (foreign ? ` · <span class="se-unknown">I left out the text that isn't in English (SpeakEasy reads English only).</span>` : "");
         $("#se-wav").href = ev.result.url + "?download"; $("#se-wav").removeAttribute("aria-disabled");
         $("#se-wav").textContent = `Download ${(ev.result.file || "").split(".").pop().toUpperCase() || "FLAC"}`;   // phase 24: lossless FLAC
         if (ev.result.mp3_url) { $("#se-mp3").href = ev.result.mp3_url + "?download"; $("#se-mp3").removeAttribute("aria-disabled"); }
@@ -390,7 +401,7 @@ function seRecent() {
   if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
   box.innerHTML = SE.recent.slice(0, SE.recAll ? RECENT_TRAY : RECENT_SHOW).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
-      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b>${facts([{ html: `${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)}` }, `${paceWord(r)} pace`, r.mode === "cadence" ? "Their own way" : "", { t: upFirst(dayWord(r.created)), muted: true }, { t: dayTime(r.created), deep: true }])}</div>
+      <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b>${facts([{ html: `${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)}` }, `${paceWord(r)} pace`, r.mode === "cadence" ? (seIsDemo(r.voice) ? "Its own way" : "Their own way") : "", { t: upFirst(dayWord(r.created)), muted: true }, { t: dayTime(r.created), deep: true }])}</div>
       <span class="mono meta dur">${fmtTime(r.duration)}</span>
       <span class="row"><button class="mini" type="button" data-rkeep="${r.id}" aria-pressed="${r.kept}" title="${r.kept ? "Kept in SafeHouse. Click to take it back." : "Keep this speech for good"}">${r.kept ? "Kept ✓" : "Send to SafeHouse"}</button><a class="mini" href="${r.mp3_url || r.url}?download">Download</a><button class="mini" type="button" data-pc data-rdel="${r.id}">Remove</button></span></div>`).join("") + recentMore("se-recent-more", !!SE.recAll, SE.recent.length);
   $("#se-recent-more")?.addEventListener("click", () => { SE.recAll = !SE.recAll; seRecent(); $("#se-recent-more")?.focus({ preventScroll: true }); });

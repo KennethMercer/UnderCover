@@ -49,7 +49,7 @@ function jobLine(j, withLeft = true) {
   return bits.join(" · ");
 }
 const jobName = j => j.title || JOB_KIND[j.kind] || j.kind;
-// a voice id read as a person ("barack-obama-uc" -> "Barack Obama"): the voice's display name when it's listed, else the id's own words; anything else as it is
+// a voice id read as a person ("johnny-cash-uc" -> "Johnny Cash"): the voice's display name when it's listed, else the id's own words; anything else as it is
 const niceName = s => !s ? "" : VOICES.has(s) ? voiceDisplay(s) : /^[a-z0-9]+(-[a-z0-9]+)*-uc$/.test(s) ? s.slice(0, -3).split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ") : s;
 const WAIT_ORDER = ["auto", "cover", "speech", "install"];   // what the user is waiting for first, then voice work
 const byWait = run => run.sort((a, b) => ((WAIT_ORDER.indexOf(a.kind) + 1) || 9) - ((WAIT_ORDER.indexOf(b.kind) + 1) || 9));
@@ -100,6 +100,7 @@ function renderBar() {
   $("#wb-forget").hidden = !w.held || !(w.resume || []).length;
   $("#wb-main").dataset.goto = main ? owner : "doubleagent";
   $("#wb-main").title = main ? `Open ${MOD_NAME[owner]}` : "";
+  $("#wb-main").setAttribute("aria-label", `Open ${MOD_NAME[main ? owner : "doubleagent"]}`);   // (a focus stop: the keyboard follows a running job to its page)
   $("#chip-train").hidden = true;   // the bar says it all
   document.documentElement.style.setProperty("--wb-h", $(".workbar-wrap").offsetHeight + "px");   // now its text is in
 }
@@ -261,7 +262,9 @@ function renderRunRoom() {
   if (w) { $("#rn-finish").checked = !!w.settings.finish_by; $("#rn-awake").checked = w.settings.keep_awake !== false; }
 
   // recent: the last five finished, and how they ended (from each job's final event)
-  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep" && !(j.kind === "speakwarm" && (j.final?.state || j.state) === "done")).slice(0, 5);   // the app's own warm-up, unless it failed
+  // the app's own housekeeping only when it failed (a pre-separation never: a cover cancels its own, and runs the separation itself)
+  const failed = j => ["error", "lost"].includes(j.final?.state || j.state);
+  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep" && !(quietJob(j) && !failed(j))).slice(0, 5);
   put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = willRetry(j) ? ["warn", "waiting to retry"] : ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");
@@ -589,3 +592,6 @@ document.addEventListener("uc:jobdone", e => {
   if (typeof seLoad === "function" && !$("#view-speakeasy").hidden) seLoad();
   if (typeof refresh === "function" && typeof T !== "undefined" && T.proj) refresh();
 });
+
+// the running strip is a link to its module: Enter or Space does what the click does (shell.js's [data-goto]); polish batch 3
+$("#wb-main")?.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } });

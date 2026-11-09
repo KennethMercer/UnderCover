@@ -75,7 +75,7 @@
 <div class="workbar-wrap">
   <div class="workbar" id="workbar" hidden role="status" aria-live="polite">
     <span class="who" id="wb-who"></span>
-    <div class="wb-main" id="wb-main"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
+    <div class="wb-main" id="wb-main" tabindex="0" role="link" aria-label="Open DoubleAgent"><span id="wb-text"></span><div class="bar" id="wb-bar" hidden><i></i></div></div>
     <div class="wb-btns"><button class="linkbtn" id="wb-more" type="button" hidden></button><button class="btn" id="wb-pause" type="button">Pause</button><button class="btn primary" id="wb-resume" type="button" hidden>Resume</button><button class="linkbtn" id="wb-forget" type="button" hidden title="Forget the paused work instead of resuming it">Dismiss</button><button class="linkbtn" id="wb-open" type="button" title="Open SafeHouse's Running room">Running</button></div>
   </div>
 </div>
@@ -217,7 +217,7 @@
             <div class="seg" id="fm-duet-way" role="group" aria-labelledby="fm-duet-way-l">
               <button type="button" data-v="turns">Take turns</button>
               <button type="button" data-v="lines" hidden>Line by line</button>
-              <button type="button" data-v="mine" data-deep disabled title="You'll draw the split on the song. Not built yet.">I'll choose <span class="deepmark wide"><svg class="ico" aria-hidden="true"><use href="#g-deep"/></svg>Deep Cover</span></button>
+              <!-- "I'll choose" (Deep Cover: draw the split on the song) comes back with its editor, after 1.2 -->
             </div>
             <p class="meta" id="fm-duet-note"></p>
             <div class="strip" id="fm-duet-strip" aria-hidden="true" hidden></div>
@@ -421,6 +421,7 @@
 
   <!-- shaping a cover: its edit list (shape.js); PC only -->
   <section class="panel shape" id="shape" hidden data-pc aria-label="Shaping a cover"></section>
+  <p class="sr-only" id="shape-say" role="status" aria-live="polite" data-pc></p>
 
   <section class="panel">
     <div class="hist-head"><div><h2>Recent covers</h2><small class="meta" id="hist-note">The latest 15 stay here; older ones roll off unless sent to SafeHouse.</small></div><span class="row-gap"><button class="linkbtn" id="hist-library">See all in SafeHouse</button><button class="linkbtn" id="open-output" data-deep data-pc>Open output folder</button></span></div>
@@ -439,7 +440,7 @@
         <span class="seg" id="da-mode" role="group" aria-label="Kind of audio"><button type="button" data-v="speaking" aria-pressed="true">Speaking</button><button type="button" data-v="singing" aria-pressed="false">Singing</button></span>
         <button class="btn primary" id="da-train" type="button">Train the voice</button>
       </div>
-      <div class="da-under"><span>e.g. Elliott Smith, or Barack Obama</span><span class="da-time"><span id="da-train-eta"></span><button class="linkbtn" id="da-tonight" type="button">Train tonight</button>: ready in the morning, while the PC is free.</span></div>
+      <div class="da-under"><span>e.g. Johnny Cash, or Audrey Hepburn</span><span class="da-time"><span id="da-train-eta"></span><button class="linkbtn" id="da-tonight" type="button">Train tonight</button>: ready in the morning, while the PC is free.</span></div>
     </section>
 
     <section class="da-work" id="da-work" hidden aria-live="polite"></section>
@@ -473,7 +474,7 @@
     <section class="panel" id="tr-find">
       <div class="row spread"><h2>1 · Who should it sound like?</h2><span class="meta">Clips are kept in <span class="mono">cache/training</span></span></div>
       <div class="row">
-        <input type="search" id="tr-person" class="grow" autocomplete="off" placeholder="A person's name, e.g. Barack Obama" aria-label="Person's name">
+        <input type="search" id="tr-person" class="grow" autocomplete="off" placeholder="A person's name, e.g. Johnny Cash" aria-label="Person's name">
         <div class="seg" id="tr-mode" role="group" aria-label="Kind of audio">
           <button type="button" data-v="speaking">Speaking</button><button type="button" data-v="singing">Singing</button><button type="button" data-v="both">Both</button>
         </div>
@@ -613,22 +614,22 @@
     </section>
     <!-- two groups (consult 5): each feature is one row with what it's for and its number, until opened; one row open at a time -->
     <section class="panel grp" id="st-make"><h3 class="grp-h">Make room</h3>
-      <button class="frow" id="lib-clean-btn" type="button" data-open="lib-clean" aria-expanded="false" data-pc><b>Clean up</b><span class="what">stems, previews, old working files</span><span class="num" id="st-n-clean"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" id="lib-clean-btn" type="button" data-open="lib-clean" aria-expanded="false" data-pc data-find="clean, clean up, delete, remove, free space, space, disk, stems, previews, cache, junk"><b>Clean up</b><span class="what">stems, previews, old working files</span><span class="num" id="st-n-clean"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="lib-clean" hidden>
         <p class="meta">Frees space without touching your covers, songs or voices (unless you tick those).</p>
         <div class="clean" id="lib-clean-list"></div>
         <div class="row"><button class="btn primary" id="lib-clean-go">Free space</button><button class="linkbtn" id="lib-clean-close">Close</button>
           <span class="meta">Can't be undone; anything here is made again when it's needed.</span></div>
       </div>
-      <button class="frow" type="button" data-open="smaller" aria-expanded="false"><b>Make it smaller</b><span class="what">voices and projects, checked to sound the same</span><span class="num" id="sm-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="smaller" aria-expanded="false" data-find="smaller, shrink, compress, space, disk, size, delete"><b>Make it smaller</b><span class="what">voices and projects, checked to sound the same</span><span class="num" id="sm-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="smaller" hidden><div class="vt-body" id="sm-body"></div></div>
-      <button class="frow" type="button" data-open="aside" aria-expanded="false"><b>Set aside</b><span class="what" id="as-what">voices UnderCover moved out of the way</span><span class="num" id="as-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="aside" aria-expanded="false" data-find="set aside, moved, missing voices, restore, put back"><b>Set aside</b><span class="what" id="as-what">voices UnderCover moved out of the way</span><span class="num" id="as-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="aside" hidden><div class="vt-body" id="as-body"></div></div>
     </section>
     <section class="panel grp" id="st-keep"><h3 class="grp-h">Keep it safe</h3>
-      <button class="frow" type="button" data-open="vault" aria-expanded="false"><b>Vault</b><span class="what">a copy of what can't be downloaded again, on another drive</span><span class="num" id="vt-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="vault" aria-expanded="false" data-find="backup, back up, vault, copy, safe, another drive, external drive, restore, files"><b>Vault</b><span class="what">a copy of what can't be downloaded again, on another drive</span><span class="num" id="vt-say"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="vault" hidden><div class="vt-body" id="vt-body"><p class="meta">Loading…</p></div></div>
-      <button class="frow" type="button" data-open="st-places-wrap" aria-expanded="false"><b>Where your files live</b><span class="what">UnderCover's folders, and where to move them</span><span class="num" id="st-drive"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
+      <button class="frow" type="button" data-open="st-places-wrap" aria-expanded="false" data-find="files, folder, folders, where are my files, location, move, drive, storage, path, space"><b>Where your files live</b><span class="what">UnderCover's folders, and where to move them</span><span class="num" id="st-drive"></span><span class="chev" aria-hidden="true">&#8250;</span></button>
       <div class="fopen" id="st-places-wrap" hidden><div class="places" id="st-places"></div><p class="meta">Logs and settings stay with the app.</p></div>
     </section>
     </div>
@@ -722,7 +723,7 @@
     </section>
     <div class="row sys-btns" data-pc data-find-name="Restart or quit" data-find="restart, quit, stop, close, exit, shut down, start again"><button class="btn" type="button" data-restart>Restart UnderCover</button>
       <button class="btn danger" id="lib-quit" type="button" title="Stops UnderCover on this PC (started by double-click, it has no window to close)">Quit UnderCover</button>
-      <span class="meta">Quit stops it on this PC; start it again with UnderCover.bat.</span></div>
+      <span class="meta" id="sys-quit-say">Quit stops it on this PC. Start it again from the Start menu.</span></div>
     </div>
 
     <div class="sh-room" id="room-settings" hidden>
@@ -838,7 +839,7 @@
         <div class="se-field" data-deep><label for="se-nudge">Pitch <output id="se-nudge-out">auto</output></label>
           <input type="range" id="se-nudge" min="-6" max="6" step="0.5" value="0">
           <p id="se-pitch-note">Set from the voice's speaking pitch; nudge it if they sound too high or low.</p></div>
-        <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad" aria-label="Speak the way they really do"><span>Speak the way <span id="se-cad-name">they</span> really <span id="se-cad-verb">do</span></span></label>
+        <div class="se-field" id="se-cad-field"><label class="se-toggle"><input type="checkbox" id="se-cad" aria-label="Speak the way they really do"><span id="se-cad-say">Speak the way they really do</span></label>
           <p id="se-cad-note">Their own pace and pauses, learned from their clips.</p>
           <p class="meta" id="se-cad-deep" data-deep></p>
           <p class="meta" id="se-engine-deep" data-deep hidden></p></div>
@@ -867,7 +868,7 @@
     <section class="panel">
       <div class="row spread"><h2>Recent</h2><button class="linkbtn" id="se-all" type="button">Show all in SafeHouse</button></div>
       <div class="se-recent" id="se-recent"><p class="meta">Speech you make collects here.</p></div>
-      <p class="meta" id="se-recent-note">The latest 15 stay here. Older ones you haven't sent to SafeHouse roll off (are deleted); sent ones stay in SafeHouse.</p>
+      <p class="meta" id="se-recent-note">The latest 15 stay here; older ones roll off unless sent to SafeHouse.</p>
     </section>
   </div>
 </div>
