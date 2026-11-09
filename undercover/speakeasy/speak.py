@@ -148,6 +148,30 @@ def _loaded(conv, v):
     return LoadedVoice(v, conv.device, conv.half)
 
 
+def _read_ahead(sents: list, synth, q: "queue.Queue", stop: threading.Event):
+    """The Reader's thread: each sentence read (synth(text) -> audio) into q, as (audio, seconds), or the error that
+    ended it. It never waits on a full queue past `stop`: after a Stop or an error the job thread has left, nothing
+    reads q, and a plain put would hold this thread for good (one more per Stop)."""
+    def put(item) -> bool:
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.5)
+                return True
+            except queue.Full:
+                continue
+        return False
+    try:
+        for s in sents:
+            if stop.is_set():
+                return
+            t = time.perf_counter()
+            a = synth(s["text"])
+            if not put((a, time.perf_counter() - t)):
+                return
+    except BaseException as e:   # handed to the job thread
+        put(e)
+
+
 def render_line(job, v) -> tuple[np.ndarray, int]:
     """The voice's preview line (core.voicepreview), read exactly as SpeakEasy reads anything with this voice, and not
     saved as a speech. Registered with core.voicepreview by the app."""
@@ -199,18 +223,8 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
     # Kokoro (CPU) reads ahead in its own thread while the GPU converts
     q: "queue.Queue" = queue.Queue(maxsize=3)
     stop = threading.Event()
-
-    def reader_thread():
-        try:
-            for s in sents:
-                if stop.is_set():
-                    return
-                t = time.perf_counter()
-                a = tts.synth(s["text"], p["reader"], p["speed"])
-                q.put((a, time.perf_counter() - t))
-        except BaseException as e:   # handed to the job thread
-            q.put(e)
-    threading.Thread(target=reader_thread, daemon=True, name="kokoro").start()
+    threading.Thread(target=_read_ahead, args=(sents, lambda text: tts.synth(text, p["reader"], p["speed"]), q, stop),
+                     daemon=True, name="kokoro").start()
 
     pieces, made, t_tts, t_rvc = [], 0.0, 0.0, 0.0
     try:

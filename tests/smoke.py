@@ -7633,6 +7633,35 @@ def u_start_race():
     return "form + form, Do it all + form: one each time"
 
 
+@check("bugs-da 8: SpeakEasy's Reader thread ends soon after a Stop, its read-ahead queue full and nobody reading it (it used to wait on it for good, one thread per Stop); an error still reaches the job")
+def u_read_ahead_stop():
+    import inspect
+    import queue
+    import threading
+    from undercover.speakeasy import speak
+    assert "_read_ahead" in inspect.getsource(speak.make_speech), "make_speech reads ahead some other way"
+    sents = [{"text": f"Sentence {i}."} for i in range(10)]
+    q, stop = queue.Queue(maxsize=3), threading.Event()
+    t = threading.Thread(target=speak._read_ahead, args=(sents, lambda text: text, q, stop), daemon=True)
+    t.start()
+    first = q.get(timeout=5)   # the job takes one sentence, then is stopped
+    assert first[0] == "Sentence 0.", first
+    time.sleep(0.3)   # (the reader fills the queue and waits on it)
+    stop.set()
+    t.join(1.0)
+    assert not t.is_alive(), "the Reader's thread still waits on the queue after a Stop"
+
+    def broken(text):
+        raise RuntimeError("the Reader fell over")
+    q2 = queue.Queue(maxsize=3)
+    t = threading.Thread(target=speak._read_ahead, args=(sents, broken, q2, threading.Event()), daemon=True)
+    t.start()
+    t.join(2.0)
+    e = q2.get_nowait()
+    assert isinstance(e, RuntimeError) and not t.is_alive(), e
+    return "gone within 1 s of the Stop; an error handed over"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15623,7 +15652,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
