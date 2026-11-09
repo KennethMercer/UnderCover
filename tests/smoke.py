@@ -15348,6 +15348,28 @@ def _users_server_training(since: float | None = None) -> set:
             and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
+@check("a night item's job names the training project it writes under (improve, a queued project, a new voice), so the real-folder check can tell the user's own server's training from a run's")
+def u_job_project():
+    import inspect
+    from undercover.core import jobs
+    from undercover.doubleagent import night, service
+    j = jobs.Job("night", title="Improve someone")
+    j.resume_spec = {"kind": "night", "item": "abc", "label": "Improve someone"}
+    assert j.snapshot()["project"] is None
+    j.project = "someone"
+    assert j.snapshot()["project"] == "someone"
+    k = jobs.Job("train", title="t")
+    k.resume_spec = {"kind": "train", "project": "other"}
+    assert k.snapshot()["project"] == "other", "a training's own project went missing"
+    src = inspect.getsource(night._improve)
+    assert src.index("job.project = proj.name") > src.index("proj = _project_for_item(item, create=True)")
+    src = inspect.getsource(night._project)
+    assert src.index('job.project = item["target"]') < src.index("service.run_project(")
+    src = inspect.getsource(service.train_new_voice)
+    assert src.index("job.project = proj.name") < src.index("busy = next(")
+    return "improve, a queued project and a new voice each name their project"
+
+
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
 def a_untouched(before: dict, dirs: dict, busy: set = frozenset(), since: float | None = None):
     """busy: the projects the user's server was training when the run started; with the ones it trained during the
@@ -15396,7 +15418,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_job_project, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

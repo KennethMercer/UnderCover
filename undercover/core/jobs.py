@@ -243,6 +243,7 @@ class Job:
         self.result = None
         self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
         self.resume_spec = None   # how to start this work again (worklist.resume)
+        self.project = None       # the training project it writes under (cache/training/<name>), once it knows
         self.control = None       # trainer Control, for jobs that train
         self.retry_req = None     # (route, body) that started it: Retry on a failed one (app/server.py, phase 10)
         self.created = time.time()
@@ -367,7 +368,7 @@ class Job:
         ref = evs[-2] if last.get("final") and len(evs) > 1 else last   # a finished job: how far it got
         stage = ref.get("stage")
         snap = {"id": self.id, "kind": self.kind, "state": self.state, "title": self.title or (self.resume_spec or {}).get("label"),
-                "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
+                "project": self.project or (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
                 "retry": self.state == "error" and self.retry_req is not None,
                 "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs),
