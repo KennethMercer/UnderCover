@@ -76,7 +76,15 @@ function setDeep(on) {
   $("#set-deep")?.setAttribute("aria-checked", on);   // the switch in SafeHouse's Settings room
   if (typeof findRun === "function") findRun();   // Find a setting shows (or only counts) Deep Cover's rows (findset.js)
   if (typeof jfNotify === "function") jfNotify();   // the strip and Running show (or stop showing) the app's own housekeeping (jobs.js)
+  sayStartAgain();
 }
+// How UnderCover is started again, said wherever it stops or can't be reached: an installed copy from the Start menu; a source
+// checkout's scripts\UnderCover.bat only in Deep Cover (/api/status's `launcher`, kept on body[data-launcher])
+function startAgain(tail = "") {
+  const bat = document.body.dataset.launcher === "bat" && document.body.classList.contains("deep");
+  return `Start it again ${bat ? "with scripts\\UnderCover.bat" : "from the Start menu"}${tail}.`;
+}
+function sayStartAgain() { const el = $("#sys-quit-say"); if (el) el.textContent = `Quit stops it on this PC. ${startAgain()}`; }
 setDeep(!!store.get("uc-deep", false));
 $("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
 $("#deep-first-ok")?.addEventListener("click", () => { store.set("uc-deep-seen", true); $("#deep-first").hidden = true; });
@@ -125,7 +133,7 @@ async function api(path, opts = {}) {
   if (opts.json !== undefined) { init.method = init.method || "POST"; init.body = JSON.stringify(opts.json); init.headers["Content-Type"] = "application/json"; }
   let r;
   try { r = await fetch(path, init); }
-  catch (e) { throw new Error("Lost contact with UnderCover. Is the UnderCover window still open? Start it again with UnderCover.bat."); }
+  catch (e) { throw new Error(`Lost contact with UnderCover. Is it still running? If not, ${startAgain().replace(/^S/, "s")}`); }
   if (r.status === 401) { location.replace("/pair"); throw new Error("This phone isn't paired any more."); }   // only phones get 401 (phase 11)
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(data.error || `Request failed (${r.status}).`), { status: r.status, data });   // the body rides along (a 409 can say more)
@@ -210,6 +218,7 @@ async function pollStatus() {
     if (s.move) { $("#ph-move-say").textContent = s.move === "ready" ? "UnderCover has a new link for this phone." : "On the PC, set up Your phone in SafeHouse's Settings to keep this phone connected."; $("#ph-move-go").hidden = s.move !== "ready"; }
     if (s.device) $("#set-phone-me").textContent = `This phone is connected as ${s.device}. Phones are added and removed on the PC.`;
     sysStatus(s);
+    if (s.launcher && document.body.dataset.launcher !== s.launcher) { document.body.dataset.launcher = s.launcher; sayStartAgain(); }
     if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);
     if (typeof tourStatus === "function") tourStatus(s.tour);   // the First assignment's tour: a fresh install's first visit to FrontMan (firstrun.js)   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)
     if (typeof firstReady === "function") firstReady(s);   // the first start's download in the one-shot card (oneshot.js)
@@ -282,7 +291,7 @@ async function restartServer(now = false) {
     }
     // A server from before this feature has no restart endpoint (404); anything else (e.g. busy) is explained by e.message.
     const old = /not found/i.test(e.message);
-    showError(old ? "This copy of UnderCover is too old to restart itself. Start it again with UnderCover.bat or the desktop shortcut." : e.message,
+    showError(old ? `This copy of UnderCover is too old to restart itself. ${startAgain()}` : e.message,
               "Couldn't restart", old ? null : { label: "Try again", run: () => restartServer() }, !old);
     return;
   }
@@ -300,8 +309,7 @@ async function restartServer(now = false) {
       if (s.started && s.started !== before) { location.reload(); return; }
     } catch (e) { /* down or timed out while it restarts */ }
   }
-  showError("UnderCover didn't come back after restarting. Start it again with UnderCover.bat or the desktop shortcut. " +
-            "If that fails, logs/server.log has the details.", "Restart failed");
+  showError(`UnderCover didn't come back after restarting. ${startAgain()} If that fails, logs/server.log has the details.`, "Restart failed");
 }
 // Look (SafeHouse's Settings room): follow Windows (the default), or always dark / light. uc-theme = "system" | "dark" | "light",
 // read before first paint by the script in index.html's head
@@ -766,7 +774,7 @@ function summary() {
   previewSync();
   $("#adv-sum").textContent = `${o.fit ? "pitch fit to the voice" : pitchText(o)} · likeness ${(+(o.index_ratio ?? 0)).toFixed(2)} · ${o.quality || "high"} quality` +
     (o.duet_voice ? ` · ${duetBackSaid(o.duet_backing)}`
-      : o.backing_voice ? ` · backing by ${voiceDisplay(o.backing_voice)}` : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
+      : o.backing_voice ? (o.backing_voice === S.voice ? " · lead + backing converted" : ` · backing by ${voiceDisplay(o.backing_voice)}`) : o.karaoke ? " · lead only" : "") + (o.dereverb ? " · de-reverb" : "") + (+o.reverb ? " · reverb" : "") + ` · ${(o.format || "mp3").toUpperCase()}`;
   const ready = S.song && S.voice;
   const busy = !!S.job || !!S.osBusy;   // a one-shot cover uses the GPU queue too
   $("#convert").disabled = !ready || busy;
@@ -778,7 +786,8 @@ function summary() {
   else {
     const est = S.estimate ? ` · about ${fmtSecs(S.estimate.total)}${S.estimate.stems_cached ? " (stems cached)" : ""}` : "";
     // a backing voice carried over (Use these settings) stays on when the lead changes: it is said here, with a way to clear it, never silently (IA P9-3)
-    const bk = S.opts.backing_voice && !S.opts.duet_voice ? ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
+    // (the one-shot converts the backing in the lead's own voice: said as that, not the voice twice)
+    const bk = S.opts.backing_voice && !S.opts.duet_voice ? `${S.opts.backing_voice === S.voice ? ", backing vocals too" : ` with <b>${vname(S.opts.backing_voice)}</b> on backing vocals`} <button class="linkbtn" type="button" id="clear-backing">Use the original singer's backing</button>` : "";
     const du = S.opts.duet_voice ? ` and <b>${vname(S.opts.duet_voice)}</b>, taking turns <button class="linkbtn" type="button" id="clear-duet">Just one singer</button> <span class="meta">· ${duetBackSaid(o.duet_backing)}</span>` : "";
     $("#summary").innerHTML = `<b>${esc(S.song.title)}</b> sung by <b>${vname(S.voice)}</b>${du}${bk} <span class="meta" data-deep>· ${o.fit ? "pitch fit to the voice" : pitchText(o)}</span><span class="meta">${est}</span>`;
   }

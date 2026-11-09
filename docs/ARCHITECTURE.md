@@ -653,7 +653,9 @@ A running strip sits under the top bar on every module: a 2 px line of light in 
 plain words (what it does and why), a realistic time left ("about 3 min left"), Pause / Resume / Queue, and "+N more"
 into the queue drawer. Every waiting state says what it waits for (the GPU, a queue, a pause, a game); nothing looks
 hung. A tab left open across an update compares `/api/status`'s `build` with the one it loaded and offers a reload
-(`#uc-updated`); `whatsnew.js` shows the newest note from `whatsnew.json` once.
+(`#uc-updated`); `whatsnew.js` shows the newest note from `whatsnew.json` once. Wherever the page says how to start
+UnderCover again (Quit, a lost connection, a failed restart), it reads `/api/status`'s `launcher` (`about.launcher()`):
+an installed copy says the Start menu; a source checkout's `scripts\UnderCover.bat` is said in Deep Cover only.
 
 The First assignment (1.1) is a spotlight tour on a fresh install's first visit to FrontMan (`firstrun.js`): the page dims, the
 control in question is cut out and lit, one card sits beside it in the dark (never over it). Four steps: the one-shot line

@@ -4098,6 +4098,89 @@ def u_person_guess():
     return "likeness from its own save; guessed persons; Squidward corrected by its display; cards open; guard unchanged"
 
 
+@check("a voice trained on another PC (no training project here) can still learn to speak: its meta's person -> clips of them are found first, as for a downloaded voice; with no person, it says its clips aren't on this PC (InternalAffairs, 1.2)")
+def u_cadence_elsewhere():
+    from undercover.core import cadence as C
+    from undercover.core.voices import ModelError, get_voice
+    from undercover.doubleagent import cadence, service
+    with isolated_data():
+        _voice_dir("ann-example-uc", {"trained": True, "project": "gone-elsewhere", "person": "Ann Example"})
+        _voice_dir("nobody-uc", {"trained": True, "project": "gone-too"})
+        real, real_new = C.engine_ready, service.train_new_voice
+        asked = []
+
+        def fake_new(job, person, *a, **k):
+            asked.append((person, k.get("prepare_only"), k.get("speaking")))
+            raise ModelError("stop here")
+        C.engine_ready, service.train_new_voice = (lambda e: True), fake_new
+        try:
+            assert cadence.can_train(get_voice("ann-example-uc")) == (True, "finds clips of Ann Example first"), cadence.can_train(get_voice("ann-example-uc"))
+            ok, why = cadence.can_train(get_voice("nobody-uc"))
+            assert not ok and why == "Its training clips aren't on this PC, and UnderCover doesn't know whose voice it is.", why
+            job = type("J", (), {"cancel": False, "pausing": False})()
+            try:
+                cadence.train(job, "ann-example-uc", lambda *a, **k: None, control=type("Ctl", (), {"pause": False, "service": lambda self: None})())
+            except ModelError as e:
+                assert str(e) == "stop here", e
+            assert asked == [("Ann Example", True, True)], asked
+        finally:
+            C.engine_ready, service.train_new_voice = real, real_new
+    return "Ann Example's clips are found first; a voice with no person says its clips aren't here"
+
+
+@check("DoubleAgent's example names (InternalAffairs, 1.2): the line under the name box, the Train tab's box and Whose voice is this? give Johnny Cash and Audrey Hepburn")
+def u_example_names():
+    web = ROOT / "undercover" / "web"
+    ix = (web / "index.html").read_text(encoding="utf-8")
+    assert "e.g. Johnny Cash, or Audrey Hepburn" in ix and 'placeholder="A person\'s name, e.g. Johnny Cash"' in ix
+    assert 'placeholder="their name, e.g. Audrey Hepburn"' in (web / "doubleagent.js").read_text(encoding="utf-8")
+    return "DoubleAgent says Johnny Cash and Audrey Hepburn"
+
+
+@check("how this copy is started again (InternalAffairs, 1.2): an installed copy (UnderCover.cmd) says the Start menu, a source checkout (scripts\\UnderCover.bat only) its .bat; /api/status carries it for the PC")
+def u_launcher_said():
+    import tempfile
+    from undercover.core import about
+    with tempfile.TemporaryDirectory() as t:
+        app = Path(t)
+        assert about.launcher(app) == "start-menu"
+        (app / "scripts").mkdir()
+        (app / "scripts" / "UnderCover.bat").write_text("@echo off\n", encoding="utf-8")
+        assert about.launcher(app) == "bat"
+        (app / "UnderCover.cmd").write_text("@echo off\n", encoding="utf-8")   # (an installer copy with a scripts folder: still the Start menu)
+        assert about.launcher(app) == "start-menu"
+    src = (ROOT / "undercover" / "app" / "server.py").read_text(encoding="utf-8")
+    assert '"launcher": None if self.remote else about.LAUNCHER' in src and about.LAUNCHER == about.launcher(), "/api/status lost its launcher"
+    return f"start-menu / bat / start-menu; this checkout: {about.launcher()}"
+
+
+@check("a song's 'Used' in the Library is its newest cover's date, never the file's own (InternalAffairs, 1.2: the sample song, seeded today and never used, said Used today)")
+def u_song_used():
+    import os as _os
+    from undercover.frontman import pipeline
+    from undercover.core.config import path
+    from undercover.safehouse import library
+    saved = (pipeline.history, library._song_metas)
+    with isolated_data():
+        try:
+            up, out = path("uploads_dir"), path("output_dir")
+            up.mkdir(parents=True, exist_ok=True); out.mkdir(parents=True, exist_ok=True)
+            for sid in ("a" * 16, "b" * 16):
+                (up / f"{sid}.mp3").write_bytes(b"x")
+            cover = out / "Mine - X.mp3"
+            cover.write_bytes(b"c")
+            _os.utime(cover, (1_700_000_000, 1_700_000_000))
+            library._song_metas = lambda: {"a" * 16: {"title": "Hold On", "file": "a" * 16 + ".mp3", "sample": True},
+                                           "b" * 16: {"title": "Mine", "file": "b" * 16 + ".mp3"}}
+            pipeline.history = lambda: [{"song": str(up / ("b" * 16 + ".mp3")), "output": str(cover)}]
+            got = {s["title"]: s for s in library.songs()}
+            assert got["Hold On"]["used"] is None and got["Hold On"]["covers"] == 0 and got["Hold On"]["last_used"] > 0, got["Hold On"]
+            assert got["Mine"]["used"] == 1_700_000_000 and got["Mine"]["covers"] == 1, got["Mine"]
+        finally:
+            pipeline.history, library._song_metas = saved
+    return "never used: no date; used: its cover's"
+
+
 @check("'tonight' is tonight (Internal Affairs P8-2): a tonight add arms the queue for the saved start time (23:00 when none, said so), never for now; an emptied queue disarms; Start now is one-time and goes back to the start time once dry; tonight's items (a move to the queue too) wait for the night")
 def u_tonight():
     from datetime import datetime
@@ -6506,6 +6589,7 @@ def u_desk_plan():
             assert o["ask"] is False and not o.get("voice_ask") and "choices" not in o, o
             assert o["voice"]["how"] == "installed" and o["voice"]["name"] == "agent-smoke" and o["voice"]["demo"], o
             assert o["from_library"]["id"] == sid and "sample song in your library" in o["note"] and "subject" not in o, o
+            assert abs(o["from_library"]["seconds"] - 3) < 0.2, o["from_library"]   # its length: the plan says "a 3-second excerpt" (InternalAffairs, 1.2)
             assert oneshot.sample_song("hold on", "Ken Mercer")["id"] == sid
             for title, artist in (("Hold On", "Wilson Phillips"), ("Hold", None), ("Hold On Tight", None)):
                 assert oneshot.sample_song(title, artist) is None, (title, artist)
@@ -13011,6 +13095,162 @@ def u_find_setting():
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
+
+def _page_selftest(body: str, routes: dict | None = None) -> str:
+    """index.html on a static server with `body` run after the last page script (the API is absent: its calls fail, and the test
+    stages what it needs and presses the page's own functions). `ok(name, cond)` records a verdict; `wait(ms)`; routes: path -> (bytes,
+    type) answered as well. The verdicts go in the title, read by --dump-dom once the page says it's done. -> the verdicts, or "" with no Chrome."""
+    import html, http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return ""
+    web = ROOT / "undercover" / "web"
+    test = ("(async () => {\n  const out = [], ok = (name, cond) => out.push((cond ? \"ok \" : \"BAD \") + name);\n"
+            "  const wait = ms => new Promise(r => setTimeout(r, ms));\n  await wait(1200);\n  try {\n" + body +
+            "\n  } catch (e) { out.push(\"BAD threw \" + e + \" \" + (e.stack || \"\").split(\"\\n\")[1]); }\n"
+            "  document.title = out.join(\" | \");\n  fetch(\"/said\");\n})();\n")
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+    extra = routes or {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(100)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p in extra:
+                body, ctype = extra[p]
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--window-size=1200,900",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = html.unescape(m.group(1)) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {' | '.join(x for x in got.split(' | ') if not x.startswith('ok '))[:1500] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
+
+
+@check("a fresh install's walk (InternalAffairs, 1.2), the page side in headless Chrome (skipped without it): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows; its waiting line says Finishing up once the job has run; Start it again from the Start menu (the .bat only in Deep Cover, in a source checkout); the Library's total over two drives; the one-shot's plan for the sample song and the desk after it; SpeakEasy's plan line in plain words; the sample song in the Library")
+def u_first_walk():
+    got = _page_selftest(r"""
+    const V = (name, x) => ({ name, kind: "speaking", cadence: {}, ...x });
+    SE.voices = [V("agent-smoke", { demo: true, trained: false }), V("some-one-uc", { trained: true }), V("some-other", { trained: false })];
+    $("#se-q").value = ""; seVoices();
+    const heads = $$("#se-voices .se-vgroup").map(h => h.textContent);
+    ok("F1 groups: trained, downloaded, demo", JSON.stringify(heads) === JSON.stringify(["Trained in DoubleAgent", "Downloaded (they learn to speak from clips first)", "Demo voice"]));
+    const after = el => { let h = el.previousElementSibling; while (h && !h.classList.contains("se-vgroup")) h = h.previousElementSibling; return h?.textContent; };
+    ok("F1 the demo voice sits under Demo voice", after($('#se-voices [data-v="agent-smoke"]')) === "Demo voice" && after($('#se-voices [data-v="some-other"]')).startsWith("Downloaded"));
+    SE.voices = [V("agent-smoke", { demo: true, trained: false })]; seVoices();
+    ok("F1 a fresh install: only Demo voice", $$("#se-voices .se-vgroup").map(h => h.textContent).join() === "Demo voice");
+    // F3: the tour's waiting tips name only what this view shows (Theme is a Deep Cover row)
+    const tipEl = document.createElement("span"); tipEl.id = "tour-tip-t"; document.body.append(tipEl);
+    const tipsSeen = () => { const seen = new Set(); for (let i = 0; i < 12; i++) { TOUR.tip = i; tourTip(true); seen.add(tipEl.textContent); } return [...seen]; };
+    setDeep(false); const basicTips = tipsSeen(); setDeep(true); const deepTips = tipsSeen(); setDeep(false);
+    ok("F3 basic view: no Themes tip", basicTips.length >= 5 && !basicTips.some(t => /^Themes/.test(t)));
+    ok("F3 Deep Cover: the Themes tip", deepTips.some(t => /^Themes, in Settings/.test(t)));
+    const phoneRow = $("#set-phone-row"), phoneWas = phoneRow.hidden;
+    phoneRow.hidden = false; const withPhone = tipsSeen(); phoneRow.hidden = true; const noPhone = tipsSeen(); phoneRow.hidden = phoneWas;
+    ok("F3 Your phone's tip only while its row shows", withPhone.some(t => /^Your phone/.test(t)) && !noPhone.some(t => /^Your phone/.test(t)));
+    tipEl.id = ""; TOUR.tip = 0;
+    // F9: the waiting card's line before the job shows, while it runs, and between the cover ending and step 2
+    const nowEl = document.createElement("span"); nowEl.id = "tour-now"; document.body.append(nowEl);
+    const realJobs = JF.list, said = () => nowEl.textContent.split(" The bar")[0];
+    TOUR.seen = false; TOUR.job = "j1";
+    JF.list = []; tourNow(); const before = said();
+    JF.list = [{ id: "j1", kind: "auto", state: "running", message: "Converting the vocal to Agent Smoke" }]; tourNow(); const during = said();
+    JF.list = []; tourNow(); const ending = said();
+    JF.list = realJobs; nowEl.id = ""; TOUR.job = null; TOUR.seen = false;
+    ok(`F9 Getting started, then the job's words, then Finishing up (${before} / ${during} / ${ending})`, before === "Getting started." && during && during !== before && ending === "Finishing up.");
+    // F5: how it's started again: the Start menu; a source checkout's .bat only in Deep Cover
+    const quitSay = () => $("#sys-quit-say").textContent;
+    delete document.body.dataset.launcher; setDeep(true); const instDeep = quitSay();
+    document.body.dataset.launcher = "bat"; setDeep(false); const srcBasic = quitSay(); setDeep(true); const srcDeep = quitSay(); setDeep(false);
+    ok(`F5 the System room's Quit line (${instDeep} / ${srcBasic} / ${srcDeep})`, instDeep === "Quit stops it on this PC. Start it again from the Start menu."
+       && srcBasic === instDeep && srcDeep === "Quit stops it on this PC. Start it again with scripts\\UnderCover.bat.");
+    let lost = ""; try { await api("http://127.0.0.1:9/nothing"); } catch (e) { lost = e.message; }
+    ok(`F5 lost contact (${lost})`, lost === "Lost contact with UnderCover. Is it still running? If not, start it again from the Start menu.");
+    delete document.body.dataset.launcher;
+    // F6: the Library's total over one drive and over two
+    const realApi = window.api, cats = { covers: 1, speech: 0, songs: 0, stems: 0, voices: 0, training: 0, temporary: 0, app: 0 };
+    const summ = drives => ({ categories: cats, total: 19.1e9, free: drives[0].free, drive: drives[0].drive, drives, counts: {}, tabs: { kept: {}, recent: {} } });
+    window.api = async () => summ([{ drive: "C:", free: 21.4e9 }]); await loadSummary(); const oneDrive = $("#lib-free").textContent;
+    window.api = async () => summ([{ drive: "C:", free: 21.4e9 }, { drive: "D:", free: 300e9 }]); await loadSummary(); const twoDrives = $("#lib-free").textContent;
+    // F7: the one-shot's plan for the sample song and a voice; the desk after the tour's cover (the backing in the lead's own voice)
+    const planned = { song_query: "Hold On", song: "Hold On", person: "Agent Smoke", style: null, ask: false, eta_s: { low: 40, high: 60 },
+      from_library: { id: "abc", title: "Hold On", artist: "", seconds: 46.2 },
+      voice: { how: "installed", name: "agent-smoke", display: "Agent Smoke", trained: false, demo: true, quality: { ok: true, problems: [] } } };
+    window.api = async () => { throw new Error("no API here"); };
+    noteVoices([{ name: "agent-smoke", display: "Agent Smoke", demo: true, trained: false }, { name: "some-one-uc", display: "Some One", trained: true }]);
+    drawPlan(planned); const sampleLine = $("#os-plan").textContent;
+    drawPlan({ ...planned, from_library: undefined, person: "Some One", voice: { how: "installed", name: "some-one-uc", display: "Some One", trained: true, quality: { ok: true, problems: [] } } });
+    const trainedLine = $("#os-plan").textContent;
+    ok(`F7 the sample song and the demo voice (${sampleLine.slice(0, 140)})`, /Hold On, a 46-second excerpt: the sample song that comes with UnderCover/.test(sampleLine)
+       && /Agent Smoke, the demo voice/.test(sampleLine) && !/album version|your voice/.test(sampleLine));
+    ok(`F7 a voice trained here is said so once (${trainedLine.slice(0, 140)})`, (trainedLine.match(/trained (here|in UnderCover)/g) || []).length === 1);
+    const wasSong = S.song, wasVoice = S.voice, wasOpts = S.opts;
+    S.song = { title: "Hold On" }; S.voice = "agent-smoke"; S.opts = { ...S.opts, backing_voice: "agent-smoke", duet_voice: "", karaoke: true };
+    summary(); const desk = $("#summary").textContent, adv = $("#adv-sum").textContent;
+    S.opts = { ...S.opts, backing_voice: "some-one-uc" }; summary(); const other = $("#summary").textContent;
+    S.song = wasSong; S.voice = wasVoice; S.opts = wasOpts;
+    window.api = realApi;
+    ok(`F7 the desk after the tour (${desk.slice(0, 120)} / ${adv.slice(0, 120)})`, /sung by Agent Smoke, backing vocals too/.test(desk) && !/on backing vocals/.test(desk)
+       && /lead \+ backing converted/.test(adv) && !/backing by/.test(adv) && / on backing vocals/.test(other));
+    // F8: SpeakEasy's plan line in plain words: the first speech's start-up, one sentence, and the demo voice
+    SE.voices = [V("agent-smoke", { demo: true, trained: false }), V("some-one-uc", { trained: true, person: "Some One" })];
+    seText.value = "One short line to say."; SE.voice = "agent-smoke";
+    const est = x => { SE.est = { key: seEstKey(), mode: "cadence", audio_seconds: 4, estimate: 20, first_s: 12, first_why: "the speech engine starts and listen-back's ear loads", sentences: 1, waiting: 0, ...x }; seSummary(); return $("#se-summary").innerText; };
+    showTab("speakeasy"); setDeep(false); const basicOne = est({});
+    setDeep(true); const deepOne = est({}); setDeep(false);
+    SE.voice = "some-one-uc"; seText.value = "One line. And another. And a third."; const three = est({ sentences: 3 });
+    seCadName("Agent Smoke", true); const demoLabel = $("#se-cad-say").textContent; seCadName("Some One", false); const realLabel = $("#se-cad-say").textContent;
+    ok(`F8 basic: the start-up in plain words, no sentence promise for one sentence (${basicOne})`, /0:12 of it to get ready, the first time only/.test(basicOne)
+       && !/ear|engine|listen-back|first few sentences|first sentence/.test(basicOne) && /in its own way/.test(basicOne) && !/really do/.test(basicOne));
+    ok(`F8 Deep Cover keeps the why (${deepOne})`, /because the speech engine starts and listen-back's ear loads \(the first speech only\)/.test(deepOne) && !/to get ready/.test(deepOne));
+    ok(`F8 three sentences, a real person (${three})`, /the way they really do/.test(three) && /ready to play after the first few sentences/.test(three));
+    ok(`F8 the toggle (${demoLabel} / ${realLabel})`, demoLabel === "Speak in Agent Smoke's own way" && realLabel === "Speak the way Some One really does" && $("#se-cad").getAttribute("aria-label") === realLabel);
+    ok("F8 a speech in the demo voice: Its own way", seIsDemo("agent-smoke") && !seIsDemo("some-one-uc"));
+    SE.est = null; SE.voice = null; seText.value = "";
+    // G3: the Library's sample song: whose it is, used only when a cover used it, and no fixed separation time
+    const song = { id: "abcd", title: "Hold On", source: "dropped file", sample: true, artist: "", duration: 46.2, stems: [], stems_size: 0, size: 1e6,
+                   covers: 0, cover_titles: [], last_used: Date.now() / 1000, used: null, url: null };
+    showTab("safehouse"); const box = $("#lib-detail"); songDetail(box, song); const detail = box.textContent;
+    ok(`G3 the sample's detail (${detail.slice(0, 160)})`, /UnderCover's sample/.test(detail) && !/Your file/.test(detail)
+       && /Not separated yet\. The next cover of this song does that first\./.test(detail) && !/minute/.test(detail));
+    showTab("safehouse"); L.cat = "songs"; L.data.songs = [song, { ...song, id: "efgh", title: "Mine", sample: false, covers: 1, cover_titles: ["Mine · X"], used: Date.now() / 1000 - 86400 * 3 }];
+    renderList(); const rowOf = id => [...$$("#lib-list [data-id]")].find(r => r.dataset.id === id)?.textContent || "";
+    const sampleRow = rowOf("abcd"), mineRow = rowOf("efgh");
+    ok(`G3 the rows (${sampleRow.slice(0, 80)} / ${mineRow.slice(0, 80)})`, /UnderCover's sample/.test(sampleRow) && !/Used|Your file/.test(sampleRow) && /Your file/.test(mineRow) && /Used /.test(mineRow));
+    L.data.songs = null;
+    ok(`F6 the Library's free line (${$("#lib-total").textContent} ${oneDrive} / ${twoDrives})`, oneDrive === `on drive C: · ${gb(21.4e9)} free`
+       && twoDrives === `in all · C: ${gb(21.4e9)} free · D: ${gb(300e9)} free`);
+    ok("F5 no .bat left in the page's copy", !/UnderCover\.bat/.test($("#room-system").textContent) && /^Start it again from the Start menu, then reload this page\.$/.test(startAgain(", then reload this page")));
+""")
+    return got or "no Chrome here: skipped"
+
+
 def _theme_tokens(web, theme: str, light: bool) -> dict:
     """A theme's tokens for one mode as the page has them: Case File's :root (and its light block), then the theme's own blocks."""
     def blocks(css):
@@ -13066,7 +13306,7 @@ def u_token_ratios():
     assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
     # bones wave 2: the song's stems in one closed Deep disclosure, the voice card's one ledger line, the one-shot's one line, a reading width
     lib, da, osj = ((web / n).read_text(encoding="utf-8") for n in ("library.js", "doubleagent.js", "oneshot.js"))
-    assert '<details class="stems-box" data-deep>' in lib and "<h2>Stems</h2>" not in lib and "Separated already, so a new cover of it skips that minute." in lib
+    assert '<details class="stems-box" data-deep>' in lib and "<h2>Stems</h2>" not in lib and "Separated already, so a new cover of it skips that step." in lib
     assert 'class="vc-ledger" data-deep' in da and "aria-expanded=\"${open}\"" in da and "cadence ${cd.engine}" not in da
     assert 'const PLAN_IDLE = "Name a song and a voice, and UnderCover does the rest.";' in osj and 'class="os-foot"' not in ix
     assert ix.count('<p class="meta os-else">Your own file or exact settings? <button class="linkbtn" id="build-toggle"') == 1
@@ -13208,7 +13448,7 @@ def u_page_rules():
     lib_js = (web / "library.js").read_text(encoding="utf-8")
     rows = lib_js[lib_js.index('if (L.cat === "covers") {\n      title = x.title;'):lib_js.index("return `<div class=\"litem")]
     assert rows.count("facts(") >= 5 and '.join(" · ")' not in rows and "<small>${esc(sub)}</small>" not in lib_js, "a Library row is a dot line again"
-    assert "cover${x.covers === 1" not in lib_js and "countWord(x.covers" in lib_js and "sourceWord(x.source)" in lib_js, "the Library says '0 covers' or 'dropped file' again"
+    assert "cover${x.covers === 1" not in lib_js and "countWord(x.covers" in lib_js and "songSource(x)" in lib_js and "sourceWord(s.source)" in lib_js, "the Library says '0 covers' or 'dropped file' again"
     for f in ("doubleagent.js", "speakeasy.js", "work.js", "aside.js", "vault.js", "rooms.js"):
         assert "facts(" in (web / f).read_text(encoding="utf-8"), f"{f} lost its chips"
     assert 'demo voice · not a real person' not in app + lib_js + (web / "doubleagent.js").read_text(encoding="utf-8"), "a demo voice's dot line is back"
@@ -13865,6 +14105,10 @@ def u_work_space():
             assert job.state == "done", job.events[-1:]
             lib = library._summary()
             assert lib["drive"] == "E:" and lib["free"] == 100e9, (lib["drive"], lib["free"])
+            # the total spans both drives (songs, models and themes stayed on the app's): each one's free space, by letter (InternalAffairs, 1.2)
+            spans = {d["drive"]: d["free"] for d in lib["drives"]}
+            assert len(spans) == 2 and spans["E:"] == 100e9 and [f for k, f in spans.items() if k != "E:"] == [1e9], lib["drives"]
+            assert [d["drive"] for d in lib["drives"]] == sorted(spans), lib["drives"]
             res = {r["id"]: r for r in doctor.c_disk(None)}   # (songs and models on the full drive: bad, but no job refuses)
             other = [r for k, r in res.items() if k != "disk:E:"]
             assert res["disk:E:"]["state"] == "ok" and other and all(r["state"] == "bad" and "refuse" not in r["say"]
@@ -16595,12 +16839,12 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

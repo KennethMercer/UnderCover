@@ -246,6 +246,9 @@ def _summary() -> dict:
         g.pop("inside", None)
     # the free space that counts: the drive the work writes to with the least (the one jobs refuse on), not the app's
     drive, free = (storage.work_space() or [(storage.drive_of(ROOT), shutil.disk_usage(ROOT).free)])[0][:2]
+    # every drive the total spans (the model files may sit on another one): its free space each, by letter
+    spans = sorted(storage.work_space(tuple(k for keys in storage.GROUPS.values() for k, _, _ in keys)), key=lambda t: t[0])
+    drives = [{"drive": d, "free": f} for d, f, *_ in spans] or [{"drive": drive, "free": free}]
     cv, sp = covers(), speak.list_speech()
     counts = {"covers": len(cv), "speech": len(sp), "songs": len(_song_metas()),
               "voices": len(list(path("voices_dir").glob("*/meta.json"))),
@@ -254,7 +257,7 @@ def _summary() -> dict:
     # voices and training are always kept (and have no Recent)
     tabs = {"kept": {**counts, "covers": sum(1 for x in cv if x["kept"]), "speech": sum(1 for x in sp if x["kept"])},
             "recent": {"covers": sum(1 for x in cv if x["recent"]), "speech": sum(1 for x in sp if x["recent"])}}
-    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": free, "drive": drive,
+    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": free, "drive": drive, "drives": drives,
             **ytdlp_info(), "counts": counts, "tabs": tabs}
 
 
@@ -344,7 +347,8 @@ def songs() -> list[dict]:
         f = uploads / m.get("file", "")
         used = by_song.get(sid, [])
         stems = _stems_for(sid, cache / "stems")
-        last = max([_mtime(Path(h["output"])) for h in used] + [_mtime(f)])
+        cov = max((_mtime(Path(h["output"])) for h in used), default=0.0)   # its newest cover ("Used ...")
+        last = max(cov, _mtime(f))
         key = None
         kf = cache / "keys" / f"{sid}.json"
         if kf.exists():
@@ -359,6 +363,7 @@ def songs() -> list[dict]:
             "source": "YouTube" if m.get("youtube_id") or m.get("source_url") else "dropped file", "source_url": m.get("source_url"),
             "size": _size(f), "stems": stems, "stems_size": sum(s["size"] for s in stems), "stems_old_model": old_model,
             "covers": len(used), "cover_titles": [Path(h["output"]).stem for h in used][:5], "last_used": last,
+            "used": cov or None,   # (said "Used ...": a cover's, never the file's own date)
             "url": file_url(f) if f.exists() else None,
             "sample": bool(m.get("sample")), "artist": m.get("artist") or "",   # the sample song (the first run's)
         })

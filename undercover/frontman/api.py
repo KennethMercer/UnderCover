@@ -482,7 +482,8 @@ def _auto_plan(h, text: str, prefer_train: bool, subject: str | None = None):
     sample = None if req["style"] else oneshot.sample_song(song, artist)   # the first run's song, on the desk
     here = (path("uploads_dir") / sample["file"]) if sample else None if req["style"] else oneshot.library_song(song, artist)
     if sample:
-        out["from_library"] = {"id": sample["id"], "title": sample.get("title") or song, "artist": sample.get("artist") or ""}
+        out["from_library"] = {"id": sample["id"], "title": sample.get("title") or song, "artist": sample.get("artist") or "",
+                               "seconds": sample.get("duration")}   # (the plan says what it is: the sample, an excerpt this long)
         out["note"] = (f"Using the sample song in your library. For another “{song}”, add its artist "
                        f"(“{song} by <artist> as {person}”).")
     if voice["how"] == "installed":   # from the measured speeds (timings.jsonl), not a fixed "1-3 min"

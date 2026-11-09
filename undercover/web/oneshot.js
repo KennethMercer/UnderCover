@@ -76,7 +76,7 @@ function voiceAskHtml(p) {
 }
 function voiceLine(v, p) {
   const who = esc(p?.person || v?.display || v?.name || "");
-  const a = aOrAn(p?.person || v?.display || v?.name || "");   // "an Obama voice", "a Eurovision voice"
+  const a = aOrAn(p?.person || v?.display || v?.name || "");   // "an Audrey Hepburn voice", "a Eurovision voice"
   if (p?.voice_ask) {
     const c = pickedVoice(p);
     return !c ? `<span class="warn">pick one below</span>` : c.voice ? `<b>${vname(c.voice)}</b>, used as it is`
@@ -84,7 +84,8 @@ function voiceLine(v, p) {
       : `a new <b>${who}</b> voice, trained first`;
   }
   if (!v) return "";
-  if (v.how === "installed") return `<b>${vname(v.name)}</b>, your voice${v.trained ? ", trained here" : ""}`;
+  // (a voice trained here says so in the line, so its name doesn't say it again to a screen reader; the demo voice isn't yours)
+  if (v.how === "installed") return `<b>${vname(v.name, !v.trained)}</b>, ${v.demo ? "the demo voice" : `your voice${v.trained ? ", trained here" : ""}`}`;
   if (v.how === "check") return `${a} ${who} voice from the community, checked against real clips first<span class="meta" data-deep> · candidates: <b>${v.candidates.map(esc).join("</b> or <b>")}</b>; none close enough trains one (~2 GB while training)</span>`;
   // the last check couldn't be done on these clips (rc-polish1): what works instead, not the same check again
   if (v.after_failed) return `a new <b>${who}</b> voice is trained first: the last check couldn't be done (${esc(v.after_failed)}). Adding clips of ${who} in DoubleAgent lets it check again`;
@@ -165,8 +166,10 @@ async function previewPlan() {
 function drawPlan(p) {
   if (p.train_s != null && $("#os-train-eta")) $("#os-train-eta").textContent = ` · ${etaWords({ low: p.train_s, high: p.train_s })}`;   // (one number: the plan's, rc-eta)
   // three plain lines (consult 2): the song, the voice, the time. No emoji, no branch list; the branches are Deep Cover's.
-  const songLine = p.style ? `<b>${esc(p.song_query)}</b>, ${aOrAn(p.style)} ${esc(p.style)} version (a cover with singing in it)`
-                           : `<b>${esc(p.song_query)}</b>, the album version`;
+  const lib = p.from_library, secs = Math.round(+lib?.seconds || 0);   // the sample song: what it is, not "the album version"
+  const songLine = lib ? `<b>${esc(lib.title || p.song_query)}</b>, ${secs ? `a ${secs}-second excerpt` : "an excerpt"}: the sample song that comes with UnderCover`
+    : p.style ? `<b>${esc(p.song_query)}</b>, ${aOrAn(p.style)} ${esc(p.style)} version (a cover with singing in it)`
+    : `<b>${esc(p.song_query)}</b>, the album version`;
   const hint = p.note ? `<p class="meta">${esc(p.note)}</p>` : "";   // "<song> by <name>": which of the two it was read as
   const warn = planPath(p) === "train" && !personWarned() ? `<p class="meta" id="os-warn">${PERSON_WARN}</p>` : "";
   $("#os-plan").innerHTML = `<div class="os-plan-grid"><span class="k">Song</span><span>${songLine}</span><span class="k">Voice</span><span>${voiceLine(p.voice, p)}</span><span class="k">Time</span><span>${planTime(p)}</span></div>${hint}${subjectHtml(p)}${voiceAskHtml(p)}${p.voice_ask ? "" : qualityHtml(p.voice)}${warn}`;
