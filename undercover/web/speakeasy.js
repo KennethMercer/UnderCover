@@ -227,8 +227,8 @@ function seSummary() {
   const first = est && est.first_s >= 5 ? `, ${fmtTime(est.first_s)} of it<span data-basic> to get ready, the first time only</span><span data-deep> because ${esc(est.first_why)} (the first speech only)</span>` : "";
   const ready = est ? ` · ready in about ${fmtTime(Math.max(1, est.estimate))}${first}${est.waiting ? ` (${esc(est.waiting)} ahead in the queue)` : ""}`
     : cad ? ` · ready in about ${fmtTime(Math.max(5, secs / (SE.plan.rtf || 0.55)))}` : "";
-  // one sentence plays when it's all made: "ready in" says it already
-  const n = est ? est.sentences : (seText.value.trim().match(/[.!?…]+(?=\s|$)/g) || []).length || 1;
+  // one sentence plays when it's all made: "ready in" says it already (the count is the server's, tts.sentences; said as before until it comes)
+  const n = est ? est.sentences : 2;
   const way = seIsDemo(SE.voice) ? "in its own way" : "the way they really do";
   const when = `${cad ? way : "read by the Reader"}${ready}${n > 1 ? ` · ready to play after the ${cad ? "first few sentences" : "first sentence"}` : ""}`;
   $("#se-summary").innerHTML = w ? `<b>${vname(SE.voice, false)}</b> reads ${w.toLocaleString()} word${w === 1 ? "" : "s"} <span class="meta">· about ${fmtTime(Math.max(1, secs))} of speech · ${when}</span>`

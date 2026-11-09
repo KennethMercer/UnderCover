@@ -116,7 +116,7 @@ function tourNow() {
   const j = (typeof runningJobs === "function" ? runningJobs() : []).find(x => x.id === TOUR.job) || (typeof runningJobs === "function" ? runningJobs()[0] : null);
   const line = j ? (typeof jobLine === "function" ? jobLine(j, false) : "") || j.message || "" : "";
   TOUR.left = j ? j.total_left ?? j.eta ?? null : null;
-  if (j) TOUR.seen = true;   // once the job has run, no line means it's ending (the cover done, step 2 not drawn yet), not starting
+  if (j && j.id === TOUR.job) TOUR.seen = true;   // once the tour's own job has run, no line means it's ending (the cover done, step 2 not drawn yet), not starting
   const said = line ? line.replace(/^./, c => c.toUpperCase()).replace(/[.\s]+$/, "") + "."   // one full stop, whatever the job's words end with
     : TOUR.seen ? "Finishing up." : "Getting started.";
   el.textContent = `${said} The bar and the time left are lit on the page.`;

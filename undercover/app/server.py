@@ -574,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
                                    "app_folder": None if self.remote else str(ROOT),
                                    # how it's started again, said when it stops: the Start menu, or a source checkout's .bat
-                                   "launcher": None if self.remote else about.launcher()})
+                                   "launcher": None if self.remote else about.LAUNCHER})
             if p == "/api/voices":
                 return self._json(voices_json())
             m = re.fullmatch(r"/api/voices/([a-z0-9-]+)/preview", p)

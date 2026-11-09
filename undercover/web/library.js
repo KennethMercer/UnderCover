@@ -152,7 +152,7 @@ function rows() {
   else if (kf === "recent") list = list.filter(x => x.recent);
   const key = { new: x => -(L.cat === "covers" || L.cat === "speech" ? Date.parse((x.created || "").replace(" ", "T")) || 0 : (x.updated || Date.parse((x.installed || "").replace(" ", "T")) / 1000 || 0)),
                 old: x => Date.parse((x.created || "").replace(" ", "T")) || 0, name: x => (x.title || x.name || x.person || "").toLowerCase(),
-                big: x => -(x.size + (x.stems_size || 0)), long: x => -x.duration, voice: x => x.voice, used: x => L.cat === "songs" ? -x.last_used : -x.covers, covers: x => -x.covers }[sort];
+                big: x => -(x.size + (x.stems_size || 0)), long: x => -x.duration, voice: x => x.voice, used: x => L.cat === "songs" ? -(x.used || 0) : -x.covers, covers: x => -x.covers }[sort];
   if (key) list.sort((a, b) => { const ka = key(a), kb = key(b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
   return list;
 }

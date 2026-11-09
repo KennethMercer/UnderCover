@@ -29,6 +29,9 @@ def launcher(root: Path = ROOT) -> str:
     return "bat" if (root / "scripts" / "UnderCover.bat").is_file() and not (root / "UnderCover.cmd").is_file() else "start-menu"
 
 
+LAUNCHER = launcher()   # (it can't change while the app runs: /api/status says this one)
+
+
 def git_commit(root: Path = ROOT) -> dict | None:
     """{"branch", "commit"} read straight from .git (no git needed), or None for an installed copy without one."""
     g = root / ".git"

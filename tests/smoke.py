@@ -4150,7 +4150,7 @@ def u_launcher_said():
         (app / "UnderCover.cmd").write_text("@echo off\n", encoding="utf-8")   # (an installer copy with a scripts folder: still the Start menu)
         assert about.launcher(app) == "start-menu"
     src = (ROOT / "undercover" / "app" / "server.py").read_text(encoding="utf-8")
-    assert '"launcher": None if self.remote else about.launcher()' in src, "/api/status lost its launcher"
+    assert '"launcher": None if self.remote else about.LAUNCHER' in src and about.LAUNCHER == about.launcher(), "/api/status lost its launcher"
     return f"start-menu / bat / start-menu; this checkout: {about.launcher()}"
 
 
