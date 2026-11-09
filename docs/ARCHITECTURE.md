@@ -540,7 +540,13 @@ stitched by the plan.
 - **On the page** (`renderDuet`, `renderDuetPlan` in `app.js`): the second singer is picked from the same voice rows, and
   the Convert bar says the backing in words. The strip is the plan of the newest cover of this song by these two, from the
   history, and the sentence under it is that cover's note. Before the first cover the page shows a general sentence and
-  no strip, because only the engine can find a plan. A way that isn't ready is hidden (`lines`) or shut (I'll choose).
+  no strip, because only the engine can find a plan. A way that isn't ready is hidden (`lines`; I'll choose isn't on the
+  page until its editor is built). With one way shown, the box says it as a sentence ("They take turns.") instead of a
+  lone button.
+- **In the one-shot** (`oneshot.split_duet`): "<song> as A and B" is two singers when one of them is a voice here, or
+  when neither is but both are full names (a band's name, such as "Hall and Oates" or "Tom Petty and the Heartbreakers",
+  stays one). The plan, the voice step and the done line name both, and the done line's key is the cover's own (the fit
+  for two). A second singer who isn't a voice here is said before anything starts.
 
 A song sung as a duet already (`separate.lead_missing`: the split finds no lead line) is sung by one voice, and the
 notes say why; a duet's two singers take turns on its whole vocal instead, backing and all. The cover's
