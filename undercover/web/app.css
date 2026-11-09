@@ -1146,6 +1146,8 @@ body.deep .nodeep { display: none !important; }
 
 /* Deep Cover: expert-only details (scores, data minutes, engine) are marked data-deep and shown only in Deep Cover mode */
 body:not(.deep) [data-deep] { display: none !important; }
+/* ...and the plain words a Deep Cover detail replaces are marked data-basic, shown only outside it */
+body.deep [data-basic] { display: none !important; }
 /* Your phone (phase 11): on a connected phone (body[data-client="phone"], from /api/status) the PC-only controls (data-pc:
    Restart, Quit, installs, storage moves, the Doctor's Fixes, Your phone itself) are hidden; data-phone shows only there */
 body[data-client="phone"] [data-pc] { display: none !important; }

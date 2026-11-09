@@ -13120,6 +13120,21 @@ def u_first_walk():
     window.api = realApi;
     ok(`F7 the desk after the tour (${desk.slice(0, 120)} / ${adv.slice(0, 120)})`, /sung by Agent Smoke, backing vocals too/.test(desk) && !/on backing vocals/.test(desk)
        && /lead \+ backing converted/.test(adv) && !/backing by/.test(adv) && / on backing vocals/.test(other));
+    // F8: SpeakEasy's plan line in plain words: the first speech's start-up, one sentence, and the demo voice
+    SE.voices = [V("agent-smoke", { demo: true, trained: false }), V("some-one-uc", { trained: true, person: "Some One" })];
+    seText.value = "One short line to say."; SE.voice = "agent-smoke";
+    const est = x => { SE.est = { key: seEstKey(), mode: "cadence", audio_seconds: 4, estimate: 20, first_s: 12, first_why: "the speech engine starts and listen-back's ear loads", sentences: 1, waiting: 0, ...x }; seSummary(); return $("#se-summary").innerText; };
+    showTab("speakeasy"); setDeep(false); const basicOne = est({});
+    setDeep(true); const deepOne = est({}); setDeep(false);
+    SE.voice = "some-one-uc"; seText.value = "One line. And another. And a third."; const three = est({ sentences: 3 });
+    seCadName("Agent Smoke", true); const demoLabel = $("#se-cad-say").textContent; seCadName("Some One", false); const realLabel = $("#se-cad-say").textContent;
+    ok(`F8 basic: the start-up in plain words, no sentence promise for one sentence (${basicOne})`, /0:12 of it to get ready, the first time only/.test(basicOne)
+       && !/ear|engine|listen-back|first few sentences|first sentence/.test(basicOne) && /in its own way/.test(basicOne) && !/really do/.test(basicOne));
+    ok(`F8 Deep Cover keeps the why (${deepOne})`, /because the speech engine starts and listen-back's ear loads \(the first speech only\)/.test(deepOne) && !/to get ready/.test(deepOne));
+    ok(`F8 three sentences, a real person (${three})`, /the way they really do/.test(three) && /ready to play after the first few sentences/.test(three));
+    ok(`F8 the toggle (${demoLabel} / ${realLabel})`, demoLabel === "Speak in Agent Smoke's own way" && realLabel === "Speak the way Some One really does" && $("#se-cad").getAttribute("aria-label") === realLabel);
+    ok("F8 a speech in the demo voice: Its own way", seIsDemo("agent-smoke") && !seIsDemo("some-one-uc"));
+    SE.est = null; SE.voice = null; seText.value = "";
     ok(`F6 the Library's free line (${$("#lib-total").textContent} ${oneDrive} / ${twoDrives})`, oneDrive === `on drive C: · ${gb(21.4e9)} free`
        && twoDrives === `in all · C: ${gb(21.4e9)} free · D: ${gb(300e9)} free`);
     ok("F5 no .bat left in the page's copy", !/UnderCover\.bat/.test($("#room-system").textContent) && /^Start it again from the Start menu, then reload this page\.$/.test(startAgain(", then reload this page")));
