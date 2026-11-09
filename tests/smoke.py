@@ -14477,6 +14477,11 @@ def u_token_ratios():
     wa = (web / "winamp.css").read_text(encoding="utf-8")
     ix = (web / "index.html").read_text(encoding="utf-8")
     assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
+    # polish batch 4: the second singer's x is 44 on a phone, Shape it's Done in the title row there, a changed stretch's underline square-ended
+    css = (web / "app.css").read_text(encoding="utf-8")
+    assert "@media (max-width: 480px) { .fm-duet .vchip .x::after { inset: -10px; } }" in css and ".shape .sh-w:is(.ea, .eb, .eo) { border-radius: 0; }" in css
+    assert css.index(".fm-duet .vchip .x::after { content") < css.index("@media (max-width: 480px) { .fm-duet .vchip .x::after")   # (the phone's wins)
+    assert 'class="linkbtn quiet sh-done" type="button" data-sh="done"' in (web / "shape.js").read_text(encoding="utf-8")
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
     assert '"Busy")' not in (web / "app.js").read_text(encoding="utf-8") + (web / "oneshot.js").read_text(encoding="utf-8")

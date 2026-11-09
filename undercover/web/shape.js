@@ -216,7 +216,7 @@ function shPaint(box) {
     <button class="btn" type="button" data-sh="undo"${d.cursor && !SH.busy ? "" : " disabled"}>Undo</button>
     <button class="btn" type="button" data-sh="redo"${d.cursor < d.edits.length && !SH.busy ? "" : " disabled"}>Redo</button>
     <button class="btn primary" type="button" data-sh="keep"${d.cursor && !SH.busy ? "" : " disabled"}>Keep this version</button>` : ""}
-    <button class="linkbtn quiet" type="button" data-sh="done">Done</button></div></div>`;
+    </div><button class="linkbtn quiet sh-done" type="button" data-sh="done">Done</button></div>`;
   if (SH.state !== "ready") {
     const st = SH.state === "listening" ? `<b>Listening for the words…</b><span>Once only: the app hears the song through, then keeps the words with this cover.</span>${SH.live ? `<span class="meta">${esc(SH.live)}</span>` : ""}`
       : SH.state === "error" ? `<b>${esc(SH.error || "This cover can't be shaped.")}</b>${SH.retry ? `<span><button class="btn" type="button" data-sh="retry">Try again</button></span>` : ""}`
@@ -246,7 +246,7 @@ function shPaint(box) {
         if (lead[4]) cls += ` e${lead[2].toLowerCase()}`;
         else if (back?.[4]) cls += back[2] === "original" ? " eo" : ` e${back[2].toLowerCase()}`;
         return `${i ? `<span class="land ${shLand(i)}" aria-hidden="true"></span>` : ""}<span class="${cls}" data-w="${i}" role="button" tabindex="${i === SH.focus ? 0 : -1}" aria-pressed="${pick && i >= pick[0] && i <= pick[1] ? "true" : "false"}">${esc(shWord(i))}</span>`;
-      }).join(" ") + `</div>`;
+      }).join(" ") + `</div>`;   // (the line is a flex row: the spaces fold away and the words' padding touches, so a changed stretch's square-ended underlines join)
     });
     h += `</div><div class="deeplegend" data-deep><span><i class="silence"></i>a pause: a change lands here</span><span><i class="dip"></i>a dip only: it may be heard</span><span><i class="none"></i>no place</span></div>
       <p class="meta">The words are what the app heard, so one may be off. The sound is what counts.${shLive().length ? " A changed stretch is underlined." : ""}</p>`;
