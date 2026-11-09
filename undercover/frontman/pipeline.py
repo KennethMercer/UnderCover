@@ -160,11 +160,20 @@ class CoverEngine:
     def _chord_note(self, back16, notes: list) -> None:
         """Where a converted backing (a backing voice's or a duet's) is a chord of several voices, one singer can't
         follow it and may waver: the notes say where (duets.chord_spans), so it's no surprise. The audio isn't
-        changed. One read of the stem's salience: the conversion's own reads are per region and keep only the track.
-        A measure that fails costs the note, never the cover."""
+        changed. One read of the stem's salience, at the scale the conversion read it (Converter.convert) and a minute
+        at a time (a long stem in one pass is a lot of GPU memory): the conversion's own reads are per region and keep
+        only the track. A measure that fails costs the note, never the cover."""
+        import numpy as np
         from .duets import chord_note, chord_spans
         try:
-            line = chord_note(chord_spans(self.converter.rmvpe.salience(back16)))
+            x = np.asarray(back16, np.float32)
+            peak = float(np.abs(x).max(initial=0.0)) / 0.95
+            x = x / peak if peak > 1 else x
+            step = 60 * 16000   # (a whole number of 10 ms frames: each piece's frames end where the next one's start)
+            pieces = [x[i:i + step] for i in range(0, len(x), step)]
+            pieces = [p for p in pieces if len(p) >= 16000]   # (a last second or less can hold no 3 s chord of its own)
+            sal = [self.converter.rmvpe.salience(p)[:len(p) // 160] for p in pieces]
+            line = chord_note(chord_spans(np.concatenate(sal))) if sal else None
         except Exception as e:   # noqa: BLE001 - the cover stands without the note
             print(f"Chord note: not measured ({type(e).__name__}: {e}).", flush=True)
             return
@@ -320,18 +329,18 @@ class CoverEngine:
         conv_path = work / f"{_safe(title)}__{voice.name}__{stamp}.flac"
         sf.write(str(conv_path), np.clip(audio, -1, 1), sr, subtype="PCM_24")
         conv_backing = bplan = None
+        back16 = load_16k(cstems["backing"]) if bvoice or dback else None
         if bvoice:
             from dataclasses import replace
             boct = int(_conv_cfg()["octave"] if opts.backing_octave is None else opts.backing_octave)
             bs = replace(s, pitch=key + 12 * boct, one_line=True)
-            baudio, bsr = self.converter.convert(load_16k(cstems["backing"]), bvoice.name, bs,
+            baudio, bsr = self.converter.convert(back16, bvoice.name, bs,
                                                  progress=lambda f: report("converting", 1 - share + share * f, f"Converting the backing vocals to {label_of(bvoice.name)}"))
             conv_backing = work / f"{_safe(title)}__{bvoice.name}__backing__{stamp}.flac"
             sf.write(str(conv_backing), np.clip(baudio, -1, 1), bsr, subtype="PCM_24")
         if dback:   # the backing as the lead: each singer's take at that singer's octave, then shared out by the plan
             from dataclasses import replace as _replace
             from .duets import backing_plan, other_singer, stitch
-            back16 = load_16k(cstems["backing"])
             aoct = (s.pitch - key) / 12
             doct = opts.duet_octave if opts.duet_octave is not None else aoct
             with self.converter.shared_f0():
@@ -350,7 +359,8 @@ class CoverEngine:
                 bplan = other_singer(bplan)
             sf.write(str(conv_backing), np.clip(stitch(ba, bb, bplan, bsr), -1, 1), bsr, subtype="PCM_24")
         if conv_backing:   # a converted backing that's a chord: the notes say where it may waver
-            self._chord_note(back16 if dback else load_16k(cstems["backing"]), notes)
+            report("converting", 1.0, "Listening for chords in the backing")
+            self._chord_note(back16, notes)
         secs["convert"] = round(time.perf_counter() - t, 2)
         report("converting", 1.0, "Vocal converted")
 

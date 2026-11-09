@@ -443,7 +443,7 @@ def stitch(a: np.ndarray, b: np.ndarray, plan: list, sr: int) -> np.ndarray:
 CHORD_MIN_S = 3.0     # a chord in a converted backing this long or longer is named in the cover's notes (chord_spans)
 CHORD_MOST = 0.4      # ...where a second line sounds on this share of the sung frames, over CHORD_WIN_S around each one.
 CHORD_WIN_S = 1.0     # On Pink Pony Club's chord (3:19-3:37, the maintainers' notes, glitch3) half its sung frames have
-                      # one, as its parts take turns. It names 3:20-3:34 there, three stretches of Toxic's (1:00, 1:56,
+                      # one, as its parts take turns. It names 3:20-3:35 there, three stretches of Toxic's (1:00, 1:56,
                       # 2:41) and nothing in Hello's backing (one line, the control)
 CHORD_MERGE_S = 1.0   # two stretches this close are one
 CHORD_NAMED = 3       # the note names this many, then "and N more"
@@ -467,21 +467,23 @@ def chord_spans(salience: np.ndarray, thred: float = 0.03) -> list:
         return []
     out = []
     for run in np.split(on, np.flatnonzero(np.diff(on) > CHORD_MERGE_S * 100) + 1):
-        a, b = run[0] / 100, (run[-1] + 1) / 100
-        if b - a >= CHORD_MIN_S:
-            out.append([round(a, 2), round(b, 2)])
+        a, b = run[0], run[-1] + 1
+        held = sung[a:b].sum()   # (mostly singing, and mostly chord: short stabs a second apart aren't a sung chord)
+        if b - a >= CHORD_MIN_S * 100 and held >= (b - a) / 2 and chord[a:b].sum() >= CHORD_MOST * held:
+            out.append([round(a / 100, 2), round(b / 100, 2)])
     return out
 
 
-def _clock(t: float) -> str:
-    return f"{int(t // 60)}:{int(t % 60):02d}"
+def _clock(t: float, up: bool = False) -> str:
+    t = math.ceil(t) if up else int(t)
+    return f"{t // 60}:{t % 60:02d}"
 
 
 def chord_note(spans: list) -> str | None:
     """The cover's note for chord_spans, said plainly so a waver there is no surprise; None when there are none."""
     if not spans:
         return None
-    named = [f"{_clock(a)}-{_clock(b)}" for a, b in spans[:CHORD_NAMED]]
+    named = [f"{_clock(a)}-{_clock(b, up=True)}" for a, b in spans[:CHORD_NAMED]]   # (the whole of each: its end rounded up)
     more = len(spans) - len(named)
     if more:
         where = ", ".join(named) + f" and {more} more place{'s' if more > 1 else ''}"

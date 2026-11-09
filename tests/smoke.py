@@ -9885,7 +9885,7 @@ def u_duets():
         assert len(spans) == 1 and abs(spans[0][0] - 5.5) < 0.2 and abs(spans[0][1] - 9.5) < 0.2, spans
         notes = []
         PL.CoverEngine._chord_note(eng, _l16(Path(td) / "third.wav"), notes)
-        assert notes == ["The backing at 0:05-0:09 is a chord of several voices; one singer can't follow it cleanly, "
+        assert notes == ["The backing at 0:05-0:10 is a chord of several voices; one singer can't follow it cleanly, "
                          "so it may waver there."], notes
         notes = []
         PL.CoverEngine._chord_note(eng, _l16(Path(td) / "solo.wav"), notes)
@@ -9898,14 +9898,34 @@ def u_duets():
     sal[2000:2200, 100] = sal[2000:2200, 120] = 0.8  # 2 s: too short to name
     sal[3000:3400, 150] = 0.8                        # one line alone: not a chord
     assert D.chord_spans(sal) == [[1.0, 9.0]], D.chord_spans(sal)
+    stabs = np.zeros((1000, 360), np.float32)
+    for a in range(100, 600, 90):   # a chord stab of 0.2 s every 0.9 s: under a second of it in 5 s isn't a sung chord
+        stabs[a:a + 20, 100] = stabs[a:a + 20, 120] = 0.8
+    assert D.chord_spans(stabs) == [], D.chord_spans(stabs)
     assert D.chord_spans(np.zeros((200, 360), np.float32)) == [] and D.chord_note([]) is None
     five = [[1.0, 4.0], [10.0, 14.0], [70.0, 74.5], [80.0, 84.0], [90.0, 94.0]]
-    assert D.chord_note(five).startswith("The backing at 0:01-0:04, 0:10-0:14, 1:10-1:14 and 2 more places is a chord"), D.chord_note(five)
-    assert "0:10-0:14 and 1:10-1:14 is" in D.chord_note(five[:3]) and "and 1 more place is" in D.chord_note(five[:4])
+    assert D.chord_note(five).startswith("The backing at 0:01-0:04, 0:10-0:14, 1:10-1:15 and 2 more places is a chord"), D.chord_note(five)
+    assert "0:10-0:14 and 1:10-1:15 is" in D.chord_note(five[:3]) and "and 1 more place is" in D.chord_note(five[:4])
     deaf, notes = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=lambda x: 1 / 0))), []
     PL.CoverEngine._chord_note(deaf, np.zeros(sr, np.float32), notes)
     assert notes == []   # (a measure that fails costs the note, never the cover)
-    assert "if conv_backing:   # a converted backing that's a chord" in inspect.getsource(PL.CoverEngine.make_cover)
+    # the read: a minute at a time, frames end to end; at the scale the conversion reads it (a peak over 1 brought down)
+    seen = []
+    def counting(x):
+        seen.append((len(x), float(np.abs(x).max())))
+        return np.zeros((len(x) // 160 + 1, 360), np.float32)   # (RMVPE's own count: one frame more than the hop's)
+    real_spans = D.chord_spans
+    try:
+        D.chord_spans = lambda s: (seen.append(s.shape), [])[1]
+        loud = np.full(int(130.5 * sr), 2.0, np.float32)
+        PL.CoverEngine._chord_note(SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=counting))), loud, [])
+    finally:
+        D.chord_spans = real_spans
+    assert [n for n, _ in seen[:3]] == [60 * sr, 60 * sr, int(10.5 * sr)] and seen[3] == (13050, 360), seen
+    assert all(abs(m - 0.95) < 1e-4 for _, m in seen[:3]), seen
+    src = inspect.getsource(PL.CoverEngine.make_cover)
+    assert src.count("self._chord_note(back16, notes)") == 1 and "if conv_backing:" in src   # (a backing voice's and a duet's)
+    assert src.index("if dback:   # the backing as the lead") < src.index("self._chord_note(") < src.index('secs["convert"]')
     import inspect as _ins
     from undercover.frontman import oneshot as OS3
     os_src = _ins.getsource(OS3.run)
