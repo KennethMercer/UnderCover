@@ -589,8 +589,10 @@ redo included, and a kept edit's `edited_from: <id>`, which `/api/history` passe
 - **`compile_list`** is pure: plans and edits as far as the cursor -> parts `[start, end, who, octave, src, base]`. `plan_of` makes
   the lead a plan, so `duet_plan` stays true. A stretch given back to what the base has there needs no snippet.
   Under "The other singer" (`duet_backing: "other"`) the backing is whoever isn't on the lead, so a lead edit that changes
-  who sings takes the stretch's backing with it (`follow` on the edit, a second snippet `<id>-backing.flac`), except where a
-  backing edit of the user's already stands; the edit's sentence says "The backing goes to <singer> with it."
+  who sings takes the stretch's backing with it (`follow`: the backing's own stretch, its edges at the backing's silences when
+  there are some within 2 s, so no phrase changes voice halfway; a second snippet `<id>-backing.flac`), except where a backing
+  edit of the user's already stands. The edit's sentence says "The backing goes to <singer> with it" (", except where you
+  changed it.").
 - **Rendering** converts the stretch with 0.5 s of context either side, through the cover's own settings, lays it over the base takes
   with a voice change's crossfade, and mixes the **whole song** (`remix`): a stretch mixed alone comes out of balance. The cover isn't
   touched. **Undo and redo** move the cursor and mix again, with no conversion. A new edit cuts off what lay past the cursor.

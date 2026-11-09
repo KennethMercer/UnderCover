@@ -202,9 +202,14 @@ def _sound(doc, cover_id: str) -> dict:
         t0, t1 = _num(e["t0"], "edits"), _num(e["t1"], "edits")
         if not 0 <= t0 < t1 <= duration + 1:
             raise ValueError("edits")
-        follow = e.get("follow")   # (only ever True: a lead's singer the backing follows, under "The other singer")
-        if follow is not None and (follow is not True or e["op"] != "singer" or e["part"] != "lead"):
-            raise ValueError("edits")
+        follow = e.get("follow")   # (a lead's singer the backing follows, under "The other singer": the backing's own stretch)
+        if follow is not None:
+            if e["op"] != "singer" or e["part"] != "lead" or not isinstance(follow, list) or len(follow) != 2:
+                raise ValueError("edits")
+            f0, f1 = _num(follow[0], "edits"), _num(follow[1], "edits")
+            if not 0 <= f0 < f1 <= duration + 1:
+                raise ValueError("edits")
+            t0 = min(t0, f0)   # (where its snippets start)
         if not isinstance(e.get("files"), dict) or set(e["files"]) - {e["part"], *(("backing",) if follow else ())}:
             raise ValueError("edits")
         if any(n != snippet_name(e, k) for k, n in e["files"].items()):   # (no other file name is ever read from this list)
@@ -406,12 +411,22 @@ def check_edit(req, doc: dict, item: dict | None = None) -> dict:
     n = 1 + max((int(e["id"][1:]) for e in doc["edits"]), default=0) if doc["edits"] else 1
     edit = {"id": f"e{n}", **clean, "t0": a[0], "t1": b[0], "words": [words[0], words[-1]] if words else None,
             "at": time.strftime("%Y-%m-%d %H:%M:%S"), "moved": moved[:MAX_SAID], "files": {}}
-    opts = _options(item) if item is not None else None
-    if clean["op"] == "singer" and clean["part"] == "lead" and doc["backing"] and opts is not None and opts.duet_backing == "other":
+    opts = _options(item) if clean["op"] == "singer" and clean["part"] == "lead" and doc["backing"] and item is not None else None
+    if opts is not None and opts.duet_backing == "other":
+        # the backing's edges at its own silences, as its base plan changes hands, so no phrase changes voice halfway (else the
+        # lead's, crossfaded as any edit)
+        f0 = snap(a[0], "backing", doc)
+        f1 = snap(b[0], "backing", doc, f0[0] if f0 else a[0])
+        span = [f0[0] if f0 else a[0], f1[0] if f1 else b[0]]
+        if span[1] - span[0] < MIN_EDIT_S:
+            span = [a[0], b[0]]
         was = [p[:4] for p in compile_list(doc, live)["backing"]]
-        if [p[:4] for p in compile_list(doc, live + [{**edit, "follow": True}])["backing"]] != was:   # (theirs all through: nothing moves)
-            said = f"The backing goes to {label_of(_voice_of(duets._other(clean['who']), opts))} with it."
-            edit["follow"], edit["moved"] = True, f"{moved[:MAX_SAID - len(said) - 1]} {said}".strip()[:MAX_SAID]
+        got = compile_list(doc, live + [{**edit, "follow": span}])["backing"]
+        if [p[:4] for p in got] != was:   # (theirs all through: nothing moves, nothing's said)
+            to = duets._other(clean["who"])
+            kept = any(p[2] != to for p in got if span[0] <= p[0] and p[1] <= span[1])   # (a backing edit of the user's stands)
+            said = f"The backing goes to {label_of(_voice_of(to, opts))} with it" + (", except where you changed it." if kept else ".")
+            edit["follow"], edit["moved"] = span, f"{moved[:MAX_SAID - len(said) - 1]} {said}".strip()[:MAX_SAID]
     done = compile_list(doc, live + [edit])
     if any(p[2] == ORIGINAL and p[3] is not None for p in done["backing"]):
         raise ModelError("The song's own backing stays at its own pitch.")
@@ -482,8 +497,8 @@ def compile_list(doc: dict, edits: list | None = None) -> dict:
             if ed["part"] == part:
                 parts = _paint(parts, ed, doc["octaves"])
                 theirs.append((ed["t0"], ed["t1"]))
-            elif part == "backing" and ed.get("follow"):   # (a lead's singer: the backing by the other one)
-                parts = _paint(parts, ed, doc["octaves"], duets._other(ed["who"]), theirs)
+            elif part == "backing" and ed.get("follow"):   # (a lead's singer: the backing by the other one, over its own stretch)
+                parts = _paint(parts, {**ed, "t0": ed["follow"][0], "t1": ed["follow"][1]}, doc["octaves"], duets._other(ed["who"]), theirs)
         out[part] = _merged(parts)
     return out
 
@@ -590,12 +605,15 @@ def _render(engine, item: dict, doc: dict, edit: dict, report) -> None:
     key, _ = pitch_plan(opts)
     s = conversion_settings(opts, song)
     stems = _stems(engine, item, doc, opts)
-    d = folder(doc["cover"])
-    at, files = max(0.0, edit["t0"] - PAD_S), {}
+    d, base = folder(doc["cover"]), base_files(item, doc)
+    t0, t1 = edit["t0"], edit["t1"]
+    if edit.get("follow"):   # (the backing's own stretch: one start for both snippets)
+        t0, t1 = min(t0, edit["follow"][0]), max(t1, edit["follow"][1])
+    at, files = max(0.0, t0 - PAD_S), {}
     for k, (part, mine) in enumerate(todo):
         src = load_16k(stems["vocals" if part == "lead" else "backing"])
-        sr = sf.info(str(base_files(item, doc)[part])).samplerate
-        end = min(len(src) / duets.SR16, edit["t1"] + PAD_S)
+        sr = sf.info(str(base[part])).samplerate
+        end = min(len(src) / duets.SR16, t1 + PAD_S)
         chunk = src[int(at * duets.SR16):int(end * duets.SR16)]
         out = np.zeros(int(round((end - at) * sr)), np.float32)
         takes = {}

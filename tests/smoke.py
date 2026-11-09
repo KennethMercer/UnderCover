@@ -11136,7 +11136,7 @@ def u_duet_follow():
         assert "follow" not in e and e["moved"] == "", e
     assert "follow" not in E.check_edit(lead, doc)   # (no history line: as before)
     e = E.check_edit(lead, doc, line("other"))
-    assert e["follow"] is True and e["moved"] == "The backing goes to mj with it.", e
+    assert e["follow"] == [20.4, 40.4] and e["moved"] == "The backing goes to mj with it.", e
     doc["edits"], doc["cursor"] = [e], 1
     assert [p[:5] for p in E.compile_list(doc)["backing"]] == [[0.0, 20.5, "A", None, None], [20.5, 40.4, "A", None, "e1"], [40.4, 60.0, "B", None, None]], E.compile_list(doc)
     # the landing sentence comes first, then the backing's
@@ -11149,6 +11149,7 @@ def u_duet_follow():
         bk = E.check_edit({"op": "singer", "part": "backing", "who": who, "t0": 29.0, "t1": 31.0}, d)
         d["edits"], d["cursor"] = [bk], 1
         e = E.check_edit(lead, d, line("other"))
+        assert e["moved"] == "The backing goes to mj with it, except where you changed it.", e
         d["edits"], d["cursor"] = [bk, e], 2
         back = E.compile_list(d)["backing"]
         assert [p[2:5] for p in back if bk["t0"] <= p[0] and p[1] <= bk["t1"]] == [[who, None, src]], back
@@ -11164,19 +11165,29 @@ def u_duet_follow():
     whole["edits"], whole["cursor"] = [mine], 1
     e = E.check_edit(lead, whole, line("other"))   # theirs all through: nothing moves, nothing said
     assert "follow" not in e and e["moved"] == "", e
-    # stored: follow is only ever true, and only on a lead's singer; its backing snippet is named as its own is
+    # the backing's edges land at its own silences, so none of its phrases changes voice halfway; with none near, at the lead's
+    own = {**fresh(), "points": {**pts, "backing": [[18.6, 19.4], [41.2, 42.0]]}}
+    e = E.check_edit(lead, own, line("other"))
+    assert (e["t0"], e["t1"]) == (20.4, 40.4) and 18.6 < e["follow"][0] < 19.4 and 41.2 < e["follow"][1] < 42.0, e
+    own["edits"], own["cursor"] = [e], 1
+    f1 = e["follow"][1]   # (from the backing's silence before it, A is the base's backing already)
+    assert [p[:5] for p in E.compile_list(own)["backing"]] == [[0.0, 20.5, "A", None, None], [20.5, f1, "A", None, "e1"], [f1, 60.0, "B", None, None]], E.compile_list(own)
+    e = E.check_edit(lead, {**fresh(), "points": {**pts, "backing": []}}, line("other"))
+    assert e["follow"] == [20.4, 40.4], e
+    # stored: follow is the backing's stretch, and only on a lead's singer; its backing snippet is named as its own is
     with isolated_data():
         ok = fresh("abcdef0123")
         f = E.folder("abcdef0123") / "edit.json"
         E.save(ok)
-        sn = {"id": "e1", "op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4, "from_s": 19.9, "at": "", "moved": "",
-              "follow": True, "files": {"lead": "e1-lead.flac", "backing": "e1-backing.flac"}}
+        sn = {"id": "e1", "op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4, "from_s": 18.5, "at": "", "moved": "",
+              "follow": [19.0, 41.0], "files": {"lead": "e1-lead.flac", "backing": "e1-backing.flac"}}
 
         def stored(**k):
             f.write_text(J.dumps({**ok, "edits": [{**sn, **k}], "cursor": 1}), encoding="utf-8")
             return E.load("abcdef0123")
         assert stored() is not None
-        for k in ({"follow": False}, {"follow": 1}, {"follow": "yes"}, {"op": "octave", "octave": 1}, {"part": "backing", "files": {"backing": "e1-backing.flac"}},
+        for k in ({"follow": True}, {"follow": False}, {"follow": 1}, {"follow": "yes"}, {"follow": [19.0]}, {"follow": [41.0, 19.0]}, {"follow": [19.0, 900.0]},
+                  {"follow": ["19", 41.0]}, {"follow": [float("nan"), 41.0]}, {"follow": [19.0, 41.0, 42.0]}, {"from_s": 19.5}, {"op": "octave", "octave": 1}, {"part": "backing", "files": {"backing": "e1-backing.flac"}},
                   {"files": {"lead": "e1-lead.flac", "backing": "e1-lead.flac"}}, {"files": {"lead": "e1-lead.flac", "backing": "../e1-backing.flac"}}):
             assert stored(**k) is None, k
         f.write_text(J.dumps({**ok, "edits": [{k: v for k, v in sn.items() if k != "follow"}], "cursor": 1}), encoding="utf-8")
@@ -11223,7 +11234,7 @@ def u_duet_follow():
             doc = E.apply(engine, it, lead, lambda *x: None)
             assert sorted(calls) == [("bw", False), ("mj", True)], calls   # the lead in B's voice, the backing in A's, one line held
             e1 = doc["edits"][0]
-            assert e1["follow"] is True and e1["files"] == {"lead": "e1-lead.flac", "backing": "e1-backing.flac"} and e1["moved"] == "The backing goes to mj with it.", e1
+            assert e1["follow"] == [20.4, 40.4] and e1["files"] == {"lead": "e1-lead.flac", "backing": "e1-backing.flac"} and e1["moved"] == "The backing goes to mj with it.", e1
             assert E.load(it["id"])["edits"][0] == e1   # (read back as sound)
             d = E.folder(it["id"])
             back, _ = sf.read(str(d / "take-backing.flac"), dtype="float32")
