@@ -9870,7 +9870,7 @@ def u_duets():
     assert 'data-v="lines" hidden' in page and 'id="fm-duet-strip"' in page   # By line waits for the ear; style A's strip
     duet_box = page[page.index('id="fm-duet-way-box"'):page.index("</div>", page.index('id="fm-duet-backing-note"'))]
     assert 'id="fm-duet-backing"' in duet_box and 'data-v="singers"' in duet_box and 'data-v="other"' in duet_box and 'data-v="original"' in duet_box
-    assert 'data-v="mine" data-deep disabled' in duet_box   # I'll choose: Deep Cover's, and shut until its editor exists
+    assert 'data-v="mine"' not in duet_box   # I'll choose: back with its editor, after 1.2 (Internal Affairs D6)
     js = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
     assert "S.opts.duet_backing = b.dataset.v" in js and "S.defaults.duet_backing" in js and "sel.hidden = duet" in js
     assert "Object.prototype.hasOwnProperty.call(DUET_BACKINGS, v)" in js   # (a stored "constructor" is no backing)
@@ -10065,14 +10065,21 @@ def u_duet_shape_words():
     return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
 
 
-@check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers")
+@check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown")
 def u_duet_copy():
     import inspect
     from undercover.frontman import pipeline as PL
     src = inspect.getsource(PL.CoverEngine.make_cover)
     assert PL.DUET_BACKING_SAID == "Converting the backing vocals (both singers)"
     assert src.count("DUET_BACKING_SAID") == 2 and "backing vocals to {label_of(dvoice.name)} too" not in src, "a duet's backing named one singer"
-    return "the backing's progress line"
+    # one way to share it is said as a sentence, not a lone pill (D6); "I'll choose" isn't shown, even in Deep Cover, until it's built
+    page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    assert "I'll choose <" not in page and 'data-v="mine"' not in page
+    assert 'const DUET_WAY_ONE = { turns: "They take turns.", lines: "They take a line each." };' in js
+    assert '$("#fm-duet-way").hidden = shown.length < 2;' in js and 'shown.length < 2 ? DUET_WAY_ONE[way] || DUET_WAY_ONE.turns : "How do they share it?"' in js
+    assert js.index('const shown = $$("#fm-duet-way button")') < js.index('$("#fm-duet-way").hidden = shown.length < 2;')
+    return "the backing's progress line; one way said as a sentence"
 
 
 @check("hangs (hangfix, hangtune): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 200 ms or more with 100 ms silent, no pause marked in the text), or a break (60 ms of silence where the words run into each other, no stop at the join), and reads it again with another seed, up to 5 tries, keeping the take whose longest join is shortest among takes as bad; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
