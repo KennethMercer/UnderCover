@@ -69,6 +69,8 @@ in brackets.
 
 **Fixes** (quietdrops)
 - The server's log keeps real problems only: a closed tab or a dropped connection no longer leaves an error there.
+**Fixes** (plainerr2)
+- A full disk, the PC running out of memory and no internet connection each say what to do, instead of "Something went wrong".
 
 **Fixes** (tidy1)
 - A file that only looks like a song (nothing in it plays) is refused with a plain message.

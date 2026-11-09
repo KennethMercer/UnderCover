@@ -16306,6 +16306,25 @@ def u_quiet_drops():
     assert [str(x.message) for x in w] == ["a library's own news"], [str(x.message) for x in w]
     assert "known_warnings()" in inspect.getsource(server.main) and "known_warnings()" in inspect.getsource(worker.main)
     return "dropped clients: nothing logged; a real error: its traceback; two known library warnings out of the logs"
+
+
+@check("a new user's likely failures say what to do: a full disk, the PC's own memory, no internet (rather than 'Something went wrong (OSError)'); anything else still points at the log")
+def u_plain_error2():
+    import socket, urllib.error
+    import requests
+    from undercover.core import jobs
+    with isolated_data():   # (the unknown errors write logs/errors.log: the test's own)
+        said = lambda e: jobs.friendly(e, "testing")
+        assert said(MemoryError()).startswith("The PC ran out of memory (RAM).")
+        assert said(OSError(28, "No space left on device")).startswith("The disk is full.")
+        if os.name == "nt":
+            assert said(OSError(None, "There is not enough space on the disk", None, 112)).startswith("The disk is full.")
+        for e in (urllib.error.URLError("x"), socket.gaierror(11001, "getaddrinfo failed"),
+                  requests.exceptions.ConnectionError("Max retries exceeded (Failed to establish a new connection)")):
+            assert said(e) == "UnderCover couldn't reach the internet. Check the connection and try again.", (type(e), said(e))
+        assert said(ConnectionResetError("x")).startswith("Something went wrong while testing"), "a dropped pipe isn't the internet"
+        assert said(OSError(13, "x")).startswith("Something went wrong") or "Windows blocked" in said(OSError(13, "x"))
+        return "disk full, RAM, no internet: plain; the rest: the log"
 @check("a night item's job names the training project it writes under (improve, a queued project, a new voice), so the real-folder check can tell the user's own server's training from a run's")
 def u_job_project():
     import inspect
@@ -16380,7 +16399,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
