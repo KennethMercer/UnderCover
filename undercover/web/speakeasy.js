@@ -24,7 +24,7 @@ async function seLoad() {
   try {
     const [voices, readers] = await Promise.all([api("/api/speak/voices"), first ? api("/api/speak/readers") : SE.readers]);
     SE.voices = voices; SE.readers = readers; noteVoices(voices);
-  } catch (e) { $("#se-voices").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
+  } catch (e) { SE.loaded = !first; if (first || !SE.voices) couldntRead($("#se-voices"), "your voices", seLoad); return; }   // (the next visit asks again)
   if (first) seReaders();
   if (!SE.voices.some(v => v.name === SE.voice)) SE.voice = (SE.voices.find(v => v.trained && !v.undertrained) || SE.voices[0] || {}).name || null;
   seVoices(); sePlan(); seLoadRecent();
@@ -389,7 +389,8 @@ $("#se-track").addEventListener("keydown", e => {
 
 // ------------------------------------------------------------ Recent
 async function seLoadRecent() {
-  try { SE.recent = await api("/api/speak/recent"); } catch (e) { SE.recent = []; }
+  try { SE.recent = await api("/api/speak/recent"); SE.recentRead = true; }
+  catch (e) { if (!SE.recentRead) couldntRead($("#se-recent"), "your speech", seLoadRecent); return; }   // (a miss never drops the speech just made)
   const mine = SE.result && SE.recent.find(r => r.id === SE.result.id);
   if (SE.result && !mine) {   // deleted (here or in SafeHouse) or rolled off the tray: its player goes too
     SE.audio.pause(); SE.audio.removeAttribute("src"); SE.result = null; SE.job = null; $("#se-now").hidden = true;
@@ -398,7 +399,7 @@ async function seLoadRecent() {
 }
 function seRecent() {
   const box = $("#se-recent");
-  if (!SE.recent.length) { box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }
+  if (!SE.recent.length) { if (SE.recentRead) box.innerHTML = `<p class="meta">Speech you make collects here.</p>`; return; }   // (empty only once it's read)
   box.innerHTML = SE.recent.slice(0, SE.recAll ? RECENT_TRAY : RECENT_SHOW).map(r => `<div class="se-rrow" data-kept="${r.kept ? "true" : "false"}">
       <button class="play" type="button" data-rplay="${r.id}" aria-label="Play">${r.id === SE.recId && !SE.rec.paused ? "❚❚" : "▶"}</button>
       <div class="t"><b title="${esc(r.text)}">“${esc(r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text)}”</b>${facts([{ html: `${typeof earMark === "function" ? earMark("speech", r.id) : ""}${vname(r.voice)}` }, `${paceWord(r)} pace`, r.mode === "cadence" ? (seIsDemo(r.voice) ? "Its own way" : "Their own way") : "", { t: upFirst(dayWord(r.created)), muted: true }, { t: dayTime(r.created), deep: true }])}</div>

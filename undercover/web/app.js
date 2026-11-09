@@ -1194,7 +1194,13 @@ function renderPreviews(list, kind, made, variants) {
 }
 
 // ------------------------------------------------------------ history
-let HIST = [];
+let HIST = [], HIST_READ = false;   // (read once: until then the tray says Loading..., or that it couldn't be read)
+// A list that couldn't be read says so, with a way to try again; it never says it's empty. what: the page's own words ("your covers")
+function couldntRead(box, what, again) {
+  if (!box) return;
+  box.innerHTML = `<p class="meta couldnt">Couldn't read ${what}. <button class="linkbtn" type="button">Try again</button></p>`;
+  box.querySelector("button").onclick = () => { box.innerHTML = `<p class="meta">Loading…</p>`; again(); };
+}
 // Recent in a module (FrontMan's covers, SpeakEasy's speech; the user, 2026-10-26): the newest five, "Show more" opens the rest of the
 // tray's 15, "Show fewer" folds it back. Everything older is in SafeHouse.
 const RECENT_SHOW = 5, RECENT_TRAY = 15;
@@ -1202,7 +1208,8 @@ const recentMore = (id, open, total) => total > RECENT_SHOW
   ? `<button class="linkbtn recent-more" type="button" id="${id}" aria-expanded="${open}">${open ? "Show fewer" : "Show more"}</button>` : "";
 async function loadHistory() {
   let ok = true;
-  try { HIST = await api("/api/history"); } catch (e) { HIST = []; ok = false; }
+  try { HIST = await api("/api/history"); HIST_READ = true; }
+  catch (e) { if (!HIST_READ) return couldntRead($("#hist"), "your covers", loadHistory); ok = false; }   // (a later miss keeps the tray as it was)
   const mine = S.result && HIST.find(x => x.id === S.result.id);
   if (mine) { S.result.kept = mine.kept; renderKeep(); $("#result-h").textContent = coverName(S.result); }
   else if (ok && S.result) { stopAll(); $("#result").hidden = true; S.result = null; }   // it rolled off the tray (or was deleted)
@@ -1211,7 +1218,7 @@ async function loadHistory() {
 }
 function renderHistory() {
   const box = $("#hist");
-  if (!HIST.length) { box.innerHTML = `<p class="meta">Your covers will appear here.</p>`; return; }
+  if (!HIST.length) { if (HIST_READ) box.innerHTML = `<p class="meta">Your covers will appear here.</p>`; return; }   // (empty only once it's read)
   const nowPlaying = !active().paused ? playingHist : null;
   box.innerHTML = HIST.slice(0, S.histAll ? RECENT_TRAY : RECENT_SHOW).map(h => {
     const o = h.options || {};

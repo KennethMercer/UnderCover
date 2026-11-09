@@ -14482,6 +14482,14 @@ def u_token_ratios():
     assert "@media (max-width: 480px) { .fm-duet .vchip .x::after { inset: -10px; } }" in css and ".shape .sh-w:is(.ea, .eb, .eo) { border-radius: 0; }" in css
     assert css.index(".fm-duet .vchip .x::after { content") < css.index("@media (max-width: 480px) { .fm-duet .vchip .x::after")   # (the phone's wins)
     assert 'class="linkbtn quiet sh-done" type="button" data-sh="done"' in (web / "shape.js").read_text(encoding="utf-8")
+    # states 1: a list that couldn't be read says so with Try again, never that it's empty; the Recent trays start on Loading...
+    pages = {n: (web / n).read_text(encoding="utf-8") for n in ("app.js", "speakeasy.js", "work.js", "doubleagent.js", "aside.js")}
+    for n, what in (("app.js", '"your covers", loadHistory'), ("speakeasy.js", '"your voices", seLoad'), ("speakeasy.js", '"your speech", seLoadRecent'),
+                    ("work.js", '"your voices", loadCandidates'), ("aside.js", '"what\'s set aside", asideLoad')):
+        assert f"couldntRead(" in pages[n] and what in pages[n], (n, what)
+    assert "HIST = []; ok = false" not in pages["app.js"] and "SE.recent = []; }" not in pages["speakeasy.js"] and "ASIDE.list = []; }" not in pages["aside.js"]
+    assert "!DA.cands.length && !PICK.read" in pages["doubleagent.js"]
+    assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
     assert '"Busy")' not in (web / "app.js").read_text(encoding="utf-8") + (web / "oneshot.js").read_text(encoding="utf-8")

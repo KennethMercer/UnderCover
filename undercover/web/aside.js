@@ -5,7 +5,8 @@
 const ASIDE = { list: [], ask: null, timer: null };
 
 async function asideLoad() {
-  try { ASIDE.list = await api("/api/library/aside"); } catch (e) { ASIDE.list = []; }
+  try { ASIDE.list = await api("/api/library/aside"); ASIDE.read = true; }
+  catch (e) { if (!ASIDE.read) { $("#as-say").textContent = "not now"; couldntRead($("#as-body"), "what's set aside", asideLoad); } return; }
   renderAside();
 }
 function renderAside() {

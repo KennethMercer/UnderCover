@@ -459,7 +459,8 @@ $("#q-mode").addEventListener("click", e => {
   if (b.dataset.v === "new") $("#q-name").focus();
 });
 async function loadCandidates() {
-  try { PICK.cands = await api("/api/work/candidates"); noteVoices(PICK.cands); } catch (e) { return; }
+  try { PICK.cands = await api("/api/work/candidates"); noteVoices(PICK.cands); PICK.read = true; }
+  catch (e) { if (!PICK.read) { couldntRead($("#da-cards"), "your voices", loadCandidates); couldntRead($("#q-cands"), "your voices", loadCandidates); } return; }
   const can = PICK.cands.filter(c => c.can), off = PICK.cands.filter(c => !c.can && !c.demo);   // the demo voice is nobody to improve: not listed
   [...PICK.sel].forEach(k => { if (!can.some(c => c.voice === k && !c.queued)) PICK.sel.delete(k); });
   $("#q-cands").innerHTML = can.length ? can.map(c => {

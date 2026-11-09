@@ -44,6 +44,7 @@ function ledgerHtml(c) {
 function renderVoiceCards(cands) {
   DA.cands = cands || []; noteVoices(DA.cands);
   const box = $("#da-cards");
+  if (!DA.cands.length && !PICK.read) return;   // (not read yet: Loading..., or that it couldn't be read; never "No voices yet")
   if (!DA.cands.length) {
     box.innerHTML = `<div class="empty"><b>No voices yet.</b><small class="meta">or name someone above</small></div>`;
     $("#da-more").hidden = true; renderDaOutcome(); return;
