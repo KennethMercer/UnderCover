@@ -62,9 +62,9 @@ def _busy(name: str) -> dict | None:
 
 def project_json(proj: P.Project) -> dict:
     tdir = proj.dir / "train"
-    hist = []
-    if (tdir / "history.jsonl").exists():
-        hist = [json.loads(l) for l in (tdir / "history.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    from .trainer import read_history
+    finite = lambda x: x if x - x == 0 else None   # (a NaN or infinite loss isn't JSON the page can read)
+    hist = [{**h, "val": finite(h["val"])} for h in read_history(tdir / "history.jsonl")]
     saves = []
     for s in proj.train.get("saves", []):
         pv = tdir / "previews" / f"e{s['epoch']}.wav"

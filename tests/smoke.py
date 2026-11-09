@@ -7662,6 +7662,29 @@ def u_read_ahead_stop():
     return "gone within 1 s of the Stop; an error handed over"
 
 
+@check("bugs-da 9: a training history with a line cut short (a crash as it was written) still loads: the project page and Resume read the rest, a NaN loss reaches the page as nothing, and Resume rewrites the history whole and safely")
+def u_history_cut():
+    import inspect
+    from undercover.doubleagent import api as DA, project as P, trainer
+    with isolated_data():
+        proj = P.Project.create("Cut Short", "speaking")
+        tdir = proj.dir / "train"
+        tdir.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps({"epoch": 1, "secs": 2.0, "val": 0.5, "mel": 30.0}),
+                 json.dumps({"epoch": 2, "secs": 2.0, "val": float("nan"), "mel": 29.0}),
+                 '{"epoch": 3, "secs": 2.0, "va']
+        (tdir / "history.jsonl").write_text("\n".join(lines), encoding="utf-8")
+        hist = trainer.read_history(tdir / "history.jsonl")
+        assert [h["epoch"] for h in hist] == [1, 2], hist
+        page = DA.project_json(P.Project.load(proj.name))
+        json.dumps(page, allow_nan=False)   # (what a browser can parse)
+        assert [h["val"] for h in page["history"]] == [0.5, None], page["history"]
+        assert trainer.read_history(tdir / "nothing.jsonl") == []
+    src = inspect.getsource(trainer.Trainer.run)
+    assert 'fsutil.write_text(self.tdir / "history.jsonl"' in src and "hf.write_text(" not in src
+    return "2 of 3 lines read; the NaN sent as null"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15652,7 +15675,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

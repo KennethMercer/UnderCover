@@ -48,6 +48,24 @@ SAVE_STEPS = 400   # a listening preview + inference save about every 2 minutes 
 FRESH_KEYS = ("epoch", "best", "saves", "state", "outcome", "epochs", "planned_epochs", "init_from", "lr", "steps", "seed")
 
 
+def read_history(f: Path) -> list[dict]:
+    """A training's history.jsonl, one epoch a line, oldest first. A line that doesn't read (cut short by a crash as it
+    was written) is left out: one bad line never stops the project page or a Resume."""
+    try:
+        lines = f.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            h = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(h, dict) and isinstance(h.get("epoch"), int) and isinstance(h.get("val"), (int, float)):
+            out.append(h)
+    return out
+
+
 def model_config(sr: int) -> list:
     c = SR_CFG[sr]
     return [c["n_fft"] // 2 + 1, c["segment"] // c["hop"], 192, 192, 768, 2, 6, 3, 0, "1", [3, 7, 11],
@@ -284,10 +302,7 @@ class Trainer:
 
     # ------------------------------------------------------------ helpers
     def _hist(self) -> list[dict]:
-        f = self.tdir / "history.jsonl"
-        if not f.exists():
-            return []
-        return [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+        return read_history(self.tdir / "history.jsonl")
 
     @torch.no_grad()
     def _validate(self, net_g, hold: list, c: dict, sr: int, seed=0) -> float:
@@ -388,10 +403,11 @@ class Trainer:
             opt_g.load_state_dict(ck["opt_g"])
             opt_d.load_state_dict(ck["opt_d"])
             epoch0 = int(ck["epoch"])
+            # the epochs up to the resume point, rewritten whole (a line a crash cut short goes, so the next epoch's
+            # line starts on its own)
+            kept_hist = [h for h in self._hist() if h["epoch"] <= epoch0]
+            fsutil.write_text(self.tdir / "history.jsonl", "".join(json.dumps(h) + "\n" for h in kept_hist))
             if st.get("epoch", 0) > epoch0:   # crashed after the last save point: forget the lost epochs
-                hf = self.tdir / "history.jsonl"
-                kept_hist = [h for h in self._hist() if h["epoch"] <= epoch0]
-                hf.write_text("".join(json.dumps(h) + "\n" for h in kept_hist), encoding="utf-8")
                 st["saves"] = [s for s in st.get("saves", []) if s["epoch"] <= epoch0]
                 if (st.get("best") or 0) > epoch0:
                     st["best"] = max((s["epoch"] for s in st["saves"]), default=None)
