@@ -15,7 +15,7 @@
 // Uses app.js ($, $$, api, esc, S, HIST, showResult), shell.js (showTab), jobs.js (runningJobs), work.js (jobName, jobLine, glyph).
 
 const TOUR = { known: null, step: 0, sub: 0, on: false, wait: false, job: null, failed: null, confirm: false, tip: 0, tipAt: 0, timer: 0, began: false,
-               left: null, long: false, away: false, ready: null };
+               left: null, long: false, away: false, ready: null, seen: false };
 const TOUR_LONG = 180;   // seconds left above which the waiting panel offers to let them look around
 const TOUR_TIPS = [
   "The glasses in the top bar are Deep Cover: every number and setting. You never need them to make a cover.",
@@ -116,7 +116,9 @@ function tourNow() {
   const j = (typeof runningJobs === "function" ? runningJobs() : []).find(x => x.id === TOUR.job) || (typeof runningJobs === "function" ? runningJobs()[0] : null);
   const line = j ? (typeof jobLine === "function" ? jobLine(j, false) : "") || j.message || "" : "";
   TOUR.left = j ? j.total_left ?? j.eta ?? null : null;
-  const said = line ? line.replace(/^./, c => c.toUpperCase()).replace(/[.\s]+$/, "") + "." : "Getting started.";   // one full stop, whatever the job's words end with
+  if (j) TOUR.seen = true;   // once the job has run, no line means it's ending (the cover done, step 2 not drawn yet), not starting
+  const said = line ? line.replace(/^./, c => c.toUpperCase()).replace(/[.\s]+$/, "") + "."   // one full stop, whatever the job's words end with
+    : TOUR.seen ? "Finishing up." : "Getting started.";
   el.textContent = `${said} The bar and the time left are lit on the page.`;
 }
 function tourTip(first) {
@@ -133,7 +135,7 @@ function tourTip(first) {
 // ------------------------------------------------------------ moving on: the real actions, polled while the tour is on
 function tourTick() {
   if (!TOUR.on) return;
-  if (TOUR.step === 1 && !TOUR.wait && !TOUR.failed && (S.osBusy || S.job)) { TOUR.wait = true; TOUR.job = (typeof OS !== "undefined" && OS.job) || S.job; tourCard(); }
+  if (TOUR.step === 1 && !TOUR.wait && !TOUR.failed && (S.osBusy || S.job)) { TOUR.wait = true; TOUR.seen = false; TOUR.job = (typeof OS !== "undefined" && OS.job) || S.job; tourCard(); }
   if (TOUR.wait) {
     tourNow(); if (Date.now() - TOUR.tipAt > 10000) tourTip(false);
     const long = TOUR.left != null && TOUR.left > TOUR_LONG;
@@ -207,7 +209,7 @@ document.addEventListener("click", e => {
   else if (a === "skip-no") { TOUR.confirm = false; tourCard(); }
   else if (a === "skip-yes") tourEnd("skip");
   else if (a === "sample") { $("#os-text").value = TOUR_SAMPLE; $("#os-text").dispatchEvent(new Event("input")); $("#os-go").click(); }
-  else if (a === "retry") { const id = TOUR.failed?.id; TOUR.failed = null; TOUR.wait = true; tourCard();
+  else if (a === "retry") { const id = TOUR.failed?.id; TOUR.failed = null; TOUR.wait = true; TOUR.seen = false; tourCard();
     api(`/api/jobs/${id}/retry`, { method: "POST" }).then(r => { TOUR.job = r?.job || TOUR.job; if (typeof refreshJobs === "function") refreshJobs(true); })
       .catch(() => { TOUR.wait = false; $("#os-go").click(); }); }   // no retry for it: the same request again
   else if (a === "next") tourGo(TOUR.step + 1);

@@ -13028,7 +13028,7 @@ def _page_selftest(body: str, routes: dict | None = None) -> str:
     return got.replace(" | ", "; ")
 
 
-@check("a fresh install's walk (InternalAffairs, 1.2): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows (headless Chrome; skipped without it)")
+@check("a fresh install's walk (InternalAffairs, 1.2), the page side in headless Chrome (skipped without it): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows; its waiting line says Finishing up once the job has run")
 def u_first_walk():
     got = _page_selftest(r"""
     const V = (name, x) => ({ name, kind: "speaking", cadence: {}, ...x });
@@ -13050,6 +13050,15 @@ def u_first_walk():
     phoneRow.hidden = false; const withPhone = tipsSeen(); phoneRow.hidden = true; const noPhone = tipsSeen(); phoneRow.hidden = phoneWas;
     ok("F3 Your phone's tip only while its row shows", withPhone.some(t => /^Your phone/.test(t)) && !noPhone.some(t => /^Your phone/.test(t)));
     tipEl.id = ""; TOUR.tip = 0;
+    // F9: the waiting card's line before the job shows, while it runs, and between the cover ending and step 2
+    const nowEl = document.createElement("span"); nowEl.id = "tour-now"; document.body.append(nowEl);
+    const realJobs = JF.list, said = () => nowEl.textContent.split(" The bar")[0];
+    TOUR.seen = false; TOUR.job = "j1";
+    JF.list = []; tourNow(); const before = said();
+    JF.list = [{ id: "j1", kind: "auto", state: "running", message: "Converting the vocal to Agent Smoke" }]; tourNow(); const during = said();
+    JF.list = []; tourNow(); const ending = said();
+    JF.list = realJobs; nowEl.id = ""; TOUR.job = null; TOUR.seen = false;
+    ok(`F9 Getting started, then the job's words, then Finishing up (${before} / ${during} / ${ending})`, before === "Getting started." && during && during !== before && ending === "Finishing up.");
 """)
     return got or "no Chrome here: skipped"
 
