@@ -13120,6 +13120,43 @@ def u_defer_rest():
     return f"rests {jobs.DEFER_REST_S:.0f} s after a whole pass"
 
 
+@check("free space is judged where the work writes (after a Storage move, not the app's drive): the jobs' 3 GB guard, "
+       "Doctor and the Library's free line agree and name that drive")
+def u_work_space():
+    from types import SimpleNamespace
+    from undercover.core import config, doctor, jobs, storage
+    from undercover.safehouse import library
+    saved = (storage.shutil, storage.drive_of)
+    try:
+        with isolated_data() as t:
+            e = t / "E"   # (stands in for another drive: the working files, covers and voices moved there)
+            for k, sub in (("cache_dir", "cache"), ("output_dir", "output"), ("voices_dir", "voices")):
+                config.CONFIG["paths"][k] = str(e / sub)
+            free = {"E:": 100e9, "app": 1e9}
+            on_e = lambda p: storage._inside(Path(p), e)
+            storage.drive_of = lambda p: "E:" if on_e(p) else saved[1](p)
+            storage.shutil = SimpleNamespace(disk_usage=lambda p: SimpleNamespace(free=free["E:" if on_e(p) else "app"]))
+            assert storage.low_work_space() is None, "1 GB on the app's drive refused work that writes to E: (100 GB)"
+            job = jobs.Job("zz-smoke")
+            jobs.run_job(job, lambda j: j.finish("done"))
+            assert job.state == "done", job.events[-1:]
+            lib = library._summary()
+            assert lib["drive"] == "E:" and lib["free"] == 100e9, (lib["drive"], lib["free"])
+            free.update({"E:": 1e9, "app": 100e9})
+            assert storage.low_work_space() == ("E:", 1e9)
+            job = jobs.Job("zz-smoke")
+            jobs.run_job(job, lambda j: j.finish("done"))
+            assert job.state == "error" and "1.0 GB free on drive E:" in job.events[-1]["message"], job.events[-1:]
+            res = {r["id"]: r for r in doctor.c_disk(None)}
+            assert res["disk:E:"]["state"] == "bad" and "refuse" in res["disk:E:"]["say"], res
+            assert all(r["state"] != "bad" and "refuse" not in r["say"] for k, r in res.items() if k != "disk:E:"), res
+            assert library._summary()["drive"] == "E:"
+    finally:
+        storage.shutil, storage.drive_of = saved
+        library.invalidate()
+    return "E: judged, named by the guard, Doctor and the Library"
+
+
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
 def u_perf_history():
     from undercover.frontman import history as hstore, pipeline
@@ -15608,7 +15645,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

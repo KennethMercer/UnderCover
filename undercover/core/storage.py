@@ -59,6 +59,57 @@ def _inside(a: Path, b: Path) -> bool:
     return a == b or a.startswith(b.rstrip("\\/") + os.sep)
 
 
+# ---------------------------------------------------------------- free space where the work writes
+
+WORK_KEYS = ("cache_dir", "output_dir", "voices_dir")   # where GPU work writes: stems and trainings, covers, voices
+MIN_WORK_FREE = 3e9   # under this on any of them, covers and trainings refuse to start (failing halfway leaves partial files)
+
+
+def _existing(p: Path) -> Path:
+    """p, or its nearest folder that exists (a folder not made yet is on its parent's drive)."""
+    p = Path(os.path.abspath(p))
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    return p
+
+
+def drive_of(p: Path) -> str:
+    """The drive a folder is on, as people read it: "E:" on Windows, the mount point elsewhere."""
+    p = _existing(p)
+    d = os.path.splitdrive(str(p))[0]
+    if d:
+        return d.upper()
+    while not os.path.ismount(p) and p.parent != p:
+        p = p.parent
+    return str(p)
+
+
+def work_space(keys=WORK_KEYS) -> list:
+    """[(drive, free bytes, folder)] for each drive the given [paths] folders are on (one per drive), least free first:
+    after a Storage move the work's files may be on another drive than the app (the maintainers' notes, bug hunt
+    2026-11-08: the guard looked at the app's drive)."""
+    out, seen = [], set()
+    for key in keys:
+        try:
+            p = path(key)
+            drive = drive_of(p)
+            if drive in seen:
+                continue
+            seen.add(drive)
+            out.append((drive, shutil.disk_usage(_existing(p)).free, p))
+        except OSError:
+            continue
+    return sorted(out, key=lambda t: t[1])
+
+
+def low_work_space() -> tuple | None:
+    """(drive, free bytes) of the first drive the work writes to that has under MIN_WORK_FREE, or None."""
+    for drive, free, _ in work_space():
+        if free < MIN_WORK_FREE:
+            return drive, free
+    return None
+
+
 def refuse(paths, from_room: bool = False, confirmed: bool = False) -> str | None:
     """Why these folders may not be moved or deleted (None = they may). See the module's "Safety" notes."""
     for p in paths:

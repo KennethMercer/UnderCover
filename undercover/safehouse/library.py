@@ -244,7 +244,8 @@ def _summary() -> dict:
     }
     for g in groups.values():
         g.pop("inside", None)
-    du = shutil.disk_usage(ROOT)
+    # the free space that counts: the drive the work writes to with the least (the one jobs refuse on), not the app's
+    drive, free, _ = (storage.work_space() or [(storage.drive_of(ROOT), shutil.disk_usage(ROOT).free, ROOT)])[0]
     cv, sp = covers(), speak.list_speech()
     counts = {"covers": len(cv), "speech": len(sp), "songs": len(_song_metas()),
               "voices": len(list(path("voices_dir").glob("*/meta.json"))),
@@ -253,7 +254,7 @@ def _summary() -> dict:
     # voices and training are always kept (and have no Recent)
     tabs = {"kept": {**counts, "covers": sum(1 for x in cv if x["kept"]), "speech": sum(1 for x in sp if x["kept"])},
             "recent": {"covers": sum(1 for x in cv if x["recent"]), "speech": sum(1 for x in sp if x["recent"])}}
-    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": du.free, "drive": str(ROOT.anchor).rstrip("\\"),
+    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": free, "drive": drive,
             **ytdlp_info(), "counts": counts, "tabs": tabs}
 
 

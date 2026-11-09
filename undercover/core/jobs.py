@@ -5,14 +5,13 @@ Every module's GPU work is a Job run by `gpu_worker`, so the models stay loaded 
 """
 import os
 import queue
-import shutil
 import threading
 import time
 import traceback
 import uuid
 from pathlib import Path
 
-from .config import CONFIG, ROOT, path
+from .config import CONFIG, path
 
 
 class Cancelled(Exception):
@@ -557,15 +556,15 @@ def run_job(job: "Job", fn):
     if STATUS.get("gpu_problem"):
         job.finish("error", message=STATUS["gpu_problem"])
         return
-    free = shutil.disk_usage(ROOT).free
-    if free < 3e9:   # separations, conversions and trainings write GBs; failing halfway leaves partial files
-        job.finish("error", message=f"Only {free / 1e9:.1f} GB free on drive {ROOT.anchor.rstrip(chr(92))}. "
+    from . import storage
+    low = storage.low_work_space()   # (separations, conversions and trainings write GBs where the working files,
+    if low:                          # covers and voices are: failing halfway leaves partial files)
+        job.finish("error", message=f"Only {low[1] / 1e9:.1f} GB free on drive {low[0]}. "
                                     "Free some space (Library → Clean up) and try again.")
         return
     if job.cancel:
         job.finish("cancelled", message="Cancelled.")
         return
-    from . import storage
     if storage.MOVING:   # SafeHouse is moving UnderCover's files: nothing may read or write them meanwhile
         job.finish("error", message="UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done.")
         return
