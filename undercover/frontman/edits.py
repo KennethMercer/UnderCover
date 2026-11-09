@@ -47,7 +47,7 @@ EDGE_S = 0.05                    # this close to the song's start or end, an edg
 EDIT_ID = re.compile(r"e[0-9]{1,7}")   # (ids only go up, undo or not)
 STATE = re.compile(r"[0-9a-f]{16}")
 FIELDS = ("op", "part", "who", "octave", "t0", "t1", "words", "words_hash", "section", "by", "note")
-STORED = ("id", "op", "part", "who", "octave", "by", "note", "t0", "t1", "words", "at", "moved", "files", "from_s")
+STORED = ("id", "op", "part", "who", "octave", "by", "note", "t0", "t1", "words", "at", "moved", "files", "from_s", "follow")
 SECTION_KINDS = ("verse", "chorus")
 PITCH = "pitch.npz"              # the lead's and the backing's pitch tracks (Hz, 100 a second), for pricing an octave edit
 MAX_PITCH = 8_000_000            # pitch.npz over this isn't one the app wrote
@@ -202,9 +202,17 @@ def _sound(doc, cover_id: str) -> dict:
         t0, t1 = _num(e["t0"], "edits"), _num(e["t1"], "edits")
         if not 0 <= t0 < t1 <= duration + 1:
             raise ValueError("edits")
-        if not isinstance(e.get("files"), dict) or set(e["files"]) - {e["part"]}:
+        follow = e.get("follow")   # (a lead's singer the backing follows, under "The other singer": the backing's own stretch)
+        if follow is not None:
+            if e["op"] != "singer" or e["part"] != "lead" or not isinstance(follow, list) or len(follow) != 2:
+                raise ValueError("edits")
+            f0, f1 = _num(follow[0], "edits"), _num(follow[1], "edits")
+            if not 0 <= f0 < f1 <= duration + 1:
+                raise ValueError("edits")
+            t0 = min(t0, f0)   # (where its snippets start)
+        if not isinstance(e.get("files"), dict) or set(e["files"]) - {e["part"], *(("backing",) if follow else ())}:
             raise ValueError("edits")
-        if any(n != snippet_name(e) for n in e["files"].values()):   # (no other file name is ever read from this list)
+        if any(n != snippet_name(e, k) for k, n in e["files"].items()):   # (no other file name is ever read from this list)
             raise ValueError("edits")
         if e["files"] and not 0 <= _num(e["from_s"], "edits") <= t0:
             raise ValueError("edits")
@@ -232,8 +240,9 @@ def save(doc: dict):
     fsutil.write_text(d / "edit.json", json.dumps(doc))
 
 
-def snippet_name(edit: dict) -> str:
-    return f"{edit['id']}-{edit['part']}.flac"
+def snippet_name(edit: dict, part: str | None = None) -> str:
+    """An edit's snippet for a part: its own, or the backing a lead edit moved with it (`follow`)."""
+    return f"{edit['id']}-{part or edit['part']}.flac"
 
 
 def snap_points(lead16: np.ndarray, back16: np.ndarray | None, words: list) -> dict:
@@ -345,25 +354,37 @@ def _landed(doc: dict, t0: float, t1: float, a: tuple, b: tuple) -> str:
     dips = [n for n, e in (("start", a), ("end", b)) if e[1] == "dip"]
     if abs(a[0] - t0) <= MOVED_S and abs(b[0] - t1) <= MOVED_S and not dips:
         return ""
-    mid = lambda w: (w[1] + w[2]) / 2
-    say = lambda w: _quoted(w[0])
-    inside = [w for w in doc["words"] if a[0] <= mid(w) <= b[0]]
-    before = [w for w in doc["words"] if mid(w) < a[0]]
-    after = [w for w in doc["words"] if mid(w) > b[0]]
+    ws = doc["words"]
+    mid = lambda i: (ws[i][1] + ws[i][2]) / 2
+    text = lambda i: _quoted(ws[i][0]).casefold()
+    picked = [i for i in range(len(ws)) if t0 <= mid(i) <= t1]
+
+    def say(i, nb):
+        """A word an edge is next to; one whose text the pick also has elsewhere goes with its neighbour (nb: -1 the word before
+        it, +1 the one after), so "ends just after "you"" never reads as another "you" in the pick (Internal Affairs H2)."""
+        if not any(j != i and text(j) == text(i) for j in picked) or not 0 <= i + nb < len(ws):
+            return _quoted(ws[i][0])
+        return " ".join(_quoted(ws[j][0]) for j in sorted((i, i + nb)))
+    inside = [i for i in range(len(ws)) if a[0] <= mid(i) <= b[0]]
+    before = [i for i in range(len(ws)) if mid(i) < a[0]]
+    after = [i for i in range(len(ws)) if mid(i) > b[0]]
     # the word next to where an edge landed: one it left out when it moved in past a word asked for, else the stretch's own
     out0 = before[-1] if a[0] > t0 + MOVED_S and before and mid(before[-1]) > t0 else None
     out1 = after[0] if b[0] < t1 - MOVED_S and after and mid(after[0]) < t1 else None
-    start = ("at the top of the song" if a[0] <= EDGE_S else f"just after \"{say(out0)}\"" if out0
-             else f"just before \"{say(inside[0])}\"" if inside else f"at {_clock(a[0])}")
-    end = ("at the end of the song" if b[0] >= doc["duration"] - EDGE_S else f"just before \"{say(out1)}\"" if out1
-           else f"just after \"{say(inside[-1])}\"" if inside else f"at {_clock(b[0])}")
+    start = ("at the top of the song" if a[0] <= EDGE_S else f"just after \"{say(out0, -1)}\"" if out0 is not None
+             else f"just before \"{say(inside[0], 1)}\"" if inside else f"at {_clock(a[0])}")
+    end = ("at the end of the song" if b[0] >= doc["duration"] - EDGE_S else f"just before \"{say(out1, 1)}\"" if out1 is not None
+           else f"just after \"{say(inside[-1], -1)}\"" if inside else f"at {_clock(b[0])}")
     heard = "; both joins may be heard" if len(dips) == 2 else f"; the join at its {dips[0]} may be heard" if dips else ""
     return f"It starts {start} and ends {end} ({_clock(a[0])}–{_clock(b[0])}){heard}."
 
 
-def check_edit(req, doc: dict) -> dict:
+def check_edit(req, doc: dict, item: dict | None = None) -> dict:
     """The one gate for an edit, from the page or an AI: every field, the stretch resolved and its edges snapped, and the plan
-    it leaves checked -> the edit as it will be stored (no files yet). ModelError with a plain sentence; the list is unchanged."""
+    it leaves checked -> the edit as it will be stored (no files yet). ModelError with a plain sentence; the list is unchanged.
+    item: the cover's history line. Under "The other singer" (duet_backing "other") the backing is sung by whoever isn't on the
+    lead, so a stretch's lead given to the other singer takes its backing with it (`follow`), wherever no backing edit of the
+    user's stands, and the edit says so (Internal Affairs H3)."""
     if not isinstance(req, dict) or set(req) - set(FIELDS):
         raise ModelError("That edit has something UnderCover doesn't know in it.")
     clean = _fields_of(req)
@@ -385,11 +406,27 @@ def check_edit(req, doc: dict) -> dict:
             raise ModelError(f"There's no place to change near the {name}" + (f", at \"{word}\"." if word else "."))
     if b[0] - a[0] < MIN_EDIT_S:
         raise ModelError("That's too short a stretch to change.")
-    moved = _landed(doc, t0, t1, a, b)[:MAX_SAID]
+    moved = _landed(doc, t0, t1, a, b)
     words = [i for i, w in enumerate(doc["words"]) if a[0] <= (w[1] + w[2]) / 2 <= b[0]]
     n = 1 + max((int(e["id"][1:]) for e in doc["edits"]), default=0) if doc["edits"] else 1
     edit = {"id": f"e{n}", **clean, "t0": a[0], "t1": b[0], "words": [words[0], words[-1]] if words else None,
-            "at": time.strftime("%Y-%m-%d %H:%M:%S"), "moved": moved, "files": {}}
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"), "moved": moved[:MAX_SAID], "files": {}}
+    opts = _options(item) if clean["op"] == "singer" and clean["part"] == "lead" and doc["backing"] and item is not None else None
+    if opts is not None and opts.duet_backing == "other":
+        # the backing's edges at its own silences, as its base plan changes hands, so no phrase changes voice halfway (else the
+        # lead's, crossfaded as any edit)
+        f0 = snap(a[0], "backing", doc)
+        f1 = snap(b[0], "backing", doc, f0[0] if f0 else a[0])
+        span = [f0[0] if f0 else a[0], f1[0] if f1 else b[0]]
+        if span[1] - span[0] < MIN_EDIT_S:
+            span = [a[0], b[0]]
+        was = [p[:4] for p in compile_list(doc, live)["backing"]]
+        got = compile_list(doc, live + [{**edit, "follow": span}])["backing"]
+        if [p[:4] for p in got] != was:   # (theirs all through: nothing moves, nothing's said)
+            to = duets._other(clean["who"])
+            kept = any(p[2] != to for p in got if span[0] <= p[0] and p[1] <= span[1])   # (a backing edit of the user's stands)
+            said = f"The backing goes to {label_of(_voice_of(to, opts))} with it" + (", except where you changed it." if kept else ".")
+            edit["follow"], edit["moved"] = span, f"{moved[:MAX_SAID - len(said) - 1]} {said}".strip()[:MAX_SAID]
     done = compile_list(doc, live + [edit])
     if any(p[2] == ORIGINAL and p[3] is not None for p in done["backing"]):
         raise ModelError("The song's own backing stays at its own pitch.")
@@ -403,17 +440,21 @@ def check_edit(req, doc: dict) -> dict:
 # ------------------------------------------------------------ what the list comes to
 
 
-def _paint(parts: list, edit: dict, own: dict) -> list:
+def _paint(parts: list, edit: dict, own: dict, follow: str | None = None, theirs: tuple = ()) -> list:
     """One edit over parts [s, e, who, octave, src, base]. octave: None is the singer's own for the song. src: the edit that
-    set this part, None when it's the base's. A part painted back to what the base has there is the base's again."""
+    set this part, None when it's the base's. A part painted back to what the base has there is the base's again.
+    follow: the singer a lead edit gives the backing (the one not on the lead), over every part outside the stretches in `theirs`
+    (the user's own backing edits so far, which stand: one that gave a part back to the base's singer too)."""
     t0, t1 = edit["t0"], edit["t1"]
     out = []
     for s, e, who, oct_, src, base in parts:
         cuts = sorted({s, e, *[t for t in (t0, t1) if s < t < e]})
         for a, b in zip(cuts, cuts[1:]):
             w, o, c = who, oct_, src
-            if a >= t0 and b <= t1:
-                if edit["op"] == "singer":
+            if a >= t0 and b <= t1 and not (follow and any(x <= a and b <= y for x, y in theirs)):
+                if follow:
+                    w, o = follow, None
+                elif edit["op"] == "singer":
                     w, o = edit["who"], None
                 else:
                     o = None if w != ORIGINAL and edit["octave"] == own[w] else edit["octave"]
@@ -451,9 +492,13 @@ def compile_list(doc: dict, edits: list | None = None) -> dict:
     out = {}
     for part, plan in (("lead", doc["plan"]), ("backing", doc["backing_plan"])):
         parts = [[s, e, w, None, None, w] for s, e, w in plan]
+        theirs = []
         for ed in live:
             if ed["part"] == part:
                 parts = _paint(parts, ed, doc["octaves"])
+                theirs.append((ed["t0"], ed["t1"]))
+            elif part == "backing" and ed.get("follow"):   # (a lead's singer: the backing by the other one, over its own stretch)
+                parts = _paint(parts, {**ed, "t0": ed["follow"][0], "t1": ed["follow"][1]}, doc["octaves"], duets._other(ed["who"]), theirs)
         out[part] = _merged(parts)
     return out
 
@@ -550,8 +595,9 @@ def _render(engine, item: dict, doc: dict, edit: dict, report) -> None:
     (singer, octave) in it converted once. A stretch the edit gave back to the base needs nothing."""
     import soundfile as sf
     from ..core.engine.convert import load_16k
-    mine = [p for p in compile_list(doc, doc["edits"][:doc["cursor"]] + [edit])[edit["part"]] if p[4] == edit["id"]]
-    if not mine:
+    done = compile_list(doc, doc["edits"][:doc["cursor"]] + [edit])
+    todo = [(part, mine) for part in PARTS if (mine := [p for p in done[part] if p[4] == edit["id"]])]   # (a lead's backing too: follow)
+    if not todo:
         return
     opts = _options(item)
     song = Path(item.get("song") or "")
@@ -559,32 +605,37 @@ def _render(engine, item: dict, doc: dict, edit: dict, report) -> None:
     key, _ = pitch_plan(opts)
     s = conversion_settings(opts, song)
     stems = _stems(engine, item, doc, opts)
-    src = load_16k(stems["vocals" if edit["part"] == "lead" else "backing"])
-    sr = sf.info(str(base_files(item, doc)[edit["part"]])).samplerate
-    at = max(0.0, edit["t0"] - PAD_S)
-    end = min(len(src) / duets.SR16, edit["t1"] + PAD_S)
-    chunk = src[int(at * duets.SR16):int(end * duets.SR16)]
-    out = np.zeros(int(round((end - at) * sr)), np.float32)
-    takes = {}
-    each = sorted({(p[2], p[3]) for p in mine}, key=str)
-    for n, (who, oct_) in enumerate(each):
-        if who == ORIGINAL:
-            takes[(who, oct_)] = _original(stems, key, at, end, sr)
-            continue
-        o = doc["octaves"][who] if oct_ is None else oct_
-        y, ysr = engine.converter.convert(chunk, _voice_of(who, opts), replace(s, pitch=key + 12 * o, one_line=edit["part"] == "backing"),
-                                          progress=lambda f, n=n: report(0.1 + 0.8 * (n + f) / len(each), "Singing the change"))
-        takes[(who, oct_)] = _to_rate(y, ysr, sr)
-    for p in mine:
-        y = takes[(p[2], p[3])]
-        y = y[:len(out)]
-        s0 = at if p is mine[0] else p[0]
-        s1 = end if p is mine[-1] else p[1]
-        overlay(out, y, 0.0, max(0.0, s0 - at), s1 - at, sr)
-    d = folder(doc["cover"])
-    d.mkdir(parents=True, exist_ok=True)
-    sf.write(str(d / snippet_name(edit)), np.clip(out, -1, 1), sr, subtype="PCM_24")
-    edit["files"] = {edit["part"]: snippet_name(edit)}
+    d, base = folder(doc["cover"]), base_files(item, doc)
+    t0, t1 = edit["t0"], edit["t1"]
+    if edit.get("follow"):   # (the backing's own stretch: one start for both snippets)
+        t0, t1 = min(t0, edit["follow"][0]), max(t1, edit["follow"][1])
+    at, files = max(0.0, t0 - PAD_S), {}
+    for k, (part, mine) in enumerate(todo):
+        src = load_16k(stems["vocals" if part == "lead" else "backing"])
+        sr = sf.info(str(base[part])).samplerate
+        end = min(len(src) / duets.SR16, t1 + PAD_S)
+        chunk = src[int(at * duets.SR16):int(end * duets.SR16)]
+        out = np.zeros(int(round((end - at) * sr)), np.float32)
+        takes = {}
+        each = sorted({(p[2], p[3]) for p in mine}, key=str)
+        for n, (who, oct_) in enumerate(each):
+            if who == ORIGINAL:
+                takes[(who, oct_)] = _original(stems, key, at, end, sr)
+                continue
+            o = doc["octaves"][who] if oct_ is None else oct_
+            y, ysr = engine.converter.convert(chunk, _voice_of(who, opts), replace(s, pitch=key + 12 * o, one_line=part == "backing"),
+                                              progress=lambda f, n=n, k=k, m=len(each): report(0.1 + 0.8 * (k + (n + f) / m) / len(todo), "Singing the change"))
+            takes[(who, oct_)] = _to_rate(y, ysr, sr)
+        for p in mine:
+            y = takes[(p[2], p[3])]
+            y = y[:len(out)]
+            s0 = at if p is mine[0] else p[0]
+            s1 = end if p is mine[-1] else p[1]
+            overlay(out, y, 0.0, max(0.0, s0 - at), s1 - at, sr)
+        d.mkdir(parents=True, exist_ok=True)
+        sf.write(str(d / snippet_name(edit, part)), np.clip(out, -1, 1), sr, subtype="PCM_24")
+        files[part] = snippet_name(edit, part)
+    edit["files"] = files
     edit["from_s"] = round(at, 3)
 
 
@@ -614,7 +665,7 @@ def _take(item: dict, doc: dict, part: str, base: Path, parts: list) -> Path:
     for p in parts:
         if p[4]:
             e = by_id[p[4]]
-            z, zsr = sf.read(str(d / snippet_name(e)), dtype="float32", always_2d=False)
+            z, zsr = sf.read(str(d / snippet_name(e, part)), dtype="float32", always_2d=False)
             if zsr != sr:
                 raise ModelError("An edit's snippet doesn't match this cover. Undo it and make it again.")
             overlay(y, z, e["from_s"], p[0], p[1], sr)
@@ -673,14 +724,14 @@ def apply(engine, item: dict, req: dict, report) -> dict:
     if doc is None:
         raise ModelError("This cover's edit list has gone. Open it again.")
     try:
-        edit = check_edit(req, doc)
+        edit = check_edit(req, doc, item)
     except ValueError as e:
         raise ModelError(str(e)) from None
     d = folder(item["id"])
     if sum(f.stat().st_size for f in d.glob("e*.flac")) > MAX_BYTES:
         raise ModelError("This cover's edits have grown too large. Keep it, and go on from the new one.")
     report(0.05, "Singing the change")
-    mine = d / snippet_name(edit)
+    mine = [d / snippet_name(edit, p) for p in PARTS]
     live = doc["edits"][:doc["cursor"]]
     new = {**doc, "edits": live + [edit], "cursor": len(live) + 1}
     try:
@@ -688,10 +739,10 @@ def apply(engine, item: dict, req: dict, report) -> dict:
         report(0.9, "Mixing the song")
         mix(engine, item, new)
     except BaseException:   # (cancelled too)
-        _drop([mine])
+        _drop(mine)
         raise
     save(new)
-    _drop([d / snippet_name(e) for e in doc["edits"][doc["cursor"]:]])
+    _drop([d / snippet_name(e, p) for e in doc["edits"][doc["cursor"]:] for p in PARTS])
     hstore.update(item["id"], edits=len(new["edits"]))
     try:
         if not pitch_of(new):   # (a list from before pitch tracks: read now, so the next octave edit is priced)

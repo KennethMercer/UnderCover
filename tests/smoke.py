@@ -10093,7 +10093,7 @@ def u_edits():
     src = (Path(ROOT) / "undercover" / "frontman" / "pipeline.py").read_text(encoding="utf-8")
     assert "edits.at_make(res.id" in src and "heard.update(words=words, rows=rows)" in src
     assert '"edits": h.get("edits") or 0' in src
-    assert 'one_line=edit["part"] == "backing"' in (Path(ROOT) / "undercover" / "frontman" / "edits.py").read_text(encoding="utf-8")
+    assert 'one_line=part == "backing"' in (Path(ROOT) / "undercover" / "frontman" / "edits.py").read_text(encoding="utf-8")
     # chorus "keep": the cover silenced the lead's leftovers under the lines kept in the backing, and the list sings from that lead too
     with isolated_data():
         from undercover.core.config import path
@@ -11095,7 +11095,156 @@ def u_duet_shape_words():
     assert e["moved"] == 'It starts just before "oh" and ends just after "Baby" (0:09–0:13).', e
     # edges where they were asked: nothing to say (the page says where it starts and ends itself)
     assert pick("lead", [5, 5])["moved"] == ""
-    return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
+    # an end that runs on into the next line names a word the pick also has: with its neighbour, so it can't read as the pick's own (H2)
+    ws2 = [[" oh", 10.0, 12.9], [" Baby,", 12.9, 13.4], [" can't", 13.6, 13.8], [" you", 13.9, 14.2], [" see?", 14.3, 14.6],
+           [" calling?", 17.5, 17.9], [" A", 18.0, 18.1], [" guy", 18.1, 18.2], [" like", 18.2, 18.3], [" you", 18.3, 18.45]]
+    lead2 = tone((10.0, 13.4), (13.6, 18.5))
+    on = E.new_doc("0123456789", ws2, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead2, back, ws2), gate, True, True)
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "words": [1, 5], "words_hash": on["words_hash"]}, on)
+    assert e["moved"].startswith('It starts just after "Baby" and ends just after "like you" (0:13–0:18)'), e
+    ws3 = [list(w) for w in ws2]
+    ws3[3][0] = " we"   # (the pick has no "you": the word stands alone)
+    on = E.new_doc("0123456789", ws3, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead2, back, ws3), gate, True, True)
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "words": [1, 5], "words_hash": on["words_hash"]}, on)
+    assert e["moved"].startswith('It starts just after "Baby" and ends just after "you" (0:13–0:18)'), e
+    ws4 = [list(w) for w in ws2]
+    ws4[1][0] = " you,"   # a start that moved in past a word the pick has again: with its neighbour too
+    on = E.new_doc("0123456789", ws4, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead2, back, ws4), gate, True, True)
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "words": [1, 5], "words_hash": on["words_hash"]}, on)
+    assert e["moved"].startswith('It starts just after "oh you" and ends just after "like you" (0:13–0:18)'), e
+    return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out; a word the pick also has"
+
+
+@check("Shape it under \"The other singer\" (Internal Affairs H3): a stretch's lead given to the other singer takes its backing with it, and says so; a backing edit of the user's there stands; the other backings are untouched; both snippets sung and read back")
+def u_duet_follow():
+    import json as J
+    from types import SimpleNamespace
+    import numpy as np
+    import soundfile as sf
+    from undercover.frontman import duets as D, edits as E, history as H
+    words = [[f" w{i}", 2.0 + i * 0.5, 2.4 + i * 0.5, 0.9] for i in range(100)]
+    rows = [{"t0": 2.0, "t1": 20.0, "text": "", "rep": False}, {"t0": 21.0, "t1": 40.0, "text": "", "rep": True}, {"t0": 41.0, "t1": 52.0, "text": "", "rep": False}]
+    plan = [[0.0, 20.5, "B"], [20.5, 60.0, "A"]]
+    pts = {"lead": [[20.0, 21.0], [40.0, 41.0]], "backing": [[20.0, 21.0], [30.0, 31.0], [40.0, 41.0]], "dips": []}
+    gate = {"instrument": [], "chorus": [], "mode": "keep"}
+    fresh = lambda i="0123456789": E.new_doc(i, words, rows, plan, D.other_singer(plan), 60.0, {"A": 0, "B": -1}, pts, gate, True, True)
+    line = lambda how: {"voice": "mj", "options": {"voice": "mj", "duet_voice": "bw", "duet_plan": plan, "duet_backing": how}}
+    lead = {"op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4}
+    doc = fresh()
+    for how in (None, "singers", "original"):   # the other backings: nothing follows
+        e = E.check_edit(lead, doc, line(how))
+        assert "follow" not in e and e["moved"] == "", e
+    assert "follow" not in E.check_edit(lead, doc)   # (no history line: as before)
+    e = E.check_edit(lead, doc, line("other"))
+    assert e["follow"] == [20.4, 40.4] and e["moved"] == "The backing goes to mj with it.", e
+    doc["edits"], doc["cursor"] = [e], 1
+    assert [p[:5] for p in E.compile_list(doc)["backing"]] == [[0.0, 20.5, "A", None, None], [20.5, 40.4, "A", None, "e1"], [40.4, 60.0, "B", None, None]], E.compile_list(doc)
+    # the landing sentence comes first, then the backing's
+    e = E.check_edit({**lead, "t0": 19.0}, fresh(), line("other"))
+    assert e["moved"].startswith("It starts just after ") and e["moved"].endswith("). The backing goes to mj with it."), e
+    # a backing edit of the user's on that stretch stands, before the lead's edit or after it
+    # (B is the base's backing there: an edit that gives it back to the base's singer stands too)
+    for who, src in (("B", None), ("original", "e1")):
+        d = fresh()
+        bk = E.check_edit({"op": "singer", "part": "backing", "who": who, "t0": 29.0, "t1": 31.0}, d)
+        d["edits"], d["cursor"] = [bk], 1
+        e = E.check_edit(lead, d, line("other"))
+        assert e["moved"] == "The backing goes to mj with it, except where you changed it.", e
+        d["edits"], d["cursor"] = [bk, e], 2
+        back = E.compile_list(d)["backing"]
+        assert [p[2:5] for p in back if bk["t0"] <= p[0] and p[1] <= bk["t1"]] == [[who, None, src]], back
+        assert [p[2:5] for p in back if 20.5 <= p[0] and p[1] <= 40.4 and not (bk["t0"] <= p[0] and p[1] <= bk["t1"])] == [["A", None, "e2"]] * 2, back
+        d = fresh()
+        e = E.check_edit(lead, d, line("other"))
+        d["edits"], d["cursor"] = [e], 1
+        bk = E.check_edit({"op": "singer", "part": "backing", "who": who, "t0": 29.0, "t1": 31.0}, d)
+        d["edits"], d["cursor"] = [e, bk], 2
+        assert [p[2:5] for p in E.compile_list(d)["backing"] if bk["t0"] <= p[0] and p[1] <= bk["t1"]] == [[who, None, None if who == "B" else "e2"]]
+    whole = fresh()
+    mine = E.check_edit({"op": "singer", "part": "backing", "who": "B", "t0": 20.4, "t1": 40.4}, whole)
+    whole["edits"], whole["cursor"] = [mine], 1
+    e = E.check_edit(lead, whole, line("other"))   # theirs all through: nothing moves, nothing said
+    assert "follow" not in e and e["moved"] == "", e
+    # the backing's edges land at its own silences, so none of its phrases changes voice halfway; with none near, at the lead's
+    own = {**fresh(), "points": {**pts, "backing": [[18.6, 19.4], [41.2, 42.0]]}}
+    e = E.check_edit(lead, own, line("other"))
+    assert (e["t0"], e["t1"]) == (20.4, 40.4) and 18.6 < e["follow"][0] < 19.4 and 41.2 < e["follow"][1] < 42.0, e
+    own["edits"], own["cursor"] = [e], 1
+    f1 = e["follow"][1]   # (from the backing's silence before it, A is the base's backing already)
+    assert [p[:5] for p in E.compile_list(own)["backing"]] == [[0.0, 20.5, "A", None, None], [20.5, f1, "A", None, "e1"], [f1, 60.0, "B", None, None]], E.compile_list(own)
+    e = E.check_edit(lead, {**fresh(), "points": {**pts, "backing": []}}, line("other"))
+    assert e["follow"] == [20.4, 40.4], e
+    # stored: follow is the backing's stretch, and only on a lead's singer; its backing snippet is named as its own is
+    with isolated_data():
+        ok = fresh("abcdef0123")
+        f = E.folder("abcdef0123") / "edit.json"
+        E.save(ok)
+        sn = {"id": "e1", "op": "singer", "part": "lead", "who": "B", "t0": 20.4, "t1": 40.4, "from_s": 18.5, "at": "", "moved": "",
+              "follow": [19.0, 41.0], "files": {"lead": "e1-lead.flac", "backing": "e1-backing.flac"}}
+
+        def stored(**k):
+            f.write_text(J.dumps({**ok, "edits": [{**sn, **k}], "cursor": 1}), encoding="utf-8")
+            return E.load("abcdef0123")
+        assert stored() is not None
+        for k in ({"follow": True}, {"follow": False}, {"follow": 1}, {"follow": "yes"}, {"follow": [19.0]}, {"follow": [41.0, 19.0]}, {"follow": [19.0, 900.0]},
+                  {"follow": ["19", 41.0]}, {"follow": [float("nan"), 41.0]}, {"follow": [19.0, 41.0, 42.0]}, {"from_s": 19.5}, {"op": "octave", "octave": 1}, {"part": "backing", "files": {"backing": "e1-backing.flac"}},
+                  {"files": {"lead": "e1-lead.flac", "backing": "e1-lead.flac"}}, {"files": {"lead": "e1-lead.flac", "backing": "../e1-backing.flac"}}):
+            assert stored(**k) is None, k
+        f.write_text(J.dumps({**ok, "edits": [{k: v for k, v in sn.items() if k != "follow"}], "cursor": 1}), encoding="utf-8")
+        assert E.load("abcdef0123") is None   # (a backing snippet without follow)
+    # a whole edit with a stand-in converter: both snippets sung, each in its own singer and its own line, laid over their takes
+    with isolated_data():
+        from undercover.core.config import path
+        sr = 40000
+        work = path("cache_dir") / "converted"
+        work.mkdir(parents=True, exist_ok=True)
+        st = {}
+        for k in ("vocals", "backing", "instrumental"):
+            st[k] = work.parent / f"{k}.flac"
+            sf.write(str(st[k]), np.zeros((16000 * 60, 1), np.float32), 16000)
+        a, b = work / "lead.flac", work / "back.flac"
+        sf.write(str(a), np.full(sr * 60, 0.1, np.float32), sr, subtype="PCM_24")
+        sf.write(str(b), np.full(sr * 60, 0.1, np.float32), sr, subtype="PCM_24")
+        song = path("uploads_dir") / "s.flac"
+        song.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(song), np.zeros((16000, 1), np.float32), 16000)
+        out = path("output_dir") / "cover.flac"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(out), np.zeros((16000, 1), np.float32), 16000)
+        it = H.record({"output": str(out), "song": str(song), "voice": "mj", "stems": {k: str(v) for k, v in st.items()}, "converted_vocal": str(a),
+                       "converted_backing": str(b), "title": "T", "options": {**line("other")["options"], "key": 0, "octave": 0, "duet_octave": -1}})
+        E.save(fresh(it["id"]))
+        calls = []
+
+        def convert(x, voice, s, progress=None):
+            calls.append((voice, s.one_line))
+            return np.full(int(len(x) / 16000 * 48000), 0.9 if s.one_line else 0.7, np.float32), 48000
+        rmvpe = SimpleNamespace(infer_from_audio=lambda au, thred, one_line=False: np.full(len(au) // 160 + 1, 200.0, np.float32))
+        engine = SimpleNamespace(converter=SimpleNamespace(convert=convert, rmvpe=rmvpe), separator=None)
+        real_mix = E.mix
+
+        def stand_in(en, i, doc):
+            done = E.compile_list(doc)
+            base = E.base_files(i, doc)
+            for part in E.PARTS:
+                E._take(i, doc, part, base[part], done[part])
+            return E._promote(E.folder(i["id"]), None)
+        E.mix = stand_in
+        try:
+            doc = E.apply(engine, it, lead, lambda *x: None)
+            assert sorted(calls) == [("bw", False), ("mj", True)], calls   # the lead in B's voice, the backing in A's, one line held
+            e1 = doc["edits"][0]
+            assert e1["follow"] == [20.4, 40.4] and e1["files"] == {"lead": "e1-lead.flac", "backing": "e1-backing.flac"} and e1["moved"] == "The backing goes to mj with it.", e1
+            assert E.load(it["id"])["edits"][0] == e1   # (read back as sound)
+            d = E.folder(it["id"])
+            back, _ = sf.read(str(d / "take-backing.flac"), dtype="float32")
+            assert abs(back[sr * 30] - 0.9) < 0.01 and abs(back[sr * 10] - 0.1) < 0.01 and abs(back[sr * 50] - 0.1) < 0.01
+            E.step(engine, it, 0)   # an edit after an undo cuts off both of the old one's snippets
+            E.apply(engine, it, {**lead, "who": "A", "t0": 0.0, "t1": 20.4}, lambda *x: None)
+            assert not (d / "e1-lead.flac").exists() and not (d / "e1-backing.flac").exists(), list(d.iterdir())
+        finally:
+            E.mix = real_mix
+    return "only under the other singer; said after the landing; the user's backing edit stands; stored as data; both snippets sung and cut off"
 
 
 @check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown; the first singer's chip has no 'lead' tag; Keep's sheet says a cover rolls off only when one will")
@@ -18569,7 +18718,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe, u_installer_pass12, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_vault_restore_forgets_voice, u_cleanup_guard,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden, u_shape_keys,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_follow, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden, u_shape_keys,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_link_offered, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk, u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause, u_not_english, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats, u_perf_validate, u_perf_stems_flac):
