@@ -13028,7 +13028,7 @@ def _page_selftest(body: str, routes: dict | None = None) -> str:
     return got.replace(" | ", "; ")
 
 
-@check("a fresh install's walk (InternalAffairs, 1.2): the demo voice in its own group in SpeakEasy (headless Chrome; skipped without it)")
+@check("a fresh install's walk (InternalAffairs, 1.2): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows (headless Chrome; skipped without it)")
 def u_first_walk():
     got = _page_selftest(r"""
     const V = (name, x) => ({ name, kind: "speaking", cadence: {}, ...x });
@@ -13040,6 +13040,16 @@ def u_first_walk():
     ok("F1 the demo voice sits under Demo voice", after($('#se-voices [data-v="agent-smoke"]')) === "Demo voice" && after($('#se-voices [data-v="some-other"]')).startsWith("Downloaded"));
     SE.voices = [V("agent-smoke", { demo: true, trained: false })]; seVoices();
     ok("F1 a fresh install: only Demo voice", $$("#se-voices .se-vgroup").map(h => h.textContent).join() === "Demo voice");
+    // F3: the tour's waiting tips name only what this view shows (Theme is a Deep Cover row)
+    const tipEl = document.createElement("span"); tipEl.id = "tour-tip-t"; document.body.append(tipEl);
+    const tipsSeen = () => { const seen = new Set(); for (let i = 0; i < 12; i++) { TOUR.tip = i; tourTip(true); seen.add(tipEl.textContent); } return [...seen]; };
+    setDeep(false); const basicTips = tipsSeen(); setDeep(true); const deepTips = tipsSeen(); setDeep(false);
+    ok("F3 basic view: no Themes tip", basicTips.length >= 5 && !basicTips.some(t => /^Themes/.test(t)));
+    ok("F3 Deep Cover: the Themes tip", deepTips.some(t => /^Themes, in Settings/.test(t)));
+    const phoneRow = $("#set-phone-row"), phoneWas = phoneRow.hidden;
+    phoneRow.hidden = false; const withPhone = tipsSeen(); phoneRow.hidden = true; const noPhone = tipsSeen(); phoneRow.hidden = phoneWas;
+    ok("F3 Your phone's tip only while its row shows", withPhone.some(t => /^Your phone/.test(t)) && !noPhone.some(t => /^Your phone/.test(t)));
+    tipEl.id = ""; TOUR.tip = 0;
 """)
     return got or "no Chrome here: skipped"
 

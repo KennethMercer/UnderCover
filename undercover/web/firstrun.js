@@ -121,7 +121,9 @@ function tourNow() {
 }
 function tourTip(first) {
   const t = $("#tour-tip-t"); if (!t) return;
-  const tips = TOUR_TIPS.filter(x => !/^Low profile/.test(x) || !$("#lp-chip")?.hidden);   // only what this copy shows
+  // only what this copy shows (Low profile, Your phone), and only what this view shows (Theme is a Deep Cover row)
+  const tips = TOUR_TIPS.filter(x => (!/^Low profile/.test(x) || !$("#lp-chip")?.hidden) && (!/^Your phone/.test(x) || !$("#set-phone-row")?.hidden)
+    && (!/^Themes/.test(x) || document.body.classList.contains("deep")));
   if (!first) TOUR.tip = (TOUR.tip + 1) % tips.length;
   TOUR.tipAt = Date.now();
   if (tourReduced() || first) { t.textContent = tips[TOUR.tip % tips.length]; return; }
