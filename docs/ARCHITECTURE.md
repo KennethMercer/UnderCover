@@ -296,6 +296,18 @@ pause. Every progress event carries `total_left` in seconds (`jobs.STAGES`, `cac
 (`logs/heartbeat*.jsonl`) records each running job's resume spec for the Doctor; `jobs.START_GATES` lets the game pause
 ask before a queued GPU job starts.
 
+A restart or quit (`POST /api/restart`, `/api/quit`) never ends work that Pause doesn't set aside (`server._unfinished_work`:
+every unfinished job but the pausable voice work, the speech engine's warm-up and a voice's preview line). It answers 409
+with what's running; a restart's 409 offers `now_ok` ("Restart now" stops it), except for a Storage move, an add-on, Make
+smaller or the yt-dlp update, which can't stop halfway and are waited for. A restart with voice work pauses it first
+(resumed by the next process: `worklist.RESTARTING` keeps this one's loop from resuming it), then waits for work started
+meanwhile, and is called off (the voice work resumes) if that hasn't finished in 10 minutes. A setting changed from the page
+never asks for a restart: `/api/status.stale` follows the code and its shipped defaults, not the user's `config.toml`.
+Every GPU job refuses to start with under 3 GB free on any drive holding the working files, covers or voices
+(`storage.work_space`, the drive named); the Doctor's free-space check and the Library's free line use the same list.
+While a Storage move runs, GPU jobs refuse, and uploads and installs (songs, voices, training recordings, themes) answer
+409; a move doesn't start while one is under way (`storage.start_writing`).
+
 ### Overnight queue
 
 `core/worklist.py` runs items one after another when the GPU is free, from a start time if set, and only items whose
