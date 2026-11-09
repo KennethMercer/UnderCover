@@ -16263,6 +16263,139 @@ def _users_server_training(since: float | None = None) -> set:
             and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
+@check("hardening of kept-alive connections: a request answered without its whole body read ends its connection, so the rest is never read as another request; one read in full keeps it; an upload that drops during a Storage move says the move")
+def u_body_close():
+    import http.server, inspect, socket, threading
+    from undercover.app import server
+
+    class H(server.Handler):
+        def do_POST(self):   # a refusal that reads no body (the upload routes' early answers), or a route that reads it all
+            if self.path == "/read":
+                self.rfile.read(int(self.headers["Content-Length"]))
+            body = b'{"error": "no"}'
+            self.send_response(409 if self.path == "/refuse" else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            seen.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+    seen = []
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def talk(raw: bytes) -> bytes:
+        c = socket.create_connection(srv.server_address, timeout=10)
+        c.sendall(raw)
+        got = b""
+        try:
+            while True:
+                d = c.recv(65536)
+                if not d:
+                    break
+                got += d
+        except socket.timeout:
+            got += b"<still open>"
+        c.close()
+        return got
+    try:
+        hidden = b"GET /smuggled HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        got = talk(b"POST /refuse HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: %d\r\n\r\n" % len(hidden) + hidden)
+        assert got.count(b"HTTP/1.1 ") == 1 and b" 409 " in got and b"<still open>" not in got, got
+        assert seen == [], f"the unread body was read as a request: {seen}"
+        two = b"POST /read HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 3\r\n\r\nabc"
+        got = talk(two + two + b"POST /refuse HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"
+                   + b"GET /after HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        assert got.count(b"HTTP/1.1 ") == 4 and seen == ["/after"], (got, seen)   # (read in full, or nothing to read: kept)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert '"moving": bool(storage.MOVING)' in inspect.getsource(server.Handler.do_GET)
+    app = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    train = (ROOT / "undercover" / "web" / "train.js").read_text(encoding="utf-8")
+    assert "async function uploadLost(fallback)" in app and app.count("await uploadLost(") == 2 and "await uploadLost(" in train
+    import ast   # a merge can leave a method twice in one class, the second silently replacing the first (11-08)
+    twice = []
+    for f in sorted((ROOT / "undercover").rglob("*.py")):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ClassDef):
+                names = [n.name for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and not any(isinstance(d, ast.Attribute) and d.attr in ("setter", "deleter") for d in n.decorator_list)]
+                twice += [f"{f.name}:{node.name}.{n}" for n in set(names) if names.count(n) > 1]
+    assert not twice, f"a method defined twice in one class: {twice}"
+    return "an unread body ends the connection; a read one keeps it; a dropped upload during a move says the move; no method twice"
+
+
+@check("the server's log keeps real errors only: a client that went away mid-request (closed tab, dropped connection) leaves nothing; any other error still leaves its traceback; two known library warnings are filtered by their own words")
+def u_quiet_drops():
+    import contextlib, http.server, io, socket, threading
+    from undercover.app import server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            raise {"/gone": ConnectionAbortedError, "/reset": ConnectionResetError, "/pipe": BrokenPipeError}.get(self.path, ValueError)("x")
+
+        def log_message(self, *a):
+            pass
+    srv = server.ExclusiveServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            for path in ("/gone", "/reset", "/pipe"):
+                c = socket.create_connection(srv.server_address, timeout=5)
+                c.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+                c.recv(10)   # (the handler ends; the connection closes)
+                c.close()
+            time.sleep(0.3)
+            assert err.getvalue() == "", err.getvalue()[:300]
+            c = socket.create_connection(srv.server_address, timeout=5)
+            c.sendall(b"GET /bug HTTP/1.1\r\nHost: x\r\n\r\n")
+            c.recv(10)
+            c.close()
+            for _ in range(20):
+                if "ValueError" in err.getvalue():
+                    break
+                time.sleep(0.1)
+        assert "ValueError" in err.getvalue(), "a real error lost its traceback"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    import inspect, warnings   # two library warnings repeated on every run: filtered by their own message, nothing wider
+    from undercover.core import quiet
+    from undercover.core.cadence import worker
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        quiet.known_warnings()
+        warnings.warn("Failed to launch Triton kernels, likely due to missing CUDA toolkit; falling back", UserWarning)
+        warnings.warn("`torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)`", FutureWarning)
+        warnings.warn("a library's own news", UserWarning)
+    assert [str(x.message) for x in w] == ["a library's own news"], [str(x.message) for x in w]
+    assert "known_warnings()" in inspect.getsource(server.main) and "known_warnings()" in inspect.getsource(worker.main)
+    return "dropped clients: nothing logged; a real error: its traceback; two known library warnings out of the logs"
+
+
+@check("a new user's likely failures say what to do: a full disk, the PC's own memory, no internet (rather than 'Something went wrong (OSError)'); anything else still points at the log")
+def u_plain_error2():
+    import socket, urllib.error
+    import requests
+    from undercover.core import jobs
+    with isolated_data():   # (the unknown errors write logs/errors.log: the test's own)
+        said = lambda e: jobs.friendly(e, "testing")
+        assert said(MemoryError()).startswith("The PC ran out of memory (RAM).")
+        assert said(OSError(28, "No space left on device")).startswith("The disk is full.")
+        if os.name == "nt":
+            assert said(OSError(None, "There is not enough space on the disk", None, 112)).startswith("The disk is full.")
+        for e in (urllib.error.URLError("x"), socket.gaierror(11001, "getaddrinfo failed"),
+                  requests.exceptions.ConnectionError("Max retries exceeded (Failed to establish a new connection)")):
+            assert said(e) == "UnderCover couldn't reach the internet. Check the connection and try again.", (type(e), said(e))
+        assert said(ConnectionResetError("x")).startswith("Something went wrong while testing"), "a dropped pipe isn't the internet"
+        assert said(OSError(13, "x")).startswith("Something went wrong") or "Windows blocked" in said(OSError(13, "x"))
+        return "disk full, RAM, no internet: plain; the rest: the log"
 @check("a night item's job names the training project it writes under (improve, a queued project, a new voice), so the real-folder check can tell the user's own server's training from a run's")
 def u_job_project():
     import inspect
@@ -16337,7 +16470,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

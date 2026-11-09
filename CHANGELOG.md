@@ -69,8 +69,17 @@ in brackets.
 - In Deep Cover, away from home can be private: only devices signed in to your Tailscale reach it, with nothing on
   the public internet.
 
+**Fixes** (quietdrops)
+- The server's log keeps real problems only: a closed tab or a dropped connection no longer leaves an error there.
+**Fixes** (plainerr2)
+- A full disk, the PC running out of memory and no internet connection each say what to do, instead of "Something went wrong".
+
 **Fixes** (tidy1)
 - A file that only looks like a song (nothing in it plays) is refused with a plain message.
+
+**Fixes** (bodyclose)
+- An upload that drops while UnderCover's files are being moved says so, instead of saying contact was lost.
+- Hardening of how the server answers an upload it refuses.
 
 ## 1.1.3 (2026-10-29)
 
