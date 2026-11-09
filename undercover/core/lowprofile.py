@@ -287,7 +287,8 @@ def apply(reserve_worker: bool = False):
     got = gpu.apply_cap(lim if lim is not None else float(card_gb() or 0) or None)
     from . import jobs
     jobs.STATUS["gpu_limit_gb"] = lim
-    _log(f"cap: server {lim if lim is not None else 'whole card'} GB, worker {STATE['worker_gb'] or 'none'} GB"
+    w = STATE["worker_gb"]
+    _log(f"cap: server {f'{lim} GB' if lim is not None else 'the whole card'}, worker {f'{w} GB' if w else 'none'}"
          + ("" if got is not None or lim is None else " (couldn't be applied)"))
 
 
