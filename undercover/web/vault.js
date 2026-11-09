@@ -95,8 +95,8 @@ function vtRow(x) {
     : x.here === "different" && !asking ? `<button class="linkbtn" type="button" data-vt-ask="${esc(key)}" data-pc>Restore…</button>` : "";
   return `<div class="vt-row"><span><b>${esc(x.name)}</b>${facts([{ t: `${x.files} file${x.files === 1 ? "" : "s"}`, deep: true }, { t: gb(x.bytes), deep: true }])}</span><span class="row">${state}${act}</span>
     ${asking ? `<div class="vt-choice"><span>The one here has changed since this copy. Bring the vault's back how?</span>
-      <button class="btn" type="button" data-vt-how="both">Keep both</button><button class="btn" type="button" data-vt-how="replace">Replace it</button><button class="linkbtn quiet" type="button" data-vt-how="cancel">Cancel</button>
-      <p class="meta">Keep both puts the vault's copy beside yours${x.kind === "voice" ? ` (as “${esc(x.name)} from vault”)` : x.kind === "project" ? " (as its own project)" : ""}. Replace copies the current one into the vault first, so nothing is lost.</p></div>` : ""}</div>`;
+      ${x.kind === "settings" ? "" : `<button class="btn" type="button" data-vt-how="both">Keep both</button>`}<button class="btn" type="button" data-vt-how="replace">Replace it</button><button class="linkbtn quiet" type="button" data-vt-how="cancel">Cancel</button>
+      <p class="meta">${x.kind === "settings" ? "A setting has one place, so it can't sit beside yours" : `Keep both puts the vault's copy beside yours${x.kind === "voice" ? ` (as “${esc(x.name)} from vault”)` : x.kind === "project" ? " (as its own project)" : ""}`}. Replace copies the current one into the vault first, so nothing is lost.</p></div>` : ""}</div>`;
 }
 function vtWireContents() {
   const find = key => { const [k, ...rest] = key.split(":"); return vtItems(k).find(x => x.item === rest.join(":")); };

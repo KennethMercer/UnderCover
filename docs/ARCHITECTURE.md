@@ -939,6 +939,11 @@ The installer and the app survive version mismatches and fix common problems the
 - Vaulting (`core/vault.py`): a quiet, incremental backup of what cannot be downloaded again (voices trained here, kept
   covers and speech, settings, the ear) to a folder on another drive, as plain files named by the SHA-256 of their
   original bytes, with a snapshot per run and a Restore that asks before replacing. Off until a folder is picked.
+  Replace puts every file it writes over into the vault first (whatever the vault's size) or replaces nothing; Keep both
+  brings a voice or project back as `<name>-from-vault` (then `-2`, ...) under its own name, a file as "(from vault)",
+  never over an earlier copy; settings have one place, so they offer Replace only. A restored config.toml keeps this
+  install's `[paths]` or isn't written. Clean up waits for every job, queued or running, and offers only old leftovers
+  from the separator's working folder.
 
 ## Tests, scripts and the installer
 

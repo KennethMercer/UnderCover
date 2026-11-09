@@ -72,6 +72,34 @@ def _guard(kinds=ALL_WORK):
             j.cancel = True
 
 
+PRESEP_WAIT_S = 20   # how long Clean up waits for a background separation it stopped
+
+
+def _guard_cleanup():
+    """Clean up's own guard, stricter than _guard: it reaches the working files every kind of job uses (the separator's
+    _work, stems, previews, a project's resume point), so it waits for ALL work, queued or running, whatever its kind
+    (2026-11-08: a list of kinds missed the overnight queue, transcribing, listening copies, Make smaller and the Doctor,
+    and took the separator's live output). A background separation is stopped and waited for; if it doesn't stop in
+    time, nothing is cleaned."""
+    if storage.MOVING:
+        raise ModelError("UnderCover's files are being moved (Storage). Try again when that's done.")
+    for j in list(jobs.JOBS.values()):
+        if not j.finished and j.kind != "presep":
+            what = _BUSY_WHAT.get(j.kind) or (f"“{j.title}”" if j.title else "other work")
+            raise ModelError(f"Can't clean up while {what} is running or waiting (it may be using these files). "
+                             "Try again when it's done.")
+    if jobs.CURRENT[0] is not None and jobs.CURRENT[0].kind != "presep":   # (the GPU's own, listed or not)
+        raise ModelError("Can't clean up while the GPU is working (it may be using these files). Try again when it's done.")
+    presep = [j for j in list(jobs.JOBS.values()) if j.kind == "presep" and not j.finished]
+    for j in presep:   # it would just be redone later
+        j.cancel = True
+    end = time.time() + PRESEP_WAIT_S
+    while any(not j.finished for j in presep) and time.time() < end:
+        time.sleep(0.2)
+    if any(not j.finished for j in presep):
+        raise ModelError("A song is still being prepared in the background; it's been asked to stop. Try Clean up again in a moment.")
+
+
 def _song_metas() -> dict:
     out = {}
     for f in path("uploads_dir").glob("*.json"):
@@ -616,7 +644,8 @@ def _cleanup_groups() -> dict:
                           "detail": "Those trainings would have to start over", "paths": paused, "default": False}
     temp = [p for p in cache.iterdir() if p.is_dir() and p.name.startswith(TEMP_PREFIXES)]
     temp += [p for p in (cache / "previews").glob("*") if now - _mtime(p) > DAY]   # incl. SpeakEasy's sentences (speech_<job>)
-    temp += [p for p in (cache / "_work").glob("*")]
+    # the separator's working folder: only what an interrupted run left, never the output of one under way
+    temp += [p for p in (cache / "_work").glob("*") if now - _mtime(p) > DAY]
     logs = [f for f in path("logs_dir").glob("*.log") if _size(f) > 10e6]
     g["temp"] = {"title": "Old previews, leftovers and big logs", "detail": "Preview renders older than a day, interrupted downloads, logs over 10 MB",
                  "paths": temp + logs, "default": True}

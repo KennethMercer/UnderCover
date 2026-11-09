@@ -585,6 +585,335 @@ def u_vault():
     return f"{r1['files']} files: {r1['raw'] / 1e3:.0f} kB kept in {r1['stored'] / 1e3:.0f} kB; incremental, safe, asks, prunes"
 
 
+@check("settings writes on a hand-edited config.toml (2026-11-08: a header with a comment after it, or an indented key, wasn't found, so a write added a second [paths] the app refused; a vault restore of the settings then wrote one with no [paths])")
+def u_config_hand_edited():
+    import tomllib
+    from undercover.core import config, vault
+    from undercover.core.voices import ModelError
+    for t in ('[paths]  # where files live\noutput_dir = "E:/x"\n[ui]\nport = 1\n',
+              '  [ paths ]\r\n  output_dir = "E:/x"\r\n  [ui]\r\n  port = 1\r\n'):
+        new = config.set_in_text(t, "paths", {"output_dir": '"F:/y"'})
+        got = tomllib.loads(new)
+        assert got == {"paths": {"output_dir": "F:/y"}, "ui": {"port": 1}}, (t, new)
+        assert config.set_in_text(new, "paths", {"output_dir": '"F:/y"'}) == new, "a second write changed it again"
+        assert "port" in config.section_text(new, "ui") and "port" not in config.section_text(new, "paths"), new
+        assert tomllib.loads(config.set_in_text(t, "ui", {"port": "2"})) == {"paths": {"output_dir": "E:/x"}, "ui": {"port": 2}}
+    # an indented inner array isn't a header: the section goes on past it
+    nested = '[ui]\nranges = [\n  [1, 2],\n  [3, 4]\n]\n[paths]\noutput_dir = "E:/x"\n'
+    new = config.set_in_text(nested, "ui", {"port": "2"})
+    assert tomllib.loads(new) == {"ui": {"ranges": [[1, 2], [3, 4]], "port": 2}, "paths": {"output_dir": "E:/x"}}, new
+    # and a layout the reader can't follow is refused, never a value written into another section
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG_FILE
+        odd = '[ui]\nranges = [\n  [1]\n]\nport = 1\n'
+        CONFIG_FILE.write_text(odd, encoding="utf-8")
+        try:
+            config.set_values("ui", {"port": "2"})
+            raise AssertionError("a settings write went ahead on a layout it couldn't follow")
+        except ValueError as e:
+            assert "nothing was written" in str(e), e
+        assert CONFIG_FILE.read_text(encoding="utf-8") == odd
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, CONFIG_FILE
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            vault.set_folder(str(box / "vault-drive"))
+            here = CONFIG_FILE.read_text(encoding="utf-8")
+            first = vault.run()["made"]
+            # this install's file, hand-edited: its [paths] header carries a comment, and it is CRLF
+            mine = here.replace("[paths]\n", "[paths]   # where my files live\n").replace("\n", "\r\n")
+            assert mine != here.replace("\n", "\r\n")
+            CONFIG_FILE.write_bytes(mine.encode("utf-8"))
+            r = vault.restore(["settings/config.toml"], "replace")
+            assert r["restored"] == ["settings/config.toml"], r
+            got = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            assert got["paths"] == tomllib.loads(here)["paths"], f"the restored settings lost this install's [paths]: {got}"
+            # a [paths] the section reader can't cut out (an inline table): refused, never a config with other folders
+            odd = 'paths = { output_dir = "E:/elsewhere" }\n'
+            CONFIG_FILE.write_text(odd, encoding="utf-8")
+            try:
+                vault.restore(["settings/config.toml"], "replace")
+                raise AssertionError("a restore wrote settings that dropped this install's [paths]")
+            except ModelError as e:
+                assert "nothing was restored" in str(e), e
+            assert CONFIG_FILE.read_text(encoding="utf-8") == odd, "a refused restore changed the settings"
+            # this install's file broken by hand outside its [paths]: the vault's copy is how it's recovered
+            CONFIG_FILE.write_text(here + "\n[ui\nbroken = \n", encoding="utf-8")
+            vault.restore(["settings/config.toml"], "replace", stamp=first)
+            assert tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))["paths"] == tomllib.loads(here)["paths"]
+            CONFIG_FILE.write_text(here, encoding="utf-8")
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "a commented header, an indented CRLF file: one [paths], read back; a restore keeps the [paths] or writes nothing"
+
+
+@check("vault: Keep both on settings that changed is a plain no, before anything is written (2026-11-08: it planned \"config (from vault).toml\", which the restore's allow-list refused, so a song asked for with it came back neither)")
+def u_vault_settings_both():
+    from undercover.core import vault
+    from undercover.core.voices import ModelError
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, CONFIG_FILE, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            up = path("uploads_dir")
+            up.mkdir(parents=True, exist_ok=True)
+            (up / "abc.mp3").write_bytes(b"the vaulted song")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            before = CONFIG_FILE.read_bytes() + b"\n[extra]\nx = 1\n"
+            CONFIG_FILE.write_bytes(before)
+            (up / "abc.mp3").write_bytes(b"the song now")
+            for keys in (["settings/config.toml"], ["settings/config.toml", "songs/abc.mp3"]):
+                try:
+                    vault.restore(keys, "both")
+                    raise AssertionError(f"keep both on changed settings went ahead: {keys}")
+                except ModelError as e:
+                    assert "side by side" in str(e) and "Nothing was restored" in str(e), e
+            assert CONFIG_FILE.read_bytes() == before and (up / "abc.mp3").read_bytes() == b"the song now"
+            assert not [f for f in CONFIG_FILE.parent.iterdir() if "from vault" in f.name] and not list(up.glob("*from vault*"))
+            assert vault.restore(["songs/abc.mp3"], "both")["restored"] == ["songs/abc.mp3"], "keep both on a song stopped working"
+            assert (up / "abc (from vault).mp3").read_bytes() == b"the vaulted song"
+            # unchanged settings under Keep both are simply the same, not refused
+            CONFIG_FILE.write_bytes(before[: -len(b"\n[extra]\nx = 1\n")])
+            assert vault.restore(["settings/config.toml"], "both")["same"] == ["settings/config.toml"]
+            page = (ROOT / "undercover" / "web" / "vault.js").read_text(encoding="utf-8")
+            assert 'x.kind === "settings" ? "" : `<button class="btn" type="button" data-vt-how="both">' in page, "the page still offers Keep both on settings"
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "settings: refused plainly, nothing written; a song's Keep both unchanged; the page doesn't offer it"
+
+
+@check("vault: Keep both on a voice or a project makes a copy that loads under its own name, never over the original or an earlier copy (2026-11-08: the copy's meta still named the original, so two voices had one name and the copy never loaded)")
+def u_vault_keep_both_copy():
+    from undercover.core import vault, voices
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            vd = path("voices_dir")
+            long = "a" * 55   # the copy's name must still read back as itself (names are cut at 60)
+            for name in ("spy", long):
+                (vd / name).mkdir(parents=True)
+                (vd / name / "meta.json").write_text(json.dumps({"name": name, "pth": str(vd / name / "model.pth"),
+                    "index": str(vd / name / "model.index"), "display": "The Spy",
+                    "extra": {"trained": True, "improved_pending": {"voice": f"{name}-next"}}}), encoding="utf-8")
+                (vd / name / "model.pth").write_bytes(b"older " + name.encode())
+                (vd / name / "model.index").write_bytes(b"index")
+            tr = path("cache_dir") / "training" / "spy"
+            tr.mkdir(parents=True)
+            (tr / "project.json").write_text(json.dumps({"name": "spy", "person": "The Spy"}), encoding="utf-8")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            snap = vault.load_snapshot(vault.root_of(box / "vault-drive"))["files"]
+            for name in ("spy", long):
+                (vd / name / "model.pth").write_bytes(b"retrained")
+            (tr / "project.json").write_text(json.dumps({"name": "spy", "person": "The Spy", "mode": "singing"}), encoding="utf-8")
+            for n, want in ((1, "spy-from-vault"), (2, "spy-from-vault-2")):
+                vault.restore([k for k in snap if k.startswith("voices/spy/")], "both")
+                v = voices.get_voice(want)
+                assert v.dir == vd / want and v.pth == vd / want / "model.pth" and v.pth.read_bytes() == b"older spy", v
+                assert v.index == vd / want / "model.index", v.index
+                meta = json.loads((vd / want / "meta.json").read_text(encoding="utf-8"))
+                assert meta["name"] == want and meta["display"] == "The Spy from vault" + (" 2" if n > 1 else ""), meta
+                assert "improved_pending" not in meta["extra"], "the copy claims the original's retrained candidate"
+            assert voices.get_voice("spy").pth.read_bytes() == b"retrained", "keep both touched the original"
+            assert [v.name for v in voices.list_voices()].count("spy") == 1
+            vault.restore([k for k in snap if k.startswith(f"voices/{long}/")], "both")
+            copy = next(v for v in voices.list_voices() if v.name != long and v.name.startswith("a" * 40))
+            assert voices.get_voice(copy.name).dir.name == copy.name and copy.name.endswith("-from-vault"), copy.name
+            from undercover.core.voices import ModelError
+            for bad in (b"not json", b"[1, 2]"):   # a record that can't name its copy stops the restore (made before any write)
+                try:
+                    vault._as_copy("voices/spy/meta.json", bad, vd / "spy-from-vault-3" / "meta.json", 3)
+                    raise AssertionError("an unreadable record came back as a copy")
+                except ModelError as e:
+                    assert "Nothing was restored" in str(e), e
+            vault.restore(["training/spy/project.json"], "both")
+            from undercover.doubleagent.project import Project
+            p = Project.load("spy-from-vault")
+            assert p.name == "spy-from-vault" and p.dir == tr.parent / "spy-from-vault", p.name
+            assert json.loads((tr / "project.json").read_text(encoding="utf-8"))["mode"] == "singing", "the original project changed"
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "spy-from-vault, then -2, each loading with its own files and display; a long name stays itself; a project copy saves as itself"
+
+
+@check("vault: Replace puts every file it writes over into the vault first, whatever the vault's size, or replaces nothing; the copy read from survives that run's pruning (2026-11-08: an Everything copy replaced under What matters, or a downloaded voice, lost the current file)")
+def u_vault_replace_keeps_current():
+    import hashlib
+    from undercover.core import vault
+    from undercover.core.voices import ModelError
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        saved_put, saved_write = vault.put, vault._write_part
+        try:
+            clip = path("cache_dir") / "training" / "spy" / "clips" / "c1.wav"
+            clip.parent.mkdir(parents=True)
+            (clip.parent.parent / "project.json").write_text('{"name": "spy"}', encoding="utf-8")
+            clip.write_bytes(b"RIFF the vaulted clip")
+            vault.set_folder(str(box / "vault-drive"), "matters")
+            vf = box / "vault-drive"
+            root = vault.root_of(vf)
+            vault.run(size="everything")
+            key = "training/spy/clips/c1.wav"
+            # that copy is old: in a month with a newer copy, so a run's pruning would let it (and the clip in it) go
+            snaps = root / "snapshots"
+            new = vault.snapshots(root)[-1]
+            old_stamp, newer = "2026-01-05T10-00-00", "2026-01-20T10-00-00"
+            body = json.loads((snaps / f"{new}.json").read_text(encoding="utf-8"))
+            (snaps / f"{new}.json").rename(snaps / f"{old_stamp}.json")
+            (snaps / f"{newer}.json").write_text(json.dumps({**body, "files": {k: v for k, v in body["files"].items() if k != key}}), encoding="utf-8")
+            clip.write_bytes(b"RIFF the clip now")
+            now_sha = hashlib.sha256(clip.read_bytes()).hexdigest()
+            # one file it can't read first: nothing replaced, said so
+            def failing(objects, f, sha):
+                if f == clip:
+                    raise PermissionError(13, "in use")
+                return saved_put(objects, f, sha)
+            vault.put = failing
+            try:
+                vault.restore([key], "replace", stamp=old_stamp)
+                raise AssertionError("replaced a file that couldn't be vaulted first")
+            except ModelError as e:
+                assert "nothing was replaced" in str(e), e
+            vault.put = saved_put
+            assert clip.read_bytes() == b"RIFF the clip now"
+            r = vault.restore([key], "replace", stamp=old_stamp)
+            assert r["restored"] == [key] and clip.read_bytes() == b"RIFF the vaulted clip", r
+            assert vault.find_object(root / "objects", now_sha), "the clip that was here isn't in the vault"
+            latest = vault.load_snapshot(root)["files"]
+            assert latest[key][0] == now_sha, "the newest copy doesn't name the clip that was replaced"
+            assert vault.get(root / "objects", now_sha) == b"RIFF the clip now"
+            # a run starting meanwhile (the quiet one, Vault now) doesn't prune away the old copy a restore is reading
+            assert old_stamp in vault.snapshots(root)
+            clip.unlink()
+            started = []
+
+            def run_first(dest, chunks):
+                if not started:
+                    started.append(1)
+                    vault.run()
+                return saved_write(dest, chunks)
+            vault._write_part = run_first
+            r = vault.restore([key], "skip", stamp=old_stamp)
+            vault._write_part = saved_write
+            assert started and r["restored"] == [key] and clip.read_bytes() == b"RIFF the vaulted clip", r
+            assert not vault._HELD, vault._HELD
+        finally:
+            vault.put = saved_put
+            vault._write_part = saved_write
+            CONFIG["vault"] = saved_vault
+    return "a locked file: nothing replaced; an Everything clip under What matters: vaulted first, named in the newest copy; the old copy held through the prune"
+
+
+@check("vault: a voice restored over its files is dropped from the converter's cache, so covers use what came back (2026-11-08: the cached model from before stayed until a restart)")
+def u_vault_restore_forgets_voice():
+    import types
+    from undercover.core import gpu, vault
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault, saved_conv = dict(CONFIG.get("vault") or {}), gpu.MODELS._conv
+        try:
+            vd = path("voices_dir")
+            (vd / "spy").mkdir(parents=True)
+            (vd / "spy" / "meta.json").write_text(json.dumps({"name": "spy", "pth": str(vd / "spy" / "model.pth"),
+                                                              "extra": {"trained": True}}), encoding="utf-8")
+            (vd / "spy" / "model.pth").write_bytes(b"the vaulted model")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            (vd / "spy" / "model.pth").write_bytes(b"retrained")
+            # a cover reading with it: refused, its files untouched
+            from undercover.core import jobs as J
+            from undercover.core.voices import ModelError
+            busy = J.Job("cover", title="Hold On · Spy")
+            busy.voices = {"spy"}
+            J.JOBS[busy.id] = busy
+            try:
+                vault.restore(["voices/spy/model.pth"], "replace")
+                raise AssertionError("a voice's files were restored under a cover using it")
+            except ModelError as e:
+                assert "in use" in str(e) and "Nothing was restored" in str(e), e
+            finally:
+                busy.finish("done")
+                J.JOBS.pop(busy.id, None)
+            assert (vd / "spy" / "model.pth").read_bytes() == b"retrained"
+            gpu.MODELS._conv = types.SimpleNamespace(voices={"spy": "loaded before", "other": "loaded"})
+            r = vault.restore(["voices/spy/model.pth"], "replace")
+            assert r["restored"] == ["voices/spy/model.pth"] and (vd / "spy" / "model.pth").read_bytes() == b"the vaulted model", r
+            assert gpu.MODELS._conv.voices == {"other": "loaded"}, f"the converter still holds the voice from before: {gpu.MODELS._conv.voices}"
+            gpu.MODELS._conv.voices["spy"] = "loaded again"
+            vault.restore(["voices/spy/model.pth"], "both")   # the same here now: nothing written, nothing dropped
+            assert "spy" in gpu.MODELS._conv.voices
+        finally:
+            gpu.MODELS._conv = saved_conv
+            CONFIG["vault"] = saved_vault
+    return "replaced: dropped from the cache (the other voice kept); an identical one: left loaded"
+
+
+@check("Clean up waits for every kind of work, queued or running, stops and waits for a background separation, and never takes the separator's live output (2026-11-08: its list of kinds missed the overnight queue and others, and its default-ticked group deleted cache/_work mid-prepare)")
+def u_cleanup_guard():
+    import threading
+    from undercover.core import jobs as J
+    from undercover.safehouse import api as shapi, library
+    with isolated_data():
+        from undercover.core.config import path
+        work = path("cache_dir") / "_work"
+        work.mkdir(parents=True)
+        live, left = work / "song_(Vocals).wav", work / "old_(Vocals).wav"
+        live.write_bytes(b"being written")
+        left.write_bytes(b"left by a crash")
+        os.utime(left, (time.time() - 3 * 86400,) * 2)
+        mine = []
+
+        def post():
+            h = _FakeHandler(body={"groups": ["temp"]})
+            assert shapi.handle(h, "POST", "/api/library/cleanup")
+            return h
+
+        saved_wait = library.PRESEP_WAIT_S
+        try:
+            for kind in ("night", "train-transcribe", "cadence-ab", "improve-ab", "smaller", "doctor", "cover"):
+                j = J.Job(kind, title=f"a {kind} job")
+                J.JOBS[j.id] = j
+                mine.append(j)
+                h = post()
+                assert h.err and "Can't clean up" in h.err and h.out is None, (kind, h.err, h.out)
+                j.finish("done")
+            assert live.is_file() and left.is_file(), "a refused clean up deleted something"
+            # a background separation: asked to stop and waited for, then the clean up goes ahead
+            pre = J.Job("presep", title="Preparing a song")
+            J.JOBS[pre.id] = pre
+            mine.append(pre)
+
+            def obeys():
+                while not pre.cancel:
+                    time.sleep(0.05)
+                time.sleep(0.3)
+                pre.finish("cancelled")
+            threading.Thread(target=obeys, daemon=True).start()
+            h = post()
+            assert h.err is None and h.out is not None and pre.cancel and pre.finished, (h.err, h.out)
+            assert live.is_file(), "Clean up took the separator's live output"
+            assert not left.exists(), "Clean up left an old leftover in _work"
+            # one that doesn't stop in time: nothing cleaned
+            stuck = J.Job("presep", title="Preparing another song")
+            J.JOBS[stuck.id] = stuck
+            mine.append(stuck)
+            left.write_bytes(b"left again")
+            os.utime(left, (time.time() - 3 * 86400,) * 2)
+            library.PRESEP_WAIT_S = 0.5
+            h = post()
+            assert h.err and "still being prepared" in h.err and left.is_file(), (h.err, h.out)
+        finally:
+            library.PRESEP_WAIT_S = saved_wait
+            for j in mine:
+                if not j.finished:
+                    j.finish("cancelled")
+                J.JOBS.pop(j.id, None)
+    return "7 kinds refused, nothing deleted; a separation stopped and waited for; its live output kept, an old leftover gone; one that won't stop: refused"
+
+
 @check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
        "Checking it stage, the voice a finished training made in its job snapshot")
 def u_da_mode():
@@ -17235,7 +17564,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe, u_installer_pass12,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe, u_installer_pass12, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_vault_restore_forgets_voice, u_cleanup_guard,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
