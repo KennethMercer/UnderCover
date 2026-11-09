@@ -15653,6 +15653,22 @@ def u_perf_voices():
         voicepreview._READY.clear()
     V._META.clear()
     voicepreview._RECS.clear()
+    # a read while a writer swaps meta.json in: Windows refuses the open mid-replace; the read waits it out (Q, 2026-11-09)
+    import builtins, tempfile
+    real_open, calls = builtins.open, {"n": 0}
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(13, "mid-replace")
+        return real_open(*a, **k)
+    with tempfile.TemporaryDirectory() as td:
+        tf = Path(td) / "meta.json"
+        tf.write_text("{}", encoding="utf-8")
+        builtins.open = flaky
+        try:
+            assert fsutil.read_text(tf) == "{}" and calls["n"] == 3, calls
+        finally:
+            builtins.open = real_open
     return f"3 voices, a rewrite and a display change seen at once; 4 readers + 1 writer x 30; readiness kept {voicepreview.READY_TTL:.0f} s"
 
 

@@ -22,6 +22,19 @@ def _replace(tmp: Path, dest: Path, tries: int = 50):
             time.sleep(0.05)
 
 
+def read_text(path, tries: int = 50) -> str:
+    """A file's text, read while another thread may be swapping it in: Windows refuses to open a file mid-replace
+    (PermissionError) until the swap is done, so retry ~2.5 s, as _replace does on the writer's side."""
+    for i in range(tries):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.05)
+
+
 def guard(dest: Path):
     """Test mode: refuse a write outside the test's folders (normal use: no-op)."""
     from . import storage   # here, not at the top: storage imports this module
