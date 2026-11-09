@@ -12,6 +12,10 @@ const SH_RETRY = /ran out of memory|Something went wrong|blocked writing|try aga
 const SH_GAP_S = 0.6;   // a pause this long between two heard words starts a new line (duets.phrases joins under it)
 const SH_FADE_S = 0.04;   // duets.FADE_S: a pause shorter than the crossfade isn't a place to land
 const SH_OCT = 2;   // edits.OCTAVE_BOUND
+const SH_TRAY = 15;   // core/tray.TRAY_SIZE: Recent covers holds this many
+// the cover a Keep would roll off Recent covers (core/tray.leaver: the oldest, when the tray is full, unless it's kept; the one
+// being edited is spared), else null: the Keep sheet says it only when it will happen (Internal Affairs D8)
+const shRollsOff = () => { const o = HIST.length >= SH_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null; };
 
 SH.audio.addEventListener("timeupdate", () => { if (SH.stopAt != null && SH.audio.currentTime >= SH.stopAt) { SH.audio.pause(); SH.stopAt = null; } });
 const shName = who => voiceDisplay(who === "B" ? SH.item?.duet_voice : SH.item?.voice);
@@ -235,7 +239,7 @@ function shDraw() {
     else if (live.length && d.kept_now) h += `<div class="kept" role="status">This version is kept: it's a cover of its own in Recent covers.</div>`;
     else if (live.length) h += `<div class="unkept"><span>Not kept yet. These changes stay with this cover, and roll off with it when it leaves Recent covers.</span><button class="btn primary" type="button" data-sh="keep"${SH.busy ? " disabled" : ""}>Keep this version</button></div>`;
   }
-  if (SH.confirm) h += `<div class="sheet" role="dialog" aria-label="Keep this version?"><h3>Keep this version?</h3><p>It becomes a new cover, <b>${esc(it.title + " (edited)")}</b>, next to the one it came from, with its changes. Recent covers holds 15, so the oldest one there rolls off to make room. Covers sent to SafeHouse stay.</p>
+  if (SH.confirm) h += `<div class="sheet" role="dialog" aria-label="Keep this version?"><h3>Keep this version?</h3><p>It becomes a new cover, <b>${esc(it.title + " (edited)")}</b>, next to the one it came from, with its changes.${shRollsOff() ? ` Recent covers holds 15, so the oldest one there, <b>${esc(shRollsOff().title)}</b>, rolls off to make room. Covers sent to SafeHouse stay.` : ""}</p>
     <div class="row"><button class="btn primary" type="button" data-sh="keep-yes">Keep it</button><button class="btn" type="button" data-sh="keep-no">Not yet</button></div></div>`;
   box.innerHTML = h + `</div>`;
   shWire();

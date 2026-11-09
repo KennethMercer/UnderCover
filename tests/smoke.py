@@ -10065,7 +10065,7 @@ def u_duet_shape_words():
     return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
 
 
-@check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown; the first singer's chip has no 'lead' tag")
+@check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown; the first singer's chip has no 'lead' tag; Keep's sheet says a cover rolls off only when one will")
 def u_duet_copy():
     import inspect
     from undercover.frontman import pipeline as PL
@@ -10081,7 +10081,13 @@ def u_duet_copy():
     assert js.index('const shown = $$("#fm-duet-way button")') < js.index('$("#fm-duet-way").hidden = shown.length < 2;')
     # the first singer's chip has no "lead" tag: it read as "sings first", and with Fit on the key is the two's together (D7)
     assert '${vname(S.voice)}</span>\n    <span class="vchip b">' in js.replace("\r\n", "\n") and "<small>lead</small>" not in js
-    return "the backing's progress line; one way said as a sentence; no 'lead' on the chip"
+    # Keep's sheet says a cover rolls off only when one will (D8; the edit list's page check runs it in Chrome)
+    sh = (ROOT / "undercover" / "web" / "shape.js").read_text(encoding="utf-8")
+    assert "with its changes.${shRollsOff() ? ` Recent covers holds 15, so the oldest one there, <b>${esc(shRollsOff().title)}</b>, rolls off" in sh
+    assert 'HIST.length >= SH_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null;' in sh
+    from undercover.core import tray
+    assert tray.TRAY_SIZE == 15 and "const SH_TRAY = 15;" in sh, "Keep's sheet counts Recent covers differently from the tray"
+    return "the backing's progress line; one way said as a sentence; no 'lead' on the chip; Keep's roll-off said when it happens"
 
 
 @check("hangs (hangfix, hangtune): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 200 ms or more with 100 ms silent, no pause marked in the text), or a break (60 ms of silence where the words run into each other, no stop at the join), and reads it again with another seed, up to 5 tries, keeping the take whose longest join is shortest among takes as bad; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
@@ -12917,6 +12923,15 @@ def u_shape_page():
     // a player has started once its "play" event has run (the page's stopOthers runs in the listener ownPlayer added first); a timeout says so
     const started = a => new Promise(r => { if (!a.paused && a.currentTime > 0) return r(true); a.addEventListener("play", () => r(true), { once: true }); setTimeout(() => r(false), 5000); });
     $("#shape").hidden = false; shDraw();
+    // Keep's sheet speaks of rolling off only when a Keep will roll one off (Internal Affairs D8)
+    const sheet = () => ($("#shape .sheet")?.innerText || "");
+    SH.confirm = true; HIST = [{ id: "aaaaaaaaaa", title: "T" }]; shDraw();
+    ok("Keep with room in Recent says nothing of rolling off", sheet().includes("next to the one it came from, with its changes.") && !sheet().includes("rolls off"));
+    HIST = Array.from({ length: 15 }, (_, i) => ({ id: "c" + i, title: "Cover " + i, kept: false })); shDraw();
+    ok("Keep with Recent full names the one that goes", sheet().includes("Recent covers holds 15, so the oldest one there, Cover 14, rolls off to make room. Covers sent to SafeHouse stay."));
+    HIST[14].kept = true; shDraw(); ok("a kept oldest one stays, and isn't said to go", !sheet().includes("rolls off"));
+    HIST[14] = { id: "aaaaaaaaaa", title: "T" }; shDraw(); ok("the cover being edited is spared, and isn't said to go", !sheet().includes("rolls off"));
+    SH.confirm = false; HIST = []; shDraw();
     shHear(1, 2);
     const b = document.createElement("button"); b.dataset.vline = "x"; b.dataset.label = "x"; document.body.appendChild(b);
     ok("Hear it starts", await started(SH.audio));
