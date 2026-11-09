@@ -421,9 +421,11 @@ def _save_state(root: Path, st: dict):
 
 # ---------------------------------------------------------------- a run
 
-def run(folder: str | None = None, size: str | None = None, progress=None, cancel=None) -> dict:
+def run(folder: str | None = None, size: str | None = None, progress=None, cancel=None, must=(), hold=()) -> dict:
     """One vault run: every item hashed (only when its size or mtime changed), new objects stored, a snapshot written
-    last (a run cut short leaves the previous snapshot whole), then pruning. -> a short report."""
+    last (a run cut short leaves the previous snapshot whole), then pruning. must: [(kind, key, file)] that go in too,
+    whatever the size, or the run fails before its snapshot (a Replace's current files); hold: snapshot stamps pruning
+    keeps this time (the one a restore reads from). -> a short report."""
     s = settings()
     folder, size = folder or s["folder"], size or s["size"]
     if not folder:
@@ -435,10 +437,10 @@ def run(folder: str | None = None, size: str | None = None, progress=None, cance
     if not connected(folder):
         raise ModelError(f"The vault's drive isn't connected ({folder}).")
     with _RUN_LOCK:
-        return _run(root, size, progress, cancel)
+        return _run(root, size, progress, cancel, must, hold)
 
 
-def _run(root: Path, size: str, progress, cancel) -> dict:
+def _run(root: Path, size: str, progress, cancel, must=(), hold=()) -> dict:
     objects = root / "objects"
     st = _state(root)
     index = st.setdefault("index", {})
@@ -469,6 +471,18 @@ def _run(root: Path, size: str, progress, cancel) -> dict:
         done += stt.st_size
         if progress:
             progress(f"Vaulting {f.name}", done / total)
+    for kind, key, f in must:   # each one in, read fresh, or no snapshot at all (what a Replace is about to write over)
+        try:
+            stt = f.stat()
+            sha = sha256_file(f)
+            put(objects, f, sha)
+            if sha256_file(f) != sha or f.stat().st_mtime_ns != stt.st_mtime_ns:
+                raise OSError("it changed while it was being copied")
+        except OSError as e:
+            raise ModelError(f"Couldn't put the one here into the vault first ({f.name}: {e.strerror or e}); "
+                             "nothing was replaced.")
+        index[key] = [stt.st_size, stt.st_mtime_ns, sha]
+        snap[key] = [sha, stt.st_size, stt.st_mtime_ns, kind]
     for k in [k for k in index if k not in snap]:
         index.pop(k)
     snaps = root / "snapshots"
@@ -480,7 +494,7 @@ def _run(root: Path, size: str, progress, cancel) -> dict:
     fsutil.write_text(snaps / f"{stamp}.json", json.dumps({"made": stamp, "size": size, "files": snap}))
     rep = {"made": stamp, "files": len(snap), "new": new, "bytes_written": wrote, "seconds": round(time.time() - t0, 1),
            "raw": sum(v[1] for v in snap.values())}
-    rep["pruned"] = prune(root)
+    rep["pruned"] = prune(root, hold=hold)
     rep["stored"] = sum(f.stat().st_size for f in objects.rglob("*") if f.is_file()) if objects.is_dir() else 0
     st["runs"] = (st.get("runs") or [])[-49:] + [rep]
     st["format"] = FORMAT
@@ -526,11 +540,11 @@ def keep_which(stamps: list[str], now: datetime | None = None) -> list[str]:
     return sorted(keep)
 
 
-def prune(root: Path, now: datetime | None = None) -> int:
-    """Remove snapshots the policy lets go, then the objects no kept snapshot names (inside the vault only).
-    -> objects removed"""
+def prune(root: Path, now: datetime | None = None, hold=()) -> int:
+    """Remove snapshots the policy lets go, then the objects no kept snapshot names (inside the vault only). hold: stamps
+    kept this time whatever the policy says. -> objects removed"""
     stamps = snapshots(root)
-    keep = keep_which(stamps, now)
+    keep = sorted(set(keep_which(stamps, now)) | (set(hold) & set(stamps)))
     drop = [root / "snapshots" / f"{s}.json" for s in stamps if s not in keep]
     if drop:
         storage.remove_files(drop, within=[root / "snapshots"])
@@ -733,7 +747,14 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
         if storage.ALLOWED_ROOTS is not None and storage.refuse([t]):
             raise ModelError(storage.refuse([t]))
     if on_conflict == "replace" and any(t.exists() for _, _, t in plan):
-        run(folder)   # what's there now goes into the vault first, so replacing loses nothing
+        # what's there now goes into the vault first, so replacing loses nothing: every file about to be written over,
+        # each one in or nothing replaced (a run alone vaults only what the vault's size takes, and skips a locked file);
+        # the snapshot read from is held through that run's pruning
+        run(folder, must=[((files[key][3:4] or ["file"])[0], key, t) for key, _, t in plan if t.is_file()],
+            hold=[stamp or snapshots(root)[-1]])
+    for key, sha, t in plan:   # every piece there before anything is written (never a restore that stops half-way)
+        if find_object(root / "objects", sha) is None:
+            raise ModelError(f"The vault is missing a piece ({sha[:12]}…); nothing was restored.")
     # the settings are made up before anything is written: one that can't keep this install's [paths] stops it all
     settings_data = {key: _config_keeping_paths(get(root / "objects", sha)) for key, sha, t in plan
                      if storage._same(t, config.CONFIG_FILE)}

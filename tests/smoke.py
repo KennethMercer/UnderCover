@@ -712,6 +712,59 @@ def u_vault_keep_both_copy():
     return "spy-from-vault, then -2, each loading with its own files and display; a long name stays itself; a project copy saves as itself"
 
 
+@check("vault: Replace puts every file it writes over into the vault first, whatever the vault's size, or replaces nothing; the copy read from survives that run's pruning (2026-11-08: an Everything copy replaced under What matters, or a downloaded voice, lost the current file)")
+def u_vault_replace_keeps_current():
+    import hashlib
+    from undercover.core import vault
+    from undercover.core.voices import ModelError
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        saved_put = vault.put
+        try:
+            clip = path("cache_dir") / "training" / "spy" / "clips" / "c1.wav"
+            clip.parent.mkdir(parents=True)
+            (clip.parent.parent / "project.json").write_text('{"name": "spy"}', encoding="utf-8")
+            clip.write_bytes(b"RIFF the vaulted clip")
+            vault.set_folder(str(box / "vault-drive"), "matters")
+            vf = box / "vault-drive"
+            root = vault.root_of(vf)
+            vault.run(size="everything")
+            key = "training/spy/clips/c1.wav"
+            # that copy is old: in a month with a newer copy, so a run's pruning would let it (and the clip in it) go
+            snaps = root / "snapshots"
+            new = vault.snapshots(root)[-1]
+            old_stamp, newer = "2026-01-05T10-00-00", "2026-01-20T10-00-00"
+            body = json.loads((snaps / f"{new}.json").read_text(encoding="utf-8"))
+            (snaps / f"{new}.json").rename(snaps / f"{old_stamp}.json")
+            (snaps / f"{newer}.json").write_text(json.dumps({**body, "files": {k: v for k, v in body["files"].items() if k != key}}), encoding="utf-8")
+            clip.write_bytes(b"RIFF the clip now")
+            now_sha = hashlib.sha256(clip.read_bytes()).hexdigest()
+            # one file it can't read first: nothing replaced, said so
+            def failing(objects, f, sha):
+                if f == clip:
+                    raise PermissionError(13, "in use")
+                return saved_put(objects, f, sha)
+            vault.put = failing
+            try:
+                vault.restore([key], "replace", stamp=old_stamp)
+                raise AssertionError("replaced a file that couldn't be vaulted first")
+            except ModelError as e:
+                assert "nothing was replaced" in str(e), e
+            vault.put = saved_put
+            assert clip.read_bytes() == b"RIFF the clip now"
+            r = vault.restore([key], "replace", stamp=old_stamp)
+            assert r["restored"] == [key] and clip.read_bytes() == b"RIFF the vaulted clip", r
+            assert vault.find_object(root / "objects", now_sha), "the clip that was here isn't in the vault"
+            latest = vault.load_snapshot(root)["files"]
+            assert latest[key][0] == now_sha, "the newest copy doesn't name the clip that was replaced"
+            assert vault.get(root / "objects", now_sha) == b"RIFF the clip now"
+        finally:
+            vault.put = saved_put
+            CONFIG["vault"] = saved_vault
+    return "a locked file: nothing replaced; an Everything clip under What matters: vaulted first, named in the newest copy; the old copy held through the prune"
+
+
 @check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
        "Checking it stage, the voice a finished training made in its job snapshot")
 def u_da_mode():
@@ -15523,7 +15576,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
