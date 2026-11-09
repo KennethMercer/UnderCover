@@ -14,6 +14,7 @@ in brackets.
   from a phone.
 - A phone can have three jobs waiting or running at a time. Deleting covers, speech, songs and training projects is
   done on the PC.
+- Two copies of UnderCover on one PC each keep their own phone link.
 - Hardening.
 - Hardening of a phone's job count.
 - A phone that isn't used for 30 days is let go: it connects again with a new code. Hardening of the link before a
