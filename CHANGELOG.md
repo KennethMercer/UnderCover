@@ -18,6 +18,7 @@ in brackets.
 - Hardening of a phone's job count.
 - A phone that isn't used for 30 days is let go: it connects again with a new code. Hardening of the link before a
   phone has connected.
+- Hardening of the phone link's switch between public and private.
 
 **FrontMan** (nobacking, holdparts, residue, notop, firstopen)
 - Under Low profile, opening Shape it for the first time and a duet's verses and choruses hear the words again: the

@@ -1948,6 +1948,54 @@ def u_decode_bound():
     return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
 
 
+@check("the hidden Tailscale's driver holds up: a publish chosen before Private was switched doesn't run (the next step chooses again); a node with no name is never ready; the CLI's output and the daemon's log stay small")
+def u_tailnet_guard():
+    import inspect, threading
+    from undercover.core import tailnet
+    saved_state, saved_cmd, saved_cli = dict(tailnet.STATE), tailnet._cmd, tailnet._cli
+    ran = []
+
+    def cmd(which):
+        ran.append(which)
+        raise OSError("not here")   # (stops the step right there; its error is kept)
+    try:
+        tailnet._cmd = cmd
+        for private, key, runs in ((True, "funnel", False), (False, "serve", False), (False, "funnel", True),
+                                   (True, "serve", True)):
+            ran.clear()
+            tailnet.STATE.update(want=True, private=private, error="")
+            tailnet._run_bg(key, [key, "--bg"])
+            for _ in range(100):
+                if not any(t.name == f"tailscale-{key}" for t in threading.enumerate()):
+                    break
+                time.sleep(0.02)
+            assert bool(ran) == runs, (private, key, ran)
+        tailnet._cli = lambda *a, **k: json.dumps({"AllowFunnel": {":443": True}, "Web": {}})
+        tailnet.STATE.update(private=False, port=7871)
+        assert tailnet._funnel_on({"Self": {"DNSName": ""}}) is False, "a node with no name was ready"
+    finally:
+        tailnet._cmd, tailnet._cli = saved_cmd, saved_cli
+        tailnet.STATE.clear()
+        tailnet.STATE.update(saved_state)
+    assert "del _P[\"out\"][:-OUT_LINES]" in inspect.getsource(tailnet._run_bg) and tailnet.OUT_LINES == 200
+    with isolated_data():
+        from undercover.core.config import path
+        logs = path("logs_dir")
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "tailscaled.log").write_text("x" * 64, encoding="utf-8")
+        was, saved_daemon = tailnet.LOG_MAX, tailnet._P["daemon"]
+        tailnet.LOG_MAX = 10
+        tailnet._cmd = lambda which: [sys.executable, "-c", "print('daemon')"]
+        try:
+            tailnet._start_daemon()
+            tailnet._P["daemon"].wait(30)
+            assert (logs / "tailscaled.old.log").read_text(encoding="utf-8") == "x" * 64
+            assert "daemon" in (logs / "tailscaled.log").read_text(encoding="utf-8")
+        finally:
+            tailnet.LOG_MAX, tailnet._cmd, tailnet._P["daemon"] = was, saved_cmd, saved_daemon
+    return "a stale publish doesn't run; no name, not ready; output and log bounded"
+
+
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); Private (1.2) is Serve to the same listener with Funnel off, and back; exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
@@ -16116,7 +16164,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
