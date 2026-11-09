@@ -12940,6 +12940,80 @@ def u_find_setting():
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
+
+def _page_selftest(body: str, routes: dict | None = None) -> str:
+    """index.html on a static server with `body` run after the last page script (the API is absent: its calls fail, and the test
+    stages what it needs and presses the page's own functions). `ok(name, cond)` records a verdict; `wait(ms)`; routes: path -> (bytes,
+    type) answered as well. The verdicts go in the title, read by --dump-dom once the page says it's done. -> the verdicts, or "" with no Chrome."""
+    import html, http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return ""
+    web = ROOT / "undercover" / "web"
+    test = ("(async () => {\n  const out = [], ok = (name, cond) => out.push((cond ? \"ok \" : \"BAD \") + name);\n"
+            "  const wait = ms => new Promise(r => setTimeout(r, ms));\n  await wait(1200);\n  try {\n" + body +
+            "\n  } catch (e) { out.push(\"BAD threw \" + e + \" \" + (e.stack || \"\").split(\"\\n\")[1]); }\n"
+            "  document.title = out.join(\" | \");\n  fetch(\"/said\");\n})();\n")
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+    extra = routes or {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(100)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p in extra:
+                body, ctype = extra[p]
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--window-size=1200,900",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = html.unescape(m.group(1)) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
+
+
+@check("a fresh install's walk (InternalAffairs, 1.2): the demo voice in its own group in SpeakEasy (headless Chrome; skipped without it)")
+def u_first_walk():
+    got = _page_selftest(r"""
+    const V = (name, x) => ({ name, kind: "speaking", cadence: {}, ...x });
+    SE.voices = [V("agent-smoke", { demo: true, trained: false }), V("some-one-uc", { trained: true }), V("some-other", { trained: false })];
+    $("#se-q").value = ""; seVoices();
+    const heads = $$("#se-voices .se-vgroup").map(h => h.textContent);
+    ok("F1 groups: trained, downloaded, demo", JSON.stringify(heads) === JSON.stringify(["Trained in DoubleAgent", "Downloaded (they learn to speak from clips first)", "Demo voice"]));
+    const after = el => { let h = el.previousElementSibling; while (h && !h.classList.contains("se-vgroup")) h = h.previousElementSibling; return h?.textContent; };
+    ok("F1 the demo voice sits under Demo voice", after($('#se-voices [data-v="agent-smoke"]')) === "Demo voice" && after($('#se-voices [data-v="some-other"]')).startsWith("Downloaded"));
+    SE.voices = [V("agent-smoke", { demo: true, trained: false })]; seVoices();
+    ok("F1 a fresh install: only Demo voice", $$("#se-voices .se-vgroup").map(h => h.textContent).join() === "Demo voice");
+""")
+    return got or "no Chrome here: skipped"
+
+
 def _theme_tokens(web, theme: str, light: bool) -> dict:
     """A theme's tokens for one mode as the page has them: Case File's :root (and its light block), then the theme's own blocks."""
     def blocks(css):
@@ -16523,7 +16597,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

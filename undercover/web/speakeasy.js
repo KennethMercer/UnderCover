@@ -88,9 +88,11 @@ function seVoices() {
       <div class="vtext"><b>${vname(v.name, false)}</b>${facts([{ html: `<span class="se-cad">${cad}</span>` }, ...bits, v.trained && v.likeness != null ? { t: `likeness ${(+v.likeness).toFixed(2)}`, deep: true } : ""])}</div>
       <div class="se-vact">${voiceLineButton(v.name)}${act}</div></div>`;
   };
-  const trained = list.filter(v => v.trained), dl = list.filter(v => !v.trained);
+  // the demo voice is its own group: it isn't downloaded, and nobody's clips to learn from
+  const demo = list.filter(v => v.demo), trained = list.filter(v => v.trained && !v.demo), dl = list.filter(v => !v.trained && !v.demo);
   $("#se-voices").innerHTML = (trained.length ? `<div class="se-vgroup">Trained in DoubleAgent</div>` + trained.map(row).join("") : "")
     + (dl.length ? `<div class="se-vgroup">Downloaded (they learn to speak from clips first)</div>` + dl.map(row).join("") : "")
+    + (demo.length ? `<div class="se-vgroup">Demo voice</div>` + demo.map(row).join("") : "")
     || (SE.voices.length ? `<p class="meta">No voice matches “${esc(q)}”.</p>` : `<div class="empty"><b>No one to speak yet.</b><button class="btn" type="button" data-goto="doubleagent">Get a voice</button></div>`);
   $$("#se-voices [data-cad]").forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Starting…";
