@@ -150,17 +150,36 @@ def after_add(v, job=None, force: bool = True, wait: float | None = None):
     return fresh(v)
 
 
+_QLOCK = threading.Lock()
+_QUEUED: dict = {}   # the voice's folder -> its preview job still waiting: a second ask joins it (renames in a row)
+
+
 def queue_job(v, force: bool = True):
-    """A GPU-queue job that renders one voice's clip ("Preview line for X" in the Running room)."""
+    """A GPU-queue job that renders one voice's clip ("Preview line for X" in the Running room). One waits per voice:
+    asked again before it starts (the name changed twice), the waiting one makes the newest line. It leaves the job
+    feed two minutes after it ends, as the backfill's and the warm-up's do."""
     from . import jobs
     from .voices import display_name
-    job = jobs.Job("voicepreview", title=f"Preview line for {display_name(v)}")
-    job.voices = {v.name}
-    jobs.JOBS[job.id] = job
+    key = str(Path(v.dir))
+    with _QLOCK:
+        q = _QUEUED.get(key)
+        if q is not None and q.state == "queued" and not q.finished and not q.cancel:
+            q.title, q.pv, q.force = f"Preview line for {display_name(v)}", v, q.force or force
+            return q
+        job = jobs.Job("voicepreview", title=f"Preview line for {display_name(v)}")
+        job.voices, job.pv, job.force = {v.name}, v, force
+        jobs.JOBS[job.id] = job
+        _QUEUED[key] = job
 
     def run(j):
-        ok = make(v, j, force)
-        j.finish("done" if ok else "error", message="Made" if ok else "Couldn't make the preview line (see the log)")
+        with _QLOCK:
+            if _QUEUED.get(key) is j:
+                _QUEUED.pop(key)   # (started: an ask from now on queues a new one)
+        try:
+            ok = make(j.pv, j, j.force)
+            j.finish("done" if ok else "error", message="Made" if ok else "Couldn't make the preview line (see the log)")
+        finally:
+            threading.Timer(120, lambda: jobs.JOBS.pop(j.id, None)).start()
     jobs.GPU_QUEUE.put((job, run))
     return job
 

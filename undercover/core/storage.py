@@ -59,6 +59,57 @@ def _inside(a: Path, b: Path) -> bool:
     return a == b or a.startswith(b.rstrip("\\/") + os.sep)
 
 
+# ---------------------------------------------------------------- free space where the work writes
+
+WORK_KEYS = ("cache_dir", "output_dir", "voices_dir")   # where GPU work writes: stems and trainings, covers, voices
+MIN_WORK_FREE = 3e9   # under this on any of them, covers and trainings refuse to start (failing halfway leaves partial files)
+
+
+def _existing(p: Path) -> Path:
+    """p, or its nearest folder that exists (a folder not made yet is on its parent's drive)."""
+    p = Path(os.path.abspath(p))
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    return p
+
+
+def drive_of(p: Path) -> str:
+    """The drive a folder is on, as people read it: "E:" on Windows, the mount point elsewhere."""
+    p = _existing(p)
+    d = os.path.splitdrive(str(p))[0]
+    if d:
+        return d.upper()
+    while not os.path.ismount(p) and p.parent != p:
+        p = p.parent
+    return str(p)
+
+
+def work_space(keys=WORK_KEYS) -> list:
+    """[(drive, free bytes, folder, key)] for each drive the given [paths] folders are on (one per drive: the first key
+    on it names it), least free first: after a Storage move the work's files may be on another drive than the app (the
+    maintainers' notes, bug hunt 2026-11-08: the guard looked at the app's drive)."""
+    out, seen = [], set()
+    for key in keys:
+        try:
+            p = path(key)
+            drive = drive_of(p)
+            if drive in seen:
+                continue
+            seen.add(drive)
+            out.append((drive, shutil.disk_usage(_existing(p)).free, p, key))
+        except OSError:
+            continue
+    return sorted(out, key=lambda t: t[1])
+
+
+def low_work_space() -> tuple | None:
+    """(drive, free bytes) of the first drive the work writes to that has under MIN_WORK_FREE, or None."""
+    for drive, free, _, _ in work_space():
+        if free < MIN_WORK_FREE:
+            return drive, free
+    return None
+
+
 def refuse(paths, from_room: bool = False, confirmed: bool = False) -> str | None:
     """Why these folders may not be moved or deleted (None = they may). See the module's "Safety" notes."""
     for p in paths:
@@ -149,8 +200,36 @@ def targets(group: str, folder: Path) -> list[tuple[str, Path, Path]]:
     return out
 
 
+MOVING_WHY = "UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done."
+_WRITES = {"n": 0}   # uploads and installs landing in UnderCover's folders outside a job, right now: a move waits for them
+_WRITES_LOCK = threading.Lock()
+
+
+def moving_why() -> str | None:
+    """What a route that writes into UnderCover's folders says while a move runs (refused: a song dropped during a
+    cross-drive copy landed in the old folder, and the move failed "N files didn't copy correctly"), else None."""
+    return MOVING_WHY if MOVING else None
+
+
+def start_writing() -> str | None:
+    """An upload or install into UnderCover's folders that isn't a job (a dropped song or voice, a song from YouTube)
+    begins: -> MOVING_WHY (refused) while a move runs, else None, and a move doesn't start until done_writing()."""
+    with _WRITES_LOCK:
+        if MOVING:
+            return MOVING_WHY
+        _WRITES["n"] += 1
+    return None
+
+
+def done_writing():
+    with _WRITES_LOCK:
+        _WRITES["n"] = max(0, _WRITES["n"] - 1)
+
+
 def _busy() -> str | None:
     from . import jobs, worklist
+    if _WRITES["n"]:
+        return "the file being added"
     for j in jobs.JOBS.values():
         if not j.finished and j.kind != "move":
             return j.title or j.kind
@@ -380,7 +459,11 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
     if why:
         raise ModelError(why)
     skips = {k: _skips(k) for k, _, _ in moves}
-    MOVING.update(group=group, job=job.id)
+    with _WRITES_LOCK:   # (looked at again under the uploads' lock: one started after check() is waited for, never copied halfway)
+        busy = _busy()
+        if busy:
+            raise ModelError(f"Wait for {busy} to finish first: nothing else can run while files move.")
+        MOVING.update(group=group, job=job.id)
     done_keys, copied = [], []
     defaults = {k: d for g in GROUPS.values() for k, _, d in g}
     switched = False   # once the setting points at the new place, a failure switches it back before removing anything
