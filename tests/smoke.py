@@ -7587,6 +7587,52 @@ def u_crash_no_resume():
     return "no resume point: failed; with one: paused"
 
 
+@check("bugs-da 7: two trainings started at the same moment (two quick POSTs, the form and Do it all): exactly one starts, the other is told one voice trains at a time, and the one running is the one Pause and Stop reach")
+def u_start_race():
+    import threading
+    import types
+    from undercover.core import jobs
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import api as DA, project as P
+    with isolated_data():
+        a, b = P.Project.create("Race One", "speaking"), P.Project.create("Race Two", "speaking")
+        saved = DA.check_voice_name, jobs.GPU_QUEUE
+        jobs.GPU_QUEUE = types.SimpleNamespace(put=lambda item: None)
+
+        def slow_check(proj, name):   # (a wide gap between the checks and the ACTIVE entry, as a busy PC's)
+            time.sleep(0.3)
+            return saved[0](proj, name)
+        DA.check_voice_name = slow_check
+        try:
+            for first, second in ((DA.start_train, DA.start_train), (DA.start_auto, DA.start_train)):
+                go, got = threading.Barrier(2), []
+
+                def start(fn, proj):
+                    go.wait()
+                    try:
+                        got.append(("ok", fn(proj.name, {"fresh": True, "voice_name": f"{proj.name}-uc"})))
+                    except ModelError as e:
+                        got.append(("refused", str(e)))
+                ts = [threading.Thread(target=start, args=(fn, p)) for fn, p in ((first, a), (second, b))]
+                for t in ts:
+                    t.start()
+                for t in ts:
+                    t.join(10)
+                ok = [j for k, j in got if k == "ok"]
+                assert len(ok) == 1 and len(got) == 2 and "one voice trains at a time" in next(m for k, m in got if k == "refused").lower(), got
+                assert [x["job"] for x in DA.ACTIVE.values() if not x["job"].finished] == ok, DA.ACTIVE
+                for n in (a.name, b.name):
+                    x = DA.ACTIVE.pop(n, None)
+                    if x:
+                        x["job"].state = "cancelled"
+                        jobs.JOBS.pop(x["job"].id, None)
+        finally:
+            DA.check_voice_name, jobs.GPU_QUEUE = saved
+            for n in (a.name, b.name):
+                DA.ACTIVE.pop(n, None)
+    return "form + form, Do it all + form: one each time"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15577,7 +15623,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

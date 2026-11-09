@@ -39,6 +39,7 @@ from .sources import Source
 
 TCFG = CONFIG["training"]
 ACTIVE: dict = {}   # project name -> {"job": Job, "control": Control | None, "kind": str}
+_STARTING = threading.Lock()   # a training's checks and its ACTIVE entry, as one step (two quick POSTs: one trains)
 
 
 def _heal(proj):
@@ -330,40 +331,41 @@ def _train(h, proj, b):
 def start_train(name: str, b: dict):
     """Train a project (GPU job). A paused run resumes unless b["fresh"]."""
     from .trainer import FRESH_KEYS, LENGTHS, SR_CFG, Control, Trainer
-    proj = P.Project.load(name)
-    if _busy(proj.name):
-        raise ModelError("This project is already busy.")
-    other = next((n for n, a in ACTIVE.items() if a["kind"] in ("train", "auto") and not a["job"].finished), None)
-    if other:
-        raise ModelError(f"'{other}' is training right now. Pause it first; one voice trains at a time.")
-    with P.lock(proj.name):
-        proj = P.Project.load(proj.name)
-        st = proj.train
-        resume = st.get("state") == "paused" and not b.get("fresh")
-        if resume:
-            from .trainer import data_key_for
-            if st.get("data_key_trained") and data_key_for(proj, int(st.get("sr") or TCFG["sample_rate"]))[0] != st["data_key_trained"]:
-                raise ModelError("The samples changed since training paused, so it can't continue where it left off. "
-                                 "Put the samples back the way they were to resume, or press \"Start over instead\".")
-        if not resume:
-            sr = int(b.get("sr") or TCFG["sample_rate"])
-            if sr not in SR_CFG:
-                raise ModelError("Sample rate must be 32000, 40000 or 48000.")
-            length = b.get("length") if b.get("length") in LENGTHS else "auto"
-            vname = slug(b.get("voice_name") or f"{proj.name}-uc")
-            if not vname:
-                raise ModelError("Give the new voice a name.")
-            check_voice_name(proj, vname)
-            for k in FRESH_KEYS:   # (an Improve's refine plan never leaks into a training; exported stays)
-                st.pop(k, None)
-            st.update(sr=sr, length=length, voice_name=vname, epochs=None)
-            (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
-        st["state"] = "queued"
-        proj.save()
-    control = Control()
-    job = jobs.Job("train")
-    jobs.JOBS[job.id] = job
-    ACTIVE[proj.name] = {"job": job, "control": control, "kind": "train"}
+    with _STARTING:
+        proj = P.Project.load(name)
+        if _busy(proj.name):
+            raise ModelError("This project is already busy.")
+        other = next((n for n, a in ACTIVE.items() if a["kind"] in ("train", "auto") and not a["job"].finished), None)
+        if other:
+            raise ModelError(f"'{other}' is training right now. Pause it first; one voice trains at a time.")
+        with P.lock(proj.name):
+            proj = P.Project.load(proj.name)
+            st = proj.train
+            resume = st.get("state") == "paused" and not b.get("fresh")
+            if resume:
+                from .trainer import data_key_for
+                if st.get("data_key_trained") and data_key_for(proj, int(st.get("sr") or TCFG["sample_rate"]))[0] != st["data_key_trained"]:
+                    raise ModelError("The samples changed since training paused, so it can't continue where it left off. "
+                                     "Put the samples back the way they were to resume, or press \"Start over instead\".")
+            if not resume:
+                sr = int(b.get("sr") or TCFG["sample_rate"])
+                if sr not in SR_CFG:
+                    raise ModelError("Sample rate must be 32000, 40000 or 48000.")
+                length = b.get("length") if b.get("length") in LENGTHS else "auto"
+                vname = slug(b.get("voice_name") or f"{proj.name}-uc")
+                if not vname:
+                    raise ModelError("Give the new voice a name.")
+                check_voice_name(proj, vname)
+                for k in FRESH_KEYS:   # (an Improve's refine plan never leaks into a training; exported stays)
+                    st.pop(k, None)
+                st.update(sr=sr, length=length, voice_name=vname, epochs=None)
+                (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
+            st["state"] = "queued"
+            proj.save()
+        control = Control()
+        job = jobs.Job("train")
+        jobs.JOBS[job.id] = job
+        ACTIVE[proj.name] = {"job": job, "control": control, "kind": "train"}
 
     def service():
         """Covers queued while training run right away, between training steps (models stay in VRAM)."""
@@ -411,23 +413,24 @@ def start_auto(name: str, b: dict):
     train (auto length) and add the best save to the voices. Same steps as a one-shot cover's training."""
     from . import service
     from .trainer import Control
-    proj = P.Project.load(name)
-    if _busy(proj.name):
-        raise ModelError("This project is already busy.")
-    if any(a["kind"] in ("train", "auto") and not a["job"].finished for a in ACTIVE.values()):
-        raise ModelError("Another voice is training right now. One voice trains at a time.")
-    if not proj.sources and not proj.person:
-        raise ModelError("Type a name and find clips first.")
-    if b.get("voice_name"):
-        check_voice_name(proj, slug(b["voice_name"]))
-        with P.lock(proj.name):
-            pr = P.Project.load(proj.name)
-            pr.train["voice_name"] = slug(b["voice_name"])
-            pr.save()
-    control = Control()
-    job = jobs.Job("train-auto")
-    jobs.JOBS[job.id] = job
-    ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
+    with _STARTING:
+        proj = P.Project.load(name)
+        if _busy(proj.name):
+            raise ModelError("This project is already busy.")
+        if any(a["kind"] in ("train", "auto") and not a["job"].finished for a in ACTIVE.values()):
+            raise ModelError("Another voice is training right now. One voice trains at a time.")
+        if not proj.sources and not proj.person:
+            raise ModelError("Type a name and find clips first.")
+        if b.get("voice_name"):
+            check_voice_name(proj, slug(b["voice_name"]))
+            with P.lock(proj.name):
+                pr = P.Project.load(proj.name)
+                pr.train["voice_name"] = slug(b["voice_name"])
+                pr.save()
+        control = Control()
+        job = jobs.Job("train-auto")
+        jobs.JOBS[job.id] = job
+        ACTIVE[proj.name] = {"job": job, "control": control, "kind": "auto"}
 
     def between():   # not `service`: that name is the module this function calls below ("Do it all" failed with an AttributeError)
         jobs.serve_between()
