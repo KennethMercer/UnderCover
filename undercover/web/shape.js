@@ -107,11 +107,14 @@ function shLanding(part) {
   const ok = p.find(x => x.ok);
   if (!ok) {
     const s = p[0].no;
-    const way = /near the start/.test(s) ? " Take the stretch from the start of the line." : /near the end/.test(s) ? " Take the stretch a little further, to the end of the line." : "";
+    // which way to move, only when the pick doesn't already go there (Internal Affairs D2: a pick from a line's first word was told to start at the line's start)
+    const lines = shLines(), [a, b] = SH.pick;
+    const way = /near the start/.test(s) && !lines.some(l => l.words[0] === a) ? " Take the stretch from the start of the line."
+      : /near the end/.test(s) && !lines.some(l => l.words.at(-1) === b) ? " Take the stretch a little further, to the end of the line." : "";
     return { k: "no", s: s + way };
   }
   const e = ok.ok.edit;
-  if (e.moved) return { k: /between two sung sounds/.test(e.moved) ? "warn" : "ok", s: e.moved + (/between two sung sounds/.test(e.moved) ? " The join may be heard." : "") };
+  if (e.moved) return { k: /may be heard/.test(e.moved) ? "warn" : "ok", s: e.moved };   // (the gate's one sentence: where it landed)
   const w = e.words || SH.pick, d = SH.doc;
   const from = e.t0 <= 0.05 ? "Starts at the top of the song" : "Starts in the pause before “" + shBare(shWord(w[0])) + "”";   // (plain text)
   const to = e.t1 >= d.duration - 0.05 ? "ends at the end of the song" : "ends in the pause after “" + shBare(shWord(w[1])) + "”";

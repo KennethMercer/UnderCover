@@ -8763,7 +8763,7 @@ def u_edits():
     e = E.check_edit({**sing, "t0": 20.4, "t1": 40.4}, doc)
     assert (e["t0"], e["t1"]) == (20.4, 40.4) and e["moved"] == "", e
     e = E.check_edit({**sing, "t0": 19.0, "t1": 39.0}, doc)
-    assert (e["t0"], e["t1"]) == (20.02, 40.02) and 'The start moved past "w34"' in e["moved"] and 'The end moved past "w74"' in e["moved"], e
+    assert (e["t0"], e["t1"]) == (20.02, 40.02) and e["moved"] == 'It starts just after "w35" and ends just after "w75" (0:20–0:40).', e   # (the word next to where it landed)
     assert e["words"] == [36, 75], e
     e = E.check_edit({**sing, "section": 1}, doc)
     assert (e["t0"], e["t1"]) == (20.98, 40.02), e
@@ -8772,7 +8772,7 @@ def u_edits():
     e = E.check_edit({**sing, "t0": 0.01, "t1": 59.99}, doc)
     assert (e["t0"], e["t1"]) == (0.0, 60.0), e   # the ends of the song are ends
     e = E.check_edit({**sing, "t0": 44.0, "t1": 59.99}, doc)
-    assert (e["t0"], e["t1"]) == (45.0, 60.0) and "between two sung sounds" in e["moved"], e   # a dip only with no silence near, and it says so
+    assert (e["t0"], e["t1"]) == (45.0, 60.0) and e["moved"] == 'It starts just after "w85" and ends at the end of the song (0:45–1:00); the start may be heard.', e   # a dip only with no silence near, and it says so
     # what's refused, and the list unchanged
     for bad in ([], "x", None, 3, {**sing}, {**sing, "t0": 1}, {**sing, "t0": 1, "t1": 9, "section": 0},
                 {**sing, "t0": 1, "t1": 9, "path": "../x"}, {**sing, "t0": float("nan"), "t1": 9}, {**sing, "t0": 1, "t1": float("inf")},
@@ -8791,7 +8791,7 @@ def u_edits():
     refused({"op": "key", "part": "lead", "t0": 20.2, "t1": 40.2}, doc, "key")
     assert E.check_edit({**sing, "t0": 20.2, "t1": 40.2, "note": "a\u202eb\x07c\nd\u200fé"}, doc)["note"] == "abcdé"   # (outside text, shown as text)
     long = [list(w) for w in words]   # a heard word of any length can't make an edit the list can't read back
-    long[34][0], long[74][0], long[6][0] = (" " + "x" * 180,) * 3
+    long[35][0], long[75][0], long[6][0] = (" " + "x" * 180,) * 3
     big = E.new_doc("0123456789", long, rows, plan, plan, 60.0, {"A": 0, "B": -1}, pts, gate, True, True)
     e = E.check_edit({**sing, "t0": 19.0, "t1": 39.0}, big)
     assert len(e["moved"]) <= E.MAX_SAID and '"' + "x" * E.MAX_WORD + '"' in e["moved"], e["moved"]
@@ -9197,12 +9197,12 @@ def u_edits():
     pd = E.new_doc("0123456789", ws, [], two, two, 30.0, {"A": 0, "B": 0}, E.snap_points(x, x, ws), gate, True, True)
     assert pd["points"]["lead"] == [[0.0, 8.0], [12.0, 15.0], [20.0, 30.0]], pd["points"]
     e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [12, 26], "words_hash": pd["words_hash"]}, pd)
-    assert e["t1"] > 20.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the end in the outro
+    assert e["t1"] > 20.0 and "may be heard" not in (e["moved"] or ""), e   # the end in the outro
     e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [0, 11], "words_hash": pd["words_hash"]}, pd)
-    assert 7.9 <= e["t0"] <= 8.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
-    assert "past" not in e["moved"] and e["moved"] == "The end moved 0.5 s.", e   # an edge moved outward is past none of its own words
+    assert 7.9 <= e["t0"] <= 8.0 and "may be heard" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
+    assert e["moved"] == 'It starts just before "w0" and ends just after "w11" (0:07–0:12).', e   # an edge moved outward is past none of its own words
     e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 6.0, "t1": 16.5}, pd)   # an end moved in: the nearest word it left out
-    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'The end moved past "x4".'), e
+    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'It starts just before "w0" and ends just before "x0" (0:06–0:14).'), e
     refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
     assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
     long_back = np.concatenate([x, 0.3 * np.sin(2 * np.pi * 220 * np.arange(16000 * 3) / 16000).astype(np.float32), np.zeros(16000, np.float32)])
@@ -10026,6 +10026,43 @@ want("done, same voice", doneLine({song: {title: "x"}, voice: {...bw, name: "mic
     assert not out, "; ".join(out or [])
     return "the cover's own key; both names in the say line; the alone line; " + (
         "no Chrome here: the page's lines not run" if out is None else "the plan's rows and the done line in Chrome")
+
+
+@check("Shape it's landing sentences (Internal Affairs D2), on synthetic audio: a line picked from its first word, the other singer running right up to it, says in one sentence where the stretch starts and ends and which join may be heard; a refusal names the picked word, not the one before it")
+def u_duet_shape_words():
+    import numpy as np
+    from undercover.core.voices import ModelError
+    from undercover.frontman import edits as E
+    sr, dur = 16000, 30.0
+    t = np.arange(int(sr * dur)) / sr
+    tone = lambda *spans: np.where(np.any([(t >= a) & (t < b) for a, b in spans], axis=0), 0.3 * np.sin(2 * np.pi * 220 * t), 0.0).astype(np.float32)
+    # the other singer runs right up to "Baby,"; a breath after it; a held note to "calling?"; then quiet. The backing never stops.
+    lead = tone((10.0, 13.4), (13.6, 18.0), (18.5, 19.0))
+    back = tone((0.0, dur))
+    ws = [[" oh", 10.0, 12.9], [" Baby,", 12.9, 13.4], [" are", 13.6, 13.8], [" you", 13.9, 14.2], [" calling?", 17.5, 18.0], [" so", 18.5, 19.0]]
+    rows = [{"t0": 10.0, "t1": 12.9, "text": "", "rep": False}, {"t0": 12.9, "t1": 18.0, "text": "", "rep": False}, {"t0": 18.5, "t1": 19.0, "text": "", "rep": False}]
+    plan = [[0.0, 12.9, "B"], [12.9, dur, "A"]]
+    gate = {"instrument": [], "chorus": [], "mode": "keep"}
+    doc = E.new_doc("0123456789", ws, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead, back, ws), gate, True, True)
+    pick = lambda part, w, d=doc: E.check_edit({"op": "singer", "part": part, "who": "B", "words": w, "words_hash": doc["words_hash"]}, d)
+    e = pick("lead", [1, 4])
+    assert e["moved"] == 'It starts just after "Baby," and ends just after "calling?" (0:13–0:18).', e
+    try:
+        pick("backing", [1, 4])
+        raise AssertionError("the backing found a place")
+    except ModelError as x:
+        assert str(x) == "There's no place to change near the start, at \"Baby,\".", x   # (not "oh", which ends where "Baby," starts)
+    # a dip at a join: said once, as the join that may be heard
+    dipped = {**doc, "points": {**doc["points"], "lead": [p for p in doc["points"]["lead"] if p[0] > 14.0], "dips": [13.5]}}
+    e = pick("lead", [1, 4], dipped)
+    assert e["moved"] == 'It starts just after "Baby," and ends just after "calling?" (0:13–0:18); the start may be heard.', e
+    # both edges moved out: each names its own word
+    wide = {**doc, "points": {"lead": [[9.0, 9.9], [13.4, 13.6]], "backing": [], "dips": []}}
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "t0": 10.4, "t1": 12.0}, wide)
+    assert e["moved"] == 'It starts just before "oh" and ends just after "Baby," (0:09–0:13).', e
+    # edges where they were asked: nothing to say (the page says where it starts and ends itself)
+    assert pick("lead", [5, 5])["moved"] == ""
+    return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
 
 
 @check("hangs (hangfix, hangtune): listen-back hears a hang inside a phrase in the take itself (a word's vowel to the next one's, 200 ms or more with 100 ms silent, no pause marked in the text), or a break (60 ms of silence where the words run into each other, no stop at the join), and reads it again with another seed, up to 5 tries, keeping the take whose longest join is shortest among takes as bad; a release blip is no vowel; a comma's pause isn't a hang; a thumbs-down for pace or pauses reads it again with new seeds; the seed is kept with the speech")
@@ -12871,13 +12908,17 @@ def u_shape_page():
     window.api = async (u, o) => {
       if (/edits\/price$/.test(u)) {
         if (o.json.part === "backing") throw new Error("There's no place to change near the start, at \"Hold\".");
-        return { edit: { moved: "The start moved past \"Hold\".", t0: 1, t1: 2.1, words: [0, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
+        return { edit: { moved: "It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the start may be heard.", t0: 1.35, t1: 2.1, words: [1, 2] }, fit: o.json.op === "octave" ? { said: "Lead, an octave up, is a poor fit here: strained." } : null };
       }
       throw new Error("stub");
     };
     SH.pick = [0, 2]; await shProbe();
     const bar = $("#shape .sh-bar").innerText;
-    ok("the bar says the gate's sentence", bar.includes("moved past \"Hold\"") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
+    ok("the bar says the gate's sentence", bar.includes("It starts just after \"Hold\" and ends just after \"night\" (0:01–0:02); the start may be heard.") && bar.includes("poor fit") && bar.includes("no place to change near the start"));
+    ok("a pick from a line's first word isn't told to start there (D2)", !bar.includes("Take the stretch from the start of the line"));
+    SH.pick = [1, 2]; await shProbe();
+    ok("a pick inside a line is", $("#shape .sh-bar").innerText.includes("at \"Hold\". Take the stretch from the start of the line."));
+    SH.pick = [0, 2]; await shProbe();
     ok("the choices are the gate's", $$("#shape .pill").map(p => p.textContent).join("|") === "b-uc takes it|An octave up|An octave down");
     const late = shProbe(); SH.pick = null; SH.seq++; await late;
     ok("a late answer is dropped", SH.probes === null);
@@ -16622,7 +16663,7 @@ def main():
     print("unit checks")
     for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting):
