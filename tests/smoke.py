@@ -12318,6 +12318,10 @@ def u_find_setting():
     ok("the phone's open box stays with its row", !gone($("#phone-box")) && !gone($("#set-phone-row")));
     $("#phone-box").hidden = true;
 
+    const phoneRow = $("#set-phone-row"), wasSt = PH.st; phoneRow.hidden = true; PH.st = { offered: false };
+    type("away from home");
+    ok("a release without the phone link says where it went, with no Go there", ($(".sf-hit")?.textContent || "").includes("Your phone") && /Off in this version/.test($(".sf-hit").textContent) && !$(".sf-hit button"));
+    phoneRow.hidden = false; PH.st = wasSt;
     type("theme");
     ok("basic: Theme isn't shown, the hint is", gone($("#set-theme-row")) && ($(".sf-deep")?.textContent || "") === "Theme is in Deep Cover. Turn on Deep Cover to see it." && !$(".sf-none"));
     $(".sf-deep button").click(); await wait(50);

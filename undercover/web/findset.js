@@ -54,6 +54,11 @@ function findIndex() {
     const el = $(sel);
     if (el && !el.hidden && el.getClientRects().length) out.push({ room: "top", el, name, say, find, deep: false });
   }
+  // a release without the phone link (/api/phone's offered: false) hides its row, so its old names would find nothing: one fixed
+  // entry says where it went, with no way there (the maintainers' design notes, phone-hidden-1.2)
+  const phone = $("#set-phone-row");
+  if (typeof PH === "object" && PH.st?.offered === false && phone?.hidden)
+    out.push({ room: "off", el: null, name: "Your phone", say: "Off in this version. It comes back in a later one.", find: phone.dataset.find, deep: false });
   return out;
 }
 
@@ -119,6 +124,7 @@ function findRun() {
     for (const e of away) {
       const row = findEl("div", "sf-hit"), say = findEl("span"), b = findEl("b", "", e.name), small = findEl("small", "", e.say);
       findMark(b, qs); findMark(small, qs);
+      if (e.room === "off") { say.append(b, small); row.append(say); list.append(row); continue; }   // (nowhere to go in this version)
       say.append(b, " ", findEl("span", "sf-where", e.room === "top" ? "Top bar" : FIND_ROOMS[e.room]), small);
       const go = findEl("button", "btn", "Go there"); go.type = "button"; go.onclick = () => findGo(e);
       row.append(say, go); list.append(row);
@@ -171,6 +177,9 @@ function findPlace() {
   const more = $("#sh-find-more");
   if (more.parentNode !== room || room.lastElementChild !== more) room.append(more);
   findRun();
+  // the phone's state says whether this version offers the link (an entry above); it's loaded when Settings opens, so from the other
+  // two rooms it's asked for once here
+  if (typeof PH === "object" && !PH.st && !FIND.askedPhone && typeof loadPhone === "function") { FIND.askedPhone = true; loadPhone().then(() => findRun()); }
 }
 
 (function () {
