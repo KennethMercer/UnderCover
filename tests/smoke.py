@@ -4137,6 +4137,23 @@ def u_example_names():
     return "DoubleAgent says Johnny Cash and Audrey Hepburn"
 
 
+@check("how this copy is started again (InternalAffairs, 1.2): an installed copy (UnderCover.cmd) says the Start menu, a source checkout (scripts\\UnderCover.bat only) its .bat; /api/status carries it for the PC")
+def u_launcher_said():
+    import tempfile
+    from undercover.core import about
+    with tempfile.TemporaryDirectory() as t:
+        app = Path(t)
+        assert about.launcher(app) == "start-menu"
+        (app / "scripts").mkdir()
+        (app / "scripts" / "UnderCover.bat").write_text("@echo off\n", encoding="utf-8")
+        assert about.launcher(app) == "bat"
+        (app / "UnderCover.cmd").write_text("@echo off\n", encoding="utf-8")   # (an installer copy with a scripts folder: still the Start menu)
+        assert about.launcher(app) == "start-menu"
+    src = (ROOT / "undercover" / "app" / "server.py").read_text(encoding="utf-8")
+    assert '"launcher": None if self.remote else about.launcher()' in src, "/api/status lost its launcher"
+    return f"start-menu / bat / start-menu; this checkout: {about.launcher()}"
+
+
 @check("'tonight' is tonight (Internal Affairs P8-2): a tonight add arms the queue for the saved start time (23:00 when none, said so), never for now; an emptied queue disarms; Start now is one-time and goes back to the start time once dry; tonight's items (a move to the queue too) wait for the night")
 def u_tonight():
     from datetime import datetime
@@ -13037,7 +13054,7 @@ def _page_selftest(body: str, routes: dict | None = None) -> str:
     return got.replace(" | ", "; ")
 
 
-@check("a fresh install's walk (InternalAffairs, 1.2), the page side in headless Chrome (skipped without it): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows; its waiting line says Finishing up once the job has run")
+@check("a fresh install's walk (InternalAffairs, 1.2), the page side in headless Chrome (skipped without it): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows; its waiting line says Finishing up once the job has run; Start it again from the Start menu (the .bat only in Deep Cover, in a source checkout)")
 def u_first_walk():
     got = _page_selftest(r"""
     const V = (name, x) => ({ name, kind: "speaking", cadence: {}, ...x });
@@ -13068,6 +13085,16 @@ def u_first_walk():
     JF.list = []; tourNow(); const ending = said();
     JF.list = realJobs; nowEl.id = ""; TOUR.job = null; TOUR.seen = false;
     ok(`F9 Getting started, then the job's words, then Finishing up (${before} / ${during} / ${ending})`, before === "Getting started." && during && during !== before && ending === "Finishing up.");
+    // F5: how it's started again: the Start menu; a source checkout's .bat only in Deep Cover
+    const quitSay = () => $("#sys-quit-say").textContent;
+    delete document.body.dataset.launcher; setDeep(true); const instDeep = quitSay();
+    document.body.dataset.launcher = "bat"; setDeep(false); const srcBasic = quitSay(); setDeep(true); const srcDeep = quitSay(); setDeep(false);
+    ok(`F5 the System room's Quit line (${instDeep} / ${srcBasic} / ${srcDeep})`, instDeep === "Quit stops it on this PC. Start it again from the Start menu."
+       && srcBasic === instDeep && srcDeep === "Quit stops it on this PC. Start it again with scripts\\UnderCover.bat.");
+    let lost = ""; try { await api("http://127.0.0.1:9/nothing"); } catch (e) { lost = e.message; }
+    ok(`F5 lost contact (${lost})`, lost === "Lost contact with UnderCover. Is it still running? If not, start it again from the Start menu.");
+    delete document.body.dataset.launcher;
+    ok("F5 no .bat left in the page's copy", !/UnderCover\.bat/.test($("#room-system").textContent) && /^Start it again from the Start menu, then reload this page\.$/.test(startAgain(", then reload this page")));
 """)
     return got or "no Chrome here: skipped"
 
@@ -16650,7 +16677,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,

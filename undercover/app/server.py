@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from ..core import gpu, jobs, phone, platform
+from ..core import about, gpu, jobs, phone, platform
 from ..core.config import CONFIG, ROOT, path
 from ..core.files import AUDIO_EXT, roots as _roots
 from ..core.jobs import GPU_QUEUE, JOBS, STATUS, Cancelled, Job, friendly, gpu_worker
@@ -572,7 +572,9 @@ class Handler(BaseHTTPRequestHandler):
                                    "moving": bool(storage.MOVING),   # (a Storage move: an upload refused meanwhile may arrive as a drop)
                                    "move": _move_state() if self.remote and not self.away else None,
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
-                                   "app_folder": None if self.remote else str(ROOT)})
+                                   "app_folder": None if self.remote else str(ROOT),
+                                   # how it's started again, said when it stops: the Start menu, or a source checkout's .bat
+                                   "launcher": None if self.remote else about.launcher()})
             if p == "/api/voices":
                 return self._json(voices_json())
             m = re.fullmatch(r"/api/voices/([a-z0-9-]+)/preview", p)

@@ -80,7 +80,7 @@ $("#lib-ytdlp-auto").onchange = async e => {
 confirmClick($("#lib-quit"), "Quit UnderCover?", async () => {
   try {
     const r = await api("/api/quit", { json: {} });
-    document.body.innerHTML = `<div class="lib-empty" style="margin:20vh auto;max-width:420px;text-align:center"><b>UnderCover has stopped</b>${r.pausing ? "Voice work was paused; Resume continues it next time. " : ""}Start it again with UnderCover.bat, then reload this page.</div>`;
+    document.body.innerHTML = `<div class="lib-empty" style="margin:20vh auto;max-width:420px;text-align:center"><b>UnderCover has stopped</b>${r.pausing ? "Voice work was paused; Resume continues it next time. " : ""}${startAgain(", then reload this page")}</div>`;
   } catch (e) { showError(e.message, "Couldn't quit"); }
 });
 async function loadCat(keepSel) {

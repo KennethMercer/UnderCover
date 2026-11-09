@@ -75,7 +75,15 @@ function setDeep(on) {
   if (first) { if (on && !store.get("uc-deep-seen", false)) first.hidden = false; else first.hidden = true; }
   $("#set-deep")?.setAttribute("aria-checked", on);   // the switch in SafeHouse's Settings room
   if (typeof findRun === "function") findRun();   // Find a setting shows (or only counts) Deep Cover's rows (findset.js)
+  sayStartAgain();
 }
+// How UnderCover is started again, said wherever it stops or can't be reached: an installed copy from the Start menu; a source
+// checkout's scripts\UnderCover.bat only in Deep Cover (/api/status's `launcher`, kept on body[data-launcher])
+function startAgain(tail = "") {
+  const bat = document.body.dataset.launcher === "bat" && document.body.classList.contains("deep");
+  return `Start it again ${bat ? "with scripts\\UnderCover.bat" : "from the Start menu"}${tail}.`;
+}
+function sayStartAgain() { const el = $("#sys-quit-say"); if (el) el.textContent = `Quit stops it on this PC. ${startAgain()}`; }
 setDeep(!!store.get("uc-deep", false));
 $("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
 $("#deep-first-ok")?.addEventListener("click", () => { store.set("uc-deep-seen", true); $("#deep-first").hidden = true; });
@@ -124,7 +132,7 @@ async function api(path, opts = {}) {
   if (opts.json !== undefined) { init.method = init.method || "POST"; init.body = JSON.stringify(opts.json); init.headers["Content-Type"] = "application/json"; }
   let r;
   try { r = await fetch(path, init); }
-  catch (e) { throw new Error("Lost contact with UnderCover. Is the UnderCover window still open? Start it again with UnderCover.bat."); }
+  catch (e) { throw new Error(`Lost contact with UnderCover. Is it still running? If not, ${startAgain().replace(/^S/, "s")}`); }
   if (r.status === 401) { location.replace("/pair"); throw new Error("This phone isn't paired any more."); }   // only phones get 401 (phase 11)
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(data.error || `Request failed (${r.status}).`), { status: r.status, data });   // the body rides along (a 409 can say more)
@@ -209,6 +217,7 @@ async function pollStatus() {
     if (s.move) { $("#ph-move-say").textContent = s.move === "ready" ? "UnderCover has a new link for this phone." : "On the PC, set up Your phone in SafeHouse's Settings to keep this phone connected."; $("#ph-move-go").hidden = s.move !== "ready"; }
     if (s.device) $("#set-phone-me").textContent = `This phone is connected as ${s.device}. Phones are added and removed on the PC.`;
     sysStatus(s);
+    if (s.launcher && document.body.dataset.launcher !== s.launcher) { document.body.dataset.launcher = s.launcher; sayStartAgain(); }
     if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);
     if (typeof tourStatus === "function") tourStatus(s.tour);   // the First assignment's tour: a fresh install's first visit to FrontMan (firstrun.js)   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)
     if (typeof firstReady === "function") firstReady(s);   // the first start's download in the one-shot card (oneshot.js)
@@ -281,7 +290,7 @@ async function restartServer(now = false) {
     }
     // A server from before this feature has no restart endpoint (404); anything else (e.g. busy) is explained by e.message.
     const old = /not found/i.test(e.message);
-    showError(old ? "This copy of UnderCover is too old to restart itself. Start it again with UnderCover.bat or the desktop shortcut." : e.message,
+    showError(old ? `This copy of UnderCover is too old to restart itself. ${startAgain()}` : e.message,
               "Couldn't restart", old ? null : { label: "Try again", run: () => restartServer() }, !old);
     return;
   }
@@ -299,8 +308,7 @@ async function restartServer(now = false) {
       if (s.started && s.started !== before) { location.reload(); return; }
     } catch (e) { /* down or timed out while it restarts */ }
   }
-  showError("UnderCover didn't come back after restarting. Start it again with UnderCover.bat or the desktop shortcut. " +
-            "If that fails, logs/server.log has the details.", "Restart failed");
+  showError(`UnderCover didn't come back after restarting. ${startAgain()} If that fails, logs/server.log has the details.`, "Restart failed");
 }
 // Look (SafeHouse's Settings room): follow Windows (the default), or always dark / light. uc-theme = "system" | "dark" | "light",
 // read before first paint by the script in index.html's head
