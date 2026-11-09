@@ -12994,11 +12994,10 @@ def u_stamp_settings():
 @check("a restart never cuts off unsaved work: a speech, a one-shot or an install is refused (Restart now offered); a "
        "Storage move is refused even with now; a pause-restart waits for work started meanwhile; quit refuses the same")
 def u_restart_guard():
-    import threading
     from types import SimpleNamespace
     from undercover.app import server as S
     from undercover.core import jobs, worklist
-    saved = (S.SERVER, dict(S.JOBS), worklist.active, worklist.pause_all)
+    saved = (S.SERVER, dict(S.JOBS), worklist.active, worklist.pause_all, S.LATE_WORK_WAIT_S, worklist.restart_abandoned)
     shut = []
     S.SERVER = SimpleNamespace(shutdown=lambda: shut.append(1))
 
@@ -13040,31 +13039,56 @@ def u_restart_guard():
             assert S.RESTART.wait(2) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "Restart now didn't restart"
             S.RESTART.clear()
             shut.clear()
-            only("speakwarm")
+            only("speakwarm", "voicepreview")   # (the engine warming, a preview line the backfill makes again)
             assert call("_restart")[0] == 200 and S.RESTART.wait(2)
             S.RESTART.clear()
             wait_for(lambda: shut, 3, every=0.05, what="the shutdown")
             shut.clear()
-            # voice work pauses first; a speech started while it pauses finishes before the restart
+            # voice work pauses first; a speech started while it pauses finishes before the restart, and meanwhile this
+            # process's worklist loop leaves "resume after restart" to the next one
             S.JOBS.clear()
             busy = [True]
             worklist.active = lambda: busy[0]
             worklist.pause_all = lambda **kw: {}
             st, obj = call("_restart")
-            assert st == 200 and obj.get("pausing"), obj
+            assert st == 200 and obj.get("pausing") and worklist.RESTARTING.is_set(), obj
+            saved_models = jobs.STATUS.get("models")
+            jobs.STATUS["models"] = "ready"
+            try:
+                assert not worklist._resume_due({"resume_after_restart": True, "resume": [], "held": True}), \
+                    "the running process would resume the work it paused to restart"
+                worklist.RESTARTING.clear()
+                assert worklist._resume_due({"resume_after_restart": True, "resume": [], "held": True}), "the new process wouldn't"
+                worklist.RESTARTING.set()
+            finally:
+                jobs.STATUS["models"] = saved_models
             late, = only("speech")
             busy[0] = False
             time.sleep(1.5)
             assert not S.RESTART.is_set(), "the restart didn't wait for the speech started while voice work paused"
             late.finish("done")
             assert S.RESTART.wait(4) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "the restart didn't follow the speech's end"
+            S.RESTART.clear()
+            shut.clear()
+            # work started meanwhile that doesn't finish in time: the restart is called off and the voice work carries on
+            called_off = []
+            worklist.restart_abandoned = lambda: called_off.append(1) or {}
+            S.LATE_WORK_WAIT_S = 1
+            busy[0] = True
+            assert call("_restart")[1].get("pausing")
+            stuck, = only("speech")
+            busy[0] = False
+            assert wait_for(lambda: called_off, 6, every=0.1, what="the restart called off")
+            assert not S.RESTART.is_set() and not shut and not stuck.cancel, "a restart cut off work that didn't finish"
     finally:
         S.RESTART.clear()
+        S.LATE_WORK_WAIT_S = saved[4]
+        worklist.RESTARTING.clear()
         S.SERVER = saved[0]
         S.JOBS.clear()
         S.JOBS.update(saved[1])
-        worklist.active, worklist.pause_all = saved[2], saved[3]
-    return "409 with now_ok for 6 kinds, 409 even with now for the 4 that can't stop halfway, waits for late work"
+        worklist.active, worklist.pause_all, worklist.restart_abandoned = saved[2], saved[3], saved[5]
+    return "409 with now_ok for 6 kinds, 409 even with now for the 4 that can't stop halfway, waits for late work or calls it off"
 
 
 @check("the GPU worker rests when no waiting job fits Low profile's cap: two or three of them looked at under 10 times in 2 s, "
@@ -13113,6 +13137,14 @@ def u_defer_rest():
             finally:
                 jobs.DEFER_REST_S = rest
             assert ran == [go.id] and jobs.GPU_QUEUE.qsize() == 2 and not d, (ran, jobs.GPU_QUEUE.qsize(), d)
+            # a waiting job that fails at its next look leaves the queue: it no longer counts toward a whole pass
+            jobs.GPU_QUEUE = queue.Queue()
+            bad = jobs.Job("zz-smoke")
+            jobs.GPU_QUEUE.put((bad, lambda j: None))
+            jobs.START_GATES[:] = [lambda job: 1 / 0]
+            d = {bad.id}
+            jobs._take_one(d)
+            assert bad.state == "error" and not d and jobs.GPU_QUEUE.empty(), (bad.state, d)
     finally:
         jobs.GPU_QUEUE, lowprofile.before_job = saved[0], saved[1]
         jobs.START_GATES[:] = saved[2]
@@ -13142,6 +13174,12 @@ def u_work_space():
             assert job.state == "done", job.events[-1:]
             lib = library._summary()
             assert lib["drive"] == "E:" and lib["free"] == 100e9, (lib["drive"], lib["free"])
+            res = {r["id"]: r for r in doctor.c_disk(None)}   # (songs and models on the full drive: bad, but no job refuses)
+            other = [r for k, r in res.items() if k != "disk:E:"]
+            assert res["disk:E:"]["state"] == "ok" and other and all(r["state"] == "bad" and "refuse" not in r["say"]
+                                                                     for r in other), res
+            from undercover.app import server as S
+            assert S._hb_state()["disk_free_gb"] == 100.0, "the heartbeat records the app's drive, not the work's"
             free.update({"E:": 1e9, "app": 100e9})
             assert storage.low_work_space() == ("E:", 1e9)
             job = jobs.Job("zz-smoke")
@@ -13157,7 +13195,7 @@ def u_work_space():
     return "E: judged, named by the guard, Doctor and the Library"
 
 
-@check("while a Storage move runs, a dropped song or voice, a song from YouTube and a voice install are refused (409, "
+@check("while a Storage move runs, a dropped song or voice, a song from YouTube, a voice install, a training recording and a theme save, import or delete are refused (409, "
        "nothing written, the body left unread); an upload under way holds a move back")
 def u_upload_moving():
     import io
@@ -13198,15 +13236,25 @@ def u_upload_moving():
             before = len(S.JOBS)
             h._start_install({"url": "https://huggingface.co/x/y/resolve/main/v.zip", "name": "v"})
             assert out["status"] == 409 and len(S.JOBS) == before, out
+            from undercover.app import themes_api
+            from undercover.doubleagent import api as DA
+            h, out = handler(headers={"X-Filename": "take.wav"}, body=b"\0" * 4096)   # (a recording for a training)
+            DA._upload(h, None, {})
+            assert out["status"] == 409 and h.close_connection and h.rfile.tell() == 0, out
+            for method, route in (("POST", "/api/themes/import"), ("POST", "/api/themes"), ("DELETE", "/api/themes/my-theme")):
+                h, out = handler(body=b"PK" + b"\0" * 100)
+                assert themes_api.handle(h, method, route) and out["status"] == 409 and h.rfile.tell() == 0, (route, out)
+            h, out = handler()
+            assert themes_api.handle(h, "GET", "/api/themes") and out["status"] == 200, "reading the themes was refused"
             assert storage._WRITES["n"] == 0, storage._WRITES
             # the other way round: an upload under way, and a move waits for it
             storage.MOVING.clear()
             assert storage.start_writing() is None
             try:
-                assert storage._busy() == "the upload under way", storage._busy()
+                assert storage._busy() == "the file being added", storage._busy()
             finally:
                 storage.done_writing()
-            assert storage._busy() != "the upload under way" and storage._WRITES["n"] == 0
+            assert storage._busy() != "the file being added" and storage._WRITES["n"] == 0
     finally:
         storage.MOVING.clear()
         storage.MOVING.update(saved[0])
@@ -13215,7 +13263,7 @@ def u_upload_moving():
         songs.download = saved[2]
         S.JOBS.clear()
         S.JOBS.update(saved[3])
-    return "four routes refused with the move's own words; a move waits for an upload"
+    return "seven routes refused with the move's own words; a move waits for an upload"
 
 
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")

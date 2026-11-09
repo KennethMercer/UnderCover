@@ -91,10 +91,14 @@ JSON_MAX_FOR = {"/api/themes": 8 << 20,          # a theme saved from the editor
 # job kinds only the PC starts (a Storage move, an add-on, Make smaller, the yt-dlp update): never cancelled or retried
 # from a phone, whatever route started them
 PC_ONLY_KINDS = ("move", "addon", "smaller", "ytdlp")
-# job kinds a restart or quit never cuts off, not even "Restart now": stopped halfway they leave things half done (a
-# move killed while rewriting paths has config.toml switched and the stored paths half rewritten)
-UNSTOPPABLE_KINDS = PC_ONLY_KINDS
-RESTART_SAFE_KINDS = ("speakwarm",)   # job kinds a restart ends without asking: nothing of the user's is lost
+# job kinds a restart or quit never cuts off, not even "Restart now" (which exits at once: a cancel isn't waited for):
+# ended halfway they leave things half done (a move killed while rewriting paths has config.toml switched and the stored
+# paths half rewritten; an add-on's packages, Make smaller's indexes and the yt-dlp swap likewise)
+UNSTOPPABLE_KINDS = ("move", "addon", "smaller", "ytdlp")
+# job kinds a restart ends without asking: nothing of the user's is lost (the engine warms again; a voice's preview line
+# is made again by the backfill)
+RESTART_SAFE_KINDS = ("speakwarm", "voicepreview")
+LATE_WORK_WAIT_S = 600   # a pause-restart waits this long for work started while voice work paused, then gives up
 
 
 def _unfinished_work() -> list:
@@ -103,6 +107,18 @@ def _unfinished_work() -> list:
     from ..core import worklist
     return [j for j in list(JOBS.values()) if not j.finished and j.kind not in RESTART_SAFE_KINDS
             and (j.kind not in worklist.PAUSABLE or j.kind in worklist.PARTLY_PAUSABLE)]
+
+
+def _wait_late_work(limit: float | None = None) -> bool:
+    """After voice work paused for a restart or quit: wait for work started meanwhile that Pause doesn't set aside (it
+    finishes, never cut off). -> True when there's none left, False when some still runs after LATE_WORK_WAIT_S (the
+    caller calls the restart or quit off rather than end it)."""
+    t0 = time.time()
+    while _unfinished_work():
+        if time.time() - t0 > (LATE_WORK_WAIT_S if limit is None else limit):
+            return False
+        time.sleep(1)
+    return True
 
 
 AWAY_401, AWAY_403 = b"Unauthorized", b"Forbidden"   # the away listener's refusals before a token: no names, no state
@@ -171,7 +187,9 @@ def _hb_state() -> dict:
             jobs.append({"kind": j.kind, "stage": ev.get("stage"), "epoch": ev.get("epoch"),
                          "message": (ev.get("message") or "")[:80], "id": j.id,
                          "spec": j.resume_spec})   # the Doctor resumes (or offers) it after a crash (phase 10)
-    rec = {"jobs": jobs, "disk_free_gb": round(shutil.disk_usage(ROOT).free / 1e9, 1)}
+    from ..core import storage
+    space = storage.work_space()   # (the drive the work writes to with the least free: the one that runs out)
+    rec = {"jobs": jobs, "disk_free_gb": round((space[0][1] if space else shutil.disk_usage(ROOT).free) / 1e9, 1)}
     torch = sys.modules.get("torch")
     if torch is not None and STATUS.get("gpu"):
         try:
@@ -788,10 +806,14 @@ class Handler(BaseHTTPRequestHandler):
         if not src:
             return self._error("Paste a link or pick a search result.")
         from ..core import storage
-        if storage.moving_why():   # (a voice landing in the old folder mid-copy fails the move; once queued, a move waits)
-            return self._error(storage.moving_why(), 409)
-        job = Job("install", title=f"Installing {name or getattr(src, 'name', None) or 'a voice'}")
-        JOBS[job.id] = job
+        why = storage.start_writing()   # (a voice landing in the old folder mid-copy fails the move; once listed, the
+        if why:                         # job holds a move back: the reservation covers the moment until then)
+            return self._error(why, 409)
+        try:
+            job = Job("install", title=f"Installing {name or getattr(src, 'name', None) or 'a voice'}")
+            JOBS[job.id] = job
+        finally:
+            storage.done_writing()
 
         def run():
             last, seen = [0.0], []
@@ -869,14 +891,20 @@ class Handler(BaseHTTPRequestHandler):
                                "busy": [j.title or j.kind for j in blocking], "now_ok": True}, 409)
         from ..core import worklist
         if worklist.active():
-            # Voice work: pause it (training keeps its place), restart, and resume it automatically after
+            # Voice work: pause it (training keeps its place), restart, and resume it automatically after (in the new
+            # process: RESTARTING keeps this one's loop from resuming it meanwhile)
+            worklist.RESTARTING.set()
             worklist.pause_all(resume_after_restart=True)
 
             def when_paused():
                 t0 = time.time()
-                # (and anything started meanwhile that Pause doesn't set aside: it finishes first, never cut off)
-                while (worklist.active() and time.time() - t0 < 180) or _unfinished_work():
+                while worklist.active() and time.time() - t0 < 180:
                     time.sleep(1)
+                if not _wait_late_work():
+                    print("The restart was called off: work started while voice work paused didn't finish in time.",
+                          flush=True)
+                    worklist.restart_abandoned()
+                    return
                 RESTART.set()
                 SERVER.shutdown()
             threading.Thread(target=when_paused, daemon=True).start()
@@ -897,8 +925,11 @@ class Handler(BaseHTTPRequestHandler):
             if worklist.active():
                 worklist.pause_all()
                 t0 = time.time()
-                while (worklist.active() and time.time() - t0 < 180) or _unfinished_work():
+                while worklist.active() and time.time() - t0 < 180:
                     time.sleep(1)
+                if not _wait_late_work():   # (the voice work stays paused, kept for Resume, as Pause leaves it)
+                    print("Quit was called off: work started while voice work paused didn't finish in time.", flush=True)
+                    return
             SERVER.shutdown()   # serve_forever() returns in main(), which exits
         self._json({"ok": True, "pausing": worklist.active()})
         threading.Thread(target=stop, daemon=True).start()

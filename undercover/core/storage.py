@@ -85,9 +85,9 @@ def drive_of(p: Path) -> str:
 
 
 def work_space(keys=WORK_KEYS) -> list:
-    """[(drive, free bytes, folder)] for each drive the given [paths] folders are on (one per drive), least free first:
-    after a Storage move the work's files may be on another drive than the app (the maintainers' notes, bug hunt
-    2026-11-08: the guard looked at the app's drive)."""
+    """[(drive, free bytes, folder, key)] for each drive the given [paths] folders are on (one per drive: the first key
+    on it names it), least free first: after a Storage move the work's files may be on another drive than the app (the
+    maintainers' notes, bug hunt 2026-11-08: the guard looked at the app's drive)."""
     out, seen = [], set()
     for key in keys:
         try:
@@ -96,7 +96,7 @@ def work_space(keys=WORK_KEYS) -> list:
             if drive in seen:
                 continue
             seen.add(drive)
-            out.append((drive, shutil.disk_usage(_existing(p)).free, p))
+            out.append((drive, shutil.disk_usage(_existing(p)).free, p, key))
         except OSError:
             continue
     return sorted(out, key=lambda t: t[1])
@@ -104,7 +104,7 @@ def work_space(keys=WORK_KEYS) -> list:
 
 def low_work_space() -> tuple | None:
     """(drive, free bytes) of the first drive the work writes to that has under MIN_WORK_FREE, or None."""
-    for drive, free, _ in work_space():
+    for drive, free, _, _ in work_space():
         if free < MIN_WORK_FREE:
             return drive, free
     return None
@@ -229,7 +229,7 @@ def done_writing():
 def _busy() -> str | None:
     from . import jobs, worklist
     if _WRITES["n"]:
-        return "the upload under way"
+        return "the file being added"
     for j in jobs.JOBS.values():
         if not j.finished and j.kind != "move":
             return j.title or j.kind
@@ -459,9 +459,10 @@ def move(group: str, folder: str, job, from_room: bool = False, confirmed: bool 
     if why:
         raise ModelError(why)
     skips = {k: _skips(k) for k, _, _ in moves}
-    with _WRITES_LOCK:   # (with the uploads' check: one that started after check() is waited for, never copied halfway)
-        if _WRITES["n"]:
-            raise ModelError("Wait for the upload under way to finish first: nothing else can run while files move.")
+    with _WRITES_LOCK:   # (looked at again under the uploads' lock: one started after check() is waited for, never copied halfway)
+        busy = _busy()
+        if busy:
+            raise ModelError(f"Wait for {busy} to finish first: nothing else can run while files move.")
         MOVING.update(group=group, job=job.id)
     done_keys, copied = [], []
     defaults = {k: d for g in GROUPS.values() for k, _, d in g}

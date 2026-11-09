@@ -528,6 +528,7 @@ def _take_one(deferred: set):
             job.gpu_alloc_gb = (G.alloc_gb() or (None, None))[1]   # of it, the most in tensors (the rest is cache)
             lowprofile.after_job(job)
     except BaseException as e:   # never let the only GPU thread die: later jobs would wait forever
+        deferred.discard(job.id)   # (it's gone from the queue: it mustn't count toward a whole pass)
         try:
             job.finish("error", message=f"Something went wrong ({e.__class__.__name__}).", plain=False)
         except Exception:
