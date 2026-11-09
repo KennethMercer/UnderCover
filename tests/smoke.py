@@ -16257,6 +16257,55 @@ def u_body_close():
                 twice += [f"{f.name}:{node.name}.{n}" for n in set(names) if names.count(n) > 1]
     assert not twice, f"a method defined twice in one class: {twice}"
     return "an unread body ends the connection; a read one keeps it; a dropped upload during a move says the move; no method twice"
+
+
+@check("the server's log keeps real errors only: a client that went away mid-request (closed tab, dropped connection) leaves nothing; any other error still leaves its traceback; two known library warnings are filtered by their own words")
+def u_quiet_drops():
+    import contextlib, http.server, io, socket, threading
+    from undercover.app import server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            raise {"/gone": ConnectionAbortedError, "/reset": ConnectionResetError, "/pipe": BrokenPipeError}.get(self.path, ValueError)("x")
+
+        def log_message(self, *a):
+            pass
+    srv = server.ExclusiveServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            for path in ("/gone", "/reset", "/pipe"):
+                c = socket.create_connection(srv.server_address, timeout=5)
+                c.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+                c.recv(10)   # (the handler ends; the connection closes)
+                c.close()
+            time.sleep(0.3)
+            assert err.getvalue() == "", err.getvalue()[:300]
+            c = socket.create_connection(srv.server_address, timeout=5)
+            c.sendall(b"GET /bug HTTP/1.1\r\nHost: x\r\n\r\n")
+            c.recv(10)
+            c.close()
+            for _ in range(20):
+                if "ValueError" in err.getvalue():
+                    break
+                time.sleep(0.1)
+        assert "ValueError" in err.getvalue(), "a real error lost its traceback"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    import inspect, warnings   # two library warnings repeated on every run: filtered by their own message, nothing wider
+    from undercover.core import quiet
+    from undercover.core.cadence import worker
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        quiet.known_warnings()
+        warnings.warn("Failed to launch Triton kernels, likely due to missing CUDA toolkit; falling back", UserWarning)
+        warnings.warn("`torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)`", FutureWarning)
+        warnings.warn("a library's own news", UserWarning)
+    assert [str(x.message) for x in w] == ["a library's own news"], [str(x.message) for x in w]
+    assert "known_warnings()" in inspect.getsource(server.main) and "known_warnings()" in inspect.getsource(worker.main)
+    return "dropped clients: nothing logged; a real error: its traceback; two known library warnings out of the logs"
 @check("a night item's job names the training project it writes under (improve, a queued project, a new voice), so the real-folder check can tell the user's own server's training from a run's")
 def u_job_project():
     import inspect
@@ -16331,7 +16380,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

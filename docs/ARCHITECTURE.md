@@ -65,7 +65,8 @@ undercover/
     + the vendored rvc/), gpu (the shared separator and converter), jobs (Job, the GPU worker, SSE events, ETA),
     worklist (Pause / Resume, the overnight queue, registries), cadence/ (engines, client, worker, render), addons,
     youtube, ytdlp (self-healing), doctor, manifest, about, diagnostics, phone, qr, tailnet (the phone's link), themes,
-    ear (thumbs), tray (the recent tray), trayicon (the system tray), gamepause, vault, platform (OS-specific calls)
+    ear (thumbs), tray (the recent tray), trayicon (the system tray), gamepause, vault, platform (OS-specific calls),
+    quiet (two known library warnings kept out of the logs)
   doubleagent/             project, sources, subject, trainer, voicecheck, clipsound, cadence, night (queue items),
                            improved (a retrained voice waiting beside the current one), frozen (the Improve test),
                            service (the public surface), api
