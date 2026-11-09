@@ -11095,7 +11095,19 @@ def u_duet_shape_words():
     assert e["moved"] == 'It starts just before "oh" and ends just after "Baby" (0:09–0:13).', e
     # edges where they were asked: nothing to say (the page says where it starts and ends itself)
     assert pick("lead", [5, 5])["moved"] == ""
-    return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out"
+    # an end that runs on into the next line names a word the pick also has: with its neighbour, so it can't read as the pick's own (H2)
+    ws2 = [[" oh", 10.0, 12.9], [" Baby,", 12.9, 13.4], [" can't", 13.6, 13.8], [" you", 13.9, 14.2], [" see?", 14.3, 14.6],
+           [" calling?", 17.5, 17.9], [" A", 18.0, 18.1], [" guy", 18.1, 18.2], [" like", 18.2, 18.3], [" you", 18.3, 18.45]]
+    lead2 = tone((10.0, 13.4), (13.6, 18.5))
+    on = E.new_doc("0123456789", ws2, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead2, back, ws2), gate, True, True)
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "words": [1, 5], "words_hash": on["words_hash"]}, on)
+    assert e["moved"].startswith('It starts just after "Baby" and ends just after "like you" (0:13–0:18)'), e
+    ws3 = [list(w) for w in ws2]
+    ws3[3][0] = " we"   # (the pick has no "you": the word stands alone)
+    on = E.new_doc("0123456789", ws3, rows, plan, plan, dur, {"A": 0, "B": 0}, E.snap_points(lead2, back, ws3), gate, True, True)
+    e = E.check_edit({"op": "singer", "part": "lead", "who": "B", "words": [1, 5], "words_hash": on["words_hash"]}, on)
+    assert e["moved"].startswith('It starts just after "Baby" and ends just after "you" (0:13–0:18)'), e
+    return "a line from its first word; the backing's refusal at the picked word; a dip; both edges moved out; a word the pick also has"
 
 
 @check("duet copy (Internal Affairs D5-D8): the shared backing's progress line names both singers; one way to share it is a sentence, and I'll choose isn't shown; the first singer's chip has no 'lead' tag; Keep's sheet says a cover rolls off only when one will")

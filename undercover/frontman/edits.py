@@ -345,18 +345,26 @@ def _landed(doc: dict, t0: float, t1: float, a: tuple, b: tuple) -> str:
     dips = [n for n, e in (("start", a), ("end", b)) if e[1] == "dip"]
     if abs(a[0] - t0) <= MOVED_S and abs(b[0] - t1) <= MOVED_S and not dips:
         return ""
-    mid = lambda w: (w[1] + w[2]) / 2
-    say = lambda w: _quoted(w[0])
-    inside = [w for w in doc["words"] if a[0] <= mid(w) <= b[0]]
-    before = [w for w in doc["words"] if mid(w) < a[0]]
-    after = [w for w in doc["words"] if mid(w) > b[0]]
+    ws = doc["words"]
+    mid = lambda i: (ws[i][1] + ws[i][2]) / 2
+    picked = {_quoted(ws[i][0]).casefold() for i in range(len(ws)) if t0 <= mid(i) <= t1}
+
+    def say(i, nb):
+        """A word an edge is next to; one from outside the pick whose text the pick also has goes with its neighbour (nb: -1 the
+        word before it, +1 the one after), so "ends just after "you"" never reads as the pick's own "you" (Internal Affairs H2)."""
+        if t0 <= mid(i) <= t1 or _quoted(ws[i][0]).casefold() not in picked or not 0 <= i + nb < len(ws):
+            return _quoted(ws[i][0])
+        return " ".join(_quoted(ws[j][0]) for j in sorted((i, i + nb)))
+    inside = [i for i in range(len(ws)) if a[0] <= mid(i) <= b[0]]
+    before = [i for i in range(len(ws)) if mid(i) < a[0]]
+    after = [i for i in range(len(ws)) if mid(i) > b[0]]
     # the word next to where an edge landed: one it left out when it moved in past a word asked for, else the stretch's own
     out0 = before[-1] if a[0] > t0 + MOVED_S and before and mid(before[-1]) > t0 else None
     out1 = after[0] if b[0] < t1 - MOVED_S and after and mid(after[0]) < t1 else None
-    start = ("at the top of the song" if a[0] <= EDGE_S else f"just after \"{say(out0)}\"" if out0
-             else f"just before \"{say(inside[0])}\"" if inside else f"at {_clock(a[0])}")
-    end = ("at the end of the song" if b[0] >= doc["duration"] - EDGE_S else f"just before \"{say(out1)}\"" if out1
-           else f"just after \"{say(inside[-1])}\"" if inside else f"at {_clock(b[0])}")
+    start = ("at the top of the song" if a[0] <= EDGE_S else f"just after \"{say(out0, -1)}\"" if out0 is not None
+             else f"just before \"{say(inside[0], 1)}\"" if inside else f"at {_clock(a[0])}")
+    end = ("at the end of the song" if b[0] >= doc["duration"] - EDGE_S else f"just before \"{say(out1, 1)}\"" if out1 is not None
+           else f"just after \"{say(inside[-1], -1)}\"" if inside else f"at {_clock(b[0])}")
     heard = "; both joins may be heard" if len(dips) == 2 else f"; the join at its {dips[0]} may be heard" if dips else ""
     return f"It starts {start} and ends {end} ({_clock(a[0])}–{_clock(b[0])}){heard}."
 
