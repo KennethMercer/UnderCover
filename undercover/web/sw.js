@@ -13,6 +13,8 @@ self.addEventListener("activate", e => e.waitUntil((async () => {
 self.addEventListener("fetch", e => {
   const r = e.request;
   if (r.mode !== "navigate" || r.method !== "GET") return;   // the page's own requests: straight to the PC, never kept
+  const p = new URL(r.url).pathname;
+  if (p.startsWith("/files/") || p.startsWith("/api/")) return;   // a download (a zip is built before it starts): no race
   e.respondWith(answer(r));
 });
 async function answer(r) {

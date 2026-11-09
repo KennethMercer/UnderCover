@@ -1141,6 +1141,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         proj = _project_named(person) or P.Project.create(person, "speaking")
     else:
         proj = project_for(person, mode, subject)
+    if job is not None:
+        job.project = proj.name   # (said in the job list: a night item or a one-shot names the project it trains)
     busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
                  and (n == proj.name or a["kind"] in ("train", "auto"))), None)
     if busy:

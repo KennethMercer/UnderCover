@@ -101,6 +101,15 @@ def friendly(e: BaseException, stage: str = "") -> str:
                 "or pick 'Fast' separation quality.")
     if name in ("NoBackendError", "LibsndfileError") or "could not be opened" in text.lower():
         return "That audio file couldn't be read. Try converting it to mp3, wav or flac first."
+    if isinstance(e, MemoryError):
+        return ("The PC ran out of memory (RAM). Close other big programs and try again; a shorter song needs less.")
+    if isinstance(e, OSError) and (e.errno == 28 or getattr(e, "winerror", None) in (39, 112)):   # ENOSPC; Windows' disk full
+        return ("The disk is full. Free some space, or move UnderCover's files to another drive in SafeHouse, Storage, "
+                "and try again.")
+    if (name in ("URLError", "gaierror", "ConnectTimeout", "ConnectTimeoutError", "NewConnectionError", "MaxRetryError")
+            or (name == "ConnectionError" and type(e).__module__.startswith("requests"))
+            or "getaddrinfo failed" in text or "Failed to establish a new connection" in text):
+        return "UnderCover couldn't reach the internet. Check the connection and try again."
     if isinstance(e, FileNotFoundError):
         return f"A file is missing: {Path(getattr(e, 'filename', '') or text).name}. If you deleted something from the output folder, run the cover again."
     if isinstance(e, PermissionError):
@@ -254,6 +263,7 @@ class Job:
         self.result = None
         self.pausing = False      # Pause at the top of the page: stop cleanly, then resume later
         self.resume_spec = None   # how to start this work again (worklist.resume)
+        self.project = None       # the training project it writes under (cache/training/<name>), once it knows
         self.control = None       # trainer Control, for jobs that train
         self.retry_req = None     # (route, body) that started it: Retry on a failed one (app/server.py, phase 10)
         self.ended = None
@@ -377,7 +387,7 @@ class Job:
         ref = evs[-2] if last.get("final") and len(evs) > 1 else last   # a finished job: how far it got
         stage = ref.get("stage")
         snap = {"id": self.id, "kind": self.kind, "state": self.state, "title": self.title or (self.resume_spec or {}).get("label"),
-                "project": (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
+                "project": self.project or (self.resume_spec or {}).get("project"), "created": round(self.created, 1),
                 "ended": round(self.ended, 1) if self.ended else None, "pausing": self.pausing, "stage": stage,
                 "retry": self.state == "error" and self.retry_req is not None,
                 "message": last.get("message") or last.get("label") or last.get("note"), "events": len(evs),

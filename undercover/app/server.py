@@ -87,7 +87,9 @@ RESTART = threading.Event()
 # own limits and never come here.
 JSON_MAX = 1 << 20                        # 1 MB: the longest speech (50,000 characters) is a few hundred KB
 JSON_MAX_FOR = {"/api/themes": 8 << 20,          # a theme saved from the editor (its files are capped at 4 MB)
-                "/api/vault/restore": 32 << 20}   # the list of what to restore from a big library
+                "/api/vault/restore": 32 << 20,   # the list of what to restore from a big library
+                **{p: 4 << 10 for p in ("/api/phone/claim", "/api/phone/wait", "/api/phone/move", "/api/phone/away")}}
+#                 (the link's open routes, before a token: a code, a nonce and a name)
 # job kinds only the PC starts (a Storage move, an add-on, Make smaller, the yt-dlp update): never cancelled or retried
 # from a phone, whatever route started them
 PC_ONLY_KINDS = ("move", "addon", "smaller", "ytdlp")
@@ -238,10 +240,78 @@ def voices_json() -> list[dict]:
 
 # ---------------------------------------------------------------- HTTP handler
 
+class _Counted:
+    """The request's reader, counting what's read: a body left unread ends the connection (Handler._left_unread)."""
+
+    def __init__(self, f):
+        self._f, self.n = f, 0
+
+    def read(self, size=-1):
+        b = self._f.read(size)
+        self.n += len(b)
+        return b
+
+    def readline(self, size=-1):
+        b = self._f.readline(size)
+        self.n += len(b)
+        return b
+
+    def __getattr__(self, k):
+        return getattr(self._f, k)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "UnderCover"
     protocol_version = "HTTP/1.1"
     timeout = 30   # (1.1 hardening) every read of a request, on every listener: a client that stalls is dropped
+    OPEN_S = 60.0  # the link: a request has this long from its first byte to show its token (an open route, to finish)
+
+    def handle_one_request(self):
+        """The link's listener: a deadline for the whole request until its token is shown, so a client that sends a byte
+        now and then (each read within `timeout`) can't hold the listener's places for long without one."""
+        t = None
+        if getattr(self.server, "away", False):
+            t = threading.Timer(self.OPEN_S, self._too_slow)
+            t.daemon = True
+            t.start()
+        self._slow, self._shut = t, False
+        try:
+            super().handle_one_request()
+            self._left_unread()   # (a body left unread ends the connection: below)
+        except OSError:
+            if not self._shut:   # (not the deadline's own doing)
+                raise
+            self.close_connection = True   # (past the deadline: the connection was shut, quietly)
+        finally:
+            if t is not None:
+                t.cancel()
+
+    def _too_slow(self):
+        import socket
+        self._shut = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)   # (the read waiting on it ends; the connection goes)
+        except OSError:
+            pass
+
+    def setup(self):
+        super().setup()
+        self.rfile = _Counted(self.rfile)
+
+    def parse_request(self) -> bool:
+        ok = super().parse_request()
+        self.rfile.n = 0   # (the body starts here)
+        return ok
+
+    def _left_unread(self):
+        """(hardening) A request answered without its whole body read (a refusal before the upload): the rest would be
+        read as the next request on a kept-alive connection, so the connection ends instead."""
+        h = getattr(self, "headers", None)
+        if self.close_connection or h is None:
+            return
+        v = (h.get("Content-Length") or "").strip()
+        if h.get("Transfer-Encoding") or (v and (not v.isdigit() or self.rfile.n < int(v))):
+            self.close_connection = True
 
     def log_message(self, fmt, *args):  # keep the console quiet; errors are reported in the UI
         pass
@@ -405,6 +475,8 @@ class Handler(BaseHTTPRequestHandler):
         self.device = phone.device_for(tok or old, "", away=True)   # Funnel's loopback: no address to keep, no header read
         if self.device is None:
             return self._deny(401, AWAY_401, clear=bool(tok or old))
+        if getattr(self, "_slow", None) is not None:   # a phone's request: its uploads and streams take as long as they take
+            self._slow.cancel()
         self.set_cookie = phone_api.main_cookie(tok or old)   # (its life runs from this use)
         if old:   # the same token under the one name, and the old name gone
             self.set_cookie = [self.set_cookie, phone_api.gone_cookie(phone.OLD_AWAY_COOKIE)]
@@ -488,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
                         "queued": sum(i["state"] in ("queued", "paused") for i in w["queue"]), "armed": w["armed"],
                         "start": w["start"], "start_at": w["settings"].get("start_at"),
                         "waits_until": w.get("waits_until"), "waits_for": w.get("waits_for")}   # B3: the strip says the wait
-                from ..core import addons, gamepause, lowprofile
+                from ..core import addons, gamepause, lowprofile, storage
                 ga = gamepause.STATE.get("asking")   # the game pause's open question: every page and a paired phone show it
                 work["game_ask"] = {**ga, "reason": gamepause.STATE.get("reason") or ""} if ga else None
                 return self._json({**STATUS, "queue": GPU_QUEUE.qsize(), "stale": code_stamp() != STARTUP_STAMP,
@@ -497,6 +569,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "low_profile": lowprofile.status(),   # (absent = None: no card to share, the control hides)
                                    "tour": firstrun.tour_status(),   # the First assignment's spotlight tour (web/firstrun.js)
                                    "client": "phone" if self.remote else "pc", "device": self.device and self.device["name"],
+                                   "moving": bool(storage.MOVING),   # (a Storage move: an upload refused meanwhile may arrive as a drop)
                                    "move": _move_state() if self.remote and not self.away else None,
                                    # which install answers (phase 25: setup's yt-dlp step waits only for its own server)
                                    "app_folder": None if self.remote else str(ROOT)})
@@ -1047,6 +1120,13 @@ class ExclusiveServer(ThreadingHTTPServer):
         self._exclusive()
         super().server_bind()
 
+    def handle_error(self, request, client_address):
+        """A client that went away mid-request (a closed tab, a phone that lost its signal, a kept-alive connection the
+        browser let go) isn't a problem: nothing in the log. Anything else: Python's traceback, as before."""
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
 
 class PhoneServer(ExclusiveServer):
     """The second listener, on the home-network address, only while a phone paired there before the link still holds
@@ -1246,6 +1326,8 @@ def _relaunch(extra_args: list[str]):
 
 def main():
     global SERVER
+    from ..core.quiet import known_warnings
+    known_warnings()   # (two library warnings that only hide what matters in the log)
     try:   # the app folder may have been moved or renamed: fix stored paths before anything reads them
         from ..core import relocate
         relocate.check_and_fix()

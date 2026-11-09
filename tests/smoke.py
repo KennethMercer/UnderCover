@@ -1285,7 +1285,7 @@ def u_harden1():
     assert "AWAY_401" in ga and "AWAY_403" in ga and "Away from home is off" not in ga and "self._deny(403)" not in ga, ga
     page = (ROOT / "undercover" / "web" / "index.html").read_text(encoding="utf-8")
     assert "the connection isn't encrypted" not in page and "home Wi-Fi only" not in page.lower() and "home-only" not in page.lower()
-    assert "Use UnderCover on your phone, at home or anywhere." in page
+    assert "Use UnderCover from your phone, at home or away. One link works for both." in page
     # another site's page: refused on every method and listener; following a link to a page is let through
     cs = lambda m, p, **h: S._cross_site(m, p, {k.replace("_", "-").title(): v for k, v in h.items()})
     assert cs("POST", "/api/voices/install", sec_fetch_site="cross-site", sec_fetch_mode="cors")
@@ -1948,6 +1948,130 @@ def u_decode_bound():
     return "a lying FLAC judged by what's decoded (link and dropped); a 5-hour song stopped at 20 min; a source at its keep; 480p first; loudness, add_file bounded"
 
 
+@check("the hidden Tailscale's driver holds up: a publish chosen before Private was switched doesn't run (the next step chooses again); a node with no name is never ready; the CLI's output and the daemon's log stay small")
+def u_tailnet_guard():
+    import inspect, threading
+    from undercover.core import tailnet
+    saved_state, saved_cmd, saved_cli = dict(tailnet.STATE), tailnet._cmd, tailnet._cli
+    ran = []
+
+    def cmd(which):
+        ran.append(which)
+        raise OSError("not here")   # (stops the step right there; its error is kept)
+    try:
+        tailnet._cmd = cmd
+        for private, key, runs in ((True, "funnel", False), (False, "serve", False), (False, "funnel", True),
+                                   (True, "serve", True)):
+            ran.clear()
+            tailnet.STATE.update(want=True, private=private, error="")
+            tailnet._run_bg(key, [key, "--bg"])
+            for _ in range(100):
+                if not any(t.name == f"tailscale-{key}" for t in threading.enumerate()):
+                    break
+                time.sleep(0.02)
+            assert bool(ran) == runs, (private, key, ran)
+        tailnet._cli = lambda *a, **k: json.dumps({"AllowFunnel": {":443": True}, "Web": {}})
+        tailnet.STATE.update(private=False, port=7871)
+        assert tailnet._funnel_on({"Self": {"DNSName": ""}}) is False, "a node with no name was ready"
+    finally:
+        tailnet._cmd, tailnet._cli = saved_cmd, saved_cli
+        tailnet.STATE.clear()
+        tailnet.STATE.update(saved_state)
+    assert "del _P[\"out\"][:-OUT_LINES]" in inspect.getsource(tailnet._run_bg) and tailnet.OUT_LINES == 200
+    with isolated_data():
+        from undercover.core.config import path
+        logs = path("logs_dir")
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "tailscaled.log").write_text("x" * 64, encoding="utf-8")
+        was, saved_daemon = tailnet.LOG_MAX, tailnet._P["daemon"]
+        tailnet.LOG_MAX = 10
+        tailnet._cmd = lambda which: [sys.executable, "-c", "print('daemon')"]
+        try:
+            tailnet._start_daemon()
+            tailnet._P["daemon"].wait(30)
+            assert (logs / "tailscaled.old.log").read_text(encoding="utf-8") == "x" * 64
+            assert "daemon" in (logs / "tailscaled.log").read_text(encoding="utf-8")
+        finally:
+            tailnet.LOG_MAX, tailnet._cmd, tailnet._P["daemon"] = was, saved_cmd, saved_daemon
+    return "a stale publish doesn't run; no name, not ready; output and log bounded"
+
+
+@check("two hidden Tailscales side by side (an install and a sandbox, two test runs): each daemon's pipe is named after its own state folder and that folder's random key (nothing to guess), so each CLI reaches its own daemon and never the other's; a daemon this state folder left running from before is ended before a new one starts, and nobody else's")
+def u_tailnet_pipe():
+    import subprocess, tempfile
+    from types import SimpleNamespace
+    from undercover.core import platform as P
+    fake = ROOT / "tests" / "fake_tailscale.py"
+    with tempfile.TemporaryDirectory(prefix="uc-ts-pipe-") as d:   # (two fakes' own state; nothing of the user's)
+        a, b2 = Path(d) / "a" / "tailscale-state", Path(d) / "b" / "tailscale-state"
+        sa, sb = P.tailscale_socket(a), P.tailscale_socket(b2)
+        assert sa != sb and P.tailscale_socket(a) == sa, (sa, sb)
+        assert P.tailscale_socket(str(a) + os.sep) == sa, "a trailing separator named another pipe"
+        if P.WINDOWS:
+            assert sa.startswith("\\\\.\\pipe\\undercover-tailscaled-") and P.tailscale_socket(str(a).upper()) == sa, sa
+        else:
+            assert sa == str(a / "tailscaled.sock")
+        daemons = []
+        try:
+            for box, sock in ((a, sa), (b2, sb)):
+                box.mkdir(parents=True)
+                env = {**os.environ, "FAKE_TS_STATE": str(box / "fake.json")}
+                daemons.append(subprocess.Popen([sys.executable, str(fake), "daemon", f"--socket={sock}"], env=env,
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                creationflags=P.NO_WINDOW))
+            def cli(box, sock):
+                env = {**os.environ, "FAKE_TS_STATE": str(box / "fake.json")}
+                r = subprocess.run([sys.executable, str(fake), "cli", f"--socket={sock}", "status", "--json"], env=env,
+                                   capture_output=True, text=True, timeout=30, creationflags=P.NO_WINDOW)
+                return r.returncode
+            wait_for(lambda: cli(a, sa) == 0 and cli(b2, sb) == 0, 20, every=0.2, what="both fake daemons")
+            assert cli(a, sb) != 0 and cli(b2, sa) != 0, "a CLI reached the other copy's daemon"
+        finally:
+            for p in daemons:
+                p.kill()
+                p.wait(10)
+    assert P.tailscale_socket(a, "k1") != P.tailscale_socket(a, "k2"), "the key isn't in the name"
+    from undercover.core import tailnet
+    with isolated_data():
+        k = tailnet._pipe_key()
+        assert re.fullmatch(r"[0-9a-f]{32}", k) and tailnet._pipe_key() == k and (tailnet.state_dir() / "uc-pipe").is_file()
+        assert tailnet._socket() == P.tailscale_socket(tailnet.state_dir(), k)
+        prog = tailnet.bin_dir() / P.tailscale_names()[0]   # (the isolated models folder: an empty stand-in file)
+        prog.parent.mkdir(parents=True, exist_ok=True)
+        prog.write_bytes(b"")
+        rec = tailnet.state_dir() / "uc-daemon"
+        rec.write_text("424242 1000", encoding="utf-8")
+        killed, real_kill, real_path, real_started, saved_cmd = [], os.kill, P.process_path, P.process_started, dict(tailnet.CMD)
+        tailnet.CMD.clear()
+        try:
+            os.kill = lambda pid, sig: killed.append(pid)
+            P.process_path = lambda pid: str(prog.resolve()) if pid in (424242, 616161) else "C:\\other\\tailscaled.exe"
+            P.process_started = lambda pid: {424242: 1000, 616161: 2000}.get(pid, 3000)
+            tailnet._end_orphans()
+            assert killed == [424242], killed
+            killed.clear()
+            rec.write_text("515151 3000", encoding="utf-8")   # another program by now
+            tailnet._end_orphans()
+            assert killed == [], "a process that isn't this copy's tailscaled was ended"
+            rec.write_text("616161 1000", encoding="utf-8")   # the pid given again (our program, a later start: the install's)
+            tailnet._end_orphans()
+            assert killed == [], "a later process Windows gave the same pid was ended"
+            tailnet.CMD.update(saved_cmd or {"tailscaled": ["x"]})   # (tests' fakes: never)
+            rec.write_text("424242 1000", encoding="utf-8")
+            tailnet._end_orphans()
+            assert killed == []
+            tailnet.CMD.clear()
+            tailnet._keep_pid(SimpleNamespace(pid=424242))
+            assert rec.read_text(encoding="utf-8") == "424242 1000"
+            tailnet._drop_pid()
+            assert not rec.exists(), "a clean end kept the record"
+        finally:
+            os.kill, P.process_path, P.process_started = real_kill, real_path, real_started
+            tailnet.CMD.clear()
+            tailnet.CMD.update(saved_cmd)
+    return "one pipe per state folder and key; each CLI reaches its own daemon only; only this folder's leftover ended"
+
+
 @check("away from home (phase 20): the hidden Tailscale walks starting -> sign-in -> approve -> ready on a fake CLI; Funnel only ever to the away listener (re-aimed after a restart); Private (1.2) is Serve to the same listener with Funnel off, and back; exit, off and forget clean up; a wrong download is refused")
 def u_tailnet():
     import re
@@ -2235,7 +2359,9 @@ def u_phone_card():
               "phone-all", "away-forget", "set-away-private", "set-phone-me", "ph-move", "ph-move-say", "ph-move-go"):
         assert page.count(f'id="{i}"') == 1, i
     for gone in ("set-phone\"", "set-away\"", "away-box", "away-me", "set-away-me-row", "Phone access", "Away from home", "away from home", "paired"):
-        assert gone not in page.split('id="room-settings"', 1)[1].split('id="room-addons"', 1)[0], f"the card still has {gone!r}"
+        # (a row's find-words may carry an old name on purpose: Find a setting finds Your phone by "away from home")
+        room = re.sub(r'data-find="[^"]*"', "", page.split('id="room-settings"', 1)[1].split('id="room-addons"', 1)[0])
+        assert gone not in room, f"the card still has {gone!r}"
     for route in ("/api/phone/allow", "/api/phone/refuse", "/api/phone/pair/short", "/api/phone/revoke-all", "/api/phone/forget",
                   "/api/phone/move/link", "{ on: true }", "{ on: false }"):
         assert route in rooms, route
@@ -2451,6 +2577,83 @@ def u_phone_jobs_burst():
             phone.MAX_DEVICES = was
             phone.set_enabled(False)
     return "ten at once: three; never-queued jobs stop counting; one preview per voice, newest name; Allow counts"
+
+
+@check("The link before a token holds up: its open routes take a few KB; a request that trickles in is closed at the deadline; half a character in a code, a nonce or a name gets the plain answer; a phone unused for 30 days is let go (off the card, out of the count); one live move code a phone; the service worker leaves downloads alone")
+def u_phone_open():
+    import inspect, socket, threading
+    import http.server
+    from undercover.app import server
+    from undercover.core import doctor, phone
+    from undercover.core.phone import PhoneError
+    for p in ("/api/phone/claim", "/api/phone/wait", "/api/phone/move", "/api/phone/away"):
+        assert server.JSON_MAX_FOR[p] == 4 << 10, p
+    assert "self._slow.cancel()" in inspect.getsource(server.Handler._gate_away)
+    was = server.Handler.OPEN_S
+    server.Handler.OPEN_S = 0.5
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    srv.away = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = socket.create_connection(srv.server_address, timeout=10)
+        t0 = time.time()
+        c.sendall(b"POST /api/phone/claim HTTP/1.1\r\nHost: x\r\n")   # a byte now and then, never the whole request
+        got = c.recv(100)
+        assert got == b"" and time.time() - t0 < 5, (got, time.time() - t0)
+        c.close()
+    finally:
+        server.Handler.OPEN_S = was
+        srv.shutdown()
+        srv.server_close()
+    assert phone.clean_name("Ann\udcff's\ud800 phone") == "Ann's phone"
+    assert phone.hash_token("\ud800") == phone.hash_token("\ud800")   # (any string the wire brings: no UnicodeEncodeError)
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        try:
+            doctor.log("a name with half a character \udcff")   # (written escaped, never raised)
+            phone.set_enabled(True)
+            phone.new_pairing()
+            try:
+                phone.claim("\ud800", "x")
+                raise AssertionError("a code with half a character was taken")
+            except PhoneError as e:
+                assert e.status == 403 and e.generic
+            nonce, d = phone.claim(phone.PAIRING["code"], "Old phone")
+            phone.allow(d["id"])
+            token, _ = phone.collect(nonce)
+            assert phone.device_for(token, away=True)
+            with phone._LOCK:
+                phone._STATE["devices"].append({"id": "lan1", "name": "Home phone", "hash": None, "lan_hash": "h" * 64,
+                                                "lan_used": None, "pending": False, "paired": "p", "seen": "s", "ip": "",
+                                                "version": 1})
+                phone._relan(phone._STATE)
+                phone._save()
+            first, second = phone.move_code("lan1"), phone.move_code("lan1")
+            assert len(phone._MOVE_CODES) == 1, "a phone kept two live move codes"
+            try:
+                phone.redeem_move(first)
+                raise AssertionError("an older move code still worked")
+            except PhoneError:
+                pass
+            phone._MOVE_CODES.clear()
+            with phone._LOCK:   # thirty days on, unused
+                x = next(x for x in phone._STATE["devices"] if x["id"] == d["id"])
+                x["used"] = time.time() - phone.TOKEN_IDLE_S - 1
+            assert [x["id"] for x in phone.devices()] == ["lan1"], "a phone unused for 30 days stayed on the card"
+            h = phone.hash_token(token)
+            assert not phone.still_valid(h) and phone.device_for(token, away=True) is None
+            saved = json.loads(phone.state_file().read_text(encoding="utf-8"))
+            assert [x["id"] for x in saved["devices"]] == ["lan1"], "forgotten in memory but not in the file"
+            log = (Path(doctor.path("logs_dir")) / "doctor.log").read_text(encoding="utf-8")
+            assert "Old phone wasn't used for 30 days" in log and "\\udcff" in log, log[-400:]
+        finally:
+            phone.set_enabled(False)
+            phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+            phone._FILE[0], phone.PAIRING = None, None
+    sw = (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
+    assert 'p.startsWith("/files/") || p.startsWith("/api/")) return;' in sw
+    return "4 KB before a token; trickles closed; half characters answered plainly; quiet phones let go; one move code"
 
 
 @check("Your phone's records hold up (1.2.1, review): an ask never allowed runs out while the server runs; No on a phone that isn't waiting leaves it; a full list keeps the code; an unreadable phone.json is never saved over; UnderCover's own warm-up and preview jobs don't count against a phone; the card doesn't redraw what hasn't changed; the pages keep waiting through a blip")
@@ -8951,7 +9154,81 @@ def u_edits():
     assert "edits.at_make(res.id" in src and "heard.update(words=words, rows=rows)" in src
     assert '"edits": h.get("edits") or 0' in src
     assert 'one_line=edit["part"] == "backing"' in (Path(ROOT) / "undercover" / "frontman" / "edits.py").read_text(encoding="utf-8")
-    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes"
+    # chorus "keep": the cover silenced the lead's leftovers under the lines kept in the backing, and the list sings from that lead too
+    with isolated_data():
+        from undercover.core.config import path
+        from undercover.frontman.pipeline import CoverOptions
+        g = E._gate_of({"instrument": [], "chorus": [(2.0, 6.0)]}, CoverOptions(voice="x", chorus="keep"))
+        assert g == {"instrument": [], "chorus": [[2.0, 6.0]], "mode": "keep"}, g
+        sd = path("cache_dir") / "sep"
+        sd.mkdir(parents=True, exist_ok=True)
+        st = {}
+        for k, v in (("vocals", 0.1), ("backing", 0.1), ("instrumental", 0.0), ("converted", 0.1)):
+            st[k] = sd / f"{k}.flac"
+            sf.write(str(st[k]), np.full((16000 * 10, 2), v, np.float32), 16000)
+        item = {"id": "0123456789", "song": "", "stems": {k: str(st[k]) for k in ("vocals", "backing", "instrumental")},
+                "converted_vocal": str(st["converted"]), "options": {"voice": "x", "chorus": "keep"}}
+        y, _ = sf.read(str(E._stems(None, item, {"gate": g, "cover": item["id"]}, E._options(item))["vocals"]), dtype="float32")
+        assert abs(y[16000 * 4]).max() < 1e-4 and abs(y[16000 * 8] - 0.1).max() < 1e-3, (y[16000 * 4], y[16000 * 8])
+        E._drop(list(E.folder(item["id"]).glob("gate_*")))
+        from undercover.frontman import leadgate as LG
+        real = (E.get_voice, D.heard_words, E.read_pitch, LG.plan)
+        E.get_voice, D.heard_words, E.read_pitch = (lambda v: None), (lambda *a, **k: []), (lambda *a, **k: None)
+        LG.plan = lambda lead, back=None: {"instrument": [], "chorus": [(2.0, 6.0)]}
+        try:
+            doc = E.prepare(None, item, lambda *a: None)   # the list's landing points from the lead the cover sang: a silence at 2-6 s
+        finally:
+            E.get_voice, D.heard_words, E.read_pitch, LG.plan = real
+        assert doc["gate"]["chorus"] == [[2.0, 6.0]] and any(a <= 2.1 and b >= 5.9 for a, b in doc["points"]["lead"]), doc["points"]
+        # "top" with no chorus: the cover's gate took out only the instrument, and the list follows it (no refusal)
+        top = {"instrument": [[2.0, 6.0]], "chorus": [], "mode": "top"}
+        y, _ = sf.read(str(E._stems(None, item, {"gate": top, "cover": "abcdef0123"}, E._options(item))["vocals"]), dtype="float32")
+        assert abs(y[16000 * 4]).max() < 1e-4, y[16000 * 4]
+        try:
+            E._stems(None, item, {"gate": {**top, "chorus": [[7.0, 9.0]]}, "cover": "abcdef0123"}, E._options(item))
+            raise AssertionError("followed a top chorus")
+        except ModelError:
+            pass
+    # the quiet before the first line and after the last are landing places: the song's last line can be edited by its words
+    t = np.arange(16000 * 30) / 16000
+    x = np.where(((t >= 8) & (t < 12)) | ((t >= 15) & (t < 20)), 0.3 * np.sin(2 * np.pi * 220 * t), 0.0).astype(np.float32)
+    ws = [[f" w{i}", 8 + 0.3 * i, 8.2 + 0.3 * i] for i in range(12)] + [[f" x{i}", 15 + 0.3 * i, 15.2 + 0.3 * i] for i in range(15)]
+    two = [[0.0, 13.5, "A"], [13.5, 30.0, "B"]]
+    pd = E.new_doc("0123456789", ws, [], two, two, 30.0, {"A": 0, "B": 0}, E.snap_points(x, x, ws), gate, True, True)
+    assert pd["points"]["lead"] == [[0.0, 8.0], [12.0, 15.0], [20.0, 30.0]], pd["points"]
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [12, 26], "words_hash": pd["words_hash"]}, pd)
+    assert e["t1"] > 20.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the end in the outro
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [0, 11], "words_hash": pd["words_hash"]}, pd)
+    assert 7.9 <= e["t0"] <= 8.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
+    assert "past" not in e["moved"] and e["moved"] == "The end moved 0.5 s.", e   # an edge moved outward is past none of its own words
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 6.0, "t1": 16.5}, pd)   # an end moved in: the nearest word it left out
+    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'The end moved past "x4".'), e
+    refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
+    assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
+    long_back = np.concatenate([x, 0.3 * np.sin(2 * np.pi * 220 * np.arange(16000 * 3) / 16000).astype(np.float32), np.zeros(16000, np.float32)])
+    assert max(b for a, b in E.snap_points(x, long_back, ws)["backing"]) <= 30.0   # (a backing longer than the lead: the song still ends with the lead)
+    one = {**pd, "points": {"lead": [[12.5, 13.5]], "backing": [], "dips": [11.0]}}   # one word, a dip before it and a silence after
+    refused({"op": "octave", "part": "lead", "octave": 1, "t0": 11.9, "t1": 12.3}, one, "too short")   # its start snaps past it: too short, as said
+    # a mix that fails before it mixes (the polish, a loudness read) leaves no mix_ folder in the cache
+    with isolated_data():
+        from undercover.core.config import path
+        import undercover.frontman.remix as RX
+        real_polish = RX.polish_vocal
+        RX.polish_vocal = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the polish went"))
+        try:
+            for s in (RX.MixSettings(polish=True), RX.MixSettings(polish=False, reverb=None)):
+                try:   # (no polish: the loudness of a file that isn't there fails)
+                    RX.remix(path("cache_dir") / "no-inst.flac", path("cache_dir") / "no-vox.flac", path("cache_dir") / "no-orig.flac",
+                             path("output_dir") / "x", s=s, reverb_ref=path("cache_dir") / "no-rev.flac")
+                    raise AssertionError("mixed")
+                except AssertionError:
+                    raise
+                except Exception:   # noqa: BLE001 - any failure will do
+                    pass
+                assert not list(path("cache_dir").glob("mix_*")), list(path("cache_dir").iterdir())
+        finally:
+            RX.polish_vocal = real_polish
+    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it, intro and outro landings"
 
 
 @check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
@@ -9580,6 +9857,77 @@ def u_duets():
     finally:
         RM.lufs = real_lufs
     assert 'if opts.duet_backing == "other":' in inspect.getsource(PL.CoverEngine.make_cover)
+    # a converted backing that's a chord: the notes say where it may waver (no audio change). Only when the backing is
+    # converted (a quiet one never is: _duet_backing and the backing voice's own rule above)
+    import tempfile as _tf
+    import soundfile as _sf
+    from undercover.core.engine.convert import load_16k as _l16
+
+    def tone_salience(x):   # a stand-in for RMVPE: each 10 ms frame's spectral peaks, at their own pitch bins
+        win, n = 2048, len(x) // 160
+        xp, hz = np.pad(x, (win // 2, win // 2)), np.fft.rfftfreq(2048, 1 / 16000)
+        out = np.zeros((n, 360), np.float32)
+        for i in range(n):
+            m = np.abs(np.fft.rfft(xp[i * 160:i * 160 + win] * np.hanning(win)))
+            if m.max() < 1.0:
+                continue
+            for k in np.flatnonzero((m[1:-1] > m[:-2]) & (m[1:-1] >= m[2:]) & (m[1:-1] > 0.3 * m.max())) + 1:
+                b = int(round((1200 * np.log2(hz[k] / 10) - 1997.3794084376191) / 20))
+                if 0 <= b < 360:
+                    out[i, b] = 0.9 * m[k] / m.max()
+        return out
+    t = np.arange(14 * sr) / sr
+    solo = np.where((t >= 2) & (t < 12), 0.2 * np.sin(2 * np.pi * 440 * t), 0).astype(np.float32)
+    third = solo + np.where((t >= 5.5) & (t < 9.5), 0.2 * np.sin(2 * np.pi * 554.37 * t), 0).astype(np.float32)   # a major third up
+    eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=tone_salience)))
+    with _tf.TemporaryDirectory(prefix="uc-chord-") as td:   # (its own folder: never the user's)
+        for name, x in (("third", third), ("solo", solo)):
+            _sf.write(str(Path(td) / f"{name}.wav"), x, sr)
+        spans = D.chord_spans(tone_salience(_l16(Path(td) / "third.wav")))
+        assert len(spans) == 1 and abs(spans[0][0] - 5.5) < 0.2 and abs(spans[0][1] - 9.5) < 0.2, spans
+        notes = []
+        PL.CoverEngine._chord_note(eng, _l16(Path(td) / "third.wav"), notes)
+        assert notes == ["The backing at 0:05-0:10 is a chord of several voices; one singer can't follow it cleanly, "
+                         "so it may waver there."], notes
+        notes = []
+        PL.CoverEngine._chord_note(eng, _l16(Path(td) / "solo.wav"), notes)
+        assert notes == [] and D.chord_spans(tone_salience(_l16(Path(td) / "solo.wav"))) == [], notes
+    # two chords a moment apart are one; a short one isn't named; past three, "and N more"
+    sal = np.zeros((6000, 360), np.float32)
+    sal[100:500, 100] = sal[100:500, 120] = 0.8     # 1-5 s, a chord
+    sal[500:550, 100] = 0.8                          # half a second of one line
+    sal[550:900, 100] = sal[550:900, 120] = 0.8     # then the chord again, to 9 s: one stretch
+    sal[2000:2200, 100] = sal[2000:2200, 120] = 0.8  # 2 s: too short to name
+    sal[3000:3400, 150] = 0.8                        # one line alone: not a chord
+    assert D.chord_spans(sal) == [[1.0, 9.0]], D.chord_spans(sal)
+    stabs = np.zeros((1000, 360), np.float32)
+    for a in range(100, 600, 90):   # a chord stab of 0.2 s every 0.9 s: under a second of it in 5 s isn't a sung chord
+        stabs[a:a + 20, 100] = stabs[a:a + 20, 120] = 0.8
+    assert D.chord_spans(stabs) == [], D.chord_spans(stabs)
+    assert D.chord_spans(np.zeros((200, 360), np.float32)) == [] and D.chord_note([]) is None
+    five = [[1.0, 4.0], [10.0, 14.0], [70.0, 74.5], [80.0, 84.0], [90.0, 94.0]]
+    assert D.chord_note(five).startswith("The backing at 0:01-0:04, 0:10-0:14, 1:10-1:15 and 2 more places is a chord"), D.chord_note(five)
+    assert "0:10-0:14 and 1:10-1:15 is" in D.chord_note(five[:3]) and "and 1 more place is" in D.chord_note(five[:4])
+    deaf, notes = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=lambda x: 1 / 0))), []
+    PL.CoverEngine._chord_note(deaf, np.zeros(sr, np.float32), notes)
+    assert notes == []   # (a measure that fails costs the note, never the cover)
+    # the read: a minute at a time, frames end to end; at the scale the conversion reads it (a peak over 1 brought down)
+    seen = []
+    def counting(x):
+        seen.append((len(x), float(np.abs(x).max())))
+        return np.zeros((len(x) // 160 + 1, 360), np.float32)   # (RMVPE's own count: one frame more than the hop's)
+    real_spans = D.chord_spans
+    try:
+        D.chord_spans = lambda s: (seen.append(s.shape), [])[1]
+        loud = np.full(int(130.5 * sr), 2.0, np.float32)
+        PL.CoverEngine._chord_note(SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=counting))), loud, [])
+    finally:
+        D.chord_spans = real_spans
+    assert [n for n, _ in seen[:3]] == [60 * sr, 60 * sr, int(10.5 * sr)] and seen[3] == (13050, 360), seen
+    assert all(abs(m - 0.95) < 1e-4 for _, m in seen[:3]), seen
+    src = inspect.getsource(PL.CoverEngine.make_cover)
+    assert src.count("self._chord_note(back16, notes)") == 1 and "if conv_backing:" in src   # (a backing voice's and a duet's)
+    assert src.index("if dback:   # the backing as the lead") < src.index("self._chord_note(") < src.index('secs["convert"]')
     import inspect as _ins
     from undercover.frontman import oneshot as OS3
     os_src = _ins.getsource(OS3.run)
@@ -10005,6 +10353,18 @@ def u_ear():
         finally:
             fapi._start_preview = realp
         assert [(v["octave"], v["key"]) for v in pv["variants"]] == [(0, 1), (-1, 0)] and pv["voice"] == "zed-2-uc" and "voice" not in pv["variants"][1], pv
+        # a cover whose settings hold its key as a float (as a cover's settings store it): variants without a key still have labels
+        import undercover.frontman.history as _fh
+        realg = _fh.get
+        _fh.get = lambda i: {**realg(i), "options": {**realg(i)["options"], "key": 2.0, "octave": -1.0}}
+        fapi._start_preview = lambda h, body: pv.update(body)
+        try:
+            h5 = _FakeHandler()
+            fapi._cover_octaves(h5, cov["id"], {"variants": [{"octave": 0}, {"octave": 1}]})
+        finally:
+            _fh.get, fapi._start_preview = realg, realp
+        assert [v["label"] for v in pv["variants"]] == ["octave +0, key +2", "octave +1, key +2"], pv["variants"]
+        assert [fapi._signed(v) for v in (None, -1.0, 1.5, float("nan"), float("inf"), "x")] == ["+0", "-1", "+1.5", "+0", "+0", "+0"]
         f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
         assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
         # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
@@ -10188,6 +10548,27 @@ def u_leadgate():
         said = G.note(g, "top", backing_converted=True, missing=gone)
         assert said and not any("top voice was converted" in s for s in said) and any("and have no top voice to move" in s and "backing's voice" in s for s in said), said
         assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
+        # a write cut off part way (a kill, a full disk) leaves no gate stem that a later edit would take as made
+        real_write = sf.write
+
+        def cut_off(f, data, *a, **k):
+            if "gate_lead_" in str(f):
+                real_write(f, data[:len(data) // 3], *a, **k)
+                raise OSError("the disk is full")
+            return real_write(f, data, *a, **k)
+        sf.write = cut_off
+        try:
+            G.apply(stems, g, tmp, "cut")
+            raise AssertionError("written")
+        except OSError:
+            pass
+        finally:
+            sf.write = real_write
+        assert not (tmp / "gate_lead_cut.flac").exists() and not list(tmp.glob("*.part*")), list(tmp.iterdir())
+        from undercover.frontman import pipeline as _PLk, remix as _RXg, songs as _SGg
+        _src = __import__("inspect").getsource   # the other files whose being there is their proof: whole or not at all
+        assert "fsutil.write_text(cache," in _src(_PLk.song_key)
+        assert "fsutil.write_text(up /" in _src(_SGg.register_song) and "write_whole(p," in _src(_RXg._reverb_ir)
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
     said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)
@@ -11409,9 +11790,7 @@ def u_phone_pairing():
             rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
             rec["used"] = time.time() - phone.TOKEN_IDLE_S + 60
             assert phone.device_for(token, away=True) and time.time() - rec["used"] < 5, "a use didn't renew the token"
-            rec["used"] = time.time() - phone.TOKEN_IDLE_S - 1
-            assert phone.device_for(token, away=True) is None, "a token unused for 30 days still worked"
-            rec.pop("used")
+            rec.pop("used")   # (unused for 30 days, the phone is let go: u_phone_open)
             assert phone.device_for(token, away=True) and "used" in rec
             from undercover.app import phone_api as PA
             assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t")
@@ -12238,7 +12617,8 @@ def u_away_sw():
     sw = (ROOT / "undercover" / "web" / "sw.js").read_bytes()
     src = sw.decode("utf-8")
     assert "caches.open(" not in src and "cache.put" not in src and ".put(" not in src, "the worker keeps something"
-    assert "/api/" not in src and not _re.search(r"https?://", src), "the worker names a route or another origin"
+    routes = src.replace('p.startsWith("/files/") || p.startsWith("/api/")', "")   # (the one line that leaves downloads alone)
+    assert "/api/" not in routes and not _re.search(r"https?://", src), "the worker names a route or another origin"
     assert 'r.mode !== "navigate"' in src and "caches.delete(" in src and 'href="/"' in src
     if not exe:
         return "no Chrome here: the source checks only"
@@ -12517,6 +12897,120 @@ def u_shape_page():
     assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:600] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
+@check("Find a setting in headless Chrome: the old name and other words find a row, a Deep Cover row is only hinted in basic, other rooms are listed with Go there, nothing typed becomes markup, every row has find-words (skipped when there is no Chrome)")
+def u_find_setting():
+    """index.html on a static server with a test script after findset.js (the API is absent: the page's own functions are pressed).
+    Its verdicts go in the title, which --dump-dom reads once the page says it's done (an image held back until then)."""
+    import html, http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+    test = r"""
+(async () => {
+  const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  await wait(1200);
+  try {
+    const box = $("#sh-find"), type = v => { box.value = v; box.dispatchEvent(new Event("input")); };
+    const gone = el => el.closest(".sf-out") !== null || getComputedStyle(el).display === "none";
+    setDeep(false);
+    $("#lp-chip").hidden = false;   // (the chip shows once Low profile is known to work here; the API is absent in this test)
+    R.addons = [{ id: "chatterbox", name: "Chatterbox", adds: "The original engine for SpeakEasy's speech in a person's own voice.", licence: "MIT", optional: true, modules: ["speakeasy"] }];
+    showTab("safehouse"); showRoom("settings");
+    const rows = $$("#room-settings .setting, #room-system .sys, #room-system .rn-sec, #room-system .sys-btns")
+      .filter(r => !r.parentElement.closest("[data-find]"));   // (a section's own lines, What's new's and the Doctor's, go with it)
+    const bare = rows.filter(r => !(r.dataset.find || "").trim()).map(r => r.id || r.className);
+    ok(`every row has find-words (${rows.length} rows${bare.length ? "; none on " + bare.join(", ") : ""})`, rows.length >= 14 && !bare.length);
+    const names = q => { const qs = findAsked(q), deep = document.body.classList.contains("deep");
+      return findIndex().filter(e => findScore(e, qs) && (deep || !e.deep)).map(e => e.name); };
+    for (const q of ["away from home", "remote", "tailscale", "phone link"]) ok(`"${q}" finds Your phone`, names(q).includes("Your phone"));
+    for (const q of ["gpu", "memory"]) ok(`"${q}" finds Low profile`, names(q).includes("Low profile"));
+    ok('"ome" finds nothing (words start)', !names("ome").length);
+    ok('"zebra" finds nothing', !names("zebra").length);
+    ok("the box is in Settings", $("#room-settings #sh-find") === box);
+
+    type("away from home");
+    ok("Your phone stays, the rest folds", !gone($("#set-phone-row")) && gone($("#set-tour-row")));
+    ok("its words are marked", $$("#set-phone-row mark.sf-mark").map(m => m.textContent.toLowerCase()).includes("away"));
+    ok("the count says 1 match", $("#sh-find-n").textContent === "1 match" && !$("#sh-find-n").hidden);
+    $("#phone-box").hidden = false; type("phone link");
+    ok("the phone's open box stays with its row", !gone($("#phone-box")) && !gone($("#set-phone-row")));
+    $("#phone-box").hidden = true;
+
+    const phoneRow = $("#set-phone-row"), wasSt = PH.st; phoneRow.hidden = true; PH.st = { offered: false };
+    type("away from home");
+    ok("a release without the phone link says where it went, with no Go there", ($(".sf-hit")?.textContent || "").includes("Your phone") && /Off in this version/.test($(".sf-hit").textContent) && !$(".sf-hit button"));
+    phoneRow.hidden = false; PH.st = wasSt;
+    type("theme");
+    ok("basic: Theme isn't shown, the hint is", gone($("#set-theme-row")) && ($(".sf-deep")?.textContent || "") === "Theme is in Deep Cover. Turn on Deep Cover to see it." && !$(".sf-none"));
+    $(".sf-deep button").click(); await wait(50);
+    ok("Deep Cover: Theme is shown", document.body.classList.contains("deep") && !gone($("#set-theme-row")) && !$(".sf-deep") && $("#sh-find-n").textContent === "1 match");
+    setDeep(false);
+
+    type("zebra");
+    ok("nothing matches", ($(".sf-none")?.textContent || "").startsWith("Nothing here matches “zebra”."));
+    type("<b>x</b>");
+    ok("typed markup stays text", $(".sf-none b")?.textContent === "Nothing here matches “<b>x</b>”." && !$(".sf-none b b"));
+
+    type("chatterbox");
+    ok("an add-on is listed from the other room", /Chatterbox Add-ons/.test($(".sf-elsewhere")?.textContent || ""));
+    type("gpu");
+    const hits = $$(".sf-hit").map(h => h.querySelector("b").textContent);
+    ok("gpu lists Graphics card and Low profile", hits.includes("Graphics card") && hits.includes("Low profile") && $("#sh-find-n").textContent === "2 matches");
+    $$(".sf-hit").find(h => h.querySelector("b").textContent === "Graphics card").querySelector("button").click();
+    await wait(400);
+    const gpu = $("#sys-gpu").closest(".sys");
+    ok("Go there opens System with the search in it", R.room === "system" && $("#room-system #sh-find") === box && box.value === "gpu" && !gone(gpu) && gpu.classList.contains("sf-lit"));
+    ok("focus lands in the room", document.activeElement === box || $("#room-system").contains(document.activeElement));
+    ok("the room is folded", gone($("#sys-news")));
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    ok("Esc clears", box.value === "" && !$$(".sf-out").length && !$$("mark.sf-mark").length && $("#sh-find-x").hidden && $("#sh-find-more").children.length === 0);
+  } catch (e) { out.push("BAD threw " + e); }
+  document.title = out.join(" | ");
+  fetch("/said");
+})();
+"""
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(100)   # (the page says when it's done; this only ends the wait if it never does)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--window-size=1200,900",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = html.unescape(m.group(1)) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
+
 def _theme_tokens(web, theme: str, light: bool) -> dict:
     """A theme's tokens for one mode as the page has them: Case File's :root (and its light block), then the theme's own blocks."""
     def blocks(css):
@@ -12574,6 +13068,19 @@ def u_token_ratios():
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
     assert '"Busy")' not in (web / "app.js").read_text(encoding="utf-8") + (web / "oneshot.js").read_text(encoding="utf-8")
     assert ".alert > .alert-btns { grid-column: 2; justify-content: flex-start; }" in (web / "app.css").read_text(encoding="utf-8")
+    # bones wave 2: the song's stems in one closed Deep disclosure, the voice card's one ledger line, the one-shot's one line, a reading width
+    lib, da, osj = ((web / n).read_text(encoding="utf-8") for n in ("library.js", "doubleagent.js", "oneshot.js"))
+    assert '<details class="stems-box" data-deep>' in lib and "<h2>Stems</h2>" not in lib and "Separated already, so a new cover of it skips that minute." in lib
+    assert 'class="vc-ledger" data-deep' in da and "aria-expanded=\"${open}\"" in da and "cadence ${cd.engine}" not in da
+    assert 'const PLAN_IDLE = "Name a song and a voice, and UnderCover does the rest.";' in osj and 'class="os-foot"' not in ix
+    assert ix.count('<p class="meta os-else">Your own file or exact settings? <button class="linkbtn" id="build-toggle"') == 1
+    assert "#room-settings, #room-system, #room-addons { max-width: 820px; }" in (web / "app.css").read_text(encoding="utf-8")
+    # the audit's plain items after bones1: the app's housekeeping out of basic (Deep shows it), one roll-off sentence, the ring on an accent fill
+    jobs, work = (web / "jobs.js").read_text(encoding="utf-8"), (web / "work.js").read_text(encoding="utf-8")
+    assert 'const HOUSEKEEPING = new Set(["presep", "speakwarm", "voicepreview"]);' in jobs and "!quietJob(j)" in jobs
+    assert 'j.kind !== "presep" && !(quietJob(j) && !failed(j))' in work   # a failed one still shows; a pre-separation never
+    assert ix.count("The latest 15 stay here; older ones roll off unless sent to SafeHouse.") == 2
+    assert ":focus-visible { outline-color: var(--fg); }" in (web / "look.css").read_text(encoding="utf-8")
     assert "/* -- bones pins -- */" in wa and ':where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0;' in wa
     assert wa.index("/* -- end bones pins -- */") < wa.index('html[data-skin="winamp"] .mod'), "the pins come before the skin's own rules"
     return f"{len(themes)} themes x 2 modes x 4 modules; worst " + ", ".join(f"{k} {v:.2f}" for k, v in worst.items())
@@ -12627,7 +13134,7 @@ def u_page_rules():
     lib, jobsj, shellc, lookc, sec = [(web / n).read_text(encoding="utf-8") for n in ("library.js", "jobs.js", "shell.css", "look.css", "speakeasy.css")]
     assert 'tabCounts("kept")[L.cat]' in lib and 'd.hidden = none ||' in lib and ".lib.solo" in css, "the Library's counts or its one empty are gone"
     assert "repeat(3, minmax(0, 1fr))" in lookc and "overflow: visible" in lookc, "a phone's rooms went back to a row that hides four of the six"
-    assert '$("#rn-when").hidden = !left.length && !w?.armed' in work and 'j.kind === "speakwarm" && (j.final?.state || j.state) === "done"' in work and 'speakwarm: "speakeasy"' in jobsj and 'speakwarm: "warming up"' in jobsj, "Tonight's clock over an empty night, or the warm-up in Recent"
+    assert '$("#rn-when").hidden = !left.length && !w?.armed' in work and 'j.kind !== "presep" && !(quietJob(j) && !failed(j))' in work and 'speakwarm: "speakeasy"' in jobsj and 'speakwarm: "warming up"' in jobsj, "Tonight's clock over an empty night, or the warm-up in Recent"
     assert "fact.muted:not(.keep)" in sec and "vname(SE.voice)" not in se and ".top .lp-label, .top .deep-btn span" in shellc and "clip-path: inset(50%)" in shellc, "a phone's voice rows or top bar grew back, or a label left the screen reader"
     assert "data-fall" in da and 'store.set("uc-da-filters"' in da and 'store.get("uc-da-filters"' in da, "Your voices' filters lost All or the memory"
     from undercover.doubleagent import night as _nt
@@ -15889,6 +16396,161 @@ def _users_server_training(since: float | None = None) -> set:
             and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
+@check("hardening of kept-alive connections: a request answered without its whole body read ends its connection, so the rest is never read as another request; one read in full keeps it; an upload that drops during a Storage move says the move")
+def u_body_close():
+    import http.server, inspect, socket, threading
+    from undercover.app import server
+
+    class H(server.Handler):
+        def do_POST(self):   # a refusal that reads no body (the upload routes' early answers), or a route that reads it all
+            if self.path == "/read":
+                self.rfile.read(int(self.headers["Content-Length"]))
+            body = b'{"error": "no"}'
+            self.send_response(409 if self.path == "/refuse" else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            seen.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+    seen = []
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def talk(raw: bytes) -> bytes:
+        c = socket.create_connection(srv.server_address, timeout=10)
+        c.sendall(raw)
+        got = b""
+        try:
+            while True:
+                d = c.recv(65536)
+                if not d:
+                    break
+                got += d
+        except socket.timeout:
+            got += b"<still open>"
+        c.close()
+        return got
+    try:
+        hidden = b"GET /smuggled HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        got = talk(b"POST /refuse HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: %d\r\n\r\n" % len(hidden) + hidden)
+        assert got.count(b"HTTP/1.1 ") == 1 and b" 409 " in got and b"<still open>" not in got, got
+        assert seen == [], f"the unread body was read as a request: {seen}"
+        two = b"POST /read HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 3\r\n\r\nabc"
+        got = talk(two + two + b"POST /refuse HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"
+                   + b"GET /after HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        assert got.count(b"HTTP/1.1 ") == 4 and seen == ["/after"], (got, seen)   # (read in full, or nothing to read: kept)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert '"moving": bool(storage.MOVING)' in inspect.getsource(server.Handler.do_GET)
+    app = (ROOT / "undercover" / "web" / "app.js").read_text(encoding="utf-8")
+    train = (ROOT / "undercover" / "web" / "train.js").read_text(encoding="utf-8")
+    assert "async function uploadLost(fallback)" in app and app.count("await uploadLost(") == 2 and "await uploadLost(" in train
+    import ast   # a merge can leave a method twice in one class, the second silently replacing the first (11-08)
+    twice = []
+    for f in sorted((ROOT / "undercover").rglob("*.py")):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ClassDef):
+                names = [n.name for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and not any(isinstance(d, ast.Attribute) and d.attr in ("setter", "deleter") for d in n.decorator_list)]
+                twice += [f"{f.name}:{node.name}.{n}" for n in set(names) if names.count(n) > 1]
+    assert not twice, f"a method defined twice in one class: {twice}"
+    return "an unread body ends the connection; a read one keeps it; a dropped upload during a move says the move; no method twice"
+
+
+@check("the server's log keeps real errors only: a client that went away mid-request (closed tab, dropped connection) leaves nothing; any other error still leaves its traceback; two known library warnings are filtered by their own words")
+def u_quiet_drops():
+    import contextlib, http.server, io, socket, threading
+    from undercover.app import server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            raise {"/gone": ConnectionAbortedError, "/reset": ConnectionResetError, "/pipe": BrokenPipeError}.get(self.path, ValueError)("x")
+
+        def log_message(self, *a):
+            pass
+    srv = server.ExclusiveServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            for path in ("/gone", "/reset", "/pipe"):
+                c = socket.create_connection(srv.server_address, timeout=5)
+                c.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+                c.recv(10)   # (the handler ends; the connection closes)
+                c.close()
+            time.sleep(0.3)
+            assert err.getvalue() == "", err.getvalue()[:300]
+            c = socket.create_connection(srv.server_address, timeout=5)
+            c.sendall(b"GET /bug HTTP/1.1\r\nHost: x\r\n\r\n")
+            c.recv(10)
+            c.close()
+            for _ in range(20):
+                if "ValueError" in err.getvalue():
+                    break
+                time.sleep(0.1)
+        assert "ValueError" in err.getvalue(), "a real error lost its traceback"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    import inspect, warnings   # two library warnings repeated on every run: filtered by their own message, nothing wider
+    from undercover.core import quiet
+    from undercover.core.cadence import worker
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        quiet.known_warnings()
+        warnings.warn("Failed to launch Triton kernels, likely due to missing CUDA toolkit; falling back", UserWarning)
+        warnings.warn("`torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)`", FutureWarning)
+        warnings.warn("a library's own news", UserWarning)
+    assert [str(x.message) for x in w] == ["a library's own news"], [str(x.message) for x in w]
+    assert "known_warnings()" in inspect.getsource(server.main) and "known_warnings()" in inspect.getsource(worker.main)
+    return "dropped clients: nothing logged; a real error: its traceback; two known library warnings out of the logs"
+
+
+@check("a new user's likely failures say what to do: a full disk, the PC's own memory, no internet (rather than 'Something went wrong (OSError)'); anything else still points at the log")
+def u_plain_error2():
+    import socket, urllib.error
+    import requests
+    from undercover.core import jobs
+    with isolated_data():   # (the unknown errors write logs/errors.log: the test's own)
+        said = lambda e: jobs.friendly(e, "testing")
+        assert said(MemoryError()).startswith("The PC ran out of memory (RAM).")
+        assert said(OSError(28, "No space left on device")).startswith("The disk is full.")
+        if os.name == "nt":
+            assert said(OSError(None, "There is not enough space on the disk", None, 112)).startswith("The disk is full.")
+        for e in (urllib.error.URLError("x"), socket.gaierror(11001, "getaddrinfo failed"),
+                  requests.exceptions.ConnectionError("Max retries exceeded (Failed to establish a new connection)")):
+            assert said(e) == "UnderCover couldn't reach the internet. Check the connection and try again.", (type(e), said(e))
+        assert said(ConnectionResetError("x")).startswith("Something went wrong while testing"), "a dropped pipe isn't the internet"
+        assert said(OSError(13, "x")).startswith("Something went wrong") or "Windows blocked" in said(OSError(13, "x"))
+        return "disk full, RAM, no internet: plain; the rest: the log"
+@check("a night item's job names the training project it writes under (improve, a queued project, a new voice), so the real-folder check can tell the user's own server's training from a run's")
+def u_job_project():
+    import inspect
+    from undercover.core import jobs
+    from undercover.doubleagent import night, service
+    j = jobs.Job("night", title="Improve someone")
+    j.resume_spec = {"kind": "night", "item": "abc", "label": "Improve someone"}
+    assert j.snapshot()["project"] is None
+    j.project = "someone"
+    assert j.snapshot()["project"] == "someone"
+    k = jobs.Job("train", title="t")
+    k.resume_spec = {"kind": "train", "project": "other"}
+    assert k.snapshot()["project"] == "other", "a training's own project went missing"
+    src = inspect.getsource(night._improve)
+    assert src.index("job.project = proj.name") > src.index("proj = _project_for_item(item, create=True)")
+    src = inspect.getsource(night._project)
+    assert src.index('job.project = item["target"]') < src.index("service.run_project(")
+    src = inspect.getsource(service.train_new_voice)
+    assert src.index("job.project = proj.name") < src.index("busy = next(")
+    return "improve, a queued project and a new voice each name their project"
+
+
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
 def a_untouched(before: dict, dirs: dict, busy: set = frozenset(), since: float | None = None):
     """busy: the projects the user's server was training when the run started; with the ones it trained during the
@@ -15937,12 +16599,12 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

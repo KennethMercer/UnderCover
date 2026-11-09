@@ -66,7 +66,11 @@ function jfNotify() {   // at most once a frame; at once in a hidden tab (no fra
     jfTimer = setTimeout(run, 300);   // a window that isn't painting (covered, throttled) never runs the frame: without this nothing was told again and a paused job stayed "running" on DoubleAgent's card (IA P9-4)
   }
 }
-const runningJobs = (opts = {}) => JF.list.filter(j => isRunning(j) && (opts.background || j.kind !== "presep"));
+// the app's own housekeeping (consult 2, item 6; the bones audit, 16): a separation done ahead, the speech engine warming, a voice's preview
+// line. Nobody started them, so the basic view doesn't show them running; Deep Cover does, named (pre-separation stays out of both, as before)
+const HOUSEKEEPING = new Set(["presep", "speakwarm", "voicepreview"]);
+const quietJob = j => HOUSEKEEPING.has(j.kind) && (j.kind === "presep" || !document.body.classList.contains("deep"));
+const runningJobs = (opts = {}) => JF.list.filter(j => isRunning(j) && (opts.background || !quietJob(j)));
 
 // ------------------------------------------------------------ one job's events
 function watchJob(id, fn) {

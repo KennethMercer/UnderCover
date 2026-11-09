@@ -142,7 +142,7 @@ function renderChoices(p) {
     $(".choice-q", box).innerHTML = going({ artist: b.dataset.name });
   });
 }
-const PLAN_IDLE = "Name a song and a voice. UnderCover finds the song, finds or trains the voice, and does the rest.";   // the card's line with nothing typed
+const PLAN_IDLE = "Name a song and a voice, and UnderCover does the rest.";   // the card's line with nothing typed
 function planKey() { return $("#os-text").value.trim() + "|" + $("#os-train").checked + "|" + (OS.subject || ""); }
 function resetGo() { syncGo(OS.last?.plan && OS.last.key === planKey() ? OS.last.plan : null); }   // the button follows the plan in hand, else it's plain "Make it"
 async function previewPlan() {
