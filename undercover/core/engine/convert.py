@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from scipy import signal
 
 from ..config import CONFIG, path
-from ..voices import ModelError, Voice, get_voice
+from ..voices import ModelError, Voice, get_voice, missing_model
 from ..timing import timed
 
 CCFG = CONFIG["conversion"]
@@ -48,8 +48,13 @@ class LoadedVoice:
         from .rvc.index import FeatureIndex, IndexFormatError
         from .rvc.synth import (SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono, SynthesizerTrnMs768NSFsid,
                                 SynthesizerTrnMs768NSFsid_nono)
-        ck = torch.load(voice.pth, map_location="cpu", weights_only=True)
         from ..voices import check_config, display_name
+        try:
+            ck = torch.load(voice.pth, map_location="cpu", weights_only=True)
+        except OSError:   # (the voice's own file: not jobs' general "deleted from the output folder"; a drive that's
+            if Path(voice.pth).exists():   # gone can say other things than "not found")
+                raise
+            raise ModelError(missing_model(voice)) from None
         check_config(ck, display_name(voice))   # (before the network is built from it: RVC's own shapes only)
         self.version = ck.get("version", "v1")
         self.f0 = int(ck.get("f0", 1))
