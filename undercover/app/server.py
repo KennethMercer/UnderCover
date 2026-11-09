@@ -91,6 +91,18 @@ JSON_MAX_FOR = {"/api/themes": 8 << 20,          # a theme saved from the editor
 # job kinds only the PC starts (a Storage move, an add-on, Make smaller, the yt-dlp update): never cancelled or retried
 # from a phone, whatever route started them
 PC_ONLY_KINDS = ("move", "addon", "smaller", "ytdlp")
+# job kinds a restart or quit never cuts off, not even "Restart now": stopped halfway they leave things half done (a
+# move killed while rewriting paths has config.toml switched and the stored paths half rewritten)
+UNSTOPPABLE_KINDS = PC_ONLY_KINDS
+RESTART_SAFE_KINDS = ("speakwarm",)   # job kinds a restart ends without asking: nothing of the user's is lost
+
+
+def _unfinished_work() -> list:
+    """The unfinished jobs a restart or quit would cut off: everything except the voice work Pause sets aside (it keeps
+    its place and carries on after) and RESTART_SAFE_KINDS. A one-shot keeps making its cover when paused: it counts."""
+    from ..core import worklist
+    return [j for j in list(JOBS.values()) if not j.finished and j.kind not in RESTART_SAFE_KINDS
+            and (j.kind not in worklist.PAUSABLE or j.kind in worklist.PARTLY_PAUSABLE)]
 
 
 AWAY_401, AWAY_403 = b"Unauthorized", b"Forbidden"   # the away listener's refusals before a token: no names, no state
@@ -819,10 +831,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _restart(self):
         """Restart the server process to load updated code. {"now": true}: stop whatever is running (Stop, not Pause:
-        the user's "the stop has to be a stop") and restart at once. Without it, a running cover is refused with what's
-        running and "now_ok" (the page offers "Restart now (stops running work)"); voice work pauses first as before."""
+        the user's "the stop has to be a stop") and restart at once. Without it, any unfinished work that Pause doesn't
+        set aside (a cover, a speech, a one-shot, a voice install, ...: _unfinished_work) is refused with what's running
+        and "now_ok" (the page offers "Restart now (stops running work)"); voice work pauses first as before. Work that
+        can't stop halfway (a Storage move, an add-on, Make smaller, the yt-dlp update) is refused even with "now"."""
         now = bool(self._body().get("now"))
         running = [j for j in JOBS.values() if not j.finished]
+        blocking = _unfinished_work()
+        whole = [j for j in blocking if j.kind in UNSTOPPABLE_KINDS]
+        if whole:
+            return self._json({"error": f"Running now: {', '.join(j.title or j.kind for j in whole)}. It can't be stopped "
+                                        "halfway: wait for it to finish, then restart.",
+                               "busy": [j.title or j.kind for j in whole]}, 409)
         if now and running:
             for j in running:
                 j.cancel = True
@@ -839,9 +859,11 @@ class Handler(BaseHTTPRequestHandler):
             RESTART.set()
             threading.Thread(target=SERVER.shutdown, daemon=True).start()
             return
-        if any(j.kind == "cover" and not j.finished for j in JOBS.values()):
-            return self._json({"error": "A cover is still being made. Wait for it to finish, or restart now (it stops).",
-                               "busy": [j.title or j.kind for j in running], "now_ok": True}, 409)
+        if blocking:
+            what = ("A cover is still being made" if any(j.kind == "cover" for j in blocking)
+                    else "Something is still being made")
+            return self._json({"error": f"{what}. Wait for it to finish, or restart now (it stops).",
+                               "busy": [j.title or j.kind for j in blocking], "now_ok": True}, 409)
         from ..core import worklist
         if worklist.active():
             # Voice work: pause it (training keeps its place), restart, and resume it automatically after
@@ -849,7 +871,8 @@ class Handler(BaseHTTPRequestHandler):
 
             def when_paused():
                 t0 = time.time()
-                while worklist.active() and time.time() - t0 < 180:
+                # (and anything started meanwhile that Pause doesn't set aside: it finishes first, never cut off)
+                while (worklist.active() and time.time() - t0 < 180) or _unfinished_work():
                     time.sleep(1)
                 RESTART.set()
                 SERVER.shutdown()
@@ -860,9 +883,10 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=SERVER.shutdown, daemon=True).start()  # makes serve_forever() return in main()
 
     def _quit(self):
-        """Stop UnderCover (there may be no window to close when it was started by double-click). Refused while a
-        cover or speech is being made; voice work is paused first (it keeps its place for Resume next time)."""
-        if any(j.kind in ("cover", "preview", "speech", "auto") and not j.finished for j in JOBS.values()):
+        """Stop UnderCover (there may be no window to close when it was started by double-click). Refused while
+        anything Pause doesn't set aside is unfinished (_unfinished_work: a cover, a speech, a Storage move, ...); voice
+        work is paused first (it keeps its place for Resume next time)."""
+        if _unfinished_work():
             return self._error("Something is still being made. Wait for it to finish (or cancel it), then quit.", 409)
         from ..core import worklist
 
@@ -870,7 +894,7 @@ class Handler(BaseHTTPRequestHandler):
             if worklist.active():
                 worklist.pause_all()
                 t0 = time.time()
-                while worklist.active() and time.time() - t0 < 180:
+                while (worklist.active() and time.time() - t0 < 180) or _unfinished_work():
                     time.sleep(1)
             SERVER.shutdown()   # serve_forever() returns in main(), which exits
         self._json({"ok": True, "pausing": worklist.active()})

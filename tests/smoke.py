@@ -12933,6 +12933,82 @@ def u_stamp_settings():
     return "set_ask and set_values leave the stamp as it was"
 
 
+@check("a restart never cuts off unsaved work: a speech, a one-shot or an install is refused (Restart now offered); a "
+       "Storage move is refused even with now; a pause-restart waits for work started meanwhile; quit refuses the same")
+def u_restart_guard():
+    import threading
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import jobs, worklist
+    saved = (S.SERVER, dict(S.JOBS), worklist.active, worklist.pause_all)
+    shut = []
+    S.SERVER = SimpleNamespace(shutdown=lambda: shut.append(1))
+
+    def call(route, body=None):
+        h = S.Handler.__new__(S.Handler)
+        out = {}
+        h._body = lambda: body or {}
+        h._json = lambda obj, status=200: out.update(obj=obj, status=status)
+        h._error = lambda msg, status=400: out.update(obj={"error": msg}, status=status)
+        getattr(S.Handler, route)(h)
+        return out["status"], out["obj"]
+
+    def only(*kinds):
+        S.JOBS.clear()
+        made = [jobs.Job(k, title=f"a {k}") for k in kinds]
+        for j in made:
+            S.JOBS[j.id] = j
+        return made
+    try:
+        with isolated_data():
+            S.RESTART.clear()
+            for kind in ("speech", "auto", "install", "cover", "presep", "train-export"):
+                only(kind)
+                st, obj = call("_restart")
+                assert st == 409 and obj.get("now_ok") and obj["busy"] == [f"a {kind}"], (kind, st, obj)
+                st, _ = call("_quit")
+                assert st == 409, (kind, "quit", st)
+            assert not S.RESTART.is_set() and not shut, "a refused restart restarted"
+            for kind in ("move", "addon", "smaller", "ytdlp"):
+                only(kind, "speech")
+                for body in (None, {"now": True}):
+                    st, obj = call("_restart", body)
+                    assert st == 409 and not obj.get("now_ok") and obj["busy"] == [f"a {kind}"], (kind, body, st, obj)
+                assert not any(j.cancel for j in S.JOBS.values()), f"a refused restart now cancelled work beside a {kind}"
+            assert not S.RESTART.is_set() and not shut
+            sp, = only("speech")
+            st, obj = call("_restart", {"now": True})   # the user chose "Restart now (stops running work)"
+            assert st == 200 and obj["stopped"] == ["a speech"] and sp.cancel, obj
+            assert S.RESTART.wait(2) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "Restart now didn't restart"
+            S.RESTART.clear()
+            shut.clear()
+            only("speakwarm")
+            assert call("_restart")[0] == 200 and S.RESTART.wait(2)
+            S.RESTART.clear()
+            wait_for(lambda: shut, 3, every=0.05, what="the shutdown")
+            shut.clear()
+            # voice work pauses first; a speech started while it pauses finishes before the restart
+            S.JOBS.clear()
+            busy = [True]
+            worklist.active = lambda: busy[0]
+            worklist.pause_all = lambda **kw: {}
+            st, obj = call("_restart")
+            assert st == 200 and obj.get("pausing"), obj
+            late, = only("speech")
+            busy[0] = False
+            time.sleep(1.5)
+            assert not S.RESTART.is_set(), "the restart didn't wait for the speech started while voice work paused"
+            late.finish("done")
+            assert S.RESTART.wait(4) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "the restart didn't follow the speech's end"
+    finally:
+        S.RESTART.clear()
+        S.SERVER = saved[0]
+        S.JOBS.clear()
+        S.JOBS.update(saved[1])
+        worklist.active, worklist.pause_all = saved[2], saved[3]
+    return "409 with now_ok for 6 kinds, 409 even with now for the 4 that can't stop halfway, waits for late work"
+
+
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
 def u_perf_history():
     from undercover.frontman import history as hstore, pipeline
@@ -15421,7 +15497,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
