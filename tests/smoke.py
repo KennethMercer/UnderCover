@@ -7685,6 +7685,25 @@ def u_history_cut():
     return "2 of 3 lines read; the NaN sent as null"
 
 
+@check("bugs-da 10: a [pause] at the very start of the text is silence before the first words (it used to be dropped); it stays on the first piece when pieces are joined or split at commas, and both readings put it there")
+def u_lead_pause():
+    import inspect
+    from undercover.core.cadence import render
+    from undercover.speakeasy import speak, tags, tts
+    d = lambda text: tags.directions(tts.sentences(text))[0]
+    ps = d("[pause 2s] Hello there, my friend. How are you today?")
+    assert ps[0]["lead"] == 2.0 and "hold" not in ps[0] and ps[0]["text"].startswith("Hello") and "lead" not in ps[1], ps
+    assert d("[pause] [louder] Go on then.")[0]["lead"] == tags.PAUSE_S
+    assert all("lead" not in p for p in d("Hello there. [pause 2s] Again here."))   # (a later pause stays the one before's)
+    j = render.join_short([{**ps[0], "text": "Hi.", "pause": 0.3}, {"text": "Now we start this.", "pause": 0.0}])
+    assert len(j) == 1 and j[0]["lead"] == 2.0, j
+    c = render.split_clauses([ps[0]])
+    assert [x.get("lead") for x in c] == [2.0, None], c
+    src = inspect.getsource(speak.make_speech) + inspect.getsource(speak._make_cadence)
+    assert src.count('s.get("lead")') == 2, "a reading leaves the lead out"
+    return "lead 2.0 s on the first piece; kept by join and split; both readings"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15675,7 +15694,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut):
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

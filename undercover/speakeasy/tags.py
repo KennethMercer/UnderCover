@@ -65,8 +65,9 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
     turned into fields (gain_db, pitch_st on the sentence; a [pause] splits it there, the piece before it ending in
     `hold` seconds of silence), the engine's tags (`known`) left in the text as it spells them, and `sounds` set on a
     piece that carries one. -> (pieces, the unknown tags in the order met, once each, the engine's tags not used yet the
-    same way)."""
+    same way). A [pause] before the text's first words sets `lead` seconds of silence on the first piece."""
     out, unknown, held = [], [], []
+    lead = 0.0
     for s in sents:
         gain = pitch = 0.0
         parts, cur, sounds = [], [], False
@@ -117,8 +118,12 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
                         out[-1]["pause"] = s["pause"]
                     if hold:
                         out[-1]["hold"] = max(out[-1].get("hold") or 0.0, hold)
+                elif hold:   # a pause before the first words: silence before them (`lead`)
+                    lead = max(lead, hold)
                 continue
             piece = {**s, "text": text, "pause": s["pause"] if k == len(parts) - 1 else 0.0}
+            if lead:
+                piece["lead"], lead = lead, 0.0
             if hold is not None:
                 piece["hold"] = hold
             if gain:

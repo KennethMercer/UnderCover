@@ -251,7 +251,7 @@ def make_speech(job, text: str, voice: str, reader: str = "auto", speed: float =
                 y = _level(np.nan_to_num(y), -20.0 + (s.get("gain_db") or 0.0))   # ([louder]: still under -1 dBFS)
             t_rvc += time.perf_counter() - t
             gap = np.zeros(int(sr * (s["hold"] if s.get("hold") is not None else s["pause"] * p.get("gap_scale", 1.0))), np.float32)
-            y = np.concatenate([y, gap])
+            y = np.concatenate([np.zeros(int(sr * (s.get("lead") or 0.0)), np.float32), y, gap])   # (lead: a [pause] first)
             f = pdir / f"s{i:04d}.wav"
             sf.write(str(f), y, sr, subtype="PCM_16")
             pieces.append(y)
@@ -535,7 +535,8 @@ def _make_cadence(job, text: str, sents: list, p: dict, save: bool = True) -> di
             pause = 0.0 if s["pause"] == 0 else (p["para_gap_s"] if s["pause"] >= 0.5 else p["gap_s"])
             if s.get("hold") is not None:   # a written [pause]: exactly that
                 pause = s["hold"]
-            y = np.concatenate([y, np.zeros(int(sr * pause), np.float32)])
+            y = np.concatenate([np.zeros(int(sr * (s.get("lead") or 0.0)), np.float32), y,   # (lead: a [pause] first)
+                                np.zeros(int(sr * pause), np.float32)])
             f = pdir / f"s{i:04d}.wav"
             sf.write(str(f), y, sr, subtype="PCM_16")
             pieces.append(y)
