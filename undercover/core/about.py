@@ -23,6 +23,15 @@ def _version() -> str:
 VERSION = _version()
 
 
+def launcher(root: Path = ROOT) -> str:
+    """How this copy is started again: "start-menu" for an installed copy (the installer's UnderCover.cmd, behind its
+    Start menu shortcut), "bat" for a source checkout (scripts/UnderCover.bat and no UnderCover.cmd)."""
+    return "bat" if (root / "scripts" / "UnderCover.bat").is_file() and not (root / "UnderCover.cmd").is_file() else "start-menu"
+
+
+LAUNCHER = launcher()   # (it can't change while the app runs: /api/status says this one)
+
+
 def git_commit(root: Path = ROOT) -> dict | None:
     """{"branch", "commit"} read straight from .git (no git needed), or None for an installed copy without one."""
     g = root / ".git"

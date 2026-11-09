@@ -11,6 +11,7 @@ import json
 import re
 
 PAUSE_S, PAUSE_MAX_S = 0.8, 5.0   # [pause] alone; [pause 2s] up to the bound
+BARE_MAX = 60.0                   # [pause 2] is seconds; a bare number this big ([pause 500]) is named, not guessed
 GAIN_DB = 4.0                     # [louder] / [softer]: one step, no stacking past it
 PITCH_ST = 2.0                    # [higher] / [lower]: the same
 OURS = {"pause", "louder", "softer", "higher", "lower"}
@@ -29,7 +30,10 @@ STYLES = {"whispering", "happy", "angry"}
 # the ones the ear has passed, which go to the engine. None yet (blind pairs, 2026-10-29): [laugh] was heard but not as
 # real, the styles weren't told from none. The others are taken out and named as not used yet.
 ENGINE_ON: frozenset = frozenset()
-_TAG = re.compile(r"\[([A-Za-z][A-Za-z ]{0,24}?)(?:\s+(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?))?\s*\]")
+# a number after the name, its unit optional ([pause 2], [pause 500ms], [pause 1.5 s.]): seconds unless said otherwise
+_TAG = re.compile(r"\[([A-Za-z][A-Za-z ]{0,24}?)(?:\s+(\d+(?:\.\d+)?)\s*([A-Za-z]+)?\.?)?\s*\]")
+_UNITS = {**dict.fromkeys(("s", "sec", "secs", "second", "seconds"), 1.0),
+          **dict.fromkeys(("ms", "msec", "msecs", "millisecond", "milliseconds"), 0.001)}
 _ENGINE: dict = {}
 
 
@@ -62,8 +66,9 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
     turned into fields (gain_db, pitch_st on the sentence; a [pause] splits it there, the piece before it ending in
     `hold` seconds of silence), the engine's tags (`known`) left in the text as it spells them, and `sounds` set on a
     piece that carries one. -> (pieces, the unknown tags in the order met, once each, the engine's tags not used yet the
-    same way)."""
+    same way). A [pause] before the text's first words sets `lead` seconds of silence on the first piece."""
     out, unknown, held = [], [], []
+    lead = 0.0
     for s in sents:
         gain = pitch = 0.0
         parts, cur, sounds = [], [], False
@@ -84,8 +89,15 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
                 elif f"[{low}]" not in unknown:
                     unknown.append(f"[{low}]")
                 continue
+            per = _UNITS.get((m.group(3) or "s").lower())
+            # a number we don't read as a length ([pause 2 minutes], [louder 2x], or [pause 500] with no unit: surely
+            # not seconds): read as nothing and named, as an unknown tag is
+            if secs and (per is None or (not m.group(3) and float(secs) >= BARE_MAX)):
+                if (t := " ".join(m.group(0).lower().split())) not in unknown:
+                    unknown.append(t)
+                continue
             if name == "pause":
-                parts.append(("".join(cur), min(PAUSE_MAX_S, float(secs)) if secs else PAUSE_S, sounds))
+                parts.append(("".join(cur), min(PAUSE_MAX_S, float(secs) * per) if secs else PAUSE_S, sounds))
                 cur, sounds = [], False
             elif name in ("louder", "softer"):
                 gain = max(-GAIN_DB, min(GAIN_DB, gain + (GAIN_DB if name == "louder" else -GAIN_DB)))
@@ -107,8 +119,12 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
                         out[-1]["pause"] = s["pause"]
                     if hold:
                         out[-1]["hold"] = max(out[-1].get("hold") or 0.0, hold)
+                elif hold:   # a pause before the first words: silence before them (`lead`)
+                    lead = max(lead, hold)
                 continue
             piece = {**s, "text": text, "pause": s["pause"] if k == len(parts) - 1 else 0.0}
+            if lead:
+                piece["lead"], lead = lead, 0.0
             if hold is not None:
                 piece["hold"] = hold
             if gain:
@@ -119,6 +135,13 @@ def directions(sents: list, known: frozenset = frozenset()) -> tuple[list, list,
                 piece["sounds"] = True
             out.append(piece)
     return out, unknown, held
+
+
+def not_english(sents: list) -> int:
+    """How many of SpeakEasy's sentences have words but none in English letters (another script): directions() leaves
+    them out, as the readers read English only, and the result says so."""
+    words = [_TAG.sub(" ", s["text"]) for s in sents]
+    return sum(1 for w in words if re.search(r"[^\W\d_]", w) and not re.search(r"[A-Za-z0-9]", w))
 
 
 def spoken(text: str, known: frozenset) -> tuple[str, bool]:

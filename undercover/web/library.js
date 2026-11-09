@@ -44,7 +44,9 @@ async function loadSummary() {
   $("#lib-stack").innerHTML = order.map(k => `<i style="width:${(s.categories[k] / total * 100).toFixed(2)}%;background:var(--c-${k})" title="${CAT_LABELS[k]} ${gb(s.categories[k])}"></i>`).join("");
   $("#lib-legend").innerHTML = order.map(k => `<span><i class="sw" style="background:var(--c-${k})"></i>${CAT_LABELS[k]} <b>${gb(s.categories[k])}</b></span>`).join("");
   $("#lib-total").textContent = gb(s.total);
-  $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
+  // one drive: "on drive C: · 21.4 GB free"; a total over two (models moved to D:): "in all", then each drive's free space
+  const drives = s.drives?.length ? s.drives : [{ drive: s.drive, free: s.free }];
+  $("#lib-free").textContent = drives.length > 1 ? `in all · ${drives.map(d => `${d.drive} ${gb(d.free)} free`).join(" · ")}` : `on drive ${s.drive} · ${gb(s.free)} free`;
   // System room (phase 16): the YouTube downloader heals itself; "Check for a fix" runs the same check by hand
   $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} + solver ${s.ytdlp_ejs || "missing"} · ${s.ytdlp_source === "side" ? `a checked update (pinned ${s.ytdlp_pinned})` : "the pinned pair"}` +
     (s.ytdlp_checked ? ` · last check ${s.ytdlp_checked.replace("T", " ").slice(0, 16)}: ${s.ytdlp_last}` : "") : "yt-dlp isn't installed";   // Deep Cover
@@ -80,7 +82,7 @@ $("#lib-ytdlp-auto").onchange = async e => {
 confirmClick($("#lib-quit"), "Quit UnderCover?", async () => {
   try {
     const r = await api("/api/quit", { json: {} });
-    document.body.innerHTML = `<div class="lib-empty" style="margin:20vh auto;max-width:420px;text-align:center"><b>UnderCover has stopped</b>${r.pausing ? "Voice work was paused; Resume continues it next time. " : ""}Start it again with UnderCover.bat, then reload this page.</div>`;
+    document.body.innerHTML = `<div class="lib-empty" style="margin:20vh auto;max-width:420px;text-align:center"><b>UnderCover has stopped</b>${r.pausing ? "Voice work was paused; Resume continues it next time. " : ""}${startAgain(", then reload this page")}</div>`;
   } catch (e) { showError(e.message, "Couldn't quit"); }
 });
 async function loadCat(keepSel) {
@@ -150,7 +152,7 @@ function rows() {
   else if (kf === "recent") list = list.filter(x => x.recent);
   const key = { new: x => -(L.cat === "covers" || L.cat === "speech" ? Date.parse((x.created || "").replace(" ", "T")) || 0 : (x.updated || Date.parse((x.installed || "").replace(" ", "T")) / 1000 || 0)),
                 old: x => Date.parse((x.created || "").replace(" ", "T")) || 0, name: x => (x.title || x.name || x.person || "").toLowerCase(),
-                big: x => -(x.size + (x.stems_size || 0)), long: x => -x.duration, voice: x => x.voice, used: x => L.cat === "songs" ? -x.last_used : -x.covers, covers: x => -x.covers }[sort];
+                big: x => -(x.size + (x.stems_size || 0)), long: x => -x.duration, voice: x => x.voice, used: x => L.cat === "songs" ? -(x.used || 0) : -x.covers, covers: x => -x.covers }[sort];
   if (key) list.sort((a, b) => { const ka = key(a), kb = key(b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
   return list;
 }
@@ -205,7 +207,7 @@ function renderList() {
       title = x.title; sub = facts([voiceDisplay(x.voice), `${paceWord(x)} pace`, { t: upFirst(dayWord(x.created)), muted: true }, { t: dayTime(x.created), deep: true }]);
       side = keepTag(x) + `<span class="mono">${fmtTime(x.duration)}</span><span class="tag" data-deep>${esc(x.format)}</span>`;
     } else if (L.cat === "songs") {
-      title = x.title; sub = facts([sourceWord(x.source), countWord(x.covers, "cover"), x.last_used ? { t: `Used ${dayWord(x.last_used)}`, muted: true } : "",
+      title = x.title; sub = facts([songSource(x), countWord(x.covers, "cover"), x.used ? { t: `Used ${dayWord(x.used)}`, muted: true } : "",
         x.key ? { t: `Key ${x.key}`, deep: true } : ""]);
       side = (x.sample ? `<span class="tag ok" title="UnderCover's sample song">sample song</span>` : "") + (x.stems.length ? `<span class="tag ${x.stems_old_model ? "warn" : "ok"}">${x.stems_old_model ? "stems: older model" : "ready ✓"}</span>` : "") + `<span class="mono" data-deep>${gb(x.size + x.stems_size)}</span>`;
     } else if (L.cat === "voices") {
@@ -385,16 +387,18 @@ function shortUrl(url) {
 }
 // a song (bones wave 2, the user 2026-11-08): what it is, its covers and size, one line on its separation; the stems themselves are
 // Deep Cover's, in one closed disclosure with their own Delete
+// where a song came from: YouTube, your own file, or UnderCover's sample (seeded on a fresh install, not dropped by anyone)
+const songSource = s => s.sample ? "UnderCover's sample" : sourceWord(s.source);
 function songDetail(d, s) {
   const has = s.stems.length > 0;
-  d.innerHTML = `<div class="dhead">${art(s.title, true)}<div style="min-width:0"><h3>${esc(s.title)}</h3>${facts([sourceWord(s.source), s.duration ? fmtTime(s.duration) : "",
+  d.innerHTML = `<div class="dhead">${art(s.title, true)}<div style="min-width:0"><h3>${esc(s.title)}</h3>${facts([songSource(s), s.duration ? fmtTime(s.duration) : "",
       has ? { t: "Ready to cover", cls: "ready" } : "", s.sample_rate ? { t: `${(s.sample_rate / 1000).toFixed(1)} kHz ${s.channels === 1 ? "mono" : "stereo"}`, deep: true } : "",
       s.key ? { t: `Key ${s.key}`, deep: true } : ""])}</div></div>
     ${s.url ? playerHtml() : ""}
     <dl class="kv">${s.sample ? `<dt>Sample</dt><dd>UnderCover's sample song${s.artist ? ` · ${esc(s.artist)}` : ""}</dd>` : ""}<dt>Covers</dt><dd>${s.covers ? s.cover_titles.map(esc).join("<br>") : "none yet"}</dd>
       <dt>Size</dt><dd>${gb(s.size + (s.stems_size || 0))}${s.stems_size ? ", with its working files" : ""}</dd>
       ${s.source_url ? `<dt>From</dt><dd><a class="linkbtn" href="${esc(s.source_url)}" target="_blank" rel="noopener" title="${esc(s.source_url)}">${esc(shortUrl(s.source_url))}</a></dd>` : ""}</dl>
-    <p class="meta">${!has ? "Not separated yet. The next cover of this song does it (about a minute)." : s.stems_old_model ? "Made with an older separation model; deleting them means the next cover separates again with the current one." : "Separated already, so a new cover of it skips that minute."}</p>
+    <p class="meta">${!has ? "Not separated yet. The next cover of this song does that first." : s.stems_old_model ? "Made with an older separation model; deleting them means the next cover separates again with the current one." : "Separated already, so a new cover of it skips that step."}</p>
     ${has ? `<details class="stems-box" data-deep><summary>Stems · ${s.stems.length} file${s.stems.length === 1 ? "" : "s"} · ${gb(s.stems_size || 0)} <span class="deepmark">Deep Cover</span></summary>
       <div class="stems">${s.stems.map((t, i) => `<div class="stem"><button class="tplay" data-i="${i}" aria-label="Play ${esc(t.label)}" aria-pressed="false">▶</button><span>${esc(t.label)}${t.quality !== "high" ? ` <span class="meta">(${t.quality})</span>` : ""}</span><span class="meta mono">${gb(t.size)}</span><a class="linkbtn" href="${t.url}?download">Download</a></div>`).join("")}</div>
       <div class="row"><button class="btn" id="lib-del-stems" data-pc>Delete stems only…</button></div></details>` : ""}

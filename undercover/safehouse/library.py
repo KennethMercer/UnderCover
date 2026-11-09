@@ -72,6 +72,34 @@ def _guard(kinds=ALL_WORK):
             j.cancel = True
 
 
+PRESEP_WAIT_S = 20   # how long Clean up waits for a background separation it stopped
+
+
+def _guard_cleanup():
+    """Clean up's own guard, stricter than _guard: it reaches the working files every kind of job uses (the separator's
+    _work, stems, previews, a project's resume point), so it waits for ALL work, queued or running, whatever its kind
+    (2026-11-08: a list of kinds missed the overnight queue, transcribing, listening copies, Make smaller and the Doctor,
+    and took the separator's live output). A background separation is stopped and waited for; if it doesn't stop in
+    time, nothing is cleaned."""
+    if storage.MOVING:
+        raise ModelError("UnderCover's files are being moved (Storage). Try again when that's done.")
+    for j in list(jobs.JOBS.values()):
+        if not j.finished and j.kind != "presep":
+            what = _BUSY_WHAT.get(j.kind) or (f"“{j.title}”" if j.title else "other work")
+            raise ModelError(f"Can't clean up while {what} is running or waiting (it may be using these files). "
+                             "Try again when it's done.")
+    if jobs.CURRENT[0] is not None and jobs.CURRENT[0].kind != "presep":   # (the GPU's own, listed or not)
+        raise ModelError("Can't clean up while the GPU is working (it may be using these files). Try again when it's done.")
+    presep = [j for j in list(jobs.JOBS.values()) if j.kind == "presep" and not j.finished]
+    for j in presep:   # it would just be redone later
+        j.cancel = True
+    end = time.time() + PRESEP_WAIT_S
+    while any(not j.finished for j in presep) and time.time() < end:
+        time.sleep(0.2)
+    if any(not j.finished for j in presep):
+        raise ModelError("A song is still being prepared in the background; it's been asked to stop. Try Clean up again in a moment.")
+
+
 def _song_metas() -> dict:
     out = {}
     for f in path("uploads_dir").glob("*.json"):
@@ -246,6 +274,9 @@ def _summary() -> dict:
         g.pop("inside", None)
     # the free space that counts: the drive the work writes to with the least (the one jobs refuse on), not the app's
     drive, free = (storage.work_space() or [(storage.drive_of(ROOT), shutil.disk_usage(ROOT).free)])[0][:2]
+    # every drive the total spans (the model files may sit on another one): its free space each, by letter
+    spans = sorted(storage.work_space(tuple(k for keys in storage.GROUPS.values() for k, _, _ in keys)), key=lambda t: t[0])
+    drives = [{"drive": d, "free": f} for d, f, *_ in spans] or [{"drive": drive, "free": free}]
     cv, sp = covers(), speak.list_speech()
     counts = {"covers": len(cv), "speech": len(sp), "songs": len(_song_metas()),
               "voices": len(list(path("voices_dir").glob("*/meta.json"))),
@@ -254,7 +285,7 @@ def _summary() -> dict:
     # voices and training are always kept (and have no Recent)
     tabs = {"kept": {**counts, "covers": sum(1 for x in cv if x["kept"]), "speech": sum(1 for x in sp if x["kept"])},
             "recent": {"covers": sum(1 for x in cv if x["recent"]), "speech": sum(1 for x in sp if x["recent"])}}
-    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": free, "drive": drive,
+    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": free, "drive": drive, "drives": drives,
             **ytdlp_info(), "counts": counts, "tabs": tabs}
 
 
@@ -344,7 +375,8 @@ def songs() -> list[dict]:
         f = uploads / m.get("file", "")
         used = by_song.get(sid, [])
         stems = _stems_for(sid, cache / "stems")
-        last = max([_mtime(Path(h["output"])) for h in used] + [_mtime(f)])
+        cov = max((_mtime(Path(h["output"])) for h in used), default=0.0)   # its newest cover ("Used ...")
+        last = max(cov, _mtime(f))
         key = None
         kf = cache / "keys" / f"{sid}.json"
         if kf.exists():
@@ -359,6 +391,7 @@ def songs() -> list[dict]:
             "source": "YouTube" if m.get("youtube_id") or m.get("source_url") else "dropped file", "source_url": m.get("source_url"),
             "size": _size(f), "stems": stems, "stems_size": sum(s["size"] for s in stems), "stems_old_model": old_model,
             "covers": len(used), "cover_titles": [Path(h["output"]).stem for h in used][:5], "last_used": last,
+            "used": cov or None,   # (said "Used ...": a cover's, never the file's own date)
             "url": file_url(f) if f.exists() else None,
             "sample": bool(m.get("sample")), "artist": m.get("artist") or "",   # the sample song (the first run's)
         })
@@ -611,7 +644,8 @@ def _cleanup_groups() -> dict:
                           "detail": "Those trainings would have to start over", "paths": paused, "default": False}
     temp = [p for p in cache.iterdir() if p.is_dir() and p.name.startswith(TEMP_PREFIXES)]
     temp += [p for p in (cache / "previews").glob("*") if now - _mtime(p) > DAY]   # incl. SpeakEasy's sentences (speech_<job>)
-    temp += [p for p in (cache / "_work").glob("*")]
+    # the separator's working folder: only what an interrupted run left, never the output of one under way
+    temp += [p for p in (cache / "_work").glob("*") if now - _mtime(p) > DAY]
     logs = [f for f in path("logs_dir").glob("*.log") if _size(f) > 10e6]
     g["temp"] = {"title": "Old previews, leftovers and big logs", "detail": "Preview renders older than a day, interrupted downloads, logs over 10 MB",
                  "paths": temp + logs, "default": True}

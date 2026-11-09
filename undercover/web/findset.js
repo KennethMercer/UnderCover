@@ -9,7 +9,9 @@
 
 const FIND = { q: "", go: null, timer: 0 };
 const FIND_ROOMS = { settings: "Settings", system: "System", addons: "Add-ons" };
-const FIND_STOP = new Set(["a", "an", "the", "to", "of", "on", "in", "from", "for", "and", "or", "my", "is", "it", "i", "how", "where", "do"]);
+const FIND_STOP = new Set(["a", "an", "the", "to", "of", "on", "in", "from", "for", "and", "or", "my", "is", "it", "i", "how", "where", "do", "are", "can"]);
+// Storage has no box of its own (it's files, not settings), but its rows are found from the other rooms (IA G1: "backup", "where are my files")
+const FIND_ALSO = { storage: "Storage" };
 const findFoldText = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const findWords = s => findFoldText(s).split(/[^a-z0-9½]+/).filter(Boolean);
 // the words asked: small words dropped, unless that leaves nothing
@@ -33,13 +35,13 @@ const findText = (el, sel) => [...el.querySelectorAll(sel)].map(s => s.textConte
 // the index, from the page as it is now (rows come and go), the add-ons from the room's own list, and the top bar's two
 function findIndex() {
   const out = [];
-  for (const room of ["settings", "system"]) {
+  for (const room of ["settings", "system", "storage"]) {
     const box = $(`#room-${room}`);
     for (const el of box.querySelectorAll("[data-find]")) {
       if (findHidden(el, box)) continue;
       const head = el.querySelector(":scope > span > b, :scope > .rn-lbl > b") || el.querySelector("b");
       out.push({ room, el, name: el.dataset.findName || head?.textContent.trim() || "", find: el.dataset.find,
-                 say: findText(el, ":scope > span > small, :scope > .rn-lbl > small, :scope > .meta"), deep: !!el.closest("[data-deep]") });
+                 say: findText(el, ":scope > span > small, :scope > .rn-lbl > small, :scope > .meta, :scope > .what"), deep: !!el.closest("[data-deep]") });
     }
   }
   for (const a of R.addons || []) {
@@ -125,7 +127,7 @@ function findRun() {
       const row = findEl("div", "sf-hit"), say = findEl("span"), b = findEl("b", "", e.name), small = findEl("small", "", e.say);
       findMark(b, qs); findMark(small, qs);
       if (e.room === "off") { say.append(b, small); row.append(say); list.append(row); continue; }   // (nowhere to go in this version)
-      say.append(b, " ", findEl("span", "sf-where", e.room === "top" ? "Top bar" : FIND_ROOMS[e.room]), small);
+      say.append(b, " ", findEl("span", "sf-where", e.room === "top" ? "Top bar" : FIND_ROOMS[e.room] || FIND_ALSO[e.room]), small);
       const go = findEl("button", "btn", "Go there"); go.type = "button"; go.onclick = () => findGo(e);
       row.append(say, go); list.append(row);
     }
@@ -163,7 +165,7 @@ function findLight() {
   el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   findFlash(el);
   // Go there's own button went with the old room's list: focus moves to the row's first control (or back to the box)
-  (el.querySelector("button:not([disabled]), a[href], input:not([type=hidden]), select") || $("#sh-find")).focus({ preventScroll: true });
+  (el.matches("button") ? el : el.querySelector("button:not([disabled]), a[href], input:not([type=hidden]), select") || $("#sh-find"))?.focus({ preventScroll: true });
 }
 function findFlash(el) { el.classList.add("sf-lit"); setTimeout(() => el.classList.remove("sf-lit"), 1600); }
 
@@ -171,7 +173,7 @@ function findFlash(el) { el.classList.add("sf-lit"); setTimeout(() => el.classLi
 function findPlace() {
   const wrap = $("#sh-find-wrap"), room = $(`#room-${R.room}`);
   if (!wrap) return;
-  if (!FIND_ROOMS[R.room]) { findUnmark(); return; }
+  if (!FIND_ROOMS[R.room]) { findUnmark(); findLight(); return; }   // (Go there to Storage: no box there, the row still lights)
   const head = room.querySelector(".roomhead");
   if (wrap.previousElementSibling !== head) head.after(wrap);
   const more = $("#sh-find-more");

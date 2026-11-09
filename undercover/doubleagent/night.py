@@ -418,7 +418,7 @@ def _improve(job, item) -> dict:
     from . import project as P
     from . import sources as srcmod
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import Trainer, epoch_line, export_voice
+    from .trainer import FRESH_KEYS, Trainer, epoch_line, export_voice
     push, control = worklist.pusher(job), worklist.control_for(job)
     old = get_voice(item["target"])
     proj = _project_for_item(item, create=True)
@@ -481,7 +481,7 @@ def _improve(job, item) -> dict:
             gate = frozen.gate_project(proj, proj.load_embeddings(), (old.extra or {}).get("f0_median"), pitch_of)
             proj.save()
             st = proj.train
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs", "planned_epochs", "init_from", "lr", "steps"):
+            for k in FRESH_KEYS:
                 st.pop(k, None)   # exported stays: the voice is still there
             kept_min = proj.kept_seconds() / 60
             old_min = float((old.extra or {}).get("train_minutes") or 0)

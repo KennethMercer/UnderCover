@@ -74,7 +74,9 @@ def _fix(id, label, how="now") -> dict:
     return {"id": id, "label": label, "how": how}
 
 
-REPAIR = _fix("repair", "Run UnderCover's setup again with -Repair", "offer")
+# What a basic user sees is the Start menu item (GUIDE and README name it so); the command line is Deep Cover's detail.
+REPAIR = dict(_fix("repair", "Repair UnderCover, in the Start menu (your files and settings stay)", "offer"),
+              detail="The same as: installer\\setup.ps1 -Repair, run from the install folder")
 
 
 # ---------------------------------------------------------------- the checks
@@ -836,7 +838,7 @@ def fix_packages(dry_run: bool = False) -> dict:
     from . import addons
     lines, refused = package_fix_lines()
     if not lines:
-        return {"message": "Nothing to reinstall." + (f" {', '.join(refused)} need setup.ps1 -Repair." if refused else ""),
+        return {"message": "Nothing to reinstall." + (f" {', '.join(refused)} need Repair UnderCover, in the Start menu." if refused else ""),
                 "lines": [], "refused": refused}
     with tempfile.TemporaryDirectory() as d:
         req = Path(d) / "repair.txt"

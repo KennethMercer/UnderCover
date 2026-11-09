@@ -440,7 +440,9 @@ default: blind, the re-reads fixed the word and the other two did not. Whisper i
 SpeakEasy's text takes directions in square brackets (`speakeasy/tags.py`). A direction applies to the sentence it
 sits in, and none is ever read out:
 - `[pause]`, or `[pause 2s]` up to 5 s: silence at that spot. The sentence is read as two pieces, the first ending in
-  that `hold`.
+  that `hold`. A bare number is seconds (`[pause 2]`), `ms` is read (`[pause 500ms]`), a stop after the unit is fine;
+  a length it can't read (`[pause 2 minutes]`, `[pause 500]`) is named as unknown. A pause before the text's first
+  words is silence before them (`lead` on the first piece). A long sentence is never cut inside a bracket.
 - `[louder]` / `[softer]`: ±4 dB, by the level the sentence is set to.
 - `[higher]` / `[lower]`: ±2 semitones on the reading's pitch, held in the voice's `f0_range`
   (`cadence.held_pitch`).
@@ -455,7 +457,8 @@ the ear passes one, it goes in `tags.ENGINE_ON`; for a cadence voice it's then p
 from its tokenizer's `added_tokens.json`).
 
 An unknown tag is read as nothing and named once under the result. An editor's bracket stays text: [sic], a
-capitalised [Name], a number. Pieces keep their directions: `join_short` never joins across a written pause or a
+capitalised [Name], a number. Text in another script is left out (the readers read English only), and the result
+says so (`not_english` on the speech's record). Pieces keep their directions: `join_short` never joins across a written pause or a
 change of direction. Listen-back hears only the words: a sound tag's noise is no extra word, and no stray ending to
 cut.
 
@@ -543,7 +546,13 @@ stitched by the plan.
 - **On the page** (`renderDuet`, `renderDuetPlan` in `app.js`): the second singer is picked from the same voice rows, and
   the Convert bar says the backing in words. The strip is the plan of the newest cover of this song by these two, from the
   history, and the sentence under it is that cover's note. Before the first cover the page shows a general sentence and
-  no strip, because only the engine can find a plan. A way that isn't ready is hidden (`lines`) or shut (I'll choose).
+  no strip, because only the engine can find a plan. A way that isn't ready is hidden (`lines`; I'll choose isn't on the
+  page until its editor is built). With one way shown, the box says it as a sentence ("They take turns.") instead of a
+  lone button.
+- **In the one-shot** (`oneshot.split_duet`): "<song> as A and B" is two singers when one of them is a voice here, or
+  when neither is but both are full names (a band's name, such as "Hall and Oates" or "Tom Petty and the Heartbreakers",
+  stays one). The plan, the voice step and the done line name both, and the done line's key is the cover's own (the fit
+  for two). A second singer who isn't a voice here is said before anything starts.
 
 A song sung as a duet already (`separate.lead_missing`: the split finds no lead line) is sung by one voice, and the
 notes say why; a duet's two singers take turns on its whole vocal instead, backing and all. The cover's
@@ -637,7 +646,9 @@ voice (mean cosine to the reference at least 0.62, median phrase score at least 
 within 5 semitones of the voice's own) and the pipeline kept more than a tenth of it; left-out sources are reported
 with why. A well-fed voice (8 minutes or more, likeness 0.6 or more, new data under 1.5x the old) is refined from its
 own weights (lr 2e-5, about 2000 steps for 10-20 minutes of new data); a thin voice or a big data jump is retrained from
-scratch with the scaled budget, because refine learns little from a fivefold jump. Whatever is offered, the person
+scratch with the scaled budget, because refine learns little from a fivefold jump. The refine plan (`init_from`, `lr`,
+`steps`) stays in the project's training state; every training that starts over drops it with the last run's progress
+(`trainer.FRESH_KEYS`, one list for the form, Do it all, a queued project and the Improve). Whatever is offered, the person
 listens to two of the test's own lines through both voices, blind, and keeps one.
 
 ## UI
@@ -655,11 +666,14 @@ A running strip sits under the top bar on every module: a 2 px line of light in 
 plain words (what it does and why), a realistic time left ("about 3 min left"), Pause / Resume / Queue, and "+N more"
 into the queue drawer. Every waiting state says what it waits for (the GPU, a queue, a pause, a game); nothing looks
 hung. A tab left open across an update compares `/api/status`'s `build` with the one it loaded and offers a reload
-(`#uc-updated`); `whatsnew.js` shows the newest note from `whatsnew.json` once.
+(`#uc-updated`); `whatsnew.js` shows the newest note from `whatsnew.json` once. Wherever the page says how to start
+UnderCover again (Quit, a lost connection, a failed restart), it reads `/api/status`'s `launcher` (`about.launcher()`):
+an installed copy says the Start menu; a source checkout's `scripts\UnderCover.bat` is said in Deep Cover only.
 
 The First assignment (1.1) is a spotlight tour on a fresh install's first visit to FrontMan (`firstrun.js`): the page dims, the
 control in question is cut out and lit, one card sits beside it in the dark (never over it). Four steps: the one-shot line
-(with a one-press "Hold On as Agent Smoke", the sample song in the demo voice); listen and Send to SafeHouse; the SafeHouse tab,
+(with a one-press "Hold On as Agent Smoke", the sample song in the demo voice, its time the one-shot plan's own for this
+PC, asked only while the sample song is in the library); listen and Send to SafeHouse; the SafeHouse tab,
 then the kept cover in the Library; DoubleAgent's "Who should it sound like?". Doing the thing moves it on; Next only where
 there's nothing to do. While the first cover is made the page stays dark: the app's own progress (the running strip, the
 one-shot's steps) is lit but can't be pressed, and a panel says what the job is doing in its own words with a tip every ten
@@ -878,10 +892,11 @@ The installer and the app survive version mismatches and fix common problems the
   venv, the PyTorch build against `[gpu] backend`, the card and its driver (full mode), every pinned package, ffmpeg and
   Deno, the model files (size fast; SHA-256 in full mode), free space, the `[paths]` folders, the port, leftovers,
   interrupted work, your phone's link, and the network type and firewall while a phone still uses the home Wi-Fi. Fast mode runs under 2 s with no torch import; full mode
-  is a job. Each result has `id, group, state (ok | info | warn | bad), title, say, detail, fix {id, label, how}`. Fixes:
-  `stale`, `model:<path>` / `models` (the new copy checks out before the old is replaced), `packages` (only the differing
-  hashed pin lines, on the person's click, never PyTorch), `cpu`, `resume`, `manifest`; `setup.ps1 -Repair` is offered in
-  words only. The Doctor never touches voices, songs, covers, speech or training projects and never changes Windows or
+  is a job. Each result has `id, group, state (ok | info | warn | bad), title, say, detail, fix {id, label, how, detail?}`.
+  Fixes: `stale`, `model:<path>` / `models` (the new copy checks out before the old is replaced), `packages` (only the
+  differing hashed pin lines, on the person's click, never PyTorch), `cpu`, `resume`, `manifest`; the installer's repair
+  is offered in words only (`how: offer`): the label names the Start menu's Repair UnderCover, and the fix's `detail`
+  (Deep Cover) the `setup.ps1 -Repair` command. The Doctor never touches voices, songs, covers, speech or training projects and never changes Windows or
   driver settings.
 - Safe healing at startup (`doctor.heal_at_startup`, before the server listens; `logs/doctor.log`): a pinned model file
   that is missing or the wrong size is fetched again; leftovers older than 6 h are removed through
@@ -889,7 +904,12 @@ The installer and the app survive version mismatches and fix common problems the
   paused work owns; work a crash interrupted resumes once by itself (a training with its `resume.pt`, transcripts) or is
   put back as paused; work that died twice is held.
 - Installer repair (`setup.ps1 -Repair`) runs the Doctor as JSON and redoes only what it reports; `-DryRun` shows the
-  plan. It keeps the venv, `config.toml` and every data folder.
+  plan. It keeps the venv, `config.toml` and every data folder. One exception: a processor install whose backend was
+  detected (`logs/setup-backend.txt` isn't "by hand") looks for a card again, and when one works now (nvidia-smi answers,
+  or AMD's list has it) the repair installs PyTorch for it, reinstalls the packages and rewrites `[gpu]`; the new
+  manifest names the torch file it just installed. Cover estimates keep a processor's measured speeds apart from a
+  card's (`timings.jsonl` rows carry `cpu`), and a processor with nothing measured yet guesses 15 times a card's
+  first guess (`pipeline.CPU_FIRST_GUESS`).
 - A diagnostics file (`core/diagnostics.py`, `GET /api/doctor/bundle.zip`): the logs, the manifest, `config.toml`, a
   fresh report. Text only, no audio; the person's folders shortened to `<UnderCover>`, `<library>`, `<working files>`,
   `<model files>`, `<voices>` and `%USERPROFILE%`.
@@ -926,6 +946,11 @@ The installer and the app survive version mismatches and fix common problems the
 - Vaulting (`core/vault.py`): a quiet, incremental backup of what cannot be downloaded again (voices trained here, kept
   covers and speech, settings, the ear) to a folder on another drive, as plain files named by the SHA-256 of their
   original bytes, with a snapshot per run and a Restore that asks before replacing. Off until a folder is picked.
+  Replace puts every file it writes over into the vault first (whatever the vault's size) or replaces nothing; Keep both
+  brings a voice or project back as `<name>-from-vault` (then `-2`, ...) under its own name, a file as "(from vault)",
+  never over an earlier copy; settings have one place, so they offer Replace only. A restored config.toml keeps this
+  install's `[paths]` or isn't written. Clean up waits for every job, queued or running, and offers only old leftovers
+  from the separator's working folder.
 
 ## Tests, scripts and the installer
 
@@ -953,9 +978,15 @@ An update downloads only what changed (1.0.3): `installer/installed.ps1` lists w
 has (a package at its exact pin in its own setup-made `.venv`, read from the venv itself; uv, Python, ffmpeg and Deno
 where setup reuses them), the download page skips those, and setup installs only the pins that differ (still
 `--require-hashes`, offline). A venv setup didn't make, one on the wrong Python, or one that won't start counts as
-having nothing; a repair reinstalls the packages as before. `setup.ps1` installs a private Python (`python.ps1`, via uv), the packages for the detected backend
+having nothing; a repair reinstalls the packages as before. `setup.ps1` unpacks a private Python itself (`python.ps1`: the pinned python-build-standalone archive, with Windows' tar; uv installs only the packages), the packages for the detected backend
 (`detect_gpu.ps1`: rocm, cuda128, cuda126 or cpu; `requirements/*.txt`, hashed by `pin_hashes.py` and constrained by
 `constraints.txt`), ffmpeg and Deno, puts the models in place (`python -m undercover.models install --offline`), writes
-the GPU settings, runs `selftest.py`, writes the manifest and makes a launcher. `space.ps1` and `sizes.json` give the
-wizard real disk needs per drive. A fresh install seeds the sample song and the demo voice once (`app/firstrun.py`);
+the GPU settings, runs `selftest.py`, writes the manifest and makes a launcher. `detect_gpu.ps1`'s JSON carries
+`nodriver` when Windows lists an NVIDIA card but nvidia-smi doesn't answer: the install is the processor's, and the
+wizard's Ready and finished pages say so and what to do (install the driver, then Repair UnderCover). `space.ps1` and
+`sizes.json` give the wizard real disk needs per drive (its output lines: `backend|`, `nodriver|`, `total|`, `need|`,
+`parts|`, `short|`); a folder left at the install folder is counted where `config.toml`'s `[paths]` already keeps it,
+so an update after a Storage move isn't asked for room on a drive it won't use. The uninstaller removes the app's own
+caches by name and keeps the user's files, the models, the training projects and the few `cache/` files that hold the
+user's picks or point at their files (`u_uninstall_kept_paths` holds the list against the app's cache names). A fresh install seeds the sample song and the demo voice once (`app/firstrun.py`);
 a seed the person deletes does not come back.

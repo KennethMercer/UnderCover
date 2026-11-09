@@ -12,6 +12,10 @@ const SH_RETRY = /ran out of memory|Something went wrong|blocked writing|try aga
 const SH_GAP_S = 0.6;   // a pause this long between two heard words starts a new line (duets.phrases joins under it)
 const SH_FADE_S = 0.04;   // duets.FADE_S: a pause shorter than the crossfade isn't a place to land
 const SH_OCT = 2;   // edits.OCTAVE_BOUND
+// the cover a Keep would roll off Recent covers (core/tray.leaver: the oldest, when the tray of RECENT_TRAY is full, unless it's
+// kept; the one being edited is spared), else null: the Keep sheet says it only when it will happen (Internal Affairs D8). HIST is
+// read again when the sheet opens, so a cover finished meanwhile is counted.
+const shRollsOff = () => { const o = HIST.length >= RECENT_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null; };
 
 SH.audio.addEventListener("timeupdate", () => { if (SH.stopAt != null && SH.audio.currentTime >= SH.stopAt) { SH.audio.pause(); SH.stopAt = null; } });
 const shName = who => voiceDisplay(who === "B" ? SH.item?.duet_voice : SH.item?.voice);
@@ -111,11 +115,14 @@ function shLanding(part) {
   const ok = p.find(x => x.ok);
   if (!ok) {
     const s = [...new Set(p.map(x => x.no))].join(" ");   // (an octave refused for range and a singer for landing say different things)
-    const way = /near the start/.test(s) ? " Take the stretch from the start of the line." : /near the end/.test(s) ? " Take the stretch a little further, to the end of the line." : "";
+    // which way to move, only when the pick doesn't already go there (Internal Affairs D2: a pick from a line's first word was told to start at the line's start)
+    const lines = shLines(), [a, b] = SH.pick;
+    const way = /near the start/.test(s) && !lines.some(l => l.words[0] === a) ? " Take the stretch from the start of the line."
+      : /near the end/.test(s) && !lines.some(l => l.words.at(-1) === b) ? " Take the stretch a little further, to the end of the line." : "";
     return { k: "no", s: s + way };
   }
   const e = ok.ok.edit;
-  if (e.moved) return { k: /between two sung sounds/.test(e.moved) ? "warn" : "ok", s: e.moved + (/between two sung sounds/.test(e.moved) ? " The join may be heard." : "") };
+  if (e.moved) return { k: /may be heard/.test(e.moved) ? "warn" : "ok", s: e.moved };   // (the gate's one sentence: where it landed)
   const w = e.words || SH.pick, d = SH.doc;
   const from = e.t0 <= 0.05 ? "Starts at the top of the song" : "Starts in the pause before “" + shBare(shWord(w[0])) + "”";   // (plain text)
   const to = e.t1 >= d.duration - 0.05 ? "ends at the end of the song" : "ends in the pause after “" + shBare(shWord(w[1])) + "”";
@@ -256,7 +263,7 @@ function shPaint(box) {
     else if (live.length && d.kept_now) h += `<div class="kept">This version is kept: it's a cover of its own in Recent covers.</div>`;
     else if (live.length) h += `<div class="unkept"><span>Not kept yet. These changes stay with this cover, and roll off with it when it leaves Recent covers.</span><button class="btn primary" type="button" data-sh="keep"${SH.busy ? " disabled" : ""}>Keep this version</button></div>`;
   }
-  if (SH.confirm) h += `<div class="sheet" role="dialog" aria-label="Keep this version?"><h3>Keep this version?</h3><p>It becomes a new cover, <b>${esc(d.keep_as || it.title + " (edited)")}</b>, next to the one it came from, with its changes. Recent covers holds 15, so the oldest one there rolls off to make room. Covers sent to SafeHouse stay.</p>
+  if (SH.confirm) h += `<div class="sheet" role="dialog" aria-label="Keep this version?"><h3>Keep this version?</h3><p>It becomes a new cover, <b>${esc(d.keep_as || it.title + " (edited)")}</b>, next to the one it came from, with its changes.${shRollsOff() ? ` Recent covers holds 15, so the oldest one there, <b>${esc(shRollsOff().title)}</b>, rolls off to make room. Covers sent to SafeHouse stay.` : ""}</p>
     <div class="row"><button class="btn primary" type="button" data-sh="keep-yes">Keep it</button><button class="btn" type="button" data-sh="keep-no">Not yet</button></div></div>`;
   box.innerHTML = h + `</div>`;
   shSay([".sh-bar .busy", ".land-say", ".kept"].map(s => $(s, box)?.textContent.trim()).find(Boolean) || "");
@@ -295,7 +302,10 @@ function shWire() {
     if (k === "done") return shapeClose();
     if (k === "retry") { SH.state = "loading"; SH.error = null; shDraw(); return shLoad(true); }
     if (k === "undo" || k === "redo") return shStep(k);
-    if (k === "keep") { SH.confirm = true; shDraw(); return $('[data-sh="keep-yes"]', box)?.focus(); }
+    if (k === "keep") { SH.confirm = true; shDraw(); $('[data-sh="keep-yes"]', box)?.focus();
+      const id = SH.id;   // (Recent covers as it is now: what the sheet says rolls off is what will)
+      return loadHistory().then(() => { if (SH.confirm && SH.id === id) { shDraw(); $('[data-sh="keep-yes"]', box)?.focus(); } }, () => {});
+    }
     if (k === "keep-yes") return shKeep();
     if (k === "keep-no") { SH.confirm = false; shDraw(); return $('[data-sh="keep"]', box)?.focus(); }
     if (k === "unpick") { SH.pick = null; SH.probes = null; SH.said = null; SH.seq++; return shDraw(); }
