@@ -322,9 +322,10 @@ def _word_at(doc: dict, t: float) -> str | None:
 
 
 def _passed(doc: dict, a: float, b: float) -> str | None:
-    """The word an edge moved past, going from a to b."""
+    """The word an edge moved past, going from a to b: the nearest one it took in or left out, by the word's middle (a word that
+    stays in or out of the stretch, as asked, isn't named)."""
     lo, hi = min(a, b), max(a, b)
-    got = [w[0].strip()[:MAX_WORD] for w in doc["words"] if lo <= w[1] <= hi or lo <= w[2] <= hi]
+    got = [w[0].strip()[:MAX_WORD] for w in doc["words"] if lo < (w[1] + w[2]) / 2 < hi]
     return got[0 if b > a else -1] if got else None
 
 

@@ -8746,6 +8746,9 @@ def u_edits():
     assert e["t1"] > 20.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the end in the outro
     e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [0, 11], "words_hash": pd["words_hash"]}, pd)
     assert 7.9 <= e["t0"] <= 8.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
+    assert "past" not in e["moved"] and e["moved"] == "The end moved 0.5 s.", e   # an edge moved outward is past none of its own words
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 6.0, "t1": 16.5}, pd)   # an end moved in: the nearest word it left out
+    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'The end moved past "x4".'), e
     refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
     assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
     return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it, intro and outro landings"
