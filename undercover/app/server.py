@@ -87,7 +87,9 @@ RESTART = threading.Event()
 # own limits and never come here.
 JSON_MAX = 1 << 20                        # 1 MB: the longest speech (50,000 characters) is a few hundred KB
 JSON_MAX_FOR = {"/api/themes": 8 << 20,          # a theme saved from the editor (its files are capped at 4 MB)
-                "/api/vault/restore": 32 << 20}   # the list of what to restore from a big library
+                "/api/vault/restore": 32 << 20,   # the list of what to restore from a big library
+                **{p: 4 << 10 for p in ("/api/phone/claim", "/api/phone/wait", "/api/phone/move", "/api/phone/away")}}
+#                 (the link's open routes, before a token: a code, a nonce and a name)
 # job kinds only the PC starts (a Storage move, an add-on, Make smaller, the yt-dlp update): never cancelled or retried
 # from a phone, whatever route started them
 PC_ONLY_KINDS = ("move", "addon", "smaller", "ytdlp")
@@ -262,6 +264,34 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "UnderCover"
     protocol_version = "HTTP/1.1"
     timeout = 30   # (1.1 hardening) every read of a request, on every listener: a client that stalls is dropped
+    OPEN_S = 60.0  # the link: a request has this long from its first byte to show its token (an open route, to finish)
+
+    def handle_one_request(self):
+        """The link's listener: a deadline for the whole request until its token is shown, so a client that sends a byte
+        now and then (each read within `timeout`) can't hold the listener's places for long without one."""
+        t = None
+        if getattr(self.server, "away", False):
+            t = threading.Timer(self.OPEN_S, self._too_slow)
+            t.daemon = True
+            t.start()
+        self._slow, self._shut = t, False
+        try:
+            super().handle_one_request()
+        except OSError:
+            if not self._shut:   # (not the deadline's own doing)
+                raise
+            self.close_connection = True   # (past the deadline: the connection was shut, quietly)
+        finally:
+            if t is not None:
+                t.cancel()
+
+    def _too_slow(self):
+        import socket
+        self._shut = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)   # (the read waiting on it ends; the connection goes)
+        except OSError:
+            pass
 
     def setup(self):
         super().setup()
@@ -369,6 +399,18 @@ class Handler(BaseHTTPRequestHandler):
     remote = False   # the request came from the network (a paired phone), not from this PC
     device = None    # that phone ({id, name, hash, ...})
 
+    def _relayed(self) -> bool:
+        """Is this loopback connection held by a relay (the link's daemon) rather than a program of the PC's own? Asked
+        once per connection."""
+        got = getattr(self, "_relay", None)
+        if got is None:
+            try:
+                got = _relay_peer(self.connection.getpeername(), self.connection.getsockname())
+            except OSError:
+                got = _link_running()
+            self._relay = got
+        return got
+
     def _gate(self, method: str) -> bool:
         """Who's asking, and may they? From this PC (the loopback listener, a loopback address): exactly the checks from
         before phase 11. From the home network (a phone paired before the link, until it moves): the link on, this
@@ -381,6 +423,8 @@ class Handler(BaseHTTPRequestHandler):
         if _cross_site(method, self.path, self.headers):
             return self._deny(403, AWAY_403 if self.away else None)
         if not self.remote:
+            if self._relayed():   # (hardening)
+                return self._deny(403)
             return self._guard_host() and (method == "GET" or self._guard_origin())
         if self.away:
             return self._gate_away(method)
@@ -434,6 +478,8 @@ class Handler(BaseHTTPRequestHandler):
         self.device = phone.device_for(tok or old, "", away=True)   # Funnel's loopback: no address to keep, no header read
         if self.device is None:
             return self._deny(401, AWAY_401, clear=bool(tok or old))
+        if getattr(self, "_slow", None) is not None:   # a phone's request: its uploads and streams take as long as they take
+            self._slow.cancel()
         self.set_cookie = phone_api.main_cookie(tok or old)   # (its life runs from this use)
         if old:   # the same token under the one name, and the old name gone
             self.set_cookie = [self.set_cookie, phone_api.gone_cookie(phone.OLD_AWAY_COOKIE)]
@@ -1130,6 +1176,46 @@ class AwayServer(PhoneServer):
     """The third listener (phase 20): loopback only, the one target of Tailscale Funnel; every request comes from the
     internet and passes _gate_away."""
     away = True
+
+
+RELAYS = {platform.exe_name("tailscaled").lower()}   # programs that are never the PC's own client
+_UNTOLD = [0.0]   # when the Doctor last said a connection's program couldn't be told
+
+
+def _link_running() -> bool:
+    from ..core import tailnet
+    d = tailnet._P["daemon"]
+    return bool(tailnet.STATE["want"]) or (d is not None and d.poll() is None)
+
+
+def _relay_peer(client: tuple, local: tuple) -> bool:
+    """Does a relay hold the client end of this local connection? When its program can't be told (the table or the
+    program unreadable) while the link's daemon runs: yes (refused, said once in a while). Not on this OS: no."""
+    try:
+        pid = platform.tcp_client_pid(client, local)
+    except platform.NotOnThisOS:
+        return False
+    if pid == os.getpid():
+        return False
+    if pid:
+        from ..core import tailnet
+        d = tailnet._P["daemon"]
+        if d is not None and pid == d.pid:
+            return True
+        try:
+            name = Path(platform.process_path(pid) or "").name.lower()
+        except platform.NotOnThisOS:
+            name = ""
+        if name:
+            return name in RELAYS
+    if not _link_running():
+        return False
+    if time.time() - _UNTOLD[0] > 600:
+        _UNTOLD[0] = time.time()
+        from ..core.doctor import log
+        log("Your phone: a connection to UnderCover on this PC couldn't be traced to a program while the phone link is on, "
+            "so it was refused. If UnderCover's page on this PC won't load, turn the phone link off.")
+    return True
 
 
 def _loopback(addr: str) -> bool:

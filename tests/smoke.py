@@ -2351,6 +2351,185 @@ def u_phone_stream():
     return "Remove, Off and the move each end the phone's stream at once; another phone's and the PC's go on"
 
 
+@check("A phone's jobs hold to its cap at the same moment too: ten at once from one phone start three; a job made and never queued stops counting; a voice's preview waits once however often it's renamed, with the newest name; Allow counts the phones already connected")
+def u_phone_jobs_burst():
+    import inspect, queue, threading
+    from types import SimpleNamespace
+    from undercover.core import jobs, phone, voicepreview
+    from undercover.core.phone import PhoneError
+    saved = dict(jobs.JOBS)
+    jobs.JOBS.clear()
+    jobs._MADE.clear()
+    got, refused = [], []
+    go = threading.Barrier(10)
+
+    def one(n):
+        jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "burst", "name": "p"})
+        try:
+            go.wait(10)
+            j = jobs.Job("cover", title=f"t{n}")
+            time.sleep(0.2)   # (the route's own work between making the job and queueing it)
+            jobs.JOBS[j.id] = j
+            got.append(j)
+        except jobs.TooManyJobs:
+            refused.append(n)
+        finally:
+            jobs.ORIGIN.h = None
+    try:
+        ts = [threading.Thread(target=one, args=(n,)) for n in range(10)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(30)
+        assert len(got) == jobs.PHONE_JOBS and len(refused) == 10 - jobs.PHONE_JOBS, (len(got), refused)
+        assert not jobs._MADE, "a queued job is still counted twice"
+        src = inspect.getsource(jobs.Job.__init__)
+        assert src.index('self.state = "queued"') < src.index("_phone_cap(self)"), "a job is counted before it has a state"
+        for j in got:
+            j.finish("done", message="Finished")
+        jobs.ORIGIN.h = SimpleNamespace(remote=True, device={"id": "burst", "name": "p"})
+        lost = [jobs.Job("cover", title="never queued") for _ in range(jobs.PHONE_JOBS)]   # (their routes failed after)
+        try:
+            jobs.Job("cover", title="t")
+            raise AssertionError("made-but-not-queued jobs didn't count")
+        except jobs.TooManyJobs:
+            pass
+        for j in lost:
+            j.created -= jobs.MADE_S + 1
+        assert jobs.Job("cover", title="t").device == "burst", "a job never queued kept counting"
+        jobs.ORIGIN.h = None
+        jobs.JOBS.update({"x1": got[0]})   # (update lands through the same door)
+        assert isinstance(jobs.JOBS, jobs._Jobs)
+
+        real_q, q = jobs.GPU_QUEUE, queue.Queue()   # a voice's preview: renamed three times before it starts
+        jobs.GPU_QUEUE = q
+        try:
+            v = [SimpleNamespace(name="smoke-pv", dir=Path("smoke-pv"), display=f"Name {n}") for n in range(3)]
+            first = voicepreview.queue_job(v[0])
+            assert voicepreview.queue_job(v[1]) is first and voicepreview.queue_job(v[2], force=False) is first
+            assert q.qsize() == 1 and first.title == "Preview line for Name 2" and first.pv is v[2] and first.force
+            made = []
+            real_make = voicepreview.make
+            voicepreview.make = lambda vv, j, force: made.append(vv.display) or True
+            real_timer = threading.Timer
+            threading.Timer = lambda s, fn: SimpleNamespace(start=lambda: made.append(("gone", s)))
+            try:
+                job, run = q.get_nowait()
+                run(job)
+            finally:
+                voicepreview.make, threading.Timer = real_make, real_timer
+            assert made == ["Name 2", ("gone", 120)] and job.state == "done", made
+            again = voicepreview.queue_job(v[0])   # (started: a new ask is a new job)
+            assert again is not first and q.qsize() == 1
+        finally:
+            jobs.GPU_QUEUE = real_q
+            voicepreview._QUEUED.clear()
+    finally:
+        jobs.ORIGIN.h = None
+        jobs.JOBS.clear()
+        jobs._MADE.clear()
+        jobs.JOBS.update(saved)
+    with isolated_data():   # Allow counts the phones already connected (asks from windows opened one after another)
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        was = phone.MAX_DEVICES
+        phone.MAX_DEVICES = 1
+        try:
+            phone.set_enabled(True)
+            asks = []
+            for name in ("A", "B"):
+                phone.new_pairing()
+                asks.append(phone.claim(phone.PAIRING["code"], name)[1])
+            phone.allow(asks[0]["id"])
+            try:
+                phone.allow(asks[1]["id"])
+                raise AssertionError("Allow went past the phones a PC may have")
+            except PhoneError as e:
+                assert e.status == 409 and "connected already" in str(e)
+            assert len(phone.devices()) == 1 and [x["id"] for x in phone.pending()] == [asks[1]["id"]]
+        finally:
+            phone.MAX_DEVICES = was
+            phone.set_enabled(False)
+    return "ten at once: three; never-queued jobs stop counting; one preview per voice, newest name; Allow counts"
+
+
+@check("The link before a token holds up: its open routes take a few KB; a request that trickles in is closed at the deadline; half a character in a code, a nonce or a name gets the plain answer; a phone unused for 30 days is let go (off the card, out of the count); one live move code a phone; the service worker leaves downloads alone")
+def u_phone_open():
+    import inspect, socket, threading
+    import http.server
+    from undercover.app import server
+    from undercover.core import doctor, phone
+    from undercover.core.phone import PhoneError
+    for p in ("/api/phone/claim", "/api/phone/wait", "/api/phone/move", "/api/phone/away"):
+        assert server.JSON_MAX_FOR[p] == 4 << 10, p
+    assert "self._slow.cancel()" in inspect.getsource(server.Handler._gate_away)
+    was = server.Handler.OPEN_S
+    server.Handler.OPEN_S = 0.5
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    srv.away = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = socket.create_connection(srv.server_address, timeout=10)
+        t0 = time.time()
+        c.sendall(b"POST /api/phone/claim HTTP/1.1\r\nHost: x\r\n")   # a byte now and then, never the whole request
+        got = c.recv(100)
+        assert got == b"" and time.time() - t0 < 5, (got, time.time() - t0)
+        c.close()
+    finally:
+        server.Handler.OPEN_S = was
+        srv.shutdown()
+        srv.server_close()
+    assert phone.clean_name("Ann\udcff's\ud800 phone") == "Ann's phone"
+    assert phone.hash_token("\ud800") == phone.hash_token("\ud800")   # (any string the wire brings: no UnicodeEncodeError)
+    with isolated_data():
+        phone._FILE[0], phone.PAIRING, phone._UNREADABLE[0] = None, None, None
+        phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+        try:
+            doctor.log("a name with half a character \udcff")   # (written escaped, never raised)
+            phone.set_enabled(True)
+            phone.new_pairing()
+            try:
+                phone.claim("\ud800", "x")
+                raise AssertionError("a code with half a character was taken")
+            except PhoneError as e:
+                assert e.status == 403 and e.generic
+            nonce, d = phone.claim(phone.PAIRING["code"], "Old phone")
+            phone.allow(d["id"])
+            token, _ = phone.collect(nonce)
+            assert phone.device_for(token, away=True)
+            with phone._LOCK:
+                phone._STATE["devices"].append({"id": "lan1", "name": "Home phone", "hash": None, "lan_hash": "h" * 64,
+                                                "lan_used": None, "pending": False, "paired": "p", "seen": "s", "ip": "",
+                                                "version": 1})
+                phone._relan(phone._STATE)
+                phone._save()
+            first, second = phone.move_code("lan1"), phone.move_code("lan1")
+            assert len(phone._MOVE_CODES) == 1, "a phone kept two live move codes"
+            try:
+                phone.redeem_move(first)
+                raise AssertionError("an older move code still worked")
+            except PhoneError:
+                pass
+            phone._MOVE_CODES.clear()
+            with phone._LOCK:   # thirty days on, unused
+                x = next(x for x in phone._STATE["devices"] if x["id"] == d["id"])
+                x["used"] = time.time() - phone.TOKEN_IDLE_S - 1
+            assert [x["id"] for x in phone.devices()] == ["lan1"], "a phone unused for 30 days stayed on the card"
+            h = phone.hash_token(token)
+            assert not phone.still_valid(h) and phone.device_for(token, away=True) is None
+            saved = json.loads(phone.state_file().read_text(encoding="utf-8"))
+            assert [x["id"] for x in saved["devices"]] == ["lan1"], "forgotten in memory but not in the file"
+            log = (Path(doctor.path("logs_dir")) / "doctor.log").read_text(encoding="utf-8")
+            assert "Old phone wasn't used for 30 days" in log and "\\udcff" in log, log[-400:]
+        finally:
+            phone.set_enabled(False)
+            phone._MOVE_CODES.clear(), phone._HANDOVER.clear(), phone._STATE.clear()
+            phone._FILE[0], phone.PAIRING = None, None
+    sw = (ROOT / "undercover" / "web" / "sw.js").read_text(encoding="utf-8")
+    assert 'p.startsWith("/files/") || p.startsWith("/api/")) return;' in sw
+    return "4 KB before a token; trickles closed; half characters answered plainly; quiet phones let go; one move code"
+
+
 @check("Your phone's records hold up (1.2.1, review): an ask never allowed runs out while the server runs; No on a phone that isn't waiting leaves it; a full list keeps the code; an unreadable phone.json is never saved over; UnderCover's own warm-up and preview jobs don't count against a phone; the card doesn't redraw what hasn't changed; the pages keep waiting through a blip")
 def u_phone_records():
     from types import SimpleNamespace
@@ -2447,6 +2626,88 @@ def u_phone_records():
         assert '.catch(() => null);   // (a blip on the way: ask again)' in src and "w.status === 401 || w.status === 403" in src, page
     assert "409" in (web / "pair.html").read_text(encoding="utf-8")
     return "asks run out; No leaves a connected phone; a full list keeps the code; an unreadable file isn't saved over; warm-ups uncounted"
+
+
+@check("hardening of the PC's own listener: a loopback connection a relay program holds is refused before Host is read (and one whose program can't be told, while the link runs); the PC's own connections are let in")
+def u_pc_listener():
+    """A loopback connection a relay program holds isn't the PC's own: the gate refuses it before Host or Origin is read."""
+    import inspect, socket, subprocess
+    from types import SimpleNamespace
+    from undercover.app import server
+    from undercover.core import platform as P
+    src = inspect.getsource(server.Handler._gate)
+    assert src.index("self._relayed()") < src.index("self._guard_host()"), "the relay check comes first"
+    if not P.WINDOWS:
+        try:
+            P.tcp_client_pid(("127.0.0.1", 1), ("127.0.0.1", 2))
+            raise AssertionError("tcp_client_pid answered off Windows")
+        except P.NotOnThisOS:
+            pass
+        assert server._relay_peer(("127.0.0.1", 1), ("127.0.0.1", 2)) is False
+        return
+    for fam, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):   # this process's own connection
+        s = socket.socket(fam)
+        try:
+            s.bind((host, 0))
+            s.listen(1)
+            c = socket.create_connection(s.getsockname()[:2], timeout=5)
+            a, _ = s.accept()
+            assert P.tcp_client_pid(a.getpeername()[:2], a.getsockname()[:2]) == os.getpid(), host
+            assert P.tcp_client_pid(a.getpeername()[:2], ("127.0.0.1", 1)) is None   # (no such row)
+            a.close(), c.close()
+        finally:
+            s.close()
+    s = socket.socket()   # another process's connection: the one a relay's would be
+    s.bind(("127.0.0.1", 0))
+    s.listen(1)
+    s.settimeout(20)
+    child = subprocess.Popen([sys.executable, "-c", "import os, socket, sys; c = socket.create_connection(('127.0.0.1', "
+                              f"{s.getsockname()[1]})); print(os.getpid(), flush=True); sys.stdin.read()"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, creationflags=P.NO_WINDOW)
+    saved, real_running = set(server.RELAYS), server._link_running
+    try:
+        a, _ = s.accept()
+        pid = int(child.stdout.readline())   # (a venv's python.exe is a launcher: the connection is its child's)
+        assert P.tcp_client_pid(a.getpeername()[:2], a.getsockname()[:2]) == pid
+        server._link_running = lambda: True
+        assert server._relay_peer(a.getpeername(), a.getsockname()) is False   # (python isn't a relay)
+        real_pid, real_path = P.tcp_client_pid, P.process_path
+        try:   # its program can't be told: refused while the link runs, let in while it doesn't
+            server._UNTOLD[0] = time.time()   # (the Doctor's line said already: nothing written by this check)
+            P.tcp_client_pid = lambda c, l: None
+            assert server._relay_peer(a.getpeername(), a.getsockname()) is True
+            P.tcp_client_pid, P.process_path = real_pid, lambda p: ""
+            assert server._relay_peer(a.getpeername(), a.getsockname()) is True
+            server._link_running = lambda: False
+            assert server._relay_peer(a.getpeername(), a.getsockname()) is False
+        finally:
+            P.tcp_client_pid, P.process_path = real_pid, real_path
+        server.RELAYS.add(Path(P.process_path(pid)).name.lower())   # this child stands in for a relay
+        assert server._relay_peer(a.getpeername(), a.getsockname()) is True
+        denied = []
+        h = SimpleNamespace(server=SimpleNamespace(), client_address=a.getpeername(), connection=a, path="/api/phone",
+                            headers={"Host": f"127.0.0.1:{a.getsockname()[1]}"})
+        h._relayed = lambda: server.Handler._relayed(h)
+        h._deny = lambda status, *x, **k: denied.append(status) or False
+        h._guard_host = lambda: (_ for _ in ()).throw(AssertionError("Host was read for a relayed connection"))
+        assert server.Handler._gate(h, "GET") is False and denied == [403] and h.remote is False
+        assert h._relay is True   # (kept for the connection's next requests)
+        mine = socket.create_connection(s.getsockname()[:2], timeout=5)   # the PC's own connection, same names: let in
+        b2, _ = s.accept()
+        h2 = SimpleNamespace(server=SimpleNamespace(), client_address=b2.getpeername(), connection=b2, path="/api/status",
+                             headers={"Host": f"127.0.0.1:{b2.getsockname()[1]}"})
+        h2._relayed = lambda: server.Handler._relayed(h2)
+        h2._deny = lambda *x, **k: (_ for _ in ()).throw(AssertionError("the PC was refused"))
+        h2._guard_host = lambda: True
+        assert server.Handler._gate(h2, "GET") is True
+        a.close(), b2.close(), mine.close()
+    finally:
+        server.RELAYS.clear()
+        server.RELAYS.update(saved)
+        server._link_running = real_running
+        child.kill()
+        child.wait(10)
+        s.close()
 
 
 @check("CounterIntelligence on onephone (CI-64, CI-65, CI-66): a phone's night-queue items count against it (three at once, said plainly) while the PC's don't; forgetting every thumb is the PC's (one thumb stays a phone's); an ask carries a two-digit match number from its nonce, the same on the phone's answer and beside Allow; a name loses its bidi controls")
@@ -11225,9 +11486,7 @@ def u_phone_pairing():
             rec = next(d for d in phone._load()["devices"] if d["id"] == dev["id"])
             rec["used"] = time.time() - phone.TOKEN_IDLE_S + 60
             assert phone.device_for(token, away=True) and time.time() - rec["used"] < 5, "a use didn't renew the token"
-            rec["used"] = time.time() - phone.TOKEN_IDLE_S - 1
-            assert phone.device_for(token, away=True) is None, "a token unused for 30 days still worked"
-            rec.pop("used")
+            rec.pop("used")   # (unused for 30 days, the phone is let go: u_phone_open)
             assert phone.device_for(token, away=True) and "used" in rec
             from undercover.app import phone_api as PA
             assert f"Max-Age={phone.TOKEN_IDLE_S}" in PA.home_cookie("t")
@@ -12054,7 +12313,8 @@ def u_away_sw():
     sw = (ROOT / "undercover" / "web" / "sw.js").read_bytes()
     src = sw.decode("utf-8")
     assert "caches.open(" not in src and "cache.put" not in src and ".put(" not in src, "the worker keeps something"
-    assert "/api/" not in src and not _re.search(r"https?://", src), "the worker names a route or another origin"
+    routes = src.replace('p.startsWith("/files/") || p.startsWith("/api/")', "")   # (the one line that leaves downloads alone)
+    assert "/api/" not in routes and not _re.search(r"https?://", src), "the worker names a route or another origin"
     assert 'r.mode !== "navigate"' in src and "caches.delete(" in src and 'href="/"' in src
     if not exe:
         return "no Chrome here: the source checks only"
@@ -15811,7 +16071,7 @@ def main():
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
-               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
+               u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:

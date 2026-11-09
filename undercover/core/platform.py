@@ -581,6 +581,54 @@ def run_text(cmd: list, timeout: float = 20, encoding: str = "utf-8") -> str:
     return r.stdout
 
 
+def tcp_client_pid(client: tuple, local: tuple) -> int | None:
+    """The process that holds the client end of a local TCP connection: the row whose own end is `client` (ip, port) and
+    whose far end is `local` (this server's end). None when it isn't in the table (closed already) or can't be read.
+    Read only (GetExtendedTcpTable, the owner-PID connection table)."""
+    if not WINDOWS:
+        raise _not("Naming the program at the other end of a connection")
+    import ctypes
+    import ipaddress
+    import socket
+    import struct
+    try:
+        cip, cport = ipaddress.ip_address(str(client[0]).split("%")[0]), int(client[1])
+        lip, lport = ipaddress.ip_address(str(local[0]).split("%")[0]), int(local[1])
+    except (ValueError, TypeError, IndexError):
+        return None
+    if getattr(cip, "ipv4_mapped", None) and getattr(lip, "ipv4_mapped", None):   # (a dual-stack socket's view of IPv4)
+        cip, lip = cip.ipv4_mapped, lip.ipv4_mapped
+    v6 = cip.version == 6
+    af, row = (socket.AF_INET6, 56) if v6 else (socket.AF_INET, 24)
+    get = ctypes.windll.iphlpapi.GetExtendedTcpTable
+    size = ctypes.c_ulong(0)
+    for _ in range(4):   # (the table can grow between the size call and the read)
+        buf = ctypes.create_string_buffer(max(size.value, 4))
+        r = get(buf, ctypes.byref(size), False, af, 4, 0)   # 4: TCP_TABLE_OWNER_PID_CONNECTIONS
+        if r == 0:
+            break
+        if r != 122:   # (ERROR_INSUFFICIENT_BUFFER: size now says how much)
+            return None
+    else:
+        return None
+    raw = buf.raw
+    n = struct.unpack_from("<I", raw, 0)[0]
+    want = (socket.htons(cport), socket.htons(lport))   # (a port is in network order in a DWORD's low half)
+    for k in range(n):   # (ports first, as integers: the table can hold thousands of rows)
+        o = 4 + k * row
+        if o + row > len(raw):
+            break
+        if v6:   # MIB_TCP6ROW_OWNER_PID: local addr[16], scope, port, remote addr[16], scope, port, state, pid
+            lp, rp = struct.unpack_from("<I", raw, o + 20)[0], struct.unpack_from("<I", raw, o + 44)[0]
+            if (lp & 0xFFFF, rp & 0xFFFF) == want and raw[o:o + 16] == cip.packed and raw[o + 24:o + 40] == lip.packed:
+                return int(struct.unpack_from("<I", raw, o + 52)[0])
+        else:    # MIB_TCPROW_OWNER_PID: state, local addr, local port, remote addr, remote port, pid
+            _, a1, lp, a2, rp, pid = struct.unpack_from("<6I", raw, o)
+            if (lp & 0xFFFF, rp & 0xFFFF) == want and struct.pack("<I", a1) == cip.packed and struct.pack("<I", a2) == lip.packed:
+                return int(pid)
+    return None
+
+
 def port_owner(port: int) -> str | None:
     """The program listening on a local TCP port, by name ("python.exe"), or None when nothing is or it can't be told.
     netstat's columns are read, not its words (they're translated): a listener's remote end is 0.0.0.0:0 or [::]:0."""
