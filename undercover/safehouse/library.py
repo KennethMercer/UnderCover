@@ -362,6 +362,7 @@ def songs() -> list[dict]:
             "source": "YouTube" if m.get("youtube_id") or m.get("source_url") else "dropped file", "source_url": m.get("source_url"),
             "size": _size(f), "stems": stems, "stems_size": sum(s["size"] for s in stems), "stems_old_model": old_model,
             "covers": len(used), "cover_titles": [Path(h["output"]).stem for h in used][:5], "last_used": last,
+            "used": max(_mtime(Path(h["output"])) for h in used) if used else None,   # (said "Used ...": a cover's, never the file's own date)
             "url": file_url(f) if f.exists() else None,
             "sample": bool(m.get("sample")), "artist": m.get("artist") or "",   # the sample song (the first run's)
         })

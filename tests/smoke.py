@@ -4154,6 +4154,33 @@ def u_launcher_said():
     return f"start-menu / bat / start-menu; this checkout: {about.launcher()}"
 
 
+@check("a song's 'Used' in the Library is its newest cover's date, never the file's own (InternalAffairs, 1.2: the sample song, seeded today and never used, said Used today)")
+def u_song_used():
+    import os as _os
+    from undercover.frontman import pipeline
+    from undercover.core.config import path
+    from undercover.safehouse import library
+    saved = (pipeline.history, library._song_metas)
+    with isolated_data():
+        try:
+            up, out = path("uploads_dir"), path("output_dir")
+            up.mkdir(parents=True, exist_ok=True); out.mkdir(parents=True, exist_ok=True)
+            for sid in ("a" * 16, "b" * 16):
+                (up / f"{sid}.mp3").write_bytes(b"x")
+            cover = out / "Mine - X.mp3"
+            cover.write_bytes(b"c")
+            _os.utime(cover, (1_700_000_000, 1_700_000_000))
+            library._song_metas = lambda: {"a" * 16: {"title": "Hold On", "file": "a" * 16 + ".mp3", "sample": True},
+                                           "b" * 16: {"title": "Mine", "file": "b" * 16 + ".mp3"}}
+            pipeline.history = lambda: [{"song": str(up / ("b" * 16 + ".mp3")), "output": str(cover)}]
+            got = {s["title"]: s for s in library.songs()}
+            assert got["Hold On"]["used"] is None and got["Hold On"]["covers"] == 0 and got["Hold On"]["last_used"] > 0, got["Hold On"]
+            assert got["Mine"]["used"] == 1_700_000_000 and got["Mine"]["covers"] == 1, got["Mine"]
+        finally:
+            pipeline.history, library._song_metas = saved
+    return "never used: no date; used: its cover's"
+
+
 @check("'tonight' is tonight (Internal Affairs P8-2): a tonight add arms the queue for the saved start time (23:00 when none, said so), never for now; an emptied queue disarms; Start now is one-time and goes back to the start time once dry; tonight's items (a move to the queue too) wait for the night")
 def u_tonight():
     from datetime import datetime
@@ -13051,11 +13078,11 @@ def _page_selftest(body: str, routes: dict | None = None) -> str:
         srv.shutdown()
     m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
     got = html.unescape(m.group(1)) if m else ""
-    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {' | '.join(x for x in got.split(' | ') if not x.startswith('ok '))[:1500] or r.stdout[-300:]}"
     return got.replace(" | ", "; ")
 
 
-@check("a fresh install's walk (InternalAffairs, 1.2), the page side in headless Chrome (skipped without it): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows; its waiting line says Finishing up once the job has run; Start it again from the Start menu (the .bat only in Deep Cover, in a source checkout)")
+@check("a fresh install's walk (InternalAffairs, 1.2), the page side in headless Chrome (skipped without it): the demo voice in its own group in SpeakEasy; the tour's tips name only what the view shows; its waiting line says Finishing up once the job has run; Start it again from the Start menu (the .bat only in Deep Cover, in a source checkout); the Library's total over two drives; the one-shot's plan for the sample song and the desk after it; SpeakEasy's plan line in plain words; the sample song in the Library")
 def u_first_walk():
     got = _page_selftest(r"""
     const V = (name, x) => ({ name, kind: "speaking", cadence: {}, ...x });
@@ -13135,6 +13162,17 @@ def u_first_walk():
     ok(`F8 the toggle (${demoLabel} / ${realLabel})`, demoLabel === "Speak in Agent Smoke's own way" && realLabel === "Speak the way Some One really does" && $("#se-cad").getAttribute("aria-label") === realLabel);
     ok("F8 a speech in the demo voice: Its own way", seIsDemo("agent-smoke") && !seIsDemo("some-one-uc"));
     SE.est = null; SE.voice = null; seText.value = "";
+    // G3: the Library's sample song: whose it is, used only when a cover used it, and no fixed separation time
+    const song = { id: "abcd", title: "Hold On", source: "dropped file", sample: true, artist: "", duration: 46.2, stems: [], stems_size: 0, size: 1e6,
+                   covers: 0, cover_titles: [], last_used: Date.now() / 1000, used: null, url: null };
+    showTab("safehouse"); const box = $("#lib-detail"); songDetail(box, song); const detail = box.textContent;
+    ok(`G3 the sample's detail (${detail.slice(0, 160)})`, /UnderCover's sample/.test(detail) && !/Your file/.test(detail)
+       && /Not separated yet\. The next cover of this song does that first\./.test(detail) && !/minute/.test(detail));
+    showTab("safehouse"); L.cat = "songs"; L.data.songs = [song, { ...song, id: "efgh", title: "Mine", sample: false, covers: 1, cover_titles: ["Mine · X"], used: Date.now() / 1000 - 86400 * 3 }];
+    renderList(); const rowOf = id => [...$$("#lib-list [data-id]")].find(r => r.dataset.id === id)?.textContent || "";
+    const sampleRow = rowOf("abcd"), mineRow = rowOf("efgh");
+    ok(`G3 the rows (${sampleRow.slice(0, 80)} / ${mineRow.slice(0, 80)})`, /UnderCover's sample/.test(sampleRow) && !/Used|Your file/.test(sampleRow) && /Your file/.test(mineRow) && /Used /.test(mineRow));
+    L.data.songs = null;
     ok(`F6 the Library's free line (${$("#lib-total").textContent} ${oneDrive} / ${twoDrives})`, oneDrive === `on drive C: · ${gb(21.4e9)} free`
        && twoDrives === `in all · C: ${gb(21.4e9)} free · D: ${gb(300e9)} free`);
     ok("F5 no .bat left in the page's copy", !/UnderCover\.bat/.test($("#room-system").textContent) && /^Start it again from the Start menu, then reload this page\.$/.test(startAgain(", then reload this page")));
@@ -13197,7 +13235,7 @@ def u_token_ratios():
     assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
     # bones wave 2: the song's stems in one closed Deep disclosure, the voice card's one ledger line, the one-shot's one line, a reading width
     lib, da, osj = ((web / n).read_text(encoding="utf-8") for n in ("library.js", "doubleagent.js", "oneshot.js"))
-    assert '<details class="stems-box" data-deep>' in lib and "<h2>Stems</h2>" not in lib and "Separated already, so a new cover of it skips that minute." in lib
+    assert '<details class="stems-box" data-deep>' in lib and "<h2>Stems</h2>" not in lib and "Separated already, so a new cover of it skips that step." in lib
     assert 'class="vc-ledger" data-deep' in da and "aria-expanded=\"${open}\"" in da and "cadence ${cd.engine}" not in da
     assert 'const PLAN_IDLE = "Name a song and a voice, and UnderCover does the rest.";' in osj and 'class="os-foot"' not in ix
     assert ix.count('<p class="meta os-else">Your own file or exact settings? <button class="linkbtn" id="build-toggle"') == 1
@@ -13333,7 +13371,7 @@ def u_page_rules():
     lib_js = (web / "library.js").read_text(encoding="utf-8")
     rows = lib_js[lib_js.index('if (L.cat === "covers") {\n      title = x.title;'):lib_js.index("return `<div class=\"litem")]
     assert rows.count("facts(") >= 5 and '.join(" · ")' not in rows and "<small>${esc(sub)}</small>" not in lib_js, "a Library row is a dot line again"
-    assert "cover${x.covers === 1" not in lib_js and "countWord(x.covers" in lib_js and "sourceWord(x.source)" in lib_js, "the Library says '0 covers' or 'dropped file' again"
+    assert "cover${x.covers === 1" not in lib_js and "countWord(x.covers" in lib_js and "songSource(x)" in lib_js and "sourceWord(s.source)" in lib_js, "the Library says '0 covers' or 'dropped file' again"
     for f in ("doubleagent.js", "speakeasy.js", "work.js", "aside.js", "vault.js", "rooms.js"):
         assert "facts(" in (web / f).read_text(encoding="utf-8"), f"{f} lost its chips"
     assert 'demo voice · not a real person' not in app + lib_js + (web / "doubleagent.js").read_text(encoding="utf-8"), "a demo voice's dot line is back"
@@ -16724,7 +16762,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
