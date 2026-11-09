@@ -63,21 +63,31 @@ os.environ.setdefault("MIOPEN_LOG_LEVEL", "3")  # errors only; FAST find mode lo
 def set_in_text(text: str, section: str, values: dict) -> str:
     """config text with keys set in one section (values are TOML literals: '"x"', a literal-string path, "true"),
     keeping everything else (comments, order) as it is. A missing key or section is added."""
-    head = re.compile(rf"(?ms)^\[{re.escape(section)}\][ \t]*\r?$(.*?)(?=^\[|\Z)")   # (a CRLF file too)
+    head = re.compile(rf"(?ms){_header(section)}(.*?)(?={_ANY_HEADER}|\Z)")
     m = head.search(text)
     if not m:
         text = (text.rstrip("\n") + "\n\n" if text.strip() else text) + f"[{section}]\n"
         m = head.search(text)
     body = m.group(1)
     for key, val in values.items():
-        rx = re.compile(rf"(?m)^{re.escape(key)}[ \t]*=.*$")
+        rx = re.compile(rf"(?m)^([ \t]*){re.escape(key)}[ \t]*=[^\r\n]*")   # (an indented key too; a CRLF line keeps its \r)
         line = f"{key} = {val}"
-        body = rx.sub(lambda _: line, body, count=1) if rx.search(body) else body.rstrip("\n") + f"\n{line}\n\n"
+        body = rx.sub(lambda mm: mm.group(1) + line, body, count=1) if rx.search(body) else body.rstrip("\n") + f"\n{line}\n\n"
     return text[:m.start(1)] + body + text[m.end(1):]
 
 
+# A table's header line as people write it by hand: indented or not, a comment after it, a CRLF file (2026-11-08: a
+# "[paths]  # where files live" line wasn't found, so every write added a second [paths] the app couldn't read).
+# (a header holds a key: bare, dotted or quoted; an inner array's line, "  [1, 2]" or "  ["a", "b"]", isn't one)
+_ANY_HEADER = r"""^[ \t]*\[\[?[ \t]*(?:[A-Za-z0-9_-]+|"[^"\r\n]*"|'[^'\r\n]*')(?:[ \t]*\.[ \t]*(?:[A-Za-z0-9_-]+|"[^"\r\n]*"|'[^'\r\n]*'))*[ \t]*\]\]?[ \t]*(?:#[^\r\n]*)?\r?$"""
+
+
+def _header(section: str) -> str:
+    return rf"^[ \t]*\[[ \t]*{re.escape(section)}[ \t]*\][ \t]*(?:#[^\r\n]*)?\r?$"
+
+
 def _section_rx(section: str):
-    return re.compile(rf"(?ms)^\[{re.escape(section)}\][ \t]*\r?$.*?(?=^\[|\Z)")
+    return re.compile(rf"(?ms){_header(section)}.*?(?={_ANY_HEADER}|\Z)")
 
 
 def section_text(text: str, section: str) -> str | None:
@@ -103,7 +113,13 @@ def set_values(section: str, values: dict, config_file: Path | None = None):
         raise ValueError("the defaults file is never written: settings go in the user's config.toml")
     text = cf.read_text(encoding="utf-8") if cf.is_file() else HEADER
     new = set_in_text(text, section, values)
-    tomllib.loads(new)   # never write a file the app can't read back
+    try:
+        back = tomllib.loads(new)   # never write a file the app can't read back
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"couldn't set [{section}] in {cf.name} safely ({e}): nothing was written") from e
+    for k, v in values.items():   # ... nor one where a value landed anywhere but its own section (a hand-edited layout)
+        if (back.get(section) or {}).get(k, object()) != tomllib.loads(f"v = {v}")["v"]:
+            raise ValueError(f"couldn't set {section}.{k} in {cf.name} safely (its layout is unusual): nothing was written")
     fsutil.write_text(cf, new)
     if Path(cf).resolve() == Path(CONFIG_FILE).resolve():
         # only the keys written here: never re-read the section (a reload once put the real [paths] back into a test

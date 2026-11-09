@@ -1,5 +1,5 @@
 // Shaping a cover: the edit list's page (frontman/edits.py, ARCHITECTURE "Edit list"). Pick a stretch of the cover's words, say what
-// changes there, hear it in about five seconds; undo, redo, and Keep makes a new cover beside this one. PC only: the routes aren't the
+// changes there, and hear it sung again; undo, redo, and Keep makes a new cover beside this one. PC only: the routes aren't the
 // paired phone's, and its row says so.
 // Everything the cover heard or said (its words, the gate's sentences, a note, a title) is outside text: shown through esc() or
 // textContent, never as HTML (the maintainers' notes, editlist).
@@ -36,13 +36,17 @@ function shapeOpen(id) {
   $("#shape").scrollIntoView({ block: "start", behavior: "smooth" });
   shLoad(true);
 }
-function shapeClose() { SH.audio.pause(); SH.id = null; $("#shape").hidden = true; $("#shape").innerHTML = ""; }
+function shapeClose() {
+  const id = SH.id;
+  SH.audio.pause(); SH.id = null; $("#shape").hidden = true; $("#shape").innerHTML = ""; shSay("");
+  ($$("[data-shape]").find(b => b.dataset.shape === id) || $("#hist-library"))?.focus();   // back where it was opened from (or Recent covers, if it rolled off)
+}
 
 async function shLoad(first) {
   const id = SH.id;
   let v;
   try { v = await api(`/api/history/${id}/edits`); }
-  catch (e) { if (SH.id === id) { SH.state = "error"; SH.error = e.message; SH.retry = true; shDraw(); } return; }   // (the server didn't answer: worth another try)
+  catch (e) { if (SH.id === id) { SH.state = "error"; SH.error = e.message; SH.retry = !(e.status >= 400 && e.status < 500); shDraw(); } return; }   // (no answer or a fault: worth another try; a refusal gives the same answer again)
   if (SH.id !== id) return;
   if (v.none) {
     if (!first) { SH.state = "error"; SH.error = "This cover's words couldn't be heard."; SH.retry = true; return shDraw(); }
@@ -110,7 +114,7 @@ function shLanding(part) {
   if (!p.length) return null;
   const ok = p.find(x => x.ok);
   if (!ok) {
-    const s = p[0].no;
+    const s = [...new Set(p.map(x => x.no))].join(" ");   // (an octave refused for range and a singer for landing say different things)
     // which way to move, only when the pick doesn't already go there (Internal Affairs D2: a pick from a line's first word was told to start at the line's start)
     const lines = shLines(), [a, b] = SH.pick;
     const way = /near the start/.test(s) && !lines.some(l => l.words[0] === a) ? " Take the stretch from the start of the line."
@@ -145,7 +149,7 @@ async function shKeep() {
   try {
     const { job } = await api(`/api/history/${SH.id}/edits/keep`, { json: {} });
     SH.busy = "Keeping it…"; SH.live = null; shDraw();
-    shFollow(job, ev => { SH.keptAs = ev.result?.output_name ? ev.result.output_name.replace(/\.[^.]+$/, "") : SH.item.title + " (edited)"; shDraw(); loadHistory(); });
+    shFollow(job, ev => { SH.keptAs = ev.result?.title || SH.doc.keep_as || SH.item.title + " (edited)"; shDraw(); loadHistory(); });   // (its name in Recent covers: edits.keep_name)
   } catch (e) { SH.said = { k: "no", s: e.message }; shDraw(); }
 }
 
@@ -184,26 +188,46 @@ function shLand(i) {
 }
 const shChip = (who, id) => `<span class="vchip ${who.toLowerCase()}"><span class="av">${vinitial(id)}</span>${vname(id)}</span>`;
 
+// what to say aloud: the page's one live region (#shape-say, beside the box) is told each new sentence once; the drawn status lines
+// are plain text, so a redraw (a probe, a job's message) doesn't announce them again (IA pass 13)
+function shSay(s) { const r = $("#shape-say"); if (r && r.textContent !== s) r.textContent = s; }
+// the control the keyboard is on: its kind (data-w, -sh, -pick-c, -hear), its value, and which of its twins it is (Keep is in the head
+// and under the changes), so the same control is found again after a redraw. Matched by value, never put into a selector
+const SH_KEYS = ["w", "sh", "pickC", "hear"];
+const shTwins = (box, k, v) => [...box.querySelectorAll("button, [data-w]")].filter(e => e.dataset[k] === v);
+function shFocusKey(box) {
+  const a = document.activeElement, k = a && box.contains(a) && SH_KEYS.find(k => a.dataset[k] != null);
+  return k ? { k, v: a.dataset[k], n: shTwins(box, k, a.dataset[k]).indexOf(a) } : null;
+}
 function shDraw() {
   const box = $("#shape");
   if (!SH.id || !box) return;
+  const key = shFocusKey(box);
+  shPaint(box);
+  // a redraw keeps the keyboard on the same control; one that went (a choice sent, the sheet closed) hands it to the word last picked
+  if (!key) return;
+  const same = shTwins(box, key.k, key.v);
+  (same[key.n] || same[0] || shTwins(box, "w", String(SH.focus))[0] || $('[data-sh="done"]', box))?.focus({ preventScroll: true });
+}
+function shPaint(box) {
   const it = SH.item, d = SH.doc;
   const chips = shChip("A", it.voice) + (it.duet_voice ? shChip("B", it.duet_voice) : "");
   const head = `<div class="sh-head"><div><h2>Shaping ${esc(coverTitle(it))}</h2><div class="sh-who">${chips}</div></div><div class="sh-acts">${d ? `
     <button class="btn" type="button" data-sh="undo"${d.cursor && !SH.busy ? "" : " disabled"}>Undo</button>
     <button class="btn" type="button" data-sh="redo"${d.cursor < d.edits.length && !SH.busy ? "" : " disabled"}>Redo</button>
     <button class="btn primary" type="button" data-sh="keep"${d.cursor && !SH.busy ? "" : " disabled"}>Keep this version</button>` : ""}
-    <button class="linkbtn quiet" type="button" data-sh="done">Done</button></div></div>`;
+    </div><button class="linkbtn quiet sh-done" type="button" data-sh="done">Done</button></div>`;
   if (SH.state !== "ready") {
-    const st = SH.state === "listening" ? `<b>Listening for the words…</b><span>About 20 s, once. The app hears the song through, then keeps the words with this cover.</span>${SH.live ? `<span class="meta">${esc(SH.live)}</span>` : ""}`
+    const st = SH.state === "listening" ? `<b>Listening for the words…</b><span>Once only: the app hears the song through, then keeps the words with this cover.</span>${SH.live ? `<span class="meta">${esc(SH.live)}</span>` : ""}`
       : SH.state === "error" ? `<b>${esc(SH.error || "This cover can't be shaped.")}</b>${SH.retry ? `<span><button class="btn" type="button" data-sh="retry">Try again</button></span>` : ""}`
       : `<b>Opening…</b>`;
-    box.innerHTML = `<div class="ed">${head}<div class="state" role="status">${st}</div></div>`;
+    box.innerHTML = `<div class="ed">${head}<div class="state">${st}</div></div>`;
+    shSay($$(".state > b, .state > span:not(:has(button))", box).map(e => e.textContent.trim()).join(" "));   // (not the Try again button's label)
     return shWire();
   }
   const live = shLive(), pick = SH.pick;
-  let h = `<div class="ed">${head}<p class="meta">Pick a stretch of the words and say what should change there. Each change is sung again in about 5 seconds. Nothing touches the cover until you keep it.</p>`;
-  if (!d.duet) h += `<p class="meta">One singer here, so the changes are octaves. For a second singer, make it a duet first.</p>`;
+  let h = `<div class="ed">${head}<p class="meta">Pick a stretch of the words and say what should change there. Each change is sung again, and you hear it here. Nothing touches the cover until you keep it.</p>`;
+  if (!d.duet) h += `<p class="meta">One singer here, so the changes are octaves. For a second singer, make the cover again with a second singer.</p>`;
   if (d.duet) h += `<div data-deep><div class="strip" aria-hidden="true">${d.compiled.lead.map(p => `<i class="${p[2].toLowerCase()}" style="flex-grow:${p[1] - p[0]}"></i>`).join("")}</div>
     <div class="sh-legend"><span><i class="sh-dot a"></i>${esc(shName("A"))}</span><span><i class="sh-dot b"></i>${esc(shName("B"))}</span></div></div>`;
   if (!d.words.length) h += `<p class="meta">No words were heard in this cover, so there's nothing to pick here.</p>`;
@@ -221,11 +245,11 @@ function shDraw() {
         if (pick && i >= pick[0] && i <= pick[1]) cls += ` in${i === pick[0] ? " first" : ""}${i === pick[1] ? " last" : ""}`;
         if (lead[4]) cls += ` e${lead[2].toLowerCase()}`;
         else if (back?.[4]) cls += back[2] === "original" ? " eo" : ` e${back[2].toLowerCase()}`;
-        return `${i ? `<span class="land ${shLand(i)}" aria-hidden="true"></span>` : ""}<span class="${cls}" data-w="${i}" role="button" tabindex="${i === SH.focus ? 0 : -1}"${pick && i >= pick[0] && i <= pick[1] ? ' aria-pressed="true"' : ""}>${esc(shWord(i))}</span>`;
-      }).join(" ") + `</div>`;
+        return `${i ? `<span class="land ${shLand(i)}" aria-hidden="true"></span>` : ""}<span class="${cls}" data-w="${i}" role="button" tabindex="${i === SH.focus ? 0 : -1}" aria-pressed="${pick && i >= pick[0] && i <= pick[1] ? "true" : "false"}">${esc(shWord(i))}</span>`;
+      }).join(" ") + `</div>`;   // (the line is a flex row: the spaces fold away and the words' padding touches, so a changed stretch's square-ended underlines join)
     });
     h += `</div><div class="deeplegend" data-deep><span><i class="silence"></i>a pause: a change lands here</span><span><i class="dip"></i>a dip only: it may be heard</span><span><i class="none"></i>no place</span></div>
-      <p class="meta">The words are what the app heard, so one may be off. The sound is what counts.</p>`;
+      <p class="meta">The words are what the app heard, so one may be off. The sound is what counts.${shLive().length ? " A changed stretch is underlined." : ""}</p>`;
   }
   h += shBar();
   if (d.edits.length) {
@@ -235,23 +259,24 @@ function shDraw() {
         <span class="by" data-deep>by ${e.by === "ai" ? "your AI" : "you"}${at ? ` · ${esc(at)}` : ""} · ${esc(e.id)}${e.note ? ` · “${esc(e.note)}”` : ""}</span>${off ? `<span class="say">Undone. Redo brings it back.</span>` : ""}</span>
         ${off || !d.result ? "<span></span>" : `<button class="sh-play" type="button" data-hear="${e.t0},${e.t1}" aria-label="Hear this change">▶</button>`}</div>`;
     }).join("") + `</div>`;
-    if (SH.keptAs) h += `<div class="kept" role="status">Kept as <b>${esc(SH.keptAs)}</b>. The changes went with it, and this cover is as it was. Undo still works here, and a new Keep makes another version.</div>`;
-    else if (live.length && d.kept_now) h += `<div class="kept" role="status">This version is kept: it's a cover of its own in Recent covers.</div>`;
+    if (SH.keptAs) h += `<div class="kept">Kept as <b>${esc(SH.keptAs)}</b>. The changes went with it, and this cover is as it was. Undo still works here, and a new Keep makes another version.</div>`;
+    else if (live.length && d.kept_now) h += `<div class="kept">This version is kept: it's a cover of its own in Recent covers.</div>`;
     else if (live.length) h += `<div class="unkept"><span>Not kept yet. These changes stay with this cover, and roll off with it when it leaves Recent covers.</span><button class="btn primary" type="button" data-sh="keep"${SH.busy ? " disabled" : ""}>Keep this version</button></div>`;
   }
-  if (SH.confirm) h += `<div class="sheet" role="dialog" aria-label="Keep this version?"><h3>Keep this version?</h3><p>It becomes a new cover, <b>${esc(it.title + " (edited)")}</b>, next to the one it came from, with its changes.${shRollsOff() ? ` Recent covers holds 15, so the oldest one there, <b>${esc(shRollsOff().title)}</b>, rolls off to make room. Covers sent to SafeHouse stay.` : ""}</p>
+  if (SH.confirm) h += `<div class="sheet" role="dialog" aria-label="Keep this version?"><h3>Keep this version?</h3><p>It becomes a new cover, <b>${esc(d.keep_as || it.title + " (edited)")}</b>, next to the one it came from, with its changes.${shRollsOff() ? ` Recent covers holds 15, so the oldest one there, <b>${esc(shRollsOff().title)}</b>, rolls off to make room. Covers sent to SafeHouse stay.` : ""}</p>
     <div class="row"><button class="btn primary" type="button" data-sh="keep-yes">Keep it</button><button class="btn" type="button" data-sh="keep-no">Not yet</button></div></div>`;
   box.innerHTML = h + `</div>`;
+  shSay([".sh-bar .busy", ".land-say", ".kept"].map(s => $(s, box)?.textContent.trim()).find(Boolean) || "");
   shWire();
 }
 function shBar() {
   const d = SH.doc, pick = SH.pick;
-  if (!pick) return SH.said ? `<p class="land-say ${SH.said.k}" role="status">${esc(SH.said.s)}</p>` : `<p class="meta pickhint">Pick a word, then the last word of the stretch.</p>`;
+  if (!pick) return SH.said ? `<p class="land-say ${SH.said.k}">${esc(SH.said.s)}</p>` : `<p class="meta pickhint">Pick a word, then the last word of the stretch. A third word starts a new stretch.</p>`;
   const [a, b] = pick, quote = a === b ? shWord(a) : shWord(a) + (b - a > 1 ? " … " : " ") + shWord(b);   // (plain text: esc'd below)
   let h = `<div class="sh-bar"><div class="pick"><button class="sh-play" type="button" data-hear="${d.words[a][1]},${d.words[b][2]}" aria-label="Hear this stretch">▶</button><q>${esc(quote)}</q>
     <span class="sh-t">${shClock(d.words[a][1])}–${shClock(d.words[b][2])}</span><button class="x" type="button" data-sh="unpick" aria-label="Drop the stretch">×</button></div>`;
-  if (SH.busy) return h + `<div class="busy" role="status"><i></i>${esc(SH.live || SH.busy)}</div>${SH.said ? `<p class="land-say ${SH.said.k}">${esc(SH.said.s)}</p>` : ""}</div>`;
-  if (SH.said) h += `<p class="land-say ${SH.said.k}" role="status">${esc(SH.said.s)}</p>`;
+  if (SH.busy) return h + `<div class="busy"><i></i>${esc(SH.live || SH.busy)}</div>${SH.said ? `<p class="land-say ${SH.said.k}">${esc(SH.said.s)}</p>` : ""}</div>`;
+  if (SH.said) h += `<p class="land-say ${SH.said.k}">${esc(SH.said.s)}</p>`;
   if (!SH.probes) return h + `<p class="meta">Asking where it would land…</p></div>`;
   const land = shLanding("lead");
   if (land) h += `<p class="land-say ${land.k}">${esc(land.s)}</p>`;
@@ -282,7 +307,7 @@ function shWire() {
       return loadHistory().then(() => { if (SH.confirm && SH.id === id) { shDraw(); $('[data-sh="keep-yes"]', box)?.focus(); } }, () => {});
     }
     if (k === "keep-yes") return shKeep();
-    if (k === "keep-no") { SH.confirm = false; return shDraw(); }
+    if (k === "keep-no") { SH.confirm = false; shDraw(); return $('[data-sh="keep"]', box)?.focus(); }
     if (k === "unpick") { SH.pick = null; SH.probes = null; SH.said = null; SH.seq++; return shDraw(); }
   });
   $$("[data-hear]", box).forEach(b => b.onclick = () => { const [t0, t1] = b.dataset.hear.split(",").map(Number); shHear(t0, t1); });
@@ -294,7 +319,7 @@ function shWire() {
     const p = SH.pick;
     SH.pick = !p || p[0] !== p[1] || i < p[0] ? [i, i] : [p[0], i];
     SH.focus = i; SH.said = null;
-    shDraw(); $(`[data-w="${i}"]`, box)?.focus();
+    shDraw(); $(`[data-w="${i}"]`, box)?.focus();   // (a click focuses it too; every later draw keeps it there)
     if (!SH.busy) shProbe();
   };
   lyr.onclick = e => { const w = e.target.closest("[data-w]"); if (w) choose(+w.dataset.w); };

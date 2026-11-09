@@ -56,7 +56,8 @@ def split_clauses(sents: list, gap: float = 0.12) -> list:
         parts = [p.strip() for p in re.split(r"(?<=,)\s+", s["text"]) if p.strip()]
         for k, p in enumerate(parts):
             last = k == len(parts) - 1
-            out.append({**{a: b for a, b in s.items() if last or a != "hold"}, "text": p, "pause": s["pause"] if last else gap})
+            out.append({**{a: b for a, b in s.items() if (last or a != "hold") and (k == 0 or a != "lead")}, "text": p,
+                        "pause": s["pause"] if last else gap})
     return out
 
 

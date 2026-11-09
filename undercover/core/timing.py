@@ -25,6 +25,9 @@ def timed(stage: str, **fields):
             from . import lowprofile
             if lowprofile.on():   # (speeds under the cap and the bursts are kept apart from the full card's)
                 record["low_profile"] = True
+            from .config import CONFIG
+            if CONFIG["gpu"].get("backend") == "cpu":   # (a processor's speeds never price a card's work, nor the other way)
+                record["cpu"] = True
         except Exception:   # noqa: BLE001
             pass
         with open(path("logs_dir") / "timings.jsonl", "a", encoding="utf-8") as f:

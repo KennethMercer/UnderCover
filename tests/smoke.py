@@ -585,6 +585,335 @@ def u_vault():
     return f"{r1['files']} files: {r1['raw'] / 1e3:.0f} kB kept in {r1['stored'] / 1e3:.0f} kB; incremental, safe, asks, prunes"
 
 
+@check("settings writes on a hand-edited config.toml (2026-11-08: a header with a comment after it, or an indented key, wasn't found, so a write added a second [paths] the app refused; a vault restore of the settings then wrote one with no [paths])")
+def u_config_hand_edited():
+    import tomllib
+    from undercover.core import config, vault
+    from undercover.core.voices import ModelError
+    for t in ('[paths]  # where files live\noutput_dir = "E:/x"\n[ui]\nport = 1\n',
+              '  [ paths ]\r\n  output_dir = "E:/x"\r\n  [ui]\r\n  port = 1\r\n'):
+        new = config.set_in_text(t, "paths", {"output_dir": '"F:/y"'})
+        got = tomllib.loads(new)
+        assert got == {"paths": {"output_dir": "F:/y"}, "ui": {"port": 1}}, (t, new)
+        assert config.set_in_text(new, "paths", {"output_dir": '"F:/y"'}) == new, "a second write changed it again"
+        assert "port" in config.section_text(new, "ui") and "port" not in config.section_text(new, "paths"), new
+        assert tomllib.loads(config.set_in_text(t, "ui", {"port": "2"})) == {"paths": {"output_dir": "E:/x"}, "ui": {"port": 2}}
+    # an indented inner array isn't a header: the section goes on past it
+    nested = '[ui]\nranges = [\n  [1, 2],\n  [3, 4]\n]\n[paths]\noutput_dir = "E:/x"\n'
+    new = config.set_in_text(nested, "ui", {"port": "2"})
+    assert tomllib.loads(new) == {"ui": {"ranges": [[1, 2], [3, 4]], "port": 2}, "paths": {"output_dir": "E:/x"}}, new
+    # and a layout the reader can't follow is refused, never a value written into another section
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG_FILE
+        odd = '[ui]\nranges = [\n  [1]\n]\nport = 1\n'
+        CONFIG_FILE.write_text(odd, encoding="utf-8")
+        try:
+            config.set_values("ui", {"port": "2"})
+            raise AssertionError("a settings write went ahead on a layout it couldn't follow")
+        except ValueError as e:
+            assert "nothing was written" in str(e), e
+        assert CONFIG_FILE.read_text(encoding="utf-8") == odd
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, CONFIG_FILE
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            vault.set_folder(str(box / "vault-drive"))
+            here = CONFIG_FILE.read_text(encoding="utf-8")
+            first = vault.run()["made"]
+            # this install's file, hand-edited: its [paths] header carries a comment, and it is CRLF
+            mine = here.replace("[paths]\n", "[paths]   # where my files live\n").replace("\n", "\r\n")
+            assert mine != here.replace("\n", "\r\n")
+            CONFIG_FILE.write_bytes(mine.encode("utf-8"))
+            r = vault.restore(["settings/config.toml"], "replace")
+            assert r["restored"] == ["settings/config.toml"], r
+            got = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            assert got["paths"] == tomllib.loads(here)["paths"], f"the restored settings lost this install's [paths]: {got}"
+            # a [paths] the section reader can't cut out (an inline table): refused, never a config with other folders
+            odd = 'paths = { output_dir = "E:/elsewhere" }\n'
+            CONFIG_FILE.write_text(odd, encoding="utf-8")
+            try:
+                vault.restore(["settings/config.toml"], "replace")
+                raise AssertionError("a restore wrote settings that dropped this install's [paths]")
+            except ModelError as e:
+                assert "nothing was restored" in str(e), e
+            assert CONFIG_FILE.read_text(encoding="utf-8") == odd, "a refused restore changed the settings"
+            # this install's file broken by hand outside its [paths]: the vault's copy is how it's recovered
+            CONFIG_FILE.write_text(here + "\n[ui\nbroken = \n", encoding="utf-8")
+            vault.restore(["settings/config.toml"], "replace", stamp=first)
+            assert tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))["paths"] == tomllib.loads(here)["paths"]
+            CONFIG_FILE.write_text(here, encoding="utf-8")
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "a commented header, an indented CRLF file: one [paths], read back; a restore keeps the [paths] or writes nothing"
+
+
+@check("vault: Keep both on settings that changed is a plain no, before anything is written (2026-11-08: it planned \"config (from vault).toml\", which the restore's allow-list refused, so a song asked for with it came back neither)")
+def u_vault_settings_both():
+    from undercover.core import vault
+    from undercover.core.voices import ModelError
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, CONFIG_FILE, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            up = path("uploads_dir")
+            up.mkdir(parents=True, exist_ok=True)
+            (up / "abc.mp3").write_bytes(b"the vaulted song")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            before = CONFIG_FILE.read_bytes() + b"\n[extra]\nx = 1\n"
+            CONFIG_FILE.write_bytes(before)
+            (up / "abc.mp3").write_bytes(b"the song now")
+            for keys in (["settings/config.toml"], ["settings/config.toml", "songs/abc.mp3"]):
+                try:
+                    vault.restore(keys, "both")
+                    raise AssertionError(f"keep both on changed settings went ahead: {keys}")
+                except ModelError as e:
+                    assert "side by side" in str(e) and "Nothing was restored" in str(e), e
+            assert CONFIG_FILE.read_bytes() == before and (up / "abc.mp3").read_bytes() == b"the song now"
+            assert not [f for f in CONFIG_FILE.parent.iterdir() if "from vault" in f.name] and not list(up.glob("*from vault*"))
+            assert vault.restore(["songs/abc.mp3"], "both")["restored"] == ["songs/abc.mp3"], "keep both on a song stopped working"
+            assert (up / "abc (from vault).mp3").read_bytes() == b"the vaulted song"
+            # unchanged settings under Keep both are simply the same, not refused
+            CONFIG_FILE.write_bytes(before[: -len(b"\n[extra]\nx = 1\n")])
+            assert vault.restore(["settings/config.toml"], "both")["same"] == ["settings/config.toml"]
+            page = (ROOT / "undercover" / "web" / "vault.js").read_text(encoding="utf-8")
+            assert 'x.kind === "settings" ? "" : `<button class="btn" type="button" data-vt-how="both">' in page, "the page still offers Keep both on settings"
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "settings: refused plainly, nothing written; a song's Keep both unchanged; the page doesn't offer it"
+
+
+@check("vault: Keep both on a voice or a project makes a copy that loads under its own name, never over the original or an earlier copy (2026-11-08: the copy's meta still named the original, so two voices had one name and the copy never loaded)")
+def u_vault_keep_both_copy():
+    from undercover.core import vault, voices
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            vd = path("voices_dir")
+            long = "a" * 55   # the copy's name must still read back as itself (names are cut at 60)
+            for name in ("spy", long):
+                (vd / name).mkdir(parents=True)
+                (vd / name / "meta.json").write_text(json.dumps({"name": name, "pth": str(vd / name / "model.pth"),
+                    "index": str(vd / name / "model.index"), "display": "The Spy",
+                    "extra": {"trained": True, "improved_pending": {"voice": f"{name}-next"}}}), encoding="utf-8")
+                (vd / name / "model.pth").write_bytes(b"older " + name.encode())
+                (vd / name / "model.index").write_bytes(b"index")
+            tr = path("cache_dir") / "training" / "spy"
+            tr.mkdir(parents=True)
+            (tr / "project.json").write_text(json.dumps({"name": "spy", "person": "The Spy"}), encoding="utf-8")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            snap = vault.load_snapshot(vault.root_of(box / "vault-drive"))["files"]
+            for name in ("spy", long):
+                (vd / name / "model.pth").write_bytes(b"retrained")
+            (tr / "project.json").write_text(json.dumps({"name": "spy", "person": "The Spy", "mode": "singing"}), encoding="utf-8")
+            for n, want in ((1, "spy-from-vault"), (2, "spy-from-vault-2")):
+                vault.restore([k for k in snap if k.startswith("voices/spy/")], "both")
+                v = voices.get_voice(want)
+                assert v.dir == vd / want and v.pth == vd / want / "model.pth" and v.pth.read_bytes() == b"older spy", v
+                assert v.index == vd / want / "model.index", v.index
+                meta = json.loads((vd / want / "meta.json").read_text(encoding="utf-8"))
+                assert meta["name"] == want and meta["display"] == "The Spy from vault" + (" 2" if n > 1 else ""), meta
+                assert "improved_pending" not in meta["extra"], "the copy claims the original's retrained candidate"
+            assert voices.get_voice("spy").pth.read_bytes() == b"retrained", "keep both touched the original"
+            assert [v.name for v in voices.list_voices()].count("spy") == 1
+            vault.restore([k for k in snap if k.startswith(f"voices/{long}/")], "both")
+            copy = next(v for v in voices.list_voices() if v.name != long and v.name.startswith("a" * 40))
+            assert voices.get_voice(copy.name).dir.name == copy.name and copy.name.endswith("-from-vault"), copy.name
+            from undercover.core.voices import ModelError
+            for bad in (b"not json", b"[1, 2]"):   # a record that can't name its copy stops the restore (made before any write)
+                try:
+                    vault._as_copy("voices/spy/meta.json", bad, vd / "spy-from-vault-3" / "meta.json", 3)
+                    raise AssertionError("an unreadable record came back as a copy")
+                except ModelError as e:
+                    assert "Nothing was restored" in str(e), e
+            vault.restore(["training/spy/project.json"], "both")
+            from undercover.doubleagent.project import Project
+            p = Project.load("spy-from-vault")
+            assert p.name == "spy-from-vault" and p.dir == tr.parent / "spy-from-vault", p.name
+            assert json.loads((tr / "project.json").read_text(encoding="utf-8"))["mode"] == "singing", "the original project changed"
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "spy-from-vault, then -2, each loading with its own files and display; a long name stays itself; a project copy saves as itself"
+
+
+@check("vault: Replace puts every file it writes over into the vault first, whatever the vault's size, or replaces nothing; the copy read from survives that run's pruning (2026-11-08: an Everything copy replaced under What matters, or a downloaded voice, lost the current file)")
+def u_vault_replace_keeps_current():
+    import hashlib
+    from undercover.core import vault
+    from undercover.core.voices import ModelError
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        saved_put, saved_write = vault.put, vault._write_part
+        try:
+            clip = path("cache_dir") / "training" / "spy" / "clips" / "c1.wav"
+            clip.parent.mkdir(parents=True)
+            (clip.parent.parent / "project.json").write_text('{"name": "spy"}', encoding="utf-8")
+            clip.write_bytes(b"RIFF the vaulted clip")
+            vault.set_folder(str(box / "vault-drive"), "matters")
+            vf = box / "vault-drive"
+            root = vault.root_of(vf)
+            vault.run(size="everything")
+            key = "training/spy/clips/c1.wav"
+            # that copy is old: in a month with a newer copy, so a run's pruning would let it (and the clip in it) go
+            snaps = root / "snapshots"
+            new = vault.snapshots(root)[-1]
+            old_stamp, newer = "2026-01-05T10-00-00", "2026-01-20T10-00-00"
+            body = json.loads((snaps / f"{new}.json").read_text(encoding="utf-8"))
+            (snaps / f"{new}.json").rename(snaps / f"{old_stamp}.json")
+            (snaps / f"{newer}.json").write_text(json.dumps({**body, "files": {k: v for k, v in body["files"].items() if k != key}}), encoding="utf-8")
+            clip.write_bytes(b"RIFF the clip now")
+            now_sha = hashlib.sha256(clip.read_bytes()).hexdigest()
+            # one file it can't read first: nothing replaced, said so
+            def failing(objects, f, sha):
+                if f == clip:
+                    raise PermissionError(13, "in use")
+                return saved_put(objects, f, sha)
+            vault.put = failing
+            try:
+                vault.restore([key], "replace", stamp=old_stamp)
+                raise AssertionError("replaced a file that couldn't be vaulted first")
+            except ModelError as e:
+                assert "nothing was replaced" in str(e), e
+            vault.put = saved_put
+            assert clip.read_bytes() == b"RIFF the clip now"
+            r = vault.restore([key], "replace", stamp=old_stamp)
+            assert r["restored"] == [key] and clip.read_bytes() == b"RIFF the vaulted clip", r
+            assert vault.find_object(root / "objects", now_sha), "the clip that was here isn't in the vault"
+            latest = vault.load_snapshot(root)["files"]
+            assert latest[key][0] == now_sha, "the newest copy doesn't name the clip that was replaced"
+            assert vault.get(root / "objects", now_sha) == b"RIFF the clip now"
+            # a run starting meanwhile (the quiet one, Vault now) doesn't prune away the old copy a restore is reading
+            assert old_stamp in vault.snapshots(root)
+            clip.unlink()
+            started = []
+
+            def run_first(dest, chunks):
+                if not started:
+                    started.append(1)
+                    vault.run()
+                return saved_write(dest, chunks)
+            vault._write_part = run_first
+            r = vault.restore([key], "skip", stamp=old_stamp)
+            vault._write_part = saved_write
+            assert started and r["restored"] == [key] and clip.read_bytes() == b"RIFF the vaulted clip", r
+            assert not vault._HELD, vault._HELD
+        finally:
+            vault.put = saved_put
+            vault._write_part = saved_write
+            CONFIG["vault"] = saved_vault
+    return "a locked file: nothing replaced; an Everything clip under What matters: vaulted first, named in the newest copy; the old copy held through the prune"
+
+
+@check("vault: a voice restored over its files is dropped from the converter's cache, so covers use what came back (2026-11-08: the cached model from before stayed until a restart)")
+def u_vault_restore_forgets_voice():
+    import types
+    from undercover.core import gpu, vault
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, path
+        saved_vault, saved_conv = dict(CONFIG.get("vault") or {}), gpu.MODELS._conv
+        try:
+            vd = path("voices_dir")
+            (vd / "spy").mkdir(parents=True)
+            (vd / "spy" / "meta.json").write_text(json.dumps({"name": "spy", "pth": str(vd / "spy" / "model.pth"),
+                                                              "extra": {"trained": True}}), encoding="utf-8")
+            (vd / "spy" / "model.pth").write_bytes(b"the vaulted model")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            (vd / "spy" / "model.pth").write_bytes(b"retrained")
+            # a cover reading with it: refused, its files untouched
+            from undercover.core import jobs as J
+            from undercover.core.voices import ModelError
+            busy = J.Job("cover", title="Hold On · Spy")
+            busy.voices = {"spy"}
+            J.JOBS[busy.id] = busy
+            try:
+                vault.restore(["voices/spy/model.pth"], "replace")
+                raise AssertionError("a voice's files were restored under a cover using it")
+            except ModelError as e:
+                assert "in use" in str(e) and "Nothing was restored" in str(e), e
+            finally:
+                busy.finish("done")
+                J.JOBS.pop(busy.id, None)
+            assert (vd / "spy" / "model.pth").read_bytes() == b"retrained"
+            gpu.MODELS._conv = types.SimpleNamespace(voices={"spy": "loaded before", "other": "loaded"})
+            r = vault.restore(["voices/spy/model.pth"], "replace")
+            assert r["restored"] == ["voices/spy/model.pth"] and (vd / "spy" / "model.pth").read_bytes() == b"the vaulted model", r
+            assert gpu.MODELS._conv.voices == {"other": "loaded"}, f"the converter still holds the voice from before: {gpu.MODELS._conv.voices}"
+            gpu.MODELS._conv.voices["spy"] = "loaded again"
+            vault.restore(["voices/spy/model.pth"], "both")   # the same here now: nothing written, nothing dropped
+            assert "spy" in gpu.MODELS._conv.voices
+        finally:
+            gpu.MODELS._conv = saved_conv
+            CONFIG["vault"] = saved_vault
+    return "replaced: dropped from the cache (the other voice kept); an identical one: left loaded"
+
+
+@check("Clean up waits for every kind of work, queued or running, stops and waits for a background separation, and never takes the separator's live output (2026-11-08: its list of kinds missed the overnight queue and others, and its default-ticked group deleted cache/_work mid-prepare)")
+def u_cleanup_guard():
+    import threading
+    from undercover.core import jobs as J
+    from undercover.safehouse import api as shapi, library
+    with isolated_data():
+        from undercover.core.config import path
+        work = path("cache_dir") / "_work"
+        work.mkdir(parents=True)
+        live, left = work / "song_(Vocals).wav", work / "old_(Vocals).wav"
+        live.write_bytes(b"being written")
+        left.write_bytes(b"left by a crash")
+        os.utime(left, (time.time() - 3 * 86400,) * 2)
+        mine = []
+
+        def post():
+            h = _FakeHandler(body={"groups": ["temp"]})
+            assert shapi.handle(h, "POST", "/api/library/cleanup")
+            return h
+
+        saved_wait = library.PRESEP_WAIT_S
+        try:
+            for kind in ("night", "train-transcribe", "cadence-ab", "improve-ab", "smaller", "doctor", "cover"):
+                j = J.Job(kind, title=f"a {kind} job")
+                J.JOBS[j.id] = j
+                mine.append(j)
+                h = post()
+                assert h.err and "Can't clean up" in h.err and h.out is None, (kind, h.err, h.out)
+                j.finish("done")
+            assert live.is_file() and left.is_file(), "a refused clean up deleted something"
+            # a background separation: asked to stop and waited for, then the clean up goes ahead
+            pre = J.Job("presep", title="Preparing a song")
+            J.JOBS[pre.id] = pre
+            mine.append(pre)
+
+            def obeys():
+                while not pre.cancel:
+                    time.sleep(0.05)
+                time.sleep(0.3)
+                pre.finish("cancelled")
+            threading.Thread(target=obeys, daemon=True).start()
+            h = post()
+            assert h.err is None and h.out is not None and pre.cancel and pre.finished, (h.err, h.out)
+            assert live.is_file(), "Clean up took the separator's live output"
+            assert not left.exists(), "Clean up left an old leftover in _work"
+            # one that doesn't stop in time: nothing cleaned
+            stuck = J.Job("presep", title="Preparing another song")
+            J.JOBS[stuck.id] = stuck
+            mine.append(stuck)
+            left.write_bytes(b"left again")
+            os.utime(left, (time.time() - 3 * 86400,) * 2)
+            library.PRESEP_WAIT_S = 0.5
+            h = post()
+            assert h.err and "still being prepared" in h.err and left.is_file(), (h.err, h.out)
+        finally:
+            library.PRESEP_WAIT_S = saved_wait
+            for j in mine:
+                if not j.finished:
+                    j.finish("cancelled")
+                J.JOBS.pop(j.id, None)
+    return "7 kinds refused, nothing deleted; a separation stopped and waited for; its live output kept, an old leftover gone; one that won't stop: refused"
+
+
 @check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
        "Checking it stage, the voice a finished training made in its job snapshot")
 def u_da_mode():
@@ -6393,7 +6722,7 @@ def u_rcpreview():
     st = inspect.getsource(VP.start)
     assert 'if os.environ.get("UNDERCOVER_NO_BACKFILL"):' in st and "jobs.JOBS.pop(j.id, None)" in st
     assert '"UNDERCOVER_NO_BACKFILL": "1"' in inspect.getsource(sys.modules[__name__])
-    assert 'pack["ready"] = bool(pack_ready(' in inspect.getsource(VP.key) and "wait=20.0)" in inspect.getsource(srv.Handler._voice_upload)
+    assert 'pack["ready"] = _pack_ready(' in inspect.getsource(VP.key) and "bool(pack_ready(" in inspect.getsource(VP._pack_ready) and "wait=20.0)" in inspect.getsource(srv.Handler._voice_upload)
     assert 'out["check_s"] = round(service.check_estimate_s(person, len(cands))' in inspect.getsource(FA._auto_plan)
     page = {f: (web / f).read_text(encoding="utf-8") for f in ("app.js", "oneshot.js", "speakeasy.js", "doubleagent.js")}
     assert "const chk = p.check_s != null ? etaWords" in page["oneshot.js"]
@@ -7307,7 +7636,7 @@ def u_cfgbounds():
     return f"3 trainer configs pass; {len(said)} crafted ones refused, e.g. {said[0][:90]}"
 
 
-@check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing)")
+@check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing); [UninstallDelete] covers every cache name the app makes (pass 12) or keeps it by name, and never names the user's songs, covers, voices, models or training")
 def u_uninstall_kept_paths():
     import subprocess
     import tempfile
@@ -7317,6 +7646,37 @@ def u_uninstall_kept_paths():
     v = storage._toml_value("uploads_dir", "uploads", Path("D:/Lib dir/uploads"))
     assert v == '"D:\\\\Lib dir\\\\uploads"' and tomllib.loads(f"a = {v}")["a"] == "D:\\Lib dir\\uploads", v
     assert storage._toml_value("uploads_dir", "uploads", APP / "uploads") == '"uploads"'
+    # [UninstallDelete] against the app's own cache names (pass 12: ytdlp, cadence, voicecheck, packs... stayed behind):
+    # every name the code puts in cache\ is either removed or on the kept list, and nothing removed is the user's
+    import re
+    iss = (ROOT / "installer" / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    sect = iss[iss.index("[UninstallDelete]"):iss.index("[Code]")]
+    gone = [m.group(2) for m in re.finditer(r'^Type: (files|filesandordirs); Name: "\{app\}\\([^"]+)"', sect, re.M)]
+    cache_gone = {g.split("\\", 1)[1] for g in gone if g.startswith("cache\\")}
+    KEPT_CACHE = {"training", "cadence", "voice_quality.json", "voice_check_failed.json", "subjects.json", "youtube_songs.json",
+                  "worklist.json", "root.txt"}
+    MINE = ("uploads", "output", "models", "models\\voices", "cache\\training", "config.toml", "tutorial.json", "ear.json",
+            "themes", "manifest.json")
+    for g in gone:   # nothing removed is (or holds) the user's work, their settings, or the models
+        for k in MINE:
+            assert not (g.lower() == k.lower() or k.lower().startswith(g.lower() + "\\")), f"the uninstaller deletes {g}, which holds {k}"
+        assert not g.lower().startswith("cache\\training") and not re.match(r"models\\(?!tailscale$)", g, re.I), f"the uninstaller deletes {g}"
+        assert g.lower() != "cache" and "*" not in g.split("\\")[0], f"the uninstaller deletes a whole top folder: {g}"
+    assert not (cache_gone & KEPT_CACHE), f"kept and deleted at once: {cache_gone & KEPT_CACHE}"
+    src = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "undercover").rglob("*.py"))
+    consts = {}   # (a name defined in several modules, SPEED_FILE: every value counts)
+    for c, val in re.findall(r'^([A-Z_]+) = "([^"/\\]+\.(?:json|txt))"', src, re.M):
+        consts.setdefault(c, set()).add(val)
+    made = set(re.findall(r'path\("cache_dir"\) / "([^"/]+)"', src))
+    for c in re.findall(r'path\("cache_dir"\) / ([A-Z_]+)\b', src):
+        made |= consts.get(c, set())
+    made |= {"offline-requirements.txt"}   # (setup's own, in setup.ps1)
+    assert {"ytdlp", "cadence", "train_speed.json", "launcher-moved.json"} <= made, ("the names scan missed the app's own", sorted(made))
+    for name in made:   # an f-string name (vup_*, mix_*, yt_*: temp folders the app removes itself) isn't matched above
+        hit = name in cache_gone or name in KEPT_CACHE or any("*" in g and re.fullmatch(re.escape(g).replace(r"\*", ".*"), name)
+                                                              for g in cache_gone)
+        assert hit, f"cache\\{name} is made by the app but the uninstaller neither removes it nor lists it as kept"
+    assert "reverb_ir_*.wav" in cache_gone and {"ytdlp", "voicecheck", "packs", "hf_lists", "matplotlib", "_work", "keys"} <= cache_gone
     iscc = next((c for c in (Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Inno Setup 6/ISCC.exe",
                              Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6/ISCC.exe") if c.is_file()), None)
     if os.name != "nt" or iscc is None:
@@ -7349,6 +7709,149 @@ def u_uninstall_kept_paths():
     return "basic, literal, relative and missing [paths] values read as the app reads them, by the uninstaller's own code"
 
 
+@check("installer pass 12 (Internal Affairs): the Doctor's repair offer names the Start menu item (the -Repair flag only in Deep Cover); the tour's sample time is the one-shot's own plan and a processor install's first guess is minutes; an NVIDIA card with no working driver is said so (detect_gpu, the wizard's Ready and finished pages) and Repair looks again; the space check counts moved models and library where config.toml keeps them; the public headers say what was tested")
+def u_installer_pass12():
+    import inspect
+    import re
+    import subprocess
+    import tempfile
+    inst = ROOT / "installer"
+    web = ROOT / "undercover" / "web"
+    # 1. the offer a basic user reads is the Start menu's Repair UnderCover (GUIDE and README); the flag is Deep Cover's
+    from undercover.core import doctor as D
+    assert "Start menu" in D.REPAIR["label"] and "-Repair" not in D.REPAIR["label"], D.REPAIR
+    assert "-Repair" in D.REPAIR.get("detail", ""), "the command-line form is gone from Deep Cover too"
+    rooms = (web / "rooms.js").read_text(encoding="utf-8")
+    row = rooms[rooms.index("function doctorRow("):rooms.index("function fixAsk(")]
+    assert '${f.detail ? `<small class="meta mono" data-deep>${esc(f.detail)}</small>` : ""}' in row, "an offer's detail isn't Deep Cover's"
+    guide = (inst / "GUIDE.md").read_text(encoding="utf-8") + (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "Repair UnderCover" in guide
+    # 2. the tour's time on the sample button: the one-shot's own plan (planTime, the Make it button's words), no fixed one
+    fr = (web / "firstrun.js").read_text(encoding="utf-8")
+    assert "about a minute" not in fr and '<small id="tour-try-t">${esc(TOUR.tryT || "")}</small>' in fr
+    tt = fr[fr.index("function tourTryTime("):fr.index("// the waiting panel's line")]
+    assert "/api/auto/plan?text=${encodeURIComponent(TOUR_SAMPLE)}&train=0" in tt and "planTime(p)" in tt and 'p.voice?.how === "installed"' in tt
+    assert tt.index('api("/api/library/songs")') < tt.index("/api/auto/plan") and "some(s => s.sample)" in tt, \
+        "the tour plans the sample with no sample song in the library (the plan would search online)"
+    from undercover.core.config import CONFIG
+    from undercover.frontman import pipeline as PL
+    with isolated_data():
+        was = CONFIG["gpu"].get("backend")
+        try:
+            o = PL.CoverOptions(voice="v", quality="high", dereverb=True, karaoke=True, backing_voice="v", polish=True)
+            CONFIG["gpu"]["backend"] = "rocm"
+            card = PL.estimate_for(240.0, o)["total"]
+            card_sep = PL.estimate_for(240.0, o)["separating"]
+            CONFIG["gpu"]["backend"] = "cpu"
+            cpu = PL.estimate_for(240.0, o)["total"]
+            # a card's measured speed never prices the processor's work (a repair that found the card, the other way)
+            import json as _json
+            from undercover.core.config import path as _path
+            from undercover.core.separate import QUALITY, SEP
+            _path("logs_dir").mkdir(parents=True, exist_ok=True)
+            (_path("logs_dir") / "timings.jsonl").write_text(_json.dumps({"stage": "separate.run", "overlap": QUALITY["high"],
+                                                                          "model": SEP["vocal_model"], "realtime": 500.0}) + "\n", encoding="utf-8")
+            assert PL.estimate_for(240.0, o)["total"] == cpu, "a card's timing priced the processor"
+            CONFIG["gpu"]["backend"] = "rocm"
+            fast = PL.estimate_for(240.0, o)["separating"]
+            from undercover.core import timing as _timing
+            assert 'record["cpu"] = True' in inspect.getsource(_timing), "timings don't say they were the processor's"
+        finally:
+            CONFIG["gpu"]["backend"] = was
+    assert cpu >= card * PL.CPU_FIRST_GUESS * 0.7 and cpu > 600, ("a processor install's first guess is a card's", card, cpu)
+    assert fast < card_sep, ("the card's own timing wasn't used", fast, card_sep)
+    # 3. an NVIDIA card with no working driver: said truthfully, shown in the wizard, and Repair looks again
+    setup = (inst / "setup.ps1").read_text(encoding="utf-8-sig")
+    rep = setup[setup.index("# A processor install looks again"):setup.index("# 1. GPU ---")]
+    assert "if ($Backend -eq 'cpu' -and -not $PSBoundParameters.ContainsKey('Backend') -and -not $choseCpu)" in rep and "$gpuSeen.backend -ne 'cpu'" in rep
+    assert "-eq 'by hand')" in rep and "$BackendChoiceFile = Join-Path $InstallDir 'logs\\setup-backend.txt'" in setup
+    assert "$how = if ($PSBoundParameters.ContainsKey('Backend') -and $Backend -ne 'auto' -and -not $Offline) { 'by hand' } else { 'detected' }" in setup, \
+        "a processor picked by hand isn't remembered (or the installer's own pick counts as one)"
+    assert "' -Backend ' + Backend + ' -Offline'" in (inst / "UnderCover.iss").read_text(encoding="utf-8-sig"), \
+        "the installer's setup run isn't -Offline: its detected backend would count as picked by hand"
+    assert "if ($script:RedetectedGpu) { $Fix.torch = $true; $Fix.packages = $true; $Fix.config = $true }" in rep
+    assert "$gpu = if ($gpuSeen) { $gpuSeen } else {" in setup and "$gpuSeen = $null; $gpuNote = $null; $script:RedetectedGpu = $false" in setup and "$g = if ($gpu) { $gpu } else { $gpuNote }" in setup
+    from undercover.core import manifest as MF
+    real_load = MF.load
+    MF.load = lambda: {"torch_file": "torch-cpu.txt"}
+    try:
+        with isolated_data():
+            CONFIG["gpu"]["backend"] = "rocm"
+            assert MF.torch_file() == "torch-cpu.txt" and MF.torch_file(recorded=False) == "torch-rocm.txt"
+    finally:
+        MF.load = real_load
+    import inspect
+    obs = inspect.getsource(MF.observe)
+    assert 'tf = torch_file(recorded=kind != "installed")' in obs and "p = pins(torch=tf)" in obs and '"torch_file": tf,' in obs, \
+        "setup's new record keeps the old torch file (or lists the old one's packages)"
+    iss = (inst / "UnderCover.iss").read_text(encoding="utf-8-sig")
+    assert "end else if Pos('nodriver|', Lines[I]) = 1 then begin" in iss and "GpuNote := Copy(Lines[I], 10, Length(Lines[I]));" in iss
+    memo = iss[iss.index("function UpdateReadyMemo("):iss.index("procedure CheckKept(")]
+    assert "if ProcessorNote <> '' then Result := Result + NewLine + NewLine + ProcessorNote;" in memo
+    outcome = iss[iss.index("procedure ShowOutcome;"):iss.rindex("procedure RetryClick(")]
+    assert "if ProcessorNote <> '' then" in outcome.split("end else begin")[0], "the finished page says nothing about a processor install"
+    sp = (inst / "space.ps1").read_text(encoding="utf-8-sig")
+    assert 'if ($seen.nodriver) { $noDriver = "$($seen.reason)" }' in sp and 'if ($noDriver) { $lines += "nodriver|$noDriver" }' in sp
+    said = "not run (needs Windows)"
+    if os.name == "nt":
+        def ps(file, body):
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", f". '{inst / file}'; {body}"],
+                               capture_output=True, text=True, timeout=60)
+            assert r.returncode == 0, r.stderr
+            return r.stdout.strip()
+        A = lambda v, n, gb=8: f"[pscustomobject]@{{ Vendor = '{v}'; Name = '{n}'; VramGB = {gb}; Driver = '1' }}"   # noqa: E731
+        smi = "[pscustomobject]@{ Vendor = 'NVIDIA'; Name = 'NVIDIA GeForce RTX 2080'; VramGB = 8; ComputeCap = '7.5'; Driver = '1' }"
+        pick = lambda adapters, nv="@()": ps("detect_gpu.ps1", f"$c = Select-Gpu @({adapters}) {nv}; $c.Backend + '|' + $c.NoDriver + '|' + $c.Reason")   # noqa: E731
+        nod = pick(A("NVIDIA", "Microsoft Basic Display Adapter"))
+        assert nod.startswith("cpu|True|an NVIDIA card was found but its driver isn't working") and "Repair UnderCover" in nod, nod
+        assert "no supported PyTorch GPU build" not in nod, nod
+        assert pick(A("NVIDIA", "NVIDIA GeForce RTX 2080"), f"@({smi})").startswith("cuda128|False|"), "a working NVIDIA card"
+        assert pick(A("Intel", "Intel(R) UHD Graphics 770")) == "cpu|False|Intel(R) UHD Graphics 770 has no supported PyTorch GPU build on Windows"
+        assert pick(A("AMD", "AMD Radeon RX 7900 XTX", 24) + ", " + A("NVIDIA", "Microsoft Basic Display Adapter")).startswith("rocm|False|")
+        assert pick("").startswith("cpu|False|no GPU found")
+        # dot-sourced it only defines its functions (no probe, no JSON)
+        assert ps("detect_gpu.ps1", "'ok'") == "ok"
+        # 5. a moved [paths]: a folder left at the install folder is counted where config.toml keeps it
+        with tempfile.TemporaryDirectory(prefix="uc-kept-") as td:
+            app = Path(td) / "app"
+            (app / "elsewhere").mkdir(parents=True)
+            (app / "elsewhere" / "m.bin").write_bytes(bytes(2 * 1024 * 1024))
+            (app / "config.toml").write_text('[gpu]\nbackend = "rocm"\n\n[paths]\nmodels_dir = "E:\\\\Moved\\\\models"\n'
+                                             "uploads_dir = 'F:\\Lib\\uploads'\ncache_dir = \"elsewhere\"\n"
+                                             '\n[ui]\nmodels_dir = "Z:\\\\not-a-path"\n', encoding="utf-8")
+            k = ps("space.ps1", f"$k = Read-KeptPaths '{app}'; ($k.Keys | Sort-Object | ForEach-Object {{ $_ + '=' + $k[$_] }}) -join ';'")
+            assert k == f"cache_dir={app}\\elsewhere;models_dir=E:\\Moved\\models;uploads_dir=F:\\Lib\\uploads", k
+            S = f"$s = Read-Sizes '{inst}'; $k = Read-KeptPaths '{app}'; "
+            roots = ps("space.ps1", S + "$n = Get-SpaceNeeds 'C:\\UC' 'C:\\UC' 'C:\\UC' 'C:\\UC' 'rocm' $s -Kept $k; ($n.Keys | Sort-Object) -join ';'")
+            assert roots == ";".join(sorted({str(app)[:3].upper(), "C:\\", "E:\\", "F:\\"})), ("the models and the library are counted on the install drive", roots)
+            asked = ps("space.ps1", S + "$n = Get-SpaceNeeds 'C:\\UC' 'C:\\UC' 'C:\\UC' 'G:\\New' 'rocm' $s -Kept $k; ($n.Keys | Sort-Object) -join ';'")
+            assert "G:\\" in asked and "E:\\" not in asked, ("a folder the page names wins over the kept one", asked)
+            seen = ps("space.ps1", S + "$n = Get-SpaceNeeds 'C:\\UC' '' '' '' 'rocm' $s -Kept $k -SetupOnly -Have { param($kind, $d) if ($kind -eq 'models-at' -and $d -eq 'E:\\Moved\\models') { 50 } else { 0 } }; ($n.Keys | Sort-Object) -join ';'")
+            assert seen == "C:\\", ("the moved models, all there, are still asked for", seen)
+            none = ps("space.ps1", S + "$n = Get-SpaceNeeds 'C:\\UC' '' '' '' 'rocm' $s -Kept (Read-KeptPaths 'C:\\no-such-uc') -SetupOnly; ($n.Keys | Sort-Object) -join ';'")
+            assert none == "C:\\", none
+            got = ps("space.ps1", f"[math]::Round((Get-HaveGB 'models-at' '{app / 'elsewhere'}') * 1GB)")
+            assert got == str(2 * 1024 * 1024), got
+            # json.dumps's escapes, as Storage and config set write them (a folder name with an accent)
+            (app / "config.toml").write_text('[paths]\nmodels_dir = "E:\\\\M\\u00fcsik\\\\models"\n', encoding="utf-8")
+            acc = ps("space.ps1", f"$k = Read-KeptPaths '{app}'; [int][char]$k['models_dir'][4]; $k['models_dir'].Length")
+            assert acc.split() == ["252", str(len("E:\\M\u00fcsik\\models"))], acc
+        said = "detect_gpu's choice on 5 faked PCs; the kept [paths] counted on their own drives"
+    assert "-Kept (Read-KeptPaths $InstallDir)" in setup and "-Kept (Read-KeptPaths $SpInstallDir)" in sp
+    # 4 and 6. the public text says what was tested and how Python arrives; constraints.txt says whose torch it pins
+    reqs = {f: (inst / "requirements" / f).read_text(encoding="utf-8") for f in ("torch-cuda128.txt", "torch-cuda126.txt", "torch-cpu.txt")}
+    assert "UNTESTED on real hardware" not in "".join(reqs.values()) and "Tested on real hardware: an RTX 2080." in reqs["torch-cuda128.txt"]
+    assert "RTX 2080" in guide and "Untested" in reqs["torch-cuda126.txt"] and "hasn't run a processor install" in reqs["torch-cpu.txt"]
+    assert "uv installs it" not in (inst / "python.ps1").read_text(encoding="utf-8") and "Setup unpacks it itself" in (inst / "python.ps1").read_text(encoding="utf-8")
+    assert "(`python.ps1`, via uv)" not in (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    assert "fetches the first time" not in sp
+    cons = (inst / "constraints.txt").read_text(encoding="utf-8")
+    head = cons[:cons.index("torch==")]
+    assert "Use on EVERY install" not in head and "don't apply" in head and "torch-cuda128.txt" in head
+    assert re.search(r"^torch==2\.9\.1\+rocm7\.2\.1$", cons, re.M) and re.search(r"^torchvision==0\.24\.1\+rocm7\.2\.1$", cons, re.M)
+    return said
+
+
 @check("Improve's estimate follows the recipe (found by the real Freeman run: 99 min said, 12 taken): a well-fed voice's Improve is estimated as a refine (1000-4000 steps on the new minutes), a thin one as scratch's budget; a manual training after a refine starts clean (init_from / lr / steps popped)")
 def u_improve_estimate():
     import inspect
@@ -7373,9 +7876,9 @@ def u_improve_estimate():
         assert well["train"] * 4 < thin["train"], (well, thin)
         assert well["prepare"] == thin["prepare"] == round(new_min / sh["kept_per_prep_min"]) and well["compare"] == thin["compare"]
         assert well["refine"] and not thin["refine"]
-    src = inspect.getsource(da_api.start_train)
-    pops = src[src.index("for k in (") : src.index("st.pop(k, None)")]
-    assert all(k in pops for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
+    from undercover.doubleagent.trainer import FRESH_KEYS
+    assert "for k in FRESH_KEYS" in inspect.getsource(da_api.start_train)
+    assert all(k in FRESH_KEYS for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
     return f"well-fed: refine {well['train']} min; thin: scratch {thin['train']} min (at {spe:.2f} s/step); the training form pops the refine plan"
 
 
@@ -7939,6 +8442,337 @@ def _fake_addon_roundtrip(addons):
         assert not r["installed_on"] and r["accepted"] and not addons.available(fake.id), r
     finally:
         addons.ADDONS.pop(fake.id, None)
+
+
+@check("bugs-da 1: a training started over (the form, Do it all, a queued Retrain) never inherits an Improve's refine plan (init_from, lr, steps, planned_epochs, seed)")
+def u_fresh_keys():
+    import inspect
+    from undercover.doubleagent import api as DA, night, project as P, service
+    from undercover.doubleagent.trainer import FRESH_KEYS
+    for fn in (DA.start_train, night._improve, service.train_new_voice, service.run_project):
+        assert "for k in FRESH_KEYS" in inspect.getsource(fn), f"{fn.__name__} keeps its own list of keys to reset"
+    with isolated_data():
+        proj = P.Project.create("Refine Leftover", "speaking")
+        plan = {"init_from": "x.pth", "lr": 1e-5, "steps": 900, "planned_epochs": 3, "seed": 1234}
+        proj.train = {**plan, "voice_name": "refine-leftover-uc", "state": "trained", "epoch": 40}
+        proj.save()
+
+        class J:
+            cancel = pausing = finished = False
+
+        class Reached(Exception):
+            pass
+
+        def push(stage, frac, msg):
+            if "Training a voice" in msg:
+                raise Reached()
+        was = P.Project.kept_seconds
+        P.Project.kept_seconds = lambda self: 600.0
+        try:
+            service.run_project(J(), proj.name, object(), push)
+            raise AssertionError("run_project didn't reach the training")
+        except Reached:
+            pass
+        finally:
+            P.Project.kept_seconds = was
+            DA.ACTIVE.pop(proj.name, None)
+        st = P.Project.load(proj.name).train
+        assert not set(plan) & set(st) and "epoch" not in st, st
+    return f"{len(FRESH_KEYS)} keys, one list in all four places; run_project's reset drops the refine plan"
+
+
+@check("bugs-da 2: a save whose every test conversion came out silent (content None) never stops a training at its save: it scores no words, and the best pick carries on")
+def u_pick_silent():
+    from undercover.doubleagent.trainer import Trainer
+    st = {"saves": [{"epoch": 10, "identity": 0.8, "content": 0.9, "cents": 20.0},
+                    {"epoch": 20, "identity": 0.0, "content": None, "cents": None}]}
+    Trainer._pick_best(None, st)
+    assert st["best"] == 10, st
+    st = {"saves": [{"epoch": 10, "identity": 0.0, "content": None, "cents": None}]}   # (every save silent: still picks)
+    Trainer._pick_best(None, st)
+    assert st["best"] == 10, st
+    return "best stays 10 beside a silent save"
+
+
+@check("bugs-da 3: a long sentence is never cut inside a direction ([pause 2s], [clear throat]): the cut swept across the tag, it's never read out")
+def u_split_tags():
+    from undercover.speakeasy import tags, tts
+    n = 0
+    for tag, word in (("[pause 2s]", "pause"), ("[clear throat]", "throat"), ("[pause 1.5 seconds]", "seconds")):
+        for at in range(30, 46):
+            w = [f"word{i}" for i in range(100)]
+            w.insert(at, tag)
+            sents = tts.sentences(" ".join(w) + ".")
+            assert len(sents) > 1 and all(s["text"].count("[") == s["text"].count("]") for s in sents), (tag, at, sents)
+            ps, unk, held = tags.directions(sents)
+            text = " ".join(p["text"] for p in ps)
+            assert word not in text and "[" not in text and unk == [], (tag, at, text, unk)
+            if word == "pause" or word == "seconds":
+                assert sum(1 for p in ps if p.get("hold")) == 1, (tag, at, ps)
+            n += 1
+    # a long bracketed aside (or a stray "[" closed far later) is cut as text: no piece runs past the limits
+    for text in ("Intro " + "[" + " ".join(f"note{i}" for i in range(120)) + "] end.",
+                 "A stray [ bracket " + " ".join(f"word{i}" for i in range(150)) + " closed ] late."):
+        pieces = tts._split_long(text)
+        assert len(pieces) > 2 and all(p and len(p) <= tts.MAX_CHARS and len(p.split()) <= tts.MAX_WORDS for p in pieces), pieces
+    return f"{n} cuts across a tag, none inside it; a long aside still cut"
+
+
+@check("bugs-da 4: a speech renamed while one of its files is held open keeps its name and its files together (the first move is put back); if even that can't be, its record follows the file, so it still lists")
+def u_rename_held():
+    from undercover.core import fsutil
+    from undercover.speakeasy import speak
+    with isolated_data():
+        d = speak.speech_dir()
+        sid = "0123456789"
+        (d / "Old one.flac").write_bytes(b"flac")
+        (d / "Old one.mp3").write_bytes(b"mp3")
+        (d / f"{sid}.json").write_text(json.dumps({"id": sid, "title": "Old one", "file": "Old one.flac", "mp3": "Old one.mp3",
+                                                   "created": "2026-11-08 10:00:00", "finished": 1.0}), encoding="utf-8")
+        real = fsutil.retry
+
+        def held(*fail, error=PermissionError):   # a retry that gives up on the calls numbered in `fail` (as after
+            n = [0]                                # ~3 s of a held file)
+
+            def retry(fn, tries=30):
+                n[0] += 1
+                if n[0] in fail:
+                    raise error(17, "held open")
+                return fn()
+            return retry
+        try:
+            fsutil.retry = held(2)   # the FLAC moves, the MP3 is held: the FLAC goes back
+            try:
+                speak.rename_speech(sid, "New name")
+                raise AssertionError("a rename with a held file said it worked")
+            except speak.SpeakError as e:
+                assert "Old one.mp3" in str(e), e
+            assert sorted(p.name for p in d.iterdir() if p.suffix != ".json") == ["Old one.flac", "Old one.mp3"]
+            assert [x["id"] for x in speak.list_speech()] == [sid] and speak.get_speech(sid)["file"] == "Old one.flac"
+            fsutil.retry = held(2, 3)   # and the FLAC can't go back either: the record names where it is
+            try:
+                speak.rename_speech(sid, "New name")
+                raise AssertionError("a rename with a held file said it worked")
+            except speak.SpeakError:
+                pass
+            got = speak.get_speech(sid)
+            assert got["file"] == "New name.flac" and got["mp3"] == "Old one.mp3" and [x["id"] for x in speak.list_speech()] == [sid], got
+            fsutil.retry = real
+            assert speak.rename_speech(sid, "Fine")["file"] == "Fine.flac" and (d / "Fine.mp3").exists()
+            fsutil.retry = held(2, error=FileExistsError)   # another failure: put back too, and not said as a held file
+            try:
+                speak.rename_speech(sid, "Other")
+                raise AssertionError("a failed rename said it worked")
+            except speak.SpeakError as e:
+                assert "couldn't be renamed" in str(e) and "open somewhere" not in str(e), e
+            assert speak.get_speech(sid)["file"] == "Fine.flac" and (d / "Fine.flac").exists() and (d / "Fine.mp3").exists()
+        finally:
+            fsutil.retry = real
+    return "held MP3: the FLAC put back, the speech lists; can't put back: the record follows"
+
+
+@check("bugs-da 5: a pause written without a unit, in milliseconds or with a stop ([pause 2], [pause 500ms], [pause 1.5 s.]) is a pause, never read out; one in a unit we don't read ([pause 2 minutes]) is named, not spoken")
+def u_pause_forms():
+    from undercover.speakeasy import tags, tts
+    d = lambda text: tags.directions(tts.sentences(text))[:2]
+    for tag, secs in (("[pause 2]", 2.0), ("[pause 500ms]", 0.5), ("[pause 1.5 s.]", 1.5), ("[pause 2 sec.]", 2.0),
+                      ("[pause 250 milliseconds]", 0.25), ("[Pause 3 Seconds]", 3.0), ("[pause 9]", tags.PAUSE_MAX_S)):
+        ps, unk = d(f"Wait {tag} for it.")
+        assert [p["text"] for p in ps] == ["Wait", "for it."] and ps[0]["hold"] == secs and unk == [], (tag, ps, unk)
+    ps, unk = d("The first part is done. [pause 1.5 s.] Now the second part starts.")   # (a stop in the tag ends no sentence)
+    assert [p["text"] for p in ps] == ["The first part is done.", "Now the second part starts."] and ps[0]["hold"] == 1.5, ps
+    for tag in ("[pause 2 minutes]", "[pause 500]", "[louder 2x]"):   # never read out, never guessed: named
+        ps, unk = d(f"Hold {tag} on.")
+        assert [p["text"] for p in ps] == ["Hold on."] and unk == [tag] and "hold" not in ps[0] and "gain_db" not in ps[0], (tag, ps, unk)
+    ps, unk = d("See [John 3] and [Fig 2] here.")   # a name and a number: still text
+    assert ps[0]["text"] == "See [John 3] and [Fig 2] here." and unk == [], (ps, unk)
+    return "2, 500ms, 1.5 s., milliseconds, capitals: pauses; 2 minutes named"
+
+
+@check("bugs-da 6: a training that crashes before its first resume point is said as failed, never paused (Resume would start over and delete its saves); with a resume point it's paused")
+def u_crash_no_resume():
+    import types
+    from undercover.core import gpu, jobs
+    from undercover.doubleagent import api as DA, project as P, trainer
+    with isolated_data():
+        proj = P.Project.create("Crash Early", "speaking")
+
+        class FakeTrainer:
+            def __init__(self, pr, *a, **k):
+                self.pr = pr
+
+            def run(self, control, progress=None):
+                self.pr.train["epoch"] = 3
+                self.pr.save_train()
+                raise RuntimeError("the GPU fell over")
+        queued = []
+        saved = trainer.Trainer, gpu.MODELS, jobs.GPU_QUEUE
+        trainer.Trainer = FakeTrainer
+        gpu.MODELS = types.SimpleNamespace(converter=types.SimpleNamespace(hubert=None, rmvpe=None, device="cpu", half=False))
+        jobs.GPU_QUEUE = types.SimpleNamespace(put=queued.append)
+        try:
+            states = []
+            for with_resume in (False, True):
+                job = DA.start_train(proj.name, {"fresh": True})
+                if with_resume:   # (start_train removes an old one: this run's own, written at a save)
+                    (proj.dir / "train").mkdir(parents=True, exist_ok=True)
+                    (proj.dir / "train" / "resume.pt").write_bytes(b"pt")
+                try:
+                    queued[-1][1](job)
+                    raise AssertionError("the crash didn't come through")
+                except RuntimeError:
+                    pass
+                job.state = "error"   # (as the GPU worker ends it)
+                states.append(P.Project.load(proj.name).train["state"])
+                jobs.JOBS.pop(job.id, None)
+            assert states == ["failed", "paused"], states
+        finally:
+            trainer.Trainer, gpu.MODELS, jobs.GPU_QUEUE = saved
+            DA.ACTIVE.pop(proj.name, None)
+    return "no resume point: failed; with one: paused"
+
+
+@check("bugs-da 7: two trainings started at the same moment (two quick POSTs, the form and Do it all): exactly one starts, the other is told one voice trains at a time, and the one running is the one Pause and Stop reach")
+def u_start_race():
+    import inspect
+    import threading
+    import types
+    from undercover.core import jobs
+    from undercover.core.voices import ModelError
+    from undercover.doubleagent import api as DA, project as P
+    with isolated_data():
+        a, b = P.Project.create("Race One", "speaking"), P.Project.create("Race Two", "speaking")
+        saved = DA.check_voice_name, jobs.GPU_QUEUE
+        jobs.GPU_QUEUE = types.SimpleNamespace(put=lambda item: None)
+
+        def slow_check(proj, name):   # (a wide gap between the checks and the ACTIVE entry, as a busy PC's)
+            time.sleep(0.3)
+            return saved[0](proj, name)
+        DA.check_voice_name = slow_check
+        from undercover.doubleagent import service   # (the queue's runs take the same step)
+        for fn in (service.train_new_voice, service.run_project):
+            assert "with train_api._STARTING:" in inspect.getsource(fn), fn.__name__
+        try:
+            for first, second in ((DA.start_train, DA.start_train), (DA.start_auto, DA.start_train)):
+                go, got = threading.Barrier(2), []
+
+                def start(fn, proj):
+                    go.wait()
+                    try:
+                        got.append(("ok", fn(proj.name, {"fresh": True, "voice_name": f"{proj.name}-uc"})))
+                    except ModelError as e:
+                        got.append(("refused", str(e)))
+                ts = [threading.Thread(target=start, args=(fn, p)) for fn, p in ((first, a), (second, b))]
+                for t in ts:
+                    t.start()
+                for t in ts:
+                    t.join(10)
+                ok = [j for k, j in got if k == "ok"]
+                assert len(ok) == 1 and len(got) == 2 and "one voice trains at a time" in next(m for k, m in got if k == "refused").lower(), got
+                assert [x["job"] for x in DA.ACTIVE.values() if not x["job"].finished] == ok, DA.ACTIVE
+                for n in (a.name, b.name):
+                    x = DA.ACTIVE.pop(n, None)
+                    if x:
+                        x["job"].state = "cancelled"
+                        jobs.JOBS.pop(x["job"].id, None)
+        finally:
+            DA.check_voice_name, jobs.GPU_QUEUE = saved
+            for n in (a.name, b.name):
+                DA.ACTIVE.pop(n, None)
+    return "form + form, Do it all + form: one each time"
+
+
+@check("bugs-da 8: SpeakEasy's Reader thread ends soon after a Stop, its read-ahead queue full and nobody reading it (it used to wait on it for good, one thread per Stop); an error still reaches the job")
+def u_read_ahead_stop():
+    import inspect
+    import queue
+    import threading
+    from undercover.speakeasy import speak
+    assert "_read_ahead" in inspect.getsource(speak.make_speech), "make_speech reads ahead some other way"
+    sents = [{"text": f"Sentence {i}."} for i in range(10)]
+    q, stop = queue.Queue(maxsize=3), threading.Event()
+    t = threading.Thread(target=speak._read_ahead, args=(sents, lambda text: text, q, stop), daemon=True)
+    t.start()
+    first = q.get(timeout=5)   # the job takes one sentence, then is stopped
+    assert first[0] == "Sentence 0.", first
+    time.sleep(0.3)   # (the reader fills the queue and waits on it)
+    stop.set()
+    t.join(1.0)
+    assert not t.is_alive(), "the Reader's thread still waits on the queue after a Stop"
+
+    def broken(text):
+        raise RuntimeError("the Reader fell over")
+    q2 = queue.Queue(maxsize=3)
+    t = threading.Thread(target=speak._read_ahead, args=(sents, broken, q2, threading.Event()), daemon=True)
+    t.start()
+    t.join(2.0)
+    e = q2.get_nowait()
+    assert isinstance(e, RuntimeError) and not t.is_alive(), e
+    return "gone within 1 s of the Stop; an error handed over"
+
+
+@check("bugs-da 9: a training history with a line cut short (a crash as it was written) still loads: the project page and Resume read the rest, a NaN loss reaches the page as nothing, and Resume rewrites the history whole and safely")
+def u_history_cut():
+    import inspect
+    from undercover.doubleagent import api as DA, project as P, trainer
+    with isolated_data():
+        proj = P.Project.create("Cut Short", "speaking")
+        tdir = proj.dir / "train"
+        tdir.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps({"epoch": 1, "secs": 2.0, "val": 0.5, "mel": 30.0}),
+                 json.dumps({"epoch": 2, "secs": 2.0, "val": float("nan"), "mel": float("inf")}),
+                 '{"epoch": 3, "secs": 2.0, "va']
+        (tdir / "history.jsonl").write_text("\n".join(lines), encoding="utf-8")
+        hist = trainer.read_history(tdir / "history.jsonl")
+        assert [h["epoch"] for h in hist] == [1, 2], hist
+        proj.train["saves"] = [{"epoch": 2, "val": float("nan")}]   # (a diverged training's save, and its losses)
+        proj.save()
+        page = DA.project_json(P.Project.load(proj.name))
+        json.dumps(page, allow_nan=False)   # (what a browser can parse)
+        assert [(h["val"], h["mel"]) for h in page["history"]] == [(0.5, 30.0), (None, None)], page["history"]
+        assert page["saves"][0]["val"] is None, page["saves"]
+        assert trainer.read_history(tdir / "nothing.jsonl") == []
+    src = inspect.getsource(trainer.Trainer.run)
+    assert 'fsutil.write_text(self.tdir / "history.jsonl"' in src and "hf.write_text(" not in src
+    return "2 of 3 lines read; the NaN sent as null"
+
+
+@check("bugs-da 10: a [pause] at the very start of the text is silence before the first words (it used to be dropped); it stays on the first piece when pieces are joined or split at commas, and both readings put it there")
+def u_lead_pause():
+    import inspect
+    from undercover.core.cadence import render
+    from undercover.speakeasy import speak, tags, tts
+    d = lambda text: tags.directions(tts.sentences(text))[0]
+    ps = d("[pause 2s] Hello there, my friend. How are you today?")
+    assert ps[0]["lead"] == 2.0 and "hold" not in ps[0] and ps[0]["text"].startswith("Hello") and "lead" not in ps[1], ps
+    assert d("[pause] [louder] Go on then.")[0]["lead"] == tags.PAUSE_S
+    assert all("lead" not in p for p in d("Hello there. [pause 2s] Again here."))   # (a later pause stays the one before's)
+    j = render.join_short([{**ps[0], "text": "Hi.", "pause": 0.3}, {"text": "Now we start this.", "pause": 0.0}])
+    assert len(j) == 1 and j[0]["lead"] == 2.0, j
+    c = render.split_clauses([ps[0]])
+    assert [x.get("lead") for x in c] == [2.0, None], c
+    src = inspect.getsource(speak.make_speech) + inspect.getsource(speak._make_cadence)
+    assert src.count('s.get("lead")') == 2, "a reading leaves the lead out"
+    return "lead 2.0 s on the first piece; kept by join and split; both readings"
+
+
+@check("bugs-da side note: sentences left out for not being in English are counted and said once under the result (they used to vanish without a word); a text with nothing in English says so")
+def u_not_english():
+    import inspect
+    from undercover.speakeasy import speak, tags, tts
+    sents = tts.sentences("Hello there, friend.\n\nПривет, как дела?\n\nこんにちは。\n\nGood night [pause 2s] everyone.")
+    ps = tags.directions(sents)[0]
+    assert all(any(c.isascii() and c.isalpha() for c in p["text"]) for p in ps), ps
+    assert tags.not_english(sents) == 2 and tags.not_english(tts.sentences("Just English [pause], 42 times.")) == 0
+    with isolated_data():
+        speak.speech_dir()
+        m = {"id": "abcdef0123", "file": "x.flac", "not_english": 2}
+        assert speak._item(m)["not_english"] == 2 and speak._item({**m, "not_english": None})["not_english"] == 0
+    src = inspect.getsource(speak.make_speech) + inspect.getsource(speak._save)
+    assert '"not_english": tags.not_english(raw)' in src and '"not_english": int(p.get("not_english") or 0)' in src
+    js = (ROOT / "undercover" / "web" / "speakeasy.js").read_text(encoding="utf-8")
+    assert "ev.result.not_english" in js and "isn't in English" in js
+    return "2 of 4 paragraphs counted; said under the result"
 
 
 @contextlib.contextmanager
@@ -9082,6 +9916,8 @@ def u_edits():
             assert E.result_of(it["id"]) == r
             new = E.keep(H.get(it["id"]))
             assert new["id"] != it["id"] and new["edits"] == 2 and new["edited_from"] == it["id"]
+            assert new["title"] == "T (edited)" and Path(new["output"]).stem == "T (edited)", new["title"]   # one name: the file's, numbered as it is
+            assert E.keep_name(H.get(it["id"]), "flac")[1] == E.keep_name(H.get(new["id"]), "flac")[1] == "T (edited) 2"   # a kept one counts on, not "(edited) (edited)"
             assert pitched and E.pitch_of(E.load(new["id"])).keys() == E.pitch_of(E.load(it["id"])).keys() == {"lead", "backing"} and pitched[-2:] == [False, True]   # (read with an edit, kept with the list)
             try:
                 E.keep(H.get(it["id"]))   # a version is kept once: each Keep rolls a cover off the tray
@@ -9093,6 +9929,7 @@ def u_edits():
             E.mix = stand_in
             E.step(engine, it, 1)
             second = E.keep(H.get(it["id"]))
+            assert second["title"] == "T (edited) 2", second["title"]
             for to in (2, 1, 2):
                 E.step(engine, it, to)
                 try:
@@ -13071,6 +13908,124 @@ def _bare_text(src: str) -> list:
     return [x for x in _tpl_exprs(src) if not _text_ok(x)]
 
 
+@check("Shape it by keyboard in headless Chrome: a picked word keeps the focus through the probes and a job's messages, unpicked words say aria-pressed false, Keep's sheet, kept line and Recent row say one name, Done hands focus back to the row, no Try again on a refusal (skipped when there is no Chrome)")
+def u_shape_keys():
+    """IA pass 13's page tests. index.html on a static server with a test script after shape.js: the API and the job feed are stubbed,
+    the page's own handlers are pressed; the verdicts go in the title, read by --dump-dom once the page says it's done."""
+    import html, http.server, subprocess, tempfile, threading
+    exe = _chrome()
+    if not exe:
+        return "no Chrome here: skipped"
+    web = ROOT / "undercover" / "web"
+    test = r"""
+(async () => {
+  const out = [], ok = (name, cond) => out.push((cond ? "ok " : "BAD ") + name);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  await wait(1200);
+  try {
+    const doc = { cover: "aaaaaaaaaa", duration: 10, words: [["Hold", 1, 1.3, 0.9], ["the", 1.4, 1.7, 0.9], ["night", 1.8, 2.1, 0.9]], words_hash: "h", sections: [],
+      plan: [[0, 10, "A"]], backing_plan: [[0, 10, "A"]], octaves: { A: 0, B: 0 }, points: { lead: [], backing: [], dips: [] }, duet: false, backing: false,
+      edits: [{ id: "e1", op: "octave", part: "lead", octave: 1, t0: 1, t1: 2.1 }], cursor: 1,
+      compiled: { lead: [[0, 1, "A", null, null], [1, 2.1, "A", 1, "e1"], [2.1, 10, "A", null, null]], backing: [] }, result: "/wav", keep_as: "T (edited) 2" };
+    const item = { id: "aaaaaaaaaa", title: "T", voice: "a-uc", output: "/wav", created: "2026-11-08 10:00:00" };
+    HIST.length = 0; HIST.push(item);
+    const held = [], release = () => held.splice(0).forEach(r => r());
+    window.api = async (u, o) => {
+      if (/edits\/price$/.test(u)) { await new Promise(r => held.push(r)); return { edit: { t0: 1, t1: 2.1, words: o.json.words }, fit: null }; }
+      if (/edits\/keep$/.test(u)) return { job: "jk" };
+      if (/\/edits$/.test(u) && !o) return doc;
+      if (u === "/api/history") return [item];   // (Keep reads Recent covers before its sheet says what rolls off)
+      throw new Error("stub");
+    };
+    const feed = {};
+    window.watchJob = (id, fn) => { feed[id] = fn; return () => {}; };
+    const row = document.createElement("button"); row.dataset.shape = "aaaaaaaaaa"; document.body.appendChild(row);
+    shapeOpen("aaaaaaaaaa"); await wait(100);
+    const box = $("#shape");
+    ok("the page opened", SH.state === "ready" && $$("[data-w]", box).length === 3);
+    ok("unpicked words say aria-pressed false", $$("[data-w]", box).every(w => w.getAttribute("aria-pressed") === "false"));
+    ok("the hint says a third word starts again", /A third word starts a new stretch\./.test(box.textContent));
+    ok("no fixed time in the copy", !/about 5 seconds|About 20 s/i.test(box.textContent));
+    const w0 = $('[data-w="0"]', box); w0.focus();
+    w0.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(50);
+    ok("a picked word keeps the focus while the probes are out", document.activeElement?.dataset.w === "0" && $('[data-w="0"]', box).getAttribute("aria-pressed") === "true");
+    release(); await wait(50);
+    ok("and when they arrive", document.activeElement?.dataset.w === "0" && SH.probes);
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(50); release(); await wait(50);
+    ok("the arrows and Enter pick the stretch, focus stays", document.activeElement?.dataset.w === "2" && SH.pick.join() === "0,2");
+    SH.busy = "Singing it again…"; shDraw(); SH.live = "Singing the stretch"; shDraw();
+    ok("a job's message keeps the focus", document.activeElement?.dataset.w === "2");
+    ok("the live region says it once", $("#shape-say").textContent === "Singing the stretch" && !$$("[role=status]", box).length);
+    SH.busy = SH.live = null; shDraw();
+    $('[data-sh="keep"]', box).click(); await wait(20);
+    ok("Keep's sheet says the name it gets", $(".sheet b", box)?.textContent === "T (edited) 2" && document.activeElement?.dataset.sh === "keep-yes");
+    $('[data-sh="keep-no"]', box).click();
+    ok("Not yet hands focus back to Keep", document.activeElement?.dataset.sh === "keep" && !$(".sheet", box));
+    $('[data-sh="keep"]', box).click(); $('[data-sh="keep-yes"]', box).click(); await wait(20);
+    const kept = { id: "bbbbbbbbbb", title: "T (edited) 2", voice: "a-uc", output: "/wav2", created: "2026-11-08 10:05:00", edited_from: "aaaaaaaaaa" };
+    HIST.push(kept); window.loadHistory = () => {};
+    feed.jk({ final: true, state: "done", result: kept }); await wait(20);
+    ok("the kept line says the same name", ($(".kept b", box)?.textContent || "") === "T (edited) 2");
+    ok("and so does the Recent row", coverTitle(kept) === "T (edited) 2");
+    $('[data-sh="done"]', box).focus(); $('[data-sh="done"]', box).click();
+    ok("Done hands focus back to the row's Shape it", document.activeElement?.dataset.shape === "aaaaaaaaaa" && $("#shape").hidden);   // (Recent covers' own row, or the stand-in)
+    window.api = async () => { throw Object.assign(new Error("That isn't a cover."), { status: 404 }); };
+    shapeOpen("aaaaaaaaaa"); await wait(50);
+    ok("a refusal offers no Try again", SH.state === "error" && !$('[data-sh="retry"]', box));
+    window.api = async () => { throw Object.assign(new Error("Lost contact with UnderCover."), {}); };
+    shapeOpen("aaaaaaaaaa"); await wait(50);
+    ok("no answer does", !!$('[data-sh="retry"]', box));
+    shapeClose();
+  } catch (e) { out.push("BAD threw " + e); }
+  document.title = out.join(" | ");
+  fetch("/said");
+})();
+"""
+    page = (web / "index.html").read_text(encoding="utf-8").replace('<script src="/static/shape.js"></script>',
+                                                                   '<script src="/static/shape.js"></script><script src="/selftest.js"></script><img src="/hold" alt="">')
+    said = threading.Event()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            if p == "/hold":
+                said.wait(100)   # (the page says when it's done; this only ends the wait if it never does)
+                body, ctype = b"", "image/gif"
+            elif p == "/said":
+                said.set(); body, ctype = b"ok", "text/plain"
+            elif p == "/selftest.js":
+                body, ctype = test.encode("utf-8"), "text/javascript"
+            elif p == "/":
+                body, ctype = page.encode("utf-8"), "text/html"
+            elif p.startswith("/static/") and (web / p[8:]).is_file():
+                f = web / p[8:]
+                body, ctype = f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}.get(f.suffix, "application/octet-stream")
+            else:
+                self.send_response(404); self.end_headers(); return
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as prof:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--mute-audio", f"--user-data-dir={prof}", "--window-size=1200,900",
+                                "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    finally:
+        srv.shutdown()
+    m = re.search(r"<title>(.*?)</title>", r.stdout, re.S)
+    got = html.unescape(m.group(1)) if m else ""
+    assert got.startswith("ok ") and "BAD" not in got, f"the page's own checks: {got[:900] or r.stdout[-300:]}"
+    return got.replace(" | ", "; ")
+
+
 @check("the edit list's page in headless Chrome: Hear it takes the page's volume and mute, one player at a time with the voice line and the cover (both ways), the price probes drawn as the gate's sentences and a late answer dropped (skipped when there is no Chrome)")
 def u_shape_page():
     """index.html on the static server with a test script after shape.js: it stubs the API, stages a list, presses the page's own
@@ -13522,6 +14477,11 @@ def u_token_ratios():
     wa = (web / "winamp.css").read_text(encoding="utf-8")
     ix = (web / "index.html").read_text(encoding="utf-8")
     assert all(f'<small class="mono" data-deep>{n}</small>' in ix for n in ("Roformer", "RVC · RMVPE", "ffmpeg")), "engine names are Deep Cover's"
+    # polish batch 4: the second singer's x is 44 on a phone, Shape it's Done in the title row there, a changed stretch's underline square-ended
+    css = (web / "app.css").read_text(encoding="utf-8")
+    assert "@media (max-width: 480px) { .fm-duet .vchip .x::after { inset: -10px; } }" in css and ".shape .sh-w:is(.ea, .eb, .eo) { border-radius: 0; }" in css
+    assert css.index(".fm-duet .vchip .x::after { content") < css.index("@media (max-width: 480px) { .fm-duet .vchip .x::after")   # (the phone's wins)
+    assert 'class="linkbtn quiet sh-done" type="button" data-sh="done"' in (web / "shape.js").read_text(encoding="utf-8")
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
     assert '"Busy")' not in (web / "app.js").read_text(encoding="utf-8") + (web / "oneshot.js").read_text(encoding="utf-8")
@@ -14603,6 +15563,418 @@ def u_perf_library():
 
 
 # every route the server answers, as (method, an example path): the walk below and a_phone go through all of them
+@check("perf: voices' meta.json read once per change (a rewrite misses, callers' changes stay theirs, safe across threads); the preview's record kept by stat")
+def u_perf_voices():
+    import threading
+    from undercover.core import fsutil, voicepreview, voices as V
+    from undercover.core.config import path
+    with isolated_data():
+        vdir = path("voices_dir")
+        for i in range(3):
+            d = vdir / f"pv-{i}"
+            d.mkdir(parents=True)
+            (d / "model.pth").write_bytes(b"\0" * 100)
+            if i != 2:
+                (d / "model.index").write_bytes(b"\0" * 50)
+            meta = {"name": d.name, "dir": "X:/elsewhere", "pth": "X:/elsewhere/model.pth",
+                    "index": "X:/elsewhere/model.index", "version": "v2", "sr": 40000, "extra": {"person": f"P {i}"}}
+            fsutil.write_text(d / "meta.json", json.dumps(meta))
+        (vdir / "no-meta").mkdir()
+        V._META.clear()
+        vs = V.list_voices()
+        assert [v.name for v in vs] == ["pv-0", "pv-1", "pv-2"], [v.name for v in vs]
+        assert vs[0].dir == vdir / "pv-0" and vs[0].pth == vdir / "pv-0" / "model.pth" and vs[0].index == vdir / "pv-0" / "model.index", vs[0]
+        assert vs[2].index == Path("X:/elsewhere/model.index"), "a file not next to meta.json isn't the stored path any more"
+        f0 = str(vdir / "pv-0" / "meta.json")
+        assert len(V._META) == 3 and f0 in V._META, list(V._META)
+        stamp, text = V._META[f0]
+        V._META[f0] = (stamp, text.replace('"P 0"', '"From the memo"'))   # same stat: served from the memo
+        assert V.get_voice("pv-0").extra["person"] == "From the memo", "an unchanged meta.json was read again"
+        vs = V.list_voices()
+        vs[1].extra["person"] = "changed by a caller"   # (callers do change their Voice's extra in place)
+        assert V.get_voice("pv-1").extra["person"] == "P 1", "a caller's change reached the memo"
+        v = V.get_voice("pv-0")
+        v.extra = {"person": "Rewritten"}
+        fsutil.write_text(v.dir / "meta.json", json.dumps(v.to_json()))   # a writer anywhere: the stat changes
+        assert V.get_voice("pv-0").extra["person"] == "Rewritten", "a rewritten meta.json came from the memo"
+        V.set_display("pv-1", "Shown")
+        assert V.get_voice("pv-1").display == "Shown"
+        errors = []
+
+        def reader():
+            try:
+                for _ in range(30):
+                    names = [x.name for x in V.list_voices()]
+                    assert names == ["pv-0", "pv-1", "pv-2"], names
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+
+        def writer():
+            try:
+                for k in range(30):
+                    x = V.get_voice("pv-2")
+                    x.display = f"Name {k}"
+                    fsutil.write_text(x.dir / "meta.json", json.dumps(x.to_json()))
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+        ts = [threading.Thread(target=reader) for _ in range(4)] + [threading.Thread(target=writer)]
+        for t_ in ts:
+            t_.start()
+        for t_ in ts:
+            t_.join(60)
+        assert not errors, errors[:2]
+        assert V.get_voice("pv-2").display == "Name 29", V.get_voice("pv-2").display
+        # the preview line's record: read by stat, a new record (another key) misses
+        v = V.get_voice("pv-0")
+        (v.dir / "preview.mp3").write_bytes(b"\0" * 10)
+        fsutil.write_text(v.dir / "preview.json", json.dumps({"key": voicepreview.key(v)}))
+        voicepreview._RECS.clear()
+        assert voicepreview.fresh(v) and len(voicepreview._RECS) == 1
+        rec = str(v.dir / "preview.json")
+        voicepreview._RECS[rec] = (voicepreview._RECS[rec][0], "not-the-key")   # same stat: the memo answers
+        assert not voicepreview.fresh(v), "an unchanged preview.json was read again"
+        fsutil.write_text(v.dir / "preview.json", json.dumps({"key": voicepreview.key(v)}))
+        assert voicepreview.fresh(v), "a rewritten preview.json came from the memo"
+        v.display = "Another name"   # what the line says changed: not fresh, whatever the memo holds
+        assert not voicepreview.fresh(v)
+        (v.dir / "preview.mp3").unlink()
+        v.display = ""
+        assert not voicepreview.fresh(v), "fresh without its clip"
+        # an engine's readiness is kept READY_TTL seconds, then asked again
+        voicepreview._READY.clear()
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic(), "kept")
+        assert voicepreview._pack_ready("chatterbox", None) == "kept"
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic() - voicepreview.READY_TTL - 1, "kept")
+        assert voicepreview._pack_ready("chatterbox", None) in (True, False), "a readiness past its time wasn't asked again"
+        voicepreview._READY[("chatterbox", None)] = (time.monotonic(), "kept")
+        assert voicepreview._pack_ready("chatterbox", None, fresh=True) in (True, False), "a render recorded a kept readiness"
+        assert voicepreview._pack_ready("chatterbox", ["not", "a", "name"]) in (True, False)   # (unhashable: asked, not kept)
+        assert 'key(v, fresh=True)' in __import__("inspect").getsource(voicepreview.make), "make() records a kept readiness"
+        voicepreview._READY.clear()
+    V._META.clear()
+    voicepreview._RECS.clear()
+    return f"3 voices, a rewrite and a display change seen at once; 4 readers + 1 writer x 30; readiness kept {voicepreview.READY_TTL:.0f} s"
+
+
+@check("perf: page files carry an ETag (304 when unchanged), the CSP made once per change, gzip only when asked (phones)")
+def u_perf_static():
+    import gzip
+    import http.client
+    import tempfile
+    import threading
+    from undercover.app import server
+    idx = (server.WEB / "index.html").resolve()
+    page = server.static_page(idx)
+    body = idx.read_bytes()
+    assert page.body == body and page.csp == server.csp(body) and page.etag.startswith('"') and page.vary
+    assert server.static_page(idx) is page, "an unchanged page was made again"
+    assert gzip.decompress(page.gzipped()) == body and page.etag_gz != page.etag
+    for header, want in (("gzip, deflate, br", True), ("br;q=1.0, gzip;q=0.8", True), ("gzip;q=0", False),
+                         ("deflate", False), (None, False), ("GZIP", True), ("gzip;q=x", False)):
+        assert server.takes_gzip(header) is want, (header, want)
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:   # a rewritten file: its stat moves, it's made again
+        f = Path(td) / "a.js"
+        f.write_text("let a = 1;\n" * 200, encoding="utf-8")
+        a = server.static_page(f)
+        time.sleep(0.02)
+        f.write_text("let b = 2;\n" * 200, encoding="utf-8")
+        b = server.static_page(f)
+        assert b is not a and b.body != a.body and b.etag != a.etag and b.csp is None, "a changed file came from the memo"
+        small = Path(td) / "s.css"
+        small.write_text("a{}", encoding="utf-8")
+        assert not server.static_page(small).vary and server.static_page(small).gzipped() is None
+        server._STATIC.pop(str(f), None)
+        server._STATIC.pop(str(small), None)
+    with isolated_data():   # (the real Handler answers: on the test's own config, never the user's)
+        _static_over_http(server, page, body)
+    return f"index {len(body) // 1024} KB, gzip {len(page.gzipped()) // 1024} KB; 304 with no body, kept-alive after it"
+
+
+def _static_over_http(server, page, body):
+    import http.client
+    import threading
+    srv = server.ExclusiveServer(("127.0.0.1", 0), server.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=10)
+
+        def get(p, **h):
+            conn.request("GET", p, headers=h)
+            r = conn.getresponse()
+            return r.status, r.read(), {k.lower(): v for k, v in r.getheaders()}
+        st, b1, h = get("/", **{"Accept-Encoding": "gzip"})
+        assert st == 200 and b1 == body and "content-encoding" not in h, "this PC got gzip (only phones do)"
+        assert h["etag"] == page.etag and h["cache-control"] == "no-cache" and h["content-security-policy"] == page.csp, h
+        st, b2, h = get("/", **{"If-None-Match": page.etag})
+        assert st == 304 and b2 == b"" and h["etag"] == page.etag and "content-length" not in h, (st, len(b2), h)
+        st, b3, _ = get("/", **{"If-None-Match": '"stale", W/' + page.etag})
+        assert st == 304 and not b3, "a list holding the tag (weak form) wasn't a 304"
+        st, b4, _ = get("/", **{"If-None-Match": '"stale"'})
+        assert st == 200 and b4 == body, "another tag got a 304"
+        st, js, h = get("/static/app.js")   # the same connection after a 304: still in step
+        assert st == 200 and js == (server.WEB / "app.js").read_bytes(), st
+        assert get("/static/../config.toml")[0] == 404 and get("/static/nope.js")[0] == 404
+        conn.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+class _CountingModels:
+    """Stand-ins for RMVPE, HuBERT, the converter and the speaker embedder that count their calls (perf2's checks)."""
+
+    def __init__(self):
+        import torch
+        self.calls = {"f0": 0, "hubert": 0, "embed": 0, "convert": 0}
+        self.device, self.half = torch.device("cpu"), False
+        outer = self
+
+        class Rmvpe:
+            def infer_from_audio(self, x, thred=0.03, one_line=False):
+                import numpy as np
+                outer.calls["f0"] += 1
+                return np.where(np.abs(x[::160]) > 1e-4, 110.0 + 10 * np.abs(x[::160]), 0.0).astype(np.float32)
+
+        class Hubert:
+            def extract(self, wav, version):
+                outer.calls["hubert"] += 1
+                w = wav[0].float()
+                n = w.shape[0] // 320
+                return w[: n * 320].reshape(1, n, 320)[..., :8] + (0.5 if version == "v1" else 0.0)
+        self.rmvpe, self.hubert = Rmvpe(), Hubert()
+        self.model_key = ("fake-embedder",)
+
+    def convert(self, x, voice, s=None):
+        import numpy as np
+        self.calls["convert"] += 1
+        return (np.asarray(x, np.float32) * 0.9 + 0.001 * len(str(voice))), 16000
+
+    def embed(self, x):
+        import numpy as np
+        self.calls["embed"] += 1
+        v = np.array([np.abs(x).mean(), x.std(), np.abs(np.diff(x)).mean(), 1.0], np.float32)
+        return v / np.linalg.norm(v)
+
+
+@check("perf: a voice check works out the voice-independent side once (pitch, prints, features, the person's range); a re-cut clip misses")
+def u_perf_voicecheck():
+    import tempfile
+    import numpy as np
+    import threading
+    from types import SimpleNamespace
+    import soundfile as sf
+    from undercover.doubleagent import voicecheck as vc
+    m = _CountingModels()
+    with tempfile.TemporaryDirectory(prefix="uc-smoke-") as td:
+        clips = Path(td)
+        rng = np.random.default_rng(3)
+        phrases = []
+        for i in range(3):
+            sf.write(str(clips / f"c{i}.wav"), (0.3 * np.sin(np.arange(16000 * 3) / 16000 * 2 * np.pi * (120 + 10 * i))).astype(np.float32), 16000)
+            phrases.append(SimpleNamespace(id=f"c{i}", dur=3.0, score=1.0 - i / 10))
+        proj = SimpleNamespace(training_phrases=lambda: phrases, clip_path=lambda pid: clips / f"{pid}.wav")
+        tests = ([(0.2 * rng.standard_normal(16000 * 3)).astype(np.float32) for _ in range(4)],
+                 np.array([0.5, 0.5, 0.5, 0.5], np.float32), "speech")
+        vc._INPUT.clear()
+        vc._RANGE.clear()
+        q1 = vc.check("voice-a", proj, m, m, tests=tests).to_json()
+        first = dict(m.calls)
+        assert first == {"f0": 3 + 2 * 4, "hubert": 2 * 4, "embed": 2 * 4, "convert": 4}, first
+        q2 = vc.check("voice-a", proj, m, m, tests=tests).to_json()
+        again = {k: m.calls[k] - first[k] for k in m.calls}
+        assert again == {"f0": 4, "hubert": 4, "embed": 4, "convert": 4}, f"the input side was worked out again: {again}"
+        assert q1 == q2, (q1, q2)
+        fresh = ([x.copy() for x in tests[0]], tests[1], "speech")   # the same samples in new arrays (a one-shot's
+        n0 = dict(m.calls)                                               # next candidate): kept by content
+        vc.check("voice-b", proj, m, m, tests=fresh)
+        assert m.calls["f0"] - n0["f0"] == 4 and m.calls["embed"] - n0["embed"] == 4, "new arrays of the same phrases missed"
+        f = vc._phrase_f0(m.rmvpe, tests[0][0])
+        f[:] = -1   # a caller's copy: never the kept one
+        assert (vc._phrase_f0(m.rmvpe, tests[0][0]) >= 0).all(), "a caller's change reached the kept pitch track"
+        time.sleep(0.02)
+        sf.write(str(clips / "c0.wav"), np.zeros(16000 * 3, np.float32) + 0.01, 16000)   # a clip re-cut: its range again
+        n1 = m.calls["f0"]
+        vc.target_range(proj, m.rmvpe)
+        assert m.calls["f0"] - n1 == 3, "a changed clip's pitch came from the memo"
+        vc.target_range(proj, m.rmvpe)
+        assert m.calls["f0"] - n1 == 3, "an unchanged range was read again"
+        out, errors = [], []
+
+        def run():
+            try:
+                out.append(vc.check("voice-a", proj, m, m, tests=tests).to_json()["score"])
+            except Exception as e:   # noqa: BLE001
+                errors.append(e)
+        vc._INPUT.clear()
+        ts = [threading.Thread(target=run) for _ in range(6)]
+        for t_ in ts:
+            t_.start()
+        for t_ in ts:
+            t_.join(60)
+        assert not errors and len(set(out)) == 1 and out[0] == q1["score"], (errors[:1], out)
+        other = _CountingModels()   # a converter made again: its models are new objects, never served the old values
+        assert vc._model_token(other.rmvpe) != vc._model_token(m.rmvpe) and vc._model_token(m.rmvpe) == vc._model_token(m.rmvpe)
+        n2 = other.calls["f0"]
+        vc._phrase_f0(other.rmvpe, tests[0][0])
+        assert other.calls["f0"] == n2 + 1, "a new pitch model was served another's values"
+        for i in range(vc.INPUT_KEEP + 5):   # bounded: the oldest go
+            vc._phrase_f0(m.rmvpe, np.full(1600, i / 1000, np.float32))
+        assert len(vc._INPUT) == vc.INPUT_KEEP, len(vc._INPUT)
+    vc._INPUT.clear()
+    vc._RANGE.clear()
+    return f"a second check of the same phrases: RMVPE {again['f0']} calls (was {first['f0']}), HuBERT {again['hubert']} (was {first['hubert']}), prints {again['embed']} (was {first['embed']}); 6 threads agree"
+
+
+@check("perf: a duet's two voices share one HuBERT pass per chunk inside shared_f0 (kept by the samples and the RVC version)")
+def u_perf_duet_feats():
+    import numpy as np
+    from types import SimpleNamespace
+    from undercover.core.engine import convert as C
+    m = _CountingModels()
+    conv = C.Converter.__new__(C.Converter)
+    conv.device, conv.half, conv.hubert, conv.rmvpe = m.device, False, m.hubert, m.rmvpe
+    conv._f0_memo = conv._feat_memo = None
+
+    class Net:
+        def infer(self, feats, lengths, *rest):
+            return ((feats.mean(-1, keepdim=True).transpose(1, 2)[:, :, :] * 1.0)[None][0][None],)
+    lv2 = SimpleNamespace(version="v2", index=None, net=Net(), tgt_sr=40000)
+    lv1 = SimpleNamespace(version="v1", index=None, net=Net(), tgt_sr=40000)
+    s = C.Settings(protect=0.5)
+    x = (0.1 * np.sin(np.arange(16000 * 2) / 16000 * 2 * np.pi * 200)).astype(np.float32)
+    alone = conv._vc_chunk_raw(lv2, x, None, None, s)
+    alone2 = conv._vc_chunk_raw(lv2, x, None, None, s)
+    assert m.calls["hubert"] == 2, "outside shared_f0 every chunk reads its own features"
+    with conv.shared_f0():
+        a = conv._vc_chunk_raw(lv2, x, None, None, s)
+        b = conv._vc_chunk_raw(lv2, x.copy(), None, None, s)   # the second voice, the same samples
+        assert m.calls["hubert"] == 3, f"the second voice read the features again ({m.calls['hubert']})"
+        c = conv._vc_chunk_raw(lv1, x, None, None, s)   # another RVC version: its own features
+        assert m.calls["hubert"] == 4
+        conv._vc_chunk_raw(lv2, x[:16000], None, None, s)   # other samples: their own
+        assert m.calls["hubert"] == 5
+    assert conv._feat_memo is None and conv._f0_memo is None, "the memo outlived its block"
+    assert np.array_equal(a, alone) and np.array_equal(b, alone) and np.array_equal(alone, alone2), "kept features changed the output"
+    assert not np.array_equal(c, a)
+    return "5 chunks, 3 HuBERT passes inside the block; outputs identical to reading them each time"
+
+
+@check("perf: training's held-out check makes each phrase's own mel once a run (the loss is the same)")
+def u_perf_validate():
+    import torch
+    from undercover.core.engine.rvc import train_parts
+    from undercover.doubleagent.trainer import SR_CFG, Trainer
+    sr = 40000
+    c = SR_CFG[sr]
+    g = torch.Generator().manual_seed(0)
+    hold = [{"wav": 0.1 * torch.randn(sr, generator=g), "phone": torch.zeros(100, 768), "pitch": torch.zeros(100, dtype=torch.long),
+             "pitchf": torch.zeros(100), "n": 100} for _ in range(3)]
+
+    class Net:
+        k = 0
+
+        def eval(self):
+            pass
+
+        def train(self):
+            pass
+
+        def infer(self, phone, n, pitch, pitchf, sid):
+            x = hold[Net.k % len(hold)]["wav"]
+            Net.k += 1
+            return ((x * 0.8)[None, None],)
+    tr = Trainer.__new__(Trainer)
+    tr.device = torch.device("cpu")
+    real, calls = train_parts.mel_spectrogram_torch, [0]
+
+    def counted(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    plain = [{k: v for k, v in x.items()} for x in hold]
+    try:
+        train_parts.mel_spectrogram_torch = counted
+        Net.k = 0
+        v1 = tr._validate(Net(), hold, c, sr)
+        assert calls[0] == 2 * len(hold), calls
+        Net.k = 0
+        v2 = tr._validate(Net(), hold, c, sr)
+        assert calls[0] == 3 * len(hold), f"the held-out mels were made again ({calls[0]})"
+        Net.k = 0
+        c2 = {**c, "mels": c["mels"] // 2}   # other settings: made again for them
+        tr._validate(Net(), hold, c2, sr)
+        assert calls[0] == 5 * len(hold), calls
+    finally:
+        train_parts.mel_spectrogram_torch = real
+    Net.k = 0
+    v0 = tr._validate(Net(), plain, c, sr)   # fresh items, nothing kept: the same loss
+    assert v1 == v2 == v0, (v1, v2, v0)
+    return f"{len(hold)} held-out phrases: mels {2 * len(hold)} on the first epoch, {len(hold)} after; loss identical"
+
+
+@check("perf: a separation pass encodes its stems side by side, the same samples as before, all done before it returns")
+def u_perf_stems_flac():
+    import threading
+    import numpy as np
+    import soundfile as sf
+    from types import SimpleNamespace
+    from undercover.core import separate
+    with isolated_data() as t:
+        song = t / "song.wav"
+        sr = 44100
+        x = (0.2 * np.sin(np.arange(sr * 2) / sr * 2 * np.pi * 330)).astype(np.float32)
+        sf.write(str(song), np.stack([x, x], 1), sr, subtype="PCM_16")
+        sep = separate.StemSeparator()
+        made, threads = {}, set()
+
+        class Fake:
+            model_instance = SimpleNamespace(overlap=None)
+
+            def separate(self, audio):
+                outs = []
+                for k, stem in enumerate(("Vocals", "Instrumental")):
+                    y = np.stack([x * (k + 1) / 3, x * (k + 2) / 4], 1)
+                    f = sep.work_dir / f"song_({stem})_model.wav"
+                    sf.write(str(f), y, sr, subtype="PCM_24")
+                    made[stem.lower()] = sf.read(str(f), dtype="int32")[0]
+                    outs.append(f.name)   # (bare names, as audio-separator returns them)
+                return outs
+        sep._get = lambda model: Fake()
+        real = separate.to_flac
+
+        def to_flac(w):
+            threads.add(threading.get_ident())
+            return real(w)
+        separate.to_flac = to_flac
+        try:
+            out = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s1" / "main", overlap=2)
+        finally:
+            separate.to_flac = real
+        assert sorted(out) == ["instrumental", "vocals"] and all(p.suffix == ".flac" and p.is_file() for p in out.values()), out
+        assert not list(out["vocals"].parent.glob("*.wav")), "a WAV was left beside its FLAC"
+        for k, p in out.items():
+            y, rate = sf.read(str(p), dtype="int32")
+            assert rate == sr and np.array_equal(y, made[k]) and sf.info(str(p)).subtype == "PCM_24", f"{k}: not the same samples"
+        assert len(threads) == 2, f"the two stems weren't encoded side by side ({len(threads)} thread)"
+        again = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s1" / "main", overlap=2)   # the cache, as before
+        assert again == out, (again, out)
+
+        class Twice(Fake):   # two outputs naming one stem: one at a time, the last one kept (as before)
+            def separate(self, audio):
+                outs = []
+                for k in range(2):
+                    f = sep.work_dir / f"song{k}_(Vocals)_model.wav"
+                    sf.write(str(f), np.stack([x * (k + 1) / 3] * 2, 1), sr, subtype="PCM_24")
+                    made[k] = sf.read(str(f), dtype="int32")[0]
+                    outs.append(f.name)
+                f = sep.work_dir / "song_(Instrumental)_model.wav"
+                sf.write(str(f), np.stack([x, x], 1), sr, subtype="PCM_24")
+                return outs + [f.name]
+        sep._get = lambda model: Twice()
+        two = sep.run(song, "model.ckpt", t / "app" / "cache" / "stems" / "s2" / "main", overlap=2)
+        assert two["vocals"].is_file() and np.array_equal(sf.read(str(two["vocals"]), dtype="int32")[0], made[1]), two
+    return "2 stems, 2 threads, bit-identical 24-bit FLAC, no WAV left; the second run from the cache"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -17061,12 +18433,13 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_cadence_elsewhere, u_example_names, u_launcher_said, u_song_used, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage, u_tailnet_guard, u_job_project, u_tailnet_pipe, u_installer_pass12, u_config_hand_edited, u_vault_settings_both, u_vault_keep_both_copy, u_vault_replace_keeps_current, u_vault_restore_forgets_voice, u_cleanup_guard,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
-               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
+               u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_duet_oneshot_names, u_duet_shape_words, u_duet_copy, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden, u_shape_keys,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_body_close, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray, u_phone_jobs_burst, u_phone_open, u_quiet_drops, u_plain_error2,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library, u_find_setting, u_first_walk,
+               u_fresh_keys, u_pick_silent, u_split_tags, u_rename_held, u_pause_forms, u_crash_no_resume, u_start_race, u_read_ahead_stop, u_history_cut, u_lead_pause, u_not_english, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats, u_perf_validate, u_perf_stems_flac):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

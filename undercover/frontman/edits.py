@@ -720,12 +720,26 @@ def _state(doc: dict) -> str:
     return hashlib.sha256(",".join(e["id"] for e in doc["edits"][:doc["cursor"]]).encode("utf-8")).hexdigest()[:16]
 
 
+_EDITED = re.compile(r" \(edited\)(?: \d+)?$")
+
+
+def keep_name(item: dict, fmt: str) -> tuple:
+    """Where a Keep puts the edited song, and the cover's name: "<title> (edited)", numbered as its file is ("(edited) 2", ...).
+    A kept cover kept again counts on from the title it came from, not "(edited) (edited)". The page's Keep sheet says this name
+    (GET .../edits keep_as), the kept line and the Recent row show it: one name everywhere (IA pass 13)."""
+    from .pipeline import _safe, _unique
+    title = _EDITED.sub("", item.get("title") or Path(item["output"]).stem)
+    stem = f"{_safe(title)[:80]} (edited)"
+    out = _unique(path("output_dir") / stem, fmt)
+    return out, f"{title} (edited){out.name[:-len(fmt) - 1][len(stem):]}"
+
+
 def keep(item: dict) -> dict:
     """The edited song as a new cover in the history, the one it came from untouched. Its list comes with it, with its own copy of
     the base takes, so an undo past Keep still works when the old cover has gone. Each version is kept once, whichever way the list
     has moved between them: each new cover rolls the oldest off the tray, and the one this came from is spared that."""
     import uuid
-    from .pipeline import _append_history, _safe, _unique, CoverResult
+    from .pipeline import _append_history, _safe, CoverResult
     doc, res = load(item["id"]), result_of(item["id"])
     if doc is None or res is None or not doc["cursor"]:
         raise ModelError("There's nothing edited to keep.")
@@ -738,9 +752,8 @@ def keep(item: dict) -> dict:
     base = base_files(item, doc)
     d = folder(doc["cover"])
     fmt = res.suffix.lstrip(".")
-    title = item.get("title") or Path(item["output"]).stem
+    out, title = keep_name(item, fmt)
     name, tag = _safe(title)[:80], uuid.uuid4().hex[:10]
-    out = _unique(path("output_dir") / f"{name} (edited)", fmt)
     work = path("cache_dir") / "converted"
     vocal, backing = work / f"{name}__edited__{tag}.flac", work / f"{name}__edited__backing__{tag}.flac" if base["backing"] else None
     o = dict(item.get("options") if isinstance(item.get("options"), dict) else {})

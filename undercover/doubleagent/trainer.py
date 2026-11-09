@@ -42,6 +42,28 @@ SR_CFG = {
 # Measured on the 7900 XTX: ~0.3 s per step (bf16) -> quick ~5 min, auto ~40 min, long ~80 min.
 LENGTHS = {"quick": 1000, "auto": 8000, "long": 16000}
 SAVE_STEPS = 400   # a listening preview + inference save about every 2 minutes of training
+# what a run that starts over drops from project.train: the last run's progress and an Improve's refine plan (init_from
+# at its gentle rate for its own budget), which a training started any other way (the form, Do it all, a queued Retrain)
+# must never inherit. exported stays: the voice is still there.
+FRESH_KEYS = ("epoch", "best", "saves", "state", "outcome", "epochs", "planned_epochs", "init_from", "lr", "steps", "seed")
+
+
+def read_history(f: Path) -> list[dict]:
+    """A training's history.jsonl, one epoch a line, oldest first. A line that doesn't read (cut short by a crash as it
+    was written) is left out: one bad line never stops the project page or a Resume."""
+    try:
+        lines = f.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            h = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(h, dict) and isinstance(h.get("epoch"), int) and isinstance(h.get("val"), (int, float)):
+            out.append(h)
+    return out
 
 
 def model_config(sr: int) -> list:
@@ -280,10 +302,7 @@ class Trainer:
 
     # ------------------------------------------------------------ helpers
     def _hist(self) -> list[dict]:
-        f = self.tdir / "history.jsonl"
-        if not f.exists():
-            return []
-        return [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+        return read_history(self.tdir / "history.jsonl")
 
     @torch.no_grad()
     def _validate(self, net_g, hold: list, c: dict, sr: int, seed=0) -> float:
@@ -299,7 +318,10 @@ class Trainer:
             o = net_g.infer(x["phone"][None], torch.tensor([n], device=self.device), x["pitch"][None],
                             x["pitchf"][None], torch.zeros(1, dtype=torch.long, device=self.device))[0][0, 0].float()
             m1 = mel_spectrogram_torch(o[None], c["n_fft"], c["mels"], sr, c["hop"], c["n_fft"])
-            m2 = mel_spectrogram_torch(x["wav"][None].float(), c["n_fft"], c["mels"], sr, c["hop"], c["n_fft"])
+            mk = (c["n_fft"], c["mels"], sr, c["hop"])   # the held-out phrase's own mel never changes: made once a run
+            if x.get("_m2", (None,))[0] != mk:
+                x["_m2"] = (mk, mel_spectrogram_torch(x["wav"][None].float(), c["n_fft"], c["mels"], sr, c["hop"], c["n_fft"]))
+            m2 = x["_m2"][1]
             t = min(m1.shape[-1], m2.shape[-1])
             losses.append(F.l1_loss(m1[..., :t], m2[..., :t]).item())
         torch.random.set_rng_state(state)
@@ -384,10 +406,11 @@ class Trainer:
             opt_g.load_state_dict(ck["opt_g"])
             opt_d.load_state_dict(ck["opt_d"])
             epoch0 = int(ck["epoch"])
+            # the epochs up to the resume point, rewritten whole (a line a crash cut short goes, so the next epoch's
+            # line starts on its own)
+            kept_hist = [h for h in self._hist() if h["epoch"] <= epoch0]
+            fsutil.write_text(self.tdir / "history.jsonl", "".join(json.dumps(h) + "\n" for h in kept_hist))
             if st.get("epoch", 0) > epoch0:   # crashed after the last save point: forget the lost epochs
-                hf = self.tdir / "history.jsonl"
-                kept_hist = [h for h in self._hist() if h["epoch"] <= epoch0]
-                hf.write_text("".join(json.dumps(h) + "\n" for h in kept_hist), encoding="utf-8")
                 st["saves"] = [s for s in st.get("saves", []) if s["epoch"] <= epoch0]
                 if (st.get("best") or 0) > epoch0:
                     st["best"] = max((s["epoch"] for s in st["saves"]), default=None)
@@ -685,9 +708,10 @@ class Trainer:
             probed = [s for s in probed if s.get("test", "speech") == probed[-1].get("test", "speech")]
         if not probed:
             return
-        top_c = max(s["content"] for s in probed)
+        content = lambda s: s.get("content") or 0.0   # (None: every test conversion came out silent or broken)
+        top_c = max(content(s) for s in probed)
         top_p = min(s["cents"] for s in probed if s.get("cents") is not None) if any(s.get("cents") is not None for s in probed) else None
-        ok = [s for s in probed if s["content"] >= top_c - 0.02 and (top_p is None or s.get("cents") is None or s["cents"] <= top_p + 10)]
+        ok = [s for s in probed if content(s) >= top_c - 0.02 and (top_p is None or s.get("cents") is None or s["cents"] <= top_p + 10)]
         st["best"] = max(ok or probed, key=lambda s: s["identity"])["epoch"]
         st["best_by"] = "conversion test"
 

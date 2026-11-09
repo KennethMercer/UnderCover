@@ -82,9 +82,11 @@ def parse_requirements(f: Path) -> dict:
     return out
 
 
-def torch_file(backend: str | None = None, torch_version: str | None = None) -> str:
-    """Which torch-<x>.txt this install uses: from the manifest, else the backend (+ the installed build's CUDA tag)."""
-    m = load() or {}
+def torch_file(backend: str | None = None, torch_version: str | None = None, recorded: bool = True) -> str:
+    """Which torch-<x>.txt this install uses: from the manifest, else the backend (+ the installed build's CUDA tag).
+    recorded=False: never the manifest's (writing a new record after setup changed the backend, e.g. a repair that found
+    a graphics card a processor install didn't have: the old record would keep saying torch-cpu.txt)."""
+    m = (load() or {}) if recorded else {}
     if m.get("torch_file"):
         return m["torch_file"]
     backend = backend or CONFIG["gpu"].get("backend", "rocm")
@@ -94,10 +96,11 @@ def torch_file(backend: str | None = None, torch_version: str | None = None) -> 
     return f"torch-{backend}.txt"
 
 
-def pins(req_dir: Path = REQ) -> dict:
-    """{name: {"version", "line", "file"}}: every package UnderCover pins for this install."""
+def pins(req_dir: Path = REQ, torch: str | None = None) -> dict:
+    """{name: {"version", "line", "file"}}: every package UnderCover pins for this install (torch: that torch-<x>.txt
+    instead of torch_file()'s)."""
     out = {}
-    for fname in ("common.txt", "cadence.txt", torch_file()):
+    for fname in ("common.txt", "cadence.txt", torch or torch_file()):
         for name, rec in parse_requirements(req_dir / fname).items():
             out[name] = {**rec, "file": fname}
     return out
@@ -189,7 +192,8 @@ def observe(kind: str = "observed", by: str = "", hash_files: bool = True, progr
     """Write the manifest from what this PC has now. hash_files=False records sizes only (a test server's quick one)."""
     from . import about, setup_models
     have = installed()
-    p = pins()
+    tf = torch_file(recorded=kind != "installed")   # (setup's record: what setup just installed, not the old record's)
+    p = pins(torch=tf)
     mdir = path("models_dir")
     models = {}
     files = model_files()
@@ -216,7 +220,7 @@ def observe(kind: str = "observed", by: str = "", hash_files: bool = True, progr
          "app": {"version": about.VERSION, "git": about.git_commit()},
          "python": {"version": sys.version.split()[0], "exe": sys.executable},
          "venv": {"path": sys.prefix, "setup": marker.exists()},
-         "backend": CONFIG["gpu"].get("backend", "rocm"), "torch_file": torch_file(),
+         "backend": CONFIG["gpu"].get("backend", "rocm"), "torch_file": tf,
          "gpu": {"name": CONFIG["gpu"].get("device_name") or None, "driver": gpu_driver()},
          "packages": {n: have[n] for n in p if n in have},
          "tools": {}, "models": models, "hashed": hash_files}
