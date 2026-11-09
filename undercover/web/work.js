@@ -261,7 +261,9 @@ function renderRunRoom() {
   if (w) { $("#rn-finish").checked = !!w.settings.finish_by; $("#rn-awake").checked = w.settings.keep_awake !== false; }
 
   // recent: the last five finished, and how they ended (from each job's final event)
-  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep" && !(j.kind === "speakwarm" && (j.final?.state || j.state) === "done")).slice(0, 5);   // the app's own warm-up, unless it failed
+  // the app's own housekeeping only when it failed (a pre-separation never: a cover cancels its own, and runs the separation itself)
+  const failed = j => ["error", "lost"].includes(j.final?.state || j.state);
+  const ended = JF.list.filter(j => !isRunning(j) && j.kind !== "presep" && !(quietJob(j) && !failed(j))).slice(0, 5);
   put($("#rn-recent"), ended.length ? ended.map(j => {
     const owner = ownerOf(j.kind), st = j.final?.state || j.state, [cls, word] = willRetry(j) ? ["warn", "waiting to retry"] : ENDED[st] || ["warn", st];
     const how = st === "done" ? (j.ended ? `took ${fmtSecs(j.ended - j.created)}` : "") : plainMsg(j.final?.message || "");

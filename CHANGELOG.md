@@ -21,7 +21,7 @@ in brackets.
   phone has connected.
 - Hardening of the phone link's switch between public and private.
 
-**FrontMan** (nobacking, holdparts, residue, notop, firstopen)
+**FrontMan** (nobacking, holdparts, residue, notop, firstopen, chordnote)
 - Under Low profile, opening Shape it for the first time and a duet's verses and choruses hear the words again: the
   speech worker gets the room Whisper needs, then gives it back. A limit too small for it says so.
 - Before Convert, a duet says when a song already split has almost no backing, so you know the second singer has
@@ -30,6 +30,8 @@ in brackets.
   voice stays on the part it was on instead of hopping to the other.
 - In a chorus kept as it is, what's left of the lead under those lines is silent, and the cover's note says who sings
   them. With the top voice moved to the lead, a line with no top voice to move stays where it was.
+- When a converted backing is a chord of several voices, the cover's note names the times, since one singer may waver
+  there.
 
 **Installer** (xttssize)
 - Ticking the XTTS-v2 add-on counts its 2 GB in the space setup checks for.

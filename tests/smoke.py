@@ -9857,6 +9857,77 @@ def u_duets():
     finally:
         RM.lufs = real_lufs
     assert 'if opts.duet_backing == "other":' in inspect.getsource(PL.CoverEngine.make_cover)
+    # a converted backing that's a chord: the notes say where it may waver (no audio change). Only when the backing is
+    # converted (a quiet one never is: _duet_backing and the backing voice's own rule above)
+    import tempfile as _tf
+    import soundfile as _sf
+    from undercover.core.engine.convert import load_16k as _l16
+
+    def tone_salience(x):   # a stand-in for RMVPE: each 10 ms frame's spectral peaks, at their own pitch bins
+        win, n = 2048, len(x) // 160
+        xp, hz = np.pad(x, (win // 2, win // 2)), np.fft.rfftfreq(2048, 1 / 16000)
+        out = np.zeros((n, 360), np.float32)
+        for i in range(n):
+            m = np.abs(np.fft.rfft(xp[i * 160:i * 160 + win] * np.hanning(win)))
+            if m.max() < 1.0:
+                continue
+            for k in np.flatnonzero((m[1:-1] > m[:-2]) & (m[1:-1] >= m[2:]) & (m[1:-1] > 0.3 * m.max())) + 1:
+                b = int(round((1200 * np.log2(hz[k] / 10) - 1997.3794084376191) / 20))
+                if 0 <= b < 360:
+                    out[i, b] = 0.9 * m[k] / m.max()
+        return out
+    t = np.arange(14 * sr) / sr
+    solo = np.where((t >= 2) & (t < 12), 0.2 * np.sin(2 * np.pi * 440 * t), 0).astype(np.float32)
+    third = solo + np.where((t >= 5.5) & (t < 9.5), 0.2 * np.sin(2 * np.pi * 554.37 * t), 0).astype(np.float32)   # a major third up
+    eng = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=tone_salience)))
+    with _tf.TemporaryDirectory(prefix="uc-chord-") as td:   # (its own folder: never the user's)
+        for name, x in (("third", third), ("solo", solo)):
+            _sf.write(str(Path(td) / f"{name}.wav"), x, sr)
+        spans = D.chord_spans(tone_salience(_l16(Path(td) / "third.wav")))
+        assert len(spans) == 1 and abs(spans[0][0] - 5.5) < 0.2 and abs(spans[0][1] - 9.5) < 0.2, spans
+        notes = []
+        PL.CoverEngine._chord_note(eng, _l16(Path(td) / "third.wav"), notes)
+        assert notes == ["The backing at 0:05-0:10 is a chord of several voices; one singer can't follow it cleanly, "
+                         "so it may waver there."], notes
+        notes = []
+        PL.CoverEngine._chord_note(eng, _l16(Path(td) / "solo.wav"), notes)
+        assert notes == [] and D.chord_spans(tone_salience(_l16(Path(td) / "solo.wav"))) == [], notes
+    # two chords a moment apart are one; a short one isn't named; past three, "and N more"
+    sal = np.zeros((6000, 360), np.float32)
+    sal[100:500, 100] = sal[100:500, 120] = 0.8     # 1-5 s, a chord
+    sal[500:550, 100] = 0.8                          # half a second of one line
+    sal[550:900, 100] = sal[550:900, 120] = 0.8     # then the chord again, to 9 s: one stretch
+    sal[2000:2200, 100] = sal[2000:2200, 120] = 0.8  # 2 s: too short to name
+    sal[3000:3400, 150] = 0.8                        # one line alone: not a chord
+    assert D.chord_spans(sal) == [[1.0, 9.0]], D.chord_spans(sal)
+    stabs = np.zeros((1000, 360), np.float32)
+    for a in range(100, 600, 90):   # a chord stab of 0.2 s every 0.9 s: under a second of it in 5 s isn't a sung chord
+        stabs[a:a + 20, 100] = stabs[a:a + 20, 120] = 0.8
+    assert D.chord_spans(stabs) == [], D.chord_spans(stabs)
+    assert D.chord_spans(np.zeros((200, 360), np.float32)) == [] and D.chord_note([]) is None
+    five = [[1.0, 4.0], [10.0, 14.0], [70.0, 74.5], [80.0, 84.0], [90.0, 94.0]]
+    assert D.chord_note(five).startswith("The backing at 0:01-0:04, 0:10-0:14, 1:10-1:15 and 2 more places is a chord"), D.chord_note(five)
+    assert "0:10-0:14 and 1:10-1:15 is" in D.chord_note(five[:3]) and "and 1 more place is" in D.chord_note(five[:4])
+    deaf, notes = SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=lambda x: 1 / 0))), []
+    PL.CoverEngine._chord_note(deaf, np.zeros(sr, np.float32), notes)
+    assert notes == []   # (a measure that fails costs the note, never the cover)
+    # the read: a minute at a time, frames end to end; at the scale the conversion reads it (a peak over 1 brought down)
+    seen = []
+    def counting(x):
+        seen.append((len(x), float(np.abs(x).max())))
+        return np.zeros((len(x) // 160 + 1, 360), np.float32)   # (RMVPE's own count: one frame more than the hop's)
+    real_spans = D.chord_spans
+    try:
+        D.chord_spans = lambda s: (seen.append(s.shape), [])[1]
+        loud = np.full(int(130.5 * sr), 2.0, np.float32)
+        PL.CoverEngine._chord_note(SimpleNamespace(converter=SimpleNamespace(rmvpe=SimpleNamespace(salience=counting))), loud, [])
+    finally:
+        D.chord_spans = real_spans
+    assert [n for n, _ in seen[:3]] == [60 * sr, 60 * sr, int(10.5 * sr)] and seen[3] == (13050, 360), seen
+    assert all(abs(m - 0.95) < 1e-4 for _, m in seen[:3]), seen
+    src = inspect.getsource(PL.CoverEngine.make_cover)
+    assert src.count("self._chord_note(back16, notes)") == 1 and "if conv_backing:" in src   # (a backing voice's and a duet's)
+    assert src.index("if dback:   # the backing as the lead") < src.index("self._chord_note(") < src.index('secs["convert"]')
     import inspect as _ins
     from undercover.frontman import oneshot as OS3
     os_src = _ins.getsource(OS3.run)
@@ -13013,6 +13084,12 @@ def u_token_ratios():
     assert 'const PLAN_IDLE = "Name a song and a voice, and UnderCover does the rest.";' in osj and 'class="os-foot"' not in ix
     assert ix.count('<p class="meta os-else">Your own file or exact settings? <button class="linkbtn" id="build-toggle"') == 1
     assert "#room-settings, #room-system, #room-addons { max-width: 820px; }" in (web / "app.css").read_text(encoding="utf-8")
+    # the audit's plain items after bones1: the app's housekeeping out of basic (Deep shows it), one roll-off sentence, the ring on an accent fill
+    jobs, work = (web / "jobs.js").read_text(encoding="utf-8"), (web / "work.js").read_text(encoding="utf-8")
+    assert 'const HOUSEKEEPING = new Set(["presep", "speakwarm", "voicepreview"]);' in jobs and "!quietJob(j)" in jobs
+    assert 'j.kind !== "presep" && !(quietJob(j) && !failed(j))' in work   # a failed one still shows; a pre-separation never
+    assert ix.count("The latest 15 stay here; older ones roll off unless sent to SafeHouse.") == 2
+    assert ":focus-visible { outline-color: var(--fg); }" in (web / "look.css").read_text(encoding="utf-8")
     assert "/* -- bones pins -- */" in wa and ':where(html[data-skin="winamp"]) .linkbtn { padding: 0; margin: 0;' in wa
     assert wa.index("/* -- end bones pins -- */") < wa.index('html[data-skin="winamp"] .mod'), "the pins come before the skin's own rules"
     return f"{len(themes)} themes x 2 modes x 4 modules; worst " + ", ".join(f"{k} {v:.2f}" for k, v in worst.items())
@@ -13066,7 +13143,7 @@ def u_page_rules():
     lib, jobsj, shellc, lookc, sec = [(web / n).read_text(encoding="utf-8") for n in ("library.js", "jobs.js", "shell.css", "look.css", "speakeasy.css")]
     assert 'tabCounts("kept")[L.cat]' in lib and 'd.hidden = none ||' in lib and ".lib.solo" in css, "the Library's counts or its one empty are gone"
     assert "repeat(3, minmax(0, 1fr))" in lookc and "overflow: visible" in lookc, "a phone's rooms went back to a row that hides four of the six"
-    assert '$("#rn-when").hidden = !left.length && !w?.armed' in work and 'j.kind === "speakwarm" && (j.final?.state || j.state) === "done"' in work and 'speakwarm: "speakeasy"' in jobsj and 'speakwarm: "warming up"' in jobsj, "Tonight's clock over an empty night, or the warm-up in Recent"
+    assert '$("#rn-when").hidden = !left.length && !w?.armed' in work and 'j.kind !== "presep" && !(quietJob(j) && !failed(j))' in work and 'speakwarm: "speakeasy"' in jobsj and 'speakwarm: "warming up"' in jobsj, "Tonight's clock over an empty night, or the warm-up in Recent"
     assert "fact.muted:not(.keep)" in sec and "vname(SE.voice)" not in se and ".top .lp-label, .top .deep-btn span" in shellc and "clip-path: inset(50%)" in shellc, "a phone's voice rows or top bar grew back, or a label left the screen reader"
     assert "data-fall" in da and 'store.set("uc-da-filters"' in da and 'store.get("uc-da-filters"' in da, "Your voices' filters lost All or the memory"
     from undercover.doubleagent import night as _nt
