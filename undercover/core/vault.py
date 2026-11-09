@@ -652,6 +652,11 @@ def restore(keys: list[str], on_conflict: str = "ask", folder: str | None = None
         status[key] = ("missing" if not t.is_file() else
                        "same" if t.stat().st_size == files[key][1] and sha256_file(t) == files[key][0] else "different")
     differ = {whole(k) for k, v in status.items() if v == "different"}
+    if on_conflict == "both" and any(k.startswith("settings/") for k in differ):
+        # a settings file has one place (a second config, theme or tutorial file beside it would be a copy nothing reads,
+        # or one the allow-list below refuses): say so plainly, before anything is written
+        raise ModelError("Settings can't be kept side by side with the ones here: Replace them (the ones here go into the "
+                         "vault first) or leave them as they are. Nothing was restored.")
     for key in keys:
         sha, t = files[key][0], target_of(key)
         if on_conflict == "both" and whole(key) in differ:   # keep both: the whole item comes back beside the current one

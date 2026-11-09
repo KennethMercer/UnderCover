@@ -628,6 +628,42 @@ def u_config_hand_edited():
     return "a commented header, an indented CRLF file: one [paths], read back; a restore keeps the [paths] or writes nothing"
 
 
+@check("vault: Keep both on settings that changed is a plain no, before anything is written (2026-11-08: it planned \"config (from vault).toml\", which the restore's allow-list refused, so a song asked for with it came back neither)")
+def u_vault_settings_both():
+    from undercover.core import vault
+    from undercover.core.voices import ModelError
+    with isolated_data() as box:
+        from undercover.core.config import CONFIG, CONFIG_FILE, path
+        saved_vault = dict(CONFIG.get("vault") or {})
+        try:
+            up = path("uploads_dir")
+            up.mkdir(parents=True, exist_ok=True)
+            (up / "abc.mp3").write_bytes(b"the vaulted song")
+            vault.set_folder(str(box / "vault-drive"))
+            vault.run()
+            before = CONFIG_FILE.read_bytes() + b"\n[extra]\nx = 1\n"
+            CONFIG_FILE.write_bytes(before)
+            (up / "abc.mp3").write_bytes(b"the song now")
+            for keys in (["settings/config.toml"], ["settings/config.toml", "songs/abc.mp3"]):
+                try:
+                    vault.restore(keys, "both")
+                    raise AssertionError(f"keep both on changed settings went ahead: {keys}")
+                except ModelError as e:
+                    assert "side by side" in str(e) and "Nothing was restored" in str(e), e
+            assert CONFIG_FILE.read_bytes() == before and (up / "abc.mp3").read_bytes() == b"the song now"
+            assert not [f for f in CONFIG_FILE.parent.iterdir() if "from vault" in f.name] and not list(up.glob("*from vault*"))
+            assert vault.restore(["songs/abc.mp3"], "both")["restored"] == ["songs/abc.mp3"], "keep both on a song stopped working"
+            assert (up / "abc (from vault).mp3").read_bytes() == b"the vaulted song"
+            # unchanged settings under Keep both are simply the same, not refused
+            CONFIG_FILE.write_bytes(before[: -len(b"\n[extra]\nx = 1\n")])
+            assert vault.restore(["settings/config.toml"], "both")["same"] == ["settings/config.toml"]
+            page = (ROOT / "undercover" / "web" / "vault.js").read_text(encoding="utf-8")
+            assert 'x.kind === "settings" ? "" : `<button class="btn" type="button" data-vt-how="both">' in page, "the page still offers Keep both on settings"
+        finally:
+            CONFIG["vault"] = saved_vault
+    return "settings: refused plainly, nothing written; a song's Keep both unchanged; the page doesn't offer it"
+
+
 @check("doubleagent: Train tonight keeps Speaking / Singing (the queue item's mode reaches the training), a "
        "Checking it stage, the voice a finished training made in its job snapshot")
 def u_da_mode():
@@ -15439,7 +15475,7 @@ def main():
     busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_config_hand_edited, u_vault_settings_both, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
