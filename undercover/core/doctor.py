@@ -29,7 +29,6 @@ never installs anything by itself and never changes Windows or driver settings.
 import json
 import os
 import re
-import shutil
 import sys
 import threading
 import time
@@ -287,23 +286,20 @@ def _part_name(part: str) -> str:
 
 
 def c_disk(ctx) -> list:
-    out, seen = [], set()
-    for key in ("uploads_dir", "output_dir", "cache_dir", "models_dir"):
-        try:
-            p = path(key)
-            drive = os.path.splitdrive(str(p))[0].upper() or "/"
-            if drive in seen:
-                continue
-            seen.add(drive)
-            free = shutil.disk_usage(p).free
-        except OSError:
-            continue
-        state = "bad" if free < 3e9 else "warn" if free < 10e9 else "ok"
-        out.append(_r(f"disk:{drive}", "files", state, f"Free space on {drive}",
-                      f"{free / 1e9:.1f} GB free." + {"bad": " Covers and training refuse to start under 3 GB: free some "
-                                                             "space (SafeHouse → Storage → Clean up).",
-                                                      "warn": " Getting low: training and separation write several GB."}.get(state, ""),
-                      str(p)))
+    """Free space on each drive UnderCover's folders are on. "Covers and training refuse" is said only for the drives
+    the jobs' own guard checks (storage.WORK_KEYS: the same function, so the two always agree)."""
+    out = []
+    # (the work's folders first: a drive's entry is a work drive whenever any work folder is on it)
+    for drive, free, p, key in storage.work_space(storage.WORK_KEYS + ("uploads_dir", "models_dir")):
+        state = "bad" if free < storage.MIN_WORK_FREE else "warn" if free < 10e9 else "ok"
+        if key in storage.WORK_KEYS:
+            say = {"bad": f" Covers and training refuse to start under {storage.MIN_WORK_FREE / 1e9:.0f} GB: free some "
+                          "space (SafeHouse → Storage → Clean up).",
+                   "warn": " Getting low: training and separation write several GB."}.get(state, "")
+        else:   # (songs or model files only: no job refuses, but new songs and model downloads fail without room)
+            say = {"bad": " New songs and model downloads need room here: free some space.",
+                   "warn": " Getting low: new songs and model downloads need room here."}.get(state, "")
+        out.append(_r(f"disk:{drive}", "files", state, f"Free space on {drive}", f"{free / 1e9:.1f} GB free.{say}", str(p)))
     return out
 
 

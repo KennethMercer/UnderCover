@@ -24,6 +24,14 @@ _ID = r"[a-z0-9][a-z0-9-]{0,38}[a-z0-9]"
 def handle(h, method: str, p: str) -> bool:
     if p != "/api/themes" and not p.startswith("/api/themes/"):
         return False
+    writes = method in ("POST", "DELETE")   # (saving, importing, deleting: into the themes folder, which a move copies)
+    if writes:
+        from ..core import storage
+        why = storage.start_writing()
+        if why:
+            h.close_connection = True   # (the body isn't read)
+            h._error(why, 409)
+            return True
     try:
         _route(h, method, p)
     except FileExistsError as e:
@@ -32,6 +40,9 @@ def handle(h, method: str, p: str) -> bool:
         h._error(str(e), 422)
     except LookupError as e:
         h._error(str(e), 404)
+    finally:
+        if writes:
+            storage.done_writing()
     return True
 
 
