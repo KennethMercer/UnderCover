@@ -9037,7 +9037,81 @@ def u_edits():
     assert "edits.at_make(res.id" in src and "heard.update(words=words, rows=rows)" in src
     assert '"edits": h.get("edits") or 0' in src
     assert 'one_line=edit["part"] == "backing"' in (Path(ROOT) / "undercover" / "frontman" / "edits.py").read_text(encoding="utf-8")
-    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes"
+    # chorus "keep": the cover silenced the lead's leftovers under the lines kept in the backing, and the list sings from that lead too
+    with isolated_data():
+        from undercover.core.config import path
+        from undercover.frontman.pipeline import CoverOptions
+        g = E._gate_of({"instrument": [], "chorus": [(2.0, 6.0)]}, CoverOptions(voice="x", chorus="keep"))
+        assert g == {"instrument": [], "chorus": [[2.0, 6.0]], "mode": "keep"}, g
+        sd = path("cache_dir") / "sep"
+        sd.mkdir(parents=True, exist_ok=True)
+        st = {}
+        for k, v in (("vocals", 0.1), ("backing", 0.1), ("instrumental", 0.0), ("converted", 0.1)):
+            st[k] = sd / f"{k}.flac"
+            sf.write(str(st[k]), np.full((16000 * 10, 2), v, np.float32), 16000)
+        item = {"id": "0123456789", "song": "", "stems": {k: str(st[k]) for k in ("vocals", "backing", "instrumental")},
+                "converted_vocal": str(st["converted"]), "options": {"voice": "x", "chorus": "keep"}}
+        y, _ = sf.read(str(E._stems(None, item, {"gate": g, "cover": item["id"]}, E._options(item))["vocals"]), dtype="float32")
+        assert abs(y[16000 * 4]).max() < 1e-4 and abs(y[16000 * 8] - 0.1).max() < 1e-3, (y[16000 * 4], y[16000 * 8])
+        E._drop(list(E.folder(item["id"]).glob("gate_*")))
+        from undercover.frontman import leadgate as LG
+        real = (E.get_voice, D.heard_words, E.read_pitch, LG.plan)
+        E.get_voice, D.heard_words, E.read_pitch = (lambda v: None), (lambda *a, **k: []), (lambda *a, **k: None)
+        LG.plan = lambda lead, back=None: {"instrument": [], "chorus": [(2.0, 6.0)]}
+        try:
+            doc = E.prepare(None, item, lambda *a: None)   # the list's landing points from the lead the cover sang: a silence at 2-6 s
+        finally:
+            E.get_voice, D.heard_words, E.read_pitch, LG.plan = real
+        assert doc["gate"]["chorus"] == [[2.0, 6.0]] and any(a <= 2.1 and b >= 5.9 for a, b in doc["points"]["lead"]), doc["points"]
+        # "top" with no chorus: the cover's gate took out only the instrument, and the list follows it (no refusal)
+        top = {"instrument": [[2.0, 6.0]], "chorus": [], "mode": "top"}
+        y, _ = sf.read(str(E._stems(None, item, {"gate": top, "cover": "abcdef0123"}, E._options(item))["vocals"]), dtype="float32")
+        assert abs(y[16000 * 4]).max() < 1e-4, y[16000 * 4]
+        try:
+            E._stems(None, item, {"gate": {**top, "chorus": [[7.0, 9.0]]}, "cover": "abcdef0123"}, E._options(item))
+            raise AssertionError("followed a top chorus")
+        except ModelError:
+            pass
+    # the quiet before the first line and after the last are landing places: the song's last line can be edited by its words
+    t = np.arange(16000 * 30) / 16000
+    x = np.where(((t >= 8) & (t < 12)) | ((t >= 15) & (t < 20)), 0.3 * np.sin(2 * np.pi * 220 * t), 0.0).astype(np.float32)
+    ws = [[f" w{i}", 8 + 0.3 * i, 8.2 + 0.3 * i] for i in range(12)] + [[f" x{i}", 15 + 0.3 * i, 15.2 + 0.3 * i] for i in range(15)]
+    two = [[0.0, 13.5, "A"], [13.5, 30.0, "B"]]
+    pd = E.new_doc("0123456789", ws, [], two, two, 30.0, {"A": 0, "B": 0}, E.snap_points(x, x, ws), gate, True, True)
+    assert pd["points"]["lead"] == [[0.0, 8.0], [12.0, 15.0], [20.0, 30.0]], pd["points"]
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [12, 26], "words_hash": pd["words_hash"]}, pd)
+    assert e["t1"] > 20.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the end in the outro
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [0, 11], "words_hash": pd["words_hash"]}, pd)
+    assert 7.9 <= e["t0"] <= 8.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
+    assert "past" not in e["moved"] and e["moved"] == "The end moved 0.5 s.", e   # an edge moved outward is past none of its own words
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "t0": 6.0, "t1": 16.5}, pd)   # an end moved in: the nearest word it left out
+    assert (e["t0"], e["t1"], e["moved"]) == (6.0, 14.98, 'The end moved past "x4".'), e
+    refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
+    assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
+    long_back = np.concatenate([x, 0.3 * np.sin(2 * np.pi * 220 * np.arange(16000 * 3) / 16000).astype(np.float32), np.zeros(16000, np.float32)])
+    assert max(b for a, b in E.snap_points(x, long_back, ws)["backing"]) <= 30.0   # (a backing longer than the lead: the song still ends with the lead)
+    one = {**pd, "points": {"lead": [[12.5, 13.5]], "backing": [], "dips": [11.0]}}   # one word, a dip before it and a silence after
+    refused({"op": "octave", "part": "lead", "octave": 1, "t0": 11.9, "t1": 12.3}, one, "too short")   # its start snaps past it: too short, as said
+    # a mix that fails before it mixes (the polish, a loudness read) leaves no mix_ folder in the cache
+    with isolated_data():
+        from undercover.core.config import path
+        import undercover.frontman.remix as RX
+        real_polish = RX.polish_vocal
+        RX.polish_vocal = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the polish went"))
+        try:
+            for s in (RX.MixSettings(polish=True), RX.MixSettings(polish=False, reverb=None)):
+                try:   # (no polish: the loudness of a file that isn't there fails)
+                    RX.remix(path("cache_dir") / "no-inst.flac", path("cache_dir") / "no-vox.flac", path("cache_dir") / "no-orig.flac",
+                             path("output_dir") / "x", s=s, reverb_ref=path("cache_dir") / "no-rev.flac")
+                    raise AssertionError("mixed")
+                except AssertionError:
+                    raise
+                except Exception:   # noqa: BLE001 - any failure will do
+                    pass
+                assert not list(path("cache_dir").glob("mix_*")), list(path("cache_dir").iterdir())
+        finally:
+            RX.polish_vocal = real_polish
+    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it, intro and outro landings"
 
 
 @check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")
@@ -10091,6 +10165,18 @@ def u_ear():
         finally:
             fapi._start_preview = realp
         assert [(v["octave"], v["key"]) for v in pv["variants"]] == [(0, 1), (-1, 0)] and pv["voice"] == "zed-2-uc" and "voice" not in pv["variants"][1], pv
+        # a cover whose settings hold its key as a float (as a cover's settings store it): variants without a key still have labels
+        import undercover.frontman.history as _fh
+        realg = _fh.get
+        _fh.get = lambda i: {**realg(i), "options": {**realg(i)["options"], "key": 2.0, "octave": -1.0}}
+        fapi._start_preview = lambda h, body: pv.update(body)
+        try:
+            h5 = _FakeHandler()
+            fapi._cover_octaves(h5, cov["id"], {"variants": [{"octave": 0}, {"octave": 1}]})
+        finally:
+            _fh.get, fapi._start_preview = realg, realp
+        assert [v["label"] for v in pv["variants"]] == ["octave +0, key +2", "octave +1, key +2"], pv["variants"]
+        assert [fapi._signed(v) for v in (None, -1.0, 1.5, float("nan"), float("inf"), "x")] == ["+0", "-1", "+1.5", "+0", "+0", "+0"]
         f = ear.fix_for("cover", ["key"], {"name": "zed-uc"}, {"octave": -2}, "x")
         assert f["do"]["options"] == {"octave": -1} and "alt" not in f and f["say"].startswith("Too low"), f
         # a downloaded voice: train a proper one; speech: pace has a fix; a reason without one: no fix
@@ -10274,6 +10360,27 @@ def u_leadgate():
         said = G.note(g, "top", backing_converted=True, missing=gone)
         assert said and not any("top voice was converted" in s for s in said) and any("and have no top voice to move" in s and "backing's voice" in s for s in said), said
         assert any("top voice was converted" in s for s in G.note(g, "top", missing=[]))
+        # a write cut off part way (a kill, a full disk) leaves no gate stem that a later edit would take as made
+        real_write = sf.write
+
+        def cut_off(f, data, *a, **k):
+            if "gate_lead_" in str(f):
+                real_write(f, data[:len(data) // 3], *a, **k)
+                raise OSError("the disk is full")
+            return real_write(f, data, *a, **k)
+        sf.write = cut_off
+        try:
+            G.apply(stems, g, tmp, "cut")
+            raise AssertionError("written")
+        except OSError:
+            pass
+        finally:
+            sf.write = real_write
+        assert not (tmp / "gate_lead_cut.flac").exists() and not list(tmp.glob("*.part*")), list(tmp.iterdir())
+        from undercover.frontman import pipeline as _PLk, remix as _RXg, songs as _SGg
+        _src = __import__("inspect").getsource   # the other files whose being there is their proof: whole or not at all
+        assert "fsutil.write_text(cache," in _src(_PLk.song_key)
+        assert "fsutil.write_text(up /" in _src(_SGg.register_song) and "write_whole(p," in _src(_RXg._reverb_ir)
     assert G.note(g) and G.plan(voice)["instrument"] == [], G.plan(voice)
     assert any("left to the original singers" in s for s in G.note(g, "keep"))
     said = G.note(g, "keep", backing_converted=True)   # (a backing sung by a voice: the lines in it are sung by that voice too)
