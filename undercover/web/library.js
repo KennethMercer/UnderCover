@@ -44,7 +44,9 @@ async function loadSummary() {
   $("#lib-stack").innerHTML = order.map(k => `<i style="width:${(s.categories[k] / total * 100).toFixed(2)}%;background:var(--c-${k})" title="${CAT_LABELS[k]} ${gb(s.categories[k])}"></i>`).join("");
   $("#lib-legend").innerHTML = order.map(k => `<span><i class="sw" style="background:var(--c-${k})"></i>${CAT_LABELS[k]} <b>${gb(s.categories[k])}</b></span>`).join("");
   $("#lib-total").textContent = gb(s.total);
-  $("#lib-free").textContent = `on drive ${s.drive} · ${gb(s.free)} free`;
+  // one drive: "on drive C: · 21.4 GB free"; a total over two (models moved to D:): "in all", then each drive's free space
+  const drives = s.drives?.length ? s.drives : [{ drive: s.drive, free: s.free }];
+  $("#lib-free").textContent = drives.length > 1 ? `in all · ${drives.map(d => `${d.drive} ${gb(d.free)} free`).join(" · ")}` : `on drive ${s.drive} · ${gb(s.free)} free`;
   // System room (phase 16): the YouTube downloader heals itself; "Check for a fix" runs the same check by hand
   $("#lib-ytdlp").textContent = s.ytdlp ? `yt-dlp ${s.ytdlp} + solver ${s.ytdlp_ejs || "missing"} · ${s.ytdlp_source === "side" ? `a checked update (pinned ${s.ytdlp_pinned})` : "the pinned pair"}` +
     (s.ytdlp_checked ? ` · last check ${s.ytdlp_checked.replace("T", " ").slice(0, 16)}: ${s.ytdlp_last}` : "") : "yt-dlp isn't installed";   // Deep Cover

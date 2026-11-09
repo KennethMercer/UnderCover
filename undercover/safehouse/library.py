@@ -246,6 +246,9 @@ def _summary() -> dict:
         g.pop("inside", None)
     # the free space that counts: the drive the work writes to with the least (the one jobs refuse on), not the app's
     drive, free = (storage.work_space() or [(storage.drive_of(ROOT), shutil.disk_usage(ROOT).free)])[0][:2]
+    # every drive the total spans (the model files may sit on another one): its free space each, by letter
+    spans = sorted(storage.work_space(tuple(k for keys in storage.GROUPS.values() for k, _, _ in keys)), key=lambda t: t[0])
+    drives = [{"drive": d, "free": f} for d, f, *_ in spans] or [{"drive": drive, "free": free}]
     cv, sp = covers(), speak.list_speech()
     counts = {"covers": len(cv), "speech": len(sp), "songs": len(_song_metas()),
               "voices": len(list(path("voices_dir").glob("*/meta.json"))),
@@ -254,7 +257,7 @@ def _summary() -> dict:
     # voices and training are always kept (and have no Recent)
     tabs = {"kept": {**counts, "covers": sum(1 for x in cv if x["kept"]), "speech": sum(1 for x in sp if x["kept"])},
             "recent": {"covers": sum(1 for x in cv if x["recent"]), "speech": sum(1 for x in sp if x["recent"])}}
-    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": free, "drive": drive,
+    return {"categories": cats, "total": sum(g["size"] for g in groups.values()), "free": free, "drive": drive, "drives": drives,
             **ytdlp_info(), "counts": counts, "tabs": tabs}
 
 

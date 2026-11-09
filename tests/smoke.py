@@ -13094,6 +13094,14 @@ def u_first_walk():
     let lost = ""; try { await api("http://127.0.0.1:9/nothing"); } catch (e) { lost = e.message; }
     ok(`F5 lost contact (${lost})`, lost === "Lost contact with UnderCover. Is it still running? If not, start it again from the Start menu.");
     delete document.body.dataset.launcher;
+    // F6: the Library's total over one drive and over two
+    const realApi = window.api, cats = { covers: 1, speech: 0, songs: 0, stems: 0, voices: 0, training: 0, temporary: 0, app: 0 };
+    const summ = drives => ({ categories: cats, total: 19.1e9, free: drives[0].free, drive: drives[0].drive, drives, counts: {}, tabs: { kept: {}, recent: {} } });
+    window.api = async () => summ([{ drive: "C:", free: 21.4e9 }]); await loadSummary(); const oneDrive = $("#lib-free").textContent;
+    window.api = async () => summ([{ drive: "C:", free: 21.4e9 }, { drive: "D:", free: 300e9 }]); await loadSummary(); const twoDrives = $("#lib-free").textContent;
+    window.api = realApi;
+    ok(`F6 the Library's free line (${$("#lib-total").textContent} ${oneDrive} / ${twoDrives})`, oneDrive === `on drive C: · ${gb(21.4e9)} free`
+       && twoDrives === `in all · C: ${gb(21.4e9)} free · D: ${gb(300e9)} free`);
     ok("F5 no .bat left in the page's copy", !/UnderCover\.bat/.test($("#room-system").textContent) && /^Start it again from the Start menu, then reload this page\.$/.test(startAgain(", then reload this page")));
 """)
     return got or "no Chrome here: skipped"
@@ -13947,6 +13955,10 @@ def u_work_space():
             assert job.state == "done", job.events[-1:]
             lib = library._summary()
             assert lib["drive"] == "E:" and lib["free"] == 100e9, (lib["drive"], lib["free"])
+            # the total spans both drives (songs, models and themes stayed on the app's): each one's free space, by letter (InternalAffairs, 1.2)
+            spans = {d["drive"]: d["free"] for d in lib["drives"]}
+            assert len(spans) == 2 and spans["E:"] == 100e9 and [f for k, f in spans.items() if k != "E:"] == [1e9], lib["drives"]
+            assert [d["drive"] for d in lib["drives"]] == sorted(spans), lib["drives"]
             res = {r["id"]: r for r in doctor.c_disk(None)}   # (songs and models on the full drive: bad, but no job refuses)
             other = [r for k, r in res.items() if k != "disk:E:"]
             assert res["disk:E:"]["state"] == "ok" and other and all(r["state"] == "bad" and "refuse" not in r["say"]
