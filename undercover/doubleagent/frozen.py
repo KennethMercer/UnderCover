@@ -34,7 +34,7 @@ import numpy as np
 
 from ..core import fsutil
 from ..core.config import CONFIG, path
-from ..core.voices import ModelError, label_of
+from ..core.voices import ModelError, label_of, missing_model
 
 # ---------------------------------------------------------------- the numbers (module constants: principle 10, no settings)
 
@@ -480,9 +480,14 @@ def test_dir(voice) -> Path:
 
 def model_hash(voice) -> str:
     h = hashlib.sha1()
-    with open(voice.pth, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
+    try:
+        with open(voice.pth, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+    except OSError:
+        if Path(voice.pth).exists():
+            raise
+        raise ModelError(missing_model(voice)) from None   # (Improve says what a cover says)
     return h.hexdigest()[:12]
 
 

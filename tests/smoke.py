@@ -7655,7 +7655,7 @@ def u_cfgbounds():
     return f"3 trainer configs pass; {len(said)} crafted ones refused, e.g. {said[0][:90]}"
 
 
-@check("a voice whose model file is gone (an antivirus, an interrupted restore, a drive that's gone; Internal Affairs H1): the converter's load names the voice and says what to do (SafeHouse's vault, or DoubleAgent), not the general 'deleted from the output folder' catch, and a job shows those words as they are")
+@check("a voice whose model file is gone (an antivirus, an interrupted restore, a drive that's gone; Internal Affairs H1): the converter's load (and Improve's) names the voice and says what to do (SafeHouse's vault, or DoubleAgent), not the general 'deleted from the output folder' catch, and a job shows those words as they are")
 def u_voice_model_missing():
     from undercover.core import jobs
     from undercover.core.engine import convert
@@ -7670,6 +7670,12 @@ def u_voice_model_missing():
         assert said.startswith("Ghost Voice's model file is missing") and "SafeHouse's vault" in said and "DoubleAgent" in said, said
         assert jobs.friendly(ModelError(said), "converting") == said and jobs.is_plain(ModelError(said))
         assert "output folder" not in said
+        from undercover.doubleagent import frozen
+        try:
+            frozen.model_hash(v)   # (Improve's first read of it)
+            raise AssertionError("Improve hashed a voice with no model file")
+        except ModelError as e:
+            assert str(e) == said, str(e)
     return said[:80]
 
 @check("the uninstaller lists the folders a Storage move chose (Internal Affairs pass 12, A1: it named the default folders after a move): Storage writes [paths] as basic TOML strings, as config set does, and the uninstaller's KeptPath reads both basic and 'literal' ones (run for real in a throwaway Inno program, installing nothing); [UninstallDelete] covers every cache name the app makes (pass 12) or keeps it by name, and never names the user's songs, covers, voices, models or training")

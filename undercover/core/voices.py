@@ -1086,6 +1086,12 @@ def display_name(v: Voice) -> str:
     return (v.display or "").strip() or default_display(v)
 
 
+def missing_model(voice: Voice) -> str:
+    """A voice's own model file is gone: whose, and how to get it back (a cover, Improve)."""
+    return (f"{display_name(voice)}'s model file is missing (an antivirus, an interrupted restore or a drive that's gone "
+            "can do it). Restore it from SafeHouse's vault, or get the voice again in DoubleAgent.")
+
+
 _LABELS: dict = {"dir": None, "at": 0.0, "map": {}}
 
 
