@@ -2362,8 +2362,18 @@ def u_tailnet_pipe():
     assert P.tailscale_socket(a, "k1") != P.tailscale_socket(a, "k2"), "the key isn't in the name"
     from undercover.core import tailnet
     with isolated_data():
-        k = tailnet._pipe_key()
-        assert re.fullmatch(r"[0-9a-f]{32}", k) and tailnet._pipe_key() == k and (tailnet.state_dir() / "uc-pipe").is_file()
+        sd = tailnet.state_dir()
+        assert tailnet._pipe_key() == "" and tailnet._socket() and not sd.exists(), "asking for the pipe made the state folder (it came back after Forget)"
+        ran, real_rt = [], P.run_text
+        P.run_text = lambda cmd, **kw: ran.append(cmd) or ""
+        try:
+            tailnet.stop()
+            assert tailnet.status() == {} and ran == [], "with no key the CLI still ran (a name anyone can work out)"
+        finally:
+            P.run_text = real_rt
+        k = tailnet._pipe_key(create=True)   # (the daemon's start makes it)
+        assert re.fullmatch(r"[0-9a-f]{32}", k) and tailnet._pipe_key() == k and (sd / "uc-pipe").is_file()
+        assert "_socket(create=True)" in inspect_src(tailnet._start_daemon)
         assert tailnet._socket() == P.tailscale_socket(tailnet.state_dir(), k)
         prog = tailnet.bin_dir() / P.tailscale_names()[0]   # (the isolated models folder: an empty stand-in file)
         prog.parent.mkdir(parents=True, exist_ok=True)
