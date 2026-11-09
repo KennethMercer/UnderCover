@@ -13339,6 +13339,40 @@ def u_perf_voicecheck():
     return f"a second check of the same phrases: RMVPE {again['f0']} calls (was {first['f0']}), HuBERT {again['hubert']} (was {first['hubert']}), prints {again['embed']} (was {first['embed']}); 6 threads agree"
 
 
+@check("perf: a duet's two voices share one HuBERT pass per chunk inside shared_f0 (kept by the samples and the RVC version)")
+def u_perf_duet_feats():
+    import numpy as np
+    from types import SimpleNamespace
+    from undercover.core.engine import convert as C
+    m = _CountingModels()
+    conv = C.Converter.__new__(C.Converter)
+    conv.device, conv.half, conv.hubert, conv.rmvpe = m.device, False, m.hubert, m.rmvpe
+    conv._f0_memo = conv._feat_memo = None
+
+    class Net:
+        def infer(self, feats, lengths, *rest):
+            return ((feats.mean(-1, keepdim=True).transpose(1, 2)[:, :, :] * 1.0)[None][0][None],)
+    lv2 = SimpleNamespace(version="v2", index=None, net=Net(), tgt_sr=40000)
+    lv1 = SimpleNamespace(version="v1", index=None, net=Net(), tgt_sr=40000)
+    s = C.Settings(protect=0.5)
+    x = (0.1 * np.sin(np.arange(16000 * 2) / 16000 * 2 * np.pi * 200)).astype(np.float32)
+    alone = conv._vc_chunk_raw(lv2, x, None, None, s)
+    alone2 = conv._vc_chunk_raw(lv2, x, None, None, s)
+    assert m.calls["hubert"] == 2, "outside shared_f0 every chunk reads its own features"
+    with conv.shared_f0():
+        a = conv._vc_chunk_raw(lv2, x, None, None, s)
+        b = conv._vc_chunk_raw(lv2, x.copy(), None, None, s)   # the second voice, the same samples
+        assert m.calls["hubert"] == 3, f"the second voice read the features again ({m.calls['hubert']})"
+        c = conv._vc_chunk_raw(lv1, x, None, None, s)   # another RVC version: its own features
+        assert m.calls["hubert"] == 4
+        conv._vc_chunk_raw(lv2, x[:16000], None, None, s)   # other samples: their own
+        assert m.calls["hubert"] == 5
+    assert conv._feat_memo is None and conv._f0_memo is None, "the memo outlived its block"
+    assert np.array_equal(a, alone) and np.array_equal(b, alone) and np.array_equal(alone, alone2), "kept features changed the output"
+    assert not np.array_equal(c, a)
+    return "5 chunks, 3 HuBERT passes inside the block; outputs identical to reading them each time"
+
+
 PHONE_SAMPLES = [
     ("GET", "/"), ("GET", "/index.html"), ("GET", "/sw.js"), ("GET", "/static/app.js"), ("GET", "/static/manifest.webmanifest"),
     ("GET", "/static/icon-192.png"), ("GET", "/static/icon-512.png"), ("GET", "/files/output/x.mp3"), ("GET", "/pair"),
@@ -15647,7 +15681,7 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static, u_perf_voicecheck):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library, u_perf_voices, u_perf_static, u_perf_voicecheck, u_perf_duet_feats):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
