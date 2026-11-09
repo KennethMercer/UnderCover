@@ -695,8 +695,13 @@ def can_train(v) -> tuple[bool, str]:
             return False, (f"{proj.person}'s clips are mostly singing: a cadence needs a few minutes of them talking "
                            "(add interviews in DoubleAgent).")
         return True, "from the voice's clips"
-    if not ex.get("trained") and voice_person(v):   # a downloaded voice (its checked person, or a guess from its name)
-        return True, f"finds clips of {voice_person(v)} first"
+    # no project here: a downloaded voice (its checked person, or a guess from its name), or one trained on another PC
+    # (its meta names the person): clips of them are found first, as for a downloaded voice
+    who = voice_person(v)
+    if who:
+        return True, f"finds clips of {who} first"
+    if ex.get("trained"):
+        return False, "Its training clips aren't on this PC, and UnderCover doesn't know whose voice it is."
     return False, "Downloaded voice: UnderCover doesn't know whose voice it is."
 
 
@@ -725,7 +730,7 @@ def train(job, voice_name: str, push, control=None) -> dict:
     if proj is None and (v.extra or {}).get("demo"):
         raise ModelError(f"{label_of(v.name)} is a demo voice made for UnderCover, not a real person, so there's nobody to find clips of.")
     if proj is None:
-        person = None if (v.extra or {}).get("trained") else voice_person(v)
+        person = voice_person(v)   # (a voice trained on another PC: its meta's person, as can_train says)
         if not person:
             raise ModelError(f"UnderCover doesn't know whose voice {label_of(v.name)} is, so it can't find their clips.")
         push("clips", 0.0, f"Finding clips of {person} talking")
