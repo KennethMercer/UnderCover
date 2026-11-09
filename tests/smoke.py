@@ -8735,7 +8735,20 @@ def u_edits():
         finally:
             E.get_voice, D.heard_words, E.read_pitch, LG.plan = real
         assert doc["gate"]["chorus"] == [[2.0, 6.0]] and any(a <= 2.1 and b >= 5.9 for a, b in doc["points"]["lead"]), doc["points"]
-    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it"
+    # the quiet before the first line and after the last are landing places: the song's last line can be edited by its words
+    t = np.arange(16000 * 30) / 16000
+    x = np.where(((t >= 8) & (t < 12)) | ((t >= 15) & (t < 20)), 0.3 * np.sin(2 * np.pi * 220 * t), 0.0).astype(np.float32)
+    ws = [[f" w{i}", 8 + 0.3 * i, 8.2 + 0.3 * i] for i in range(12)] + [[f" x{i}", 15 + 0.3 * i, 15.2 + 0.3 * i] for i in range(15)]
+    two = [[0.0, 13.5, "A"], [13.5, 30.0, "B"]]
+    pd = E.new_doc("0123456789", ws, [], two, two, 30.0, {"A": 0, "B": 0}, E.snap_points(x, x, ws), gate, True, True)
+    assert pd["points"]["lead"] == [[0.0, 8.0], [12.0, 15.0], [20.0, 30.0]], pd["points"]
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [12, 26], "words_hash": pd["words_hash"]}, pd)
+    assert e["t1"] > 20.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the end in the outro
+    e = E.check_edit({"op": "octave", "part": "lead", "octave": 1, "words": [0, 11], "words_hash": pd["words_hash"]}, pd)
+    assert 7.9 <= e["t0"] <= 8.0 and "between two sung sounds" not in (e["moved"] or ""), e   # the first line's start in the intro's quiet
+    refused({"op": "octave", "part": "lead", "octave": 1, "words": [0, 5], "words_hash": pd["words_hash"]}, pd, 'near the end, at "w5"')   # never back past the start
+    assert E.snap_points(np.zeros(16000, np.float32), None, [])["lead"] == []   # (nothing sung: no landing places made up)
+    return "the gate, snapping, compile, undo, a stored list as data, the overlay, a whole edit, Keep, the routes, a kept chorus as the cover had it, intro and outro landings"
 
 
 @check("duets (1.2): the lead's own lines (split only at its silences), choruses where words come back, a repeating pre-chorus left with its verse, a change between sentences, Take turns with one singer on the verses and the other on the choruses and By line, one singer at a time; the fallback; the stitch changes voice only in the lead's silence with an equal-power fade; the backing converted in each section's singer as a cover would; a plan from outside checked; the fit for two; the one-shot's 'A and B'; the cover's duet options checked strictly; the pitch track read once")

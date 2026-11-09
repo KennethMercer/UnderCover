@@ -237,10 +237,15 @@ def snippet_name(edit: dict) -> str:
 
 
 def snap_points(lead16: np.ndarray, back16: np.ndarray | None, words: list) -> dict:
-    """Where an edit's edges may land: the lead's silences and its dips at a word's start, and the backing's own silences."""
+    """Where an edit's edges may land: the lead's silences (the quiet before its first line and after its last too) and its dips at a
+    word's start, and the backing's own silences."""
     def gaps(x):
         sang = duets._sung_runs(x)
-        return [[a[1], b[0]] for a, b in zip(sang, sang[1:])]
+        if not sang:
+            return []
+        out = [[a[1], b[0]] for a, b in zip(sang, sang[1:])]
+        end = round(len(x) / duets.SR16, 3)
+        return ([[0.0, sang[0][0]]] if sang[0][0] >= FADE_S else []) + out + ([[sang[-1][1], end]] if end - sang[-1][1] >= FADE_S else [])
     db = duets._db(lead16)
     floor = float(np.percentile(db, 95)) - duets.DIP_DB if len(db) else 0.0
     dips = {duets._dip(db, floor, float(w[1])) for w in words}
@@ -282,26 +287,28 @@ def _address(req: dict, doc: dict) -> tuple[float, float]:
     return doc["words"][w[0]][1], doc["words"][w[1]][2]
 
 
-def snap(t: float, part: str, doc: dict) -> tuple[float, str] | None:
+def snap(t: float, part: str, doc: dict, after: float | None = None) -> tuple[float, str] | None:
     """The nearest place an edge may land -> (time, "silence" | "dip" | "end"), a silence first: nothing proves a dip is between
-    two words, though the ear didn't hear one at a join (the maintainers' notes, snap point). None: no place within MAX_SNAP_S."""
+    two words, though the ear didn't hear one at a join (the maintainers' notes, snap point). None: no place within MAX_SNAP_S.
+    after: an end's start, where it landed; an end never lands at or before it (one just after it is too short, and said so)."""
     dur = doc["duration"]
     if t <= EDGE_S:
         return 0.0, "end"
     if t >= dur - EDGE_S:
         return dur, "end"
     half = FADE_S / 2
+    room = (lambda p: True) if after is None else (lambda p: p > after)
     best = None
     for a, b in doc["points"][part]:
         if b - a < FADE_S:
             continue
         p = min(max(t, a + half), b - half)
-        if abs(p - t) <= MAX_SNAP_S and (best is None or abs(p - t) < abs(best - t)):
+        if abs(p - t) <= MAX_SNAP_S and room(p) and (best is None or abs(p - t) < abs(best - t)):
             best = p
     if best is not None:
         return round(best, 3), "silence"
     if part == "lead":
-        near = [d for d in doc["points"]["dips"] if abs(d - t) <= MAX_SNAP_S]
+        near = [d for d in doc["points"]["dips"] if abs(d - t) <= MAX_SNAP_S and room(d)]
         if near:
             return round(min(near, key=lambda d: abs(d - t)), 3), "dip"
     return None
@@ -347,7 +354,8 @@ def check_edit(req, doc: dict) -> dict:
     t0, t1 = _address(req, doc)
     if not 0 <= t0 < t1 <= doc["duration"] + EDGE_S:
         raise ModelError("Those times aren't in the song.")
-    a, b = snap(t0, clean["part"], doc), snap(t1, clean["part"], doc)
+    a = snap(t0, clean["part"], doc)
+    b = snap(t1, clean["part"], doc, a[0] if a else None)
     for got, t, name in ((a, t0, "start"), (b, t1, "end")):
         if got is None:
             word = _word_at(doc, t)
