@@ -329,7 +329,7 @@ def _train(h, proj, b):
 
 def start_train(name: str, b: dict):
     """Train a project (GPU job). A paused run resumes unless b["fresh"]."""
-    from .trainer import LENGTHS, SR_CFG, Control, Trainer
+    from .trainer import FRESH_KEYS, LENGTHS, SR_CFG, Control, Trainer
     proj = P.Project.load(name)
     if _busy(proj.name):
         raise ModelError("This project is already busy.")
@@ -354,8 +354,7 @@ def start_train(name: str, b: dict):
             if not vname:
                 raise ModelError("Give the new voice a name.")
             check_voice_name(proj, vname)
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs",   # exported stays: the voice is still there
-                      "planned_epochs", "init_from", "lr", "steps", "seed"):    # an Improve's refine plan never leaks into a training
+            for k in FRESH_KEYS:   # (an Improve's refine plan never leaks into a training; exported stays)
                 st.pop(k, None)
             st.update(sr=sr, length=length, voice_name=vname, epochs=None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)

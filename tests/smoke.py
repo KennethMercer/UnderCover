@@ -6844,9 +6844,9 @@ def u_improve_estimate():
         assert well["train"] * 4 < thin["train"], (well, thin)
         assert well["prepare"] == thin["prepare"] == round(new_min / sh["kept_per_prep_min"]) and well["compare"] == thin["compare"]
         assert well["refine"] and not thin["refine"]
-    src = inspect.getsource(da_api.start_train)
-    pops = src[src.index("for k in (") : src.index("st.pop(k, None)")]
-    assert all(k in pops for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
+    from undercover.doubleagent.trainer import FRESH_KEYS
+    assert "for k in FRESH_KEYS" in inspect.getsource(da_api.start_train)
+    assert all(k in FRESH_KEYS for k in ("init_from", "lr", "steps", "planned_epochs")), "a manual training keeps an Improve's refine plan"
     return f"well-fed: refine {well['train']} min; thin: scratch {thin['train']} min (at {spe:.2f} s/step); the training form pops the refine plan"
 
 
@@ -7410,6 +7410,43 @@ def _fake_addon_roundtrip(addons):
         assert not r["installed_on"] and r["accepted"] and not addons.available(fake.id), r
     finally:
         addons.ADDONS.pop(fake.id, None)
+
+
+@check("bugs-da 1: a training started over (the form, Do it all, a queued Retrain) never inherits an Improve's refine plan (init_from, lr, steps, planned_epochs, seed)")
+def u_fresh_keys():
+    import inspect
+    from undercover.doubleagent import api as DA, night, project as P, service
+    from undercover.doubleagent.trainer import FRESH_KEYS
+    for fn in (DA.start_train, night._improve, service.train_new_voice, service.run_project):
+        assert "for k in FRESH_KEYS" in inspect.getsource(fn), f"{fn.__name__} keeps its own list of keys to reset"
+    with isolated_data():
+        proj = P.Project.create("Refine Leftover", "speaking")
+        plan = {"init_from": "x.pth", "lr": 1e-5, "steps": 900, "planned_epochs": 3, "seed": 1234}
+        proj.train = {**plan, "voice_name": "refine-leftover-uc", "state": "trained", "epoch": 40}
+        proj.save()
+
+        class J:
+            cancel = pausing = finished = False
+
+        class Reached(Exception):
+            pass
+
+        def push(stage, frac, msg):
+            if "Training a voice" in msg:
+                raise Reached()
+        was = P.Project.kept_seconds
+        P.Project.kept_seconds = lambda self: 600.0
+        try:
+            service.run_project(J(), proj.name, object(), push)
+            raise AssertionError("run_project didn't reach the training")
+        except Reached:
+            pass
+        finally:
+            P.Project.kept_seconds = was
+            DA.ACTIVE.pop(proj.name, None)
+        st = P.Project.load(proj.name).train
+        assert not set(plan) & set(st) and "epoch" not in st, st
+    return f"{len(FRESH_KEYS)} keys, one list in all four places; run_project's reset drops the refine plan"
 
 
 @contextlib.contextmanager
@@ -15401,7 +15438,8 @@ def main():
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
+               u_fresh_keys):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

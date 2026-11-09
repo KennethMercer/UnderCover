@@ -1131,8 +1131,8 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
     from . import project as P
     from . import sources as srcmod
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import Trainer, epoch_line, export_voice
-    TC = {**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
+    from .trainer import FRESH_KEYS, Trainer, epoch_line, export_voice
+    TC ={**CONFIG["training"], **({"target_minutes": target_minutes} if target_minutes else {})}
     key = slug(person)
     if project:
         proj = P.Project.load(project)
@@ -1302,7 +1302,7 @@ def train_new_voice(job, person: str, control, push, project: str | None = None,
         push("voice", 0.12, f"Training a voice from {mins:.1f} min of {person}")
         st = proj.train
         if st.get("state") != "paused":
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
+            for k in FRESH_KEYS:   # (an Improve's refine plan left behind never leaks in; exported stays)
                 st.pop(k, None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
         st.update(sr=st.get("sr") or TC["sample_rate"], length="auto", voice_name=st.get("voice_name") or f"{key}-uc")
@@ -1355,7 +1355,7 @@ def run_project(job, name: str, control, push) -> str:
     from . import api as train_api
     from . import project as P
     from ..core.speaker import SpeakerEmbedder
-    from .trainer import LENGTHS, Trainer, epoch_line, export_voice
+    from .trainer import FRESH_KEYS, LENGTHS, Trainer, epoch_line, export_voice
     proj = P.Project.load(name)
     busy = next((n for n, a in train_api.ACTIVE.items() if a["job"] is not job and not a["job"].finished
                  and (n == proj.name or a["kind"] in ("train", "auto"))), None)
@@ -1388,7 +1388,7 @@ def run_project(job, name: str, control, push) -> str:
                              "ticked (3+ needed). Tick more sources in DoubleAgent, then queue it again.")
         st = proj.train
         if st.get("state") != "paused":
-            for k in ("epoch", "best", "saves", "state", "outcome", "epochs"):   # exported stays: the voice is still there
+            for k in FRESH_KEYS:   # (an Improve's refine plan left behind never leaks in; exported stays)
                 st.pop(k, None)
             (proj.dir / "train" / "resume.pt").unlink(missing_ok=True)
         st.update(sr=st.get("sr") or CONFIG["training"]["sample_rate"],

@@ -42,6 +42,10 @@ SR_CFG = {
 # Measured on the 7900 XTX: ~0.3 s per step (bf16) -> quick ~5 min, auto ~40 min, long ~80 min.
 LENGTHS = {"quick": 1000, "auto": 8000, "long": 16000}
 SAVE_STEPS = 400   # a listening preview + inference save about every 2 minutes of training
+# what a run that starts over drops from project.train: the last run's progress and an Improve's refine plan (init_from
+# at its gentle rate for its own budget), which a training started any other way (the form, Do it all, a queued Retrain)
+# must never inherit. exported stays: the voice is still there.
+FRESH_KEYS = ("epoch", "best", "saves", "state", "outcome", "epochs", "planned_epochs", "init_from", "lr", "steps", "seed")
 
 
 def model_config(sr: int) -> list:
