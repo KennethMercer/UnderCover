@@ -14179,6 +14179,12 @@ def u_find_setting():
     const missed = Object.entries(want).filter(([q, n]) => !names(q).includes(n)).map(([q]) => q);
     ok(`Storage's rows answer a first-timer's words${missed.length ? " (missed: " + missed.join(", ") + ")" : ""}`, !missed.length);
     ok("Storage's rows have find-words", $$("#room-storage .frow").every(r => (r.dataset.find || "").trim()));
+    // what a row says it doesn't do isn't what it's for (IA G2: Your ear's "Nothing is changed or deleted" answered "delete")
+    const ear = $("#set-ear-row"), earWas = ear.hidden;
+    ear.hidden = false; $("#set-ear-say").textContent = "Give a cover a thumb. Nothing is changed or deleted because of a thumb.";
+    ok('"delete" doesn\'t find Your ear, "thumb" still does', !names("delete").includes("Your ear") && names("thumb").includes("Your ear"));
+    ok("a clause after a negation is dropped, the rest kept", findSaid("Kept, never deleted; it isn’t removed. Moved here").trim().split(/\s+/).join(" ") === "Kept, ; it . Moved here");
+    ear.hidden = earWas;
     ok("the box is in Settings", $("#room-settings #sh-find") === box);
 
     type("away from home");
