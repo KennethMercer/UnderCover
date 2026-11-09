@@ -24,7 +24,7 @@ async function seLoad() {
   try {
     const [voices, readers] = await Promise.all([api("/api/speak/voices"), first ? api("/api/speak/readers") : SE.readers]);
     SE.voices = voices; SE.readers = readers; noteVoices(voices);
-  } catch (e) { SE.loaded = !first; if (first || !SE.voices) couldntRead($("#se-voices"), "your voices", seLoad); return; }   // (the next visit asks again)
+  } catch (e) { SE.loaded = !first; if (first) couldntRead($("#se-voices"), "your voices", seLoad); return; }   // (the next visit asks again)
   if (first) seReaders();
   if (!SE.voices.some(v => v.name === SE.voice)) SE.voice = (SE.voices.find(v => v.trained && !v.undertrained) || SE.voices[0] || {}).name || null;
   seVoices(); sePlan(); seLoadRecent();
