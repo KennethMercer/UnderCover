@@ -25,7 +25,7 @@ const TOUR_TIPS = [
   "Thumbs up or down under a cover teach UnderCover your ear: the voices you like come first.",
   "Your phone, in SafeHouse's Settings, lets you use UnderCover from your phone, at home or anywhere.",
   "Themes, in Settings, change the look. Five come with UnderCover, and you can make your own.",
-  "\"Or set it up yourself\", under the one-shot line, takes your own file and the exact voice.",
+  "\"Set it up yourself\", at the end of the one-shot's line, takes your own file and the exact voice.",
 ];
 const TOUR_SAMPLE = "Hold On as Agent Smoke";
 const tourReduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;

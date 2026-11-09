@@ -74,6 +74,8 @@ function setDeep(on) {
   const first = $("#deep-first");
   if (first) { if (on && !store.get("uc-deep-seen", false)) first.hidden = false; else first.hidden = true; }
   $("#set-deep")?.setAttribute("aria-checked", on);   // the switch in SafeHouse's Settings room
+  if (typeof findRun === "function") findRun();   // Find a setting shows (or only counts) Deep Cover's rows (findset.js)
+  if (typeof jfNotify === "function") jfNotify();   // the strip and Running show (or stop showing) the app's own housekeeping (jobs.js)
 }
 setDeep(!!store.get("uc-deep", false));
 $("#deep-toggle")?.addEventListener("click", () => setDeep(!document.body.classList.contains("deep")));
@@ -205,8 +207,8 @@ async function pollStatus() {
     document.body.dataset.client = s.client || "pc";   // "phone": a paired phone (phase 11); [data-pc] controls hide
     if (typeof phoneApp === "function") phoneApp(s);   // 1.2: the away app's service worker and its alerts (phonealerts.js)
     $("#ph-move").hidden = !s.move;   // 1.2.1: a phone from before, on the home Wi-Fi ("ready": Switch; "waiting": the PC's step)
-    if (s.move) { $("#ph-move-say").textContent = s.move === "ready" ? "UnderCover has a new link for this phone." : "Your PC needs one step to keep this phone connected."; $("#ph-move-go").hidden = s.move !== "ready"; }
-    if (s.device) $("#set-phone-me").textContent = `This phone is connected as ${s.device}. Your phone is managed on the PC.`;
+    if (s.move) { $("#ph-move-say").textContent = s.move === "ready" ? "UnderCover has a new link for this phone." : "On the PC, set up Your phone in SafeHouse's Settings to keep this phone connected."; $("#ph-move-go").hidden = s.move !== "ready"; }
+    if (s.device) $("#set-phone-me").textContent = `This phone is connected as ${s.device}. Phones are added and removed on the PC.`;
     sysStatus(s);
     if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);
     if (typeof tourStatus === "function") tourStatus(s.tour);   // the First assignment's tour: a fresh install's first visit to FrontMan (firstrun.js)   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)
@@ -382,7 +384,7 @@ async function installFile(file) {
     await loadVoices(data.voice);
   } catch (e) {
     $("#online-h").hidden = $("#online").hidden = true;
-    showError(e.message, "That voice couldn't be installed");
+    showError(e instanceof TypeError ? await uploadLost(e.message) : e.message, "That voice couldn't be installed");   // (TypeError: the connection dropped)
   }
 }
 
@@ -409,6 +411,13 @@ function presep() {
     });
   }).catch(() => {});
 }
+// An upload the PC refused before reading it (a Storage move runs) can arrive as a dropped connection instead of its
+// sentence: ask the status, and say the move when that's what it is. -> the message to show
+async function uploadLost(fallback) {
+  try { if ((await api("/api/status")).moving) return "UnderCover's files are being moved (SafeHouse → Storage). Try again when that's done."; }
+  catch (e) {}
+  return fallback;
+}
 function upload(file) {
   if (S.job || S.osBusy) return showError("Wait for the current cover to finish (or cancel it) before loading another song.", "Busy");
   setDrop("uploading");
@@ -423,11 +432,11 @@ function upload(file) {
     if (xhr.status !== 200) { setDrop(S.song ? "loaded" : "empty"); return showError(data.error || "The upload failed.", "Couldn't load that song"); }
     S.song = data; store.set("uc-song", data.id); renderSong(); refreshEstimate(); presep();
   };
-  xhr.onerror = () => { setDrop(S.song ? "loaded" : "empty"); showError("Lost contact with UnderCover while uploading. Is its window still open?", "Couldn't load that song"); };
+  xhr.onerror = async () => { setDrop(S.song ? "loaded" : "empty"); showError(await uploadLost("Lost contact with UnderCover while uploading. Is its window still open?"), "Couldn't load that song"); };
   xhr.send(file);
 }
 // The build path (Song / Voice / Convert) is a section of the one-shot card (consult 1): open while something is on its desk, a song loaded or a
-// voice picked by hand, and closed by itself when the desk is empty; "or set it up yourself" opens it by hand. No memory: a first visit is empty.
+// voice picked by hand, and closed by itself when the desk is empty; "Set it up yourself" (the one-shot's line) opens it by hand. No memory: a first visit is empty.
 function syncBuild() {
   const build = $("#build"), tog = $("#build-toggle"); if (!build) return;
   const desk = !!S.song || S.deskVoice;
@@ -436,7 +445,7 @@ function syncBuild() {
   const open = S.buildOpen != null ? S.buildOpen : desk;
   build.hidden = !open;
   if (open) drawSongWave();   // its waveform gets its width now (the ResizeObserver needs a painted frame)
-  tog.setAttribute("aria-expanded", open); tog.innerHTML = open ? "set it up yourself &#9662;" : "or set it up yourself &#8250;";
+  tog.setAttribute("aria-expanded", open); tog.innerHTML = open ? "Set it up yourself &#9662;" : "Set it up yourself &#8250;";
 }
 $("#build-toggle")?.addEventListener("click", () => { S.buildOpen = $("#build").hidden; syncBuild(); if (!$("#build").hidden) $("#build").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
 function renderSong() {

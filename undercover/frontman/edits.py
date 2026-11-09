@@ -237,10 +237,17 @@ def snippet_name(edit: dict) -> str:
 
 
 def snap_points(lead16: np.ndarray, back16: np.ndarray | None, words: list) -> dict:
-    """Where an edit's edges may land: the lead's silences and its dips at a word's start, and the backing's own silences."""
+    """Where an edit's edges may land: the lead's silences (the quiet before its first line and after its last too) and its dips at a
+    word's start, and the backing's own silences. The song ends where the lead does (the list's duration)."""
+    end = round(len(lead16) / duets.SR16, 3)
+
     def gaps(x):
-        sang = duets._sung_runs(x)
-        return [[a[1], b[0]] for a, b in zip(sang, sang[1:])]
+        sang = [[a, min(b, end)] for a, b in duets._sung_runs(x) if a < end]
+        if not sang:
+            return []
+        out = [[a[1], b[0]] for a, b in zip(sang, sang[1:])]   # (each SILENCE_S or more, as _sung_runs splits them)
+        return ([[0.0, sang[0][0]]] if sang[0][0] >= duets.SILENCE_S else []) + out + \
+            ([[sang[-1][1], end]] if end - sang[-1][1] >= duets.SILENCE_S else [])
     db = duets._db(lead16)
     floor = float(np.percentile(db, 95)) - duets.DIP_DB if len(db) else 0.0
     dips = {duets._dip(db, floor, float(w[1])) for w in words}
@@ -282,26 +289,29 @@ def _address(req: dict, doc: dict) -> tuple[float, float]:
     return doc["words"][w[0]][1], doc["words"][w[1]][2]
 
 
-def snap(t: float, part: str, doc: dict) -> tuple[float, str] | None:
+def snap(t: float, part: str, doc: dict, after: float | None = None) -> tuple[float, str] | None:
     """The nearest place an edge may land -> (time, "silence" | "dip" | "end"), a silence first: nothing proves a dip is between
-    two words, though the ear didn't hear one at a join (the maintainers' notes, snap point). None: no place within MAX_SNAP_S."""
+    two words, though the ear didn't hear one at a join (the maintainers' notes, snap point). None: no place within MAX_SNAP_S.
+    after: an end's start, where it landed; an end never snaps back onto it or before it (one that lands at it going forward, as when
+    the start snapped past a short stretch, or just after it, is too short, and said so)."""
     dur = doc["duration"]
     if t <= EDGE_S:
         return 0.0, "end"
     if t >= dur - EDGE_S:
         return dur, "end"
     half = FADE_S / 2
+    room = (lambda p: True) if after is None else (lambda p: p > after or (p == after and p >= t))   # (never back onto it)
     best = None
     for a, b in doc["points"][part]:
         if b - a < FADE_S:
             continue
         p = min(max(t, a + half), b - half)
-        if abs(p - t) <= MAX_SNAP_S and (best is None or abs(p - t) < abs(best - t)):
+        if abs(p - t) <= MAX_SNAP_S and room(p) and (best is None or abs(p - t) < abs(best - t)):
             best = p
     if best is not None:
         return round(best, 3), "silence"
     if part == "lead":
-        near = [d for d in doc["points"]["dips"] if abs(d - t) <= MAX_SNAP_S]
+        near = [d for d in doc["points"]["dips"] if abs(d - t) <= MAX_SNAP_S and room(d)]
         if near:
             return round(min(near, key=lambda d: abs(d - t)), 3), "dip"
     return None
@@ -315,9 +325,10 @@ def _word_at(doc: dict, t: float) -> str | None:
 
 
 def _passed(doc: dict, a: float, b: float) -> str | None:
-    """The word an edge moved past, going from a to b."""
+    """The word an edge moved past, going from a to b: the nearest one it took in or left out, by the word's middle (a word that
+    stays in or out of the stretch, as asked, isn't named)."""
     lo, hi = min(a, b), max(a, b)
-    got = [w[0].strip()[:MAX_WORD] for w in doc["words"] if lo <= w[1] <= hi or lo <= w[2] <= hi]
+    got = [w[0].strip()[:MAX_WORD] for w in doc["words"] if lo < (w[1] + w[2]) / 2 < hi]
     return got[0 if b > a else -1] if got else None
 
 
@@ -347,7 +358,8 @@ def check_edit(req, doc: dict) -> dict:
     t0, t1 = _address(req, doc)
     if not 0 <= t0 < t1 <= doc["duration"] + EDGE_S:
         raise ModelError("Those times aren't in the song.")
-    a, b = snap(t0, clean["part"], doc), snap(t1, clean["part"], doc)
+    a = snap(t0, clean["part"], doc)
+    b = snap(t1, clean["part"], doc, a[0] if a else None)
     for got, t, name in ((a, t0, "start"), (b, t1, "end")):
         if got is None:
             word = _word_at(doc, t)
@@ -446,13 +458,13 @@ def _options(item: dict):
     return CoverOptions(**{"voice": item.get("voice"), **{k: v for k, v in o.items() if k in known}})
 
 
-def _stems(engine, item: dict, doc: dict, opts) -> dict:
+def _stems(engine, item: dict, doc: dict, opts, raw: dict | None = None) -> dict:
     """The stems the cover was sung from, as make_cover saw them: separated again if they've been cleaned up (about a minute), and
-    the lead gate's changes made once in the list's folder."""
+    the lead gate's changes made once in the list's folder. raw: the stems before the gate, when they're already in hand."""
     from .leadgate import apply as gate_apply
     from ..core.separate import separate
-    st = {k: Path(v) for k, v in (item.get("stems") or {}).items() if v}
-    if not st.get("vocals") or not st.get("instrumental") or not all(p.exists() for p in st.values()):
+    st = dict(raw) if raw is not None else {k: Path(v) for k, v in (item.get("stems") or {}).items() if v}
+    if raw is None and (not st.get("vocals") or not st.get("instrumental") or not all(p.exists() for p in st.values())):
         song = Path(item.get("song") or "")
         if not song.exists():
             raise ModelError("This cover's song isn't there any more, so it can't be edited.")
@@ -462,7 +474,7 @@ def _stems(engine, item: dict, doc: dict, opts) -> dict:
     if not gate["instrument"] and not gate["chorus"]:
         return st
     d = folder(doc["cover"])
-    if gate["mode"] == "top":
+    if gate["mode"] == "top" and gate["chorus"]:   # (with no chorus the cover's gate took out only the instrument, as here)
         raise ModelError("This cover moved lines out of its backing in a way the editor can't follow yet.")
     made = {"vocals": d / "gate_lead_base.flac", "instrumental": d / "gate_instrumental_base.flac", "backing": d / "gate_backing_base.flac"}
     if made["vocals"].exists():   # (written last)
@@ -803,13 +815,19 @@ def prepare(engine, item: dict, report) -> dict:
         fsutil.retry(lambda: os.replace(d / "edit.json", d / "edit.json.bad"))
     if (d / "base-lead.flac").exists():   # a kept cover: a fresh list would put the edited plan on the original base
         raise ModelError("This edited cover's list can't be read, so it can't be edited. Make it again, and edit that.")
-    if d.exists():
-        _drop([*d.glob("result.*"), *d.glob("take-*.flac")])
+    if d.exists():   # (a gate's stems from a list set aside are made again from this one's gate; a cut-off write's .part goes too)
+        _drop([*d.glob("result.*"), *d.glob("take-*.flac"), *d.glob("gate_*_base.flac"), *d.glob("gate_*.part.flac")])
     opts = _options(item)
     get_voice(opts.voice)
     base_files(item, {"cover": item["id"]})
-    st = _stems(engine, item, {"gate": {"instrument": [], "chorus": []}, "cover": item["id"]}, opts)
-    lead, back = load_16k(st["vocals"]), load_16k(st["backing"]) if st.get("backing") else None
+    raw = _stems(engine, item, {"gate": {"instrument": [], "chorus": []}, "cover": item["id"]}, opts)
+    lead, back = load_16k(raw["vocals"]), load_16k(raw["backing"]) if raw.get("backing") else None
+    gate = _gate_of(gate_plan(lead, back) if opts.lead_gate is not False else {}, opts)
+    st = raw
+    if (gate["instrument"] or gate["chorus"]) and not (gate["mode"] == "top" and gate["chorus"]):
+        # the stems as the cover's conversion saw them (a "top" chorus: the first edit says it can't follow)
+        st = _stems(engine, item, {"gate": gate, "cover": item["id"]}, opts, raw)
+        lead, back = load_16k(st["vocals"]), load_16k(st["backing"]) if st.get("backing") else None
     report(0.2, "Listening to the words")
     words = duets.heard_words(st["vocals"], st.get("backing"), path("cache_dir") / "converted")
     rows = duets.sections(lead, words) if len(words) >= duets.MIN_WORDS else duets.phrases(lead)
@@ -822,7 +840,6 @@ def prepare(engine, item: dict, report) -> dict:
     bplan = duets.backing_plan(plan, back) if opts.duet_voice and conv_back and back is not None else [list(p) for p in plan]
     if opts.duet_backing == "other" and conv_back:
         bplan = duets.other_singer(bplan)
-    gate = _gate_of(gate_plan(lead, back) if opts.lead_gate is not False else {}, opts)
     doc = new_doc(item["id"], words, rows, plan, bplan, dur, _octaves(opts), snap_points(lead, back, words), gate, bool(opts.duet_voice), conv_back)
     save(doc)
     report(0.9, "Reading the pitch")
@@ -834,13 +851,13 @@ def prepare(engine, item: dict, report) -> dict:
 
 
 def _gate_of(g: dict, opts) -> dict:
-    """What the lead gate did to the stems, in the list: what it took from the lead, and what it brought in from the backing."""
+    """What the lead gate did to the stems, in the list: what it took from the lead, and its chorus stretches: brought in from the
+    backing, or under "keep" the lead's leftovers silenced there (leadgate.apply), as the cover had them."""
     from ..core.config import CONFIG
     from .leadgate import CHORUS_MODES
     mode = opts.chorus or CONFIG["conversion"].get("chorus", "keep")
     mode = mode if mode in CHORUS_MODES else "keep"
-    return {"instrument": [list(x) for x in g.get("instrument", [])], "chorus": [] if mode == "keep" else [list(x) for x in g.get("chorus", [])],
-            "mode": mode}
+    return {"instrument": [list(x) for x in g.get("instrument", [])], "chorus": [list(x) for x in g.get("chorus", [])], "mode": mode}
 
 
 def save_pitch(cover_id: str, tracks: dict):
