@@ -14,12 +14,15 @@ const FIND_STOP = new Set(["a", "an", "the", "to", "of", "on", "in", "from", "fo
 const FIND_ALSO = { storage: "Storage" };
 const findFoldText = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const findWords = s => findFoldText(s).split(/[^a-z0-9½]+/).filter(Boolean);
+// a row's small text, less what it says the row doesn't do: from a "not", "never", "nothing"... to the end of that clause (IA G2: Your ear's
+// "Nothing is changed or deleted because of a thumb" answered "delete")
+const findSaid = s => String(s || "").replace(/\b(?:not|no|never|nothing|none|without|cannot|(?:is|are|was|wo|does|do|did|ca)n['’]t)\b[^.,;:!?()]*/gi, " ");
 // the words asked: small words dropped, unless that leaves nothing
 function findAsked(q) { const ws = findWords(q), keep = ws.filter(w => !FIND_STOP.has(w)); return keep.length ? keep : ws; }
 // 0 unless every word asked starts a word of the row's name, find-words or small text; then 3 if the name has one, 2 the find-words, 1 the text
 function findScore(e, qs) {
   if (!qs.length) return 0;
-  const fields = [[findWords(e.name), 3], [findWords(e.find), 2], [findWords(e.say), 1]];
+  const fields = [[findWords(e.name), 3], [findWords(e.find), 2], [findWords(findSaid(e.say)), 1]];
   const has = (ws, w) => ws.some(x => x.startsWith(w));
   if (!qs.every(w => fields.some(([ws]) => has(ws, w)))) return 0;
   return Math.max(...fields.filter(([ws]) => qs.some(w => has(ws, w))).map(([, s]) => s));

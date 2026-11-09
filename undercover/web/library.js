@@ -38,7 +38,8 @@ const LIB_KINDS = new Set(["cover", "auto", "speech", "install", "train", "train
 document.addEventListener("uc:jobdone", e => { if (L.visible && LIB_KINDS.has(e.detail?.kind)) refreshAll(true); });
 
 async function loadSummary() {
-  try { L.summary = await api("/api/library/summary"); } catch (e) { return; }
+  try { L.summary = await api("/api/library/summary"); }
+  catch (e) { if (!L.summary) { $("#lib-total").textContent = ""; couldntRead($("#lib-free"), "the sizes", loadSummary); } return; }   // (never "…" for good)
   const s = L.summary, total = s.total || 1;
   const order = ["covers", "speech", "songs", "stems", "voices", "training", "temporary", "app"];
   $("#lib-stack").innerHTML = order.map(k => `<i style="width:${(s.categories[k] / total * 100).toFixed(2)}%;background:var(--c-${k})" title="${CAT_LABELS[k]} ${gb(s.categories[k])}"></i>`).join("");

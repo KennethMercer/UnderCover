@@ -1198,8 +1198,9 @@ let HIST = [], HIST_READ = false;   // (read once: until then the tray says Load
 // A list that couldn't be read says so, with a way to try again; it never says it's empty. what: the page's own words ("your covers")
 function couldntRead(box, what, again) {
   if (!box) return;
-  box.innerHTML = `<p class="meta couldnt">Couldn't read ${what}. <button class="linkbtn" type="button">Try again</button></p>`;
-  box.querySelector("button").onclick = () => { box.innerHTML = `<p class="meta">Loading…</p>`; again(); };
+  const t = box.tagName === "SPAN" ? "span" : "p";   // (a line inside a sentence's span stays inline)
+  box.innerHTML = `<${t} class="meta couldnt">Couldn't read ${what}. <button class="linkbtn" type="button">Try again</button></${t}>`;
+  box.querySelector("button").onclick = () => { box.innerHTML = `<${t} class="meta">Loading…</${t}>`; again(); };
 }
 // Recent in a module (FrontMan's covers, SpeakEasy's speech; the user, 2026-10-26): the newest five, "Show more" opens the rest of the
 // tray's 15, "Show fewer" folds it back. Everything older is in SafeHouse.

@@ -14198,6 +14198,12 @@ def u_find_setting():
     const missed = Object.entries(want).filter(([q, n]) => !names(q).includes(n)).map(([q]) => q);
     ok(`Storage's rows answer a first-timer's words${missed.length ? " (missed: " + missed.join(", ") + ")" : ""}`, !missed.length);
     ok("Storage's rows have find-words", $$("#room-storage .frow").every(r => (r.dataset.find || "").trim()));
+    // what a row says it doesn't do isn't what it's for (IA G2: Your ear's "Nothing is changed or deleted" answered "delete")
+    const ear = $("#set-ear-row"), earWas = ear.hidden;
+    ear.hidden = false; $("#set-ear-say").textContent = "Give a cover a thumb. Nothing is changed or deleted because of a thumb.";
+    ok('"delete" doesn\'t find Your ear, "thumb" still does', !names("delete").includes("Your ear") && names("thumb").includes("Your ear"));
+    ok("a clause after a negation is dropped, the rest kept", findSaid("Kept, never deleted; it isn’t removed. Moved here").trim().split(/\s+/).join(" ") === "Kept, ; it . Moved here");
+    ear.hidden = earWas;
     ok("the box is in Settings", $("#room-settings #sh-find") === box);
 
     type("away from home");
@@ -14508,6 +14514,9 @@ def u_token_ratios():
         assert f"couldntRead(" in pages[n] and what in pages[n], (n, what)
     assert "HIST = []; ok = false" not in pages["app.js"] and "SE.recent = []; }" not in pages["speakeasy.js"] and "ASIDE.list = []; }" not in pages["aside.js"]
     assert "!DA.cands.length && !PICK.read" in pages["doubleagent.js"]
+    # states 2: Storage's total and its places say so too (never "…" for good, never an error inside a closed panel)
+    assert 'couldntRead($("#lib-free"), "the sizes", loadSummary)' in (web / "library.js").read_text(encoding="utf-8")
+    assert 'couldntRead($("#st-places"), "where your files live", loadStorage)' in (web / "rooms.js").read_text(encoding="utf-8")
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")
