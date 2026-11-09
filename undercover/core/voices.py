@@ -916,14 +916,14 @@ def _meta_text(f: str) -> str:
     a new file, so a new st_ino even where mtimes are coarse), and the stat is taken before the read, so a write racing
     this read is seen on the next call. The text, not the parsed dict, is kept: each caller parses its own (callers
     change their Voice's extra in place)."""
-    st = os.stat(f)
+    from . import fsutil
+    st = fsutil.retry(lambda: os.stat(f))   # (the same, for the stat)
     key = (st.st_ino, st.st_mtime_ns, st.st_size)
     with _META_LOCK:
         hit = _META.get(f)
     if hit and hit[0] == key:
         return hit[1]
-    with open(f, encoding="utf-8") as fh:
-        text = fh.read()
+    text = fsutil.read_text(f)   # (retries while a writer swaps the file in: Windows refuses an open mid-replace)
     with _META_LOCK:
         _META.pop(f, None)
         _META[f] = (key, text)
