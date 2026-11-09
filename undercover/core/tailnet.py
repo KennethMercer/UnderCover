@@ -191,6 +191,8 @@ def _drop_pid():
 
 
 def _cli(*args, timeout: float = 20) -> str:
+    if not _pipe_key():   # (no key: no daemon of ours to reach, and a name without one is no one's to talk to)
+        return ""
     return platform.run_text(_cmd("tailscale") + [f"--socket={_socket()}", *args], timeout=timeout)
 
 
