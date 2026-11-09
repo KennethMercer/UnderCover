@@ -7462,6 +7462,25 @@ def u_pick_silent():
     return "best stays 10 beside a silent save"
 
 
+@check("bugs-da 3: a long sentence is never cut inside a direction ([pause 2s], [clear throat]): the cut swept across the tag, it's never read out")
+def u_split_tags():
+    from undercover.speakeasy import tags, tts
+    n = 0
+    for tag, word in (("[pause 2s]", "pause"), ("[clear throat]", "throat"), ("[pause 1.5 seconds]", "seconds")):
+        for at in range(30, 46):
+            w = [f"word{i}" for i in range(100)]
+            w.insert(at, tag)
+            sents = tts.sentences(" ".join(w) + ".")
+            assert len(sents) > 1 and all(s["text"].count("[") == s["text"].count("]") for s in sents), (tag, at, sents)
+            ps, unk, held = tags.directions(sents)
+            text = " ".join(p["text"] for p in ps)
+            assert word not in text and "[" not in text and unk == [], (tag, at, text, unk)
+            if word == "pause" or word == "seconds":
+                assert sum(1 for p in ps if p.get("hold")) == 1, (tag, at, ps)
+            n += 1
+    return f"{n} cuts across a tag, none inside it"
+
+
 @contextlib.contextmanager
 def isolated_data():
     """Every [paths] folder, config.toml and the storage allow-list point into a fresh temp dir for the duration (the
@@ -15452,7 +15471,7 @@ def main():
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
                u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library,
-               u_fresh_keys, u_pick_silent):
+               u_fresh_keys, u_pick_silent, u_split_tags):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes

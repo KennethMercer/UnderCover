@@ -143,14 +143,19 @@ def sentences(text: str) -> list[dict]:
 
 def _split_long(s: str) -> list[str]:
     """A sentence too long to read in one breath, at the last comma, semicolon, colon or dash inside the limit (not too
-    near its start), else at a space: within MAX_CHARS characters and MAX_WORDS words."""
+    near its start), else at a space: within MAX_CHARS characters and MAX_WORDS words. Never inside a bracket: a cut
+    [pause 2s] or [clear throat] would be read out as words."""
     words = s.split()
     if len(s) <= MAX_CHARS and len(words) <= MAX_WORDS:
         return [s]
     limit = min(MAX_CHARS, len(" ".join(words[:MAX_WORDS])) + 1)
-    cut = max((m.end() for m in re.finditer(r"[;:,—–-]\s", s[:limit])), default=0)
+    spans = [(m.start(), m.end()) for m in re.finditer(r"\[[^\]]*\]", s)]
+    inside = lambda i: next((a for a, b in spans if a < i < b), None)   # the bracket a cut at i would split, if any
+    cut = max((m.end() for m in re.finditer(r"[;:,—–-]\s", s[:limit]) if inside(m.end()) is None), default=0)
     if cut < 40:
-        cut = s.rfind(" ", 0, limit) + 1 or limit
+        cut = max((m.end() for m in re.finditer(" ", s[:limit]) if inside(m.end()) is None), default=0) or limit
+    if (a := inside(cut)) is not None:   # (no space to cut at: before the bracket, or past it when it starts the text)
+        cut = a or next(b for x, b in spans if x == a)
     return [s[:cut].strip()] + _split_long(s[cut:].strip())
 
 
