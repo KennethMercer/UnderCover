@@ -176,7 +176,9 @@ app's real folders in test mode. Writes go through `core/fsutil.py`, so a power 
 `<voices_dir>/<name>/`: `model.pth`, optional `model.index` (a compact fp16 form; `core/engine/rvc/index.py` reads
 faiss indexes without faiss), `meta.json`, and `preview.mp3` + `preview.json` (the "Go undercover as" clip; not part of
 the model). Files are found next to `meta.json`; stored absolute paths are a hint. The folder name is the id and never
-changes. Downloaded `.pth` files are loaded with `torch.load(weights_only=True)`, and a voice's `config` is held to
+changes. The voice list lists each folder once and keeps each `meta.json`'s text by its stat (inode, mtime, size; every
+writer replaces the file whole), so a change made anywhere shows on the next list; `preview.json`'s record is kept the
+same way, and whether a speech pack's engine can read here for 2 s. Downloaded `.pth` files are loaded with `torch.load(weights_only=True)`, and a voice's `config` is held to
 RVC's own shapes before its network is built (`core.voices.check_config`, at install for a community `.pth` and a
 voice pack alike, and at load): the 18 values, the sizes capped, the upsampling equal to the sample rate's 10 ms hop
 (32, 40 or 48 kHz), and the config agreeing with its own weights; anything else is refused with the reason.
@@ -475,7 +477,7 @@ then waits in `tts/pending/` for the ear.
 ### Duets by sections
 
 A cover can be shared by two voices taking turns (`frontman/duets.py`). The lead is converted once in each voice,
-inside `Converter.shared_f0`, so the pitch track is read once. Both voices sing in one key for the song, each at its
+inside `Converter.shared_f0`, so the pitch track and the HuBERT features are read once. Both voices sing in one key for the song, each at its
 own best octave: `duets.joint_fit` picks the key with the lowest `fit.pick_fit` cost, each voice's cost read on the
 melody its sections hold and weighed by its share of the sung melody (so the fit runs after the plan). When one of
 them sits `FAR_ST` (3) semitones or more from where they'd sing alone, the fit's note says so. The two takes are then
@@ -583,7 +585,9 @@ other people in clips of the target (interviewers, hosts; the bundled Readers wh
 with the model, shifted by whole octaves toward the target's pitch, and their voice prints are compared with the
 target's real voice. The other speakers' own similarity is the baseline. Verdicts: good from 0.45, weak from 0.30, bad
 below, with a bootstrap lower bound because few phrases leave a wide interval. A voice that fails never joins the
-voices. The subject of a request is read from what a search finds (`doubleagent/subject.py`): a real person gets
+voices. What a check works out from the test alone (each phrase's pitch, voice print and HuBERT features, the person's
+pitch range from their clips) is kept by the phrases' samples and the clips' files, so a training's saves and a
+one-shot's candidates pay for it once. The subject of a request is read from what a search finds (`doubleagent/subject.py`): a real person gets
 interviews and speeches (recent first; never talk about them), a singer their songs with the vocals separated, a
 fictional character its scenes and voice lines, never cast interviews or podcasts about it. An ambiguous bare title
 asks which song before anything starts (`frontman/ambiguity.py`); with no answer it runs with the first and says so.
@@ -629,7 +633,9 @@ an icon each, the training chip and the Deep Cover glasses. On a phone (under 68
 bar. Shared tokens come from `app.css`; each module sets `--accent` only, through `body[data-module]`: FrontMan amber,
 DoubleAgent violet, SpeakEasy blue, SafeHouse grey. The look (`look.css`, "Case File") tells surfaces apart by tone
 rather than borders. Fonts are bundled in `web/fonts` (OFL); no remote fonts or scripts. The pages carry a
-Content-Security-Policy: own origin only, inline scripts by hash.
+Content-Security-Policy: own origin only, inline scripts by hash. Page files go out with `Cache-Control: no-cache` and an
+ETag (a hash of the file, made once per change of its stat), so an unchanged file is a 304 with no body; over the
+network (a phone) text files go gzipped when the browser takes it.
 
 A running strip sits under the top bar on every module: a 2 px line of light in the owning module's colour, the job in
 plain words (what it does and why), a realistic time left ("about 3 min left"), Pause / Resume / Queue, and "+N more"
