@@ -206,8 +206,8 @@ async function pollStatus() {
     document.body.dataset.client = s.client || "pc";   // "phone": a paired phone (phase 11); [data-pc] controls hide
     if (typeof phoneApp === "function") phoneApp(s);   // 1.2: the away app's service worker and its alerts (phonealerts.js)
     $("#ph-move").hidden = !s.move;   // 1.2.1: a phone from before, on the home Wi-Fi ("ready": Switch; "waiting": the PC's step)
-    if (s.move) { $("#ph-move-say").textContent = s.move === "ready" ? "UnderCover has a new link for this phone." : "Your PC needs one step to keep this phone connected."; $("#ph-move-go").hidden = s.move !== "ready"; }
-    if (s.device) $("#set-phone-me").textContent = `This phone is connected as ${s.device}. Your phone is managed on the PC.`;
+    if (s.move) { $("#ph-move-say").textContent = s.move === "ready" ? "UnderCover has a new link for this phone." : "On the PC, set up Your phone in SafeHouse's Settings to keep this phone connected."; $("#ph-move-go").hidden = s.move !== "ready"; }
+    if (s.device) $("#set-phone-me").textContent = `This phone is connected as ${s.device}. Phones are added and removed on the PC.`;
     sysStatus(s);
     if (typeof renderLowProfile === "function") renderLowProfile(s.low_profile, s);
     if (typeof tourStatus === "function") tourStatus(s.tour);   // the First assignment's tour: a fresh install's first visit to FrontMan (firstrun.js)   // the top bar's Low profile (lowprofile.js; hidden until the backend has it)
