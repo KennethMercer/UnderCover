@@ -101,6 +101,15 @@ def friendly(e: BaseException, stage: str = "") -> str:
                 "or pick 'Fast' separation quality.")
     if name in ("NoBackendError", "LibsndfileError") or "could not be opened" in text.lower():
         return "That audio file couldn't be read. Try converting it to mp3, wav or flac first."
+    if isinstance(e, MemoryError):
+        return ("The PC ran out of memory (RAM). Close other big programs and try again; a shorter song needs less.")
+    if isinstance(e, OSError) and (e.errno == 28 or getattr(e, "winerror", None) in (39, 112)):   # ENOSPC; Windows' disk full
+        return ("The disk is full. Free some space, or move UnderCover's files to another drive in SafeHouse, Storage, "
+                "and try again.")
+    if (name in ("URLError", "gaierror", "ConnectTimeout", "ConnectTimeoutError", "NewConnectionError", "MaxRetryError")
+            or (name == "ConnectionError" and type(e).__module__.startswith("requests"))
+            or "getaddrinfo failed" in text or "Failed to establish a new connection" in text):
+        return "UnderCover couldn't reach the internet. Check the connection and try again."
     if isinstance(e, FileNotFoundError):
         return f"A file is missing: {Path(getattr(e, 'filename', '') or text).name}. If you deleted something from the output folder, run the cover again."
     if isinstance(e, PermissionError):
