@@ -14495,6 +14495,9 @@ def u_token_ratios():
         assert f"couldntRead(" in pages[n] and what in pages[n], (n, what)
     assert "HIST = []; ok = false" not in pages["app.js"] and "SE.recent = []; }" not in pages["speakeasy.js"] and "ASIDE.list = []; }" not in pages["aside.js"]
     assert "!DA.cands.length && !PICK.read" in pages["doubleagent.js"]
+    # states 2: Storage's total and its places say so too (never "…" for good, never an error inside a closed panel)
+    assert 'couldntRead($("#lib-free"), "the sizes", loadSummary)' in (web / "library.js").read_text(encoding="utf-8")
+    assert 'couldntRead($("#st-places"), "where your files live", loadStorage)' in (web / "rooms.js").read_text(encoding="utf-8")
     assert '<div class="hist" id="hist"><p class="meta">Loading…</p></div>' in ix and '<div class="se-recent" id="se-recent"><p class="meta">Loading…</p></div>' in ix
     # polish batch 3: the running strip is a focus stop that follows its module, the banner's actions under it on a phone, one plain title
     assert 'id="wb-main" tabindex="0" role="link"' in ix and 'addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ")' in (web / "work.js").read_text(encoding="utf-8")

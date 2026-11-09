@@ -190,7 +190,7 @@ const GCOL = { library: "var(--c-glib)", working: "var(--c-gwork)", models: "var
 async function loadStorage() {
   let s;
   try { s = R.storage = await api("/api/storage"); }
-  catch (e) { $("#st-places").innerHTML = `<p class="meta">${esc(e.message)}</p>`; return; }
+  catch (e) { if (!R.storage) couldntRead($("#st-places"), "where your files live", loadStorage); return; }   // (a later miss keeps what it said)
   const g = s.groups, total = Object.values(g).reduce((n, x) => n + x.size, 0) || 1;
   $("#st-stack").innerHTML = Object.entries(g).map(([k, x]) => `<i style="width:${(x.size / total * 100).toFixed(2)}%;background:${GCOL[k]}" title="${esc(x.label)} ${gb(x.size)}"></i>`).join("");
   $("#st-legend").innerHTML = Object.entries(g).map(([k, x]) => `<span><i class="sw" style="background:${GCOL[k]}"></i>${esc(x.label)} <b>${gb(x.size)}</b></span>`).join("");
