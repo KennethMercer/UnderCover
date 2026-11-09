@@ -9567,7 +9567,7 @@ def u_duets():
         assert OS.split_duet("Simon and Garfunkel") is None and OS.split_duet("Hall and Oates") is None
         # neither here: two singers only as two full names, never a band's ("the ...", a list with commas, one-word names)
         assert OS.split_duet("Daryl Hall and John Oates") == {"person": "Daryl Hall", "with": "John Oates", "voice": None}
-        for band in ("Tom Petty and the Heartbreakers", "Peter, Paul and Mary", "Earth, Wind and Fire", "Sly and the Family Stone", "Mumford & Sons"):
+        for band in ("Glenn Miller and His Orchestra", "Tom Petty and the Heartbreakers", "Peter, Paul and Mary", "Earth, Wind and Fire", "Sly and the Family Stone", "Mumford & Sons"):
             assert OS.split_duet(band) is None, band
         assert OS.split_duet("Michael Jackson") is None and OS.split_duet("Michael Jackson and Michael Jackson") is None
     finally:
@@ -9970,6 +9970,9 @@ def u_duet_oneshot_names():
     s = plan["settings"]
     assert (s["key"], s["octave"], s["duet_octave"]) == (-5, 0, 1) and s["options"]["key"] == -5 and s["options"]["duet_octave"] == 1, s
     assert s["why"] == "key -5, A at octave +0, B at octave +1" and "settings_fit" not in plan, plan
+    plan3 = {"settings": {"octave": 0, "key": 3, "why": "song melody ~220 Hz, voice ~110 Hz"}}   # (no range for either: the cover says so)
+    OS.duet_settings(plan3, {"key": 3, "octave": 0}, ["Fit to voice: neither A nor B has a measured range yet, so your octave and key were used."])
+    assert plan3["settings"]["why"] == "neither A nor B has a measured range yet, so your octave and key were used", plan3
     plan2 = {"settings": {"octave": 1, "key": 2, "why": "w"}}
     OS.duet_settings(plan2, {"key": True, "octave": "x"}, [])   # (nothing a number can't be is taken)
     assert plan2["settings"] == {"octave": 1, "key": 2, "why": "w"}, plan2
@@ -10026,6 +10029,7 @@ want("done", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: set}
 want("done, own key", doneLine({song: {title: "Hold On"}, voice: bw, duet, settings: {...set, key: 0}}, 61), "taking turns · the song&#39;s own key");
 want("done, one", doneLine({song: {title: "Hold On"}, voice: bw, settings: {octave: 0, key: -6, why: "w"}}, 61),
      "with <b>Barry White</b> · the singer&#39;s octave · song 6 semitones lower", "taking turns");
+want("done, no voice yet", doneLine({song: {title: "x"}, person: "Barry White", settings: {octave: 0, key: 0, why: "w"}}, 1), "with <b>Barry White</b> ·");
 want("done, same voice", doneLine({song: {title: "x"}, voice: {...bw, name: "michael-jackson-uc"}, duet, settings: set}, 1), "with <b>Barry White</b> · the singer&#39;s octave", "taking turns");""")
     assert not out, "; ".join(out or [])
     # the one-shot's duet example on a new install (no voices but the demo): read as two singers, the first trained, the second said
@@ -10105,9 +10109,10 @@ def u_duet_copy():
     # Keep's sheet says a cover rolls off only when one will (D8; the edit list's page check runs it in Chrome)
     sh = (ROOT / "undercover" / "web" / "shape.js").read_text(encoding="utf-8")
     assert "with its changes.${shRollsOff() ? ` Recent covers holds 15, so the oldest one there, <b>${esc(shRollsOff().title)}</b>, rolls off" in sh
-    assert 'HIST.length >= SH_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null;' in sh
+    assert 'HIST.length >= RECENT_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null;' in sh
+    assert "return loadHistory().then(() => { if (SH.confirm && SH.id === id)" in sh   # (Recent as it is when the sheet opens)
     from undercover.core import tray
-    assert tray.TRAY_SIZE == 15 and "const SH_TRAY = 15;" in sh, "Keep's sheet counts Recent covers differently from the tray"
+    assert tray.TRAY_SIZE == 15 and "RECENT_TRAY = 15;" in js, "Keep's sheet counts Recent covers differently from the tray"
     return "the backing's progress line; one way said as a sentence; no 'lead' on the chip; Keep's roll-off said when it happens"
 
 

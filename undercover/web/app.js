@@ -659,7 +659,7 @@ $("#backing_voice").addEventListener("change", e => { S.opts.backing_voice = e.t
 // itself, and only a voice that's installed.
 // (Line by line stays hidden until it passes the ear; I'll choose waits for its editor)
 const DUET_WAY_ONE = { turns: "They take turns.", lines: "They take a line each." };   // the way, said when it's the only one shown
-const DUET_WAYS ={ turns: "One takes the verses and the other the choruses, by whose range suits them.", lines: "A line each, changing only where the singer breathes." };
+const DUET_WAYS = { turns: "One takes the verses and the other the choruses, by whose range suits them.", lines: "A line each, changing only where the singer breathes." };
 const DUET_BACKINGS = { singers: "Under each line, the backing is sung by whoever has the lead there.", other: "The backing goes to whoever isn't on the lead, one backing phrase at a time.",
                         original: "The song's own backing singers stay." };
 const DUET_BACK_SAID = { singers: "backing in their own voices", other: "backing by the other singer", original: "the original backing" };

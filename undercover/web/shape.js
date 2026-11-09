@@ -12,10 +12,10 @@ const SH_RETRY = /ran out of memory|Something went wrong|blocked writing|try aga
 const SH_GAP_S = 0.6;   // a pause this long between two heard words starts a new line (duets.phrases joins under it)
 const SH_FADE_S = 0.04;   // duets.FADE_S: a pause shorter than the crossfade isn't a place to land
 const SH_OCT = 2;   // edits.OCTAVE_BOUND
-const SH_TRAY = 15;   // core/tray.TRAY_SIZE: Recent covers holds this many
-// the cover a Keep would roll off Recent covers (core/tray.leaver: the oldest, when the tray is full, unless it's kept; the one
-// being edited is spared), else null: the Keep sheet says it only when it will happen (Internal Affairs D8)
-const shRollsOff = () => { const o = HIST.length >= SH_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null; };
+// the cover a Keep would roll off Recent covers (core/tray.leaver: the oldest, when the tray of RECENT_TRAY is full, unless it's
+// kept; the one being edited is spared), else null: the Keep sheet says it only when it will happen (Internal Affairs D8). HIST is
+// read again when the sheet opens, so a cover finished meanwhile is counted.
+const shRollsOff = () => { const o = HIST.length >= RECENT_TRAY ? HIST.at(-1) : null; return o && !o.kept && o.id !== SH.id ? o : null; };
 
 SH.audio.addEventListener("timeupdate", () => { if (SH.stopAt != null && SH.audio.currentTime >= SH.stopAt) { SH.audio.pause(); SH.stopAt = null; } });
 const shName = who => voiceDisplay(who === "B" ? SH.item?.duet_voice : SH.item?.voice);
@@ -277,7 +277,10 @@ function shWire() {
     if (k === "done") return shapeClose();
     if (k === "retry") { SH.state = "loading"; SH.error = null; shDraw(); return shLoad(true); }
     if (k === "undo" || k === "redo") return shStep(k);
-    if (k === "keep") { SH.confirm = true; shDraw(); return $('[data-sh="keep-yes"]', box)?.focus(); }
+    if (k === "keep") { SH.confirm = true; shDraw(); $('[data-sh="keep-yes"]', box)?.focus();
+      const id = SH.id;   // (Recent covers as it is now: what the sheet says rolls off is what will)
+      return loadHistory().then(() => { if (SH.confirm && SH.id === id) { shDraw(); $('[data-sh="keep-yes"]', box)?.focus(); } }, () => {});
+    }
     if (k === "keep-yes") return shKeep();
     if (k === "keep-no") { SH.confirm = false; return shDraw(); }
     if (k === "unpick") { SH.pick = null; SH.probes = null; SH.said = null; SH.seq++; return shDraw(); }

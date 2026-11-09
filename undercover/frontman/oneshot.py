@@ -108,7 +108,7 @@ def split_duet(person: str) -> dict | None:
     """"<song> as <one singer> and <another>" (also "with", "&", "a duet of ..."): two singers taking turns, in the order
     written (1.2, duets.py). Only when the second one is a voice here, or the first is and the second isn't (then the
     first sings alone, said plainly); never when the whole name is one voice ("Simon and Garfunkel"). Two names neither of
-    which is here are two singers only when each is a full name and the second isn't "the ..." ("Barry White and Michael
+    which is here are two singers only when each is a full name and the second isn't "the ..." or "his ..." ("Barry White and Michael
     Jackson", the one-shot's duet example on a new install); otherwise they're a band's name ("Hall and Oates", "Tom
     Petty and the Heartbreakers", "Peter, Paul and Mary"). -> {person, with, voice (the second's, or None)} or None."""
     from ..core.voices import slug
@@ -126,7 +126,7 @@ def split_duet(person: str) -> dict | None:
     va, vb = installed_for(a) or [], installed_for(b) or []
     vb = [v for v in vb if not va or v.name != va[0].name]
     full = lambda n: len(n.split()) >= 2 and "," not in n   # (a first and last name; a list with commas is a band's)
-    if not (va or vb) and not (full(a) and full(b) and not re.match(r"the\s", b, re.I)):
+    if not (va or vb) and not (full(a) and full(b) and not re.match(r"(?:the|his|her|their)\s", b, re.I)):
         return None
     return {"person": a, "with": b, "voice": vb[0].name if vb else None}
 
@@ -669,9 +669,10 @@ def duet_settings(plan: dict, used: dict, notes: list) -> None:
             s[k] = int(v)
             if isinstance(s.get("options"), dict):
                 s["options"][k] = int(v)
-    said = next((n for n in notes or [] if isinstance(n, str) and n.startswith("Fit for two:")), None)
+    # why, as the cover said it: the fit for two, or why there was none (neither voice has a measured range)
+    said = next((n for n in notes or [] if isinstance(n, str) and n.startswith(("Fit for two:", "Fit to voice:"))), None)
     if said:
-        s["why"] = said[len("Fit for two:"):].strip().rstrip(".")
+        s["why"] = said.split(":", 1)[1].strip().rstrip(".")
     plan.pop("settings_fit", None)   # (the first voice's alone: no octave pick between two of its fits on a duet)
 
 

@@ -266,7 +266,7 @@ const keyWords = k => k ? `song ${Math.abs(k)} semitone${Math.abs(k) === 1 ? "" 
 // a duet's settings are the cover's own (one key for both, each singer at their own octave: the octaves stay in the why)
 const fitWords = (set, plan) => twoVoices(plan) ? keyWords(set.key) || "the song's own key"
   : octaveWords(set.octave) + (set.key ? ` · ${keyWords(set.key)}` : "");
-const whoSang = plan => !plan.voice ? "" : `<b>${esc(plan.voice.display || voiceDisplay(plan.voice.name))}</b>` +
+const whoSang = plan => `<b>${esc(plan.voice ? plan.voice.display || voiceDisplay(plan.voice.name) : plan.person || "")}</b>` +
   (twoVoices(plan) ? ` &amp; <b>${esc(duetWith(plan))}</b>, taking turns` : "");
 function doneLine(plan, elapsed) {
   return `Done in ${fmtSecs(elapsed || 0)}: <b>${esc(plan.song?.title || "")}</b> with ${whoSang(plan)}` +
@@ -298,9 +298,10 @@ function renderOS(ev) {
   $("small", vc).textContent = ev.stage === "voice" ? ev.message
     : voice ? [voice.checked || { installed: "your installed voice", online: `community voice${voice.repo ? " · " + voice.repo : ""}`, train: "trained in UnderCover" }[voice.how], two && "taking turns"].filter(Boolean).join(" · ") : "";
   $("b", cc).textContent = ev.stage === "cover" ? "Making the cover" : (ev.final && ev.state === "done" ? "Done" : "Waiting");
+  const kept = set?.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "";
   $("small", cc).innerHTML = ev.stage === "cover" && !ev.final ? esc(ev.message)
-    : set && two && !(ev.final && ev.state === "done") ? "Best settings"   // (a duet's key is the cover's own, found as it's made)
-    : set ? esc(`Best settings · ${fitWords(set, plan)}`) + `<span data-deep> (${esc(set.why)})</span>` + (set.backing === "original (stacked harmonies)" ? " · original backing harmonies kept" : "") : "Best settings";
+    : set && two && !(ev.final && ev.state === "done") ? "Best settings" + kept   // (a duet's key is the cover's own, found as it's made)
+    : set ? esc(`Best settings · ${fitWords(set, plan)}`) + `<span data-deep> (${esc(set.why)})</span>` + kept : "Best settings";
   OS.eta = ev.total_left ?? ev.eta ?? null; OS.etaAt = performance.now();
   // before the cover itself starts, never count less than what's left of the picked path (a check's whole time, then the cover): the server's first number was the cover's alone
   if (OS.pathEta && !ev.final && ev.stage !== "cover") OS.eta = Math.max(OS.eta ?? 0, OS.pathEta - (OS.etaAt - OS.pathAt) / 1000);
