@@ -43,13 +43,22 @@ class Settings:
     one_line: bool = False                                 # a backing stem: through stacked voices, one of them (f0fix.hold_line)
 
 
+def missing_model(voice: Voice) -> str:
+    from ..voices import display_name
+    return (f"{display_name(voice)}'s model file is missing (an antivirus, an interrupted restore or a drive that's gone "
+            "can do it). Restore it from SafeHouse's vault, or get the voice again in DoubleAgent.")
+
+
 class LoadedVoice:
     def __init__(self, voice: Voice, device, half: bool):
         from .rvc.index import FeatureIndex, IndexFormatError
         from .rvc.synth import (SynthesizerTrnMs256NSFsid, SynthesizerTrnMs256NSFsid_nono, SynthesizerTrnMs768NSFsid,
                                 SynthesizerTrnMs768NSFsid_nono)
-        ck = torch.load(voice.pth, map_location="cpu", weights_only=True)
         from ..voices import check_config, display_name
+        try:
+            ck = torch.load(voice.pth, map_location="cpu", weights_only=True)
+        except FileNotFoundError:   # (the voice's own file: not jobs' general "deleted from the output folder")
+            raise ModelError(missing_model(voice)) from None
         check_config(ck, display_name(voice))   # (before the network is built from it: RVC's own shapes only)
         self.version = ck.get("version", "v1")
         self.f0 = int(ck.get("f0", 1))
