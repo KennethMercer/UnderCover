@@ -98,6 +98,19 @@ def wait_for(fn, timeout, every=2.0, what="condition"):
     raise TimeoutError(f"{what} not reached in {timeout:.0f} s")
 
 
+def _job_final(job_id: str, timeout: float = 60) -> dict:
+    """A job's final event (state, message, and what the job returned as `result`), read from its own event stream:
+    the stream replays a finished job from its first event and ends at the final one. /api/jobs's snapshot only
+    carries the final state and message."""
+    with urllib.request.urlopen(BASE + f"/api/jobs/{job_id}/events", timeout=timeout) as resp:
+        for raw in resp:
+            if raw.startswith(b"data: "):
+                ev = json.loads(raw[6:])
+                if ev.get("final"):
+                    return ev
+    raise AssertionError(f"job {job_id}'s stream ended without a final event")
+
+
 # ---------------------------------------------------------------- unit checks (no server)
 
 @check("imports: every module loads")
@@ -115,6 +128,24 @@ def u_imports():
             bad.append(f"{m}: {e}")
     assert not bad, "; ".join(bad)
     return f"{len(mods)} modules"
+
+
+@check("every check in this file is decorated once (2026-11-08: two @check lines stacked on one function left the next one bare: it ran uncounted, and an error in it ended the run)")
+def u_checks_decorated():
+    import ast
+    import re
+    src = (ROOT / "tests" / "smoke.py").read_text(encoding="utf-8")
+    stacked = [m.start() for m in re.finditer(r"@check\([^\n]*\)\r?\n\s*\r?\n*@check\(", src)]
+    assert not stacked, f"two @check decorators stacked at offset {stacked[0]} (line {src.count(chr(10), 0, stacked[0]) + 1})"
+    tree = ast.parse(src)
+    bare = [f.name for f in tree.body if isinstance(f, ast.FunctionDef) and re.match(r"[ua]_", f.name)
+            and not any(isinstance(d, ast.Call) and getattr(d.func, "id", "") == "check" for d in f.decorator_list)]
+    assert not bare, f"checks without @check: {bare}"
+    main_src = next(f for f in tree.body if isinstance(f, ast.FunctionDef) and f.name == "main")
+    named = {n.id for n in ast.walk(main_src) if isinstance(n, ast.Name) and re.match(r"[ua]_", n.id)}
+    defined = {f.name for f in tree.body if isinstance(f, ast.FunctionDef) and re.match(r"[ua]_", f.name)}
+    assert defined <= named, f"checks defined but never run: {sorted(defined - named)}"
+    return f"{len(defined)} checks, each decorated once and run"
 
 
 MODULES = ("frontman", "doubleagent", "speakeasy")   # the suite's modules (safehouse and app have their own rules)
@@ -799,7 +830,7 @@ def u_gamepause():
             assert gp.before_start(job3, sleep=lambda _s: None, look=lambda: game) == "start"
             # the GPU worker asks the gates before every job, and says which job is on the GPU (what "busy" means)
             import inspect
-            src = inspect.getsource(jobs.gpu_worker)
+            src = inspect.getsource(jobs._take_one)   # (the GPU worker's one turn)
             assert src.index("gate(job)") < src.index("CURRENT[0] = job") < src.index("run_job(job, fn)"), "the gate isn't wired"
             assert not gp._gpu_busy()
         finally:
@@ -1453,7 +1484,10 @@ def u_netguard():
     import yt_dlp
     from yt_dlp.downloader import get_suitable_downloader
     from yt_dlp.downloader.external import FFmpegFD
-    from yt_dlp.extractor.youtube.jsc._builtin import deno
+    try:   # yt-dlp's own internals, and yt-dlp updates itself (ARCHITECTURE "Self-healing yt-dlp"): a move isn't a failure here
+        from yt_dlp.extractor.youtube.jsc._builtin import deno
+    except ImportError:
+        deno = None
     from undercover.core import safeurl, youtube
     from undercover.core.youtube import SongResult
     from undercover.frontman import songs
@@ -1698,10 +1732,20 @@ def u_netguard():
                         "remote_components", "hls_prefer_native", '"proxy"'):
                 assert opt not in text or rel == "undercover/core/youtube.py", (rel, opt)
         # Deno: yt-dlp gives it no permission to reach the network
-        argv = list(deno.DenoJCP._DENO_BASE_OPTIONS)
-        dsrc = Path(deno.__file__).read_text(encoding="utf-8")
+        # (yt-dlp updates itself: if it moved the runner, every yt-dlp file named for Deno is read the same way instead;
+        # only a yt-dlp with no Deno file at all skips this, and says so with its version)
+        deno_note = "Deno"
+        argv = list(getattr(getattr(deno, "DenoJCP", None), "_DENO_BASE_OPTIONS", None) or [])
         assert not any(a.startswith("--allow") or a == "-A" for a in argv), argv
-        assert "--allow" not in dsrc and "'-A'" not in dsrc and '"-A"' not in dsrc
+        dfiles = ([Path(deno.__file__)] if deno is not None
+                  else [p for p in Path(yt_dlp.__file__).parent.rglob("*.py") if "deno" in p.name.lower()])
+        for f in dfiles:
+            dsrc = f.read_text(encoding="utf-8")
+            assert "--allow" not in dsrc and "'-A'" not in dsrc and '"-A"' not in dsrc, f
+        if not dfiles:
+            deno_note = f"(the Deno check skipped: yt-dlp {yt_dlp.version.__version__} has no Deno runner file)"
+        elif deno is None or not argv:
+            deno_note = f"Deno (read from {len(dfiles)} file(s): yt-dlp {yt_dlp.version.__version__} moved its runner)"
 
         # a proxy: its own address reached, everything else at home refused, links behind it checked by name
         os.environ.pop("NO_PROXY", None)
@@ -1729,7 +1773,7 @@ def u_netguard():
         home.shutdown()
         net.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
-    return "the race, every socket call, yt-dlp's hops, the downloaders, one stream, the proxy, Deno"
+    return f"the race, every socket call, yt-dlp's hops, the downloaders, one stream, the proxy, {deno_note}"
 
 
 @check("a link's audio is bounded by time as well as size: a song's decode stops a second past 20 minutes and audio that reaches it is refused plainly, judged from ffmpeg's own pass (a song that came as FLAC skips yt-dlp's conversion, and its header may say less than it holds); a training source's stops at what a source keeps, length known or not; a site with no sound-only format gives a small video first; the waveform, loudness and a dropped recording are decoded to a bound too")
@@ -2774,6 +2818,7 @@ def u_improved_keep():
 def _voice_dir(name, extra):
     """A minimal voice folder for unit checks (a fake model; nothing loads it)."""
     from undercover.core.voices import voices_dir
+    _isolated_only()
     d = voices_dir() / name
     d.mkdir(parents=True)
     (d / "model.pth").write_bytes(b"m-" + name.encode())
@@ -4713,6 +4758,80 @@ def u_character_check():
     return "no songs for a character; its project speaks; songs unticked (user's kept), voices found again, scenes searched if none; plain when unchecked"
 
 
+@check("training: prepare() on a small project with stand-in feature models (four kept clips and a holdout): the clips are sliced and normalised, the holdout kept apart by id, data.pt written in format 2 with the sample set's key; the same set reuses the file at once, a changed one rebuilds it, under a minute is refused")
+def u_prepare():
+    """The sandbox's training check reuses the real project's prepared data (2026-11-08, two minutes saved), so
+    prepare() itself is covered here, with HuBERT and RMVPE stood in for by shapes (the models are the GPU checks')."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from undercover.doubleagent import project as P, trainer
+    from undercover.doubleagent.sources import Source
+    from undercover.core.voices import ModelError
+
+    class Hubert:   # (1, samples) at 16 kHz -> (1, T50, 768) features at 50 frames/s
+        def extract(self, w, version):
+            assert version == "v2" and w.ndim == 2, (version, w.shape)
+            return torch.full((1, w.shape[1] // 320, 768), 0.01, dtype=w.dtype, device=w.device)
+
+    class Rmvpe:    # samples at 16 kHz -> f0 at 100 frames/s
+        def infer_from_audio(self, wav16, thred):
+            return np.full(len(wav16) // 160, 120.0, dtype=np.float32)
+
+    def project(name, durs):
+        proj = P.Project.create("Prep Person", "speaking", name=name)
+        (proj.dir / "clips").mkdir(parents=True, exist_ok=True)
+        for k, dur in enumerate(durs):
+            t = np.arange(int(16000 * dur)) / 16000
+            sf.write(str(proj.dir / "clips" / f"c{k}.flac"), (0.2 * np.sin(2 * np.pi * (110 + 7 * k) * t)).astype("float32"), 16000)
+            proj.phrases.append(P.Phrase(id=f"c{k}", source="s0", start=30.0 * k, dur=float(dur), score=0.8, reason="", noise=0.1))
+        proj.sources = [Source(id="s0", url="u", title="Source", duration=600.0)]
+        proj.reference = {"cluster": 1, "clip": "c0", "confirmed": True}
+        proj.save()
+        return P.Project.load(name)
+
+    sr = 40000
+    with isolated_data():
+        try:
+            trainer.prepare(project("prep-short", [5.0]), Hubert(), Rmvpe(), sr, "cpu", False)
+            raise AssertionError("under a minute of kept samples was prepared")
+        except ModelError as e:
+            assert "1 minute" in str(e), e
+        proj = project("prep-smoke", [22.0, 22.0, 22.0, 22.0, 5.0])   # the 5 s clip is the only holdout candidate (3-8 s)
+        seen = []
+        out = trainer.prepare(proj, Hubert(), Rmvpe(), sr, "cpu", False, progress=seen.append)
+        assert out == proj.dir / "train" / "data.pt" and out.is_file() and seen and seen[-1] == 1.0, (out, seen[-3:])
+        data = torch.load(out, map_location="cpu", weights_only=True)
+        assert data["format"] == 2 and data["sr"] == sr, {k: data[k] for k in ("format", "sr")}
+        items, hold = data["items"], data["holdout"]
+        assert [h["id"] for h in hold] == ["c4"] and abs(len(hold[0]["wav"]) / sr - 5.0) < 0.1, "the holdout clip isn't kept whole, apart"
+        # four 22 s clips, sliced into 3.7 s pieces stepping 3.4 s, the tail kept when it's 0.5 s or more: 7 pieces each
+        assert 24 <= len(items) <= 32 and all("id" not in i for i in items), len(items)
+        hop = trainer.SR_CFG[sr]["hop"]
+        for i in items:
+            n = len(i["wav"])
+            assert 0.5 * sr <= n <= trainer.SLICE * sr + hop and n % hop == 0, n
+            assert i["wav"].dtype == torch.float16 and i["phone50"].shape[1] == 768 and i["phone50"].dtype == torch.float16, i["wav"].dtype
+            assert len(i["pitch"]) == len(i["pitchf"]) == n // hop <= 2 * i["phone50"].shape[0], (len(i["pitch"]), n // hop, i["phone50"].shape)
+            assert float(i["wav"].float().abs().max()) <= 1.0 and float(i["pitchf"].min()) > 100, "a piece isn't normalised, or lost its pitch"
+        st = P.Project.load("prep-smoke").train
+        assert st["data_key"].startswith(f"{sr}:") and st["holdout"] == ["c4"] and st["pieces"] == len(items), st
+        assert abs(st["train_minutes"] - sum(len(i["wav"]) for i in items) / sr / 60) < 0.01, st["train_minutes"]
+        # the same sample set: the file is reused as it is (the sandbox's training check relies on this)
+        before = out.stat().st_mtime_ns
+        assert trainer.prepare(P.Project.load("prep-smoke"), None, None, sr, "cpu", False) == out and out.stat().st_mtime_ns == before, "prepare() ran again for the same samples"
+        # one clip unticked: a new key, the data rebuilt without it
+        proj = P.Project.load("prep-smoke")
+        next(p for p in proj.phrases if p.id == "c3").choice = False
+        proj.save()
+        key1 = st["data_key"]
+        trainer.prepare(P.Project.load("prep-smoke"), Hubert(), Rmvpe(), sr, "cpu", False)
+        st2 = P.Project.load("prep-smoke").train
+        data2 = torch.load(out, map_location="cpu", weights_only=True)
+        assert st2["data_key"] != key1 and st2["pieces"] == len(data2["items"]) < len(items), (st2["data_key"], key1, st2["pieces"], len(items))
+    return f"{len(items)} pieces from 4 clips + 1 holdout; reused for the same set; {len(data2['items'])} after unticking one"
+
+
 @check("Do it all's preparation reads as progress (IA pass 11 B2: '(1/2) / (2/2)' six times in 19 min, the time left climbing 3598 -> 4354 s): 'source k of n' over the whole job, the bar never goes back, the time left comes from the work and counts down, said through the job's rule; a check's verdict is kept per clip set (A3); an auto training says its planned end, not the cap")
 def u_prep_progress():
     import inspect
@@ -5541,22 +5660,25 @@ def u_rcfix10():
     saved = client.WORKER
     client.WORKER = w
     try:
-        flag = [False]
-        fut = w.submit("tts", text="a sentence that never ends")
-        threading.Timer(0.3, lambda: flag.__setitem__(0, True)).start()
-        t0 = time.time()
-        try:
-            client.wait(fut, cancel=lambda: flag[0])
-            raise AssertionError("the wait didn't stop")
-        except Cancelled:
-            pass
-        first = started[-1]
-        for _ in range(40):
-            if first.poll() is not None and fut.done():
-                break
-            time.sleep(0.05)
-        took = time.time() - t0
-        assert first.poll() is not None and fut.done() and took < 2.0, (first.poll(), fut.done(), took)
+        def cancelled_wait():   # (best of two: a busy PC can be slow to start the fake worker once)
+            flag = [False]
+            fut = w.submit("tts", text="a sentence that never ends")
+            threading.Timer(0.3, lambda: flag.__setitem__(0, True)).start()
+            t0 = time.time()
+            try:
+                client.wait(fut, cancel=lambda: flag[0])
+                raise AssertionError("the wait didn't stop")
+            except Cancelled:
+                pass
+            first = started[-1]
+            for _ in range(40):
+                if first.poll() is not None and fut.done():
+                    break
+                time.sleep(0.05)
+            return time.time() - t0, (first, fut)
+        took, tried = best_time(cancelled_wait, 2.0, tries=2)
+        first, fut = tried[-1][1]
+        assert first.poll() is not None and fut.done() and took < 2.0, (first.poll(), fut.done(), [round(t, 2) for t, _ in tried])
         assert w.proc is None or w.proc is not first
         # a job's own check that raises (cadence training's check(), calibration's _stop): the same
         fut2 = w.submit("tts", text="again")   # (a new worker: the next request starts one)
@@ -6575,6 +6697,64 @@ def u_lowprofile():
     return "defaults, test default, set(), the split, needs/waits/learns, batch, speeds, the pause, the game's on/off, the phone route"
 
 
+@check("Low profile: \"raise its limit and it starts\" holds: a cover that ran out under the cap retries under the raised "
+       "limit (applied when it fits, though a job was current); the wait never reads \"needs about 4 GB; allows 4\"")
+def u_lowprofile_retry():
+    import threading
+    from undercover.core import gpu, jobs, lowprofile as L
+    from undercover.core.cadence import client
+    saved_env = {k: os.environ.get(k) for k in ("UNDERCOVER_TEST_ROOTS", "UNDERCOVER_LOW_PROFILE")}
+    saved = (dict(jobs.STATUS), dict(L.STATE), jobs.CURRENT[0], client.WORKER.running,
+             {n: getattr(gpu, n) for n in ("apply_cap", "free", "release", "alloc_gb")})
+    caps, seen = [], []
+    try:
+        with isolated_data():
+            for k in saved_env:
+                os.environ.pop(k, None)
+            jobs.STATUS["vram_gb"] = 24
+            client.WORKER.running = lambda: False
+            gpu.apply_cap = lambda lim=None: caps.append(lim) or lim   # (what torch's share of the card would be set to)
+            for n in ("free", "release", "alloc_gb"):
+                setattr(gpu, n, lambda *a, **k: None)
+            L.STATE["applied"] = None
+            L.change(on=True, limit_gb=4)
+            assert caps[-1] == 4.0, caps
+
+            def cover(job):
+                seen.append(L.STATE["server_gb"])
+                if len(seen) == 1:
+                    raise RuntimeError("HIP out of memory")   # (the first try runs out under the 4 GB cap)
+                job.finish("done")
+            job = jobs.Job("cover")
+            jobs.CURRENT[0] = job
+            th = threading.Thread(target=jobs.run_job, args=(job, cover), daemon=True)
+            th.start()
+            assert wait_for(lambda: job.events and job.events[-1].get("waits_for") == "Low profile", 5, every=0.05,
+                            what="the wait for Low profile")
+            msg = job.events[-1]["message"]
+            assert "allows 4" in msg and "needs about 4 GB" not in msg, msg
+            L.change(limit_gb=12)   # the user raises the limit, as the message asks (a job is current: no apply here)
+            th.join(10)
+            assert not th.is_alive() and job.state == "done", job.state
+            assert seen == [4.0, 12.0] and caps[-1] == 12.0, f"the retry ran under {seen[-1]} GB; caps set {caps}"
+            assert L._needs_allows(4.04, 4.0) == "needs about 4.1 GB; Low profile allows 4"
+            assert L._needs_allows(8.7, 9.96) == "needs about 8.7 GB; Low profile allows 9.9"
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        jobs.STATUS.clear()
+        jobs.STATUS.update(saved[0])
+        L.STATE.clear()
+        L.STATE.update(saved[1])
+        jobs.CURRENT[0], client.WORKER.running = saved[2], saved[3]
+        for n, f in saved[4].items():
+            setattr(gpu, n, f)
+    return "the retry saw 12 GB; needs rounded up, the allowance down"
+
+
 @check("voice packs (1.1): a voice exports as one .ucvoice (safetensors weights, the compact index, a canonical manifest whose pack_id is its own SHA-256, the subject declared, the p2p fields reserved, no cadence) and imports back identical, staged, never over a voice; a pickle inside, a changed manifest, a file that isn't its SHA-256, a private person without consent, a newer format, all refused")
 def u_voicepack():
     import hashlib
@@ -6860,6 +7040,7 @@ def _fake_project(name, person, n_phrases=30, other=6, n_sources=3):
     import numpy as np
     import soundfile as sf
     from undercover.doubleagent import project as P
+    _isolated_only()
     proj = P.Project.create(person, "speaking", name=name)
     rng = np.random.default_rng(3)
     (proj.dir / "clips").mkdir(parents=True, exist_ok=True)
@@ -7103,27 +7284,31 @@ def u_stop_download():
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
-            got = {"n": 0}
-            def stop_soon():
-                got["n"] += 1
-                return got["n"] > 3
-            t0 = time.time()
-            try:
-                setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", "0" * 64, "big.bin", cancel=stop_soon)   # (stopped before the checksum)
-                raise AssertionError("the download ran to the end")
-            except setup_models.DownloadStopped:
-                pass
-            assert time.time() - t0 < 3 and not (box / "big.bin").exists(), "Stop didn't end the download early"
+            def stopped_fetch():   # (best of two: a busy PC can be slow to accept the connection once)
+                got = {"n": 0}
+                def stop_soon():
+                    got["n"] += 1
+                    return got["n"] > 3
+                t0 = time.time()
+                try:
+                    setup_models.fetch(f"http://127.0.0.1:{srv.server_port}/big.bin", box / "big.bin", "0" * 64, "big.bin", cancel=stop_soon)   # (stopped before the checksum)
+                    raise AssertionError("the download ran to the end")
+                except setup_models.DownloadStopped:
+                    pass
+                return time.time() - t0, None
+            took, tried = best_time(stopped_fetch, 3, tries=2)
+            assert took < 3 and not (box / "big.bin").exists(), f"Stop didn't end the download early ({[round(t, 1) for t, _ in tried]} s)"
         finally:
             srv.shutdown()
-        # test mode: a missing model under the real models folder is refused, nothing written there
-        real = real_dirs()["models_dir"] / "smoke-never-here.bin"   # the user's models folder, outside the test roots
-        try:
-            setup_models.ensure(files={str(real): "file:///nonexistent"})
-            raise AssertionError("a test downloaded into the real models folder")
-        except ModelError as e:
-            assert "Test mode" in str(e) or "outside" in str(e), e
-        assert not real.exists()
+        # test mode: a missing model under the app folder's models/ is refused, nothing written there (a stand-in app folder)
+        with fake_app() as fake:
+            real = fake / "models" / "smoke-never-here.bin"   # the app's models folder, outside the test roots
+            try:
+                setup_models.ensure(files={str(real): "file:///nonexistent"})
+                raise AssertionError("a test downloaded into the app folder's models")
+            except ModelError as e:
+                assert "Test mode" in str(e) or "outside" in str(e), e
+            assert not real.exists()
     # P2-5: no reset clears the project's exported voice; a stopped run is "stopped"
     for fn in (DA.start_train, night._improve, service.train_new_voice, service.run_project):
         src = inspect.getsource(fn)
@@ -7401,6 +7586,41 @@ def isolated_data():
             config.CONFIG_FILE, storage.ALLOWED_ROOTS = saved[1], saved[2]
 
 
+def _isolated_only(*paths: Path):
+    """A helper that writes, moves or ages files runs only with the storage allow-list set (inside isolated_data() or
+    the sandbox) and with every [paths] folder, and the paths given, inside it. Called at the top of each such helper
+    (2026-11-08): until then they relied on every caller remembering."""
+    from undercover.core import config, storage
+    roots = storage.ALLOWED_ROOTS
+    assert roots, "a writing helper was called outside isolated_data() / the sandbox: it would reach the app's own folders"
+    folders = {k: Path(v) for k, v in config.CONFIG["paths"].items() if k != "models_dir"}   # (the sandbox reads the real models)
+    folders["voices_dir"] = config.path("voices_dir")
+    for k, v in folders.items():
+        assert any(storage._inside(v, r) for r in roots), f"[paths] {k} -> {v} is outside the test's folders {roots}"
+    for p in paths:
+        assert any(storage._inside(Path(p), r) for r in roots), f"{p} is outside the test's folders {roots}"
+
+
+@contextlib.contextmanager
+def fake_app():
+    """A stand-in for the app folder, for the checks that prove the guards refuse "the app's own folders": a temp
+    folder with uploads / output / models / cache / docs inside it, and core.storage's idea of the app folder (ROOT)
+    pointed at it for the duration. The negative tests then name this folder, never the user's real one (2026-11-08:
+    until then only refuse() and `within` stood between those tests and the user's data)."""
+    import tempfile
+    from undercover.core import storage
+    saved = storage.ROOT
+    with tempfile.TemporaryDirectory(prefix="uc-fakeapp-") as td:
+        app = Path(td).resolve()
+        for d in ("uploads", "output", "models", "cache", "docs"):
+            (app / d).mkdir()
+        storage.ROOT = app
+        try:
+            yield app
+        finally:
+            storage.ROOT = saved
+
+
 @check("add-ons: registry, CLI list, a fake add-on installs (checksum) and removes cleanly")
 def u_addons():
     import subprocess
@@ -7515,12 +7735,16 @@ def u_storage():
 
         def push(self, **ev):
             pass
-    # the guards, checked without touching anything: the app's real folders are out of reach
-    assert storage.refuse([ROOT / "uploads"]) and storage.refuse([ROOT / "output"], from_room=True)
-    assert storage.refuse([ROOT / "models"], from_room=True, confirmed=True) is None   # only the room, confirmed
+    # the guards, checked without touching anything, against a stand-in for the app folder (never the real one named);
+    # first that the guards' own idea of the app folder is the real one, which every stand-in below replaces
+    assert storage._same(storage.ROOT, ROOT), f"core.storage's app folder is {storage.ROOT}, not {ROOT}"
+    with fake_app() as fake:
+        assert storage.refuse([fake / "uploads"]) and storage.refuse([fake / "output"], from_room=True)
+        assert storage.refuse([fake / "models"], from_room=True, confirmed=True) is None   # only the room, confirmed
     with isolated_data() as t:
         app, lib, mod = t / "app", t / "lib2", t / "models2"
-        assert storage.refuse([ROOT / "cache"], True, True), "test mode must refuse the app folder"
+        with fake_app() as fake:
+            assert storage.refuse([fake / "cache"], True, True), "test mode must refuse the app folder"
         assert storage.refuse([t.parent / "not-this-test"]), "test mode must refuse folders outside the test's own"
         # regression (2026-10-11): writing [paths] must not reload the file's other keys into the running config
         text = config.CONFIG_FILE.read_text(encoding="utf-8").replace(f"'{app / 'uploads'}'", '"uploads"')
@@ -7571,6 +7795,7 @@ def u_storage():
 def _fake_cover(i, tag="c"):
     """A finished cover's history record with real (tiny) files, in the isolated output / cache folders."""
     from undercover.core.config import path
+    _isolated_only()
     out, conv = path("output_dir"), path("cache_dir") / "converted"
     out.mkdir(parents=True, exist_ok=True)
     conv.mkdir(parents=True, exist_ok=True)
@@ -7588,6 +7813,7 @@ def _fake_speech(i, speak, tag="s"):
     from undercover.core.config import path
     job = f"{tag}job{i:02d}"
     parts = speak.parts_dir(job)
+    _isolated_only(parts)
     parts.mkdir(parents=True, exist_ok=True)
     (parts / "s0000.wav").write_bytes(b"p" * 10)
     p = {"voice": "zz", "reader": "am_michael", "auto": True, "speed": 1.0, "pitch": 0.0}
@@ -7675,12 +7901,12 @@ def u_rolloff_covers():
                     raise AssertionError(f"a real file inside {within} wasn't refused in test mode")
                 except storage.ModelError:
                     pass
-            try:
-                # (a folder that exists: a fresh checkout or worktree has no output/, and what isn't there isn't refused)
-                storage.remove_files([], within=[t], dirs=[ROOT / "output" if (ROOT / "output").is_dir() else ROOT / "docs"])
-                raise AssertionError("a real folder wasn't refused in test mode")
-            except storage.ModelError:
-                pass
+            with fake_app() as fake:   # the app folder's output/, on a stand-in (what isn't there isn't refused, so a real one)
+                try:
+                    storage.remove_files([], within=[t], dirs=[fake / "output"])
+                    raise AssertionError("the app folder's output wasn't refused in test mode")
+                except storage.ModelError:
+                    pass
             try:   # a folder where a file is expected, even inside the allowed place, is not removed as a file
                 storage.remove_files([path("output_dir")], [t])
                 raise AssertionError("a folder was accepted as a file")
@@ -7849,6 +8075,7 @@ def _fake_voice(name: str, source: str = "", extra: dict | None = None, display:
     """A voice folder with a meta.json (and an empty model.pth) in the isolated models/voices; no model is loaded."""
     from undercover.core.voices import Voice, voices_dir
     d = voices_dir() / name
+    _isolated_only(d)
     d.mkdir(parents=True, exist_ok=True)
     (d / "model.pth").write_bytes(b"x")
     v = Voice(name=name, dir=d, pth=d / "model.pth", index=None, source=source, installed="2026-10-11 00:00",
@@ -10042,6 +10269,7 @@ def _fake_pack(d, clip: str, score: float, before: float | None = None, verdicts
     """A cadence pack on disk (ref.wav + cadence.json) and its extra.tts dict."""
     import numpy as np
     import soundfile as sf
+    _isolated_only(d)
     d.mkdir(parents=True, exist_ok=True)
     sf.write(str(d / "ref.wav"), (np.random.default_rng(len(clip)).standard_normal(16000) * 0.1).astype(np.float32), 16000)
     pack = {"engine": "chatterbox", "cfg_weight": 0.3, "exaggeration": 0.5, "v": 1, "ref": "ref.wav", "ref_text": "Hello.",
@@ -10485,6 +10713,7 @@ def u_ask_flow():
 
 def _old(p: Path, hours: float = 8):
     import os
+    _isolated_only(p)
     t = time.time() - hours * 3600
     os.utime(p, (t, t))
 
@@ -10597,17 +10826,18 @@ def u_doctor_models():
             # a missing file the record knew about is offered (and fetched at startup); one it never saw waits for first use
             dest.unlink()
             assert row(doctor.run(False))["fix"]["id"] == f"model:{local}"
-            # test mode: a re-download into the app's real model folder is refused, whatever the list says
+            # test mode: a re-download into the app folder's models/ is refused, whatever the list says (on a stand-in app folder)
             from undercover.core import config
             saved = dict(config.CONFIG["paths"])
-            config.CONFIG["paths"]["models_dir"] = str(ROOT / "models")
-            try:
-                setup_models.refetch(local)
-                raise AssertionError("a test re-downloaded into the real models folder")
-            except setup_models.ModelError as e:
-                assert "Test mode" in str(e), e
-            finally:
-                config.CONFIG["paths"] = saved
+            with fake_app() as fake:
+                config.CONFIG["paths"]["models_dir"] = str(fake / "models")
+                try:
+                    setup_models.refetch(local)
+                    raise AssertionError("a test re-downloaded into the app folder's models")
+                except setup_models.ModelError as e:
+                    assert "Test mode" in str(e), e
+                finally:
+                    config.CONFIG["paths"] = saved
         finally:
             setup_models.PINNED.pop(local, None)
     return "cut-off and same-size damage found; wrong source refused; good copy swapped in"
@@ -11815,6 +12045,7 @@ def config_path(key):
 # ---------------------------------------------------------------- the First assignment (phase 17)
 
 def _fake_demo_voice(d: Path):
+    _isolated_only(d)
     d.mkdir(parents=True)
     (d / "model.pth").write_bytes(b"not really a model")
     (d / "meta.json").write_text(json.dumps({"name": "agent-smoke", "version": "v2", "sr": 40000, "f0": True, "source": "demo",
@@ -12822,6 +13053,301 @@ def u_perf_code_stamp():
     return f"kept {server.CODE_STAMP_TTL:.0f} s"
 
 
+@check("a setting changed from the page never says \"Restart needed\" (the code stamp leaves config.toml out)")
+def u_stamp_settings():
+    from undercover.app import server
+    from undercover.core import config, gamepause
+    saved = dict(server._CODE_STAMP)
+    try:
+        with isolated_data():
+            server._CODE_STAMP["at"] = None
+            start = server.code_stamp()
+            time.sleep(0.05)
+            gamepause.set_ask(False)   # (a Settings switch: writes the test's own config.toml)
+            config.set_values("ui", {"open_browser": "false"})
+            os.utime(config.CONFIG_FILE, (time.time() + 3600, time.time() + 3600))   # (newer than any code)
+            server._CODE_STAMP["at"] = None
+            assert server.code_stamp() == start, "a settings write changed the code stamp: every tab would say Restart needed"
+    finally:
+        server._CODE_STAMP.update(saved)
+    return "set_ask and set_values leave the stamp as it was"
+
+
+@check("a restart never cuts off unsaved work: a speech, a one-shot or an install is refused (Restart now offered); a "
+       "Storage move is refused even with now; a pause-restart waits for work started meanwhile; quit refuses the same")
+def u_restart_guard():
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import jobs, worklist
+    saved = (S.SERVER, dict(S.JOBS), worklist.active, worklist.pause_all, S.LATE_WORK_WAIT_S, worklist.restart_abandoned)
+    shut = []
+    S.SERVER = SimpleNamespace(shutdown=lambda: shut.append(1))
+
+    def call(route, body=None):
+        h = S.Handler.__new__(S.Handler)
+        out = {}
+        h._body = lambda: body or {}
+        h._json = lambda obj, status=200: out.update(obj=obj, status=status)
+        h._error = lambda msg, status=400: out.update(obj={"error": msg}, status=status)
+        getattr(S.Handler, route)(h)
+        return out["status"], out["obj"]
+
+    def only(*kinds):
+        S.JOBS.clear()
+        made = [jobs.Job(k, title=f"a {k}") for k in kinds]
+        for j in made:
+            S.JOBS[j.id] = j
+        return made
+    try:
+        with isolated_data():
+            S.RESTART.clear()
+            for kind in ("speech", "auto", "install", "cover", "presep", "train-export"):
+                only(kind)
+                st, obj = call("_restart")
+                assert st == 409 and obj.get("now_ok") and obj["busy"] == [f"a {kind}"], (kind, st, obj)
+                st, _ = call("_quit")
+                assert st == 409, (kind, "quit", st)
+            assert not S.RESTART.is_set() and not shut, "a refused restart restarted"
+            for kind in ("move", "addon", "smaller", "ytdlp"):
+                only(kind, "speech")
+                for body in (None, {"now": True}):
+                    st, obj = call("_restart", body)
+                    assert st == 409 and not obj.get("now_ok") and obj["busy"] == [f"a {kind}"], (kind, body, st, obj)
+                assert not any(j.cancel for j in S.JOBS.values()), f"a refused restart now cancelled work beside a {kind}"
+            assert not S.RESTART.is_set() and not shut
+            sp, = only("speech")
+            st, obj = call("_restart", {"now": True})   # the user chose "Restart now (stops running work)"
+            assert st == 200 and obj["stopped"] == ["a speech"] and sp.cancel, obj
+            assert S.RESTART.wait(2) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "Restart now didn't restart"
+            S.RESTART.clear()
+            shut.clear()
+            only("speakwarm", "voicepreview")   # (the engine warming, a preview line the backfill makes again)
+            assert call("_restart")[0] == 200 and S.RESTART.wait(2)
+            S.RESTART.clear()
+            wait_for(lambda: shut, 3, every=0.05, what="the shutdown")
+            shut.clear()
+            # voice work pauses first; a speech started while it pauses finishes before the restart, and meanwhile this
+            # process's worklist loop leaves "resume after restart" to the next one
+            S.JOBS.clear()
+            busy = [True]
+            worklist.active = lambda: busy[0]
+            worklist.pause_all = lambda **kw: {}
+            st, obj = call("_restart")
+            assert st == 200 and obj.get("pausing") and worklist.RESTARTING.is_set(), obj
+            saved_models = jobs.STATUS.get("models")
+            jobs.STATUS["models"] = "ready"
+            try:
+                assert not worklist._resume_due({"resume_after_restart": True, "resume": [], "held": True}), \
+                    "the running process would resume the work it paused to restart"
+                worklist.RESTARTING.clear()
+                assert worklist._resume_due({"resume_after_restart": True, "resume": [], "held": True}), "the new process wouldn't"
+                worklist.RESTARTING.set()
+            finally:
+                jobs.STATUS["models"] = saved_models
+            late, = only("speech")
+            busy[0] = False
+            time.sleep(1.5)
+            assert not S.RESTART.is_set(), "the restart didn't wait for the speech started while voice work paused"
+            late.finish("done")
+            assert S.RESTART.wait(4) and wait_for(lambda: shut, 3, every=0.05, what="the shutdown"), "the restart didn't follow the speech's end"
+            S.RESTART.clear()
+            shut.clear()
+            # work started meanwhile that doesn't finish in time: the restart is called off and the voice work carries on
+            called_off = []
+            worklist.restart_abandoned = lambda: called_off.append(1) or {}
+            S.LATE_WORK_WAIT_S = 1
+            busy[0] = True
+            assert call("_restart")[1].get("pausing")
+            stuck, = only("speech")
+            busy[0] = False
+            assert wait_for(lambda: called_off, 6, every=0.1, what="the restart called off")
+            assert not S.RESTART.is_set() and not shut and not stuck.cancel, "a restart cut off work that didn't finish"
+    finally:
+        S.RESTART.clear()
+        S.LATE_WORK_WAIT_S = saved[4]
+        worklist.RESTARTING.clear()
+        S.SERVER = saved[0]
+        S.JOBS.clear()
+        S.JOBS.update(saved[1])
+        worklist.active, worklist.pause_all, worklist.restart_abandoned = saved[2], saved[3], saved[5]
+    return "409 with now_ok for 6 kinds, 409 even with now for the 4 that can't stop halfway, waits for late work or calls it off"
+
+
+@check("the GPU worker rests when no waiting job fits Low profile's cap: two or three of them looked at under 10 times in 2 s, "
+       "not a million; a job that fits behind them still runs at once")
+def u_defer_rest():
+    import queue
+    import threading
+    from undercover.core import jobs, lowprofile
+    saved = (jobs.GPU_QUEUE, lowprofile.before_job, list(jobs.START_GATES), jobs.CURRENT[0])
+    looks, ran = [], []
+    try:
+        with isolated_data():
+            for n in (2, 3):
+                jobs.GPU_QUEUE = queue.Queue()
+                jobs.START_GATES[:] = []
+                lowprofile.before_job = lambda job: looks.append(job.id) and None   # (nothing fits the cap)
+                looks.clear()
+                for _ in range(n):
+                    jobs.GPU_QUEUE.put((jobs.Job("zz-smoke"), lambda j: None))
+                stop = threading.Event()
+
+                def turn():
+                    deferred = set()
+                    while not stop.is_set():
+                        jobs._take_one(deferred)
+                th = threading.Thread(target=turn, daemon=True)
+                th.start()
+                time.sleep(2.0)
+                stop.set()
+                seen = len(looks)
+                th.join(jobs.DEFER_REST_S + 2)
+                assert not th.is_alive()
+                assert n <= seen < 10, f"{seen} looks in 2 s with {n} waiting jobs (it spins)"
+            # one that fits, queued behind the waiting ones, runs on the next pass
+            jobs.GPU_QUEUE = queue.Queue()
+            wait = [jobs.Job("zz-smoke") for _ in range(2)]
+            go = jobs.Job("zz-smoke")
+            for j in (*wait, go):
+                jobs.GPU_QUEUE.put((j, lambda j: ran.append(j.id) or j.finish("done")))
+            lowprofile.before_job = lambda job: True if job is go else None
+            jobs.DEFER_REST_S, rest = 0.0, jobs.DEFER_REST_S
+            try:
+                d = set()
+                for _ in range(3):
+                    jobs._take_one(d)
+            finally:
+                jobs.DEFER_REST_S = rest
+            assert ran == [go.id] and jobs.GPU_QUEUE.qsize() == 2 and not d, (ran, jobs.GPU_QUEUE.qsize(), d)
+            # a waiting job that fails at its next look leaves the queue: it no longer counts toward a whole pass
+            jobs.GPU_QUEUE = queue.Queue()
+            bad = jobs.Job("zz-smoke")
+            jobs.GPU_QUEUE.put((bad, lambda j: None))
+            jobs.START_GATES[:] = [lambda job: 1 / 0]
+            d = {bad.id}
+            jobs._take_one(d)
+            assert bad.state == "error" and not d and jobs.GPU_QUEUE.empty(), (bad.state, d)
+    finally:
+        jobs.GPU_QUEUE, lowprofile.before_job = saved[0], saved[1]
+        jobs.START_GATES[:] = saved[2]
+        jobs.CURRENT[0] = saved[3]
+    return f"rests {jobs.DEFER_REST_S:.0f} s after a whole pass"
+
+
+@check("free space is judged where the work writes (after a Storage move, not the app's drive): the jobs' 3 GB guard, "
+       "Doctor and the Library's free line agree and name that drive")
+def u_work_space():
+    from types import SimpleNamespace
+    from undercover.core import config, doctor, jobs, storage
+    from undercover.safehouse import library
+    saved = (storage.shutil, storage.drive_of)
+    try:
+        with isolated_data() as t:
+            e = t / "E"   # (stands in for another drive: the working files, covers and voices moved there)
+            for k, sub in (("cache_dir", "cache"), ("output_dir", "output"), ("voices_dir", "voices")):
+                config.CONFIG["paths"][k] = str(e / sub)
+            free = {"E:": 100e9, "app": 1e9}
+            on_e = lambda p: storage._inside(Path(p), e)
+            storage.drive_of = lambda p: "E:" if on_e(p) else saved[1](p)
+            storage.shutil = SimpleNamespace(disk_usage=lambda p: SimpleNamespace(free=free["E:" if on_e(p) else "app"]))
+            assert storage.low_work_space() is None, "1 GB on the app's drive refused work that writes to E: (100 GB)"
+            job = jobs.Job("zz-smoke")
+            jobs.run_job(job, lambda j: j.finish("done"))
+            assert job.state == "done", job.events[-1:]
+            lib = library._summary()
+            assert lib["drive"] == "E:" and lib["free"] == 100e9, (lib["drive"], lib["free"])
+            res = {r["id"]: r for r in doctor.c_disk(None)}   # (songs and models on the full drive: bad, but no job refuses)
+            other = [r for k, r in res.items() if k != "disk:E:"]
+            assert res["disk:E:"]["state"] == "ok" and other and all(r["state"] == "bad" and "refuse" not in r["say"]
+                                                                     for r in other), res
+            from undercover.app import server as S
+            assert S._hb_state()["disk_free_gb"] == 100.0, "the heartbeat records the app's drive, not the work's"
+            free.update({"E:": 1e9, "app": 100e9})
+            assert storage.low_work_space() == ("E:", 1e9)
+            job = jobs.Job("zz-smoke")
+            jobs.run_job(job, lambda j: j.finish("done"))
+            assert job.state == "error" and "1.0 GB free on drive E:" in job.events[-1]["message"], job.events[-1:]
+            res = {r["id"]: r for r in doctor.c_disk(None)}
+            assert res["disk:E:"]["state"] == "bad" and "refuse" in res["disk:E:"]["say"], res
+            assert all(r["state"] != "bad" and "refuse" not in r["say"] for k, r in res.items() if k != "disk:E:"), res
+            assert library._summary()["drive"] == "E:"
+    finally:
+        storage.shutil, storage.drive_of = saved
+        library.invalidate()
+    return "E: judged, named by the guard, Doctor and the Library"
+
+
+@check("while a Storage move runs, a dropped song or voice, a song from YouTube, a voice install, a training recording and a theme save, import or delete are refused (409, "
+       "nothing written, the body left unread); an upload under way holds a move back")
+def u_upload_moving():
+    import io
+    from types import SimpleNamespace
+    from undercover.app import server as S
+    from undercover.core import config, storage
+    from undercover.frontman import api as F, songs
+    saved = (dict(storage.MOVING), dict(storage._WRITES), songs.download, dict(S.JOBS))
+    fetched = []
+
+    def handler(cls=None, headers=None, body=b""):
+        h = S.Handler.__new__(S.Handler) if cls else SimpleNamespace()
+        out = {}
+        h.headers = headers or {}
+        h.rfile = io.BytesIO(body)
+        h.close_connection = False
+        h._length = lambda: len(body)
+        h._json = lambda obj, status=200: out.update(obj=obj, status=status)
+        h._error = lambda msg, status=400: out.update(obj={"error": msg}, status=status)
+        return h, out
+    try:
+        with isolated_data():
+            up = config.path("uploads_dir")
+            up.mkdir(parents=True, exist_ok=True)
+            songs.download = lambda *a, **k: fetched.append(a) or {}
+            storage.MOVING.update(group="library", job="x")
+            h, out = handler(headers={"X-Filename": "song.mp3"}, body=b"\0" * 4096)
+            F._upload(h)
+            assert out["status"] == 409 and "being moved" in out["obj"]["error"] and h.close_connection, out
+            assert h.rfile.tell() == 0 and not any(up.iterdir()), "the song was read or written during the move"
+            h, out = handler()
+            F._song_from_youtube(h, {"id": "dQw4w9WgXcQ", "title": "t", "raw_title": "t", "channel": "c", "duration": 1})
+            assert out["status"] == 409 and not fetched, out
+            h, out = handler(cls=True, headers={"X-Filename": "v.zip"}, body=b"PK" + b"\0" * 100)
+            h._voice_upload()
+            assert out["status"] == 409 and h.close_connection and h.rfile.tell() == 0, out
+            h, out = handler(cls=True)
+            before = len(S.JOBS)
+            h._start_install({"url": "https://huggingface.co/x/y/resolve/main/v.zip", "name": "v"})
+            assert out["status"] == 409 and len(S.JOBS) == before, out
+            from undercover.app import themes_api
+            from undercover.doubleagent import api as DA
+            h, out = handler(headers={"X-Filename": "take.wav"}, body=b"\0" * 4096)   # (a recording for a training)
+            DA._upload(h, None, {})
+            assert out["status"] == 409 and h.close_connection and h.rfile.tell() == 0, out
+            for method, route in (("POST", "/api/themes/import"), ("POST", "/api/themes"), ("DELETE", "/api/themes/my-theme")):
+                h, out = handler(body=b"PK" + b"\0" * 100)
+                assert themes_api.handle(h, method, route) and out["status"] == 409 and h.rfile.tell() == 0, (route, out)
+            h, out = handler()
+            assert themes_api.handle(h, "GET", "/api/themes") and out["status"] == 200, "reading the themes was refused"
+            assert storage._WRITES["n"] == 0, storage._WRITES
+            # the other way round: an upload under way, and a move waits for it
+            storage.MOVING.clear()
+            assert storage.start_writing() is None
+            try:
+                assert storage._busy() == "the file being added", storage._busy()
+            finally:
+                storage.done_writing()
+            assert storage._busy() != "the file being added" and storage._WRITES["n"] == 0
+    finally:
+        storage.MOVING.clear()
+        storage.MOVING.update(saved[0])
+        storage._WRITES.clear()
+        storage._WRITES.update(saved[1])
+        songs.download = saved[2]
+        S.JOBS.clear()
+        S.JOBS.update(saved[3])
+    return "seven routes refused with the move's own words; a move waits for an upload"
+
+
 @check("perf: history.jsonl is parsed once per change (a hit, a rewrite misses, a write drops it, rows are copies); titles remembered")
 def u_perf_history():
     from undercover.frontman import history as hstore, pipeline
@@ -13229,6 +13755,27 @@ def _away(method, path, port, host, cookie=None, body=None, origin=True, extra=N
         c.close()
 
 
+# a_link's waits: the link's driver ticks every 2 s and each step spawns fake CLI processes (Python start-ups), under a
+# --full run's GPU work on a busy PC; 60 s was tight enough to fail a run that then passed on its own (2026-11-08)
+AWAY_WAIT = 120
+
+
+def _fake_daemon_alive(st_file: Path) -> bool:
+    """Is the fake tailscaled still running? Its liveness is a byte lock on <state>.alive that the OS drops when the
+    process ends (fake_tailscale.daemon_alive, read the same way): a lock this process can take means nobody holds it."""
+    alive = st_file.with_name(st_file.name + ".alive")
+    if not alive.exists():
+        return False
+    fd = os.open(alive, os.O_RDWR)
+    try:
+        if GpuLock._lock(fd, True):
+            GpuLock._lock(fd, False)
+            return False
+        return True
+    finally:
+        os.close(fd)
+
+
 @check("api: the one link (1.2.1) on a fake Tailscale: setup walks sign-in, approval, ready, and Funnel only to the link's listener; its gate (Host, Origin, generic refusals, forwarded headers ignored); pairing at the link: the QR's code once, a nonce, the token once on Allow (never before, never twice), No; the typed code only when asked, five tries; the sign-in URL reaches no phone; Remove clears the phone; a phone from before moves over, its LAN token good until the new one is used; off closes everything; Private is the same gate")
 def a_link():
     from undercover.app import phone_api
@@ -13242,14 +13789,15 @@ def a_link():
         st = api("/api/phone", {"on": True})   # setup: the link comes up on the fake
         assert st["enabled"] and st["link"] is None and st["phase"] in ("fetching", "starting", "sign-in"), st
         port = st["port"]
-        assert st["listening"] and 7870 <= port < 7880 and st["supported"] and st["auth_url"] is None, st
-        st = wait_for(lambda: (lambda x: x if x["auth_url"] else None)(api("/api/phone")), 60, every=0.5, what="the Tailscale sign-in link")
+        # (the driver may already be at sign-in when the answer comes back: a sign-in link only once it is)
+        assert st["listening"] and 7870 <= port < 7880 and st["supported"] and (st["auth_url"] is None or st["phase"] == "sign-in"), st
+        st = wait_for(lambda: (lambda x: x if x["auth_url"] else None)(api("/api/phone")), AWAY_WAIT, every=0.5, what="the Tailscale sign-in link")
         assert st["phase"] == "sign-in" and st["approve_url"] is None and st["link"] is None, st
         write(backend="Running", signed_in=True, host="uc-fakelink.tailfake.ts.net")
-        st = wait_for(lambda: (lambda x: x if x["approve_url"] else None)(api("/api/phone")), 60, every=0.5, what="the approval link")
+        st = wait_for(lambda: (lambda x: x if x["approve_url"] else None)(api("/api/phone")), AWAY_WAIT, every=0.5, what="the approval link")
         assert st["phase"] == "approve" and st["auth_url"] is None, st
         write(funnel_approved=True)
-        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/phone")), 60, every=0.5, what="ready")
+        st = wait_for(lambda: (lambda x: x if x["phase"] == "ready" else None)(api("/api/phone")), AWAY_WAIT, every=0.5, what="ready")
         host = st["link"].removeprefix("https://")
         assert st["link"] == f"https://{host}" and st["lan"] is None and st["auth_url"] is st["approve_url"] is None and st["name"], st
         sandbox_port = int(BASE.rsplit(":", 1)[1])
@@ -13383,14 +13931,14 @@ def a_link():
         # Private (Deep Cover): Serve on the tailnet only, the same gate and token; then back to Funnel
         st = api("/api/phone", {"private": True})
         assert st["private"] and st["enabled"], st
-        wait_for(lambda: api("/api/phone")["approve_url"], 60, every=0.5, what="Serve's approval link")
+        wait_for(lambda: api("/api/phone")["approve_url"], AWAY_WAIT, every=0.5, what="Serve's approval link")
         write(serve_approved=True)
-        wait_for(lambda: api("/api/phone")["phase"] == "ready", 60, every=0.5, what="ready on the tailnet only")
+        wait_for(lambda: api("/api/phone")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready on the tailnet only")
         assert read()["serve_on"] and not read().get("funnel_on") and read()["funnel_target"] == f"http://127.0.0.1:{port}", read()
         assert _away("GET", "/api/status", port, host)[:3:2] == (401, b"Unauthorized"), "the tailnet alone let a request in"
         assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
         api("/api/phone", {"private": False})
-        wait_for(lambda: api("/api/phone")["phase"] == "ready" and read().get("funnel_on"), 60, every=0.5, what="back on Funnel")
+        wait_for(lambda: api("/api/phone")["phase"] == "ready" and read().get("funnel_on"), AWAY_WAIT, every=0.5, what="back on Funnel")
         # off: nothing reaches this PC from a phone any more (funnel reset, down, the listener closed); on again keeps the sign-in
         resets = read()["calls"].count(["funnel", "reset"])
         st = api("/api/phone", {"on": False})
@@ -13403,7 +13951,7 @@ def a_link():
         except ConnectionRefusedError:
             pass
         api("/api/phone", {"on": True})
-        wait_for(lambda: api("/api/phone")["phase"] == "ready", 60, every=0.5, what="ready again")
+        wait_for(lambda: api("/api/phone")["phase"] == "ready", AWAY_WAIT, every=0.5, what="ready again")
         port = api("/api/phone")["port"]
         assert json.loads(_away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[2])["device"] == "Link phone"
         import http.client as _hc   # a phone that used away from home in 1.2 holds this token as uc_away: carried over once
@@ -13418,14 +13966,24 @@ def a_link():
         assert any(x.startswith(f"__Host-uc={token};") for x in got) and any(x.startswith("uc_away=;") and "Max-Age=0" in x for x in got), got
         assert _away("GET", "/api/status", port, host, cookie="uc_away=" + "x" * 43)[:3:2] == (401, b"Unauthorized")
         assert api("/api/phone/revoke-all", {})["devices"] == [] and _away("GET", "/api/status", port, host, cookie=f"__Host-uc={token}")[0] == 401
-        # Forget with the link off: the daemon comes up just for the logout, then goes, and the node's keys with it
+        # Forget with the link off: the daemon comes up just for the logout, then goes, and the node's keys with it.
+        # Judged by state, not by counting daemon starts: forget() starts one only if none answers, and the fake's
+        # liveness is an OS lock Windows lets go a moment after the process ends, so first wait for the old daemon
+        # to be really gone, then watch the fake's own daemon flag go from off to on, and the logout land after it
         api("/api/phone", {"on": False})
-        daemons = sum(c[0] == "tailscaled" for c in read()["calls"])
+        wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Off")
+        write(daemon=False)
+        n0 = len(read()["calls"])
         st = api("/api/phone/forget", {})
         r = read()
-        assert r.get("logged_out") and sum(c[0] == "tailscaled" for c in r["calls"]) == daemons + 1 and not st["name"], (st, r["calls"][-4:])
+        later = r["calls"][n0:]
+        # (not the backend's state: forget() ends with stop(), whose `down` leaves it Stopped or, if the daemon has
+        # already gone, NeedsLogin from the logout; logged_out is the forget itself)
+        assert r.get("logged_out") and r.get("daemon") is True and not st["name"], (st, later)
+        assert ["logout"] in later and any(c[0] == "tailscaled" for c in later), later   # a daemon came up for it, then the logout
         assert not st["enabled"] and st["phase"] == "off" and not st["listening"], st
         assert _api_status("/api/away") == 404 and _api_status("/api/away/forget", {}) == 404, "the old setup routes still answer"
+        wait_for(lambda: not _fake_daemon_alive(st_file), AWAY_WAIT, every=0.5, what="the fake daemon gone after Forget")
     finally:
         api("/api/phone/revoke-all", {})
         api("/api/phone", {"on": False})
@@ -13450,25 +14008,27 @@ def a_stop_separation():
     t = np.arange(44100 * 240) / 44100.0                         # 4 minutes: a separation of tens of seconds
     y = 0.3 * np.sin(2 * np.pi * 220 * t) * (1 + np.sin(2 * np.pi * 0.5 * t)) + 0.05 * np.random.default_rng(0).standard_normal(len(t))
     sf.write(str(f), np.stack([y, y], 1).astype(np.float32), 44100)
-    flag = {"stop": False, "at": None}
-    def working(frac, step):   # Stop 1 s after the separation is really under way (models loaded, chunks running)
-        if frac > 0 and flag["at"] is None:
-            flag["at"] = -1.0
-            threading.Timer(1.0, lambda: flag.update(stop=True, at=time.perf_counter())).start()
-    t0 = time.perf_counter()
-    try:
-        separate(f, dereverb=True, karaoke=False, separator=gpu.MODELS.separator, quality="high", stop=lambda: flag["stop"],
-                 progress=working)
-        raise AssertionError("the separation finished before Stop (make the test file longer)")
-    except Stopped:
-        ended = time.perf_counter()
-    lag = ended - flag["at"]
-    assert lag < 2.0, f"Stop took {lag:.1f} s"
+    def stopped_run():   # (best of two: under a busy GPU one chunk can run long once)
+        flag = {"stop": False, "at": None}
+        def working(frac, step):   # Stop 1 s after the separation is really under way (models loaded, chunks running)
+            if frac > 0 and flag["at"] is None:
+                flag["at"] = -1.0
+                threading.Timer(1.0, lambda: flag.update(stop=True, at=time.perf_counter())).start()
+        t0 = time.perf_counter()
+        try:
+            separate(f, dereverb=True, karaoke=False, separator=gpu.MODELS.separator, quality="high", stop=lambda: flag["stop"],
+                     progress=working)
+            raise AssertionError("the separation finished before Stop (make the test file longer)")
+        except Stopped:
+            ended = time.perf_counter()
+        return ended - flag["at"], flag["at"] - t0
+    lag, tried = best_time(stopped_run, 2.0, tries=2)
+    assert lag < 2.0, f"Stop took {' then '.join(f'{t:.1f}' for t, _ in tried)} s"
     from undercover.core.separate import file_hash
     stems = config_path("cache_dir") / "stems" / file_hash(f)
     assert not any(stems.rglob("*.flac")) if stems.exists() else True, "a stopped separation cached a stem"
     f.unlink(missing_ok=True)
-    return f"stopped {lag:.2f} s after Stop (ran {flag['at'] - t0:.1f} s first)"
+    return f"stopped {lag:.2f} s after Stop (ran {tried[-1][1]:.1f} s first)"
 
 
 @check("api: a song's preparation says what it's doing (Separating the vocal / Removing reverb, step n of m, time left), and a preview queued behind it says \"Preparing the song first (n of m)\" with waits_for, never a bare \"starting\"")
@@ -14284,8 +14844,6 @@ def a_train():
     return f"{len(ps)} projects"
 
 
-@check("api: work queue, candidates, pause/resume")
-
 @check("api: a voice pack (1.1): the export form, a real voice exported over the API as one .ucvoice, imported back through the voice upload under its own free name, listed with its pack, then removed")
 def a_voicepack():
     import zipfile
@@ -14323,12 +14881,25 @@ def a_voicepack():
         pack.unlink(missing_ok=True)
     return f"{src} -> {round(len(data) / 1e6, 1)} MB pack -> {got}"
 
-@check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here)")
+@check("api: the vault (a folder inside the test's own, a run, what it holds, a restore that finds everything already here; then a cover changed since the run: Ask names it, Keep both brings the vaulted copy back beside it, Replace vaults what's there first and puts it back, Skip leaves it)")
 def a_vault():
     from undercover.core import storage
-    vf = storage.ALLOWED_ROOTS[0] / "vault-drive"
-    bad = api("/api/vault/check", {"folder": str(ROOT / "output")})
+    from undercover.core.config import path
+    root = storage.ALLOWED_ROOTS[0]
+    vf = root / "vault-drive"
+    out = path("output_dir")   # the sandbox's own output folder (this process's config points into the sandbox too)
+    assert storage._inside(out, root), out
+    bad = api("/api/vault/check", {"folder": str(path("uploads_dir") / "vault")})   # inside the library: refused
     assert bad["ok"] is False, bad
+    # the app folder itself (the sandbox server's: this worktree; nothing is written, the check refuses first)
+    bad = api("/api/vault/check", {"folder": str(ROOT / "smoke-vault-here")})
+    assert bad["ok"] is False and "UnderCover's folder" in bad["why"], bad
+    # a scratch cover of our own in the sandbox's output, so a restore meets a real conflict (2026-11-08: until then
+    # only the unit check restored over a changed file; here it's the server's routes and the background Replace)
+    mine, beside = out / "Smoke vault (zz).mp3", out / "Smoke vault (zz) (from vault).mp3"
+    orig = b"vaulted " * 2000
+    out.mkdir(parents=True, exist_ok=True)
+    mine.write_bytes(orig)
     st = api("/api/vault/settings", {"folder": str(vf), "size": "matters"})
     assert st["on"] and st["connected"], st
     try:
@@ -14340,11 +14911,35 @@ def a_vault():
         keys = [k for its in c["kinds"].values() for it in its for k in it["keys"]]
         r = api("/api/vault/restore", {"keys": keys[:20], "on_conflict": "ask"})
         assert not r["conflicts"] and not r["restored"] and r["same"], r
+        cover = next(i for i in c["kinds"]["cover"] if i["item"] == mine.name)
+        assert cover["here"] == "same" and cover["keys"], cover
+        mine.write_bytes(b"changed since the run")
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "ask"})
+        assert r["conflicts"] == cover["keys"] and not r["restored"] and mine.read_bytes() == b"changed since the run", r
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "both"})   # keep both: the vaulted copy beside it
+        assert r["restored"] == cover["keys"] and beside.read_bytes() == orig and mine.read_bytes() == b"changed since the run", r
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "skip"})
+        assert r["skipped"] == cover["keys"] and not r["restored"] and mine.read_bytes() == b"changed since the run", r
+        st0 = api("/api/vault")
+        snaps = st0["snapshots"]
+        r = api("/api/vault/restore", {"keys": cover["keys"], "on_conflict": "replace"})   # replace: in the background, vaulting first
+        assert r["started"] is True, r
+        rs = wait_for(lambda: (lambda s: s if s and not s["running"] else None)(api("/api/vault")["restore"]), 600, what="the Replace restore")
+        assert not rs["error"] and rs["result"]["restored"] == cover["keys"], rs
+        assert mine.read_bytes() == orig, "Replace didn't put the vaulted copy back"
+        st = api("/api/vault")
+        # (a new last run, not an exact count: the vault's own idle run or its keep policy may add or prune one meanwhile)
+        assert st["last"] != st0["last"] and st["snapshots"] >= 1, f"Replace didn't vault what was there first ({snaps} -> {st['snapshots']})"
+        c2 = api("/api/vault/contents")
+        assert any(i["item"] == mine.name for i in c2["kinds"]["cover"]), "the changed copy isn't in the fresh snapshot"
     finally:
         api("/api/vault/settings", {"folder": ""})
-    return f"{st['last']['files']} files, {st['raw'] / 1e6:.1f} MB kept in {st['stored'] / 1e6:.1f} MB"
+        storage.remove_files([f for f in (mine, beside) if f.exists()], within=[out])   # scratch, through the same guard as the app's deletes
+    return (f"{st['last']['files']} files, {st['raw'] / 1e6:.1f} MB kept in {st['stored'] / 1e6:.1f} MB; a changed cover: asked, kept both, "
+            f"skipped, replaced after a fresh snapshot ({snaps} -> {st['snapshots']})")
 
 
+@check("api: work queue, candidates, pause/resume")
 def a_work():
     w = api("/api/work")
     assert "queue" in w and "held" in w
@@ -14600,17 +15195,24 @@ def a_jobs_feed():
     assert html.index("/static/app.js") < html.index("/static/jobs.js") < html.index("/static/train.js"), "jobs.js must load after app.js, before the modules"
     voices = api("/api/speak/voices")
     v = next((x for x in voices if x["trained"] and x["kind"] == "speech" and not x["undertrained"]), voices[0] if voices else None)
-    r = api("/api/speak", {"text": "Smoke test for the job list. It has two sentences.", "voice": v["name"]})
+    r = api("/api/speak", {"text": "Smoke test for the job list. It has two sentences.", "voice": v["name"], "cadence": False})   # (the quick Reader: no cadence worker spawned for a job-list check)
     job = r["job"]
     try:
         snap = next((j for j in api("/api/jobs") if j["id"] == job), None)
         assert snap and snap["kind"] == "speech", "a new job isn't in /api/jobs"
         assert snap["state"] in ("queued", "running") and v["display"] in snap["title"], f"unexpected snapshot {snap}"   # titles show the display name (phase 7)
-        t0 = time.time()
-        with urllib.request.urlopen(BASE + f"/api/jobs/{job}/events", timeout=60) as resp:
-            assert resp.headers.get("X-Accel-Buffering") == "no", "event stream may be buffered on the way"
+        def opened():   # the stream's padding must arrive at once (best of two: a busy PC can be slow to accept once)
+            t0 = time.time()
+            resp = urllib.request.urlopen(BASE + f"/api/jobs/{job}/events", timeout=60)
             first = resp.read(1024)
-            assert first.startswith(b":") and time.time() - t0 < 5, "the stream's padding didn't arrive at once"
+            return time.time() - t0, (resp, first)
+        best, tried = best_time(opened, 5, tries=2)
+        for _, (r_, _) in tried[:-1]:
+            r_.close()
+        resp, first = tried[-1][1]
+        with resp:
+            assert resp.headers.get("X-Accel-Buffering") == "no", "event stream may be buffered on the way"
+            assert first.startswith(b":") and best < 5, f"the stream's padding didn't arrive at once ({[round(t, 1) for t, _ in tried]} s)"
             for raw in resp:
                 if raw.startswith(b"data: ") and json.loads(raw[6:]).get("final"):
                     break
@@ -14642,7 +15244,10 @@ def a_training():
     shutil.rmtree(pdir / scratch, ignore_errors=True)
     shutil.copytree(pdir / src, pdir / scratch, ignore=shutil.ignore_patterns("*.pth", "resume.pt", "previews", "raw"))
     pj = json.loads((pdir / scratch / "project.json").read_text(encoding="utf-8"))
-    pj["name"], pj["train"] = scratch, {}
+    # a fresh training state, keeping what names the prepared data (train/data.pt came along): with the key matching
+    # the same clips, prepare() is skipped and the run is about the training, pause and resume
+    pj["name"], pj["train"] = scratch, {k: v for k, v in pj["train"].items() if k in ("data_key", "holdout", "pieces", "train_minutes")}
+    prepared = (pdir / scratch / "train" / "data.pt").is_file() and bool(pj["train"].get("data_key"))
     (pdir / scratch / "project.json").write_text(json.dumps(pj), encoding="utf-8")
     try:
         api(f"/api/train/projects/{scratch}/train", {"voice_name": "zz-smoke-voice", "length": "quick", "fresh": True})
@@ -14657,7 +15262,7 @@ def a_training():
         if st.get("job"):
             api(f"/api/jobs/{st['job']['id']}/cancel", {})
         wait_for(lambda: not api(f"/api/train/projects/{scratch}").get("job"), 180, what="stopped")
-        return f"paused at {e1}, continued past it"
+        return f"paused at {e1}, continued past it" + ("; prepared data reused" if prepared else "; prepared from the clips")
     finally:
         time.sleep(2)
         shutil.rmtree(pdir / scratch, ignore_errors=True)
@@ -14703,9 +15308,12 @@ def a_cadence():
     (pdir / CAD_PROJ / "project.json").write_text(json.dumps(pj), encoding="utf-8")
     shutil.copytree(vdir / voice, vdir / CAD_VOICE, ignore=shutil.ignore_patterns("tts"))
     meta = json.loads((vdir / CAD_VOICE / "meta.json").read_text(encoding="utf-8"))
-    meta["name"], meta["dir"] = CAD_VOICE, str(vdir / CAD_VOICE)
+    meta["name"], meta["dir"], meta["pth"] = CAD_VOICE, str(vdir / CAD_VOICE), str(vdir / CAD_VOICE / "model.pth")
+    if meta.get("index"):   # (left pointing at the source voice, the clone's readings failed with "model.pth missing", glitch2's log)
+        meta["index"] = str(vdir / CAD_VOICE / "model.index")
     meta["extra"]["project"] = CAD_PROJ
     meta["extra"].pop("tts", None)
+    assert not any(str(vdir / voice) in str(v or "") for v in (meta["dir"], meta["pth"], meta.get("index"))), "the clone's meta.json still points at the source voice"
     (vdir / CAD_VOICE / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     item = None
     try:
@@ -14715,8 +15323,11 @@ def a_cadence():
                  what="transcripts")
         done = next(x for x in api("/api/jobs") if x["id"] == j)
         assert done["state"] == "done", done.get("final")
-        tr = json.loads((pdir / CAD_PROJ / "transcripts.json").read_text(encoding="utf-8"))["clips"]
-        assert len(tr) >= 50, f"only {len(tr)} transcripts"
+        # the count from the job's own final event, never transcripts.json read from disk (the job writes it per batch:
+        # a partial file passed for a finished one when the job died under a shared GPU)
+        final = _job_final(j)
+        n_tr = (final.get("result") or {}).get("clips", 0)
+        assert n_tr >= 50, f"only {n_tr} transcripts ({final})"
         # 2. Train cadence, as SpeakEasy's button does (a queue item that runs now)
         w = api("/api/speak/cadence", {"voice": CAD_VOICE, "now": True})
         item = next(i for i in w["queue"] if i["kind"] == "cadence" and i["target"] == CAD_VOICE)
@@ -14765,7 +15376,7 @@ def a_cadence():
         assert r["kept"] == "pending" and (tts / "previous" / "ref.wav").exists(), r
         v = next(x for x in api("/api/speak/voices") if x["name"] == CAD_VOICE)
         assert v["cadence"]["has"] and not v["cadence"].get("pending"), v["cadence"]
-        return (f"{len(tr)} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}, "
+        return (f"{n_tr} clips transcribed; likeness {sc.get('likeness')}, cadence gap {sc.get('cadence_gap')}, WER {sc.get('wer')}, "
                 f"clip sound -{sc.get('sound')}, pace x{sc.get('pace_ratio')} ({sc.get('pace_heard')}), pitch {sc.get('pitch_raw_st'):+} st "
                 f"(nudge {meta.get('pitch_nudge')}); A/B readings {len(wav) // 1000} KB, new pack kept")
     finally:
@@ -14794,6 +15405,106 @@ def a_cadence():
 # outside the scratch folder. The real folders are listed before and after the whole run and any difference fails it.
 
 SANDBOX_PORTS = range(7862, 7870)   # chats in other worktrees run smoke too: each run takes the first free one
+
+
+class GpuLock:
+    """One GPU-heavy smoke run at a time, across processes and worktrees (2026-11-05: two --full runs at once reset
+    the GPU driver, both died and a game crashed with them). A byte lock on one file in the temp folder: the OS drops
+    it when the holder dies, so a killed run never leaves it stuck. smoke-full.ps1 holds a lock of its own around the
+    whole script (another file, so the two never wait on each other); this one is inside smoke.py, so a bare
+    `tests\\smoke.py` or `--full` that starts a sandbox waits for the other run too."""
+    FILE = "undercover-smoke-gpu.lock"
+
+    def __init__(self, file: Path | None = None):
+        import tempfile
+        self.file = Path(file) if file else Path(tempfile.gettempdir()) / self.FILE
+        self.fd = None
+
+    @staticmethod
+    def _lock(fd, on: bool) -> bool:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(fd, 0, 0)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK if on else msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, (fcntl.LOCK_EX | fcntl.LOCK_NB) if on else fcntl.LOCK_UN)
+            return True
+        except OSError:
+            return False
+
+    def try_acquire(self) -> bool:
+        if self.fd is not None:
+            return True
+        fd = os.open(self.file, os.O_RDWR | os.O_CREAT)
+        if not self._lock(fd, True):
+            os.close(fd)
+            return False
+        self.fd = fd
+        try:   # who holds it, for the one waiting (past the locked byte, so another process may read it)
+            os.lseek(fd, 16, 0)
+            os.write(fd, f"pid {os.getpid()} from {ROOT}".encode("utf-8", "replace").ljust(240)[:240])
+        except OSError:
+            pass
+        return True
+
+    def holder(self) -> str:
+        try:
+            with open(self.file, "rb") as f:
+                f.seek(16)
+                return f.read(240).decode("utf-8", "replace").strip("\0 ")
+        except OSError:
+            return ""
+
+    def acquire(self, timeout: float = 3600, every: float = 15, say=print):
+        """Wait for the lock (saying so once, with the holder), up to `timeout` seconds."""
+        t0 = time.time()
+        waited = False
+        while not self.try_acquire():
+            if not waited:
+                say(f"  (another smoke run holds the GPU lock, {self.holder() or self.file}: waiting up to {timeout / 60:.0f} min)", flush=True)
+                waited = True
+            if time.time() - t0 > timeout:
+                raise TimeoutError(f"the GPU lock ({self.file}) was held for {timeout / 60:.0f} min by {self.holder() or 'another run'}")
+            time.sleep(every)
+        if waited:
+            say(f"  (the GPU lock is ours after {time.time() - t0:.0f} s)", flush=True)
+
+    def release(self):
+        if self.fd is None:
+            return
+        self._lock(self.fd, False)
+        os.close(self.fd)
+        self.fd = None
+
+
+@check("one GPU-heavy smoke run at a time: the GPU lock file can't be held by two runners at once (a second process gets no, and yes again once the first lets go)")
+def u_gpu_lock():
+    import subprocess
+    import tempfile
+    probe = ("import sys; sys.path.insert(0, sys.argv[1]); import smoke; "
+             "print('held' if smoke.GpuLock(sys.argv[2]).try_acquire() else 'busy')")
+    with tempfile.TemporaryDirectory(prefix="uc-gpulock-") as td:
+        f = Path(td) / "gpu.lock"
+        other = lambda: subprocess.run([sys.executable, "-c", probe, str(ROOT / "tests"), str(f)], capture_output=True, text=True,
+                                       timeout=60, cwd=td).stdout.strip()
+        mine = GpuLock(f)
+        assert mine.try_acquire() and mine.try_acquire(), "the lock wasn't taken"   # (taking it again is fine for the holder)
+        assert other() == "busy", "a second runner took the GPU lock while this one held it"
+        assert f"pid {os.getpid()}" in mine.holder(), mine.holder()
+        said = []
+        try:
+            GpuLock(f).acquire(timeout=0.5, every=0.2, say=lambda m, **k: said.append(m))
+            raise AssertionError("a second runner in this process took the held lock")
+        except TimeoutError:
+            pass
+        assert said and "waiting" in said[0] and f"pid {os.getpid()}" in said[0], said
+        mine.release()
+        assert other() == "held", "the lock stayed taken after release"   # (the probe's process ended: the OS dropped its lock)
+        assert mine.try_acquire(), "the lock couldn't be taken again"
+        mine.release()
+    return "held once, a second runner refused, free again after release and after the holder ends"
 
 
 def _port_taken(port: int) -> bool:
@@ -14872,14 +15583,17 @@ def u_sandbox_game():
         root = Path(t)
         for d in ("sb", "sb2"):   # (sandbox_server makes its root before the config)
             (root / d).mkdir()
-        user = "[gpu]\nbackend = 'rocm'\n\n[game_pause]\nask = true\nnever_ask = ['game.exe']\n"   # asking, a game on never_ask
+        user = ("[gpu]\nbackend = 'rocm'\n\n[game_pause]\nask = true\nnever_ask = ['game.exe']\n\n"   # asking, a game on never_ask
+                "[vault]\nfolder = 'E:\\\\Vault'\nsize = 'everything'\n")                              # and a vault drive
         cfg, mine = _sandbox_config(root / "sb", {"models_dir": root / "models"}, user=user)
         got = tomllib.loads(cfg.read_text(encoding="utf-8"))
         assert got["game_pause"] == {"ask": False}, got.get("game_pause")   # replaced, not merged
         assert got["gpu"] == {"backend": "rocm"} and {k: Path(v) for k, v in got["paths"].items()} == mine, got
+        assert got["vault"] == {"folder": ""}, got.get("vault")   # the user's vault drive never comes along (2026-11-08)
         cfg2, _ = _sandbox_config(root / "sb2", {"models_dir": root / "models"}, user="")   # no user config at all
-        assert tomllib.loads(cfg2.read_text(encoding="utf-8"))["game_pause"] == {"ask": False}
-    return "[game_pause] ask = false over the user's own, the rest kept; paths in the sandbox"
+        got2 = tomllib.loads(cfg2.read_text(encoding="utf-8"))
+        assert got2["game_pause"] == {"ask": False} and got2["vault"] == {"folder": ""}, got2
+    return "[game_pause] ask = false and [vault] off over the user's own, the rest kept; paths in the sandbox"
 
 
 def _sandbox_config(root: Path, real: dict, user: str | None = None) -> tuple[Path, dict]:
@@ -14899,6 +15613,9 @@ def _sandbox_config(root: Path, real: dict, user: str | None = None) -> tuple[Pa
     # a game the user is playing never holds the sandbox's jobs on the game question (2026-10-25: a light game held a
     # --full run's covers on "Keep both / Pause?" until they failed); u_gamepause tests the question itself
     text = config.replace_section(text, "game_pause", "[game_pause]\nask = false\n\n")
+    # the user's vault folder never comes along: vault.start() runs at server start and backs the library up when the
+    # GPU is idle, so a sandbox inheriting it would put its copied voices into the user's real vault (a_vault sets its own)
+    text = config.replace_section(text, "vault", "[vault]\nfolder = ''\n\n")
     cfg = root / "config.toml"
     cfg.write_text(text, encoding="utf-8")
     got = {k: Path(v) for k, v in tomllib.loads(text)["paths"].items()}
@@ -14913,7 +15630,7 @@ def _sandbox_config(root: Path, real: dict, user: str | None = None) -> tuple[Pa
     return cfg, mine
 
 
-def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
+def _sandbox_fixtures(root: Path, real: dict, mine: dict, full: bool = False) -> str:
     """Copies (read from the real folders, written only into the sandbox) of one trained voice and its training
     project, so the cover, speech, training and cadence checks have something to work with."""
     tr = real["cache_dir"] / "training"
@@ -14952,20 +15669,33 @@ def _sandbox_fixtures(root: Path, real: dict, mine: dict) -> str:
     for f in ("project.json", "embeddings.npz"):
         shutil.copyfile(tr / src / f, pdst / f)
     shutil.copytree(tr / src / "clips", pdst / "clips")
+    # the prepared tensors too, when the project has them: with project.json's data_key matching, a training on this
+    # copy skips prepare() (2-3 minutes of HuBERT and RMVPE over every clip); u_prepare covers prepare itself
+    # (--full only: a_training is its one reader, and the file runs from 170 MB to over 1 GB)
+    if full and (tr / src / "train" / "data.pt").is_file():
+        (pdst / "train").mkdir()
+        shutil.copyfile(tr / src / "train" / "data.pt", pdst / "train" / "data.pt")
     return src
 
 
 @contextlib.contextmanager
-def sandbox_server(port: int):
+def sandbox_server(port: int, gpu_lock: bool = True, full: bool = False):
     """Start a sandbox server, point this process's own config and the app's guards at the same scratch folders (so
-    checks that touch folders directly stay inside it too), and stop and remove everything afterwards."""
+    checks that touch folders directly stay inside it too), and stop and remove everything afterwards. With gpu_lock
+    (every sandbox run: covers, separation and speech load models; --full trains and transcribes too) the
+    cross-process GPU lock is taken first, waiting for another run to finish, and let go at the very end. smoke-full.ps1's
+    own lock is a different file (smoke-full.lock), so a run under it never waits on itself."""
     import os
     import subprocess
     import tempfile
     from undercover.core import config, storage
     global BASE
-    if _port_taken(port):   # taken since it was picked (another run started in between)
-        sys.exit(f"Something already answers on port {port}. The sandbox server must be smoke's own: try again.")
+    lock = GpuLock() if gpu_lock else None
+    if lock:
+        lock.acquire()
+    if _port_taken(port):   # taken while this run waited for the lock (another run started in between): pick again
+        was, port = port, sandbox_port()
+        print(f"  (port {was} was taken while this run waited: port {port} instead)", flush=True)
     real = real_dirs()
     root = Path(tempfile.mkdtemp(prefix="uc-sandbox-")).resolve()
     assert root.name.startswith("uc-sandbox-") and storage._inside(root, Path(tempfile.gettempdir()).resolve()) and not storage._inside(root, ROOT)
@@ -14973,7 +15703,7 @@ def sandbox_server(port: int):
     proc = log = None
     try:
         cfg, mine = _sandbox_config(root, real)
-        _sandbox_fixtures(root, real, mine)
+        _sandbox_fixtures(root, real, mine, full)
         env = {**os.environ, "UNDERCOVER_CONFIG": str(cfg), "UNDERCOVER_TEST_ROOTS": str(root), "UNDERCOVER_PHONE_ADDR": PHONE_ADDR,
                "UNDERCOVER_NO_BACKFILL": "1"}   # (rc-preview: the checks expect the queue as they left it)
         env.pop("UNDERCOVER_TEST_ADDON", None)
@@ -14998,6 +15728,8 @@ def sandbox_server(port: int):
             else:
                 assert storage._inside(p, root), f"the sandbox server's {k} is {p}, outside {root}: stopping before any check runs"
         assert api("/api/gamepause")["ask"] is False, "the sandbox would ask the game question: a game being played would hold its jobs"
+        vs = api("/api/vault")
+        assert not vs["on"] and not vs["folder"], f"the sandbox server has a vault folder ({vs['folder']}): it would back its copies up into the user's vault"
         config.CONFIG["paths"], config.CONFIG_FILE, storage.ALLOWED_ROOTS = {k: str(v) for k, v in mine.items()}, cfg, [root]
         yield root
     finally:
@@ -15030,18 +15762,49 @@ def sandbox_server(port: int):
                 print(f"  (the sandbox's scratch folder couldn't be removed: {root})")
         else:
             print(f"  (the sandbox server is still running or its folder was left: {root})")
+        if lock:   # (a failure before the try above ends the run within seconds, and the OS drops the lock with the process)
+            lock.release()
+
+
+def _users_server_training(since: float | None = None) -> set:
+    """The training projects the user's own server (7860) is working on right now (its training writes under
+    cache/training/<project>, which this run never touches but does watch), and with `since`, the ones whose job
+    started or ended after it (a training that came and went during the run; the job list keeps an hour of finished
+    jobs). A paused job writes nothing and isn't counted until it runs again. No server, or no answer: nothing."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:7860/api/jobs", timeout=3) as r:
+            jobs = json.loads(r.read())
+    except (OSError, ValueError):
+        return set()
+
+    def during(j):
+        return since is not None and any((j.get(k) or 0) >= since for k in ("created", "ended"))
+    return {j["project"] for j in jobs if isinstance(j, dict) and j.get("project")
+            and (j.get("state") in ("queued", "running", "pausing") or during(j))}
 
 
 @check("the real folders (uploads, output, models, cache, voices) and settings files are exactly as they were when this run started")
-def a_untouched(before: dict, dirs: dict):
+def a_untouched(before: dict, dirs: dict, busy: set = frozenset(), since: float | None = None):
+    """busy: the projects the user's server was training when the run started; with the ones it trained during the
+    run (since) and trains now, their folders' changes are the user's server's, said in the note, not this run's
+    (2026-11-05: a run was blamed for them)."""
+    import os
     after = snapshot_real(dirs)
     added = sorted(set(after) - set(before))
     gone = sorted(set(before) - set(after))
     changed = sorted(p for p in set(before) & set(after) if before[p] != after[p])
+    theirs = {str(dirs["cache_dir"] / "training" / name) for name in set(busy) | _users_server_training(since)}
+    from undercover.core import storage
+    his = lambda p: any(storage._inside(Path(p), Path(t)) for t in theirs)
+    users = [p for p in added + gone + changed if his(p)]
+    added, gone, changed = [[p for p in ps if not his(p)] for ps in (added, gone, changed)]
     if added or gone or changed:
         lines = [f"+ {p}" for p in added[:6]] + [f"- {p}" for p in gone[:6]] + [f"~ {p}" for p in changed[:6]]
         raise AssertionError(f"{len(added)} added, {len(gone)} removed, {len(changed)} changed:\n    " + "\n    ".join(lines))
-    return f"{len(after)} files compared"
+    note = f"{len(after)} files compared"
+    if users:
+        note += f"; {len(users)} changed by the user's server training {', '.join(sorted(os.path.basename(t) for t in theirs))} (not this run)"
+    return note
 
 
 def main():
@@ -15065,14 +15828,15 @@ def main():
                  f"(ports {SANDBOX_PORTS.start}-{SANDBOX_PORTS.stop - 1}). Leave --port out.")
     t0 = time.time()
     dirs = real_dirs()
+    busy = _users_server_training()   # what the user's own server is training (its changes aren't this run's)
     before = snapshot_real(dirs)   # the whole run is judged against this: the user's folders must come out the same
     print("unit checks")
-    for fn in (u_imports, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
+    for fn in (u_imports, u_checks_decorated, u_deps, u_fit, u_window, u_phone, u_stems, u_sources, u_speak, u_paused, u_vault, u_gamepause, u_gamedetect, u_sandbox_game, u_gpu_lock, u_da_mode, u_write_guard, u_demo_pause, u_demo_topup, u_cadence_starts, u_listenback, u_listenback_extra, u_harden1, u_netguard, u_improve_pending, u_improved_keep, u_pending_guard, u_no_voice_deletes, u_export_lands, u_aside_list, u_remove_aside, u_duplicate_aside, u_move_rollback, u_aside_gaps, u_p7_1, u_cadence_chain, u_queue_pack, u_report_words, u_person_guess, u_tonight, u_p8_small, u_p9, u_start_time_sticks, u_start_at_hold, u_frozen_bar, u_frozen_recipe, u_improve_estimate, u_person_search, u_source_selected, u_reader_print, u_compare_priced, u_version, u_plankton_reads, u_phrase_list_trains, u_config_layers, u_ci_workflow, u_layout, u_launcher_moved, u_character_check, u_prepare, u_prep_progress, u_retry_status, u_installer_python, u_installer_failure, u_installer_space, u_installer_quiet, u_installer_downloads, u_rcfix7, u_rcpolish1, u_rcpreview, u_rceta, u_rcfix10, u_meta_keys, u_v101, u_lowprofile, u_lowprofile_retry, u_lowprofile_hear, u_voicepack, u_pace, u_cfgbounds, u_uninstall_kept_paths, u_models_progress, u_model_download_said, u_frozen_files, u_frozen_singer, u_frozen_gate_project, u_queue_live, u_arm_paused, u_voice_ask, u_eta_narrow, u_speak_estimate, u_project_pause_holds, u_cadence_sample_range, u_stop_download, u_drawl, u_voice_name_guard, u_project_queue, u_to_queue, u_preview_fit, u_oneshot_options, u_estimates, u_listenback_fetch, u_lossless, u_smaller, u_shrink_export, u_tailnet, u_phone_away, u_cadence, u_eta, u_addons, u_xtts, u_ytdlp, u_ytdlp_upstream, u_storage,
                u_rolloff_covers, u_rolloff_speech, u_stable_ids, u_migrate_ids,
                u_display_names, u_person, u_grammar, u_ambiguity, u_ask_flow, u_clipsound, u_keep_this_one, u_relocate_guard, u_pace_pitch, u_speak_hz, u_decode_bound, u_tags, u_hangfix, u_duets, u_edits, u_edit_price, u_characters, u_leadgate, u_yield, u_likeness_word, u_ear, u_golden,
                u_doctor_fast, u_doctor_models, u_doctor_startup, u_doctor_resume, u_doctor_stale, u_doctor_packages,
                u_doctor_interrupted, u_doctor_bundle, u_qr, u_plain_error, u_phone_pairing, u_phone_listen, u_phone_jobs, u_phone_card, u_phone_stream, u_phone_records, u_phone_ci64, u_pc_listener, u_phone_routes, u_phone_doctor, u_themes, u_themes_shipped, u_shape_page, u_ytdlp_heal, u_firstrun, u_no_assignment, u_desk_plan, u_page_rules, u_page_syntax, u_away_sw, u_platform, u_ffmpeg_resolver, u_tray,
-               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_perf_history, u_perf_library):
+               u_roots_follow, u_token_ratios, u_perf_load16k, u_perf_code_stamp, u_stamp_settings, u_restart_guard, u_defer_rest, u_work_space, u_upload_moving, u_perf_history, u_perf_library):
         fn()
     if not a.unit_only:
         if a.port:   # someone else's server (7861 for a manual look): nothing that writes
@@ -15089,7 +15853,7 @@ def main():
                 os.environ["UNDERCOVER_TAILSCALE_FAKE"] = str(ROOT / "tests" / "fake_tailscale.py")
                 fake_ts = Path(tempfile.mkdtemp(prefix="uc-fake-ts-"))   # smoke's own scratch folder, removed after
                 os.environ["FAKE_TS_STATE"] = str(fake_ts / "state.json")
-                with sandbox_server(port):
+                with sandbox_server(port, full=a.full):   # (one GPU-using run at a time)
                     for fn in (a_status, a_page, a_page_console, a_lists, a_library, a_train, a_work, a_vault, a_voicepack, a_doctor, a_retry, a_stop_separation, a_presep_progress, a_phone, a_link, a_themes, a_firstrun, a_tray):
                         fn()
                     if not a.no_cover:
@@ -15109,7 +15873,7 @@ def main():
                 if fake_ts.name.startswith("uc-fake-ts-"):
                     import shutil
                     shutil.rmtree(fake_ts, ignore_errors=True)
-    a_untouched(before, dirs)
+    a_untouched(before, dirs, busy, t0)
     failed = [n for ok, n in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed in {time.time() - t0:.0f} s" + (f"; FAILED: {', '.join(failed)}" if failed else ""))
     sys.exit(1 if failed else 0)

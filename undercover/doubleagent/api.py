@@ -235,6 +235,11 @@ def _upload(h, proj, b):
         raise ModelError(f"'{fname}' doesn't look like an audio file. Use mp3, wav, flac, m4a or ogg.")
     if not n or n > CONFIG["ui"]["max_upload_mb"] * 1e6:
         raise ModelError("That file is empty or too large.")
+    from ..core import storage
+    why = storage.start_writing()   # (refused while a Storage move runs; a move waits for it)
+    if why:
+        h.close_connection = True   # (the body isn't read)
+        return h._error(why, 409)
     tmp = path("cache_dir") / f"tup_{uuid.uuid4().hex}{Path(fname).suffix.lower()}"
     try:
         with open(tmp, "wb") as f:
@@ -253,6 +258,7 @@ def _upload(h, proj, b):
             proj.save()
     finally:
         tmp.unlink(missing_ok=True)
+        storage.done_writing()
     h._json(project_json(proj))
 
 
